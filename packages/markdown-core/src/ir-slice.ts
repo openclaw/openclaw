@@ -1,7 +1,7 @@
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import {
   attachBlockMetadata,
-  attachListItemMetadata,
+  copyMarkdownListItem,
   copyHtmlTags,
   sliceListMarker,
   type MarkdownIRWithMetadata,
@@ -66,32 +66,21 @@ function sliceNormalizedMarkdownIR(
         : undefined;
     return listMarker || taskMarker
       ? [
-          attachListItemMetadata(
-            {
-              kind: item.kind,
-              ...(listMarker ? { listMarker } : {}),
-              ...(item.task ? { task: true as const } : {}),
-              ...(taskMarker ? { taskMarker } : {}),
-              ...(item.listId !== undefined ? { listId: item.listId } : {}),
-              ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
-              ...(item.depth !== undefined ? { depth: item.depth } : {}),
-              ...(item.start !== undefined
-                ? { start: Math.max(item.start, normalizedStart) - normalizedStart }
-                : {}),
-              ...(item.end !== undefined
-                ? { end: Math.min(item.end, normalizedEnd) - normalizedStart }
-                : {}),
-            },
-            {
-              ...(content ? { contentStart: content.start, contentEnd: content.end } : {}),
-              ...(item.markerOnly ? { markerOnly: true as const } : {}),
-              sourceMarker: item.sourceMarker,
-              sourceContent: item.sourceContent,
-              sourceIndent: item.sourceIndent,
-              sourceStartLine: item.sourceStartLine,
-              sourceEndLine: item.sourceEndLine,
-            },
-          ),
+          copyMarkdownListItem(item, {
+            listMarker,
+            taskMarker,
+            start:
+              item.start !== undefined
+                ? Math.max(item.start, normalizedStart) - normalizedStart
+                : undefined,
+            end:
+              item.end !== undefined
+                ? Math.min(item.end, normalizedEnd) - normalizedStart
+                : undefined,
+            contentStart: content?.start,
+            contentEnd: content?.end,
+            markerOnly: item.markerOnly,
+          }),
         ]
       : [];
   });

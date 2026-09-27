@@ -3,6 +3,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { retainLegacyDefaultAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
@@ -219,6 +220,9 @@ describe("transcript turn logical ownership", () => {
         const cfg = fleetConfig(configuredStorePath, "ops");
 
         const completed: string[] = [];
+        const accepted = createDeferredCore();
+        const release = createDeferredCore();
+        const settled: string[] = [];
         const turn = persistSessionTranscriptTurn(
           {
             agentId: "research",
@@ -244,18 +248,39 @@ describe("transcript turn logical ownership", () => {
                   ]
                 : []),
             ],
-            onMessageCommitted: ({ messageId }) => {
+            onMessageCommitted: ({ messageId }, acceptCompletion) => {
               completed.push(messageId);
+              acceptCompletion(async () => {
+                accepted.resolve();
+                await release.promise;
+                settled.push(messageId);
+              });
             },
             updateMode: "none",
           },
         );
-        if (failSecondAppend) {
-          await expect(turn).rejects.toThrow("second append failed");
-        } else {
-          await expect(turn).resolves.toMatchObject({ appendedCount: 1 });
+        const outcome = turn.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        try {
+          expect(await Promise.race([accepted.promise.then(() => "accepted"), outcome])).toBe(
+            "accepted",
+          );
+          expect(completed).toEqual(["injected-first"]);
+          expect(settled).toEqual([]);
+          release.resolve();
+          if (failSecondAppend) {
+            await expect(turn).rejects.toThrow("second append failed");
+          } else {
+            await expect(turn).resolves.toMatchObject({ appendedCount: 1 });
+          }
+        } finally {
+          release.resolve();
+          await outcome;
         }
         expect(completed).toEqual(["injected-first"]);
+        expect(settled).toEqual(["injected-first"]);
         expect(
           await loadTranscriptEvents({
             agentId: "research",

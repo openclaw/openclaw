@@ -8,7 +8,7 @@ extension OpenClawChatSQLiteTranscriptCache {
     /// attachment bodies and ordinary tool arguments are never cache data.
     static func cacheableMessages(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         messages.suffix(maxCachedMessagesPerSession).map { message in
-            OpenClawChatMessage(
+            var cached = OpenClawChatMessage(
                 id: message.id,
                 role: message.role,
                 content: message.content.map { item in
@@ -43,6 +43,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                 toolCallId: message.toolCallId,
                 toolName: message.toolName,
                 usage: message.usage,
+                model: message.model,
                 stopReason: message.stopReason,
                 errorMessage: message.errorMessage,
                 details: self.cacheableDetails(message.details),
@@ -53,6 +54,10 @@ extension OpenClawChatSQLiteTranscriptCache {
                 turnBoundary: message.turnBoundary,
                 steerTargetRunID: message.steerTargetRunID,
                 streamFallback: message.streamFallback)
+            cached.sourceMetadata = message.sourceMetadata
+            cached.senderLabel = message.senderLabel
+            cached.senderSession = message.senderSession
+            return cached
         }
     }
 

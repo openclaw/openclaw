@@ -221,7 +221,12 @@ function nativeRuntime() {
   const pid = livePid(counts?.pid ?? 0);
   const supervisorPid = livePid(counts?.supervisorPid ?? 0);
   const groupPid = livePid(counts?.groupPid ?? 0, true);
-  const unsettled = counts?.starting || supervisorPid || groupPid;
+  const populated = paths.controlGroup
+    ? /^populated 1$/m.test(
+        fs.readFileSync(`/sys/fs/cgroup${paths.controlGroup}/cgroup.events`, "utf8"),
+      )
+    : false;
+  const unsettled = counts?.starting || supervisorPid || groupPid || populated;
   const successful = !last || last.code === 0;
   return {
     pid,
@@ -230,6 +235,7 @@ function nativeRuntime() {
     sub: pid ? "running" : unsettled ? "auto-restart" : "dead",
     generation: counts?.entered ?? 0,
     settled: !pid && !unsettled,
+    controlGroup: pid || unsettled ? paths.controlGroup || "" : "",
     restarts: counts?.restarts ?? 0,
     result: successful ? "success" : "exit-code",
     exitStatus: Number.isInteger(last?.code) ? last.code : (osConstants.signals[last?.signal] ?? 0),
@@ -278,9 +284,6 @@ function inspectLoadedRuntime(args) {
     fail("Fixture unit is not already loaded.");
   }
   const unit = parseUnit(fs.readFileSync(loadedPath, "utf8"));
-  if (!unit) {
-    fail();
-  }
   if (matches(["call", paths.owner, root, `${manager}.Manager`, "GetUnit", "s", unitName])) {
     writeProperties([["o", [object]]]);
     return true;
@@ -353,8 +356,7 @@ function inspectLoadedRuntime(args) {
       ["s", unit.killMode],
       ["t", runtime.settled ? 0 : unknown],
       ["t", unknown],
-      // This process-group emulator does not create a native systemd cgroup.
-      ...(includeControlGroup ? [["s", ""]] : []),
+      ...(includeControlGroup ? [["s", runtime.controlGroup]] : []),
     ]);
     return true;
   }
@@ -450,6 +452,7 @@ function run() {
   if (operation === "runtime" && !args.length) {
     const runtime = nativeRuntime();
     console.log(`ActiveState=${runtime.active}\nSubState=${runtime.sub}\nMainPID=${runtime.pid}`);
+    console.log(`ControlGroup=${runtime.controlGroup}`);
     if (runtime.exitCode) {
       console.log(
         `ExecMainStatus=${runtime.exitStatus}\nExecMainCode=${runtime.exitCode === 1 ? "exited" : "killed"}`,
@@ -520,9 +523,14 @@ function run() {
       ...Object.entries(environment).map(([key, value]) => `${key}=${value}`),
       ...unit.programArguments,
     ];
+    const { controlGroup } = runtimePaths();
+    // Move the ExecStart shell before exec so every Gateway descendant inherits membership.
+    const placement = controlGroup
+      ? `printf '0\\n' > ${quote(`/sys/fs/cgroup${controlGroup}/cgroup.procs`)} && `
+      : "";
     // Physical traversal matches chdir: shell-logical .. can select a different directory.
     console.log(
-      `cd -P ${quote(unit.workingDirectory || process.env.HOME)} && exec ${command.map(quote).join(" ")}`,
+      `cd -P ${quote(unit.workingDirectory || process.env.HOME)} && ${placement}exec ${command.map(quote).join(" ")}`,
     );
     return;
   }
@@ -562,23 +570,17 @@ function run() {
     "s",
     unitName,
   ]);
-  const unitQuery = matches([
-    ...prefix,
-    "get-property",
-    manager,
-    object,
-    `${manager}.Unit`,
-    ...commandPropertyNames("Unit"),
-  ]);
-  const serviceQuery = matches([
-    ...prefix,
-    "get-property",
-    manager,
-    object,
-    `${manager}.Service`,
-    ...commandPropertyNames("Service"),
-  ]);
-  if (!load && !unitQuery && !serviceQuery) {
+  const commandScope = ["Unit", "Service"].find((scope) =>
+    matches([
+      ...prefix,
+      "get-property",
+      manager,
+      object,
+      `${manager}.${scope}`,
+      ...commandPropertyNames(scope),
+    ]),
+  );
+  if (!load && !commandScope) {
     fail();
   }
   const unit = readUnit(false, requireLoaded);
@@ -591,7 +593,7 @@ function run() {
   if (load) {
     writeProperties([["o", [object]]]);
   } else {
-    writeCommandProperties(unit, unitQuery ? "Unit" : "Service");
+    writeCommandProperties(unit, commandScope);
   }
 }
 

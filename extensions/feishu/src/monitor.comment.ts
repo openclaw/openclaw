@@ -455,12 +455,7 @@ async function requestFeishuOpenApi<T>(params: {
     const response = isRecord(error.response) ? error.response : undefined;
     const responseData = isRecord(response?.data) ? response?.data : undefined;
     const details = {
-      message:
-        typeof error.message === "string"
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : JSON.stringify(error),
+      message: typeof error.message === "string" ? error.message : JSON.stringify(error),
       code: readString(error.code),
       method: readString(isRecord(error.config) ? error.config.method : undefined),
       url: readString(isRecord(error.config) ? error.config.url : undefined),
@@ -642,18 +637,14 @@ function formatWholeCommentTimelinePromptLines(params: {
   });
 }
 
-async function fetchDriveCommentContext(params: {
-  client: FeishuRequestClient;
-  fileToken: string;
-  fileType: CommentFileType;
-  commentId: string;
-  replyId?: string;
-  botOpenIds?: Iterable<string | undefined>;
-  timeoutMs: number;
-  logger?: (message: string) => void;
-  accountId: string;
-  abortSignal?: AbortSignal;
-}): Promise<{
+async function fetchDriveCommentContext(
+  params: DriveCommentPageRequest & {
+    commentId: string;
+    replyId?: string;
+    botOpenIds?: Iterable<string | undefined>;
+    abortSignal?: AbortSignal;
+  },
+): Promise<{
   documentTitle?: string;
   documentUrl?: string;
   isWholeComment?: boolean;
@@ -800,18 +791,16 @@ async function fetchDriveCommentContext(params: {
     fileType: params.fileType,
     fileToken: params.fileToken,
   };
+  const contentContext: CommentContentContext = {
+    botOpenIds: params.botOpenIds,
+    currentDocument,
+    client: params.client,
+    wikiCache,
+    logger: params.logger,
+    accountId: params.accountId,
+  };
   const resolvedReplies = await Promise.all(
-    replies.map((reply) =>
-      resolveCommentReplyContext({
-        reply,
-        botOpenIds: params.botOpenIds,
-        currentDocument,
-        client: params.client,
-        wikiCache,
-        logger: params.logger,
-        accountId: params.accountId,
-      }),
-    ),
+    replies.map((reply) => resolveCommentReplyContext({ ...contentContext, reply })),
   );
   resolvedReplies.sort((left, right) =>
     compareCommentTimelineEntries(
@@ -835,13 +824,8 @@ async function fetchDriveCommentContext(params: {
   let wholeCommentTimeline: ResolvedWholeCommentTimelineEntry[] = [];
   if (commentCard?.is_whole === true) {
     const allComments = await fetchDriveComments({
-      client: params.client,
-      fileToken: params.fileToken,
-      fileType: params.fileType,
+      ...params,
       isWholeOnly: true,
-      timeoutMs: params.timeoutMs,
-      logger: params.logger,
-      accountId: params.accountId,
     });
     const wholeComments = allComments.items.filter((comment) => comment.is_whole === true);
     wholeCommentTimeline = await Promise.all(
@@ -851,13 +835,8 @@ async function fetchDriveCommentContext(params: {
           normalizeTrimmedStringList(Array.from(params.botOpenIds ?? [])),
         );
         const content = await resolveParsedCommentContent({
+          ...contentContext,
           elements: isRecord(rootWholeReply?.content) ? rootWholeReply.content.elements : undefined,
-          botOpenIds: params.botOpenIds,
-          currentDocument,
-          client: params.client,
-          wikiCache,
-          logger: params.logger,
-          accountId: params.accountId,
         });
         const commentUserId =
           normalizeString(rootWholeReply?.user_id) || normalizeString(comment.user_id);
@@ -927,26 +906,16 @@ async function fetchDriveCommentContext(params: {
   };
 }
 
-function buildDriveCommentSurfacePrompt(params: {
-  noticeType: "add_comment" | "add_reply";
-  fileType: CommentFileType;
-  fileToken: string;
-  commentId: string;
-  replyId?: string;
-  isWholeComment?: boolean;
-  isMentioned?: boolean;
-  documentTitle?: string;
-  documentUrl?: string;
-  quoteText?: string;
-  rootCommentText?: string;
-  targetReplyText?: string;
-  rootCommentContent?: ParsedCommentContent;
-  targetReplyContent?: ParsedCommentContent;
-  currentCommentThreadReplies: ResolvedCommentReplyContext[];
-  wholeCommentTimeline: ResolvedWholeCommentTimelineEntry[];
-  nearestBotWholeCommentAfter?: ResolvedWholeCommentTimelineEntry;
-  nearestBotWholeCommentBefore?: ResolvedWholeCommentTimelineEntry;
-}): string {
+function buildDriveCommentSurfacePrompt(
+  params: Awaited<ReturnType<typeof fetchDriveCommentContext>> & {
+    noticeType: "add_comment" | "add_reply";
+    fileType: CommentFileType;
+    fileToken: string;
+    commentId: string;
+    replyId?: string;
+    isMentioned?: boolean;
+  },
+): string {
   const documentLabel = params.documentTitle
     ? `"${params.documentTitle}"`
     : `${params.fileType} document ${params.fileToken}`;

@@ -3,6 +3,7 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentMessage } from "../plugin-sdk/agent-core.js";
 import { withSessionTranscriptWriteLock } from "../plugin-sdk/session-transcript-runtime.js";
@@ -49,14 +50,7 @@ function importedSessionCatalogMessage(params: {
     api: "openai-responses",
     provider: params.catalogId,
     model: params.item.model ?? "native-history",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: makeZeroUsageSnapshot(),
     stopReason: "stop",
   };
 }
@@ -69,14 +63,7 @@ function sessionCatalogContinuationNotice(text: string, timestamp: number): Agen
     api: "openai-responses",
     provider: "openclaw",
     model: "session-catalog",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: makeZeroUsageSnapshot(),
     stopReason: "stop",
   };
 }

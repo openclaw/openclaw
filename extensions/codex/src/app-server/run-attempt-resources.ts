@@ -32,6 +32,7 @@ import {
   CodexNativeProcessAuthority,
   hasCodexNativeBackgroundProcesses,
 } from "./native-process-authority.js";
+import { createNativeSubagentAssignmentStore } from "./native-subagent-assignment-store.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
@@ -327,6 +328,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
               ),
           }
         : undefined;
+    const assignmentStore =
+      historyOwner && submissionStore
+        ? createNativeSubagentAssignmentStore({
+            bindingStore,
+            identity: bindingIdentity,
+            owner: historyOwner,
+            assertLifecycleCurrent: () => submissionStore.assertCurrent(),
+          })
+        : undefined;
     const assertRegistrationCurrent = () => {
       runAbortController.signal.throwIfAborted();
       params.hostCapabilities.assertActive();
@@ -362,9 +372,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         unqualifiedModelExecution: modelSource && !configurationQualification ? true : undefined,
         onUnqualifiedModelCancelled: connection.abortExplicitly,
         requesterSessionKey: params.sessionKey,
-        taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
+        completionScope: params.agentHarnessCompletionScope,
         historyOwner,
         submissionStore,
+        assignmentStore,
         agentId: sessionAgentId,
         assertCurrent: assertRegistrationCurrent,
         retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),
@@ -373,7 +384,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         claimDirectChild: (childThreadId) => nativeHookRelay?.claimDirectChild(childThreadId),
         rejectPendingDirectChild: (childThreadId, reason) =>
           nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
-        ...(params.sessionKey && params.agentHarnessTaskRuntimeScope
+        ...(params.sessionKey && params.agentHarnessCompletionScope
           ? {
               onDirectChildAccepted: () => {
                 state.runtimeContinuationStarted = true;
@@ -382,6 +393,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           : {}),
       });
       try {
+        await registration.ready;
         assertRegistrationCurrent();
         state.nativeSubagentMonitor = registration;
       } catch (error) {
@@ -536,7 +548,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     previousRelay?.unregister();
     await previousRelay?.drain();
     connection.assertCurrent();
-    const requiresProcessAdmission = nativeProcessAuthority && runtime.nativeToolSurfaceEnabled;
+    const requiresProcessAdmission =
+      nativeProcessAuthority?.requiresProcessAdmission && runtime.nativeToolSurfaceEnabled;
     const requiresModelAdmission =
       nativeModelAdmission !== undefined && decision.nativeModelInputTools !== undefined;
     const requiresExecutionAdmission = requiresProcessAdmission || requiresModelAdmission;
@@ -624,9 +637,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       nativeHookRelayGeneration: state.nativeHookRelay?.generation,
     };
   };
-  const nativeProcessAuthority =
-    sandbox?.enabled && sandbox.backend && params.hostCapabilities.retainSourceAuthority
-      ? new CodexNativeProcessAuthority(params.hostCapabilities, (error) => {
+  const nativeProcessAuthority = params.hostCapabilities.retainSourceAuthority
+    ? new CodexNativeProcessAuthority(
+        params.hostCapabilities,
+        (error) => {
           const message = formatErrorMessage(error);
           embeddedAgentLog.warn("codex native background work remains unsettled", {
             runId: params.runId,
@@ -637,8 +651,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             stream: "codex_app_server.lifecycle",
             data: { phase: "background_cleanup_failed", error: message },
           });
-        })
-      : undefined;
+        },
+        Boolean(sandbox?.enabled && sandbox.backend),
+      )
+    : undefined;
   return {
     prompt,
     trajectoryRecorder,

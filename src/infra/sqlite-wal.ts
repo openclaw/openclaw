@@ -13,8 +13,8 @@ import {
   normalizeSqliteNonNegativeInteger,
   runWithSqliteBusyTimeout,
 } from "./sqlite-busy-timeout.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   createSqliteWalCheckpoint,
   type SqliteWalCheckpointMode,
@@ -557,7 +557,6 @@ export function configureSqliteWalMaintenance(
   };
 
   let timer: IntervalHandle | null = null;
-  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   const maintainPeriodic = (
     request: SqliteWalPeriodicRequest,
     admit?: (stage: "transaction" | "commit") => void,
@@ -612,17 +611,6 @@ export function configureSqliteWalMaintenance(
     (error) => checkpointOwner.recordError(error),
     512,
   );
-  const maintainPeriodically = (retry = true) => {
-    void maintain().then(() => {
-      if (retry && timer && !invalidated && checkpointOwner.health?.blockingOwner && !retryTimer) {
-        retryTimer = setTimeout(() => {
-          retryTimer = undefined;
-          maintainPeriodically(false);
-        }, 1_000);
-        retryTimer.unref();
-      }
-    });
-  };
   if (timerIntervalMs > 0) {
     timer = runInSqliteMaintenanceContext(
       () =>
@@ -655,7 +643,7 @@ export function configureSqliteWalMaintenance(
               terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
             }
           }
-          maintainPeriodically();
+          void maintain();
         }, timerIntervalMs) as IntervalHandle,
     );
     timer.unref?.();
@@ -670,11 +658,9 @@ export function configureSqliteWalMaintenance(
     reclaimFreePages,
     inspectIdle: () => (runMaintenance(checkpointOwner.inspectIdle) ? "healthy" : "retire"),
     close: (closeOptions) => {
-      clearTimeout(retryTimer);
-      retryTimer = undefined;
       clearInterval(timer ?? undefined);
       timer = null;
-      cancelSqliteWalWriteAdmission(db);
+      void cancelSqliteWalWriteAdmission(db);
       if (invalidated) {
         return false;
       }

@@ -1,4 +1,4 @@
-import { createServer, type Server, type AddressInfo } from "node:net";
+import { createServer, type AddressInfo, type Server } from "node:net";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../agents/failover-error.js";
 import {
@@ -8,12 +8,11 @@ import {
 } from "../agents/run-termination.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  loadRunCronIsolatedAgentTurn,
   dispatchCronDeliveryMock,
+  loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
   resolveAllowedModelRefMock,
@@ -90,7 +89,6 @@ async function runPersistedDiagnosticCase(params: {
   return await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-cron-execution-diagnostics-" },
     async (state) => {
-      resetTaskRegistryForTests();
       const events: CronEvent[] = [];
       const storePath = state.path("cron", "jobs.json");
       const cron = new CronService({
@@ -146,7 +144,6 @@ async function runPersistedDiagnosticCase(params: {
         };
       } finally {
         cron.stop();
-        resetTaskRegistryForTests({ persist: false });
       }
     },
   );

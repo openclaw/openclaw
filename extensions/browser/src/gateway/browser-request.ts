@@ -82,6 +82,8 @@ export async function handleBrowserGatewayRequest({
   signal: invocationSignal,
   hasCurrentClientAuthority,
 }: Parameters<GatewayRequestHandlers["browser.request"]>[0]) {
+  const reject = (...error: Parameters<typeof errorShape>) =>
+    respond(false, undefined, errorShape(...error));
   const typed = params as BrowserRequestParams;
   const methodRaw = (normalizeOptionalString(typed.method) ?? "").toUpperCase();
   const path = normalizeBrowserRequestPath(normalizeOptionalString(typed.path) ?? "");
@@ -115,42 +117,26 @@ export async function handleBrowserGatewayRequest({
         typeof typed.node !== "string" ||
         typed.node.length > 256))
   ) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        'target must be "host" or "node"; node requires target="node" and a nonempty selector of at most 256 characters',
-      ),
+    reject(
+      ErrorCodes.INVALID_REQUEST,
+      'target must be "host" or "node"; node requires target="node" and a nonempty selector of at most 256 characters',
     );
     return;
   }
 
   if (!methodRaw || !path) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "method and path are required"),
-    );
+    reject(ErrorCodes.INVALID_REQUEST, "method and path are required");
     return;
   }
   if (methodRaw !== "GET" && methodRaw !== "POST" && methodRaw !== "DELETE") {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "method must be GET, POST, or DELETE"),
-    );
+    reject(ErrorCodes.INVALID_REQUEST, "method must be GET, POST, or DELETE");
     return;
   }
   if (path === "/dashboard") {
     if (typed.target === "node" || requestedNode) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Browser dashboards use a local managed browser on the Gateway host",
-        ),
+      reject(
+        ErrorCodes.INVALID_REQUEST,
+        "Browser dashboards use a local managed browser on the Gateway host",
       );
       return;
     }
@@ -158,13 +144,9 @@ export async function handleBrowserGatewayRequest({
       .extend({ resume: z.boolean().optional() })
       .safeParse(methodRaw === "GET" ? query : body);
     if (!request.success) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Browser dashboard requires sessionKey and a stable widget name",
-        ),
+      reject(
+        ErrorCodes.INVALID_REQUEST,
+        "Browser dashboard requires sessionKey and a stable widget name",
       );
       return;
     }
@@ -181,7 +163,7 @@ export async function handleBrowserGatewayRequest({
       });
       respond(true, result);
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+      reject(ErrorCodes.INVALID_REQUEST, String(error));
     }
     return;
   }
@@ -189,13 +171,9 @@ export async function handleBrowserGatewayRequest({
   if (typed.dashboard !== undefined) {
     const scope = dashboardRequestSchema.safeParse(typed.dashboard);
     if (!scope.success || explicitNode || requestedNode) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Dashboard requests require a valid local dashboard identity",
-        ),
+      reject(
+        ErrorCodes.INVALID_REQUEST,
+        "Dashboard requests require a valid local dashboard identity",
       );
       return;
     }
@@ -234,7 +212,7 @@ export async function handleBrowserGatewayRequest({
         assertBrowserDashboardTargetCurrent(dashboard, scope.data.agentId, authority, profile);
       await assertDashboardCurrent();
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+      reject(ErrorCodes.INVALID_REQUEST, String(error));
       return;
     }
   }
@@ -246,11 +224,7 @@ export async function handleBrowserGatewayRequest({
   const forceHostLocal =
     Boolean(assertDashboardCurrent) || isBrowserHostLocalRoute(methodRaw, path);
   if (forceHostLocal && explicitNode) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "this browser route must run on the Gateway host"),
-    );
+    reject(ErrorCodes.INVALID_REQUEST, "this browser route must run on the Gateway host");
     return;
   }
   let nodeTarget: NodeSession | null = null;
@@ -265,32 +239,22 @@ export async function handleBrowserGatewayRequest({
       });
       assertRequesterCurrent();
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      reject(ErrorCodes.UNAVAILABLE, String(err));
       return;
     }
   }
 
   if (nodeTarget && path === "/screencast") {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "browser screencast is not available over a node proxy",
-        { details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" } },
-      ),
-    );
+    reject(ErrorCodes.INVALID_REQUEST, "browser screencast is not available over a node proxy", {
+      details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" },
+    });
     return;
   }
 
   if (nodeTarget && isPersistentBrowserProfileMutation(methodRaw, path)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "browser.request cannot mutate persistent browser profiles over a node proxy",
-      ),
+    reject(
+      ErrorCodes.INVALID_REQUEST,
+      "browser.request cannot mutate persistent browser profiles over a node proxy",
     );
     return;
   }
@@ -304,7 +268,7 @@ export async function handleBrowserGatewayRequest({
     ) {
       const message = browserProxyUploadUnavailableMessage(nodeTarget.declaredCommands);
       if (explicitNode || configuredNode) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+        reject(ErrorCodes.UNAVAILABLE, message);
         return;
       }
       logger.warn(
@@ -325,7 +289,7 @@ export async function handleBrowserGatewayRequest({
       assertRequesterCurrent();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+      reject(ErrorCodes.INVALID_REQUEST, message);
       return;
     }
     if (preparedUpload.upload) {
@@ -343,13 +307,9 @@ export async function handleBrowserGatewayRequest({
     if (!allowed.ok) {
       const platform = nodeTarget.platform ?? "unknown";
       const hint = `node command not allowed: ${allowed.reason} (platform: ${platform}, command: ${proxyCommand})`;
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, hint, {
-          details: { reason: allowed.reason, command: proxyCommand },
-        }),
-      );
+      reject(ErrorCodes.INVALID_REQUEST, hint, {
+        details: { reason: allowed.reason, command: proxyCommand },
+      });
       return;
     }
 
@@ -378,7 +338,7 @@ export async function handleBrowserGatewayRequest({
       });
       assertRequesterCurrent();
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
+      reject(ErrorCodes.UNAVAILABLE, String(error));
       return;
     }
     const allowAutomaticHostFallback =
@@ -398,13 +358,13 @@ export async function handleBrowserGatewayRequest({
       if (failure) {
         const { status, body: errorBody } = failure.error;
         const code = status >= 500 ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST;
-        respond(false, undefined, errorShape(code, errorBody.error, { details: errorBody }));
+        reject(code, errorBody.error, { details: errorBody });
         return;
       }
       const proxy =
         payload && typeof payload === "object" ? (payload as BrowserProxyEnvelope) : null;
       if (!proxy || !("result" in proxy)) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser proxy failed"));
+        reject(ErrorCodes.UNAVAILABLE, "browser proxy failed");
         return;
       }
       try {
@@ -412,11 +372,7 @@ export async function handleBrowserGatewayRequest({
         assertRequesterCurrent();
         respond(true, result);
       } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "browser proxy file transfer failed"),
-        );
+        reject(ErrorCodes.UNAVAILABLE, "browser proxy file transfer failed");
       }
       return;
     }
@@ -427,11 +383,7 @@ export async function handleBrowserGatewayRequest({
   // `browser.proxy` is a separate remote-host authority.
   const ready = await startBrowserControlServiceFromConfig();
   if (!ready) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, await describeBrowserControlUnavailable()),
-    );
+    reject(ErrorCodes.UNAVAILABLE, await describeBrowserControlUnavailable());
     return;
   }
 
@@ -439,7 +391,7 @@ export async function handleBrowserGatewayRequest({
   try {
     dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
   } catch (err) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+    reject(ErrorCodes.UNAVAILABLE, String(err));
     return;
   }
 
@@ -481,7 +433,7 @@ export async function handleBrowserGatewayRequest({
       ? await withTimeout(dispatch, timeoutMs, "browser request")
       : await dispatch();
   } catch (err) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+    reject(ErrorCodes.UNAVAILABLE, String(err));
     return;
   }
 
@@ -491,7 +443,7 @@ export async function handleBrowserGatewayRequest({
         ? String((result.body as { error?: unknown }).error)
         : `browser request failed (${result.status})`;
     const code = result.status >= 500 ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST;
-    respond(false, undefined, errorShape(code, message, { details: result.body }));
+    reject(code, message, { details: result.body });
     return;
   }
 

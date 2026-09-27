@@ -1,10 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
-import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator-errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
@@ -89,6 +89,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: { path: string; now?:
     for (;;) {
       let admission: SqliteWorkerOperationAdmission | undefined;
       let publication: ReturnType<typeof stagePlacementTurnClaimWorkerPublication> | undefined;
+      let entered = false;
       let granted = false;
       let prepared: PlacementTurnClaimReceipt | undefined;
       let published = false;
@@ -116,7 +117,6 @@ export function createPlacementTurnClaimWorkerOps(runtime: { path: string; now?:
           async (scope) => publish(await scope.execute(command)),
           {
             assertCurrent: check,
-            requireStateLifecycle: true,
             createAdmission: () => {
               admission = createSqliteWorkerOperationAdmission((request, grant) => {
                 check();
@@ -136,6 +136,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: { path: string; now?:
                   publication?.rollback();
                   throw new Error("Placement claim admission expired");
                 }
+                entered ||= request.stage === "transaction";
                 granted ||= request.stage === "commit";
               });
               return { nativeLocations: [runtime.path], admission };
@@ -207,18 +208,18 @@ export function createPlacementTurnClaimWorkerOps(runtime: { path: string; now?:
         }
         if (
           command.type === "placementTurns.releaseIfOwned" &&
+          !entered &&
           !granted &&
           admission?.settlement?.kind !== "unknown" &&
-          error instanceof StateDatabaseCoordinatorContentionError &&
-          error.family === "state-lifecycle"
+          isSqliteLockError(error)
         ) {
           // The worker never admitted a commit. Keep this exact cleanup owner alive;
-          // the broker waits asynchronously before every new acquisition attempt.
+          // SQLite waits in the worker before every new transaction attempt.
           // Never replay startup, a claim, an uncertain write, or a replaced database.
           context.admission.assertCurrent();
           if (!reportedContention) {
             reportedContention = true;
-            log.warn("Turn claim release is waiting for the state coordinator", {
+            log.warn("Turn claim release is waiting for the state database", {
               sessionId: claim.sessionId,
               runId: claim.runId,
               error,

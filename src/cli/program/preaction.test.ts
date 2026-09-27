@@ -748,6 +748,43 @@ describe("registerPreActionHooks", () => {
     });
   });
 
+  describe.each(["infer", "capability"])("%s model run startup", (command) => {
+    it.each([
+      { args: ["--prompt", "hello", "--gateway"], validationOnly: true },
+      { args: ["--prompt", "--local", "--gateway"], validationOnly: true },
+      { args: ["--gateway", "--prompt", "--local"], validationOnly: true },
+      { args: ["--prompt=--local", "--gateway"], validationOnly: true },
+      { args: ["--prompt", "hello"], validationOnly: false },
+      { args: ["--prompt", "hello", "--local"], validationOnly: false },
+      { args: ["--prompt", "--gateway"], validationOnly: false },
+      { args: ["--prompt", "--gateway", "--local"], validationOnly: false },
+    ])("uses parsed transport for $args", async ({ args, validationOnly }) => {
+      const parseProgram = new Command().name("openclaw").enablePositionalOptions();
+      const action = vi.fn();
+      parseProgram
+        .command(command)
+        .command("model")
+        .command("run")
+        .requiredOption("--prompt <text>")
+        .option("--local", "Force local execution", false)
+        .option("--gateway", "Force Gateway execution", false)
+        .action(action);
+      registerPreActionHooks(parseProgram, "9.9.9-test");
+      process.argv = ["node", "openclaw", command, "model", "run", ...args];
+
+      await parseProgram.parseAsync(process.argv);
+
+      expect(action).toHaveBeenCalledOnce();
+      expect(ensureConfigReadyMock).toHaveBeenCalledOnce();
+      const bootstrap = ensureConfigReadyMock.mock.calls[0]?.[0];
+      if (validationOnly) {
+        expect(bootstrap).toHaveProperty("validateConfigOnly", true);
+      } else {
+        expect(bootstrap).not.toHaveProperty("validateConfigOnly");
+      }
+    });
+  });
+
   it("uses the Commander path past parent option values for gateway calls", async () => {
     const parseProgram = buildProgram();
     process.argv = ["node", "openclaw", "gateway", "--token", "secret", "call", "health", "--json"];

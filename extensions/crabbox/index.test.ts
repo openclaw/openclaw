@@ -158,7 +158,7 @@ describe("Crabbox plugin generation lifecycle", () => {
         // complete diagnostics, Stop and child-settlement cleanup envelope. Native
         // capture adds 45m plus seven 10s command settlements to the former budgets.
         expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(
-          216 * 60_000 + 25_000,
+          217 * 60_000 + 25_000,
         );
         expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(74 * 60_000 + 15_000);
         expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);

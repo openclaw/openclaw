@@ -24,12 +24,11 @@ import {
   isActiveMemoryGloballyEnabled,
   isActiveMemoryPluginEnabled,
   isAllowedChatId,
-  isAllowedChatType,
   isEligibleInteractiveSession,
   isEnabledForAgent,
-  isPrivateRecallDestination,
   isSessionActiveMemoryDisabled,
   lacksAdminToMutateActiveMemoryGlobal,
+  resolveChatType,
   resolveCommandSessionKey,
   setSessionActiveMemoryDisabled,
   shouldSkipActiveMemoryForHarnessSession,
@@ -181,12 +180,7 @@ export default definePluginEntry({
     // both maxima so preflight latency cannot consume recall settlement time.
     const beforePromptBuildTimeoutMs =
       MAX_TIMEOUT_MS + MAX_SETUP_GRACE_TIMEOUT_MS + HOOK_TIMEOUT_RECOVERY_GRACE_MS * 2;
-    // Names the exit taken when recall is configured off for this session, so
-    // "no relevant memory found" and "recall never ran" stop being
-    // indistinguishable at info level. Reserved for states an operator can act
-    // on; the routine escalation decision stays at debug. Deliberately not
-    // gated on config.logging, which defaults to false and would reproduce the
-    // invisibility this reports.
+    // Actionable skips stay visible even when optional recall logging is off.
     const logRecallSkipped = (reason: string) => {
       api.logger.info?.(`active-memory: recall skipped reason=${reason}`);
     };
@@ -205,14 +199,8 @@ export default definePluginEntry({
         toolAuthority.assertActive();
         refreshLiveConfigFromRuntime();
         const liveConfig = readCurrentConfig();
-        // The hook deadline, watchdog, and embedded-run budget all flow from
-        // this config, so the CLI-runtime default raise must happen before
-        // any of them are armed. Budgeting shares the runner's own dispatch
-        // eligibility so API-key/missing-backend passthrough runs keep the
-        // plain default.
+        // Resolve the runner's CLI budget before arming any recall deadlines.
         const timeoutAgentId = resolveStatusUpdateAgentId(ctx);
-        // getModelRef returns undefined when no recall model resolves; the
-        // eligibility check treats a missing provider as ineligible.
         const timeoutModelRef =
           (timeoutAgentId
             ? getModelRef(liveConfig, timeoutAgentId, config, {
@@ -351,13 +339,10 @@ export default definePluginEntry({
               memoryCapabilityRegistration && memoryCapabilityRegistration.pluginId === memorySlot
                 ? memoryCapabilityRegistration.capability
                 : undefined;
-            const allowedRecallTools = authorityAllowedRecallTools;
             const deterministicRecallToolName = memoryCapability?.deterministicRecallToolName;
-            const chatIdAllowed = isAllowedChatId(invocationConfig, {
-              sessionKey: destinationContext.sessionKey,
-              messageProvider: destinationContext.messageProvider,
-              channelId: destinationContext.channelId,
-            });
+            const chatType = resolveChatType(destinationContext);
+            const privateDestination = chatType === "direct" || chatType === "explicit";
+            const chatIdAllowed = isAllowedChatId(invocationConfig, destinationContext);
             const activeMemoryConfigured = isEnabledForAgent(invocationConfig, effectiveAgentId);
             let laneOne: { context?: string; hasStrongHit: boolean; injectedCount: number } = {
               hasStrongHit: false,
@@ -367,16 +352,13 @@ export default definePluginEntry({
               activeMemoryConfigured &&
               effectiveAgentId &&
               deterministicRecallToolName &&
-              allowedRecallTools.includes(deterministicRecallToolName) &&
-              isPrivateRecallDestination(destinationContext) &&
+              authorityAllowedRecallTools.includes(deterministicRecallToolName) &&
+              privateDestination &&
               chatIdAllowed
             ) {
               toolAuthority.assertActive();
-              // Lane one is optional and runs inside the preflight deadline.
-              // Its own timeout is what is left of that budget, less enough
-              // to fall through to model recall before the watchdog fires.
-              // Without that headroom it is skipped outright: even a zero
-              // delay timer is asynchronous and can lose to the watchdog.
+              // Leave headroom to start model recall before the preflight watchdog;
+              // even a zero-delay trigger timeout can lose that race.
               const triggerLookupTimeoutMs =
                 hookDeadline.remainingMs() - TRIGGER_LOOKUP_SETTLE_RESERVE_MS;
               if (triggerLookupTimeoutMs > 0) {
@@ -411,13 +393,14 @@ export default definePluginEntry({
             const laneOneContext = laneOne.context;
             const activeMemoryAllowed =
               activeMemoryConfigured &&
-              isAllowedChatType(invocationConfig, destinationContext) &&
+              chatType !== undefined &&
+              invocationConfig.allowedChatTypes.includes(chatType) &&
               chatIdAllowed;
             const productRecallRequested = Boolean(
               invocationConfig.enabled &&
               resolvedSessionKey &&
               resolveRememberAcrossConversations(liveConfig, effectiveAgentId) &&
-              isPrivateRecallDestination(destinationContext) &&
+              privateDestination &&
               chatIdAllowed,
             );
             const productRecallEligible =
@@ -430,7 +413,7 @@ export default definePluginEntry({
             const productRecallToolName =
               productRecallEligible &&
               deterministicRecallToolName &&
-              allowedRecallTools.includes(deterministicRecallToolName)
+              authorityAllowedRecallTools.includes(deterministicRecallToolName)
                 ? deterministicRecallToolName
                 : undefined;
             const productRecallAllowed = Boolean(productRecallToolName);
@@ -454,9 +437,7 @@ export default definePluginEntry({
               hasStrongLaneOneHit: laneOne.hasStrongHit,
             });
             if (escalationDecision !== "recall") {
-              // Stays at debug: escalate is the default mode and ordinary
-              // prompts resolve to no-recall-intent, so this is the healthy
-              // path rather than an actionable skip.
+              // Ordinary turns intentionally skip recall in the default escalation mode.
               api.logger.debug?.(`active-memory: recall skipped reason=${escalationDecision}`);
               const outcomeContext =
                 escalationDecision === "no-recall-intent"
@@ -476,7 +457,7 @@ export default definePluginEntry({
             const recallConfig =
               productRecallToolName && !activeMemoryAllowed
                 ? { ...invocationConfig, toolsAllow: [productRecallToolName] }
-                : { ...invocationConfig, toolsAllow: allowedRecallTools };
+                : { ...invocationConfig, toolsAllow: authorityAllowedRecallTools };
             const query = buildQuery({
               latestUserMessage: currentUserMessage,
               recentTurns,

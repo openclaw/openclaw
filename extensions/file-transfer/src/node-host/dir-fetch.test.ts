@@ -80,6 +80,10 @@ describe("handleDirFetch — happy path", () => {
     await fs.writeFile(path.join(tmpRoot, ".ssh", "id_rsa"), "secret\n");
     await fs.mkdir(path.join(tmpRoot, "sub"));
     await fs.writeFile(path.join(tmpRoot, "sub", "b.txt"), "beta\n");
+    await fs.mkdir(path.join(tmpRoot, "c"));
+    await fs.writeFile(path.join(tmpRoot, "c", "z.txt"), "first subtree\n");
+    await fs.mkdir(path.join(tmpRoot, "c\u200d"));
+    await fs.writeFile(path.join(tmpRoot, "c\u200d", "a.txt"), "second subtree\n");
 
     const r = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
     if (!r.ok) {
@@ -91,7 +95,17 @@ describe("handleDirFetch — happy path", () => {
     expect(r.tarBytes).toBe(0);
     expect(r.sha256).toBe("");
     expect(r.preflightOnly).toBe(true);
-    expect(r.entries).toEqual([".ssh", ".ssh/id_rsa", "a.txt", "sub", "sub/b.txt"]);
+    expect(r.entries).toEqual([
+      ".ssh",
+      ".ssh/id_rsa",
+      "a.txt",
+      "c",
+      "c/z.txt",
+      "c\u200d",
+      "c\u200d/a.txt",
+      "sub",
+      "sub/b.txt",
+    ]);
     expect(r.fileCount).toBe(r.entries?.length);
   });
 

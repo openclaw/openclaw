@@ -330,7 +330,14 @@ export async function startWebLoginWithQr(
   }
 
   const existing = activeLogins.get(account.accountId);
-  if (existing && isLoginFresh(existing) && existing.qrDataUrl) {
+  if (
+    !opts.force &&
+    existing &&
+    isLoginFresh(existing) &&
+    !existing.connected &&
+    existing.error === undefined &&
+    existing.qrDataUrl
+  ) {
     return {
       qrDataUrl: existing.qrDataUrl,
       message: "QR already active. Scan it in WhatsApp → Linked Devices.",

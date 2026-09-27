@@ -80,7 +80,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.CancellationException
 import kotlin.math.abs
@@ -141,7 +140,7 @@ internal fun SidebarSectionTitle(
 ) {
   Text(
     text = label,
-    style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = 12.sp),
+    style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
     color = palette.muted,
     modifier = modifier.semantics { heading() }.padding(horizontal = 12.dp, vertical = 6.dp),
     maxLines = 1,
@@ -185,7 +184,7 @@ internal fun SidebarCollapsibleHeader(
     iconContent?.invoke()
     Text(
       text = label,
-      style = ClawTheme.type.body.copy(fontSize = 13.sp),
+      style = ClawTheme.type.body,
       color = palette.text,
       modifier = Modifier.weight(1f),
       maxLines = 1,
@@ -446,14 +445,14 @@ internal fun SidebarSessionRow(
     Column(modifier = Modifier.weight(1f)) {
       Text(
         text = sessionPresentationTitle(session) { session.key },
-        style = ClawTheme.type.body.copy(fontSize = 13.sp),
+        style = ClawTheme.type.body,
         color = palette.text,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
       Text(
         text = attention?.status ?: sidebarSessionSubtitle(session, sessionStateDescription),
-        style = ClawTheme.type.caption.copy(fontSize = 11.sp),
+        style = ClawTheme.type.caption,
         color = palette.muted,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,

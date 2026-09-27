@@ -28,7 +28,6 @@ struct ChatProTab: View {
     }
 
     private enum PendingChatAction {
-        case backgroundTasks
         case exportTranscript
         case gatewaySettings
         case newSessionOptions
@@ -44,7 +43,6 @@ struct ChatProTab: View {
 
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
-    @State private var showsBackgroundTasks = false
     @State private var showsNewSessionOptions = false
     @State private var showsChatActions = false
     @State private var pendingChatAction: PendingChatAction?
@@ -111,9 +109,6 @@ struct ChatProTab: View {
             .sheet(item: self.$transcriptShareItem) { item in
                 OpenClawChatFileShareSheet(fileURL: item.fileURL)
             }
-            .sheet(isPresented: self.$showsBackgroundTasks) {
-                BackgroundTasksScreen(agentID: self.currentAgentID)
-            }
             .sheet(isPresented: self.$showsNewSessionOptions) {
                 if let viewModel {
                     ChatNewSessionOptionsPopover(viewModel: viewModel) {
@@ -152,7 +147,6 @@ struct ChatProTab: View {
                 assistantName: self.agentDisplayName,
                 assistantAvatarText: self.agentBadge,
                 assistantAvatarTint: OpenClawBrand.accent,
-                showsAssistantAvatars: false,
                 composerChrome: .clean,
                 isComposerEnabled: self.gatewayConnected || self.canQueueOffline,
                 isAttachmentInputEnabled: self.gatewayConnected || self.canQueueOffline,
@@ -483,13 +477,6 @@ struct ChatProTab: View {
                 .accessibilityIdentifier("chat-show-reasoning-toggle")
 
                 self.chatActionButton(
-                    title: "Background tasks",
-                    systemImage: "clock.arrow.circlepath",
-                    disabled: !self.appModel.isOperatorGatewayConnected)
-                {
-                    self.pendingChatAction = .backgroundTasks
-                }
-                self.chatActionButton(
                     title: "Export transcript",
                     systemImage: "square.and.arrow.up",
                     disabled: self.viewModel == nil)
@@ -528,8 +515,6 @@ struct ChatProTab: View {
         guard let pendingChatAction = self.pendingChatAction else { return }
         self.pendingChatAction = nil
         switch pendingChatAction {
-        case .backgroundTasks:
-            self.showsBackgroundTasks = true
         case .exportTranscript:
             self.exportTranscript()
         case .gatewaySettings:

@@ -199,7 +199,7 @@ export async function executeSnapshotAction(params: {
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
+  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
   const snapshotDefaults = getRuntimeConfig().browser?.snapshotDefaults;
@@ -274,7 +274,7 @@ export async function executeSnapshotAction(params: {
     refsFallback = "role";
     snapshot = await readSnapshot({ ...snapshotQuery, refs: "role" });
   }
-  params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
+  await params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
   const identity = { format: snapshot.format, targetId: snapshot.targetId, url: snapshot.url };
   const dialogState = {
     ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),

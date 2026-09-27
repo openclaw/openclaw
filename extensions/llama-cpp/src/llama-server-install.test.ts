@@ -32,13 +32,13 @@ vi.mock("./defaults.js", async (importOriginal) => ({
 import {
   LLAMA_SERVER_BUILD,
   LLAMA_SERVER_COMMIT,
+  resolveManagedLlamaServerPaths,
+  selectLlamaServerAsset,
   type LlamaServerAsset,
 } from "./llama-server-assets.js";
 import {
   downloadVerifiedFile,
   ensureLlamaServerInstalled,
-  resolveManagedLlamaServerPaths,
-  selectLlamaServerAsset,
   sha256File,
 } from "./llama-server-install.js";
 

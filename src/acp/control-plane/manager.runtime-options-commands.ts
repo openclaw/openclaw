@@ -8,7 +8,7 @@ import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import type {
   AcpSessionRuntimeOptions,
   EnsureManagerRuntimeHandle,
-  ResolveManagerSession,
+  ResolveManagerSessionAsync,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 import { createUnsupportedControlError, requireReadySessionMeta } from "./manager.utils.js";
@@ -24,7 +24,7 @@ import {
 /** Manager services required by runtime-option command handlers. */
 export type RuntimeOptionCommandServices = {
   runtimeHandles: ManagerRuntimeHandleCache;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   writeSessionMeta: WriteManagerSessionMeta;
   isCurrentActor: () => boolean;
@@ -37,25 +37,29 @@ type RuntimeOptionCommandContext = RuntimeOptionCommandServices & {
   agentId: string;
 };
 
-function resolveRuntimeOptionSessionMeta(params: RuntimeOptionCommandContext) {
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
-  params.assertActive?.();
-  return requireReadySessionMeta(
-    params.resolveSession({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-    }),
-  );
+async function resolveRuntimeOptionSessionMeta(params: RuntimeOptionCommandContext) {
+  const assertCurrent = () => {
+    if (!params.isCurrentActor()) {
+      throw createSupersededActorError(params.sessionKey);
+    }
+    params.assertActive?.();
+  };
+  assertCurrent();
+  const resolution = await params.resolveSession({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    assertCurrent,
+  });
+  assertCurrent();
+  return requireReadySessionMeta(resolution);
 }
 
 /** Applies a backend runtime mode control and persists the selected mode. */
 export async function runSetManagerSessionRuntimeMode(
   params: RuntimeOptionCommandContext & { runtimeMode: string },
 ): Promise<AcpSessionRuntimeOptions> {
-  const resolvedMeta = resolveRuntimeOptionSessionMeta(params);
+  const resolvedMeta = await resolveRuntimeOptionSessionMeta(params);
   const { runtime, handle, meta } = await params.ensureRuntimeHandle({
     assertActive: params.assertActive,
     cfg: params.cfg,
@@ -109,7 +113,7 @@ export async function runSetManagerSessionRuntimeMode(
 export async function runSetManagerSessionConfigOption(
   params: RuntimeOptionCommandContext & { key: string; value: string },
 ): Promise<AcpSessionRuntimeOptions> {
-  const resolvedMeta = resolveRuntimeOptionSessionMeta(params);
+  const resolvedMeta = await resolveRuntimeOptionSessionMeta(params);
   const { runtime, handle, meta } = await params.ensureRuntimeHandle({
     assertActive: params.assertActive,
     cfg: params.cfg,
@@ -178,7 +182,7 @@ export async function runSetManagerSessionConfigOption(
 export async function runUpdateManagerSessionRuntimeOptions(
   params: RuntimeOptionCommandContext & { patch: Partial<AcpSessionRuntimeOptions> },
 ): Promise<AcpSessionRuntimeOptions> {
-  const resolvedMeta = resolveRuntimeOptionSessionMeta(params);
+  const resolvedMeta = await resolveRuntimeOptionSessionMeta(params);
   const nextOptions = mergeRuntimeOptions({
     current: resolveRuntimeOptionsFromMeta(resolvedMeta),
     patch: params.patch,
@@ -195,15 +199,20 @@ export async function runUpdateManagerSessionRuntimeOptions(
 export async function runResetManagerSessionRuntimeOptions(
   params: RuntimeOptionCommandContext,
 ): Promise<AcpSessionRuntimeOptions> {
-  resolveRuntimeOptionSessionMeta(params);
+  await resolveRuntimeOptionSessionMeta(params);
   const cached = params.runtimeHandles.get(params);
   if (cached) {
     await withAcpRuntimeErrorBoundary({
-      run: async () =>
+      run: async () => {
+        if (!params.isCurrentActor()) {
+          throw createSupersededActorError(params.sessionKey);
+        }
+        params.assertActive?.();
         await cached.runtime.close({
           handle: cached.handle,
           reason: "reset-runtime-options",
-        }),
+        });
+      },
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "Could not reset ACP runtime options.",
     });

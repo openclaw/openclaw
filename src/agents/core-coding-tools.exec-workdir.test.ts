@@ -40,16 +40,7 @@ describe("coding-tool exec working directory", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    { workdir: undefined, directory: "workspace", pty: false },
-    { workdir: ".", directory: "workspace", pty: false },
-    { workdir: ".", directory: "workspace", pty: true },
-    { workdir: "nested", directory: "workspace/nested", pty: false },
-    { workdir: "~", directory: "workspace/~", pty: false },
-    { workdir: "../sibling", directory: "sibling", pty: false },
-    { workdir: "absolute", directory: "sibling", pty: false },
-  ])("executes in $directory for workdir=$workdir (PTY=$pty)", async (testCase) => {
-    expect(fs.realpathSync(process.cwd())).not.toBe(codingRoot);
+  function createExecTool(sandbox?: Parameters<typeof createCoreCodingTools>[0]["sandbox"]) {
     const tools = createCoreCodingTools({
       codingRoot,
       containmentRoot: codingRoot,
@@ -57,10 +48,11 @@ describe("coding-tool exec working directory", () => {
       shellTools: "full",
       workspaceOnly: false,
       readOnly: false,
+      sandbox,
       applyPatchEnabled: false,
       applyPatchWorkspaceOnly: true,
       execDefaults: {
-        host: "gateway",
+        host: sandbox ? "sandbox" : "gateway",
         mode: "full",
         allowBackground: false,
         notifyOnExit: false,
@@ -72,6 +64,19 @@ describe("coding-tool exec working directory", () => {
     if (!exec) {
       throw new Error("Expected the coding exec tool");
     }
+    return exec;
+  }
+
+  it.each([
+    { workdir: undefined, directory: "workspace", pty: false },
+    { workdir: ".", directory: "workspace", pty: true },
+    { workdir: "nested", directory: "workspace/nested", pty: false },
+    { workdir: "~", directory: "workspace/~", pty: false },
+    { workdir: "../sibling", directory: "sibling", pty: false },
+    { workdir: "absolute", directory: "sibling", pty: false },
+  ])("executes in $directory for workdir=$workdir (PTY=$pty)", async (testCase) => {
+    expect(fs.realpathSync(process.cwd())).not.toBe(codingRoot);
+    const exec = createExecTool();
     const workdir = testCase.workdir === "absolute" ? path.join(root, "sibling") : testCase.workdir;
     const result = await exec.execute("coding-workdir", {
       command: process.platform === "win32" ? "(Get-Location).Path" : "pwd -P",
@@ -120,29 +125,7 @@ describe("coding-tool exec working directory", () => {
         fsBridge: createHostSandboxFsBridge(codingRoot),
       },
     });
-    const tools = createCoreCodingTools({
-      codingRoot,
-      containmentRoot: codingRoot,
-      includeBaseCodingTools: false,
-      shellTools: "full",
-      workspaceOnly: false,
-      readOnly: false,
-      sandbox,
-      applyPatchEnabled: false,
-      applyPatchWorkspaceOnly: true,
-      execDefaults: {
-        host: "sandbox",
-        mode: "full",
-        allowBackground: false,
-        notifyOnExit: false,
-        config: { plugins: { enabled: false } },
-      },
-      processDefaults: {},
-    });
-    const exec = tools.find((tool) => tool.name === "exec");
-    if (!exec) {
-      throw new Error("Expected the builtin exec tool");
-    }
+    const exec = createExecTool(sandbox);
     const result = await exec.execute("coding-cleanup", { command: "fixture" });
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
     expect(result.content.find((entry) => entry.type === "text")?.text.trim()).toBe(

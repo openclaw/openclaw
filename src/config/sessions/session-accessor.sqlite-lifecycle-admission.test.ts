@@ -107,7 +107,10 @@ function observeColdAdmission(databasePath: string) {
       const prepare = database.prepare.bind(database);
       database.prepare = (sql) => {
         const statement = prepare(sql);
-        if (sql === "PRAGMA integrity_check;") {
+        if (
+          sql === "PRAGMA integrity_check;" ||
+          sql === "PRAGMA integrity_check('sqlite_schema');"
+        ) {
           const all = statement.all.bind(statement);
           statement.all = () => {
             parentChecks += 1;

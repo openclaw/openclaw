@@ -201,6 +201,7 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
           const service = createMockGatewayService({
             readCommand: async () => ({
               programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
+              ...(platform === "win32" ? { sourcePath: mocks.taskScriptPath } : {}),
               environment: { HOME: home },
             }),
             readRuntime: async () => ({
@@ -303,6 +304,7 @@ it
         createMockGatewayService({
           readCommand: async () => ({
             programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
+            ...(platform === "win32" ? { sourcePath: mocks.taskScriptPath } : {}),
             environment: { HOME: home },
           }),
           readRuntime: async () => {

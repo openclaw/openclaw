@@ -288,6 +288,15 @@ describe("installed-CLI consent scenario report contract", () => {
     expect(fs.existsSync(path.join(installPath, "index.js"))).toBe(true);
   });
 
+  it("retains plugin consent proof when a frozen target predates core update consent", async () => {
+    await expect(
+      runConsentScenario(entry, coreTarball, { coreUpdateConsent: false }),
+    ).resolves.toBeUndefined();
+    expect(installed).toBe(2);
+    expect(adapters.future).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"core-update-consent"'));
+  });
+
   it.each([
     [
       "missing plugin warning",

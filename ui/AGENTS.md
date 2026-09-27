@@ -24,7 +24,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 - Session rosters apply nested Gateway row snapshots through the shared reconciler.
   `lib/sessions/session-list-query.ts` owns whether a snapshot preserves a held
-  window: lifecycle, placement, patch/send/steer, run-start/settlement/capacity, and title
+  window: lifecycle, participants, placement, patch/send/steer, run-start/settlement/capacity, and title
   updates can avoid list reads when membership, lineage, and pin/owner/archive
   facts stay unchanged and recency does not move backwards. Tree events require
   the Gateway's complete, access-scoped `ancestorSessions` snapshots plus any
@@ -76,6 +76,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Stylesheet Policy
 
+- No universal targets after a `:has()` compound or `:has()` with `::placeholder` (measured ~9/~8 ms subtree restyles per insertion with 534 messages); use owner-set classes or named children.
 - Cursors: links and controls that open a new tab use the pointer; state-changing controls keep the default arrow.
 - Colors: stylesheet colors flow through custom-property tokens defined in `ui/src/styles/base.css`; `color-no-hex` enforces this. Exempt surfaces (token definitions, `lobster-pet.css` sprite artwork, `--theme-chip-*` preview swatches) each carry a stated contract. Lit `css\`\`` templates are not yet gated — prefer tokens there too.
 - Breakpoints: `max-width` media conditions use the canonical ladder 400/560/640/768/900/1100/1320px (plus the 932×500 landscape-phone compound); stylelint's allowed-list enforces it. New thresholds round up to the next rung. Don't add rungs without updating the config comment and this note.

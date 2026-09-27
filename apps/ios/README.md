@@ -183,6 +183,10 @@ run the same entry point from a clean local `main` matching `origin/main`:
 pnpm ios:release:upload
 ```
 
+GitHub first qualifies pairing and chat in a separate job. Signing and upload
+then use a fresh checkout of the same commit, so qualification build outputs
+cannot dirty the release source.
+
 The entry point freezes the live App Store plan and unchanged source SHA,
 generates reviewed release notes from changes since the latest public build,
 and saves the text as a release artifact. After upload and Apple processing, it

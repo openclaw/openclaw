@@ -1,4 +1,3 @@
-// Ollama setup runtime handles plugin onboarding behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -411,15 +410,8 @@ export async function promptAndConfigureOllama(params: {
     ],
   })) as OllamaInteractiveMode;
   if (mode === "cloud-only") {
-    const { credential, credentialMode, discoveryApiKey } = await promptForOllamaCloudCredential({
-      cfg: params.cfg,
-      env: params.env,
-      workspaceDir: params.workspaceDir,
-      opts: params.opts,
-      prompter: params.prompter,
-      secretInputMode: params.secretInputMode,
-      allowSecretRefPrompt: params.allowSecretRefPrompt,
-    });
+    const { credential, credentialMode, discoveryApiKey } =
+      await promptForOllamaCloudCredential(params);
     const { models } = await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL, {
       apiKey: discoveryApiKey,
       signal: params.signal,

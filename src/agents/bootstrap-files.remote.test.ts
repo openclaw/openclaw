@@ -28,6 +28,19 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let testState: OpenClawTestState | undefined;
 
+function createRemoteBridge(workspaceDir: string, remoteDir: string) {
+  return createRemoteShellSandboxFsBridge({
+    sandbox: createSandboxTestContext({
+      overrides: { workspaceDir, agentWorkspaceDir: workspaceDir },
+    }),
+    runtime: {
+      remoteWorkspaceDir: remoteDir,
+      remoteAgentWorkspaceDir: remoteDir,
+      runRemoteShellScript: createLocalRemoteShellScriptRunner(),
+    },
+  });
+}
+
 describe.runIf(process.platform !== "win32")("remote bootstrap read provenance", () => {
   beforeEach(async () => {
     clearInternalHooks();
@@ -64,16 +77,7 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
       path.join(remoteDir, "users", bob.id),
       "junction",
     );
-    const bridge = createRemoteShellSandboxFsBridge({
-      sandbox: createSandboxTestContext({
-        overrides: { workspaceDir, agentWorkspaceDir: workspaceDir },
-      }),
-      runtime: {
-        remoteWorkspaceDir: remoteDir,
-        remoteAgentWorkspaceDir: remoteDir,
-        runRemoteShellScript: createLocalRemoteShellScriptRunner(),
-      },
-    });
+    const bridge = createRemoteBridge(workspaceDir, remoteDir);
     const release = registerAgentWorkspaceAccess(workspaceDir, { bridge });
     try {
       const files = await resolveBootstrapFilesForRun({
@@ -106,16 +110,7 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
     }
     const local = await loadExtraBootstrapFilesWithDiagnostics(remoteDir, ["*.md"]);
     expect(local.files).toMatchObject([{ name: "AGENTS.md", content: "Harness instructions" }]);
-    const bridge = createRemoteShellSandboxFsBridge({
-      sandbox: createSandboxTestContext({
-        overrides: { workspaceDir, agentWorkspaceDir: workspaceDir },
-      }),
-      runtime: {
-        remoteWorkspaceDir: remoteDir,
-        remoteAgentWorkspaceDir: remoteDir,
-        runRemoteShellScript: createLocalRemoteShellScriptRunner(),
-      },
-    });
+    const bridge = createRemoteBridge(workspaceDir, remoteDir);
     const release = registerAgentWorkspaceAccess(workspaceDir, { bridge });
     try {
       const remote = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, ["*.md"]);
@@ -131,16 +126,7 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
     const remoteDir = tempDirs.make("bootstrap-source-harness-");
     await fs.writeFile(path.join(workspaceDir, "USER.md"), "Gateway decoy");
     await fs.writeFile(path.join(remoteDir, "USER.md"), "Harness profile");
-    const bridge = createRemoteShellSandboxFsBridge({
-      sandbox: createSandboxTestContext({
-        overrides: { workspaceDir, agentWorkspaceDir: workspaceDir },
-      }),
-      runtime: {
-        remoteWorkspaceDir: remoteDir,
-        remoteAgentWorkspaceDir: remoteDir,
-        runRemoteShellScript: createLocalRemoteShellScriptRunner(),
-      },
-    });
+    const bridge = createRemoteBridge(workspaceDir, remoteDir);
     let workspaceSource = true;
     const read = bridge.readFileWithSource!.bind(bridge);
     bridge.readFileWithSource = async (params) => {
@@ -182,16 +168,7 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
     const workspaceDir = tempDirs.make("bootstrap-revoked-gateway-");
     const remoteDir = tempDirs.make("bootstrap-revoked-harness-");
     await fs.writeFile(path.join(remoteDir, "USER.md"), "Harness profile");
-    const bridge = createRemoteShellSandboxFsBridge({
-      sandbox: createSandboxTestContext({
-        overrides: { workspaceDir, agentWorkspaceDir: workspaceDir },
-      }),
-      runtime: {
-        remoteWorkspaceDir: remoteDir,
-        remoteAgentWorkspaceDir: remoteDir,
-        runRemoteShellScript: createLocalRemoteShellScriptRunner(),
-      },
-    });
+    const bridge = createRemoteBridge(workspaceDir, remoteDir);
     const release = registerAgentWorkspaceAccess(workspaceDir, { bridge });
     memoryRuntimeMocks.classifyWorkspacePaths.mockImplementation(async () => {
       if (stage === "classification") {

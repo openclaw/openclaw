@@ -3,6 +3,7 @@ import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transc
 import type { AgentMessage } from "../../runtime/index.js";
 import { buildSessionsYieldContextMessage } from "../../sessions-yield-context.js";
 import type { SessionManager } from "../../sessions/index.js";
+import { buildUsageWithNoCost } from "../../stream-message-shared.js";
 /**
  * Handles sessions-yield interruption, persistence, and artifact cleanup.
  */
@@ -37,20 +38,7 @@ export function createYieldAbortedResponse(model: {
     api: model.api ?? "",
     provider: model.provider ?? "",
     model: model.id ?? "",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
+    usage: buildUsageWithNoCost({}),
     timestamp: Date.now(),
   };
   return {

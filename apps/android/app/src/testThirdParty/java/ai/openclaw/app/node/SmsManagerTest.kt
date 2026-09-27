@@ -19,8 +19,8 @@ class SmsManagerTest {
     status: Int = 0,
     body: String? = "msg-$id",
     transportType: String? = null,
-  ): SmsManager.SmsMessage =
-    SmsManager.SmsMessage(
+  ): SmsMessage =
+    SmsMessage(
       id = id,
       threadId = 1L,
       address = "+15551234567",
@@ -176,7 +176,7 @@ class SmsManagerTest {
         ok = true,
         messages =
           listOf(
-            SmsManager.SmsMessage(
+            SmsMessage(
               id = 1L,
               threadId = 2L,
               address = "+1555",
@@ -511,7 +511,7 @@ class SmsManagerTest {
 
   @Test
   fun upsertTopDateCandidatesKeepsDescendingOrderAndBounds() {
-    val candidates = mutableListOf<Pair<String, SmsManager.SmsMessage>>()
+    val candidates = mutableListOf<Pair<String, SmsMessage>>()
     val max = 2
 
     SmsManager.upsertTopDateCandidates(candidates, "sms:1", smsMessage(id = 1L, date = 1700L), max)
@@ -525,7 +525,7 @@ class SmsManagerTest {
   @Test
   fun upsertTopDateCandidatesSupportsDefaultMixedPathBoundedWindow() {
     val params = SmsManager.QueryParams(limit = 3, offset = 2, includeMms = true, phoneNumber = "+15551234567")
-    val candidates = mutableListOf<Pair<String, SmsManager.SmsMessage>>()
+    val candidates = mutableListOf<Pair<String, SmsMessage>>()
     val max = params.offset + params.limit
 
     SmsManager.upsertTopDateCandidates(candidates, "sms:1", smsMessage(id = 1L, date = 1000L), max)
@@ -542,7 +542,7 @@ class SmsManagerTest {
 
   @Test
   fun upsertTopDateCandidatesDedupesBySourceAwareIdentityAndKeepsBestOrdering() {
-    val candidates = mutableListOf<Pair<String, SmsManager.SmsMessage>>()
+    val candidates = mutableListOf<Pair<String, SmsMessage>>()
     val max = 5
 
     SmsManager.upsertTopDateCandidates(candidates, "sms:1987", smsMessage(id = 1987L, date = 1773950752506L), max)
@@ -563,7 +563,7 @@ class SmsManagerTest {
 
   @Test
   fun materializeByPhoneCandidateDedupesBySourceAwareIdentity() {
-    val candidates = linkedMapOf<String, SmsManager.SmsMessage>()
+    val candidates = linkedMapOf<String, SmsMessage>()
 
     SmsManager.materializeByPhoneCandidate(candidates, "sms:1", smsMessage(id = 1L, date = 1000L))
     SmsManager.materializeByPhoneCandidate(candidates, "sms:1", smsMessage(id = 1L, date = 2000L))
@@ -576,8 +576,8 @@ class SmsManagerTest {
 
   @Test
   fun collectMixedByPhoneCandidateUsesBoundedCollectorWhenReviewModeDisabled() {
-    val topCandidates = mutableListOf<Pair<String, SmsManager.SmsMessage>>()
-    val materializedCandidates = linkedMapOf<String, SmsManager.SmsMessage>()
+    val topCandidates = mutableListOf<Pair<String, SmsMessage>>()
+    val materializedCandidates = linkedMapOf<String, SmsMessage>()
 
     SmsManager.collectMixedByPhoneCandidate(
       topCandidates = topCandidates,
@@ -602,8 +602,8 @@ class SmsManagerTest {
 
   @Test
   fun collectMixedByPhoneCandidateMaterializesFullSetWhenReviewModeEnabled() {
-    val topCandidates = mutableListOf<Pair<String, SmsManager.SmsMessage>>()
-    val materializedCandidates = linkedMapOf<String, SmsManager.SmsMessage>()
+    val topCandidates = mutableListOf<Pair<String, SmsMessage>>()
+    val materializedCandidates = linkedMapOf<String, SmsMessage>()
 
     SmsManager.collectMixedByPhoneCandidate(
       topCandidates = topCandidates,
@@ -689,7 +689,7 @@ class SmsManagerTest {
 
   @Test
   fun upsertTopDateCandidatesNoOpWhenMaxIsZero() {
-    val candidates = mutableListOf<Pair<String, SmsManager.SmsMessage>>()
+    val candidates = mutableListOf<Pair<String, SmsMessage>>()
     SmsManager.upsertTopDateCandidates(candidates, "sms:1", smsMessage(id = 1L, date = 2000L), 0)
     assertTrue(candidates.isEmpty())
   }

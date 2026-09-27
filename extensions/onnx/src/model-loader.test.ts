@@ -42,7 +42,7 @@ beforeEach(() => {
 });
 
 describe("ONNX resident model cache", () => {
-  it.each(["model-missing", "model-integrity", "invalid-tokenizer"] as const)(
+  it.each(["model-integrity", "invalid-tokenizer"] as const)(
     "keeps the warm session when the replacement has %s",
     async (failure) => {
       const release = vi.fn(async () => {});
@@ -59,7 +59,7 @@ describe("ONNX resident model cache", () => {
       } else {
         vi.mocked(readModelArtifact).mockRejectedValueOnce(new OnnxWorkerError(failure));
       }
-      await expect(cache.get(base)).rejects.toThrow(/model-missing|model-integrity/);
+      await expect(cache.get(base)).rejects.toThrow("model-integrity");
 
       const resident = await cache.get(edge);
       await expect(

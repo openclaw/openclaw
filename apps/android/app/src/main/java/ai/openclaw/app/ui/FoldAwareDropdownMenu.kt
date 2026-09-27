@@ -63,6 +63,7 @@ internal data class FoldAwareMenuItem(
   val icon: ImageVector? = null,
   val enabled: Boolean = true,
   val interactionSource: MutableInteractionSource? = null,
+  val iconContent: (@Composable () -> Unit)? = null,
 )
 
 /** Activity-hosted, non-nested menu. The surrounding Box is its stationary anchor. */
@@ -149,7 +150,7 @@ private fun MenuBody(
             text = {
               Text(item.label, onTextLayout = { opening.textLayouts[item.id] = it })
             },
-            leadingIcon = item.icon?.let { icon -> { Icon(icon, contentDescription = null) } },
+            leadingIcon = item.iconContent ?: item.icon?.let { icon -> { Icon(icon, contentDescription = null) } },
             enabled = item.enabled,
             interactionSource = item.interactionSource,
             onClick = { owner.accept(opening, item.id) },

@@ -14,18 +14,23 @@ import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lif
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
 
+function holdNextCatalogWrite() {
+  const started = createDeferred();
+  const release = createDeferred();
+  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+    started.resolve();
+    await release.promise;
+    return { agentDir: String(agentDir), wrote: false };
+  });
+  return { started, release };
+}
+
 describe("prepared model runtime owner selection", () => {
   it.each(["lost claim", "invalidation", "close"] as const)(
     "does not accept a joined refresh after %s",
     async (boundary) => {
       mocks.configuredAgentIds = ["default"];
-      const started = createDeferred();
-      const release = createDeferred();
-      mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
-        started.resolve();
-        await release.promise;
-        return { agentDir: String(agentDir), wrote: false };
-      });
+      const { started, release } = holdNextCatalogWrite();
       const first = refreshPreparedModelRuntimeSnapshots({}, { joinSupersedingPublication: true });
       const rejected = expect(first).rejects.toThrow(/superseded|closed/);
       let successor: Promise<void> | undefined;
@@ -59,13 +64,7 @@ describe("prepared model runtime owner selection", () => {
 
   it("joins the latest of multiple replacements without rebuilding skipped config", async () => {
     mocks.configuredAgentIds = ["default"];
-    const started = createDeferred();
-    const release = createDeferred();
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
-      started.resolve();
-      await release.promise;
-      return { agentDir: String(agentDir), wrote: false };
-    });
+    const { started, release } = holdNextCatalogWrite();
     const first = refreshPreparedModelRuntimeSnapshots({}, { joinSupersedingPublication: true });
     let skipped: Promise<void> | undefined;
     let latest: Promise<void> | undefined;
@@ -98,21 +97,8 @@ describe("prepared model runtime owner selection", () => {
     for (const agentId of mocks.configuredAgentIds) {
       expect(read(agentId)?.isCurrent()).toBe(true);
     }
-    const started = createDeferred();
-    const release = createDeferred();
-    const successorStarted = createDeferred();
-    const releaseSuccessor = createDeferred();
-    mocks.ensureOpenClawModelsJson
-      .mockImplementationOnce(async (_config, agentDir) => {
-        started.resolve();
-        await release.promise;
-        return { agentDir: String(agentDir), wrote: false };
-      })
-      .mockImplementationOnce(async (_config, agentDir) => {
-        successorStarted.resolve();
-        await releaseSuccessor.promise;
-        return { agentDir: String(agentDir), wrote: false };
-      });
+    const { started, release } = holdNextCatalogWrite();
+    const { started: successorStarted, release: releaseSuccessor } = holdNextCatalogWrite();
     const first = refreshPreparedModelRuntimeSnapshots(config, {
       agentIds: new Set(["agent-a"]),
       joinSupersedingPublication: true,

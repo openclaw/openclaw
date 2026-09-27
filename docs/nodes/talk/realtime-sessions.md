@@ -11,8 +11,8 @@ sidebarTitle: "Realtime sessions"
 ## Choose a Talk voice from chat
 
 During an active browser, iOS, or Android realtime Talk call, ask the assistant
-to list the available voices or switch to one. Browser Talk also offers a voice
-picker beside the call controls. The `talk_voice`
+to list the available voices or switch to one. The browser composer keeps only
+call controls; choose the default voice in **Settings → Talk**. The `talk_voice`
 tool lists the current provider, model, voice,
 and supported voice IDs for the call in the current conversation. Setting a
 voice reconnects that call while preserving its chat and captions. The replacement

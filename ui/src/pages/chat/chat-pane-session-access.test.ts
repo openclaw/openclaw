@@ -7,7 +7,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 
 describe("chat pane session access", () => {
@@ -199,7 +198,6 @@ describe("chat pane session access", () => {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
         session,
         false,
         undefined,
@@ -234,7 +232,6 @@ describe("chat pane session access", () => {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
         session,
         false,
         undefined,

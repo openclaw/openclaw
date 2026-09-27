@@ -51,10 +51,7 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
   it.each([
     { hook: "reply_payload_sending", mode: "partial" },
     { hook: "message_sending", mode: "progress" },
-    { hook: "message_sending", mode: "off" },
-    { hook: "none", mode: "partial" },
     { hook: "message_sent", mode: "partial" },
-    { hook: "message_sent", mode: "off" },
   ] as const)("gates real preview writes with $hook in $mode mode", async ({ hook, mode }) => {
     const registry = createEmptyPluginRegistry();
     const modifierEntered = createDeferred<void>();

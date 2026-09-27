@@ -206,7 +206,6 @@ async function fixture({
     readConfigFileSnapshot: async () => ({}),
     prepareUpdateRestart: async () => restartContext,
     convergeUpdatePlugins: async (params) => ({ resultWithPostUpdate: params.result }),
-    maybeResumeWindowsTaskAutoStartAfterPackageUpdate: async () => {},
     createWindowsTaskAutoStartGuard: () => ({}),
     rollbackFailedUpdate: async (params) => {
       events.push("rollback-unverified");

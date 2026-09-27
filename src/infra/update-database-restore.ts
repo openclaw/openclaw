@@ -1,23 +1,17 @@
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { drainAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
-import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { publishFileExclusive, sha256File } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import { publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
-import {
-  acquireGatewayMaintenanceCoordinator,
-  acquireStateDatabaseCoordinator,
-  acquireStateDatabaseHandleExclusion,
-} from "./state-database-coordinator.js";
+import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
-import {
-  readUpdateDatabaseGenerations,
-  type UpdateDatabaseGenerations,
-} from "./update-database-generations.js";
+import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
 
 async function existingFile(file: string) {
   try {
@@ -35,44 +29,40 @@ async function existingFile(file: string) {
 }
 
 async function withDatabaseExclusion<T>(
-  shared: string,
+  env: NodeJS.ProcessEnv,
   paths: string[],
   sourcePaths: string[],
   assertCurrent: () => void,
   operation: (assertOwned: () => void) => Promise<T>,
 ): Promise<T> {
-  using owners = new DisposableStack();
-  const retain = (owner: { release: () => void }) => owners.defer(() => owner.release());
-  const exclusions: Array<{ assertCurrent: () => void }> = [];
+  assertCurrent();
+  const owner = await acquireGatewayLock({
+    env,
+    role: "sqlite-maintenance",
+    allowInTests: true,
+    timeoutMs: 0,
+  });
+  if (!owner) {
+    throw new Error("Database rollback requires exclusive state ownership");
+  }
+  const exclusions: Array<Awaited<ReturnType<typeof prepareOpenClawStateDatabaseRemoval>>> = [];
   const assertOwned = () => {
     assertCurrent();
+    owner.assertCurrent();
     for (const exclusion of exclusions) {
       exclusion.assertCurrent();
     }
   };
-  assertCurrent();
-  // These coordinators live outside the replaced databases. Keep every owner
-  // and local admission seal until the complete family, including the ledger, is restored.
-  retain(acquireGatewayMaintenanceCoordinator({ databasePath: shared, busyTimeoutMs: 0 }));
-  const canonicalShared = resolvePathViaExistingAncestorSync(shared);
-  for (const databasePath of paths) {
-    retain(acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 }));
-  }
+  // Process custody survives replacement; native exclusions and local seals
+  // remain held until the complete database family, including the ledger, is restored.
   const acquire = async (index: number): Promise<T> => {
     const databasePath = paths[index];
     if (databasePath === undefined) {
       return operation(assertOwned);
     }
-    if (databasePath === canonicalShared) {
-      const exclusion = await acquireOpenClawStateDatabaseFileExclusion(shared);
-      retain(exclusion);
-      exclusions.push(exclusion);
-      assertOwned();
-      return acquire(index + 1);
-    }
-    const exclusion = acquireStateDatabaseHandleExclusion({ databasePath, busyTimeoutMs: 0 });
-    retain(exclusion);
+    const exclusion = await prepareOpenClawStateDatabaseRemoval(databasePath, assertCurrent);
     exclusions.push(exclusion);
+    assertOwned();
     return acquire(index + 1);
   };
   const drain = async (index: number): Promise<T> => {
@@ -87,7 +77,35 @@ async function withDatabaseExclusion<T>(
       return drain(index + 1);
     });
   };
-  return await drain(0);
+  let outcome: { value: T } | { error: unknown };
+  try {
+    outcome = { value: await owner.run(() => drain(0)) };
+  } catch (error) {
+    outcome = { error };
+  }
+  // Unconfirmed child settlement retains native and local custody for recovery.
+  if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
+    throw outcome.error;
+  }
+  try {
+    await owner.release();
+    for (const exclusion of exclusions.toReversed()) {
+      exclusion.release();
+    }
+  } catch (cleanupError) {
+    if ("error" in outcome) {
+      throw createSqliteLifecycleAggregateError(
+        [outcome.error, cleanupError],
+        "Database rollback and ownership cleanup both failed",
+        outcome.error,
+      );
+    }
+    throw cleanupError;
+  }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.value;
 }
 
 /** The caller owns a settled failed candidate that has never been allowed to serve. */
@@ -102,23 +120,25 @@ export async function restoreUpdateDatabaseBackup(params: {
     throw new Error("Database rollback requires its original update run identity.");
   }
   const { backup, assertCurrent } = params;
-  const shared = resolveOpenClawStateSqlitePath(params.env);
   const paths = [
     ...new Set([...backup.databases.map((entry) => entry.path), ...backup.missingPaths]),
   ].toSorted();
   const displaced: string[] = [];
   return await withDatabaseExclusion(
-    shared,
+    params.env,
     paths,
     [...new Set([...backup.sourcePaths, ...paths])],
     assertCurrent,
     async (assertOwned) => {
-      if (
-        params.expectedGenerations &&
-        !isDeepStrictEqual(readUpdateDatabaseGenerations(paths), params.expectedGenerations)
-      ) {
-        return null;
+      if (params.expectedGenerations) {
+        assertOwned();
+        const generations = await readUpdateDatabaseGenerationsIsolated(paths, { env: params.env });
+        assertOwned();
+        if (!isDeepStrictEqual(generations, params.expectedGenerations)) {
+          return null;
+        }
       }
+      assertOwned();
       // Verify the entire backup before moving any live file. Publication verifies
       // these exact digests again, so a changed backup never authorizes replacement.
       for (const entry of backup.databases) {

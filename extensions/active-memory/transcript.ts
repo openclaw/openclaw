@@ -1,10 +1,10 @@
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { clampInt } from "./config.js";
 import {
   readExplicitMemoryEvidence,
   readStructuredMemoryEvidenceFromContent,
@@ -27,24 +27,18 @@ function resolveTranscriptReadLimits(
   limits?: TranscriptReadLimits,
 ): Required<TranscriptReadLimits> {
   return {
-    maxChars: clampInt(
-      limits?.maxChars,
-      DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
-      1,
-      DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
-    ),
-    maxLines: clampInt(
-      limits?.maxLines,
-      DEFAULT_TRANSCRIPT_READ_MAX_LINES,
-      1,
-      DEFAULT_TRANSCRIPT_READ_MAX_LINES,
-    ),
-    maxBytes: clampInt(
-      limits?.maxBytes,
-      DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
-      1,
-      DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
-    ),
+    maxChars: resolveIntegerOption(limits?.maxChars, DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS, {
+      min: 1,
+      max: DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
+    }),
+    maxLines: resolveIntegerOption(limits?.maxLines, DEFAULT_TRANSCRIPT_READ_MAX_LINES, {
+      min: 1,
+      max: DEFAULT_TRANSCRIPT_READ_MAX_LINES,
+    }),
+    maxBytes: resolveIntegerOption(limits?.maxBytes, DEFAULT_TRANSCRIPT_READ_MAX_BYTES, {
+      min: 1,
+      max: DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
+    }),
   };
 }
 

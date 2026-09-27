@@ -1,9 +1,7 @@
-// Workboard API module exposes the plugin public contract.
 import { fileURLToPath } from "node:url";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
-  PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import type {
   PersistedWorkboardAttachment,
@@ -19,17 +17,29 @@ function migrationEnv(params: { env: NodeJS.ProcessEnv; stateDir: string }): Nod
   return { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
 }
 
-function openLegacyStore<T>(params: {
-  context: PluginDoctorStateMigrationContext;
-  env: NodeJS.ProcessEnv;
-  namespace: string;
-  maxEntries: number;
-}): PluginStateKeyedStore<T> {
-  return params.context.openPluginStateKeyedStore<T>({
-    namespace: params.namespace,
-    maxEntries: params.maxEntries,
-    env: params.env,
-  });
+function openLegacyStores(context: PluginDoctorStateMigrationContext, env: NodeJS.ProcessEnv) {
+  return {
+    cards: context.openPluginStateKeyedStore<PersistedWorkboardCard>({
+      namespace: "workboard.cards",
+      maxEntries: MAX_CARDS,
+      env,
+    }),
+    boards: context.openPluginStateKeyedStore<PersistedWorkboardBoard>({
+      namespace: "workboard.boards",
+      maxEntries: 200,
+      env,
+    }),
+    subscriptions: context.openPluginStateKeyedStore<PersistedWorkboardNotificationSubscription>({
+      namespace: "workboard.notify",
+      maxEntries: 2000,
+      env,
+    }),
+    attachments: context.openPluginStateKeyedStore<PersistedWorkboardAttachment>({
+      namespace: "workboard.attachments",
+      maxEntries: MAX_CARDS * 21,
+      env,
+    }),
+  };
 }
 
 function isPersistedCard(value: unknown): value is PersistedWorkboardCard {
@@ -66,7 +76,7 @@ function isPersistedAttachment(value: unknown): value is PersistedWorkboardAttac
   const attachment = candidate.attachment;
   return (
     candidate.version === 1 &&
-    attachment !== undefined &&
+    attachment != null &&
     typeof attachment === "object" &&
     typeof attachment.id === "string" &&
     typeof attachment.cardId === "string" &&
@@ -178,30 +188,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "Workboard .28 plugin-state KV",
     async detectLegacyState(params) {
       const env = migrationEnv(params);
-      const cards = openLegacyStore<PersistedWorkboardCard>({
-        context: params.context,
-        env,
-        namespace: "workboard.cards",
-        maxEntries: MAX_CARDS,
-      });
-      const boards = openLegacyStore<PersistedWorkboardBoard>({
-        context: params.context,
-        env,
-        namespace: "workboard.boards",
-        maxEntries: 200,
-      });
-      const subscriptions = openLegacyStore<PersistedWorkboardNotificationSubscription>({
-        context: params.context,
-        env,
-        namespace: "workboard.notify",
-        maxEntries: 2000,
-      });
-      const attachments = openLegacyStore<PersistedWorkboardAttachment>({
-        context: params.context,
-        env,
-        namespace: "workboard.attachments",
-        maxEntries: MAX_CARDS * 21,
-      });
+      const { cards, boards, subscriptions, attachments } = openLegacyStores(params.context, env);
       let count = 0;
       for (const store of [cards, boards, subscriptions, attachments]) {
         count += store.count ? await store.count() : (await store.entries()).length;
@@ -222,30 +209,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const { createWorkboardSqliteStores } = await import("./src/sqlite-store.js");
       const { resolveWorkboardSqliteWorkerModuleUrl } = await import("./src/sqlite-store-paths.js");
       const env = migrationEnv(params);
-      const cards = openLegacyStore<PersistedWorkboardCard>({
-        context: params.context,
-        env,
-        namespace: "workboard.cards",
-        maxEntries: MAX_CARDS,
-      });
-      const boards = openLegacyStore<PersistedWorkboardBoard>({
-        context: params.context,
-        env,
-        namespace: "workboard.boards",
-        maxEntries: 200,
-      });
-      const subscriptions = openLegacyStore<PersistedWorkboardNotificationSubscription>({
-        context: params.context,
-        env,
-        namespace: "workboard.notify",
-        maxEntries: 2000,
-      });
-      const attachments = openLegacyStore<PersistedWorkboardAttachment>({
-        context: params.context,
-        env,
-        namespace: "workboard.attachments",
-        maxEntries: MAX_CARDS * 21,
-      });
+      const { cards, boards, subscriptions, attachments } = openLegacyStores(params.context, env);
       const sqlite = createWorkboardSqliteStores({
         env,
         workerModuleUrl: resolveWorkboardSqliteWorkerModuleUrl(fileURLToPath(import.meta.url)),

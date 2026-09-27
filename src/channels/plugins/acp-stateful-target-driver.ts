@@ -5,8 +5,7 @@ import {
 } from "../../acp/persistent-bindings.lifecycle.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
-import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { performGatewaySessionReset } from "../../gateway/session-reset-service.js";
 import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -21,17 +20,17 @@ import type {
   StatefulBindingTargetSessionResult,
 } from "./stateful-target-drivers.js";
 
-function toAcpStatefulBindingTargetDescriptor(params: {
+async function toAcpStatefulBindingTargetDescriptor(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
-}): StatefulBindingTargetDescriptor | null {
+}): Promise<StatefulBindingTargetDescriptor | null> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return null;
   }
   const target = resolveAcpSessionTarget(params);
-  const stored = readAcpSessionEntry({ cfg: params.cfg, ...target });
+  const stored = await readAcpSessionEntryAsync({ cfg: params.cfg, ...target });
   if (stored?.acp) {
     return {
       kind: "stateful",
@@ -115,13 +114,15 @@ async function resetAcpTargetInPlace(params: {
   reason: "new" | "reset";
   commandSource?: string;
 }): Promise<StatefulBindingTargetResetResult> {
-  if (
-    resolveSessionEntryAccessTarget({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      agentId: params.bindingTarget.agentId,
-    }).entry?.incognito === true
-  ) {
+  const stored = await readAcpSessionEntryAsync({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.bindingTarget.agentId,
+  });
+  if (stored?.storeReadFailed) {
+    return { ok: false, error: "Session metadata is unavailable; retry after storage is ready." };
+  }
+  if (stored?.entry?.incognito === true) {
     return { ok: false, error: "Incognito sessions cannot reset in place." };
   }
   const result = await performGatewaySessionReset({

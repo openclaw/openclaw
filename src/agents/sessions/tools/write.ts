@@ -153,13 +153,12 @@ function updateWriteHighlightCacheIncremental(
   if (!lang) {
     return undefined;
   }
-  if (!cache) {
-    return rebuildWriteHighlightCacheFull(rawPath, fileContent);
-  }
-  if (cache.lang !== lang || cache.rawPath !== rawPath) {
-    return rebuildWriteHighlightCacheFull(rawPath, fileContent);
-  }
-  if (!fileContent.startsWith(cache.rawContent)) {
+  if (
+    !cache ||
+    cache.lang !== lang ||
+    cache.rawPath !== rawPath ||
+    !fileContent.startsWith(cache.rawContent)
+  ) {
     return rebuildWriteHighlightCacheFull(rawPath, fileContent);
   }
   if (fileContent.length === cache.rawContent.length) {
@@ -170,19 +169,9 @@ function updateWriteHighlightCacheIncremental(
   const deltaDisplay = normalizeDisplayText(deltaRaw);
   const deltaNormalized = replaceTabs(deltaDisplay);
   cache.rawContent = fileContent;
-  if (cache.normalizedLines.length === 0) {
-    cache.normalizedLines.push("");
-    cache.highlightedLines.push("");
-  }
-
   const segments = deltaNormalized.split("\n");
   const lastIndex = cache.normalizedLines.length - 1;
-  const firstSegment = segments.at(0);
-  const currentLastLine = cache.normalizedLines.at(lastIndex);
-  if (firstSegment === undefined || currentLastLine === undefined) {
-    return rebuildWriteHighlightCacheFull(rawPath, fileContent);
-  }
-  cache.normalizedLines[lastIndex] = currentLastLine + firstSegment;
+  cache.normalizedLines[lastIndex] = cache.normalizedLines[lastIndex]! + segments[0]!;
   cache.highlightedLines[lastIndex] = highlightSingleLine(
     cache.normalizedLines[lastIndex],
     cache.lang,
@@ -424,16 +413,7 @@ export function createWriteToolDefinition(
     promptGuidelines: ["Use only new files/complete rewrites."],
     parameters: writeSchema,
     outputSchema: WriteToolOutputSchema,
-    async execute(
-      toolCallId,
-      { path, content }: { path: string; content: string },
-      signal?: AbortSignal,
-      onUpdate?,
-      ctx?,
-    ) {
-      void toolCallId;
-      void onUpdate;
-      void ctx;
+    async execute(_toolCallId, { path, content }, signal, _onUpdate, _ctx) {
       const assertCurrent = captureAgentToolSourceExecutionGuard();
       const absolutePath = resolvePath(path, cwd);
       const dir = dirname(absolutePath);

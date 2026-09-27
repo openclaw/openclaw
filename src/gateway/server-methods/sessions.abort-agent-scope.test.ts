@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Tests that session abort requests stay scoped to the targeted agent.
  */
@@ -77,58 +76,13 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
-import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
-import { sessionAbortHandlers } from "./sessions-abort.js";
-import { sessionCompactHandlers } from "./sessions-compact.js";
-import { sessionDeleteHandlers } from "./sessions-delete.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
-import { sessionReadHandlers } from "./sessions-read.js";
-import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
+import { callSessions } from "./sessions.abort-agent-scope.request.test-support.js";
 import {
   createActiveRun,
   createBetaRunContext,
   createGlobalWorkRunContext,
   createContext,
 } from "./sessions.abort-agent-scope.test-support.js";
-
-function createRespond(): RespondFn {
-  return vi.fn() as unknown as RespondFn;
-}
-
-const sessionHandlers = {
-  ...sessionAbortHandlers,
-  ...sessionCompactHandlers,
-  ...sessionDeleteHandlers,
-  ...sessionMutationHandlers,
-  ...sessionReadHandlers,
-  ...sessionSubscriptionHandlers,
-};
-
-async function callSessions(
-  method: keyof typeof sessionHandlers,
-  params: Record<string, unknown>,
-  options: {
-    context: GatewayRequestContext;
-    respond?: RespondFn;
-    reqId?: string;
-    client?: GatewayClient | null;
-  },
-): Promise<RespondFn> {
-  const respond = options.respond ?? createRespond();
-  await expectDefined(
-    sessionHandlers[method],
-    "sessionHandlers[method] test invariant",
-  )({
-    req: { id: options.reqId ?? `req-${method}` } as never,
-    params,
-    respond,
-    context: options.context,
-    client: options.client ?? null,
-    isWebchatConnect: () => false,
-  });
-  await flushPendingSessionsChangedEvents(options.context);
-  return respond;
-}
 
 function expectChatAbortParams(params: Record<string, unknown>): void {
   expect(chatAbortMock).toHaveBeenCalledTimes(1);

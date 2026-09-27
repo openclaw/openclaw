@@ -29,7 +29,7 @@ function runFixture(
   writeFileSync(
     runner,
     String.raw`
-import { appendFileSync, copyFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 const [tool, ...args] = process.argv.slice(2);
 const root = process.env.SIMSLIM_FIXTURE_ROOT;
@@ -52,9 +52,12 @@ if (tool === "uname") {
     if (failure === "version-exit") process.exit(23);
   } else if (args[0] === failure) {
     process.exit(23);
+  } else if (args[0] === "on") {
+    writeFileSync(path.join(root, "simslim-applied"), "");
   }
-} else if (tool === "xcrun" && failure === "readiness") {
-  process.exit(23);
+} else if (tool === "xcrun") {
+  const phase = existsSync(path.join(root, "simslim-applied")) ? "reboot-readiness" : "initial-readiness";
+  if (failure === phase) process.exit(23);
 }
 `,
   );
@@ -163,10 +166,11 @@ describe.skipIf(process.platform === "win32")("simslim installer", () => {
 });
 
 describe.skipIf(process.platform === "win32")("iOS simulator preparation", () => {
-  it("applies and verifies the same conservative profile on the explicit simulator", () => {
+  it("boots the explicit simulator before applying and verifying the conservative profile", () => {
     const { result, commands } = runFixture("ios-simulator-prepare.sh");
     expect(result.status, result.stderr).toBe(0);
     expect(commands).toEqual([
+      { tool: "xcrun", args: ["simctl", "bootstatus", simulatorId, "-b"] },
       { tool: "simslim", args: ["on", simulatorId, "--except", keptCategories] },
       { tool: "xcrun", args: ["simctl", "bootstatus", simulatorId, "-b"] },
       { tool: "simslim", args: ["verify", simulatorId, "--except", keptCategories] },
@@ -197,9 +201,10 @@ describe.skipIf(process.platform === "win32")("iOS simulator preparation", () =>
   });
 
   it.each([
-    ["on", 1],
-    ["readiness", 2],
-    ["verify", 3],
+    ["initial-readiness", 1],
+    ["on", 2],
+    ["reboot-readiness", 3],
+    ["verify", 4],
   ] as const)("preserves %s failure without subsequent calls", (failure, count) => {
     const { result, commands } = runFixture("ios-simulator-prepare.sh", { failure });
     expect(result.status).toBe(23);

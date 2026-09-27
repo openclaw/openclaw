@@ -415,6 +415,22 @@ describe("createReplyMediaPathNormalizer", () => {
     expectOutboundAttachmentCall(0, absolutePath, 64 * 1024 * 1024);
   });
 
+  it("uses Telegram's transport default when staging reply attachments", async () => {
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: { channels: { telegram: {} } },
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+      messageProvider: "telegram",
+    });
+
+    await normalize({ mediaUrls: ["./exports/video.mp4"] });
+
+    expectOutboundAttachmentCall(
+      0,
+      "/Users/peter/.openclaw/workspace/exports/video.mp4",
+      100 * 1024 * 1024,
+    );
+  });
+
   it("drops workspace-relative media paths that escape the agent workspace", async () => {
     const normalize = createTestReplyMediaNormalizer();
 

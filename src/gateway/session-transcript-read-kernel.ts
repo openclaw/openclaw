@@ -307,6 +307,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
         beforeSeq?: number;
         recentAtHead?: TranscriptRecentReadLimits;
         maxBytes?: number;
+        allowOversizedFirst?: boolean;
       },
   ): Promise<ReadRecentSessionMessagesResult> {
     const target = await access.resolveTarget(scope);

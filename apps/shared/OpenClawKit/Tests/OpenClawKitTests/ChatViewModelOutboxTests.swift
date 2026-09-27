@@ -552,6 +552,7 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
 
     private nonisolated let base: OpenClawChatSQLiteTranscriptCache
     private let forwarding: Forwarding
+    private let parkingHook: (@Sendable () async -> Void)?
     private var loadDelayNanoseconds: UInt64 = 0
     private var enqueueRelease: DeleteGate?
     private var recoveryAvailable = true
@@ -566,9 +567,14 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
     private let canceled = DeleteGate()
     private let cancellationRelease = DeleteGate()
 
-    init(base: OpenClawChatSQLiteTranscriptCache, forwarding: Forwarding = .full) {
+    init(
+        base: OpenClawChatSQLiteTranscriptCache,
+        forwarding: Forwarding = .full,
+        parkingHook: (@Sendable () async -> Void)? = nil)
+    {
         self.base = base
         self.forwarding = forwarding
+        self.parkingHook = parkingHook
     }
 
     nonisolated func changes() -> AsyncStream<OpenClawChatOutboxChange> {
@@ -738,6 +744,7 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
         in scope: OpenClawChatOutboxScope,
         lastError: String) async -> Bool
     {
+        await self.parkingHook?()
         guard self.parkingAvailable else { return false }
         return await self.base.parkQueuedCommands(in: scope, lastError: lastError)
     }

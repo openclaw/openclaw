@@ -10,7 +10,6 @@ import {
 } from "../../agents/session-placement-forced-terminal-settlement.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator-errors.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
@@ -56,8 +55,8 @@ beforeAll(async () => {
 
 afterEach(() => vi.restoreAllMocks());
 
-it("claims and strictly releases durable turns without host SQLite or coordinator exec", async () => {
-  const queries = observeHostDataSql({ OPENCLAW_STATE_DIR: stateDir });
+it("claims and strictly releases durable turns without host SQLite", async () => {
+  const queries = observeHostDataSql();
   const exec = vi.spyOn(DatabaseSync.prototype, "exec");
   try {
     const claim = await placements.claimTurn(input("sql-free"));
@@ -164,18 +163,16 @@ it("returns committed claim custody after its real worker reply is corrupted", a
   const requested = input("lost-reply");
   const receive = brokerReply.receiveSqliteWorkerReply;
   let corrupted = 0;
-  vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation(
-    (slot, reply, owner, pumping) => {
-      if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
-        const value: unknown = deserialize(reply.value);
-        if (isRecord(value) && isRecord(value.claim) && value.claim.claimId === requested.claimId) {
-          corrupted += 1;
-          return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner, pumping);
-        }
+  vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
+    if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
+      const value: unknown = deserialize(reply.value);
+      if (isRecord(value) && isRecord(value.claim) && value.claim.claimId === requested.claimId) {
+        corrupted += 1;
+        return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
       }
-      return receive(slot, reply, owner, pumping);
-    },
-  );
+    }
+    return receive(slot, reply, owner);
+  });
   const claim = await placements.claimTurn(requested);
   expect(corrupted).toBe(1);
   expect(claim).toMatchObject({ claimId: requested.claimId, runId: requested.runId });
@@ -191,29 +188,27 @@ it("keeps a later same-byte native claim authoritative when the old release repl
   const replyArrived = createDeferredCore<() => void>();
   const receive = brokerReply.receiveSqliteWorkerReply;
   let delayed = false;
-  vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation(
-    (slot, reply, owner, pumping) => {
+  vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
+    if (
+      !delayed &&
+      slot.current?.request.type === "execute" &&
+      reply.ok &&
+      !reply.transfer &&
+      !reply.input
+    ) {
+      const value: unknown = deserialize(reply.value);
       if (
-        !delayed &&
-        slot.current?.request.type === "execute" &&
-        reply.ok &&
-        !reply.transfer &&
-        !reply.input
+        isRecord(value) &&
+        isRecord(value.placement) &&
+        value.placement.sessionId === claim.sessionId
       ) {
-        const value: unknown = deserialize(reply.value);
-        if (
-          isRecord(value) &&
-          isRecord(value.placement) &&
-          value.placement.sessionId === claim.sessionId
-        ) {
-          delayed = true;
-          replyArrived.resolve(() => receive(slot, reply, owner, pumping));
-          return;
-        }
+        delayed = true;
+        replyArrived.resolve(() => receive(slot, reply, owner));
+        return;
       }
-      return receive(slot, reply, owner, pumping);
-    },
-  );
+    }
+    return receive(slot, reply, owner);
+  });
   const releasing = placements.releaseTurn(claim);
   const deliver = await replyArrived.promise;
   let delivered = false;
@@ -261,7 +256,10 @@ it("settles a failed local startup after precommit release contention without re
       (admit, attachment) =>
         createAdmission((request, grant) => {
           if (request.stage === "transaction") {
-            throw new StateDatabaseCoordinatorContentionError("state-lifecycle");
+            throw Object.assign(new Error("database is locked"), {
+              code: "ERR_SQLITE_ERROR",
+              errcode: 5,
+            });
           }
           admit(request, grant);
         }, attachment),
@@ -282,11 +280,18 @@ it("settles a failed local startup after precommit release contention without re
   ).resolves.toBe("next turn completed");
 });
 
-it.each(["ordinary", "forced"] as const)(
-  "retains non-contention cleanup refusal across %s local completion",
-  async (completion) => {
-    const claim = input(`release-refused-${completion}`);
-    const refused = new Error("release authority refused");
+it.each(
+  (["ordinary", "forced"] as const).flatMap((completion) =>
+    (["authority", "entered writer"] as const).map((failure) => ({ completion, failure })),
+  ),
+)(
+  "retains $failure cleanup refusal across $completion local completion",
+  async ({ completion, failure }) => {
+    const claim = input(`release-refused-${completion}-${failure}`);
+    const refused =
+      failure === "authority"
+        ? new Error("release authority refused")
+        : Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 });
     const startupError = new Error("local backend startup failed");
     const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     const release = vi.spyOn(placements, "releaseTurnIfOwned");
@@ -296,7 +301,7 @@ it.each(["ordinary", "forced"] as const)(
       vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
         (admit, attachment) =>
           createAdmission((request, grant) => {
-            if (request.stage === "transaction") {
+            if (request.stage === (failure === "authority" ? "transaction" : "commit")) {
               throw refused;
             }
             admit(request, grant);

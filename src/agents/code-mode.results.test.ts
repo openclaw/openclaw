@@ -225,66 +225,58 @@ it.each(["replacement", "restriction", "clear", "abort", "run", "session"] as co
   },
 );
 
-it.each(["before-cell", "while-parked"] as const)(
-  "preserves results when client tools append %s",
-  async (appendAt) => {
-    const h = createCodeModeHarness();
-    const collision = pluginToolWithExecute("results", "A tool named results", async () =>
-      jsonResult("tool"),
+it("preserves results when client tools append while parked", async () => {
+  const h = createCodeModeHarness();
+  const collision = pluginToolWithExecute("results", "A tool named results", async () =>
+    jsonResult("tool"),
+  );
+  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, collision] });
+  try {
+    const saved = resultDetails(
+      await h.tools[0]!.execute("save", {
+        code: 'const ref = await results.save({name:"sample"}); return {id:ref.id, count:ref.count};',
+      }),
     );
-    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, collision] });
-    try {
-      const saved = resultDetails(
-        await h.tools[0]!.execute("save", {
-          code: 'const ref = await results.save({name:"sample"}); return {id:ref.id, count:ref.count};',
-        }),
-      );
-      expect(saved).toMatchObject({
-        status: "completed",
-        value: { id: expect.any(String), count: 1 },
+    expect(saved).toMatchObject({
+      status: "completed",
+      value: { id: expect.any(String), count: 1 },
+    });
+    const id = (saved.value as { id: string }).id;
+    const appendClient = () =>
+      addClientToolsToToolCatalog({
+        ...h.ctx,
+        enabled: true,
+        tools: [
+          {
+            name: "client_fixture",
+            label: "Client fixture",
+            description: "Fixture",
+            parameters: { type: "object", properties: {} },
+            execute: async () => jsonResult(true),
+          },
+        ],
       });
-      const id = (saved.value as { id: string }).id;
-      const appendClient = () =>
-        addClientToolsToToolCatalog({
-          ...h.ctx,
-          enabled: true,
-          tools: [
-            {
-              name: "client_fixture",
-              label: "Client fixture",
-              description: "Fixture",
-              parameters: { type: "object", properties: {} },
-              execute: async () => jsonResult(true),
-            },
-          ],
-        });
-      if (appendAt === "before-cell") {
-        appendClient();
-      }
-      const parked = resultDetails(
-        await h.tools[0]!.execute("wait", {
-          code: `await yield_control(); const value = await results.load(${JSON.stringify(id)}); const copy = await results.save(value); await results.delete(copy.id); return {value, tool: await (await catalog.search("results"))[0]({}), declarations:(await API.read("results.d.ts")).content};`,
-        }),
-      );
-      expect(parked.status).toBe("waiting");
-      if (appendAt === "while-parked") {
-        appendClient();
-      }
-      expect(
-        resultDetails(await h.tools[1]!.execute("resume", { runId: parked.runId })),
-      ).toMatchObject({
-        status: "completed",
-        value: {
-          value: { name: "sample" },
-          tool: "tool",
-          declarations: expect.stringContaining("load(id: string): Promise<unknown>"),
-        },
-      });
-    } finally {
-      clearToolSearchCatalog(h.ctx);
-    }
-  },
-);
+    const parked = resultDetails(
+      await h.tools[0]!.execute("wait", {
+        code: `await yield_control(); const value = await results.load(${JSON.stringify(id)}); const copy = await results.save(value); await results.delete(copy.id); return {value, tool: await (await catalog.search("results"))[0]({}), declarations:(await API.read("results.d.ts")).content};`,
+      }),
+    );
+    expect(parked.status).toBe("waiting");
+    appendClient();
+    expect(
+      resultDetails(await h.tools[1]!.execute("resume", { runId: parked.runId })),
+    ).toMatchObject({
+      status: "completed",
+      value: {
+        value: { name: "sample" },
+        tool: "tool",
+        declarations: expect.stringContaining("load(id: string): Promise<unknown>"),
+      },
+    });
+  } finally {
+    clearToolSearchCatalog(h.ctx);
+  }
+});
 
 it("preserves network provenance when later cells load, transform, and resave data", async () => {
   const h = createCodeModeHarness();

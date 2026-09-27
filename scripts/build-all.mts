@@ -3,7 +3,6 @@
 
 import type { SpawnSyncOptions } from "node:child_process";
 import { performance } from "node:perf_hooks";
-import prettyMilliseconds from "pretty-ms";
 import { resolveNodeRuntimeExecutable } from "../src/infra/node-runtime-executable.ts";
 import {
   finalizeBuildStepCache,
@@ -17,6 +16,7 @@ import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
+import { formatDurationElapsed } from "./lib/format-duration.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import type { MemoryLimitParams } from "./lib/process-memory.mts";
 import { preflightInstalledSourceArtifacts } from "./lib/source-update-artifact-preflight.mts";
@@ -492,7 +492,7 @@ export function formatBuildAllDuration(durationMs: number) {
       : clampedMs < 10_000
         ? Math.round(clampedMs / 10) * 10
         : Math.round(clampedMs / 100) * 100;
-  return prettyMilliseconds(roundedMs, {
+  return formatDurationElapsed(roundedMs, {
     secondsDecimalDigits: clampedMs < 10_000 ? 2 : 1,
   });
 }
@@ -595,28 +595,19 @@ export async function runBuildAllSteps(
     const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
     const result = await runStep(invocation);
     const durationMs = cacheDurationMs + now() - startedAt;
-    if (typeof result.status === "number") {
-      if (result.status !== 0) {
-        timings.push({ label: step.label, status: "failed", durationMs });
-        logger.error(
-          `[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`,
-        );
-        exitCode = result.status;
-        break;
-      }
-      // Runtime-only tsdown cleans its output roots. Cache hits restore
-      // declarations again after that pass so the full build stays complete.
-      if (!finalizeCache(step, cacheState, { env: buildEnv, reusedCache })) {
-        throw new Error(`Build cache changed during ${step.label}; rerun the build`);
-      }
-      timings.push({ label: step.label, status: reusedCache ? "reused" : "ran", durationMs });
-      logger.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
-      continue;
+    if (result.status !== 0) {
+      timings.push({ label: step.label, status: "failed", durationMs });
+      logger.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
+      exitCode = typeof result.status === "number" ? result.status : 1;
+      break;
     }
-    timings.push({ label: step.label, status: "failed", durationMs });
-    logger.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
-    exitCode = 1;
-    break;
+    // Runtime-only tsdown cleans its output roots. Cache hits restore
+    // declarations again after that pass so the full build stays complete.
+    if (!finalizeCache(step, cacheState, { env: buildEnv, reusedCache })) {
+      throw new Error(`Build cache changed during ${step.label}; rerun the build`);
+    }
+    timings.push({ label: step.label, status: reusedCache ? "reused" : "ran", durationMs });
+    logger.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
   }
   logger.error(formatBuildAllTimingSummary(timings));
   return { exitCode, timings };

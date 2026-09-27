@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  createMockPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
@@ -11,6 +16,7 @@ const {
   fetchWithSsrFGuardMock,
   prepareAgentWorkspaceContextMock,
   watchedSessionsContextMock,
+  openModelContextAsyncMock,
   promptFixture,
 } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:
@@ -23,6 +29,9 @@ const {
     vi.fn<
       typeof import("openclaw/plugin-sdk/agent-harness-runtime").buildWatchedSessionsHarnessContext
     >(),
+  openModelContextAsyncMock: vi.fn(async () => ({
+    buildSessionContext: () => ({ messages: [{ role: "user", content: "Earlier request" }] }),
+  })),
   promptFixture: {
     declarations: [] as AgentsApiToolSurface["declarations"],
     turnInputs: [] as string[],
@@ -58,7 +67,10 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
-  SessionManager: { open: () => ({ buildSessionContext: () => ({ messages: [] }) }) },
+  SessionManager: {
+    open: () => ({ buildSessionContext: () => ({ messages: [] }) }),
+    openModelContextAsync: openModelContextAsyncMock,
+  },
 }));
 
 vi.mock("./agentsapi-tools.js", () => ({
@@ -84,18 +96,18 @@ vi.mock("./agentsapi-files.js", async () => {
     await vi.importActual<typeof import("./agentsapi-files.js")>("./agentsapi-files.js");
   return {
     ...files,
-    collectOutputs: async () => ({ toolMediaUrls: [], hostOwnedToolMediaUrls: [] }),
+    collectOutputs: async () => [],
   };
 });
 
 vi.mock("./agentsapi-messages.js", () => ({
-  createAgentsApiMessageProjection: () => ({
-    reply: {},
-    recordUsage: vi.fn(),
-    commit: vi.fn(),
-    toolMetas: [],
-    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-  }),
+  AgentsApiMessageProjection: class {
+    reply = {};
+    recordUsage = vi.fn();
+    commit = vi.fn();
+    toolMetas = [];
+    itemLifecycle = { startedCount: 0, completedCount: 0, activeCount: 0 };
+  },
 }));
 
 vi.mock("./agentsapi-session.js", () => ({
@@ -114,6 +126,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => fetchWithSsrFGuardMock.mockReset());
 afterEach(() => prepareAgentWorkspaceContextMock.mockClear());
 afterEach(() => watchedSessionsContextMock.mockClear());
+afterEach(() => openModelContextAsyncMock.mockReset());
+afterEach(() => resetGlobalHookRunner());
 afterEach(() => {
   promptFixture.declarations = [];
   promptFixture.turnInputs = [];
@@ -121,6 +135,94 @@ afterEach(() => {
 });
 
 describe("Agents API agent workspace instructions", () => {
+  it("captures plugin system instructions once and refreshes plugin context on resume", async () => {
+    const fixture = await createFixture({
+      trigger: "user",
+      toolAuthorityFingerprint: "fixture-prompt-authority",
+      contextTokenBudget: 32_000,
+    });
+    promptFixture.declarations = toolDeclarations("memory_search", "memory_get");
+    const hook = vi.fn().mockReturnValue({
+      prependSystemContext: "Plugin system guidance one.",
+      prependContext: "Reminder one.",
+      appendContext: "Plugin trailing context.",
+    });
+    const recall = vi.fn().mockReturnValue({ prependContext: "Authorized recall context." });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_prompt_build", handler: hook },
+        { hookName: "before_prompt_build", handler: recall, requiresToolAuthority: true },
+      ]),
+    );
+
+    const binding = await fixture.run();
+    expect(openModelContextAsyncMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        limits: { maxBytes: 256_000, maxEvents: 10_000, toolResultOverflow: "omit" },
+      }),
+    );
+    expect(hook).toHaveBeenCalledWith(
+      expect.objectContaining({ messages: [{ role: "user", content: "Earlier request" }] }),
+      expect.anything(),
+    );
+    expect(fixture.requests[0]?.agent.instructions).toContain("Plugin system guidance one.");
+    expect(promptFixture.turnInputs[0]).toContain(
+      "Reminder one.\n\nAuthorized recall context.\n\nFixture prompt\n\nPlugin trailing context.",
+    );
+    hook.mockReturnValue({
+      prependSystemContext: "Plugin system guidance two.",
+      prependContext: "Reminder two.",
+    });
+    await fixture.run(binding, { prompt: "Continued request" });
+    expect(fixture.requests[1]).toEqual({ agent: { reasoning: { effort: null } } });
+    expect(promptFixture.turnInputs[1]).toContain(
+      "Reminder two.\n\nAuthorized recall context.\n\nContinued request",
+    );
+
+    await fixture.run();
+    expect(fixture.requests[2]?.agent.instructions).toContain("Plugin system guidance two.");
+  });
+
+  it("continues without transcript access when no prompt hook needs history", async () => {
+    const fixture = await createFixture();
+    openModelContextAsyncMock.mockRejectedValue(new Error("History is unavailable"));
+    await fixture.run();
+    expect(promptFixture.turnInputs[0]).toContain("Fixture prompt");
+  });
+
+  it.each([
+    { resumed: false, toolsAllow: [] },
+    { resumed: true, toolsAllow: [] },
+    { resumed: false, toolsAllow: ["memory_search"] },
+    { resumed: true, toolsAllow: ["memory_search"] },
+  ])(
+    "continues with plugin context when tool restrictions cannot be enforced ($resumed, $toolsAllow)",
+    async ({ resumed, toolsAllow }) => {
+      const fixture = await createFixture({ toolAuthorityFingerprint: "fixture-prompt-authority" });
+      const binding = resumed ? await fixture.run() : undefined;
+      const requestCount = fixture.requests.length;
+      const inputCount = promptFixture.turnInputs.length;
+      const recall = vi.fn().mockReturnValue({ prependContext: "Authorized recall context." });
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            handler: () => ({ toolsAllow, prependContext: "Ordinary plugin context." }),
+          },
+          { hookName: "before_prompt_build", handler: recall, requiresToolAuthority: true },
+        ]),
+      );
+      await fixture.run(binding);
+      expect(fixture.requests).toHaveLength(requestCount + 1);
+      expect(promptFixture.turnInputs).toHaveLength(inputCount + 1);
+      expect(promptFixture.turnInputs[inputCount]).toContain(
+        "Ordinary plugin context.\n\nAuthorized recall context.\n\nFixture prompt",
+      );
+      expect(recall).toHaveBeenCalledOnce();
+    },
+  );
+
   it("sends the Gateway workspace snapshot once, preserves it on resume, and refreshes it for a new session", async () => {
     const fixture = await createFixture();
     const instructionsPath = path.join(fixture.workspace, "AGENTS.md");

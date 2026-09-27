@@ -13,7 +13,7 @@ import { packFutureUpdateFixture } from "../update-first-hop-package-fixtures.mj
 import { observePostCoreCommand } from "./process-observer.mjs";
 
 // Without a core tarball, run only the plugin reinstall boundary against the supplied CLI.
-export async function runConsentScenario(entry, coreTarball) {
+export async function runConsentScenario(entry, coreTarball, options = {}) {
   assert(entry, "expected CLI entry");
   let coreTarballSha256;
   if (coreTarball) {
@@ -280,10 +280,27 @@ export async function runConsentScenario(entry, coreTarball) {
         "accepted forced reinstall replaces package and acceptance while remaining disabled",
         "explicit enable activates the reviewed replacement",
       ];
-      if (!coreTarball) {
+      if (!coreTarball || options.coreUpdateConsent === false) {
         console.log(
           JSON.stringify(
-            { status: "passed", root, assertions: reinstallAssertions, runs, snapshots },
+            {
+              status: "passed",
+              root,
+              assertions: reinstallAssertions,
+              ...(coreTarball && options.coreUpdateConsent === false
+                ? {
+                    omissions: [
+                      {
+                        scenario: "core-update-consent",
+                        reason:
+                          "selected frozen target predates the recorded update compatibility contract",
+                      },
+                    ],
+                  }
+                : {}),
+              runs,
+              snapshots,
+            },
             null,
             2,
           ),

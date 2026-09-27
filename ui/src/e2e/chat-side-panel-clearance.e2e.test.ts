@@ -266,7 +266,13 @@ suite.define(() => {
           expect(geometry.pickerTop).toBeGreaterThanOrEqual(geometry.panelTop);
           expect(geometry.firstTop).toBeGreaterThanOrEqual(geometry.composerBottom);
           const choices = picker.locator("button");
-          expect(await choices.count()).toBeGreaterThan(5);
+          expect(await picker.locator(".side-panel-type-option__label").allTextContents()).toEqual([
+            "Review",
+            "Terminal",
+            "Browser",
+            "Files",
+            "Side chat",
+          ]);
           for (const choice of [choices.first(), choices.last()]) {
             await choice.scrollIntoViewIfNeeded();
             await choice.click({ trial: true });

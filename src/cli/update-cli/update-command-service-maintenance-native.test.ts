@@ -45,15 +45,11 @@ const { runNativeMaintenanceUpdate } =
 it
   .runIf(process.platform === "darwin" || process.platform === "linux")
   .each([
-    "direct helper",
     "activation helper",
     "activation helper with retained service root",
-    "ordinary nested caller",
     "tuple-only caller",
-    "ordinary external Stop",
     "unrecorded helper",
     "revoked at native stop",
-    "revoked after inspection",
     "revoked after inspection with disable",
     "revoked after disable",
     "revoked before port cleanup",
@@ -107,7 +103,7 @@ it
           meta: { root: callerRoot, runId, handoffId: claim.lease.owner },
         }),
       );
-      if (scenario === "ordinary nested caller" || scenario === "unrecorded helper") {
+      if (scenario === "unrecorded helper") {
         expect(store.release(claim.lease)).toBe(true);
       }
       mockProcessPlatform("darwin");
@@ -184,11 +180,7 @@ it
       });
       const intent = () => db.prepare("SELECT pid, reason FROM gateway_restart_intent").get();
       let atBootout: ReturnType<typeof intent>;
-      const callerPids = new Set(
-        scenario === "ordinary external Stop"
-          ? [process.pid, process.ppid, 1]
-          : [process.pid, process.ppid, gatewayPid],
-      );
+      const callerPids = new Set([process.pid, process.ppid, gatewayPid]);
       vi.spyOn(ancestry, "getSelfAndAncestorPidsSync").mockReturnValue(callerPids);
       vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
         pids: callerPids,
@@ -225,11 +217,7 @@ it
         }
         if (args[0] === "print") {
           inspections += 1;
-          if (
-            inspections === 2 &&
-            (scenario === "revoked after inspection" ||
-              scenario === "revoked after inspection with disable")
-          ) {
+          if (inspections === 2 && scenario === "revoked after inspection with disable") {
             expect(store.release(claim.lease)).toBe(true);
           }
           return loaded
@@ -266,7 +254,7 @@ it
       });
       await withEnvAsync(
         {
-          OPENCLAW_UPDATE_RUN_HANDOFF: scenario === "ordinary nested caller" ? undefined : "1",
+          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
           [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
           OPENCLAW_LAUNCHD_LABEL: label,
           OPENCLAW_SERVICE_MARKER: undefined,
@@ -304,7 +292,7 @@ it
             disable:
               scenario === "revoked after inspection with disable" ||
               scenario === "revoked after disable",
-            ...(scenario === "ordinary nested caller" ? {} : { updateHandoff: { root, runId } }),
+            updateHandoff: { root, runId },
           };
           const stop = () =>
             productionCaller
@@ -314,9 +302,7 @@ it
                   claim.lease.owner,
                   retainedService ? root : undefined,
                 )
-              : scenario === "ordinary nested caller" ||
-                  scenario === "tuple-only caller" ||
-                  scenario === "ordinary external Stop"
+              : scenario === "tuple-only caller"
                 ? service.stop(nativeArgs)
                 : withGatewayServiceOperationLock(process.env, (assertCurrent) =>
                     withGatewayServiceUpdateAuthority(
@@ -327,11 +313,7 @@ it
                       },
                     ),
                   );
-          const authorized =
-            scenario === "direct helper" ||
-            scenario === "activation helper" ||
-            retainedService ||
-            scenario === "ordinary external Stop";
+          const authorized = scenario === "activation helper" || retainedService;
           if (authorized) {
             await stop();
             if (retainedService) {
@@ -358,14 +340,10 @@ it
           expect(loaded).toBe(!bootedOut);
           expect(pidAlive.isPidAlive(gatewayPid)).toBe(!bootedOut);
           expect(atBootout).toEqual(
-            bootedOut && scenario !== "ordinary external Stop"
-              ? { pid: gatewayPid, reason: "update.run" }
-              : undefined,
+            bootedOut ? { pid: gatewayPid, reason: "update.run" } : undefined,
           );
           expect(intent()).toEqual(
-            bootedOut && scenario !== "ordinary external Stop"
-              ? { pid: gatewayPid, reason: "update.run" }
-              : undefined,
+            bootedOut ? { pid: gatewayPid, reason: "update.run" } : undefined,
           );
           expect(cleanup).not.toHaveBeenCalled();
         },

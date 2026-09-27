@@ -7,7 +7,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveRealtimeBootstrapContextInstructions } from "../../agents/realtime-bootstrap-context.js";
+import { resolveRealtimeVoiceAgentContextInstructions } from "../../agents/realtime-bootstrap-context.js";
 import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../plugins/types.js";
@@ -69,8 +69,7 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
   sessionKey: string;
   warn: (message: string) => void;
 }): Promise<string> {
-  const bootstrapContext = await resolveRealtimeBootstrapContextInstructions(params);
-  return [params.configuredInstructions, bootstrapContext]
+  return [params.configuredInstructions, await resolveRealtimeVoiceAgentContextInstructions(params)]
     .filter((entry): entry is string => Boolean(entry?.trim()))
     .join("\n\n");
 }

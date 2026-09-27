@@ -58,6 +58,52 @@ const listRenderingFixtures = [
   },
 ];
 
+describe("markdownToStory inline formatting", () => {
+  it.each([
+    {
+      markdown: "**bold** __bold__ *italic* _italic_ ~~strike~~ `code`",
+      inline: [
+        { bold: ["bold"] },
+        " ",
+        { bold: ["bold"] },
+        " ",
+        { italics: ["italic"] },
+        " ",
+        { italics: ["italic"] },
+        " ",
+        { strike: ["strike"] },
+        " ",
+        { "inline-code": "code" },
+      ],
+    },
+    {
+      markdown: "**outer *inner* text**",
+      inline: [{ bold: ["outer ", { italics: ["inner"] }, " text"] }],
+    },
+    {
+      markdown: "~zod [site](https://example.com)",
+      inline: [{ ship: "~zod" }, " ", { link: { href: "https://example.com", content: "site" } }],
+    },
+    {
+      markdown: "https://example.com",
+      inline: [{ link: { href: "https://example.com", content: "https://example.com" } }],
+    },
+    { markdown: "_word_suffix *unfinished", inline: ["_word_suffix *unfinished"] },
+  ])("renders %j without losing literal text or nested styles", ({ markdown, inline }) => {
+    expect(markdownToStory(markdown)).toEqual([{ inline }]);
+  });
+
+  it("hoists an image at the start of an inline run", () => {
+    expect(markdownToStory("![diagram](https://example.com/diagram.png)")).toEqual([
+      {
+        block: {
+          image: { src: "https://example.com/diagram.png", alt: "diagram", height: 0, width: 0 },
+        },
+      },
+    ]);
+  });
+});
+
 describe("markdownToStory paragraph boundaries", () => {
   it.each(["####### heading", "# "])("preserves non-heading %j as ordinary text", (markdown) => {
     expect(markdownToStory(markdown)).toEqual([{ inline: [markdown] }]);
