@@ -16,12 +16,10 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
   return false;
 }
 
-const modelRunStartupPolicy = {
-  // Gateway model runs are RPC clients. The Gateway owns state migrations.
-  configGuard: ({ argv }: { argv: string[] }) =>
-    hasFlag(argv, "--gateway") && !hasFlag(argv, "--local")
-      ? ("validate" as const)
-      : ("run" as const),
+const modelRunStartupPolicy: CliCommandCatalogEntry["policy"] = {
+  // Gateway model runs need only non-observing client config validation.
+  configGuard: ({ options }) =>
+    options?.gateway === true && options.local !== true ? "validate" : "run",
 };
 
 /** Command path registry used before Commander registration has loaded all plugins. */
