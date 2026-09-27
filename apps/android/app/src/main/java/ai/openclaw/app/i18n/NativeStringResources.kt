@@ -633,6 +633,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Finished" to R.string.native_7804f7a79a9eee32,
     "First page" to R.string.native_0bdbb750609ca61c,
     "Fix connection" to R.string.native_5855b3ac2fcc1b3e,
+    "Focus mode" to R.string.native_047cfdebdd839f7b,
     "Focus thread search" to R.string.native_d96f2b0eab4e67b7,
     "Follow Android · \$systemLanguageTag" to R.string.native_69909e834a13b2a8,
     "Follow the agent's configured policy." to R.string.native_2444e80cabc9c5e0,
