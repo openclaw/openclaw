@@ -379,12 +379,15 @@ function renderViewportContent(controller: BrowserPanelController) {
               spellcheck="false"
               @click=${(event: MouseEvent) => controller.handleStageClick(event)}
               @contextmenu=${(event: MouseEvent) => controller.handleStageClick(event)}
-              @beforeinput=${(event: InputEvent) => event.preventDefault()}
-              @input=${(event: InputEvent) => {
-                if (event.currentTarget instanceof HTMLTextAreaElement) {
-                  event.currentTarget.value = "";
-                }
-              }}
+              @beforeinput=${(event: InputEvent) => controller.input.handleTextInput(event)}
+              @input=${(event: InputEvent) => controller.input.handleTextInput(event)}
+              @compositionstart=${() => controller.input.handleCompositionStart()}
+              @compositionend=${(event: CompositionEvent) => controller.input.handleCompositionEnd(event)}
+              @pointerdown=${(event: PointerEvent) => controller.input.handleTouchPointerDown(event)}
+              @pointermove=${(event: PointerEvent) => controller.input.handleTouchPointerMove(event)}
+              @pointerup=${(event: PointerEvent) => controller.input.handleTouchPointerEnd(event)}
+              @pointercancel=${(event: PointerEvent) => controller.input.handleTouchPointerEnd(event)}
+              @lostpointercapture=${(event: PointerEvent) => controller.input.handleTouchPointerEnd(event)}
             ></textarea>`
           : nothing
       }

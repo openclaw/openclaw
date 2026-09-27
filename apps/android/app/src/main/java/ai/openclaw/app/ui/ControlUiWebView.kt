@@ -14,6 +14,7 @@ import android.view.ContextThemeWrapper
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -35,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -114,10 +116,13 @@ internal fun ControlUiWebView(
   page: NodeRuntime.GatewayControlPage,
   url: String,
   modifier: Modifier = Modifier,
+  interactive: Boolean = true,
+  onExternalLink: ((String) -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val darkAppearance = LocalResolvedAppearanceIsDark.current
   var rendererGeneration by remember { mutableIntStateOf(0) }
+  val currentExternalLink by rememberUpdatedState(onExternalLink)
 
   // A WebView reads prefers-color-scheme from the Context it was built with, so an appearance
   // flip has to rebuild it; keying on the resolved boolean keeps that to real dark/light changes.
@@ -149,10 +154,22 @@ internal fun ControlUiWebView(
         // The native gateway connection already established this route's trust.
         // Reuse only that exact accepted fingerprint; every other SSL error cancels.
         // The same client protects both terminal and dashboard pages.
-        webView.webViewClient = ControlUiWebViewClient(page) { rendererGeneration += 1 }
+        webView.webViewClient =
+          ControlUiWebViewClient(
+            page = page,
+            navigationUrl = url.takeIf { onExternalLink != null },
+            onExternalLink = { currentExternalLink?.invoke(it) },
+            onRendererGone = { rendererGeneration += 1 },
+          )
         installControlUiAuthScript(webView, page)
         webView.loadUrl(url)
         webView
+      },
+      update = { webView ->
+        webView.importantForAccessibility = if (interactive) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        webView.isFocusable = interactive
+        webView.isFocusableInTouchMode = interactive
+        if (!interactive) webView.clearFocus()
       },
       onRelease = { webView ->
         (webView.webViewClient as? ControlUiWebViewClient)?.release(webView)
@@ -223,9 +240,25 @@ private const val X509_CERTIFICATE_BUNDLE_KEY = "x509-certificate"
 @SuppressLint("MissingOnRenderProcessGone")
 private class ControlUiWebViewClient(
   private val page: NodeRuntime.GatewayControlPage,
+  private val navigationUrl: String? = null,
+  private val onExternalLink: (String) -> Unit = {},
   private val onRendererGone: () -> Unit,
 ) : WebViewClient() {
   private var released = false
+
+  override fun shouldOverrideUrlLoading(
+    view: WebView,
+    request: WebResourceRequest,
+  ): Boolean {
+    val expected = navigationUrl ?: return false
+    if (!request.isForMainFrame) return false
+    if (request.url.toString() == expected) return false
+    // The remote page is streamed, not navigated into this credential-bearing host.
+    if (request.hasGesture() && request.url.scheme in setOf("http", "https")) {
+      onExternalLink(request.url.toString())
+    }
+    return true
+  }
 
   fun release(view: WebView) {
     if (released) return

@@ -347,6 +347,8 @@ internal fun ChatScreen(
   features: List<DisplayFeature> = emptyList(),
 ) {
   val messages by viewModel.chatMessages.collectAsState()
+  val browserTab = remember(messages) { messages.asReversed().firstNotNullOfOrNull { message -> message.content.asReversed().firstNotNullOfOrNull { it.toolActivity?.browserTab } } }
+  val controlPage by viewModel.gatewayControlPage.collectAsState()
   val sourcePreviewConfig by viewModel.gatewaySourcePreviewConfig.collectAsState()
   val transcriptAnchor by viewModel.chatTranscriptAnchor.collectAsState()
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
@@ -1045,6 +1047,22 @@ internal fun ChatScreen(
     tabletopPanes = tabletopPanes,
     features = features,
     conversationStatus = conversationStatus,
+    browser = { availableHeight ->
+      if (composerOwnerReady) {
+        browserTab?.let { tab ->
+          key(composerOwner, selectionGeneration) {
+            ChatBrowserCard(
+              tab = tab,
+              sessionKey = sessionKey,
+              page = controlPage,
+              connected = gatewayConnectionDisplay.isConnected,
+              canControl = operatorScopesAllowAdmin(operatorScopes),
+              availableHeight = availableHeight,
+            )
+          }
+        }
+      }
+    },
     header = { onJumpToLatest, compactHeight, tabletop ->
       if ((!compactHeight || tabletop) && !detailsExpanded) headerContent(onJumpToLatest) { detailsExpanded = false }
     },
@@ -1746,6 +1764,7 @@ private fun ChatMessageList(
   tabletopPanes: TabletopPaneBounds?,
   features: List<DisplayFeature>,
   conversationStatus: @Composable () -> Unit,
+  browser: @Composable (Dp) -> Unit,
   header: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
   composer: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
 ) {
@@ -1833,7 +1852,7 @@ private fun ChatMessageList(
           catalogRevision = gatewayCatalogRevision,
           prepareRead = prepareFullMessageRead,
         ) { visibleContent, disclosure ->
-          Box(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+          ChatBrowserLayout(browser = browser, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             LazyColumn(
               modifier = Modifier.fillMaxSize().nestedScroll(readerScroll.nestedScrollConnection).onGloballyPositioned(readerScroll.navigation.anchors::viewportPlaced),
               state = readerScroll.listState,

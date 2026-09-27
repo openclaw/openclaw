@@ -486,6 +486,25 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
 - Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via Gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the Gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
 
+#### Agent browser in chat
+
+When the Browser plugin returns an identifiable tab, Chat shows a preview of
+the session's latest browser tab. Tap **Control browser** to interact without
+leaving the conversation or replacing your draft. **Collapse browser** or Android
+Back returns to the preview. **Open in your browser** is a separate, explicit action.
+Ordinary website links and **Desktop** keep their existing behavior.
+
+The preview uses the connected Gateway and the exact browser profile, host or
+node, and tab from the tool result. It never starts another browser or substitutes
+a different tab. Switching sessions or Gateways replaces the viewer; going offline
+removes its controls until the connection returns. A stopped or closed remote tab
+stays unavailable rather than creating a replacement.
+
+This uses the Gateway's existing Browser panel and `operator.admin` browser
+permission. The connected Gateway must serve the browser focus view; older
+Gateways without that view cannot provide embedded control. No additional browser
+service or session-sharing permission is created.
+
 ### 7. Camera
 
 Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camera.clip` (mp4). See [Camera node](/nodes/camera) for parameters and CLI helpers.

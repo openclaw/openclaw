@@ -15,6 +15,122 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("embeds only the requested existing browser tab and retains its identity across resize", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 180, width: 400 } },
+      async ({ page }) => {
+        await page.route("**/__openclaw__/assistant-media**", (route) =>
+          route.fulfill({
+            contentType: "image/png",
+            body: Buffer.from(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+              "base64",
+            ),
+          }),
+        );
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["browser.request"],
+          operatorScopes: ["operator.admin"],
+          methodResponses: {
+            "browser.request": {
+              cases: [
+                {
+                  match: { path: "/tabs" },
+                  response: {
+                    running: true,
+                    tabs: [
+                      {
+                        targetId: "unrelated",
+                        title: "Other session",
+                        url: "https://other.example/",
+                      },
+                      {
+                        targetId: "existing",
+                        title: "Selected page",
+                        url: "https://selected.example/",
+                      },
+                    ],
+                  },
+                },
+                {
+                  match: { path: "/screencast" },
+                  response: {
+                    __mockError: { code: "UNAVAILABLE", message: "Screencast unavailable" },
+                  },
+                },
+                {
+                  match: { path: "/screenshot" },
+                  response: {
+                    targetId: "existing",
+                    path: "/proof/selected.png",
+                    url: "https://selected.example/",
+                  },
+                },
+                {
+                  match: { path: "/act" },
+                  response: {
+                    result: {
+                      cssWidth: 100,
+                      cssHeight: 100,
+                      title: "Selected page",
+                      url: "https://selected.example/",
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(
+          `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=node&node=worker-a&profile=work&targetId=existing`,
+        );
+        const panel = page.locator("openclaw-browser-panel");
+        await panel.locator('.bp-shot[alt="Selected page"]').waitFor();
+        expect(await page.locator("openclaw-app-shell, openclaw-desktop-panel").count()).toBe(0);
+        expect(await panel.getByRole("button", { name: "New tab", exact: true }).count()).toBe(0);
+        await page.setViewportSize({ width: 400, height: 400 });
+        await panel.locator(".bp-input").click({ position: { x: 20, y: 20 } });
+        await panel.locator(".bp-input").press("Enter");
+        await gateway.waitForRequest("browser.request", {
+          match: { path: "/act", body: { kind: "press", targetId: "existing", key: "Enter" } },
+        });
+        const requests = await gateway.getRequests("browser.request");
+        for (const request of requests) {
+          expect(request.params).toMatchObject({
+            target: "node",
+            node: "worker-a",
+            query: { profile: "work" },
+          });
+          const envelope = asNullableRecord(request.params);
+          expect(["/start", "/tabs/open", "/tabs/focus"]).not.toContain(envelope?.path);
+          const targetId = asNullableRecord(envelope?.body)?.targetId;
+          if (targetId !== undefined) {
+            expect(targetId).toBe("existing");
+          }
+        }
+      },
+    );
+  });
+
+  it("shows browser access unavailability without opening another surface", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["browser.request"],
+        operatorScopes: ["operator.read", "operator.sessions.write"],
+      });
+      await page.goto(
+        `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=existing`,
+      );
+      await page
+        .getByText(
+          "Browser control is unavailable for this connection. Reconnect with browser access.",
+        )
+        .waitFor();
+      expect(await gateway.getRequests("browser.request")).toEqual([]);
+      expect(await page.locator("openclaw-app-shell, openclaw-desktop-panel").count()).toBe(0);
+    });
+  });
+
   it.each([true, false])(
     "keeps non-browser metadata inert (history: %s) with browser access enabled",
     async (includeHistory) => {
