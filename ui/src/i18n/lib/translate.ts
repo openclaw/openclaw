@@ -6,8 +6,9 @@ import {
   isSupportedLocale,
   loadLazyLocaleTranslation,
   resolveNavigatorLocale,
+  type Locale,
 } from "./registry.ts";
-import type { Locale, TranslationMap } from "./types.ts";
+import type { TranslationMap } from "./types.ts";
 
 function lookupTranslation(map: TranslationMap | undefined, keys: readonly string[]): unknown {
   let value: unknown = map;
