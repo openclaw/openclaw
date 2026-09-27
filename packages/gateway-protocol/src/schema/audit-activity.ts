@@ -1,5 +1,5 @@
 // Versioned metadata-only activity audit query payloads.
-import { type Static, type TProperties, type TSchema, Type } from "typebox";
+import { type TProperties, type TSchema, Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -525,19 +525,31 @@ type AuditActivityInboundMessageV1Terminal =
       status: "succeeded";
       outcome: "completed";
       errorCode?: never;
-      reasonCode?: Static<typeof inboundCompletedReasonSchema>;
+      reasonCode?:
+        | "fast_abort"
+        | "plugin_bound_handled"
+        | "plugin_bound_unavailable"
+        | "plugin_bound_declined"
+        | "before_dispatch_handled"
+        | "acp_dispatch_completed"
+        | "acp_dispatch_empty"
+        | "active_run_injected";
     }
   | {
       status: "blocked";
       outcome: "skipped";
       errorCode?: never;
-      reasonCode?: Static<typeof inboundSkippedReasonSchema>;
+      reasonCode?:
+        | "duplicate"
+        | "reply_operation_active"
+        | "reply_operation_aborted"
+        | "acp_dispatch_aborted";
     }
   | {
       status: "failed";
       outcome: "failed";
       errorCode: "message_processing_failed";
-      reasonCode?: Static<typeof inboundFailureReasonSchema>;
+      reasonCode?: "acp_dispatch_failed" | "plugin_bound_error";
     };
 export type AuditActivityInboundMessageV1 = AuditActivityMessageRecordBaseV1 & {
   eventType: "inbound_message";
@@ -561,16 +573,21 @@ type AuditActivityOutboundMessageV1Terminal =
       status: "blocked";
       outcome: "suppressed";
       errorCode?: never;
-      reasonCode: Static<typeof outboundSuppressedReasonSchema>;
+      reasonCode:
+        | "cancelled_by_message_sending_hook"
+        | "cancelled_by_reply_payload_sending_hook"
+        | "empty_after_message_sending_hook"
+        | "empty_after_reply_payload_sending_hook"
+        | "no_visible_payload";
       failureStage?: never;
       deliveryKind?: never;
     }
   | {
       status: "failed";
       outcome: "failed";
-      errorCode: Static<typeof outboundFailureErrorSchema>;
+      errorCode: "message_delivery_failed" | "message_delivery_partial_failure";
       reasonCode?: never;
-      failureStage: Static<typeof outboundFailureStageSchema>;
+      failureStage: "platform_send" | "queue" | "unknown";
       deliveryKind?: "text" | "media" | "other";
     }
   | {
@@ -578,7 +595,7 @@ type AuditActivityOutboundMessageV1Terminal =
       outcome: "unknown";
       errorCode?: never;
       reasonCode?: never;
-      failureStage: Static<typeof outboundFailureStageSchema>;
+      failureStage: "platform_send" | "queue" | "unknown";
       deliveryKind?: never;
     };
 export type AuditActivityOutboundMessageV1 = AuditActivityMessageRecordBaseV1 & {

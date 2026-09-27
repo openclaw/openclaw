@@ -140,11 +140,19 @@ export const WebPushPreferencesSetParamsSchema = Type.Union([
 /** Empty request type for fetching the Web Push VAPID public key. */
 export type WebPushVapidPublicKeyParams = Record<string, never>;
 /** Browser PushSubscription subset persisted by the gateway. */
-export type WebPushSubscribeParams = Static<typeof WebPushSubscribeParamsSchema>;
+export type WebPushSubscribeParams = {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+};
 /** Browser PushSubscription endpoint removal request. */
-export type WebPushUnsubscribeParams = Static<typeof WebPushUnsubscribeParamsSchema>;
+export type WebPushUnsubscribeParams = {
+  endpoint: string;
+};
 /** Optional title/body overrides for a Web Push test notification. */
-export type WebPushTestParams = Static<typeof WebPushTestParamsSchema>;
+export type WebPushTestParams = {
+  title?: string;
+  body?: string;
+};
 export type WebPushNotificationCategory = Static<typeof WebPushNotificationCategorySchema>;
 export type WebPushDetailLevel = Static<typeof WebPushDetailLevelSchema>;
 export type WebPushNotificationPreferences = Static<typeof WebPushNotificationPreferencesSchema>;

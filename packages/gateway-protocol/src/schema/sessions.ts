@@ -623,7 +623,8 @@ export const SessionsRewindResultSchema = closedObject({
 
 export const SessionsForkResultSchema = closedObject({
   sessionKey: NonEmptyString,
-  ...SessionsRewindResultSchema.properties,
+  editorText: Type.Optional(Type.String()),
+  editorAttachments: Type.Optional(Type.Array(SessionEditorAttachmentSchema)),
 });
 
 export const SessionBranchSchema = closedObject({

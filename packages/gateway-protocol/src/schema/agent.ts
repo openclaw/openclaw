@@ -256,8 +256,10 @@ export const ConversationTurnResultSchema = Type.Union([
     status: Type.Literal("timeout"),
   }),
   closedObject({
-    ...ConversationTurnBaseResultSchema,
+    conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+    channel: NonEmptyString,
     messageId: Type.Optional(NonEmptyString),
+    correlationPersisted: Type.Boolean(),
     status: ConversationSendResultSchema.properties.status,
     error: NonEmptyString,
   }),

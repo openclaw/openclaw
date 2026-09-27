@@ -79,6 +79,10 @@ export const SessionPlacementRunnerSchema = closedObject({
   deviceId: Type.Optional(WorkerIdentifierSchema),
 });
 
+const SessionPlacementDiskSpaceProperties = {
+  diskSpace: Type.Optional(SessionPlacementDiskSpaceSchema),
+};
+
 const WORKER_MACHINE_CLASS_MAX_LENGTH = 128;
 const WORKER_OPERATING_SYSTEM_MAX_LENGTH = 64;
 const WorkerMachineClassSchema = Type.String({
@@ -112,6 +116,14 @@ const WorkspaceResultConflictSchema = closedObject({
   totalCount: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 });
 
+const SessionPlacementConflictProperties = {
+  workspaceResultConflict: Type.Optional(WorkspaceResultConflictSchema),
+};
+
+const SessionPlacementWorkspaceReconciliationProperties = {
+  workspaceResultReconciling: Type.Optional(Type.Literal(true)),
+};
+
 const TerminalSessionPlacementProperties = {
   ...SessionPlacementIdentityProperties,
   environmentId: Type.Optional(NonEmptyString),
@@ -120,7 +132,7 @@ const TerminalSessionPlacementProperties = {
   remoteWorkspaceDir: Type.Optional(NonEmptyString),
   workerBundleHash: Type.Optional(WorkerBundleHashSchema),
   ...SessionPlacementAckProperties,
-  workspaceResultConflict: Type.Optional(WorkspaceResultConflictSchema),
+  ...SessionPlacementConflictProperties,
   terminalReason: Type.Optional(NonEmptyString),
   terminalAtMs: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
 };
@@ -143,8 +155,8 @@ function workerOwnedSessionPlacementProperties<
     workerBundleHash: WorkerBundleHashSchema,
     ...SessionPlacementWorkspaceProperties,
     ...SessionPlacementAckProperties,
-    workspaceResultConflict: Type.Optional(WorkspaceResultConflictSchema),
-    diskSpace: Type.Optional(SessionPlacementDiskSpaceSchema),
+    ...SessionPlacementConflictProperties,
+    ...SessionPlacementDiskSpaceProperties,
   };
 }
 
@@ -177,12 +189,12 @@ const StartingSessionPlacementSchema = closedObject({
 
 const ActiveWorkerSessionPlacementSchema = closedObject({
   ...workerOwnedSessionPlacementProperties("active"),
-  workspaceResultReconciling: Type.Optional(Type.Literal(true)),
+  ...SessionPlacementWorkspaceReconciliationProperties,
   runner: Type.Optional(SessionPlacementRunnerSchema),
 });
 const DrainingSessionPlacementSchema = closedObject({
   ...workerOwnedSessionPlacementProperties("draining"),
-  workspaceResultReconciling: Type.Optional(Type.Literal(true)),
+  ...SessionPlacementWorkspaceReconciliationProperties,
 });
 const ReconcilingSessionPlacementSchema = closedObject({
   ...workerOwnedSessionPlacementProperties("reconciling"),

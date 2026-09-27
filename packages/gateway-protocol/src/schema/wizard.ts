@@ -42,8 +42,8 @@ export const WizardNextParamsSchema = closedObject({
   answer: Type.Optional(WizardAnswerSchema),
 });
 
-/** Reads status for an active or recently completed wizard session. */
-export const WizardStatusParamsSchema = closedObject({
+/** Session-id-only params for status requests. */
+const WizardSessionIdParamsSchema = closedObject({
   sessionId: NonEmptyString,
 });
 
@@ -52,6 +52,9 @@ export const WizardCancelParamsSchema = closedObject({
   sessionId: NonEmptyString,
   closeInput: Type.Optional(Type.Boolean()),
 });
+
+/** Reads status for an active or recently completed wizard session. */
+export const WizardStatusParamsSchema = WizardSessionIdParamsSchema;
 
 /** Selectable value shown in a choice-based wizard step. */
 const WizardStepOptionSchema = closedObject({
