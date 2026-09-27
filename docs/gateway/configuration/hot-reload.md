@@ -218,8 +218,13 @@ Disabling transcript storage stops capture writers without ending their meetings
 
 Role definitions, proxy trust, identity scopes, Tailscale authentication, and
 trusted-proxy policies apply live. Connections and pending handshakes that retain
-old policy lose authority and reconnect. Accepted policy writes can finish their
-response; other work must pass the current authority checks before writing.
+old policy lose authority and reconnect. For WebSocket connections with a verified
+login identity, identity-scope edits only retire authority when that login’s
+resolved grants change. Editing another login or reordering the same scopes keeps
+the connection and its accepted runs active. Removing or changing the original
+grant still revokes retained and delegated work, even if it is restored afterward.
+Accepted policy writes can finish their response; other work must pass the current
+authority checks before writing.
 Changing authentication mode or listener topology still requires a Gateway restart.
 
 Node command policy updates connected nodes immediately. Disabling node-published
