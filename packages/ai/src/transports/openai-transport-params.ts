@@ -336,8 +336,6 @@ export function buildOpenAIClientHeaders(
     provider: model.provider,
     api: model.api,
     baseUrl: model.baseUrl,
-    capability: "llm",
-    transport: "stream",
     providerHeaders,
     callerHeaders: Object.keys(callerHeaders).length > 0 ? callerHeaders : undefined,
     precedence: "caller-wins",

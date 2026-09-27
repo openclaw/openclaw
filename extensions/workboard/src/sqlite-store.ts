@@ -15,6 +15,7 @@ import type {
 } from "./persistence-types.js";
 import type {
   WorkboardSqliteOperations,
+  WorkboardSqliteStoreMethods,
   WorkboardSqliteWorkerOperations,
 } from "./sqlite-store-contract.js";
 import { unwrapWorkboardSqliteResult } from "./sqlite-store-errors.js";
@@ -30,11 +31,6 @@ type WorkboardSqliteStores = {
   close(this: void): Promise<void>;
   runWithWriteAuthority: WorkboardWriteAuthority;
 };
-
-type StoreOperation = Exclude<
-  keyof WorkboardSqliteOperations,
-  "connection.open" | "connection.close" | "dataVersion"
->;
 
 export function createWorkboardSqliteStores(options: {
   dbPath?: string;
@@ -158,8 +154,8 @@ export function createWorkboardSqliteStores(options: {
       operations.delete(pending);
     }
   }
-  function bindOperation<K extends StoreOperation>(type: K, writes = false) {
-    return (...args: WorkboardSqliteOperations[K]["input"]["args"]) =>
+  function bindOperation<K extends keyof WorkboardSqliteStoreMethods>(type: K, writes = false) {
+    return (...args: Parameters<WorkboardSqliteStoreMethods[K]>) =>
       run(args, (connection, captured) => execute(type, { connection, args: captured }, writes));
   }
   return {

@@ -38,9 +38,7 @@ export function checkProtocolJson(data: unknown, maxDepth: number): ValidationEr
       return { keyword: "acyclic", message: "must be an acyclic JSON value" };
     }
     seen.add(current.value);
-    const values = Array.isArray(current.value)
-      ? current.value
-      : Object.values(current.value as Record<string, unknown>);
+    const values = Array.isArray(current.value) ? current.value : Object.values(current.value);
     for (const value of values) {
       stack.push({ depth: current.depth + 1, value });
     }

@@ -7,38 +7,43 @@ import type {
 } from "./persistence-types.js";
 import type { WorkboardSqliteResult } from "./sqlite-store-errors.js";
 
-type Operation<Method extends (...args: never[]) => unknown> = {
-  input: { connection: number; args: Parameters<Method> };
-  output: Awaited<ReturnType<Method>>;
+export type WorkboardSqliteStoreMethods = {
+  "cards.register": WorkboardCardStore["register"];
+  "cards.registerIfAbsent": WorkboardCardStore["registerIfAbsent"];
+  "cards.registerIfUpdatedAt": WorkboardCardStore["registerIfUpdatedAt"];
+  "cards.claimIfOwnerAvailable": WorkboardCardStore["claimIfOwnerAvailable"];
+  "cards.deleteIfUpdatedAt": WorkboardCardStore["deleteIfUpdatedAt"];
+  "cards.lookup": WorkboardCardStore["lookup"];
+  "cards.delete": WorkboardCardStore["delete"];
+  "cards.entries": WorkboardCardStore["entries"];
+  "cards.listCardStatuses": WorkboardCardStore["listCardStatuses"];
+  "cards.listBoardAggregates": WorkboardCardStore["listBoardAggregates"];
+  "cards.listStatsAggregates": WorkboardCardStore["listStatsAggregates"];
+  "cards.hasCards": WorkboardCardStore["hasCards"];
+  "boards.register": WorkboardKeyedStore<PersistedWorkboardBoard>["register"];
+  "boards.lookup": WorkboardKeyedStore<PersistedWorkboardBoard>["lookup"];
+  "boards.delete": WorkboardKeyedStore<PersistedWorkboardBoard>["delete"];
+  "boards.entries": WorkboardKeyedStore<PersistedWorkboardBoard>["entries"];
+  "subscriptions.register": WorkboardSubscriptionStore["register"];
+  "subscriptions.lookup": WorkboardSubscriptionStore["lookup"];
+  "subscriptions.delete": WorkboardSubscriptionStore["delete"];
+  "subscriptions.entries": WorkboardSubscriptionStore["entries"];
+  "attachments.register": WorkboardKeyedStore<PersistedWorkboardAttachment>["register"];
+  "attachments.lookup": WorkboardKeyedStore<PersistedWorkboardAttachment>["lookup"];
+  "attachments.delete": WorkboardKeyedStore<PersistedWorkboardAttachment>["delete"];
+  "attachments.entries": WorkboardKeyedStore<PersistedWorkboardAttachment>["entries"];
 };
-export type WorkboardSqliteOperations = {
+
+type StoreOperations = {
+  [K in keyof WorkboardSqliteStoreMethods]: {
+    input: { connection: number; args: Parameters<WorkboardSqliteStoreMethods[K]> };
+    output: Awaited<ReturnType<WorkboardSqliteStoreMethods[K]>>;
+  };
+};
+export type WorkboardSqliteOperations = StoreOperations & {
   "connection.open": { input: undefined; output: { connection: number; dataVersion: number } };
   "connection.close": { input: { connection: number }; output: void };
   dataVersion: { input: { connection: number }; output: number };
-  "cards.register": Operation<WorkboardCardStore["register"]>;
-  "cards.registerIfAbsent": Operation<WorkboardCardStore["registerIfAbsent"]>;
-  "cards.registerIfUpdatedAt": Operation<WorkboardCardStore["registerIfUpdatedAt"]>;
-  "cards.claimIfOwnerAvailable": Operation<WorkboardCardStore["claimIfOwnerAvailable"]>;
-  "cards.deleteIfUpdatedAt": Operation<WorkboardCardStore["deleteIfUpdatedAt"]>;
-  "cards.lookup": Operation<WorkboardCardStore["lookup"]>;
-  "cards.delete": Operation<WorkboardCardStore["delete"]>;
-  "cards.entries": Operation<WorkboardCardStore["entries"]>;
-  "cards.listCardStatuses": Operation<WorkboardCardStore["listCardStatuses"]>;
-  "cards.listBoardAggregates": Operation<WorkboardCardStore["listBoardAggregates"]>;
-  "cards.listStatsAggregates": Operation<WorkboardCardStore["listStatsAggregates"]>;
-  "cards.hasCards": Operation<WorkboardCardStore["hasCards"]>;
-  "boards.register": Operation<WorkboardKeyedStore<PersistedWorkboardBoard>["register"]>;
-  "boards.lookup": Operation<WorkboardKeyedStore<PersistedWorkboardBoard>["lookup"]>;
-  "boards.delete": Operation<WorkboardKeyedStore<PersistedWorkboardBoard>["delete"]>;
-  "boards.entries": Operation<WorkboardKeyedStore<PersistedWorkboardBoard>["entries"]>;
-  "subscriptions.register": Operation<WorkboardSubscriptionStore["register"]>;
-  "subscriptions.lookup": Operation<WorkboardSubscriptionStore["lookup"]>;
-  "subscriptions.delete": Operation<WorkboardSubscriptionStore["delete"]>;
-  "subscriptions.entries": Operation<WorkboardSubscriptionStore["entries"]>;
-  "attachments.register": Operation<WorkboardKeyedStore<PersistedWorkboardAttachment>["register"]>;
-  "attachments.lookup": Operation<WorkboardKeyedStore<PersistedWorkboardAttachment>["lookup"]>;
-  "attachments.delete": Operation<WorkboardKeyedStore<PersistedWorkboardAttachment>["delete"]>;
-  "attachments.entries": Operation<WorkboardKeyedStore<PersistedWorkboardAttachment>["entries"]>;
 };
 export type WorkboardSqliteWorkerOperations = {
   [K in keyof WorkboardSqliteOperations]: {
