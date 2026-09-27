@@ -16,9 +16,8 @@ export type GatewayWebSocketTargetOptions = {
 export type GatewayWebSocketClientOptions = Omit<WsClientOptions, "checkServerIdentity"> &
   Pick<ConnectionOptions, "checkServerIdentity" | "servername">;
 
-type GatewayWebSocketConstructor = typeof import("ws").WebSocket & {
-  new (address: string | URL, options: GatewayWebSocketClientOptions): WebSocket;
-};
+type GatewayWebSocketConstructor = typeof import("ws").WebSocket &
+  (new (address: string | URL, options: GatewayWebSocketClientOptions) => WebSocket);
 
 // Load ws below its package entry so Bun cannot substitute its smaller built-in adapter.
 const require = createRequire(import.meta.url);
