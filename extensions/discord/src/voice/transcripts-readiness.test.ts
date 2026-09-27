@@ -161,12 +161,6 @@ defineDiscordVoiceTests(
         if (recovery) {
           createRealtimeVoiceBridgeSessionMock.mockReturnValueOnce(provider);
         }
-        const pending =
-          stage === "ready"
-            ? entersStateMock
-            : stage === "bootstrap"
-              ? resolveRealtimeVoiceAgentContextInstructionsMock
-              : provider.connect;
         if (stage === "bootstrap") {
           resolveRealtimeVoiceAgentContextInstructionsMock.mockImplementationOnce(async () => {
             waiting.resolve();
