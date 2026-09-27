@@ -20,6 +20,7 @@ import type { ResolvedRunEntryModelSelection } from "../run-entry.types.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunCompletionCheck } from "./terminal-retry-state.js";
+import type { EmbeddedSettledDraftReviewer } from "./turn-continuation.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type CompactionAccountingTarget = Readonly<
@@ -102,10 +103,11 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   /** Re-admit from the committed transcript without persisting the original prompt again. */
   pluginRuntimeRefreshContinuation?: true;
-  pluginRuntimeRefreshUserPrompt?: EmbeddedRunAttemptParams["pluginRuntimeRefreshUserPrompt"];
+  /** An internal prompt continues the admitted task instead of submitting another user input. */
+  turnContinuation?: true;
+  continuationMessages?: EmbeddedRunAttemptParams["continuationMessages"];
   pluginRuntimeRefreshMessages?: EmbeddedRunAttemptParams["pluginRuntimeRefreshMessages"];
-  /** Actual generation cleanup, including source callbacks after native terminal publication. */
-  runCleanupSettlement?: Promise<void>;
+  reviewSettledDraft?: EmbeddedSettledDraftReviewer;
   /** Host-only transfer of attempt terminal resources to the logical turn. */
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   /** Aborts the logical turn when its retained embedded handle is cancelled. */

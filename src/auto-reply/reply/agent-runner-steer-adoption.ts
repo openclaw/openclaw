@@ -34,8 +34,7 @@ import {
   scheduleFollowupDrainAfterReplyOperationClear,
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
-import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
-import type { MessageInjectionRuntimeReason } from "./message-injection-authority.js";
+import { recordGroupParticipationInput } from "./group-participation-inputs.js";
 import {
   admitFollowupRunLifecycle,
   reserveSteerCandidate,
@@ -147,25 +146,22 @@ export async function runActiveReplySteer(
   if (!parked) {
     return "handled";
   }
-  const mailbox = expectDefined(followupRun.controllerInput, "Parked steer source").mailbox;
-  const owner = mailbox.owner.active;
-  if (owner) {
-    scheduleFollowupDrainAfterReplyOperationClear({
-      operation: owner,
-      queueKey,
-      runFollowup,
-    });
-  } else {
-    scheduleFollowupDrain(queueKey, runFollowup, mailbox.owner);
-  }
-  let custodyFinished = false;
-  const fallback = async (
-    reason: ActiveReplySteerFallbackReason,
-    activeRunId?: string,
-    error?: string,
-    runtimeReason?: MessageInjectionRuntimeReason,
-  ): Promise<"handled"> => {
-    assertReadCurrent();
+  recordGroupParticipationInput(activeReplyOperation, followupRun);
+  const scheduleParkedFallback = () => {
+    const owner = replyRunRegistry.get(queueKey);
+    if (owner) {
+      scheduleFollowupDrainAfterReplyOperationClear({
+        operation: owner,
+        queueKey,
+        runFollowup,
+      });
+    } else {
+      scheduleFollowupDrain(queueKey, runFollowup);
+    }
+  };
+  scheduleParkedFallback();
+  releaseAdmissionTicket();
+  const fallback = async (reason?: string): Promise<"handled"> => {
     parked.fallback();
     custodyFinished = true;
     const queueCapRejected =
@@ -478,9 +474,12 @@ export async function runActiveReplySteer(
         `queue: active session ${steerSessionId} adoption finalizer failed: ${formatErrorMessage(finalization.adoptionError)}`,
       );
     }
-    await refreshReplyOperationTyping(activeReplyOperation, {
-      startIfIdle: typingSignals.shouldStartImmediately,
-    });
+    recordGroupParticipationInput(activeReplyOperation, followupRun, "steer");
+    if (activeReplyOperation) {
+      await refreshReplyOperationTyping(activeReplyOperation, {
+        startIfIdle: typingSignals.shouldStartImmediately,
+      });
+    }
     await touchActiveSessionEntry();
     return "handled";
   } finally {

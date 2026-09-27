@@ -220,6 +220,8 @@ export async function runEmbeddedAttemptPromptPhase(
     transcriptLeafId = promptAssembly.transcriptLeafId;
 
     const promptContext = await prepareEmbeddedAttemptPromptContext({
+      retainedCurrentTurnMessageCount:
+        input.preparedStreamRuntime.history.retainedCurrentTurnMessageCount,
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,
       systemPromptRuntimeContextFragments: prepared.systemPrompt.runtimeContextFragments,

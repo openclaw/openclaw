@@ -46,6 +46,9 @@ async function recordAgentTurnExecutionOutcome(
   ) {
     params.opts?.onAgentRunTerminalOutcome?.(executionStatus === "ok" ? "completed" : "failed");
   }
+  if (result?.outcome.kind === "observed") {
+    return;
+  }
   const sourceReplyDeliveryMode =
     params.followupRun.run.sourceReplyDeliveryMode ?? params.opts?.sourceReplyDeliveryMode;
   if (sourceReplyDeliveryMode !== "message_tool_only") {

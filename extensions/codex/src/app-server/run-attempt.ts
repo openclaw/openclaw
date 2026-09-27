@@ -199,10 +199,20 @@ export async function runCodexAppServerAttempt(
             ) {
               throw startedResources.state.executionDisconnectError;
             }
-            connection.assertModelExecutionCurrent();
-            return finalizedResult;
-          } finally {
-            turnRuntime.deadlines.dispose();
+            // A failed handoff still owns completed effects. Return their replay
+            // evidence rather than throwing them away at the cleanup boundary.
+            const original = attemptTerminal.project(finalizedResult.terminal).promptError;
+            finalizedResult.terminal = attemptTerminal.merge(finalizedResult.terminal, {
+              kind: "failed",
+              source: "prompt",
+              error: new AggregateError(
+                original ? [original, error] : [error],
+                "Plugin runtime changed, but native continuation failed. Inspect the existing thread before continuing; do not repeat completed actions.",
+              ),
+            });
+            delete finalizedResult.pluginRuntimeRefreshMessages;
+            delete finalizedResult.continuationMessages;
+            delete finalizedResult.settledTurnFinalizationContext;
           }
         } finally {
           if (!activeTurnOwnsCleanup) {

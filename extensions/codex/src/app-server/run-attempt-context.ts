@@ -15,6 +15,7 @@ import {
   readMirroredSessionHistoryMessages,
   renderCodexSkillsInstructions,
 } from "./attempt-context.js";
+import { readCodexContinuationMessages } from "./attempt-continuation.js";
 import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
@@ -168,7 +169,9 @@ export async function prepareCodexAttemptContext(
     historyState.messages = (await readFencedHistory()) ?? historyState.messages;
   }
   // The admission fence intentionally excludes this logical turn's committed results.
-  historyState.messages.push(...(params.pluginRuntimeRefreshMessages ?? []));
+  if (!activeContextEngine) {
+    historyState.messages.push(...(readCodexContinuationMessages(params) ?? []));
+  }
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,
     agentWorkspaceDeveloperInstructions:

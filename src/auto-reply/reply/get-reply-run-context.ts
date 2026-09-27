@@ -1,11 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
-import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
-import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import { resolveDecisionModelSetting } from "../../agents/decision-model-setting.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
-import { resolveRequestGitCoauthorPrompt } from "../../agents/git-coauthor-prompt.js";
-import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
-import { buildPrAttributionPrompt, preparePrAttribution } from "../../agents/pr-attribution.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
   isSyntheticSourceReplyTurn,
   resolveReplyCompletion,
@@ -186,6 +183,18 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const isFirstTurnInSession = isNewSession || !systemSent;
   const isGroupChat =
     promptSessionCtx.ChatType === "group" || promptSessionCtx.ChatType === "channel";
+  const isDirectChat = promptSessionCtx.ChatType === "direct" || promptSessionCtx.ChatType === "dm";
+  const groupParticipation =
+    isGroupChat &&
+    !isHeartbeat &&
+    promptSessionCtx.WasMentioned !== true &&
+    (conversation.activation ?? defaultActivation) === "always" &&
+    resolveDecisionModelSetting(cfg, agentId)
+      ? {
+          agentName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.name),
+          replyToText: sessionCtx.ReplyToBody,
+        }
+      : undefined;
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
     requestedPolicy: opts?.typingPolicy,
     suppressTyping: opts?.suppressTyping === true,
@@ -714,6 +723,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     buildPromptBodies,
     refreshInboundContextAfterAdmissionWait,
     terminalReplyExpectation,
+    groupParticipation,
   } as const;
 }
 
