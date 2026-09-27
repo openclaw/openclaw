@@ -20,8 +20,9 @@
       "hostExecutorSkillDirectories": {
         "type": "array",
         "maxItems": 32,
-        "items": { "type": "string", "pattern": "^(?:/|[A-Za-z]:[/\\\\]|\\\\\\\\)" },
-        "description": "Absolute paths on the executor host machine that already contain the skill files and are available to the Agents API harness. OpenClaw does not copy or install these files. Gateway skill eligibility filters do not apply to these directories. Reset existing sessions after changing this list."
+        "uniqueItems": true,
+        "items": { "type": "string", "pattern": "^(?:(?![\\s\\S]*/\\.{1,2}(?:/|(?![\\s\\S])))/|(?![\\s\\S]*[\\\\/]\\.{1,2}(?:[\\\\/]|(?![\\s\\S])))(?:[A-Za-z]:[\\\\/]|\\\\\\\\))" },
+        "description": "Unique absolute paths without . or .. path segments on the executor host machine that already contain the skill files and are available to the Agents API harness. OpenClaw does not copy or install these files. Gateway skill eligibility filters do not apply to these directories. Reset existing sessions after changing this list."
       }
     }
   }

@@ -5,8 +5,23 @@ import { z } from "zod";
 export const agentsApiConfigSchema = z.strictObject({
   environment: z.enum(["openai_hosted", "self_hosted"]).default("openai_hosted"),
   hostExecutorSkillDirectories: z
-    .array(z.string().regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/))
+    .array(
+      z
+        .string()
+        .regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/)
+        .refine(
+          (directory) =>
+            !directory
+              .split(directory.startsWith("/") ? "/" : /[\\/]/)
+              .some((segment) => segment === "." || segment === ".."),
+          "Executor skill directories cannot contain . or .. path segments",
+        ),
+    )
     .max(32)
+    .refine(
+      (directories) => new Set(directories).size === directories.length,
+      "Executor skill directories must be unique",
+    )
     .optional(),
 });
 
