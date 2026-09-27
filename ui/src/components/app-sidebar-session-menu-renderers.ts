@@ -334,7 +334,8 @@ export function renderSidebarSessionSortMenu(params: {
   ownerFilterId: string | null;
   involvingMe: boolean;
   selfOwnerId: string | null;
-  activeFilterCount: number;
+  /** Any Filters row differs from its default, so Reset has work to do. */
+  filtersChanged: boolean;
   onResetFilters: () => void;
   onGroupingChange: (grouping: SidebarSessionsGrouping) => void;
   onSortModeChange: (mode: SidebarSessionSortMode) => void;
@@ -406,7 +407,7 @@ export function renderSidebarSessionSortMenu(params: {
           <div class="sidebar-session-menu-heading">
             <h3 id="sidebar-sessions-filters-label">${t("chat.sidebar.menuFilters")}</h3>
             ${
-              params.activeFilterCount > 0
+              params.filtersChanged
                 ? html`<button
                     type="button"
                     id="sidebar-sessions-reset"

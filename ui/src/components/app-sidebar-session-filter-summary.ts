@@ -100,7 +100,6 @@ export function renderSidebarSessionFilter(
     }}
   >
     ${icons.listFilter}
-    ${count > 0 ? html`<span class="sidebar-session-filter-count" aria-hidden="true">${count}</span>` : nothing}
   </button>`;
 }
 

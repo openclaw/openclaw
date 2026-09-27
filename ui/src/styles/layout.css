@@ -1817,7 +1817,7 @@ openclaw-settings-save-indicator:empty {
   position: relative;
 }
 
-.sidebar-session-sort--filtered:not(:has(.sidebar-session-filter-count))::after {
+.sidebar-session-sort--filtered::after {
   position: absolute;
   top: 2px;
   right: 2px;
@@ -1827,21 +1827,6 @@ openclaw-settings-save-indicator:empty {
   background: var(--accent);
   box-shadow: 0 0 0 1.5px var(--bg);
   content: "";
-}
-
-.sidebar-session-filter-count {
-  position: absolute;
-  inset-block-start: calc(-1 * var(--space-1));
-  inset-inline-end: calc(-1 * var(--space-1));
-  display: grid;
-  place-items: center;
-  min-width: var(--space-4);
-  height: var(--space-4);
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  color: var(--accent-foreground);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
 }
 
 /* Group header kebab: hidden until hover/keyboard focus like row actions, but always

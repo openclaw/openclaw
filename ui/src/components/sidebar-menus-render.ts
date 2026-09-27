@@ -527,10 +527,14 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
-    activeFilterCount: countSidebarSessionFilters(host),
+    // The badge counts Owners and Status; Reset also clears the other Filters rows.
+    filtersChanged:
+      countSidebarSessionFilters(host) > 0 || host.sessionsShowCron || host.sessionsShowSystem,
     onResetFilters: () => {
       host.setSessionOwnerFilter(null);
       host.sessionOrganizer.setSessionsStatusFilter("active");
+      host.sessionOrganizer.setSessionsShowCron(false);
+      host.sessionOrganizer.setSessionsShowSystem(false);
     },
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);

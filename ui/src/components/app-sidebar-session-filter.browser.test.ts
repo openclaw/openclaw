@@ -80,6 +80,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       const expectFits = async () => {
         const menu = sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel")!;
         await expect.element(menu).toBeVisible();
+        // The phone sheet slides in; measure where it settles.
+        await Promise.all(menu.getAnimations().map((animation) => animation.finished));
         const bounds = menu.getBoundingClientRect();
         expect(bounds.height).toBeGreaterThan(0);
         expect(bounds.height).toBeLessThanOrEqual(innerHeight);
@@ -122,7 +124,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       ).toHaveLength(2);
       const search = page.getByRole("combobox", { name: "Search", exact: true });
       await expect.element(search).toHaveFocus();
-      expect(ringStyle(sidebar, ".picker-select__search")).not.toBe("none");
+      expect(getComputedStyle(sidebar.querySelector(".picker-select__search")!).boxShadow).not.toBe(
+        "none",
+      );
       expect(ringStyle(sidebar, ".picker-select__option[data-active]")).not.toBe("none");
       await userEvent.keyboard("bo");
       await expect.poll(() => sidebar.querySelectorAll(".picker-select__option").length).toBe(1);
@@ -210,7 +214,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
   it("opens display submenus on mouse hover and leaves touch on click", async () => {
     const { sidebar, page } = await mountFilters(1440);
     const { userEvent } = await import("vitest/browser");
-    const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
+    const settle = () =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 300);
+      });
     await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
     const sort = page.getByRole("button", { name: "Sort by: Created", exact: true });
     const sortRow = sidebar.querySelector<HTMLElement>("#sidebar-sessions-sort")!.parentElement!;
@@ -219,7 +226,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await expect.element(sort).toHaveAttribute("aria-expanded", "false");
     await userEvent.hover(sort);
     await expect.element(sort).toHaveAttribute("aria-expanded", "true");
-    await userEvent.hover(page.getByRole("option", { name: "Updated", exact: true }));
+    await userEvent.hover(page.getByRole("option", { name: "Last updated", exact: true }));
     await settle();
     await sort.click();
     await expect.element(sort).toHaveAttribute("aria-expanded", "true");
@@ -237,6 +244,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await trigger.click();
     const panel = sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel")!;
     await expect.element(panel).toBeVisible();
+    await Promise.all(panel.getAnimations().map((animation) => animation.finished));
     expect(panel.getAttribute("aria-modal")).toBe("true");
     expect(sidebar.querySelector(".sidebar-session-sort-menu wa-popup")).toBeNull();
     const sheet = panel.getBoundingClientRect();
@@ -270,16 +278,21 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     const { sidebar, sessions, page } = await mountFilters(1440);
     await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-session-sort-menu")!;
-    const expectFilterCount = async (count: number) => {
+    // The toolbar dot and its description track Owners and Status only; Reset
+    // also appears for the automation and system toggles.
+    const expectFilterCount = async (count: number, resetVisible = count > 0) => {
       await expect
-        .poll(
-          () => sidebar.querySelector(".sidebar-session-filter-count")?.textContent?.trim() ?? null,
+        .poll(() =>
+          sidebar.querySelector(".sidebar-session-sort")?.getAttribute("aria-description"),
         )
-        .toBe(count ? String(count) : null);
-      expect(sidebar.querySelector(".sidebar-session-sort")?.getAttribute("aria-description")).toBe(
-        count ? `Active filters: ${count}` : null,
-      );
-      expect(sidebar.querySelector("#sidebar-sessions-reset") !== null).toBe(count > 0);
+        .toBe(count ? `Active filters: ${count}` : null);
+      expect(
+        sidebar
+          .querySelector(".sidebar-session-sort")
+          ?.classList.contains("sidebar-session-sort--filtered"),
+      ).toBe(count > 0);
+      expect(sidebar.querySelector(".sidebar-session-sort")?.textContent?.trim()).toBe("");
+      expect(sidebar.querySelector("#sidebar-sessions-reset") !== null).toBe(resetVisible);
     };
     await expectFilterCount(0);
     await page.getByRole("button", { name: "Group by: Custom groups", exact: true }).click();
@@ -308,7 +321,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       const before = read();
       await page.getByRole("switch", { name, exact: true }).click();
       expect(read()).toBe(!before);
-      // Display and visibility choices never count as filters.
+      // Only Owners and Status light the toolbar dot.
       await expectFilterCount(1);
     }
     const owner = page.getByRole("button", { name: /^Owners:/ });
@@ -337,8 +350,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await page.getByRole("button", { name: "Reset", exact: true }).click();
     expect(loadStoredSidebarSessionStatusFilter()).toBe("active");
     expect(sidebar.sessionOwnerFilterId).toBeNull();
-    expect(loadStoredSidebarSessionsShowCron()).toBe(true);
-    expect(loadStoredSidebarSessionsShowSystem()).toBe(true);
+    expect(loadStoredSidebarSessionsShowCron()).toBe(false);
+    expect(loadStoredSidebarSessionsShowSystem()).toBe(false);
     expect(loadStoredSidebarSessionsGrouping()).toBe("person");
     expect(loadStoredSidebarSessionSortMode()).toBe("people");
     expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
@@ -348,6 +361,11 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await expectFilterCount(0);
     await expect.element(page.getByRole("radio", { name: "Active", exact: true })).toHaveFocus();
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBe(menu);
+    await page.getByRole("switch", { name: "Show automation sessions", exact: true }).click();
+    await expectFilterCount(0, true);
+    await page.getByRole("button", { name: "Reset", exact: true }).click();
+    expect(loadStoredSidebarSessionsShowCron()).toBe(false);
+    await expectFilterCount(0);
     await page.getByRole("button", { name: "Group by: Person", exact: true }).click();
     await page.getByRole("option", { name: "Custom groups", exact: true }).click();
     await page.getByRole("button", { name: /^Hide empty groups:/ }).click();
