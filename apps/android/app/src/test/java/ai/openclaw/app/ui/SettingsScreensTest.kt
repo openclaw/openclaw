@@ -101,7 +101,7 @@ class SettingsScreensTest {
   @Test
   fun gatewayStatusLabelReportsWhichAuthRecoveryAppliesInsteadOfGenericLabel() {
     assertEquals(
-      "Setup code expired",
+      "Setup code no longer valid",
       gatewayStatusLabel(
         "Gateway error: unauthorized: bootstrap token invalid or expired",
         isConnected = false,

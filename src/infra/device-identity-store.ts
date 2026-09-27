@@ -25,6 +25,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
+import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 const PRIMARY_DEVICE_IDENTITY_KEY = "primary";
 
@@ -299,7 +300,8 @@ export function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOption
     pathMayExistSync(`${legacyPath}.native-importing`) ||
     pathMayExistSync(legacyPath)
   ) {
-    throw new Error(
+    throw new StartupMaintenanceRequiredError(
+      "state-migrations",
       `Legacy device identity exists at ${legacyPath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
     );
   }

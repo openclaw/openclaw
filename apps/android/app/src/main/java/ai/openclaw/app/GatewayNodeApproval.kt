@@ -42,13 +42,15 @@ internal data class GatewayNodeApprovalSurface(
       commands.containsAll(other.commands) &&
       other.permissions.all { (key, allowed) -> !allowed || permissions[key] == true }
 
-  // These are the configurable node surfaces on Android's onboarding page.
+  // A promptable SMS search alone is not an enabled onboarding capability.
   // Other commands may be withheld by Gateway policy or its protocol version.
-  fun onboardingSurface(): GatewayNodeApprovalSurface =
-    copy(
-      capabilities = capabilities.filterTo(mutableSetOf()) { it in setOf("camera", "location", "sms") },
-      commands = commands.filterTo(mutableSetOf()) { it.substringBefore('.') in setOf("camera", "location", "sms") },
+  fun onboardingSurface(): GatewayNodeApprovalSurface {
+    val enabledCapabilities = capabilities.intersect(setOf("camera", "location", "sms"))
+    return copy(
+      capabilities = enabledCapabilities,
+      commands = commands.filterTo(mutableSetOf()) { it.substringBefore('.') in enabledCapabilities },
     )
+  }
 }
 
 internal class GatewayNodeApprovalContext(

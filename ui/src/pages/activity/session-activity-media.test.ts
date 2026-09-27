@@ -164,6 +164,9 @@ it.each(["initial discovery", "revision refresh"])(
         (button) => button.textContent?.trim() === "Retry",
       );
       expect(retryButton).toBeDefined();
+      expect(retryButton?.closest(".activity-feed__note")?.parentElement).toBe(
+        row.querySelector(".activity-feed__media"),
+      );
       retryButton!.click();
       await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
       expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0");
@@ -296,3 +299,86 @@ it("coalesces queued revisions without moving the session behind later arrivals"
   pending[3]!.resolve(images("queue-3"));
   await vi.waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(16));
 });
+
+it.each([
+  { count: 3, cursor: true, omitted: false, error: false },
+  { count: 3, cursor: true, omitted: true, error: false },
+  { count: 0, cursor: true, omitted: false, error: false },
+  { count: 0, cursor: false, omitted: true, error: false },
+  { count: 0, cursor: true, omitted: true, error: false },
+  { count: 0, cursor: false, omitted: false, error: true },
+  { count: 0, cursor: true, omitted: true, error: true },
+  { count: 0, cursor: false, omitted: false, error: false },
+])(
+  "keeps image discovery feedback inside its media inset (%j)",
+  async ({ count, cursor, omitted, error }) => {
+    vi.useFakeTimers();
+    const continued = createDeferred<ArtifactsListResult>();
+    try {
+      const result: ArtifactsListResult = {
+        ...images("preview", count),
+        ...(cursor ? { nextCursor: "older" } : {}),
+        ...(omitted ? { omittedOversized: true } : {}),
+      };
+      // With a notice and an error, the first page carries the notice and the next page fails.
+      const request = vi.fn(async () => {
+        if (error && (!omitted || request.mock.calls.length > 1)) {
+          throw new Error("Image discovery failed");
+        }
+        return result;
+      });
+      const harness = createGatewayHarness(createTestGatewayClient(request));
+      const context = createContext(harness.gateway, createSessions("main", []));
+      render(
+        html`<openclaw-activity-session-media
+          .context=${context}
+          sessionKey="agent:main:preview"
+          agentId="main"
+        ></openclaw-activity-session-media>`,
+        container,
+      );
+      const row = container.querySelector<LitElement>("openclaw-activity-session-media")!;
+      await row.updateComplete;
+      observers.get(row)?.(true);
+      await vi.advanceTimersByTimeAsync(0);
+      await row.updateComplete;
+
+      const media = row.querySelector(".activity-feed__media");
+      expect(Boolean(media)).toBe(count > 0 || cursor || omitted || error);
+      expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count);
+      const note = row.querySelector(".activity-feed__note");
+      expect(Boolean(note)).toBe(error || omitted || (count === 0 && cursor));
+      if (note) {
+        expect(note.parentElement).toBe(media);
+      }
+      expect(note?.textContent?.includes("Images too large to preview here") ?? false).toBe(
+        omitted,
+      );
+      if (error) {
+        expect(note?.querySelector('[role="status"]')?.textContent).toBe("Couldn't load images");
+        expect(note?.querySelector("button")?.textContent?.trim()).toBe("Retry");
+      }
+      const action = row.querySelector<HTMLButtonElement>(".activity-feed__note-action");
+      expect(action?.classList.contains("btn") ?? false).toBe(false);
+      if (cursor && !error) {
+        expect(action?.textContent?.trim()).toBe("Older images");
+        expect(action?.parentElement).toBe(
+          count ? media?.querySelector(".chat-message-images") : note,
+        );
+        expect(action?.parentElement?.lastElementChild).toBe(action);
+        request.mockReturnValueOnce(continued.promise);
+        action!.click();
+        await row.updateComplete;
+        expect(action!.disabled).toBe(true);
+        expect(action!.textContent?.trim()).toBe("Loading…");
+        continued.resolve(images("finished"));
+        await vi.advanceTimersByTimeAsync(0);
+        await row.updateComplete;
+        expect(row.querySelector(".activity-feed__note-action")).toBeNull();
+      }
+    } finally {
+      continued.resolve({ artifacts: [] });
+      vi.useRealTimers();
+    }
+  },
+);

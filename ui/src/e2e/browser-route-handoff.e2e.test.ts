@@ -464,6 +464,7 @@ suite.define(() => {
               target: "host",
               query: { profile: "managed" },
               body: { targetId: "t1", type: "png" },
+              tabScope: { sessionKey: "agent:main:main" },
             });
           const afterHostOpen = (await gateway.getRequests("browser.request")).slice(
             beforeHostOpen,

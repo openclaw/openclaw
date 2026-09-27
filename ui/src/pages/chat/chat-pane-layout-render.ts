@@ -207,6 +207,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       terminalTabsInHeader,
       browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
       preferredBrowserTab: [...latestBrowserTabs.values()].at(-1),
+      sessionBrowserTabs: [...latestBrowserTabs.values()].map((selection) => selection.tab),
       desktopPresented,
       desktopRefreshOnPresentation,
       desktopAvailable,

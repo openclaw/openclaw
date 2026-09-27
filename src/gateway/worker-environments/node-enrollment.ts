@@ -2,7 +2,6 @@ import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isLinkLocalIpAddress, isUnspecifiedIpAddress } from "@openclaw/net-policy/ip";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
 import { removePairedDeviceRole } from "../../infra/device-pairing.js";
 import {
@@ -70,7 +69,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const url = await resolvePairingGatewayUrl(config, {
       env: process.env,
       useLocalGateway: config.gateway?.mode === "remote",
-      publicUrl: resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
+      publicUrl: resolveConfiguredPairingPublicUrl(config),
+      publicOriginPreference: "prefer",
       networkInterfaces: os.networkInterfaces,
       runCommandWithTimeout: commandRunner,
     });
@@ -243,8 +243,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           const resolved = await resolvePairingSetupFromConfig(config, {
             env: process.env,
             useLocalGateway: config.gateway?.mode === "remote",
-            publicUrl:
-              resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
+            publicUrl: resolveConfiguredPairingPublicUrl(config),
+            publicOriginPreference: "prefer",
             bootstrapProfile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
             issuedBootstrap: issued,
             localTlsFingerprint: options.getLocalTlsFingerprint?.(),

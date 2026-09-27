@@ -65,6 +65,7 @@ export type InitialChatSnapshotHydration = {
   promise: Promise<void>;
   readyAt?: number;
   wait?: Promise<boolean>;
+  complete?: () => void;
   cancel?: () => void;
 };
 
@@ -135,6 +136,7 @@ export function waitForInitialChatSnapshot(state: ChatHistoryHost): Promise<bool
       }
       resolve(current);
     };
+    hydration.complete = () => finish(true);
     hydration.cancel = () => finish(false);
     const timer = setTimeout(() => finish(true), remaining);
     void hydration.promise.then(

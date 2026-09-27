@@ -228,7 +228,7 @@ vi.mock("./runtime.js", async (importOriginal) => {
 });
 
 // Load after mock registration and retain local bindings for Vitest's export transform.
-const { runNodeHost } = await import("./runner.js");
+const { loadResumableNodeHostGateway, runNodeHost } = await import("./runner.js");
 const { startNodeHostMcpManager } = await import("./mcp.js");
 
 export function lastCapturedOptions(): GatewayClientOptions | undefined {
@@ -273,4 +273,4 @@ export function resetRunnerTestState() {
   });
 }
 
-export { mocks, runNodeHost, startNodeHostMcpManager };
+export { loadResumableNodeHostGateway, mocks, runNodeHost, startNodeHostMcpManager };

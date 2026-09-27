@@ -3056,7 +3056,6 @@ src/state/openclaw-schema-versions.ts	7
 src/state/openclaw-state-db-audit-migration.ts	5
 src/state/openclaw-state-db-delivery-queue-backfill.ts	1
 src/state/openclaw-state-db-legacy-backfills.ts	5
-src/state/openclaw-state-db-maintenance.ts	3
 src/state/openclaw-state-db-operator-approval-migration.ts	1
 src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	3
@@ -3297,7 +3296,6 @@ ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-message-bubble.ts	1
 ui/src/pages/chat/components/chat-message-confirmation.ts	2
-ui/src/pages/chat/components/chat-message-media.ts	1
 ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker.ts	4
 ui/src/pages/chat/components/chat-pane-header.ts	2
