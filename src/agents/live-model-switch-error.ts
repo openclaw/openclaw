@@ -3,7 +3,13 @@
  * Carries the requested provider/model/auth-profile selection out of live
  * session setup code without treating the switch as a failure.
  */
-import type { LiveSessionModelSelection } from "./live-model-switch.js";
+type LiveSessionModelSelection = {
+  provider: string;
+  model: string;
+  agentRuntimeOverride?: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+};
 
 /** Control-flow error used to request a live session model switch. */
 export class LiveSessionModelSwitchError extends Error {
