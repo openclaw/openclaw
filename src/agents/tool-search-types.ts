@@ -40,7 +40,7 @@ export type CatalogVisibilityOptions = {
   includeMcp?: boolean;
   allowedIds?: { has(id: string): boolean };
 };
-type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "catalog";
+type UnknownToolRecoverySurface = "raw-tools" | "catalog";
 export type UnknownToolErrorOptions = {
   exactIdOnly?: boolean;
   recoverySurface?: UnknownToolRecoverySurface;
