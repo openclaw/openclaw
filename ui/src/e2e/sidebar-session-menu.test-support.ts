@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 
 export async function openSidebarMenu(page: Page) {
   const menu = page.locator(".sidebar-session-sort-menu");
@@ -7,7 +7,19 @@ export async function openSidebarMenu(page: Page) {
     await trigger.click();
   }
   await menu.getByRole("dialog").waitFor();
+  await settleSidebarMenuMotion(menu.getByRole("dialog"));
   return menu;
+}
+
+/** Waits for the phone sheet and its choice pages to finish sliding in. */
+export async function settleSidebarMenuMotion(locator: Locator) {
+  await locator.evaluate((element) =>
+    Promise.all(
+      [element.closest(".sidebar-session-filter-panel"), element.closest(".picker-select__menu")]
+        .flatMap((node) => node?.getAnimations() ?? [])
+        .map((animation) => animation.finished),
+    ),
+  );
 }
 
 export async function chooseSidebarMenuOption(

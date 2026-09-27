@@ -7,7 +7,11 @@ import {
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
-import { chooseSidebarOwner, openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
+import {
+  chooseSidebarOwner,
+  openSidebarMenu,
+  settleSidebarMenuMotion,
+} from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -165,6 +169,7 @@ suite.define(() => {
           ownerCount,
         );
         const list = menu.getByRole("listbox", { name: "Owners", exact: true });
+        await settleSidebarMenuMotion(list);
         const listBounds = await list.boundingBox();
         expect(listBounds).not.toBeNull();
         expect(listBounds!.x).toBeGreaterThanOrEqual(0);

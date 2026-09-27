@@ -481,7 +481,7 @@ suite.define(() => {
       }
       await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
       await openSidebarMenu(page);
-      const previewToggle = page.getByRole("checkbox", {
+      const previewToggle = page.getByRole("switch", {
         name: "Show message preview",
         exact: true,
       });

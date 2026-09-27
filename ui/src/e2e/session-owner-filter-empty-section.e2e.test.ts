@@ -13,6 +13,7 @@ import {
   chooseSidebarMenuOption,
   closeSidebarMenu,
   openSidebarMenu,
+  settleSidebarMenuMotion,
 } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -148,9 +149,9 @@ suite.define(() => {
       await expectBrowser(
         menu.getByRole("option", { name: "When filtering", exact: true }),
       ).toHaveAttribute("aria-selected", "true");
-      const bounds = await menu
-        .getByRole("listbox", { name: "Hide empty groups", exact: true })
-        .boundingBox();
+      const choices = menu.getByRole("listbox", { name: "Hide empty groups", exact: true });
+      await settleSidebarMenuMotion(choices);
+      const bounds = await choices.boundingBox();
       expect(bounds).not.toBeNull();
       expect(bounds!.x).toBeGreaterThanOrEqual(0);
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
