@@ -2,10 +2,11 @@
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { turnCompleted } from "./protocol.test-helpers.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
@@ -784,8 +785,20 @@ describe("Codex app-server main thread cleanup", () => {
   });
 
   it.each([false, true])(
-    "joins native terminal cleanup before releasing cancellation (RPC fails: %s)",
+    "joins source-owned process cleanup before releasing cancellation (cleanup fails: %s)",
     async (terminationFails) => {
+      const cleanupEntered = createDeferred<void>();
+      const releaseCleanup = createDeferred<void>();
+      onTestFinished(() => releaseCleanup.resolve());
+      const cancelTurn = vi
+        .spyOn(CodexNativeProcessAuthority.prototype, "cancelTurn")
+        .mockImplementation(async () => {
+          cleanupEntered.resolve();
+          await releaseCleanup.promise;
+          if (terminationFails) {
+            throw new Error("source-owned process cleanup failed");
+          }
+        });
       const sessionFile = path.join(tempDir, "cancelled-session.jsonl");
       const workspaceDir = path.join(tempDir, "cancelled-workspace");
       const sessionKey = "agent:main:dashboard:incognito-cancelled-turn";
@@ -843,6 +856,8 @@ describe("Codex app-server main thread cleanup", () => {
       });
       expect(settled).toBe(false);
 
+      expect(cancelTurn).not.toHaveBeenCalled();
+
       harness.send({
         method: "turn/completed",
         params: {
@@ -850,39 +865,17 @@ describe("Codex app-server main thread cleanup", () => {
           turn: { id: "turn-1", status: "interrupted", items: [] },
         },
       });
-      const list = await waitForHarnessRequest(harness, "thread/backgroundTerminals/list");
-      expect(list.params).toEqual({ threadId: "thread-1" });
-      harness.send({ id: list.id, result: { data: [{ processId: "42" }], nextCursor: null } });
-      const terminate = await waitForHarnessRequest(
-        harness,
-        "thread/backgroundTerminals/terminate",
-      );
-      expect(terminate.params).toEqual({ threadId: "thread-1", processId: "42" });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await Promise.race([cleanupEntered.promise, run]);
+      expect(cancelTurn).toHaveBeenCalledExactlyOnceWith(harness.client, "thread-1", "turn-1");
       expect(settled).toBe(false);
-      expect(harness.writes.map((entry) => JSON.parse(entry).method)).not.toContain(
-        "thread/unsubscribe",
-      );
-      const confirmationStart = harness.writes.length;
+      const cleanupMethods = harness.writes.map((entry) => JSON.parse(entry).method);
+      expect(cleanupMethods).not.toContain("thread/unsubscribe");
+      expect(cleanupMethods).not.toContain("thread/backgroundTerminals/list");
+      expect(cleanupMethods).not.toContain("thread/backgroundTerminals/terminate");
       const rejected = terminationFails
-        ? expect(run).rejects.toThrow("Codex background-terminal cleanup failed")
+        ? expect(run).rejects.toThrow("source-owned process cleanup failed")
         : undefined;
-      if (terminationFails) {
-        harness.send({
-          id: terminate.id,
-          error: { code: -32_603, message: "terminal service unavailable" },
-        });
-      } else {
-        harness.send({ id: terminate.id, result: { terminated: true } });
-        const confirmation = await waitForHarnessRequest(
-          harness,
-          "thread/backgroundTerminals/list",
-          confirmationStart,
-        );
-        harness.send({ id: confirmation.id, result: { data: [], nextCursor: null } });
-      }
+      releaseCleanup.resolve();
       const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
       harness.send({ id: unsubscribe.id, result: {} });
 
