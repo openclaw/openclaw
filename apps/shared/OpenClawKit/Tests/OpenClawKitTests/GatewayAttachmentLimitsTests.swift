@@ -10,6 +10,12 @@ struct GatewayAttachmentLimitsTests {
             (
                 #"{"attachments":{"maxBytes":10485760,"maxImageBytes":5242880}}"#,
                 GatewayAttachmentLimits(maxBytes: 10_485_760, maxImageBytes: 5_242_880)),
+            (
+                #"{"maxPayload":26214400,"attachments":{"maxBytes":9223372036854775807,"maxImageBytes":9223372036854775807}}"#,
+                GatewayAttachmentLimits(maxBytes: 19_464_192, maxImageBytes: 19_464_192)),
+            (
+                #"{"maxPayload":262151,"attachments":{"maxBytes":8,"maxImageBytes":8}}"#,
+                GatewayAttachmentLimits(maxBytes: 5, maxImageBytes: 5)),
             (#"{"maxPayload":16777216}"#, nil),
             (#"{"attachments":{"maxBytes":0,"maxImageBytes":5242880}}"#, nil),
             (

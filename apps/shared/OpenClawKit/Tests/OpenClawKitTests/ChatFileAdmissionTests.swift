@@ -106,7 +106,109 @@ struct ChatFileAdmissionTests {
         #expect(OpenClawChatViewModel.mimeType(for: URL(fileURLWithPath: fileName)) == mimeType)
     }
 
-    @Test(arguments: [Int?.none, 3, 4])
+    @Test(arguments: ["file", "image", "voice", "image-file-batch"])
+    @MainActor
+    func `all staging paths count existing attachment bytes`(kind: String) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let defaultsName = "ChatFileAdmissionTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: FileAdmissionTransport(limits: .init(maxBytes: 10000, maxImageBytes: 10000)),
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { model.detachTransport() }
+        let first = directory.appendingPathComponent("first.pdf")
+        try Data(count: 10000).write(to: first)
+        await model.loadAttachments(urls: [first])
+        #expect(model.attachments.map(\.fileName) == ["first.pdf"])
+        if kind.hasPrefix("image") {
+            let image = try #require(Data(base64Encoded:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////GQAJ+wP/2hN8NwAAAABJRU5ErkJggg=="))
+            if kind == "image" {
+                await model.addImageAttachment(
+                    data: image, fileName: "second.png", mimeType: "image/png", for: model.currentSessionSnapshot())
+            } else {
+                let imageURL = directory.appendingPathComponent("second.png")
+                let oversized = directory.appendingPathComponent("third.pdf")
+                try image.write(to: imageURL)
+                try Data(count: 10001).write(to: oversized)
+                await model.loadAttachments(urls: [imageURL, oversized])
+            }
+        } else {
+            let file = directory.appendingPathComponent(kind == "voice" ? "second.m4a" : "second.pdf")
+            try Data("file".utf8).write(to: file)
+            if kind == "voice" {
+                await model.addVoiceNoteAttachment(fileURL: file, durationSeconds: 1)
+                #expect(!FileManager.default.fileExists(atPath: file.path))
+            } else {
+                await model.loadAttachments(urls: [file])
+            }
+        }
+        #expect(model.attachments.map(\.fileName) == ["first.pdf"])
+        let rejectedName = switch kind {
+        case "image": "second.jpg"
+        case "image-file-batch": "second.png, third.pdf"
+        case "voice": "second.m4a"
+        default: "second.pdf"
+        }
+        #expect(model.errorText == "Too large to send: \(rejectedName)")
+    }
+
+    @Test(arguments: [6, 8])
+    @MainActor
+    func `outbox admission preserves an oversized draft`(maximumBytes: Int) async throws {
+        let (store, databases, directory) = try makeOutboxStore()
+        defer {
+            try? databases.close()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let defaultsName = "ChatFileAdmissionTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: FileAdmissionTransport(limits: .init(maxBytes: maximumBytes, maxImageBytes: maximumBytes)),
+            activeAgentId: "main",
+            sessionRoutingContract: "per-sender|main|main",
+            outbox: store,
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { model.detachTransport() }
+        model.input = "Keep this draft"
+        model.attachments = ["first.pdf", "second.pdf"].map {
+            OpenClawPendingAttachment(
+                url: nil,
+                data: Data("file".utf8),
+                fileName: $0,
+                mimeType: "application/pdf",
+                preview: nil)
+        }
+        let attachmentIDs = model.attachments.map(\.id)
+        let accepted = await model.enqueueOutboxCommand(
+            text: model.input,
+            draftInput: model.input,
+            draftRevision: model.composerRevision(for: model.sessionKey),
+            draftAttachments: model.attachments,
+            session: model.currentSessionSnapshot())
+        let commands = await store.loadCommands()
+        #expect(accepted == (maximumBytes == 8))
+        if maximumBytes == 6 {
+            #expect(model.input == "Keep this draft")
+            #expect(model.attachments.map(\.id) == attachmentIDs)
+            #expect(model.errorText == "Too large to send: second.pdf")
+            #expect(commands.isEmpty)
+            #expect(model.messages.isEmpty)
+        } else {
+            #expect(model.input.isEmpty)
+            #expect(model.attachments.isEmpty)
+            #expect(commands.count == 1)
+            #expect(commands.first?.attachments.map(\.data.count) == [4, 4])
+        }
+    }
+
+    @Test(arguments: [Int?.none, 3, 4, 6, 12])
     @MainActor
     func `stages files with gateway limits`(maximumBytes: Int?) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -128,9 +230,11 @@ struct ChatFileAdmissionTests {
             try data.write(to: file)
         }
         await model.loadAttachments(urls: files)
-        if maximumBytes == 3 {
-            #expect(model.attachments.isEmpty)
-            #expect(model.errorText == "Too large to send: report.pdf, song.mp3, unknown")
+        if let maximumBytes, maximumBytes < 12 {
+            let acceptedNames = Array(names.prefix(maximumBytes / data.count))
+            #expect(model.attachments.map(\.fileName) == acceptedNames)
+            #expect(model.errorText == "Too large to send: " + names.dropFirst(acceptedNames.count)
+                .joined(separator: ", "))
         } else {
             #expect(model.attachments.map(\.fileName) == names)
             #expect(model.attachments.map(\.mimeType) == ["application/pdf", "audio/mpeg", "application/octet-stream"])

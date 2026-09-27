@@ -297,7 +297,7 @@ struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
                 self.showsFileImporter = true
             } label: {
                 Label {
-                    Text("Attach file")
+                    Text("File")
                         .font(OpenClawChatTypography.body)
                 } icon: {
                     Image(systemName: "folder")
