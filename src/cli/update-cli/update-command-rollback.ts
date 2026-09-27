@@ -528,6 +528,7 @@ export async function rollbackFailedUpdate(params: {
       resolveGatewayService(),
       recoveryEnv,
       params.timeoutMs,
+      { managerUid: restoredService.serviceManagerUid, assertCurrent },
     );
     let verdict = await revalidateManagedGatewayServiceAfterUpdate({
       state,
