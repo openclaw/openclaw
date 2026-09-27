@@ -18,6 +18,7 @@ import {
   embeddedAgentLog,
   formatErrorMessage,
   resolveAgentDir,
+  resolveAgentHarnessBeforePromptBuildResult,
   runAgentEndSideEffects,
   runAgentHarnessLlmOutputHook,
   sanitizeToolArgs,
@@ -122,6 +123,25 @@ export async function runAgentsApiAttempt(
     state: { lifecycleStarted: false, lifecycleTerminalEmitted: false },
     emitEvent,
   });
+  const contextWindow = {
+    contextTokenBudget: params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
+    contextWindowSource: params.contextWindowInfo?.source,
+    contextWindowReferenceTokens: params.contextWindowInfo?.referenceTokens,
+  };
+  const hookContext = {
+    runId: params.runId,
+    agentId: target.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    modelProviderId: params.provider,
+    modelId: params.model.id,
+    trigger: params.trigger,
+    inputProvenance: params.inputProvenance,
+    ...buildAgentHookContextChannelFields(params),
+    channelContext: params.channelContext,
+    ...contextWindow,
+  };
   let native: ReturnType<typeof createAgentsApiSession> | undefined;
   let remoteSessionId = binding?.sessionId;
   let terminal: ReturnType<typeof agentHarnessAttemptTerminal.normalize> = { kind: "ok" };
@@ -222,18 +242,58 @@ export async function runAgentsApiAttempt(
     const client = new AgentsApiClient(params.resolvedApiKey!, assertOwnerCurrent);
     const reasoningEffort = resolveAgentsApiReasoningEffort(params);
     const creatingSession = !remoteSessionId;
-    if (!remoteSessionId) {
-      // The remote session owns this snapshot; continuation never reloads it.
-      const instructions = await buildAgentsApiInstructions(params, surface.declarations);
-      assertCurrent();
-      remoteSessionId = await client.create(controller.signal, instructions, params.model.id, {
-        functions: surface.declarations,
-        files: inputs.files,
-        reasoning: {
-          effort: reasoningEffort,
-          ...(params.reasoningLevel && params.reasoningLevel !== "off" ? { summary: "auto" } : {}),
+    const instructions = creatingSession
+      ? await buildAgentsApiInstructions(params, surface.declarations)
+      : "";
+    assertCurrent();
+    const admittedMessage =
+      params.userTurnTranscriptRecorder?.message ??
+      (await params.userTurnTranscriptRecorder?.resolveMessage());
+    assertCurrent();
+    const history = await SessionManager.openModelContextAsync(target, {
+      cwd: params.workspaceDir,
+      admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+      signal: controller.signal,
+    });
+    assertCurrent();
+    const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: params.prompt,
+      currentInboundContext: params.currentInboundContext,
+      currentUserMessage: admittedMessage ?? params.prompt,
+      developerInstructions: {
+        build: ({ hasToolRestrictions }) => {
+          assertCurrent();
+          if (hasToolRestrictions) {
+            throw new Error("Agents API cannot enforce before_prompt_build toolsAllow.");
+          }
+          return instructions;
         },
-      });
+      },
+      messages: history.buildSessionContext().messages,
+      ctx: hookContext,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
+      toolAuthority: {
+        fingerprint: params.toolAuthorityFingerprint,
+        activeToolNames: () => surface.declarations.map((tool) => tool.name),
+        assertActive: assertCurrent,
+      },
+    });
+    assertCurrent();
+    if (!remoteSessionId) {
+      // System hook contributions share the native session's immutable instruction snapshot.
+      remoteSessionId = await client.create(
+        controller.signal,
+        promptBuild.developerInstructions,
+        params.model.id,
+        {
+          functions: surface.declarations,
+          files: inputs.files,
+          reasoning: {
+            effort: reasoningEffort,
+            ...(params.reasoningLevel && params.reasoningLevel !== "off" ? { summary: "auto" } : {}),
+          },
+        },
+      );
       assertCurrent();
       await bind({ sessionId: remoteSessionId, authFingerprint: fingerprint });
     } else {
@@ -332,7 +392,7 @@ export async function runAgentsApiAttempt(
     const result = await native.run(
       [
         buildAgentsApiTurnContext(params, surface.declarations),
-        buildCurrentInboundPrompt({ context: params.currentInboundContext, prompt: params.prompt }),
+        promptBuild.prompt,
         inputs.mappingText,
       ]
         .filter(Boolean)
@@ -514,25 +574,6 @@ export async function runAgentsApiAttempt(
     },
   };
   assertHarnessCurrent();
-  const contextWindow = {
-    contextTokenBudget: params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
-    contextWindowSource: params.contextWindowInfo?.source,
-    contextWindowReferenceTokens: params.contextWindowInfo?.referenceTokens,
-  };
-  const hookContext = {
-    runId: params.runId,
-    agentId: target.agentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    workspaceDir: params.workspaceDir,
-    modelProviderId: params.provider,
-    modelId: params.model.id,
-    trigger: params.trigger,
-    inputProvenance: params.inputProvenance,
-    ...buildAgentHookContextChannelFields(params),
-    channelContext: params.channelContext,
-    ...contextWindow,
-  };
   runAgentHarnessLlmOutputHook({
     event: {
       runId: params.runId,

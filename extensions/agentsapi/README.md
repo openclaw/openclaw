@@ -6,6 +6,17 @@ environment. Select it through `agents.defaults.agentRuntime.id` or an agent's
 
 Multi-user Gateways are not supported by the Agents API MVP.
 
+Ordinary conversation attempts run OpenClaw's shared `before_prompt_build` hook,
+including tool-authorized recall and heartbeat prompt contributions. Per-turn
+`prependContext` and `appendContext` are applied on both new and resumed sessions.
+System-prompt additions and overrides are captured only when the native session
+is created. Updating system instructions on an existing native session is an MVP
+implementation gap; reset the OpenClaw session to adopt those changes. The harness
+does not move system instructions into user messages. Restrictive hook `toolsAllow`
+results are rejected before native dispatch because the harness cannot enforce
+turn-scoped restrictions across Gateway and native tools. Steering messages and
+isolated completions do not run these conversation prompt hooks.
+
 Memory Core dreaming can generate its diary narrative in a fresh Agents API
 session without an executor, supplied functions, native web search, vaults, or
 subagents. These calls use the prepared model and API key, do not reuse the

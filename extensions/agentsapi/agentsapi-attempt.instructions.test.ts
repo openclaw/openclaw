@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  createMockPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
@@ -58,7 +63,10 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
-  SessionManager: { open: () => ({ buildSessionContext: () => ({ messages: [] }) }) },
+  SessionManager: {
+    open: () => ({ buildSessionContext: () => ({ messages: [] }) }),
+    openModelContextAsync: async () => ({ buildSessionContext: () => ({ messages: [] }) }),
+  },
 }));
 
 vi.mock("./agentsapi-tools.js", () => ({
@@ -114,6 +122,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => fetchWithSsrFGuardMock.mockReset());
 afterEach(() => prepareAgentWorkspaceContextMock.mockClear());
 afterEach(() => watchedSessionsContextMock.mockClear());
+afterEach(() => resetGlobalHookRunner());
 afterEach(() => {
   promptFixture.declarations = [];
   promptFixture.turnInputs = [];
@@ -121,6 +130,67 @@ afterEach(() => {
 });
 
 describe("Agents API agent workspace instructions", () => {
+  it("captures plugin system instructions once and refreshes plugin context on resume", async () => {
+    const fixture = await createFixture({
+      trigger: "user",
+      toolAuthorityFingerprint: "fixture-prompt-authority",
+    });
+    promptFixture.declarations = toolDeclarations("memory_search", "memory_get");
+    const hook = vi.fn().mockReturnValue({
+      prependSystemContext: "Plugin system guidance one.",
+      prependContext: "Reminder one.",
+      appendContext: "Plugin trailing context.",
+    });
+    const recall = vi.fn().mockReturnValue({ prependContext: "Authorized recall context." });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_prompt_build", handler: hook },
+        { hookName: "before_prompt_build", handler: recall, requiresToolAuthority: true },
+      ]),
+    );
+
+    const binding = await fixture.run();
+    expect(fixture.requests[0]?.agent.instructions).toContain("Plugin system guidance one.");
+    expect(promptFixture.turnInputs[0]).toContain(
+      "Reminder one.\n\nAuthorized recall context.\n\nFixture prompt\n\nPlugin trailing context.",
+    );
+    hook.mockReturnValue({
+      prependSystemContext: "Plugin system guidance two.",
+      prependContext: "Reminder two.",
+    });
+    await fixture.run(binding, { prompt: "Continued request" });
+    expect(fixture.requests[1]).toEqual({ agent: { reasoning: { effort: null } } });
+    expect(promptFixture.turnInputs[1]).toContain(
+      "Reminder two.\n\nAuthorized recall context.\n\nContinued request",
+    );
+
+    await fixture.run();
+    expect(fixture.requests[2]?.agent.instructions).toContain("Plugin system guidance two.");
+  });
+
+  it.each([false, true])(
+    "rejects a restrictive plugin tool policy before native dispatch (resumed: %s)",
+    async (resumed) => {
+      const fixture = await createFixture({ toolAuthorityFingerprint: "fixture-prompt-authority" });
+      const binding = resumed ? await fixture.run() : undefined;
+      const requestCount = fixture.requests.length;
+      const inputCount = promptFixture.turnInputs.length;
+      const recall = vi.fn().mockReturnValue({ prependContext: "Authorized recall context." });
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_prompt_build", handler: () => ({ toolsAllow: ["memory_search"] }) },
+          { hookName: "before_prompt_build", handler: recall, requiresToolAuthority: true },
+        ]),
+      );
+      await expect(fixture.run(binding)).rejects.toThrow(
+        "Agents API cannot enforce before_prompt_build toolsAllow.",
+      );
+      expect(fixture.requests).toHaveLength(requestCount);
+      expect(promptFixture.turnInputs).toHaveLength(inputCount);
+      expect(recall).not.toHaveBeenCalled();
+    },
+  );
+
   it("sends the Gateway workspace snapshot once, preserves it on resume, and refreshes it for a new session", async () => {
     const fixture = await createFixture();
     const instructionsPath = path.join(fixture.workspace, "AGENTS.md");
