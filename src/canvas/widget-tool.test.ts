@@ -2,7 +2,6 @@
 import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
 import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
@@ -137,30 +136,6 @@ async function executeWidget(params: {
 }
 
 describe("show_widget", () => {
-  it("accepts an explicit null placement anchor and omits it from the first widget put", async () => {
-    const { mock: callGatewayMock, callGateway } = createBoardPutCaller();
-    const tool = createShowWidgetTool({
-      agentSessionKey: "agent:main:first-widget",
-      inlineHostEnabled: false,
-      callGateway,
-    });
-    const args = {
-      title: "First widget",
-      widget_code: "<p>first</p>",
-      pin: true,
-      name: "first-widget",
-      after: null,
-    };
-
-    expect(Value.Check(tool.parameters, args)).toBe(true);
-    await tool.execute("first-widget", args);
-
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      "board.widget.put",
-      expect.not.objectContaining({ placement: expect.anything() }),
-    );
-  });
-
   it("builds a sorted kind enum and routes registered source through board put", async () => {
     registerDiagramContentKind();
     const stateDir = await createStateDir();

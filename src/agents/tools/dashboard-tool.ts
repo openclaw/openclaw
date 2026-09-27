@@ -10,6 +10,7 @@ import type {
 import { BOARD_REPORT_GUIDANCE } from "../../boards/board-report.js";
 import {
   BOARD_WIDGET_NAME_PATTERN,
+  normalizeOptionalBoardWidgetAnchor,
   optionalBoardWidgetAnchorSchema,
 } from "../../boards/board-tool-args.js";
 import { BOARD_WEBSITE_GUIDANCE } from "../../boards/board-website.js";
@@ -193,7 +194,7 @@ function opForAction(action: string, params: Record<string, unknown>): BoardOp {
     case "widget_move": {
       const targetTabId = readToolStringParam(params, "tabId");
       const position = readNumberParam(params, "position", { integer: true, strict: true });
-      const after = readToolStringParam(params, "after");
+      const after = normalizeOptionalBoardWidgetAnchor(readToolStringParam(params, "after"));
       if (position !== undefined && after !== undefined) {
         throw new ToolInputError("widget_move accepts either position or after, not both");
       }
@@ -352,7 +353,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
         const title = readToolStringParam(params, "title");
         const tabId = readOptionalTabId(params);
         const size = readToolStringParam(params, "size");
-        const after = readToolStringParam(params, "after");
+        const after = normalizeOptionalBoardWidgetAnchor(readToolStringParam(params, "after"));
         const props = readPluginProps(params);
         return snapshotResult(
           await callGateway<BoardSnapshot>("board.widget.put", {

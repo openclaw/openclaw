@@ -407,6 +407,7 @@ describe("dashboard tool", () => {
   it.each([
     ["omitted", {}],
     ["explicit null", { after: null }],
+    ["literal null", { after: "null" }],
   ])("creates the first plugin widget with %s after anchor", async (_label, placement) => {
     const harness = recorder();
     const tool = createDashboardTool({
@@ -430,6 +431,33 @@ describe("dashboard tool", () => {
           sessionKey: "agent:main:first-widget",
           name: "first-widget",
           content: { kind: "plugin", pluginKind: "workboard:card" },
+        },
+      ],
+    ]);
+  });
+
+  it("keeps genuine anchors and unrelated null strings", async () => {
+    const harness = recorder();
+    const tool = createDashboardTool({
+      agentSessionKey: "agent:main:anchored-widget",
+      callGateway: harness.callGateway,
+    });
+
+    await tool.execute("put", {
+      action: "widget_put",
+      name: "null",
+      pluginKind: "workboard:card",
+      after: "clock",
+    });
+
+    expect(harness.calls).toEqual([
+      [
+        "board.widget.put",
+        {
+          sessionKey: "agent:main:anchored-widget",
+          name: "null",
+          content: { kind: "plugin", pluginKind: "workboard:card" },
+          placement: { after: "clock" },
         },
       ],
     ]);

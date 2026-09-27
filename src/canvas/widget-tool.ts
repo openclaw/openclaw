@@ -18,6 +18,7 @@ import {
 } from "../boards/board-report.js";
 import {
   BOARD_WIDGET_NAME_PATTERN,
+  normalizeOptionalBoardWidgetAnchor,
   optionalBoardWidgetAnchorSchema,
 } from "../boards/board-tool-args.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -462,7 +463,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         const tab = readToolStringParam(params, "tab");
         const size = readToolStringParam(params, "size");
         const frame = readToolStringParam(presentation ?? {}, "frame");
-        const after = readToolStringParam(params, "after");
+        const after = normalizeOptionalBoardWidgetAnchor(readToolStringParam(params, "after"));
         const pinnedTitle = boardWidgetTitle(title);
         if (!registration && !isReport) {
           assertPinnedWidgetDocumentSize(

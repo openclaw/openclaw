@@ -8,3 +8,8 @@ export function optionalBoardWidgetAnchorSchema(description: string) {
     Type.Union([Type.String({ pattern: BOARD_WIDGET_NAME_PATTERN }), Type.Null()], { description }),
   );
 }
+
+/** Treats a provider-produced null string as omission only at board placement call sites. */
+export function normalizeOptionalBoardWidgetAnchor(value: string | undefined): string | undefined {
+  return value === "null" ? undefined : value;
+}
