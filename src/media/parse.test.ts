@@ -283,6 +283,24 @@ describe("splitMediaFromOutput", () => {
     },
   );
 
+  it.each([
+    // A quote pair inside one unquoted path is text in the filename, not a reference: `'/tmp/album
+    // 'best' photos/image.png'` is a single path step to `main`. Treating that pair as a boundary split
+    // the path in two and leaked the fragment into the visible reply text, which loses an attachment
+    // that used to prepare. Only a quote pair that is itself an accepted reference bounds a reference.
+    ["MEDIA:/tmp/album 'best' photos/image.png", ["/tmp/album 'best' photos/image.png"]],
+    ['MEDIA:/tmp/album "best" photos/image.png', ['/tmp/album "best" photos/image.png']],
+    [
+      "MEDIA:/tmp/album 'best' photos/image.png /tmp/second.png",
+      ["/tmp/album 'best' photos/image.png", "/tmp/second.png"],
+    ],
+  ] as const)("keeps a quoted fragment inside one unquoted reference: %s", (input, mediaUrls) => {
+    expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
+    expect(splitMediaFromOutput(input).segments).toEqual(
+      mediaUrls.map((url) => ({ type: "media", url })),
+    );
+  });
+
   it("keeps a quoted relative reference separate from the quoted reference before it", () => {
     // Explicit quotes already delimit each reference. The unquoted-path reconstruction heuristic exists
     // for bare paths with real filename spaces, so it must not reach across those quotes and fuse the

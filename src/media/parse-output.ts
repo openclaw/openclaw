@@ -248,6 +248,18 @@ function isQuotedChunk(token: string): boolean {
   return token.length > 1 && QUOTE_CHARS.has(quote) && token.endsWith(quote);
 }
 
+// A quoted chunk that is itself an accepted media reference bounds a reference. One that is not is only
+// text inside a longer path — the `'best'` in `/tmp/album 'best' photos/image.png` — so the join below
+// may still reach across it. The split keeps a quoted part exactly when this accepts it, so the guard
+// and the parts it protects agree on what counts as a reference.
+function isQuotedMediaReference(token: string): boolean {
+  if (!isQuotedChunk(token)) {
+    return false;
+  }
+  const value = unwrapQuoted(token);
+  return value !== undefined && isValidMedia(value, { allowSpaces: true });
+}
+
 type MediaDirectiveToken = { token: string; index: number };
 
 // One tokenizer owns the reference boundaries, so splitting and list detection agree on them. Reading a
@@ -282,15 +294,16 @@ function splitMediaDirectiveParts(payload: string): string[] {
     const previous = parts.at(-1);
     const previousCandidate = previous ? normalizeMediaSource(cleanCandidate(previous)) : "";
     if (
-      !isQuotedChunk(token.token) &&
-      !(previousToken !== undefined && isQuotedChunk(previousToken.token)) &&
+      !isQuotedMediaReference(token.token) &&
+      !(previousToken !== undefined && isQuotedMediaReference(previousToken.token)) &&
       MEDIA_SOURCE_ROOT_RE.test(previousCandidate) &&
       !beginsIndependentMediaSource(candidate) &&
       (!HAS_FILE_EXT.test(previousCandidate) || !isValidMedia(candidate))
     ) {
       // Preserve real filename whitespace while keeping independently valid attachments separate. This
-      // reconstruction only serves unquoted paths: an explicit quote pair already ends its reference,
-      // so reaching across one would fuse two references the author delimited.
+      // reconstruction only serves unquoted paths: a quote pair that is itself an accepted reference
+      // already ends its reference, so reaching across one would fuse two references the author
+      // delimited. A quote pair that is not one is text inside a longer path and must not block the join.
       const previousEnd = previousToken
         ? previousToken.index + previousToken.token.length
         : token.index;
