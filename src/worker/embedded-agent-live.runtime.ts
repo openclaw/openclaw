@@ -108,11 +108,6 @@ function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
         payload: { ...event.payload, result: boundLiveValue(event.payload.result) },
       };
     }
-  } else if (event.kind === "lifecycle" && event.payload.phase === "error") {
-    bounded = {
-      kind: "lifecycle",
-      payload: { ...event.payload, error: truncateLiveText(event.payload.error) },
-    };
   } else {
     throw new Error(`worker live ${event.kind} event exceeds the protocol payload limit`);
   }

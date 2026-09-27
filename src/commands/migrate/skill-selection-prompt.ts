@@ -56,7 +56,6 @@ function formatOption(
     case "inactive":
       return `${styleText("dim", S_CHECKBOX_INACTIVE)} ${styleText("dim", withHint)}`;
   }
-  return withHint;
 }
 
 /** Prompts for migration selection values and reconciles all/none/recommended shortcuts. */

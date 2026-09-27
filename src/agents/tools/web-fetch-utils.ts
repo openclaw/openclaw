@@ -165,8 +165,6 @@ function closeContext(
       }
       parent.parts.push(`\n- ${label}`);
       return;
-    case "root":
-      parent.parts.push(label);
   }
 }
 

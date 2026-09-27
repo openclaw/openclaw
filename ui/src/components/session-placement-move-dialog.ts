@@ -48,7 +48,6 @@ function targetKey(target: SessionMoveTarget | null): string {
     case "device":
       return `device:${target.deviceId}`;
   }
-  throw new Error("Unknown session placement move target");
 }
 
 export function showSessionPlacementTargetDialog(

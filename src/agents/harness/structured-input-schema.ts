@@ -387,10 +387,7 @@ function buildField(
     question: {
       id: context.questionId,
       header: boundText(title, 12),
-      question: boundText(
-        details.length > 0 ? `${title}\n${details.join(" ")}` : title,
-        MAX_FIELD_TEXT,
-      ),
+      question: boundText(`${title}\n${details.join(" ")}`, MAX_FIELD_TEXT),
       ...(params.multiSelect ? { multiSelect: true } : {}),
       isOther: params.isOther,
       isSecret: context.secret,
