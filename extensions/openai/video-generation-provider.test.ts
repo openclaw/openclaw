@@ -154,7 +154,7 @@ describe("openai video generation provider", () => {
     });
   });
 
-  it("advertises OpenAI video for an actual config-only API key", () => {
+  it("does not advertise OpenAI video against the retired public Videos API endpoint", () => {
     expect(
       buildOpenAIVideoGenerationProvider(modelAuth).isConfigured?.({
         cfg: {
@@ -163,6 +163,24 @@ describe("openai video generation provider", () => {
               openai: {
                 apiKey: "openai-video-config-key",
                 baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("advertises OpenAI video for a custom base URL with a configured API key", () => {
+    expect(
+      buildOpenAIVideoGenerationProvider(modelAuth).isConfigured?.({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                apiKey: "openai-video-config-key",
+                baseUrl: "https://openai-proxy.example.com/v1",
                 models: [],
               },
             },
