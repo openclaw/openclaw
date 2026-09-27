@@ -34,7 +34,7 @@ import {
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 import { resolveLocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
 import * as groupOwner from "../../scripts/vitest-process-group.mts";
-import { createDeferred } from "../helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { getUnitFastIsolatedTestFiles } from "../vitest/vitest.unit-fast-paths.mjs";
 
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -1169,6 +1169,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       vi.spyOn(os, "availableParallelism").mockReturnValue(8);
       vi.spyOn(os, "totalmem").mockReturnValue(24 * 1024 ** 3);
       const gates = Array.from({ length: 5 }, () => createDeferred<number>());
+      const admissions = gates.map(() => createDeferred());
       const seen: Array<{
         label: string;
         cache: string;
@@ -1203,20 +1204,42 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               include: env.OPENCLAW_VITEST_INCLUDE_FILE!,
               workers: env.OPENCLAW_VITEST_MAX_WORKERS,
             });
+            admissions[Number(label)]!.resolve();
             return gates[Number(label)]!.promise;
           },
         },
       );
       try {
-        await vi.waitFor(() => expect(seen).toHaveLength(2));
+        await withTestTimeout(
+          Promise.race([
+            Promise.all(admissions.slice(0, 2).map((admission) => admission.promise)),
+            pending,
+          ]),
+          1_000,
+          "ordinary span admission",
+        );
+        expect(seen).toHaveLength(2);
         gates[0]!.resolve(0);
         await nextTurn();
         expect(seen).toHaveLength(2);
         gates[1]!.resolve(0);
-        await vi.waitFor(() => expect(seen).toHaveLength(3));
+        await withTestTimeout(
+          Promise.race([admissions[2]!.promise, pending]),
+          1_000,
+          "exclusive plan admission",
+        );
+        expect(seen).toHaveLength(3);
         expect(seen[2]!.workers).toBe("8");
         gates[2]!.resolve(0);
-        await vi.waitFor(() => expect(seen).toHaveLength(5));
+        await withTestTimeout(
+          Promise.race([
+            Promise.all(admissions.slice(3).map((admission) => admission.promise)),
+            pending,
+          ]),
+          1_000,
+          "post-barrier span admission",
+        );
+        expect(seen).toHaveLength(5);
         expect(seen.map(({ label }) => label)).toEqual(["0", "1", "2", "3", "4"]);
         expect(seen.map(({ cache }) => path.basename(cache))).toEqual([
           "vitest-cache-0",
