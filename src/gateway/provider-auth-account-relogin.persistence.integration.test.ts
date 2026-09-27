@@ -164,74 +164,63 @@ function persistedProfiles(state: OpenClawTestState): Record<string, AuthProfile
 }
 
 describe("provider account re-login through the real persistence adapter", () => {
-  it("persists a fresh OAuth login under the provider-generated profile id", async () => {
-    await withProofFixture({ accountId: "account-a" }, async ({ state, runLogin }) => {
-      seedProfiles(state, { "other:retained": retainedProfile });
+  it.each([false, true])(
+    "preserves the selected account across re-login (force: %s)",
+    async (force) => {
+      await withProofFixture(
+        { accountId: "account-a", generation: "rotated" },
+        async ({ state, config, runLogin }) => {
+          seedProfiles(state, {
+            "other:retained": retainedProfile,
+            [pinnedProfileId]: oauthCredential("account-a", "old"),
+          });
+          const sessionKey = "agent:main:proof";
+          const sessionEntry: SessionEntry = {
+            sessionId: "proof-session",
+            updatedAt: 1,
+            authProfileOverride: pinnedProfileId,
+            authProfileOverrideSource: "user",
+          };
+          const sessionStore = { [sessionKey]: sessionEntry };
 
-      await expect(runLogin()).resolves.toMatchObject({
-        profiles: [{ profileId: generatedProfileId, provider: providerId, mode: "oauth" }],
-      });
-      expect(persistedProfiles(state)).toEqual({
-        "other:retained": retainedProfile,
-        [generatedProfileId]: oauthCredential("account-a", "new"),
-      });
-    });
-  });
-
-  it("preserves a same-account profile id and keeps an existing conversation usable", async () => {
-    await withProofFixture(
-      { accountId: "account-a", generation: "rotated" },
-      async ({ state, config, runLogin }) => {
-        seedProfiles(state, {
-          "other:retained": retainedProfile,
-          [pinnedProfileId]: oauthCredential("account-a", "old"),
-        });
-        const sessionKey = "agent:main:proof";
-        const sessionEntry: SessionEntry = {
-          sessionId: "proof-session",
-          updatedAt: 1,
-          authProfileOverride: pinnedProfileId,
-          authProfileOverrideSource: "user",
-        };
-        const sessionStore = { [sessionKey]: sessionEntry };
-
-        await expect(runLogin()).resolves.toMatchObject({
-          profiles: [{ profileId: pinnedProfileId, provider: providerId, mode: "oauth" }],
-        });
-        expect(persistedProfiles(state)).toEqual({
-          "other:retained": retainedProfile,
-          [pinnedProfileId]: oauthCredential("account-a", "rotated"),
-        });
-        const selection = await resolveSessionAuthSelection({
-          cfg: config,
-          provider: providerId,
-          modelId: "proof-model",
-          agentDir: state.agentDir(),
-          sessionEntry,
-          sessionStore,
-          sessionKey,
-          isNewSession: false,
-        });
-        expect(selection).toMatchObject({ profileId: pinnedProfileId, source: "user" });
-        if (!selection) {
-          throw new Error("Expected the existing session to retain its selected auth profile");
-        }
-        await expect(
-          resolveApiKeyForProviderCore({
-            provider: providerId,
+          await expect(runLogin({ force })).resolves.toMatchObject({
+            profiles: [{ profileId: pinnedProfileId, provider: providerId, mode: "oauth" }],
+          });
+          expect(persistedProfiles(state)).toEqual({
+            "other:retained": retainedProfile,
+            [pinnedProfileId]: oauthCredential("account-a", "rotated"),
+          });
+          const selection = await resolveSessionAuthSelection({
             cfg: config,
-            profileId: selection.profileId,
+            provider: providerId,
+            modelId: "proof-model",
             agentDir: state.agentDir(),
-            lockedProfile: true,
-          }),
-        ).resolves.toMatchObject({
-          apiKey: "rotated-access",
-          mode: "oauth",
-          profileId: pinnedProfileId,
-        });
-      },
-    );
-  });
+            sessionEntry,
+            sessionStore,
+            sessionKey,
+            isNewSession: false,
+          });
+          expect(selection).toMatchObject({ profileId: pinnedProfileId, source: "user" });
+          if (!selection) {
+            throw new Error("Expected the existing session to retain its selected auth profile");
+          }
+          await expect(
+            resolveApiKeyForProviderCore({
+              provider: providerId,
+              cfg: config,
+              profileId: selection.profileId,
+              agentDir: state.agentDir(),
+              lockedProfile: true,
+            }),
+          ).resolves.toMatchObject({
+            apiKey: "rotated-access",
+            mode: "oauth",
+            profileId: pinnedProfileId,
+          });
+        },
+      );
+    },
+  );
 
   it("keeps a different account under its provider-generated profile id", async () => {
     await withProofFixture({ accountId: "account-b" }, async ({ state, runLogin }) => {
@@ -264,26 +253,6 @@ describe("provider account re-login through the real persistence adapter", () =>
         [pinnedProfileId]: oauthCredential("account-b", "reassigned"),
       });
     });
-  });
-
-  it("recreates a same-account profile id after an intentional forced purge", async () => {
-    await withProofFixture(
-      { accountId: "account-a", generation: "forced" },
-      async ({ state, runLogin }) => {
-        seedProfiles(state, {
-          "other:retained": retainedProfile,
-          [pinnedProfileId]: oauthCredential("account-a", "old"),
-        });
-
-        await expect(runLogin({ force: true })).resolves.toMatchObject({
-          profiles: [{ profileId: pinnedProfileId, provider: providerId, mode: "oauth" }],
-        });
-        expect(persistedProfiles(state)).toEqual({
-          "other:retained": retainedProfile,
-          [pinnedProfileId]: oauthCredential("account-a", "forced"),
-        });
-      },
-    );
   });
 
   it("rejects another account reclaiming a force-purged id before persistence", async () => {

@@ -397,7 +397,8 @@ async function resolveSessionAuthProfileOverride(params: {
           event: "session_auth_profile_unavailable",
           sessionKey,
           profileId: currentProfileId,
-          recovery: "clear the session account selection or reconnect using this exact profile id",
+          recovery:
+            "select a configured model@profile or reconnect the intended account with models auth login --profile-id",
           tags: ["auth_profiles", "session_recovery"],
         },
       );

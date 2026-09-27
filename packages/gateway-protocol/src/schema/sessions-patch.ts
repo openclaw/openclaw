@@ -72,8 +72,6 @@ const SessionsPatchMutationProperties = {
   sandboxMode: Type.Optional(Type.Union([Type.Literal("off"), Type.Null()])),
   nativeRuntimeConsent: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  /** Clear the session's saved model-account selection and return to automatic selection. */
-  authProfileId: Type.Optional(Type.Null()),
   /** Explicit runtime for the selected model; null follows configured routing. */
   agentRuntime: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

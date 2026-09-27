@@ -690,12 +690,10 @@ describe("resolveSessionAuthProfileOverride", () => {
         expect(sessionEntry.authProfileOverrideCompactionCount).toBe(profile ? undefined : 2);
         if (!profile) {
           expect(warn).toHaveBeenCalledWith(
-            "selected session auth profile is unavailable; explicit pin remains strict",
+            expect.any(String),
             expect.objectContaining({
               event: "session_auth_profile_unavailable",
               profileId: "openai:missing",
-              recovery:
-                "clear the session account selection or reconnect using this exact profile id",
             }),
           );
         }

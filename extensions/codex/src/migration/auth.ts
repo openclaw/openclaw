@@ -60,16 +60,6 @@ type CodexAuthProfileConfig = {
   displayName?: string;
 };
 
-function loadLocalAuthProfileStore(
-  targets: PlannedMigrationTargets,
-): ReturnType<typeof loadAuthProfileStoreWithoutExternalProfiles> {
-  // Bind inheritance to the target owner so planning sees only its local profiles.
-  // The read-only loader leaves a missing target database missing during previews.
-  return loadAuthProfileStoreWithoutExternalProfiles(targets.agentDir, {
-    inheritedAuthDir: targets.agentDir,
-  });
-}
-
 type CodexAuthConfigApplyResult = "configured" | "conflict" | "unavailable";
 
 class CodexAuthConfigConflict extends Error {}
@@ -379,7 +369,6 @@ export async function buildCodexAuthItems(params: {
     );
   }
   const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir);
-  const localStore = loadLocalAuthProfileStore(params.targets);
   const skipped = !params.ctx.includeSecrets;
   return credentials.map((credential) => {
     const { profileId, matchedExisting } = itemProfileTarget(
@@ -387,7 +376,6 @@ export async function buildCodexAuthItems(params: {
       store,
       params.ctx,
       params.source,
-      localStore,
     );
     const existing = store.profiles[profileId];
     const configProfile = authProfileConfigForCredential(credential, profileId);
@@ -433,7 +421,6 @@ export async function buildCodexAuthItems(params: {
       details: {
         provider: credential.provider,
         profileId,
-        ...(matchedExisting ? { matchedExistingProfile: true } : {}),
         sourceProfileId: credential.profileId,
         sourceCredentialFingerprint: sourceCredentialFingerprint(credential),
         sourceKind: "codex-native-selected-storage",
@@ -539,10 +526,9 @@ async function applyCodexAuthItem(
     updater: (freshStore) => {
       ctx.signal?.throwIfAborted();
       const effectiveStore = loadAuthProfileStoreWithoutExternalProfiles(targets.agentDir);
-      const currentTarget = itemProfileTarget(credential, effectiveStore, ctx, source, freshStore);
       if (
-        currentTarget.profileId !== profileId ||
-        (currentTarget.matchedExisting && item.details?.matchedExistingProfile !== true)
+        item.details?.legacyNativeHome !== undefined &&
+        itemProfileTarget(credential, effectiveStore, ctx, source).profileId !== profileId
       ) {
         conflicted = true;
         return false;

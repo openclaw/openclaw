@@ -59,7 +59,6 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     { name: "fast off", patch: { fastMode: false } },
     { name: "fast auto", patch: { fastMode: "auto" } },
     { name: "fast reset", patch: { fastMode: null } },
-    { name: "auth profile reset", patch: { authProfileId: null } },
     {
       name: "combined model and effort",
       patch: { model: "openai/gpt-test-a", thinkingLevel: "high", fastMode: true },
@@ -169,7 +168,7 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
         targets: [{ key: "agent:main:thread" }],
-        patch: { model: null, authProfileId: null, thinkingLevel: null, fastMode: null },
+        patch: { model: null, thinkingLevel: null, fastMode: null },
       }),
     ).toBe("operator.write");
     for (const patch of [
