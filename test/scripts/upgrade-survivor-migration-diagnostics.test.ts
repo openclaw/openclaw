@@ -163,7 +163,11 @@ it("emits the published failure metadata through the host CLI without changing i
   ]);
   expect(result.stderr).not.toContain(secret);
   expect(result.stderr).not.toContain(privateBody);
-  expect(fs.existsSync(path.join(destination, "failure.json"))).toBe(true);
+  const control = path.join(f.root, "unannotated-publication");
+  publishDiagnostics(f.artifacts, control, redactSensitiveText);
+  expect(fs.readFileSync(path.join(destination, "failure.json"), "utf8")).toBe(
+    fs.readFileSync(path.join(control, "failure.json"), "utf8"),
+  );
 });
 
 function pluginPolicyReceipt() {

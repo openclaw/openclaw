@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
@@ -110,6 +111,7 @@ type ShellCommandOptions = {
   env: NodeJS.ProcessEnv;
   label: string;
   logFile?: string;
+  captureUpgradeFailure?: boolean;
   noOutputTimeoutMs?: number;
   timeoutKillGraceMs?: number;
   timeoutMs?: number;
@@ -920,6 +922,7 @@ export function runShellCommand({
   env,
   label,
   logFile,
+  captureUpgradeFailure = false,
   timeoutMs,
   noOutputTimeoutMs,
   timeoutKillGraceMs = SHELL_TIMEOUT_KILL_GRACE_MS,
@@ -934,13 +937,32 @@ export function runShellCommand({
       timeoutKillGraceMs,
       SHELL_TIMEOUT_KILL_GRACE_MS,
     );
-    const pipeOutput = Boolean(logFile || resolvedNoOutputTimeoutMs);
+    const pipeOutput = Boolean(logFile || resolvedNoOutputTimeoutMs || captureUpgradeFailure);
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
       detached: process.platform !== "win32",
-      env,
-      stdio: pipeOutput ? ["ignore", "pipe", "pipe"] : "inherit",
+      env: captureUpgradeFailure ? { ...env, OPENCLAW_DOCKER_FAILURE_METADATA_FD: "3" } : env,
+      stdio: captureUpgradeFailure
+        ? ["ignore", "pipe", "pipe", "pipe"]
+        : pipeOutput
+          ? ["ignore", "pipe", "pipe"]
+          : "inherit",
     });
+    // Host publication has a private pipe, never parsed from candidate stdout or
+    // stderr. Drain it through child close; emit only after process and log cleanup.
+    let failureMetadata: Buffer | undefined = Buffer.alloc(0);
+    const metadataPipe = captureUpgradeFailure ? child.stdio[3] : undefined;
+    if (metadataPipe instanceof Readable) {
+      metadataPipe.on("data", (chunk: Buffer) => {
+        failureMetadata =
+          failureMetadata && failureMetadata.length + chunk.length <= 1024
+            ? Buffer.concat([failureMetadata, chunk])
+            : undefined;
+      });
+      metadataPipe.on("error", () => {
+        failureMetadata = undefined;
+      });
+    }
     activeChildren.set(child, resolvedTimeoutKillGraceMs);
     let timedOut = false;
     let noOutputTimedOut = false;
@@ -1074,6 +1096,9 @@ export function runShellCommand({
             : new AggregateError(errors, "Docker command cleanup and log publication failed", {
                 cause: errors[0],
               });
+        }
+        if (exitCode !== 0 && env.GITHUB_ACTIONS === "true") {
+          printUpgradeFailureMetadata(failureMetadata);
         }
         resolve({
           signal,
@@ -1534,6 +1559,8 @@ async function runLane(
     env,
     label: name,
     logFile,
+    captureUpgradeFailure:
+      env.GITHUB_ACTIONS === "true" && lane.stateScenario === "upgrade-survivor",
     timeoutMs,
     noOutputTimeoutMs,
   });
@@ -1771,6 +1798,37 @@ export async function tailFile(file: string, lines: number, maxBytes = LOG_TAIL_
   }
   const tail = content.split(/\r?\n/).slice(-lines).join("\n");
   return tail.trimEnd();
+}
+
+function printUpgradeFailureMetadata(bytes: Buffer | undefined) {
+  if (!bytes?.length) {
+    return;
+  }
+  let failure: unknown;
+  try {
+    failure = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    return;
+  }
+  if (
+    !isRecord(failure) ||
+    Object.keys(failure).length !== 3 ||
+    typeof failure.phase !== "string" ||
+    !/^[a-z0-9-]{1,80}$/u.test(failure.phase) ||
+    typeof failure.exitStatus !== "number" ||
+    !Number.isInteger(failure.exitStatus) ||
+    failure.exitStatus < 0 ||
+    failure.exitStatus > 255 ||
+    (failure.signal !== null &&
+      failure.signal !== "SIGHUP" &&
+      failure.signal !== "SIGINT" &&
+      failure.signal !== "SIGTERM")
+  ) {
+    return;
+  }
+  console.error(
+    `::error title=Upgrade survivor failure::phase=${failure.phase}; exitStatus=${failure.exitStatus}; signal=${failure.signal ?? "none"}`,
+  );
 }
 
 async function printFailureSummary(failures: LaneResult[], tailLines: number) {

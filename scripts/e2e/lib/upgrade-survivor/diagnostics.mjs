@@ -1831,7 +1831,7 @@ export function publishDiagnostics(
       publishedSuccessSummary(artifactRoot, sanitize),
       publicLimit,
     );
-    return;
+    return undefined;
   }
   if (outcome !== "failed") {
     throw new Error();

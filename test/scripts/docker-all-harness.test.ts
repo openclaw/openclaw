@@ -1311,6 +1311,74 @@ describe("Docker scheduler trusted harness execution", () => {
     },
   );
 
+  posixIt("retains host-published survivor metadata after cleanup with a one-line tail", () => {
+    const fixture = setupFixture("split");
+    const catalog = path.join(fixture.harness, "scripts/lib/docker-e2e-scenarios.mts");
+    writeFileSync(
+      catalog,
+      readFileSync(catalog, "utf8") +
+        '\nmainLanes.find(lane => lane.name === "gateway-concurrency").stateScenario = "upgrade-survivor";\n',
+    );
+    const artifacts = path.join(fixture.root, "private");
+    mkdirSync(path.join(artifacts, "diagnostics"), { recursive: true });
+    writeFileSync(
+      path.join(artifacts, "diagnostics/raw.json"),
+      JSON.stringify({
+        phase: "recovery-update-restart",
+        exitStatus: 7,
+        signal: null,
+        logs: { "update.err": "PRIVATE_LOG_BYTES" },
+        environment: { TOKEN: "PRIVATE_ENV_BYTES" },
+      }),
+    );
+    const published = path.join(fixture.root, "public");
+    const cleaned = path.join(fixture.root, "cleanup-complete");
+    writeFileSync(
+      path.join(fixture.harness, "scripts/e2e/gateway-concurrency-docker.sh"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "cleanup() { printf settled > " +
+          quote(cleaned) +
+          '; printf "[upgrade-survivor] FAILED (exit 7)\\n" >&2; }',
+        "trap cleanup EXIT",
+        [
+          quote(process.execPath),
+          "--import",
+          quote(path.resolve("scripts/tsx.mjs")),
+          quote(path.resolve("scripts/upgrade-survivor-diagnostics.mjs")),
+          "publish",
+          quote(artifacts),
+          quote(published),
+        ].join(" "),
+        "exit 7",
+        "",
+      ].join("\n"),
+    );
+    const { result, logDir } = runFixture(fixture, "split", ["gateway-concurrency"], {
+      env: { GITHUB_ACTIONS: "true", OPENCLAW_DOCKER_ALL_FAILURE_TAIL_LINES: "1" },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(readFileSync(cleaned, "utf8")).toBe("settled");
+    expect(readFileSync(path.join(logDir, "gateway-concurrency.log"), "utf8")).toContain(
+      "[upgrade-survivor] FAILED (exit 7)",
+    );
+    const annotations = result.stderr.split("\n").filter((line) => line.startsWith("::error"));
+    expect(annotations).toEqual([
+      "::error title=Upgrade survivor failure::phase=recovery-update-restart; exitStatus=7; signal=none",
+      "::error title=Docker lane failure::status=7; timedOut=false; noOutputTimedOut=false",
+    ]);
+    expect(annotations.join("")).not.toContain("PRIVATE");
+    expect(annotations.join("")).not.toContain(fixture.root);
+    const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
+    expect(summary).toMatchObject({
+      status: "failed",
+      cleanup: { joined: true },
+      lanes: [{ status: 7 }],
+    });
+    expect(summary.lanes[0]).not.toHaveProperty("failureMetadata");
+  });
+
   posixIt.each(["timeout", "deterministic failure", "rate limited", "ECONNRESET"])(
     "fails on the first lane outcome: %s",
     (failure) => {
