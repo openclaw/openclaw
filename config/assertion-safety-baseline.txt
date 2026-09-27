@@ -802,7 +802,6 @@ extensions/qa-channel/src/channel.ts	5
 extensions/qa-channel/src/gateway.ts	2
 extensions/qa-channel/src/inbound.ts	1
 extensions/qa-channel/src/setup.ts	2
-extensions/qa-lab/src/agentic-parity-report.ts	1
 extensions/qa-lab/src/auth-profile.fixture.ts	3
 extensions/qa-lab/src/browser-runtime.ts	2
 extensions/qa-lab/src/bundled-plugin-staging.ts	4
@@ -838,7 +837,6 @@ extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive-recovery.ts	1
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-state.ts	1
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.ts	3
-extensions/qa-lab/src/live-transports/matrix/substrate/client-message-content.ts	2
 extensions/qa-lab/src/live-transports/matrix/substrate/client.ts	3
 extensions/qa-lab/src/live-transports/matrix/substrate/config.ts	8
 extensions/qa-lab/src/live-transports/matrix/substrate/e2ee-client.ts	8
@@ -878,7 +876,7 @@ extensions/qa-lab/src/providers/live-config.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-assistant-text.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-contracts.ts	2
-extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	4
+extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	3
 extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
