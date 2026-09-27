@@ -52,7 +52,15 @@ avoiding another download. Cloud-enrolled nodes keep their own execution-mode-sp
 installation and retention lifecycle.
 
 You can also enroll and enable a service host in one step with
-`openclaw connect --service --session-host`. In Control UI New Session, a
+`openclaw connect --service --session-host`.
+
+For a process-scoped host, enroll in the foreground with
+`openclaw connect <join-url> --session-host`. The join URL is single-use; after
+that process stops, restart the host with `openclaw node run --session-host`,
+which reuses the saved pairing. See
+[Reconnect a paired node](/cli/connect#reconnect-a-paired-node).
+
+In Control UI New Session, a
 write-scoped operator chooses either a specific paired device or **Auto**.
 Without an explicit project or folder selection, **New workspace** starts an
 empty isolated workspace without requiring a user Git repository. A selected

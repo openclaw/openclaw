@@ -30,9 +30,10 @@ Use the current template and a real body file. Preserve human credit and keep
 branches editable by maintainers when safe. For a fork, consider GitHub's
 Actions/secrets warning before enabling edits.
 
-Create as draft, wait for non-null `mergeable`, then mark ready. Confirm CI
-attached to the pushed head. A merge-ref startup failure cannot be rerun; the
-hourly PR CI sweeper can re-fire it, or use an authorized close/reopen after
+Create as draft; when merge readiness is requested, wait for non-null `mergeable`,
+then mark ready and confirm CI attached to the pushed head. A merge-ref startup
+failure cannot be rerun; the hourly PR CI sweeper can re-fire it, or use an
+authorized close/reopen after
 verifying the missing attachment. Do not rebase merely because main advanced.
 Refresh only for a conflict, failing guard, explicit request, or material stale
 base risk. An explicitly requested landing of one's own draft includes marking
@@ -69,7 +70,7 @@ Do not disclose private desktop content, identifiers, model routes, or secrets.
 
 ## Review, prepare, merge
 
-For main-targeted PRs, use only the native sequence:
+For main-targeted PRs, prefer the native sequence; adapt as needed.
 
 ```bash
 scripts/pr review-init <pr>

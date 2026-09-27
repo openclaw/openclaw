@@ -74,7 +74,6 @@ describe("conversation position rail scroll rendering", () => {
         );
       });
     const renderRows = () => {
-      transcript.hostUpdate();
       render(transcriptView(), container);
       transcript.hostUpdated();
     };

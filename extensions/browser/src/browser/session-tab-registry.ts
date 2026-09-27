@@ -37,6 +37,7 @@ import {
 import { readDurableTabs, resolveVolatile, type DurableTab } from "./session-tab-tracking.js";
 
 export {
+  filterTrackedSessionBrowserTabs,
   trackSessionBrowserTab,
   touchSessionBrowserTab,
   untrackSessionBrowserTab,
