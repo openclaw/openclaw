@@ -806,7 +806,9 @@ async function scanSlackConversationForDelivery(params: {
     }
     if (expectedPartCount !== undefined && deliveryParts.size === expectedPartCount) {
       // Matching counts cover every validated index in [0, expectedPartCount).
-      const completeParts = [...deliveryParts.values()].sort((a, b) => a.partIndex - b.partIndex);
+      const completeParts = [...deliveryParts.values()].toSorted(
+        (a, b) => a.partIndex - b.partIndex,
+      );
       const reconciledThreadTs = completeParts[0]?.threadTs ?? params.threadTs;
       const platformMessageIds = completeParts.map((part) => part.messageId);
       return {
