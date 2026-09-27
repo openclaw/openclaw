@@ -31,6 +31,7 @@ import type { ReplyDeliveryState } from "../../reply-completion.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
+import type { SemanticNoProgressObserver } from "../../semantic-no-progress.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
 import type { ToolEffectReceipt } from "../../tool-effect-receipt.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
@@ -43,6 +44,7 @@ import type {
 } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
+import type { SemanticStallReplanState } from "./semantic-stall-replan.js";
 
 export type StreamRunState = {
   aborted: boolean;
@@ -225,6 +227,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Run-owned async semantic observer; deterministic loop evidence remains its gate. */
+  semanticNoProgressObserver?: SemanticNoProgressObserver;
+  /** One strong-stall replan budget shared across all attempts in this logical run. */
+  semanticStallReplanState?: SemanticStallReplanState;
   /** Reads the sticky untrusted-content flag for the current user turn. */
   isTurnTainted?: () => boolean;
   /** Shipped harness notification; core uses onAttemptDeadlineChanged for queue ownership. */

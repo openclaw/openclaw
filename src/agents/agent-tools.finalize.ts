@@ -3,7 +3,7 @@ import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import {
   rewrapToolWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHookCore as wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.wrapper.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";

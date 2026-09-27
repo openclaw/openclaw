@@ -15,6 +15,27 @@ export type InternalBeforeToolBatchHook = (
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
 
+export type InternalBeforeModelRequestHook = (systemPrompt: string) => string;
+const beforeModelRequestByAgent = new WeakMap<object, InternalBeforeModelRequestHook>();
+
+/** Keep run-owned prompt revocation at the final synchronous model dispatch boundary. */
+export function setInternalBeforeModelRequest(
+  agent: object,
+  hook: InternalBeforeModelRequestHook | undefined,
+): void {
+  if (hook) {
+    beforeModelRequestByAgent.set(agent, hook);
+  } else {
+    beforeModelRequestByAgent.delete(agent);
+  }
+}
+
+export function getInternalBeforeModelRequest(
+  agent: object,
+): InternalBeforeModelRequestHook | undefined {
+  return beforeModelRequestByAgent.get(agent);
+}
+
 type InternalReadyToolCall = { toolCallId: string; args: unknown };
 
 export type InternalToolBatchLifecycle = {

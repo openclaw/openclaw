@@ -191,7 +191,7 @@ function makeDispatchInput(
     startupStagesEmitted: false,
     bootstrapPromptWarningSignaturesSeen: [],
     resolveRuntimeFallbackReason: () => null,
-    observeToolOutcome: vi.fn(),
+    onToolOutcome: vi.fn(),
     isTurnTainted: vi.fn(() => false),
     allocateToolOutcomeOrdinal: vi.fn(() => 1),
     getPostCompactionAbortError: vi.fn(() => undefined),

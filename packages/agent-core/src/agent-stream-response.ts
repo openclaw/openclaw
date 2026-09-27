@@ -151,6 +151,13 @@ export async function streamAgentResponse(
   const resolvedApiKey =
     (config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
 
+  // No await may separate this revocation check from dispatch. Earlier turn
+  // preparation can be followed by async steering, conversion, and key lookup.
+  if (llmContext.systemPrompt !== undefined) {
+    llmContext.systemPrompt =
+      config.beforeModelRequest?.(llmContext.systemPrompt) ?? llmContext.systemPrompt;
+  }
+
   const executionAbort = new AbortController();
   const executionSignal = signal
     ? AbortSignal.any([signal, executionAbort.signal])
@@ -230,8 +237,9 @@ export async function streamAgentResponse(
     executions = Promise.all([previousExecutions, execution]).then(() => {});
   };
   try {
+    const { beforeModelRequest: _beforeModelRequest, ...streamOptions } = config;
     const stream = streamFunction(config.model, llmContext, {
-      ...config,
+      ...streamOptions,
       apiKey: resolvedApiKey,
       signal: executionSignal,
       onActiveResponse: steering.onActiveResponse,

@@ -105,6 +105,8 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
+  | "semanticNoProgressObserver"
+  | "semanticStallReplanState"
   | "inputAttachmentMedia"
 >;
 /**

@@ -16,6 +16,7 @@ import type {
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
 import type { AgentTool } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { SemanticNoProgressObserver } from "./semantic-no-progress.js";
 
 export type ToolOutcomeObservation = {
   toolName: string;
@@ -56,6 +57,8 @@ export type HookContext = {
   turnSourceThreadId?: string | number;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
+  /** Run-owned async semantic observer; deterministic loop evidence remains its gate. */
+  semanticNoProgressObserver?: SemanticNoProgressObserver;
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   skillsSnapshot?: SkillSnapshot;
   skillUsagePaths?: SkillUsagePath[];

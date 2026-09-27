@@ -428,7 +428,7 @@ it.each(dispatchCases)(
         startupStagesEmitted: false,
         bootstrapPromptWarningSignaturesSeen: [],
         resolveRuntimeFallbackReason: () => null,
-        observeToolOutcome: vi.fn(),
+        onToolOutcome: vi.fn(),
         isTurnTainted: () => false,
         allocateToolOutcomeOrdinal: () => 1,
         getPostCompactionAbortError: () => undefined,

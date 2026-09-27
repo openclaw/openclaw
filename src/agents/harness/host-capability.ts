@@ -41,6 +41,7 @@ import {
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
+import { omitSemanticNoProgressObserver, projectToolOutcomeHooks } from "../tool-outcome-hooks.js";
 import { registerTrustedToolNoStartError } from "../tool-result-error.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
@@ -354,10 +355,7 @@ export function createAgentHarnessHostCapabilities(params: {
     ...(getActiveDiagnosticTraceContext() ? { trace: getActiveDiagnosticTraceContext() } : {}),
     ...(skillsSnapshot ? { skillsSnapshot } : {}),
     ...(skillUsagePaths ? { skillUsagePaths } : {}),
-    ...(attempt.onToolOutcome ? { onToolOutcome: attempt.onToolOutcome } : {}),
-    ...(attempt.allocateToolOutcomeOrdinal
-      ? { allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal }
-      : {}),
+    ...projectToolOutcomeHooks(attempt),
     ...(attempt.sandbox?.enabled &&
     attempt.sandbox.workspaceAccess === "rw" &&
     attempt.sandbox.fsBridge
@@ -521,6 +519,7 @@ export function createAgentHarnessHostCapabilities(params: {
     bindToolSurface,
     createToolSurface: (options, bindingOptions) => {
       assertActive();
+      const safeOptions = omitSemanticNoProgressObserver(options);
       // Only host-created core tools can seed TTS provenance. Plugin-bound tools
       // must not replay a retained core result into this attempt's authority set.
       const tools = bindTools(
@@ -528,7 +527,10 @@ export function createAgentHarnessHostCapabilities(params: {
           withInstallationTarget(installationTarget, () =>
             createOpenClawCodingToolsInternal(
               {
-                ...options,
+                ...safeOptions,
+                // Semantic observation belongs to the admitted run owner, never
+                // to plugin-supplied construction options.
+                ...projectToolOutcomeHooks(attempt),
                 // Availability belongs to this prepared host, not mutable plugin inputs.
                 githubPublicationAvailable,
                 runtimePluginToolGrant,

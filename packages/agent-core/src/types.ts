@@ -213,6 +213,8 @@ export type ToolLoopRecoveryState = {
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
   model: Model;
+  /** @internal Final synchronous prompt check immediately before model dispatch. */
+  beforeModelRequest?: (systemPrompt: string) => string;
   /** Logical thinking level retained across model changes before provider mapping. */
   thinkingLevel?: ThinkingLevel;
 

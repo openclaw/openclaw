@@ -42,7 +42,7 @@ import {
 } from "./agent-tools.before-tool-call.diagnostics.js";
 import {
   consumeFinalClientVoiceToolConfirmation,
-  runBeforeToolCallHook,
+  runBeforeToolCallHookCore as runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.policy.js";
 import {
   adjustedParamsByToolCallId,
@@ -288,7 +288,7 @@ export function buildBlockedToolResult(params: {
   return result;
 }
 
-export function wrapToolWithBeforeToolCallHook(
+export function wrapToolWithBeforeToolCallHookCore(
   tool: AnyAgentTool,
   ctx?: HookContext,
   options: Partial<BeforeToolCallDiagnosticOptions> = {},
@@ -702,7 +702,7 @@ export function rewrapToolWithBeforeToolCallHook(
   const preservedOptions = getBeforeToolCallDiagnosticOptions(tool);
   const wrapperOptions = { ...preservedOptions, ...options };
   if (sourceTool === tool) {
-    return wrapToolWithBeforeToolCallHook(tool, ctx ?? preservedContext, wrapperOptions);
+    return wrapToolWithBeforeToolCallHookCore(tool, ctx ?? preservedContext, wrapperOptions);
   }
   // Preserve post-wrap schema/metadata while restoring the source execute function.
   const rewrapSource: AnyAgentTool = {
@@ -712,7 +712,7 @@ export function rewrapToolWithBeforeToolCallHook(
   clearBeforeToolCallWrappedMarker(rewrapSource);
   copyBeforeToolCallWrapperMetadata(tool, rewrapSource);
   copyAgentToolSourceExecutionGuard(tool, rewrapSource);
-  return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, wrapperOptions);
+  return wrapToolWithBeforeToolCallHookCore(rewrapSource, ctx ?? preservedContext, wrapperOptions);
 }
 
 function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {

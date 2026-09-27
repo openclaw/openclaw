@@ -4,7 +4,7 @@ import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
 } from "../logging/diagnostic-session-state.js";
-import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
+import { runBeforeToolCallHookCore as runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import {
   clearBatchAdmittedToolCallsForRun,
   consumeBatchAdmittedToolCall,

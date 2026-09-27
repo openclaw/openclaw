@@ -10,6 +10,7 @@ export {
   getInternalToolResultProvenance,
   getInternalToolExecutionPreparer,
   setInternalBeforeToolBatch,
+  setInternalBeforeModelRequest,
   type InternalBeforeToolBatchHook,
   type InternalToolExecutionPreparer,
 } from "../../../packages/agent-core/src/internal-hooks.js";

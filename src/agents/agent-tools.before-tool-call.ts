@@ -24,12 +24,14 @@ export {
 export { finalizeToolTerminalPresentation } from "./agent-tools.before-tool-call.diagnostics.js";
 export {
   cancelDeferredPluginToolApproval,
-  requestDeferredPluginToolApproval,
+  requestDeferredPluginToolApprovalCore,
+  requestDeferredPluginToolApprovalCore as requestDeferredPluginToolApproval,
 } from "./agent-tools.before-tool-call.approval.js";
 export {
   getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
-  runBeforeToolCallHook,
+  runBeforeToolCallHookCore,
+  runBeforeToolCallHookCore as runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.policy.js";
 export {
   buildBlockedToolResult,
@@ -39,5 +41,6 @@ export {
   recordAdjustedParamsForToolCall,
   recordStructuredReplayTrustForToolCall,
   rewrapToolWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHookCore,
+  wrapToolWithBeforeToolCallHookCore as wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.wrapper.js";

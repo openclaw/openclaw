@@ -100,7 +100,7 @@ export function consumeFinalClientVoiceToolConfirmation(args: {
   });
 }
 
-export async function runBeforeToolCallHook(args: {
+export async function runBeforeToolCallHookCore(args: {
   toolName: string;
   params: unknown;
   toolKind?: PluginHookToolKind;

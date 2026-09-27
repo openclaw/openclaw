@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
-import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
+import { wrapToolWithBeforeToolCallHookCore as wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import { createPostCompactionLoopGuard } from "./embedded-agent-runner/post-compaction-loop-guard.js";
 import { resolveToolExecutionErrorKind } from "./tool-result-error.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
