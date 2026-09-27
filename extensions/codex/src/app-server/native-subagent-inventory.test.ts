@@ -389,9 +389,9 @@ describe("native pending assignment inventory through registered monitor admissi
     async (scenario) => {
       const f = await fixture();
       const client = createClient();
-      onTestFinished(() => {
-        codexNativeSubagentMonitorRuntime.retireParent(client.client, "parent-thread");
-        codexNativeSubagentMonitorRuntime.retireParent(client.client, "rotated-parent");
+      onTestFinished(async () => {
+        await codexNativeSubagentMonitorRuntime.retireParent(client.client, "parent-thread");
+        await codexNativeSubagentMonitorRuntime.retireParent(client.client, "rotated-parent");
         client.close();
       });
       f.deliver.mockImplementation(async ({ completionCustody }) => {
