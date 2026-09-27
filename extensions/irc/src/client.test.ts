@@ -244,9 +244,15 @@ async function collectPrivmsgBodies(
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-function maxLineBytes(bodies: string[]): number {
+// The line recipients get: the server puts our `:nick!user@host ` in front, and 512 bytes bounds
+// that relayed line, so measure it with the longest user@host a server can give us.
+const RELAY_PREFIX = `:bot!${"u".repeat(11)}@${"h".repeat(63)} `;
+
+function maxRelayedLineBytes(bodies: string[]): number {
   return Math.max(
-    ...bodies.map((body) => Buffer.byteLength(`PRIVMSG #general :${body}\r\n`, "utf8")),
+    ...bodies.map((body) =>
+      Buffer.byteLength(`${RELAY_PREFIX}PRIVMSG #general :${body}\r\n`, "utf8"),
+    ),
   );
 }
 
@@ -319,7 +325,7 @@ describe("irc client PRIVMSG chunking on the wire", () => {
       try {
         const bodies = await collectPrivmsgBodies(server, text, limit);
         expect(bodies.length).toBeGreaterThan(1);
-        expect(maxLineBytes(bodies)).toBeLessThanOrEqual(512);
+        expect(maxRelayedLineBytes(bodies)).toBeLessThanOrEqual(512);
         expect(bodies.some((body) => LONE_SURROGATE.test(body))).toBe(false);
         expect(bodies.join(separator)).toBe(text);
         if (lengths) {
