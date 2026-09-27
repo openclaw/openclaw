@@ -98,10 +98,15 @@ export function scrollTranscriptToEnd(
   instance: Virtualizer<HTMLDivElement, HTMLElement>,
   { source, behavior }: Required<ChatScrollToEndOptions>,
   cancelScroll: () => void,
+  measureSkippedRows: () => void,
 ): void {
   // Retargeting automatic follow must not insert an instant stop or lose manual ownership.
   if (source !== "auto" || state.scrollCommand?.target !== "end") {
     cancelScroll();
+  } else if (state.scrollCommand.behavior === "smooth" && behavior !== "smooth") {
+    // Retargeting bypasses cancellation, which normally replays the row sizes
+    // TanStack suppressed outside the outgoing smooth command’s target buffer.
+    measureSkippedRows();
   }
   const current = state.scrollCommand;
   state.scrollCommand = {
