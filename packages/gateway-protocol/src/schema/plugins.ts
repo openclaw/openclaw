@@ -721,7 +721,13 @@ export const PluginsSetEnabledParamsSchema = closedObject({
 });
 
 /** Successful plugin enablement policy update. */
-export const PluginsSetEnabledResultSchema = closedObject(PluginsInstallResultSchema.properties);
+export const PluginsSetEnabledResultSchema = closedObject({
+  ok: Type.Literal(true),
+  plugin: PluginCatalogEntrySchema,
+  restartRequired: Type.Boolean(),
+  runtime: Type.Optional(PluginRuntimeApplicationSchema),
+  warnings: Type.Optional(Type.Array(Type.String())),
+});
 
 export type PluginCatalogEntry = Static<typeof PluginCatalogEntrySchema>;
 export type ControlUiPluginTab = Static<typeof ControlUiPluginTabSchema>;
