@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
+import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { CodeModeOutputState } from "./code-mode-json.js";
@@ -14,6 +14,7 @@ import {
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import type { SpawnSubagentParams } from "./subagents/spawn/subagent-spawn-contract.js";
 import {
@@ -621,6 +622,71 @@ describe("Code Mode swarm host bridge", () => {
       kind: "phase",
       text: "Plan",
     });
+  });
+
+  it("uses the run session key when a direct message runs under a peer policy key", async () => {
+    const runtimeConfig = { tools: { codeMode: true, swarm: { enabled: true } } };
+    // Like createOpenClawTools, the spawn tool registers collectors under the run key.
+    const spawnTool = createSessionsSpawnTool({
+      config: runtimeConfig,
+      agentSessionKey: "agent:main:main",
+      requesterRunId: "run-swarm",
+    });
+    const surface = createAgentHarnessToolSurfaceRuntimeCore({
+      config: runtimeConfig,
+      agentId: "main",
+      sessionKey: "agent:main:telegram:default:direct:123",
+      runSessionKey: "agent:main:main",
+      sessionId: "session-swarm",
+      runId: "run-swarm",
+      modelToolsEnabled: true,
+      executeTool: async (params) =>
+        await params.acceptResultBeforeProjection(
+          await params.tool.execute(
+            params.toolCallId,
+            params.input,
+            params.signal,
+            params.onUpdate,
+            undefined as never,
+          ),
+        ),
+    });
+    try {
+      const controls = surface.compactTools([spawnTool]).tools;
+      const result = await runUntilCompleted({
+        execTool: expectDefined(
+          controls.find((tool) => tool.name === "exec"),
+          "exec control",
+        ),
+        waitTool: expectDefined(
+          controls.find((tool) => tool.name === "wait"),
+          "wait control",
+        ),
+        code: 'return await agents.run("Research");',
+      });
+
+      expect(result).toMatchObject({ status: "completed", value: "restored" });
+      expect(swarmMocks.spawnSubagentDirect.mock.calls[0]?.[0]).toMatchObject({
+        collect: true,
+        groupId: "swarm:agent:main:main:run-swarm",
+      });
+      expect(swarmMocks.getSwarmRunByLaunchReplayKey).toHaveBeenCalledWith(
+        expect.stringMatching(/^cm_replay_[0-9a-f]{24}:bridge:agentSpawn:1$/u),
+        "agent:main:main",
+        "main",
+      );
+      expect(swarmMocks.waitForCollectorCompletion).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "collector-1",
+          currentSessionKeys: new Set([
+            "agent:main:telegram:default:direct:123",
+            "agent:main:main",
+          ]),
+        }),
+      );
+    } finally {
+      surface.cleanup();
+    }
   });
 
   it.each([

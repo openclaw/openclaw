@@ -92,6 +92,8 @@ export type ToolSearchToolContext = {
   runtimeConfig?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  /** Durable run session key when `sessionKey` is a distinct runtime policy key. */
+  runSessionKey?: string;
   sessionId?: string;
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;

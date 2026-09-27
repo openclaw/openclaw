@@ -53,6 +53,8 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   supportsDeferredToolCalls?: boolean;
   prompt?: string;
   runId?: string;
+  /** Durable run key for Code Mode swarm identity; `sessionKey` may be a policy key. */
+  runSessionKey?: string;
   runtimeToolAllowlist?: readonly string[];
   sessionId?: string;
   sessionKey?: string;
@@ -152,6 +154,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
           modelContextWindowTokens: params.contextTokenBudget ?? params.model?.contextWindow,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
+          runSessionKey: params.runSessionKey,
           sessionId: params.sessionId,
           runId: params.runId,
           catalogRef: toolSearchCatalogRef,
