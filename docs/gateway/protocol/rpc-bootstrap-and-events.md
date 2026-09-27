@@ -28,8 +28,10 @@ the snapshot is being built. Reconcile those events with the response and issue
 a trailing `sessions.list` refresh when needed, including when an event only
 invalidates the cached list. Reconnects require a new subscription and snapshot.
 
-The Gateway keeps durable session metadata in memory and fills materialized rows
-incrementally. Committed owner changes refresh affected rows; there is no
+The Gateway keeps durable session metadata in memory and finishes its initial
+row materialization before normal startup completes. Reconnecting clients can
+read the initial roster as soon as the Gateway is ready. Committed owner changes
+refresh affected rows incrementally; there is no
 completed-page cache or one-second staleness window. Keyed descriptions,
 resolution, and chat startup prepare their requested row without waiting for the
 bulk refresh. Newly admitted or replaced stores load their metadata once, and
