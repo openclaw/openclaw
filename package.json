@@ -2247,6 +2247,7 @@
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [
+    "@openclaw/proxyline",
     "chrome-devtools-mcp"
   ],
   "dependencies": {

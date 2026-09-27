@@ -1,7 +1,7 @@
 // Node proxy agent helpers adapt env or explicit proxy settings for libraries
 // that need node:http Agent instances.
-import { Agent as HttpAgent, type AgentOptions as HttpAgentOptions } from "node:http";
-import { Agent as HttpsAgent, type AgentOptions as HttpsAgentOptions } from "node:https";
+import type { Agent as HttpAgent, AgentOptions as HttpAgentOptions } from "node:http";
+import type { Agent as HttpsAgent, AgentOptions as HttpsAgentOptions } from "node:https";
 import { createRequire } from "node:module";
 import { isIPv6 } from "node:net";
 import { matchesNoProxy, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
@@ -31,13 +31,6 @@ type NodeProxyAgentWithOptions = HttpAgent & {
 };
 
 const require = createRequire(import.meta.url);
-
-// Node dispatches requests through this inherited method, omitted by @types/node.
-declare module "node:http" {
-  interface Agent {
-    addRequest: ProxylineNodeAgent["addRequest"];
-  }
-}
 
 /** Selects either ambient env proxy resolution or a caller-supplied fixed proxy URL. */
 export type CreateNodeProxyAgentOptions =
@@ -88,9 +81,8 @@ function fixedProxyEnv(proxyUrl: URL): ProxylineEnvSnapshot {
   };
 }
 
-function loadCreateAmbientNodeProxyAgent(): ProxylineCreateAmbientNodeProxyAgent {
-  return (require("@openclaw/proxyline") as typeof import("@openclaw/proxyline"))
-    .createAmbientNodeProxyAgent;
+function loadProxyline(): typeof import("@openclaw/proxyline") {
+  return require("@openclaw/proxyline") as typeof import("@openclaw/proxyline");
 }
 
 function applyNodeAgentOptions(agent: HttpAgent, options: NodeProxyAgentOptions | undefined): void {
@@ -182,7 +174,7 @@ function createFixedNodeProxyAgent(
       ? proxyUrl
       : proxyUrlWithDefaultScheme(proxyUrl, options.protocol ?? "https");
   const proxyConnect = options.proxyConnect;
-  const agent = loadCreateAmbientNodeProxyAgent()({
+  const agent = loadProxyline().createAmbientNodeProxyAgent({
     env: fixedProxyEnv(parsedProxyUrl),
     protocol: options.protocol ?? "https",
     ...(options.proxyTls !== undefined ? { proxyTls: options.proxyTls } : {}),
@@ -205,7 +197,6 @@ function createPerRequestEnvProxyAgent(
   }
   const routes = new Map<NodeProxyProtocol, ProxylineNodeAgent["addRequest"]>();
   const agents: ProxylineNodeAgent[] = [];
-  let initializationError: unknown;
   for (const protocol of ["http", "https"] as const) {
     const value = protocol === "http" ? proxies.httpProxy : proxies.httpsProxy;
     if (!value) {
@@ -224,29 +215,18 @@ function createPerRequestEnvProxyAgent(
     } catch (error) {
       // An invalid route must fail when selected, without disabling the other
       // protocol or turning a configured proxy request into a direct request.
-      initializationError = error;
       routes.set(protocol, () => {
         throw error;
       });
     }
   }
-  const router = agents.at(-1);
-  if (!router) {
-    // This agent never opens a socket. Accept either Node request protocol so
-    // the configured proxy error, not protocol validation, rejects each request.
-    class RejectedProxyAgent extends HttpsAgent {
-      protocol = undefined;
-
-      override addRequest = () => {
-        throw initializationError;
-      };
-    }
-    return new RejectedProxyAgent(options.agentOptions);
-  }
-  const direct = {
-    http: new HttpAgent(options.agentOptions),
-    https: new HttpsAgent(options.agentOptions),
-  };
+  const { ProxylineNodeProxyAgent } = loadProxyline();
+  const router = new ProxylineNodeProxyAgent({
+    ...options.agentOptions,
+    defaultProtocol: options.protocol ?? "https",
+    getProxyForUrl: () => "",
+  });
+  const directRequest = router.addRequest.bind(router);
   router.addRequest = (request, requestOptions) => {
     const protocol = request.protocol === "https:" ? "https" : "http";
     const host = isIPv6(request.host) ? `[${request.host}]` : request.host;
@@ -258,17 +238,13 @@ function createPerRequestEnvProxyAgent(
     if (route) {
       route(request, requestOptions);
     } else {
-      direct[protocol].addRequest(request, requestOptions);
+      directRequest(request, requestOptions);
     }
   };
   const destroyRouter = router.destroy.bind(router);
   router.destroy = () => {
-    direct.http.destroy();
-    direct.https.destroy();
     for (const agent of agents) {
-      if (agent !== router) {
-        agent.destroy();
-      }
+      agent.destroy();
     }
     destroyRouter();
   };

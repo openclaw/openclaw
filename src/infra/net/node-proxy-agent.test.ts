@@ -60,7 +60,7 @@ describe("resolveEnvNodeProxyUrlForTarget", () => {
 
 describe("createNodeProxyAgent", () => {
   it("rejects unusable env proxies at either Node request boundary", () => {
-    withProxyEnv({ HTTPS_PROXY: "socks5://proxy.example:1080" }, () => {
+    withProxyEnv({ HTTP_PROXY: "socks5://proxy.example:1080" }, () => {
       const agent = createNodeProxyAgent({ mode: "env" });
       expect(agent).toBeDefined();
       try {

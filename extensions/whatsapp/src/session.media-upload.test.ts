@@ -340,6 +340,22 @@ describe("WhatsApp session media upload", () => {
     expect(proxyRequests).toEqual([]);
   });
 
+  it("honors upload and redirect bypasses when every proxy route is invalid", async () => {
+    vi.stubEnv("HTTP_PROXY", "socks5://127.0.0.1:1");
+    vi.stubEnv("HTTPS_PROXY", "socks5://127.0.0.1:1");
+    vi.stubEnv("NO_PROXY", "127.0.0.0/8");
+    redirectUrl = `http://127.0.0.1:${plainOriginPort}/bypassed`;
+    const session = await createUploadSession();
+    await upload(session, "127.0.0.1");
+    expect(received).toEqual([
+      { host: `127.0.0.1:${originPort}`, body: mediaBytes },
+      { host: `127.0.0.1:${plainOriginPort}`, body: mediaBytes },
+    ]);
+    await expect(upload(session, "files.proxy.test")).rejects.toThrow("Unsupported proxy protocol");
+    expect(received).toHaveLength(2);
+    expect(proxyRequests).toEqual([]);
+  });
+
   it.each([true, false])(
     "selects each upload host independently (WebSocket bypass: %s)",
     async (bypassWebSocket) => {
