@@ -191,12 +191,12 @@ describeGitHubLinkPresentation("chat GitHub link presentation", () => {
       const page = await browser.newPage();
       try {
         await page.goto("file://" + fixtureFile);
-        const geometry = await page.evaluate((direction) => {
+        const geometry = await page.evaluate((dir) => {
           const column = document.querySelector<HTMLElement>("#column-repository-ref")!;
           const chip = document.querySelector<HTMLElement>("#repository-ref")!;
           column.style.width = "280px";
           column.style.fontSize = "28px";
-          column.dir = direction;
+          column.dir = dir;
           chip.textContent = "organization-with-a-long-name/repository-with-a-long-name#987654";
           const label = document.createRange();
           label.selectNodeContents(chip);

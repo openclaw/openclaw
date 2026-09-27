@@ -522,7 +522,9 @@ describe("Control UI theme contrast", () => {
         .split(property + ":")[1]
         ?.split(";")[0]
         ?.trim();
-      if (!value) throw new Error("Missing GitHub chip paint: " + property);
+      if (!value) {
+        throw new Error("Missing GitHub chip paint: " + property);
+      }
       return value;
     };
     const foreground = declaration(base, "color");
@@ -533,7 +535,9 @@ describe("Control UI theme contrast", () => {
     const focus = css.match(
       /a\.markdown-github-item:focus-visible\s*\{\s*outline-color:\s*([^;]+);/u,
     )?.[1];
-    if (!focus) throw new Error("Missing GitHub chip focus paint");
+    if (!focus) {
+      throw new Error("Missing GitHub chip focus paint");
+    }
     const failures: string[] = [];
     for (const [theme, palette] of themes) {
       const page = resolveOpaqueColor("var(--bg)", palette);
@@ -565,10 +569,13 @@ describe("Control UI theme contrast", () => {
             const ink = composite(resolveColor(foreground, tokens), background);
             const ratio = contrastRatio(ink, background);
             const floor = AAA_THEMES.has(theme) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
-            if (ratio < floor)
+            if (ratio < floor) {
               failures.push(theme + "/" + tone + ": " + ratio.toFixed(2) + " < " + floor);
+            }
             const focusRatio = contrastRatio(composite(resolveColor(focus, tokens), host), host);
-            if (focusRatio < 3) failures.push(theme + "/focus: " + focusRatio.toFixed(2));
+            if (focusRatio < 3) {
+              failures.push(theme + "/focus: " + focusRatio.toFixed(2));
+            }
           }
         }
       }
