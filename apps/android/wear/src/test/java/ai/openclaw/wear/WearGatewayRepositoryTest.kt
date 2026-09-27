@@ -635,9 +635,9 @@ class WearGatewayRepositoryTest {
     assertTrue(tracker.isCurrent(token))
     assertEquals(
       WearLiveStreamSnapshot(text = "Hello world", complete = true, runId = "run-1"),
-      tracker.finish(token).liveStream,
+      tracker.finish(token),
     )
-    assertNull(tracker.finish(token).liveStream)
+    assertNull(tracker.finish(token))
   }
 
   @Test
@@ -645,7 +645,7 @@ class WearGatewayRepositoryTest {
     val tracker = WearHistoryLoadTracker()
     val token = tracker.start("session-1")
 
-    assertNull(tracker.finish(token).liveStream)
+    assertNull(tracker.finish(token))
   }
 
   @Test

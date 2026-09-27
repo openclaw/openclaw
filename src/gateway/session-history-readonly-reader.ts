@@ -41,9 +41,7 @@ export function createBoundSessionHistorySubagentProjection(
     readSourceDatabases,
   );
   return {
-    isSubagentSession(sessionKey) {
-      return readSource(sessionKey);
-    },
+    isSubagentSession: readSource,
     isSubagentRunMessage(runId, messageSeq) {
       if (messageSeq === undefined) {
         return false;

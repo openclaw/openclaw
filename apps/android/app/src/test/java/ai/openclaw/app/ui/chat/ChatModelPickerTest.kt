@@ -42,10 +42,8 @@ class ChatModelPickerTest {
     assertEquals(ChatModelPickerAction.Disabled, chatModelPickerAction(catalog[1]))
     assertEquals(ChatModelPickerAction.Select, chatModelPickerAction(catalog[2]))
     assertEquals(ChatModelPickerAction.Select, chatModelPickerAction(catalog[3]))
-    val sections = chatModelPickerSections(catalog, listOf("openai/standard"), listOf("openai/priority"))
-    assertTrue(sections.pinned.isEmpty())
-    assertTrue(sections.recent.isEmpty())
-    assertEquals(listOf("fixture/quick", "fixture/legacy"), sections.remaining.map { it.providerQualifiedRef() })
+    val choices = chatModelPickerChoices(catalog, listOf("openai/standard"), listOf("openai/priority"))
+    assertEquals(listOf("fixture/quick", "fixture/legacy"), choices.map { it.providerQualifiedRef() })
     assertFalse(chatModelSendBlocked(true, "openai/standard", catalog))
   }
 
@@ -56,7 +54,7 @@ class ChatModelPickerTest {
   }
 
   @Test
-  fun sectionsPreservePinAndRecentOrderAndKeepRemainingCatalogOrder() {
+  fun choicesPreservePinAndRecentOrderAndKeepRemainingCatalogOrder() {
     val catalog =
       listOf(
         model(id = "a", provider = "one"),
@@ -65,16 +63,14 @@ class ChatModelPickerTest {
         model(id = "d", provider = "three"),
       )
 
-    val sections =
-      chatModelPickerSections(
+    val choices =
+      chatModelPickerChoices(
         catalog = catalog,
         favorites = listOf("one/c", "missing/model", "one/a"),
         recents = listOf("one/a", "three/d", "missing/recent"),
       )
 
-    assertEquals(listOf("one/c", "one/a"), sections.pinned.map { it.providerQualifiedRef() })
-    assertEquals(listOf("three/d"), sections.recent.map { it.providerQualifiedRef() })
-    assertEquals(listOf("two/b"), sections.remaining.map { it.providerQualifiedRef() })
+    assertEquals(listOf("one/c", "one/a", "three/d", "two/b"), choices.map { it.providerQualifiedRef() })
   }
 
   @Test

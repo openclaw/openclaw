@@ -182,11 +182,12 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     });
   let workerBundleProducer: WorkerBundleProducer | undefined;
   let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
-  const prepareInstallation = async (install: "bundle" | "npm") => {
+  const prepareInstallation = async (install: "bundle" | "npm", signal?: AbortSignal) => {
     const [workerRuntime, { WORKER_PROTOCOL_FEATURES }] = await Promise.all([
       loadWorkerEnvironmentRuntimeModule(),
       import("../../packages/gateway-protocol/src/schema/worker-admission.js"),
     ]);
+    signal?.throwIfAborted();
     const producer = (workerBundleProducer ??= workerRuntime.createWorkerBundleProducer({
       protocolFeatures: WORKER_PROTOCOL_FEATURES,
       cacheOwnership: "exclusive",
@@ -196,6 +197,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     }));
     const bundle = await producer.prepare();
     await producer.prune(listRetainedBundleHashes);
+    signal?.throwIfAborted();
     if (install === "bundle") {
       return bundle;
     }
@@ -410,15 +412,25 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     prepareNodeArtifacts: async (profileSnapshot, signal) => {
       const pin = new AbortController();
       try {
-        const preparedBootstrap = await prepareNodeArtifact(
-          profileSnapshot,
-          signal ? AbortSignal.any([signal, pin.signal]) : pin.signal,
+        const preparationSignal = signal ? AbortSignal.any([signal, pin.signal]) : pin.signal;
+        // Cancellation releases the caller; the producers retain their shared work.
+        const [bootstrapResult, bundleResult] = await racePromiseWithAbortSignal(
+          Promise.allSettled([
+            prepareNodeArtifact(profileSnapshot, preparationSignal),
+            prepareInstallation("bundle", preparationSignal),
+          ]),
+          signal,
         );
         signal?.throwIfAborted();
+        if (bootstrapResult.status === "rejected") {
+          throw bootstrapResult.reason;
+        }
+        if (bundleResult.status === "rejected") {
+          throw bundleResult.reason;
+        }
+        const preparedBootstrap = bootstrapResult.value;
         const bootstrap = preparedBootstrap.artifact;
-        preparedBootstrap.assertCurrent();
-        const bundle = await racePromiseWithAbortSignal(prepareInstallation("bundle"), signal);
-        signal?.throwIfAborted();
+        const bundle = bundleResult.value;
         preparedBootstrap.assertCurrent();
         if (bundle.install !== "bundle") {
           throw new Error("Worker preparation requires a bundle artifact");

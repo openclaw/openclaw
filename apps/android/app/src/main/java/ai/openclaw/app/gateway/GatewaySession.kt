@@ -244,6 +244,15 @@ data class GatewayUpdateAvailableSummary(
   val channel: String?,
 )
 
+internal fun parseGatewayUpdateAvailableSummary(value: JsonObject?): GatewayUpdateAvailableSummary? {
+  if (value == null) return null
+  return GatewayUpdateAvailableSummary(
+    currentVersion = value["currentVersion"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty),
+    latestVersion = value["latestVersion"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty),
+    channel = value["channel"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty),
+  )
+}
+
 private data class SelectedConnectAuth(
   val authToken: String?,
   val authBootstrapToken: String?,
@@ -1857,24 +1866,12 @@ class GatewaySession(
             remoteAddress = remoteAddress,
             serverVersion = serverVersion,
             mainSessionKey = nextMainSessionKey,
-            updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull()),
+            updateAvailable = parseGatewayUpdateAvailableSummary(snapshot?.get("updateAvailable").asObjectOrNull()),
             authRole = authRole,
             authScopes = authScopes,
             methods = methods,
             capabilities = capabilities,
           ),
-      )
-    }
-
-    private fun parseUpdateAvailable(value: JsonObject?): GatewayUpdateAvailableSummary? {
-      if (value == null) return null
-      val latestVersion = value["latestVersion"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      val currentVersion = value["currentVersion"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      val channel = value["channel"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      return GatewayUpdateAvailableSummary(
-        currentVersion = currentVersion,
-        latestVersion = latestVersion,
-        channel = channel,
       )
     }
 

@@ -335,6 +335,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       requestSessionsSend: unused,
       requestSessionsSpawn: unused,
       requestPortal: unused,
+      requestPresence: unused,
       requestSkillWorkshop: async (input) => {
         expect(validateWorkerSkillWorkshopParams(input)).toBe(true);
         return {
