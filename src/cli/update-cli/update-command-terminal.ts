@@ -377,6 +377,7 @@ export async function recordUpdatePackageCompletion(
     return;
   }
   let cleanupFailure: unknown;
+  defaultRuntime.error("Finishing update: checking package backup retention and cleanup.");
   const retained: UpdateStepResult | void = await transaction
     .complete({ activationVerified: result.status === "ok" }, assertCurrent)
     .catch((error: unknown) => {
