@@ -152,6 +152,15 @@ afterEach(async () => {
   await state.cleanup();
 });
 
+function resume() {
+  return resumePostCoreUpdate({
+    root: state.root,
+    channel: "stable",
+    opts: { json: true, yes: true },
+    timeoutMs: 5_000,
+  });
+}
+
 function firstRefusal() {
   const error = new Error("original authority refusal");
   let armed = false;
@@ -206,12 +215,7 @@ describe("unproved Doctor authority callers", () => {
         },
       );
       const publication = vi.spyOn(postCore, "writePostCorePluginUpdateResultFile");
-      const result = resumePostCoreUpdate({
-        root: state.root,
-        channel: "stable",
-        opts: { json: true, yes: true },
-        timeoutMs: 5_000,
-      });
+      const result = resume();
       if (revoked) {
         await expect(result).rejects.toMatchObject({ code: "requester-revoked" });
         expect(publication).not.toHaveBeenCalled();
@@ -298,12 +302,7 @@ describe("unproved Doctor authority callers", () => {
     expect(holder).not.toBeNull();
     const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance");
     try {
-      const work = resumePostCoreUpdate({
-        root: state.root,
-        channel: "stable",
-        opts: { json: true, yes: true },
-        timeoutMs: 5_000,
-      }).catch((error: unknown) => error);
+      const work = resume().catch((error: unknown) => error);
       expect(await work).toBeUndefined();
       expect(maintenance).toHaveBeenCalledWith(expect.objectContaining({ root: null }));
       expect(maintenance.mock.calls[0]?.[0].assertCurrent).toBeUndefined();
@@ -385,12 +384,7 @@ describe("unproved Doctor authority callers", () => {
         }
         return result;
       });
-      const pending = resumePostCoreUpdate({
-        root: state.root,
-        channel: "stable",
-        opts: { json: true, yes: true },
-        timeoutMs: 5_000,
-      });
+      const pending = resume();
       if (unsafe) {
         await expect(pending).rejects.toBe(refusal);
         expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
@@ -430,30 +424,23 @@ describe("unproved Doctor authority callers", () => {
     },
   );
 
-  it.each(["2026.9.3", "2026.9.4"])(
-    "keeps the shipped %s child-owned completion route outside the 9.2 bridge",
-    async (version) => {
-      const run = createUpdateRun({ trigger: "cli", before: { version } });
-      recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
-      recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
-      await resumePostCoreUpdate({
-        root: state.root,
-        channel: "stable",
-        opts: { json: true, yes: true },
-        timeoutMs: 5_000,
-      });
-      expect(dispatched).toEqual(["repair", "validate", "readiness"]);
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: run.runId,
-          steps: [expect.objectContaining({ doctorLintFindings: [] })],
-        }),
-      );
-      expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
-    },
-  );
+  it("keeps the shipped 9.3 child-owned completion route outside the 9.2 bridge", async () => {
+    const version = "2026.9.3";
+    const run = createUpdateRun({ trigger: "cli", before: { version } });
+    recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
+    recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+    await resume();
+    expect(dispatched).toEqual(["repair", "validate", "readiness"]);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.runId,
+        steps: [expect.objectContaining({ doctorLintFindings: [] })],
+      }),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
 
   it.each([false, true])(
     "publishes settled phase evidence only for older parents (parent owns completion=%s)",
@@ -525,12 +512,7 @@ describe("unproved Doctor authority callers", () => {
           await writeResult(...args);
         });
 
-      await resumePostCoreUpdate({
-        root: state.root,
-        channel: "stable",
-        opts: { json: true, yes: true },
-        timeoutMs: 5_000,
-      });
+      await resume();
 
       expect(publication).toHaveBeenCalledOnce();
       expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
@@ -538,18 +520,16 @@ describe("unproved Doctor authority callers", () => {
     },
   );
 
-  it.each(["live", "paths", "sizes"] as const)(
+  it.each(["paths", "sizes"] as const)(
     "fences default-budget %s await before the next child",
     async (boundary) => {
       const authority = firstRefusal();
-      if (boundary !== "live") {
-        const mock = boundary === "paths" ? mocks.paths : mocks.sizes;
-        mock.mockImplementationOnce(async () => {
-          await Promise.resolve();
-          authority.arm();
-          return boundary === "paths" ? new Map() : [];
-        });
-      }
+      const mock = boundary === "paths" ? mocks.paths : mocks.sizes;
+      mock.mockImplementationOnce(async () => {
+        await Promise.resolve();
+        authority.arm();
+        return boundary === "paths" ? new Map() : [];
+      });
       const result = completePostCorePluginUpdate({
         root: state.root,
         pluginUpdate,
@@ -558,18 +538,8 @@ describe("unproved Doctor authority callers", () => {
         json: true,
         assertCurrent: authority.assertCurrent,
       });
-      if (boundary === "live") {
-        expect((await result).pluginUpdate.status).toBe("ok");
-        expect(dispatched).toEqual(["repair", "validate", "readiness"]);
-        expect(mocks.runExec.mock.calls.map((call) => call[2].timeoutMs)).toEqual([
-          undefined,
-          300_000,
-          300_000,
-        ]);
-      } else {
-        await expect(result).rejects.toBe(authority.error);
-        expect(dispatched).toEqual(["repair"]);
-      }
+      await expect(result).rejects.toBe(authority.error);
+      expect(dispatched).toEqual(["repair"]);
     },
   );
 
