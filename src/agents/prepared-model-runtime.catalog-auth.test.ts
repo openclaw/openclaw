@@ -4,7 +4,16 @@ import type { PreparedModelCatalogAuth } from "./prepared-model-runtime-auth.js"
 import { replacePreparedModelCatalogAuth } from "./prepared-model-runtime.catalog-auth.js";
 
 const authStore = (profiles: RuntimeAuthProfileStore["profiles"]): RuntimeAuthProfileStore => ({
+  version: 1,
   profiles,
+});
+
+const oauthProfile = (provider: string) => ({
+  provider,
+  type: "oauth" as const,
+  access: `${provider}-access`,
+  refresh: `${provider}-refresh`,
+  expires: 0,
 });
 
 const catalogAuth = (
@@ -12,13 +21,13 @@ const catalogAuth = (
 ): Pick<PreparedModelCatalogAuth, "authStore" | "credentials" | "authModes"> => ({
   authStore: authStore(
     Object.fromEntries(
-      providers.map((provider) => [`${provider}-profile`, { provider, type: "oauth" }]),
+      providers.map((provider) => [`${provider}-profile`, oauthProfile(provider)]),
     ),
   ),
   credentials: Object.fromEntries(
     providers.map((provider) => [
       provider,
-      { type: "oauth", access: `${provider}-access`, refresh: `${provider}-refresh` },
+      { type: "oauth", access: `${provider}-access`, refresh: `${provider}-refresh`, expires: 0 },
     ]),
   ),
   authModes: Object.fromEntries(providers.map((provider) => [provider, "oauth"])),
@@ -44,7 +53,7 @@ describe("replacePreparedModelCatalogAuth", () => {
     );
 
     expect(merged.authModes["claude-cli"]).toBe("oauth");
-    expect(merged.credentials["claude-cli"]).toEqual(previous.credentials["claude-cli"]);
+    expect(merged.credentials?.["claude-cli"]).toEqual(previous.credentials?.["claude-cli"]);
     expect(Object.keys(merged.authStore.profiles)).toContain("claude-cli-profile");
     // Providers outside the refresh scope are untouched.
     expect(merged.authModes["other"]).toBe("oauth");
@@ -66,7 +75,7 @@ describe("replacePreparedModelCatalogAuth", () => {
       (provider) => provider === "claude-cli",
     );
 
-    expect(merged.credentials["claude-cli"]).toEqual(next.credentials["claude-cli"]);
+    expect(merged.credentials?.["claude-cli"]).toEqual(next.credentials?.["claude-cli"]);
     expect(merged.authModes["claude-cli"]).toBe("oauth");
   });
 });
