@@ -15,10 +15,7 @@ import {
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
-import {
-  applyToolSchemaDirectoryCatalog,
-  MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
-} from "./tool-search-directory.js";
+import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
 import {
   prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
@@ -379,15 +376,4 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       },
     },
   ];
-}
-
-const testing = {
-  maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
-  resolveToolSearchConfig,
-  applyToolSearchCatalog,
-  addClientToolsToToolSearchCatalog,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.toolSearchTestApi")] = testing;
 }

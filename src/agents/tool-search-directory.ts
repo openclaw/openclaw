@@ -20,7 +20,7 @@ import {
 } from "./tool-search-types.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
-export const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
+const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
 const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 // Catalog entry arrays are immutable snapshots. Keying their rendered directory by
 // array identity preserves prompt-prefix bytes without retaining retired catalogs.
