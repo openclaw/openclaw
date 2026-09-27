@@ -7,6 +7,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { createEmptyAcpxKeyedStore } from "./src/empty-keyed-store.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -30,15 +31,7 @@ it("resets every registered ACP harness with a read-only package directory", asy
         state: {
           resolveStateDir,
           // Host-owned identity/lease storage is outside this filesystem contract.
-          openKeyedStore: () => ({
-            lookup: async () => undefined,
-            register: async () => {},
-            registerIfAbsent: async () => true,
-            entries: async () => [],
-            consume: async () => undefined,
-            delete: async () => false,
-            clear: async () => {},
-          }),
+          openKeyedStore: createEmptyAcpxKeyedStore,
         },
       }),
       registerAgentHarness: (harness) => harnesses.push(harness),
