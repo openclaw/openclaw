@@ -56,16 +56,11 @@ export function waitForQuiescenceRenewal(
   if (signal.aborted) {
     return Promise.resolve(false);
   }
-  return new Promise<boolean>((resolve) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve(false);
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve(true);
-    }, intervalMs);
-    signal.addEventListener("abort", onAbort, { once: true });
+  return delay(intervalMs, true, { signal }).catch((error: unknown) => {
+    if (signal.aborted) {
+      return false;
+    }
+    throw error;
   });
 }
 

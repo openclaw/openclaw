@@ -1,5 +1,3 @@
-// Command list serialization gathers chat, skill, and plugin commands into the
-// gateway protocol result while clamping names, descriptions, aliases, and args.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
@@ -74,7 +72,6 @@ function supportsNativeProvider(cmd: ChatCommandDefinition, provider?: string): 
   );
 }
 
-/** Resolves normalized text aliases, preserving slash-prefixed command names. */
 function resolveTextAliases(cmd: ChatCommandDefinition): string[] {
   const seen = new Set<string>();
   const aliases: string[] = [];
@@ -99,7 +96,6 @@ function resolveTextAliases(cmd: ChatCommandDefinition): string[] {
   return [`/${truncateUtf16Safe(cmd.key, COMMAND_NAME_MAX_LENGTH)}`];
 }
 
-/** Serializes a command argument into the bounded gateway protocol shape. */
 function serializeArg(arg: CommandArgDefinition): SerializedArg {
   const isDynamic = typeof arg.choices === "function";
   const staticChoices = Array.isArray(arg.choices)
@@ -158,7 +154,6 @@ function mapCommand(
   };
 }
 
-/** Builds plugin command entries from text specs plus provider-native metadata. */
 function buildPluginCommandEntries(params: {
   provider?: string;
   nameSurface: CommandNameSurface;
@@ -195,7 +190,6 @@ function buildPluginCommandEntries(params: {
   return entries;
 }
 
-/** Builds the public commands.list payload for an agent/provider/scope view. */
 export async function buildCommandsListResult(params: {
   sessionEntry?: SessionEntry;
   sessionKey?: string;

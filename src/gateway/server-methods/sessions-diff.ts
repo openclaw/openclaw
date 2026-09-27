@@ -7,7 +7,6 @@ import {
   type SessionsDiffParams,
   type SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
@@ -31,19 +30,13 @@ export async function loadSessionDiff(
     ...(unavailableReason ? { unavailableReason } : {}),
   });
   const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
-  const { cfg, agentId: loadedAgentId, entry, storePath, canonicalKey } = loaded;
+  const { cfg, agentId, entry, storePath } = loaded;
   // Same session scoping as sessions.files.*: an unknown session must not fall
   // back to some agent workspace and surface another checkout's diff.
   if (!entry?.sessionId || !storePath) {
     return empty("unknown_session");
   }
-  const agentId = normalizeAgentId(
-    loadedAgentId ??
-      parseAgentSessionKey(canonicalKey)?.agentId ??
-      params.agentId ??
-      parseAgentSessionKey(params.sessionKey)?.agentId,
-  );
-  const repository = resolveRepositoryWorkspaceAccess({ ...loaded, agentId }, context);
+  const repository = resolveRepositoryWorkspaceAccess(loaded, context);
   if (repository) {
     if (repository.kind === "stored") {
       return await loadRepositoryArtifactDiff(repository, params);

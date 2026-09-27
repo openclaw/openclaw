@@ -1,9 +1,7 @@
-// Model probe gateway method reuses the CLI auth-probe engine behind an admin-scoped RPC.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   ErrorCodes,
   errorShape,
-  type ModelsProbeParams,
   type ModelsProbeResult,
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -138,7 +136,7 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateModelsProbeParams, "models.probe", respond)) {
       return;
     }
-    const request = params as ModelsProbeParams;
+    const request = params;
     const provider = normalizeProviderId(request.provider);
     const profileId = request.profileId?.trim();
     if (!provider || (request.profileId !== undefined && !profileId)) {

@@ -49,10 +49,7 @@ export function resolveGlobalAwareNodeChatDeliveryKeys(params: {
   }
   const scopedAgentId = normalizeAgentId(selectedAgentId);
   const keys = [`agent:${scopedAgentId}:${params.sessionKey}`];
-  if (
-    unscopedOwnerAgentId &&
-    normalizeAgentId(unscopedOwnerAgentId) === normalizeAgentId(scopedAgentId)
-  ) {
+  if (unscopedOwnerAgentId && normalizeAgentId(unscopedOwnerAgentId) === scopedAgentId) {
     keys.push(params.sessionKey);
   }
   return keys;
@@ -64,7 +61,7 @@ function resolveChatSessionKeys(params: {
   agentId?: string;
 }): string[] {
   return resolveGlobalAwareNodeChatDeliveryKeys({
-    cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+    cfg: params.context.getRuntimeConfig?.() ?? {},
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });

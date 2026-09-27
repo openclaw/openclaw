@@ -262,35 +262,27 @@ async function toSessionFileEntry(
   if (!opts.includeContent) {
     return entry;
   }
-  if (stat.size <= MAX_PREVIEW_BYTES) {
-    const read = await readWorkspaceFile(root!, browserPath, { assertCurrent: opts.assertCurrent });
-    if (!read) {
-      return { ...base, missing: true };
-    }
-    if (read === "too-large") {
-      return entry;
-    }
-    entry.workspacePath = read.canonicalPath;
-    entry.size = read.stat.size;
-    entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
+  const inline = stat.size <= MAX_PREVIEW_BYTES;
+  const read = inline
+    ? await readWorkspaceFile(root!, browserPath, { assertCurrent: opts.assertCurrent })
+    : await readWorkspaceFilePrefix(root!, browserPath, MIME_SNIFF_PREFIX_BYTES);
+  if (!read) {
+    return { ...base, missing: true };
+  }
+  if (read === "too-large" || read === "unsupported") {
+    return entry;
+  }
+  entry.workspacePath = read.canonicalPath;
+  entry.size = read.stat.size;
+  entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
+  if (inline) {
     await populateSessionFilePreview(entry, read.buffer);
     if (read.readOnly) {
       delete entry.hash;
     }
-    return entry;
+  } else {
+    applyOversizedFileMetadata(entry, read.buffer, await detectMime({ buffer: read.buffer }));
   }
-  const prefix = await readWorkspaceFilePrefix(root!, browserPath, MIME_SNIFF_PREFIX_BYTES);
-  if (prefix === "unsupported") {
-    return entry;
-  }
-  if (!prefix) {
-    return { ...base, missing: true };
-  }
-  entry.workspacePath = prefix.canonicalPath;
-  entry.size = prefix.stat.size;
-  entry.updatedAtMs = toUpdatedAtMs(prefix.stat.mtimeMs);
-  const mimeType = await detectMime({ buffer: prefix.buffer });
-  applyOversizedFileMetadata(entry, prefix.buffer, mimeType);
   return entry;
 }
 
@@ -327,14 +319,6 @@ function toBrowserEntry(
   };
 }
 
-function matchesSearch(entryPath: string, name: string, query: string): boolean {
-  const normalizedQuery = query.toLowerCase();
-  return (
-    name.toLowerCase().includes(normalizedQuery) ||
-    entryPath.toLowerCase().includes(normalizedQuery)
-  );
-}
-
 async function searchBrowserEntries(params: {
   assertCurrent?: () => void;
   root: string | WorkspaceRoot;
@@ -342,6 +326,7 @@ async function searchBrowserEntries(params: {
   relevance: ReadonlyMap<string, SessionFileRelevance>;
 }): Promise<{ entries: SessionFileBrowserEntry[]; truncated?: boolean }> {
   const entries: SessionFileBrowserEntry[] = [];
+  const query = params.query.toLowerCase();
   let visitedEntries = 0;
   let truncated = false;
   const shouldStop = (): boolean => {
@@ -365,7 +350,7 @@ async function searchBrowserEntries(params: {
       }
       visitedEntries += 1;
       const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
-      if (matchesSearch(browserPath, dirent.name, params.query)) {
+      if (browserPath.toLowerCase().includes(query)) {
         const entry = toBrowserEntry(browserPath, dirent, params.relevance);
         if (entry) {
           entries.push(entry);

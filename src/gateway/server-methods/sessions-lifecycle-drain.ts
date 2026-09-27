@@ -38,7 +38,6 @@ import {
   type AcceptedWorkerInferenceSessionDrain,
   type WorkerInferenceSessionDrain,
 } from "../worker-environments/inference-control-internal.js";
-import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "../worker-environments/placement-workspace-result.js";
 import {
@@ -122,7 +121,6 @@ export async function prepareSessionLifecycleDrain(
     new Set([...params.sessionKeys, ...(params.sessionId ? [params.sessionId] : [])]),
   );
   const workerService = params.context.workerEnvironmentService;
-  const workerControl = asWorkerInferenceControl(workerService);
   let workerDrain: AcceptedWorkerInferenceSessionDrain | undefined;
   let workerDrained: Promise<void> | undefined;
   let terminalDrain: AgentTerminalSessionDrain | undefined;
@@ -175,7 +173,7 @@ export async function prepareSessionLifecycleDrain(
             }
             throw error;
           }
-          if (!workerDrain && workerControl?.hasInferenceForSession(params.sessionId) === true) {
+          if (!workerDrain && workerService?.hasInferenceForSession(params.sessionId) === true) {
             throw new Error("Worker inference drain is unavailable");
           }
           if (workerDrain) {

@@ -171,10 +171,10 @@ export function createPluginApprovalHandlers(
       // Untrusted display metadata gets the same escape as title/description:
       // pluginId/toolName/agentId are interpolated into channel approval text.
       // Host-minted runtime identity values stay authoritative and unescaped.
-      const sanitizeMeta = (value?: string | null): string | null =>
-        normalizeTrimmedString(value) === null
-          ? null
-          : sanitizeExecApprovalDisplayText(normalizeTrimmedString(value)!);
+      const sanitizeMeta = (value?: string | null): string | null => {
+        const normalized = normalizeTrimmedString(value);
+        return normalized === null ? null : sanitizeExecApprovalDisplayText(normalized);
+      };
       const request: PluginApprovalRequestPayload = {
         pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
         title: sanitizedTitle,
@@ -184,7 +184,7 @@ export function createPluginApprovalHandlers(
           rawDetail === null
             ? null
             : truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail)),
-        severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
+        severity: p.severity ?? null,
         toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,
         ...(trustedAgentRuntime && p.policySubject

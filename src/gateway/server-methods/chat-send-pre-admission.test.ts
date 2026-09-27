@@ -24,7 +24,6 @@ import {
   respondChatSendRetry,
   runChatSendPreAdmission,
 } from "./chat-send-pre-admission.js";
-import { resolveChatSendStopOwnerScope } from "./chat-send-stop-owner-scope.js";
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
@@ -118,7 +117,8 @@ beforeEach(() => {
 });
 
 describe("chat send stop ownership", () => {
-  it("keeps the selected filter separate from the compatibility run fallback", () => {
+  it("stops selected-agent work without cancelling the compatibility owner's run", async () => {
+    const { fixture, params } = preAdmissionFixture("stop-selected-agent");
     const cfg: OpenClawConfig = {
       session: { scope: "global", store: "/tmp/shared.sqlite" },
       agents: {
@@ -127,14 +127,39 @@ describe("chat send stop ownership", () => {
         entries: { ops: {}, research: {} },
       },
     };
+    params.request.stopCommand = true;
+    Object.assign(params.session, {
+      cfg,
+      sessionKey: "global",
+      rawSessionKey: "global",
+      agentId: "research",
+      selectedAgent: { ok: true, agentId: "research" },
+      entry: undefined,
+    });
+    for (const [runId, agentId] of [
+      ["selected", "research"],
+      ["compatibility", undefined],
+    ]) {
+      fixture.context.dedupe.set(`agent:${runId}`, {
+        ts: 100,
+        ok: true,
+        payload: { runId, sessionKey: "global", agentId, status: "accepted" },
+      });
+    }
 
-    expect(
-      resolveChatSendStopOwnerScope({
-        cfg,
-        selectedAgentId: "research",
-        sessionKey: "global",
-      }),
-    ).toEqual({ agentId: "research", defaultAgentId: "ops" });
+    expect(await runChatSendPreAdmission(params)).toBe(false);
+    expect(fixture.respond).toHaveBeenCalledWith(true, {
+      ok: true,
+      aborted: true,
+      runIds: ["selected"],
+    });
+    expect(fixture.context.dedupe.get("agent:selected")?.payload).toMatchObject({
+      status: "timeout",
+      summary: "aborted",
+    });
+    expect(fixture.context.dedupe.get("agent:compatibility")?.payload).toMatchObject({
+      status: "accepted",
+    });
   });
 });
 
