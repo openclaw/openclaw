@@ -69,7 +69,7 @@
   position: absolute;
   z-index: 2;
   inset: 0 var(--chat-thread-gutter) auto;
-  height: 32px;
+  height: 24px;
   pointer-events: none;
   background: linear-gradient(
     to bottom,

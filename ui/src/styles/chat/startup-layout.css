@@ -129,7 +129,7 @@
 
 .chat-main__conversation {
   --chat-composer-top-margin: 8px;
-  --chat-transcript-fade-height: 32px;
+  --chat-transcript-fade-height: 24px;
   --chat-footer-max-height: calc(100cqh - clamp(60px, 20cqh, 160px));
 
   position: absolute;
