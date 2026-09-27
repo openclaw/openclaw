@@ -1,4 +1,3 @@
-// Runtime LLM helpers adapt plugin provider hooks into the core model runtime.
 import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

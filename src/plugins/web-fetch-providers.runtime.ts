@@ -1,4 +1,3 @@
-/** Runtime resolver for plugin-contributed web fetch providers. */
 import type { PluginWebFetchProviderEntry } from "./types.js";
 import {
   resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts,

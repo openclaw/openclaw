@@ -1,8 +1,3 @@
-/**
- * Extension loader - loads TypeScript extension modules using jiti.
- *
- */
-
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
@@ -435,9 +430,6 @@ async function loadExtensionModule(
   return factory;
 }
 
-/**
- * Create an Extension object with empty collections.
- */
 function createExtension(extensionPath: string, resolvedPath: string): Extension {
   const source =
     extensionPath.startsWith("<") && extensionPath.endsWith(">")
@@ -487,9 +479,6 @@ async function loadExtension(
   }
 }
 
-/**
- * Create an Extension from an inline factory function.
- */
 export async function loadExtensionFromFactory(
   factory: ExtensionFactory,
   cwd: string,
@@ -503,9 +492,6 @@ export async function loadExtensionFromFactory(
   return extension;
 }
 
-/**
- * Load extensions from paths.
- */
 export async function loadExtensionsCached(
   paths: string[],
   cwd: string,

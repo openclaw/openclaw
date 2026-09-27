@@ -850,7 +850,6 @@ interface ToolResultEventBase<TName extends string, TDetails> {
   details: TDetails;
   isError: boolean;
   terminate?: boolean;
-  details: TDetails;
 }
 
 type BashToolResultEvent = ToolResultEventBase<"bash", BashToolDetails | undefined>;

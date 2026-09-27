@@ -1,6 +1,4 @@
 /**
- * Plugin Command Registry
- *
  * Compatibility wrappers for plugin command registration, matching, and execution.
  */
 import { clearPluginCommands, registerPluginCommand } from "./command-registration.js";

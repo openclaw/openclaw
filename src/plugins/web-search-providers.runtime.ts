@@ -1,4 +1,3 @@
-// Runtime bridge for web-search providers supplied by plugins.
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import {
   resolveBundledWebSearchProvidersFromPublicArtifacts,
