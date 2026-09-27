@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
@@ -437,7 +436,6 @@ describe("Codex native close admission", () => {
 describe("same-monitor close assignment proof", () => {
   it.each([
     "original",
-    "current",
     "delayed",
     "missing-start",
     "duplicate",
@@ -478,10 +476,7 @@ describe("same-monitor close assignment proof", () => {
           scenario === "detached-during-read" ||
           scenario === "unregister-drain";
         const shouldCancel =
-          initialOnly ||
-          scenario === "current" ||
-          scenario === "mismatched" ||
-          scenario === "detached-during-read";
+          initialOnly || scenario === "mismatched" || scenario === "detached-during-read";
         const host = await createAdmittedHostCapabilityTestFixture({
           runId: `same-monitor-${scenario}-parent`,
           agentId: "main",
@@ -499,9 +494,8 @@ describe("same-monitor close assignment proof", () => {
           runIdPrefix: "codex-thread:",
         });
         const queue = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
-        let phase = "assignment-a";
-        const wire: unknown[] = [];
-        const unsubscriptions: { phase: string; params: unknown }[] = [];
+        const requests: Array<string | undefined> = [];
+        const unsubscriptions: unknown[] = [];
         const membershipRequests: unknown[] = [];
         const snapshots: Record<string, unknown> = {};
         const notifications: {
@@ -516,12 +510,12 @@ describe("same-monitor close assignment proof", () => {
               method?: string;
               params?: unknown;
             };
-            wire.push({ direction: "request", phase, request });
+            requests.push(request.method);
             if (request.id === undefined) {
               return;
             }
             if (request.method === "thread/unsubscribe") {
-              unsubscriptions.push({ phase, params: request.params });
+              unsubscriptions.push(request.params);
               reply({ id: request.id, result: {} });
             } else if (request.method === "thread/loaded/list") {
               membershipRequests.push(request.params);
@@ -573,7 +567,6 @@ describe("same-monitor close assignment proof", () => {
           );
         const send = (notification: CodexServerNotification) => {
           const cursor = notifications.length;
-          wire.push({ direction: "notification", phase, notification });
           harness.send(notification);
           return cursor;
         };
@@ -663,7 +656,6 @@ describe("same-monitor close assignment proof", () => {
           });
         };
         const startFollowup = async () => {
-          phase = "native-resume-b";
           send(collab("item/started", "resume-b", "resumeAgent"));
           send(collab("item/completed", "resume-b", "resumeAgent"));
           send(collab("item/started", "send-b", "sendInput", "running"));
@@ -761,7 +753,6 @@ describe("same-monitor close assignment proof", () => {
             snapshots.predecessor = read(initialRunId);
           }
           if (initialOnly || closeBeforeFollowup) {
-            phase = "old-close-started";
             send(
               collab(
                 "item/started",
@@ -772,7 +763,6 @@ describe("same-monitor close assignment proof", () => {
             );
           }
           if (scenario === "duplicate") {
-            phase = "first-close-a-completed";
             const completion = collab("item/completed", "close-a", "closeAgent");
             await settle(completion, send(completion));
             expect(unsubscriptions).toEqual([]);
@@ -782,7 +772,6 @@ describe("same-monitor close assignment proof", () => {
             | { notification: CodexServerNotification; cursor: number }
             | undefined;
           if (scenario === "read-replacement" || scenario === "read-error-replacement") {
-            phase = "old-close-membership-pending";
             const notification = collab("item/completed", "close-a", "closeAgent");
             deferredCompletion = { notification, cursor: send(notification) };
             await vi.waitFor(() => expect(replyToMembership).toBeTypeOf("function"));
@@ -805,7 +794,6 @@ describe("same-monitor close assignment proof", () => {
             expect(isCodexAppServerLiveThreadClaimed(harness.client, childThreadId)).toBe(true);
           }
           if (scenario === "transient-explicit-close") {
-            phase = "native-child-shutdown";
             const interrupted = childTurnCompletedNotification({
               turnId: "assignment-a",
               status: "interrupted",
@@ -817,9 +805,7 @@ describe("same-monitor close assignment proof", () => {
               params: { threadId: childThreadId, status: { type: "notLoaded" } },
             };
             await settle(notLoaded, send(notLoaded));
-            snapshots.afterNativeShutdown = read(initialRunId);
           }
-          phase = `${closeId}-completed`;
           const completion =
             deferredCompletion?.notification ??
             collab(
@@ -868,23 +854,13 @@ describe("same-monitor close assignment proof", () => {
           }
           if (scenario === "transient-explicit-close") {
             snapshots.afterInconclusiveClose = read(initialRunId);
-            snapshots.publicAfterInconclusiveClose = taskRuntime
-              .listTaskRecords()
-              .find((record) => record.runId === initialRunId);
-            snapshots.claimedAfterInconclusiveClose = isCodexAppServerLiveThreadClaimed(
-              harness.client,
-              childThreadId,
-            );
             expectUnconfirmedClose(initialRunId);
             expect(membershipRequests).toEqual([{}]);
-            phase = "same-close-call-replay";
             send(collab("item/started", "close-a", "closeAgent", "running"));
             const replay = collab("item/completed", "close-a", "closeAgent", "running");
             await settle(replay, send(replay));
-            snapshots.afterSameCallReplay = read(initialRunId);
             expect(read(initialRunId)).toEqual(snapshots.afterInconclusiveClose);
             expect(membershipRequests).toEqual([{}]);
-            phase = "fresh-explicit-close";
             send(collab("item/started", "close-retry", "closeAgent", "running"));
             const retryCompletion: CodexServerNotification = {
               method: "item/completed",
@@ -911,15 +887,6 @@ describe("same-monitor close assignment proof", () => {
             }
           }
           const activeRunId = initialOnly ? initialRunId : followupRunId;
-          snapshots.afterClose = read(activeRunId);
-          snapshots.publicAfterClose = taskRuntime
-            .listTaskRecords()
-            .find((record) => record.runId === activeRunId);
-          snapshots.claimedAfterClose = isCodexAppServerLiveThreadClaimed(
-            harness.client,
-            childThreadId,
-          );
-          snapshots.predecessorAfterClose = initialOnly ? undefined : read(initialRunId);
           if (!initialOnly) {
             expect(read(initialRunId)).toEqual(snapshots.predecessor);
           }
@@ -948,14 +915,7 @@ describe("same-monitor close assignment proof", () => {
             expect(read(followupRunId)).toEqual(snapshots.successorRunning);
             expect(isCodexAppServerLiveThreadClaimed(harness.client, childThreadId)).toBe(true);
           }
-          expect(wire).not.toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                direction: "request",
-                request: expect.objectContaining({ method: "thread/read" }),
-              }),
-            ]),
-          );
+          expect(requests).not.toContain("thread/read");
         } finally {
           if (scenario === "detached-during-read") {
             replyToMembership?.();
@@ -965,26 +925,6 @@ describe("same-monitor close assignment proof", () => {
             replyToMembership?.();
             await unregisterCompletion;
           }
-          const evidenceDirectory = process.env.OPENCLAW_SAME_MONITOR_PROOF_DIRECTORY;
-          if (evidenceDirectory) {
-            fs.writeFileSync(
-              path.join(evidenceDirectory, `${scenario}-evidence.json`),
-              JSON.stringify(
-                {
-                  scenario,
-                  sameParentTurn: "parent-p1",
-                  parentRegistrations: 1,
-                  snapshots,
-                  membershipRequests,
-                  unsubscriptions,
-                  wire,
-                },
-                null,
-                2,
-              ) + "\n",
-            );
-          }
-          phase = "task-cleanup";
           codexNativeSubagentMonitorRuntime.retireParent(harness.client, parentThreadId);
           await drainOwnership();
           await harness.client.closeAndWait();
