@@ -88,7 +88,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         const controls = rows.map((row) => row.lastElementChild!.getBoundingClientRect());
         for (const [index, row] of rows.entries()) {
           expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
-          expect(row.getBoundingClientRect().height).toBe(32);
+          expect(row.getBoundingClientRect().height).toBe(36);
           expect(controls[index]!.left).toBeCloseTo(controls[0]!.left, 1);
           expect(controls[index]!.right).toBeCloseTo(controls[0]!.right, 1);
         }

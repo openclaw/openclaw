@@ -106,14 +106,20 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   white-space: nowrap;
 }
 
+/* One column for every row: headers, dividers, and row hover surfaces share
+   the panel inset; each row pads its content by the same inset, so labels,
+   boxed controls, switch tracks, and chevrons line up on both edges. */
 .sidebar-session-sort-menu .sidebar-session-filter-panel {
+  --sidebar-filter-row-height: calc(var(--settings-control-height) + var(--space-1));
+  --sidebar-filter-row-inset: var(--space-2);
+
   box-sizing: border-box;
   width: calc(var(--space-8) * 8);
   max-width: calc(100dvw - var(--space-6));
   max-height: min(calc(100dvh - var(--space-6)), var(--auto-size-available-height, 100dvh));
   overflow: auto;
   overscroll-behavior: contain;
-  padding: var(--space-3);
+  padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
@@ -123,22 +129,23 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
 
 .sidebar-session-menu-section {
   display: grid;
-  gap: var(--space-1);
 }
 
 .sidebar-session-menu-section + .sidebar-session-menu-section,
 .sidebar-session-menu-footer {
-  margin-block-start: var(--space-3);
-  padding-block-start: var(--space-3);
+  margin-block-start: var(--space-2);
+  padding-block-start: var(--space-2);
   border-block-start: 1px solid var(--border);
 }
 
+/* The header keeps its height with or without Reset, so its label never moves. */
 .sidebar-session-menu-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: var(--space-5);
-  margin-block-end: var(--space-1);
+  box-sizing: border-box;
+  min-height: var(--space-6);
+  padding: var(--space-1) var(--sidebar-filter-row-inset) 0;
 }
 
 .sidebar-session-menu-heading h3 {
@@ -149,12 +156,25 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   text-transform: uppercase;
 }
 
+.sidebar-session-menu-row,
+.sidebar-session-menu-switch,
+.sidebar-session-filter-footer,
+.sidebar-session-filter-panel .picker-select--submenu .picker-select__trigger {
+  box-sizing: border-box;
+  min-height: var(--sidebar-filter-row-height);
+  padding: 0 var(--sidebar-filter-row-inset);
+  border-radius: var(--menu-item-radius);
+}
+
+.sidebar-session-filter-panel .picker-select--submenu .picker-select__trigger {
+  border: 0;
+}
+
 .sidebar-session-menu-row {
   display: grid;
   grid-template-columns: calc(var(--space-6) * 4) minmax(0, 1fr);
   align-items: center;
   gap: var(--space-2);
-  min-height: var(--settings-control-height);
 }
 
 .sidebar-session-menu-row > :is(label, span) {
@@ -205,12 +225,8 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  box-sizing: border-box;
   width: 100%;
-  min-height: var(--settings-control-height);
-  padding: 0;
   border: 0;
-  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -290,14 +306,23 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   pointer-events: none;
 }
 
+/* The empty label slot keeps a leading margin that would pull the track off
+   the shared right edge. */
+.sidebar-session-menu-switch wa-switch::part(label) {
+  display: none;
+}
+
+/* Reset's text ends on the controls' edge; its hover surface extends past it. */
 .sidebar-session-menu-reset {
   width: auto;
   min-height: var(--space-5);
+  margin-inline-end: calc(-1 * var(--space-1));
+  padding: 0 var(--space-1);
+  border-radius: var(--menu-item-radius);
   font-size: var(--control-ui-text-xs);
 }
 
-.sidebar-session-filter-footer,
-.sidebar-session-menu-reset {
+.sidebar-session-filter-footer {
   color: var(--muted);
 }
 
