@@ -157,9 +157,9 @@ struct ChatFileAdmissionTests {
         #expect(model.errorText == "Too large to send: \(rejectedName)")
     }
 
-    @Test(arguments: [6, 8])
+    @Test(arguments: [Int?.none, 6, 8])
     @MainActor
-    func `outbox admission preserves an oversized draft`(maximumBytes: Int) async throws {
+    func `outbox admission preserves an oversized draft`(maximumBytes: Int?) async throws {
         let (store, databases, directory) = try makeOutboxStore()
         defer {
             try? databases.close()
@@ -170,17 +170,20 @@ struct ChatFileAdmissionTests {
         defer { defaults.removePersistentDomain(forName: defaultsName) }
         let model = OpenClawChatViewModel(
             sessionKey: "main",
-            transport: FileAdmissionTransport(limits: .init(maxBytes: maximumBytes, maxImageBytes: maximumBytes)),
+            transport: FileAdmissionTransport(limits: maximumBytes.map {
+                .init(maxBytes: $0, maxImageBytes: $0)
+            }),
             activeAgentId: "main",
             sessionRoutingContract: "per-sender|main|main",
             outbox: store,
             modelPickerStore: ChatModelPickerStore(defaults: defaults))
         defer { model.detachTransport() }
         model.input = "Keep this draft"
+        let data = maximumBytes == nil ? Data(count: 10 * 1024 * 1024) : Data("file".utf8)
         model.attachments = ["first.pdf", "second.pdf"].map {
             OpenClawPendingAttachment(
                 url: nil,
-                data: Data("file".utf8),
+                data: data,
                 fileName: $0,
                 mimeType: "application/pdf",
                 preview: nil)
@@ -194,7 +197,7 @@ struct ChatFileAdmissionTests {
             session: model.currentSessionSnapshot())
         let commands = await store.loadCommands()
         #expect(accepted == (maximumBytes == 8))
-        if maximumBytes == 6 {
+        if maximumBytes != 8 {
             #expect(model.input == "Keep this draft")
             #expect(model.attachments.map(\.id) == attachmentIDs)
             #expect(model.errorText == "Too large to send: second.pdf")
@@ -259,7 +262,7 @@ struct ChatFileAdmissionTests {
             let oversized = directory.appendingPathComponent("oversized.pdf")
             try Data().write(to: oversized)
             let handle = try FileHandle(forWritingTo: oversized)
-            try handle.truncate(atOffset: 20 * 1024 * 1024 + 1)
+            try handle.truncate(atOffset: 19_464_193)
             try handle.close()
             await model.loadAttachments(urls: [oversized])
             #expect(model.attachments.count == attachmentCount)

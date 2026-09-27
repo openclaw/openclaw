@@ -1,8 +1,18 @@
 import OpenClawProtocol
 
 public struct GatewayAttachmentLimits: Sendable, Equatable {
-    /// Older Gateways do not advertise attachment limits, so native uploads retain their client ceilings.
-    public static let legacyClientFallback = Self(maxBytes: 20 * 1024 * 1024, maxImageBytes: 5_000_000)
+    /// Older Gateways use the default frame budget and the existing processed-image ceiling.
+    public static let legacyClientFallback = Self(maxBytes: frameSafeMaxBytes(), maxImageBytes: 5_000_000)
+    private static let defaultMaxPayloadBytes = 25 * 1024 * 1024
+
+    fileprivate static func frameSafeMaxBytes(maxPayload: Int? = nil) -> Int {
+        // Match chat-attachment-policy.ts: reserve the envelope, then account
+        // for base64 expansion. Divide first so a malformed Int.max cannot overflow.
+        let payload = maxPayload ?? Self.defaultMaxPayloadBytes
+        let available = max(0, max(0, payload) - 256 * 1024)
+        return (available / 4) * 3 + (available % 4) * 3 / 4
+    }
+
     public let maxBytes: Int
     public let maxImageBytes: Int
 
@@ -20,15 +30,7 @@ extension HelloOk {
               let maxImageBytes = attachments["maxImageBytes"]?.intValue,
               maxBytes > 0, maxImageBytes > 0
         else { return nil }
-        let ceiling: Int
-        if let maxPayload = self.policy["maxPayload"]?.intValue {
-            // Match chat-attachment-policy.ts: reserve the envelope, then account
-            // for base64 expansion. Divide first so a malformed Int.max cannot overflow.
-            let available = max(0, max(0, maxPayload) - 256 * 1024)
-            ceiling = (available / 4) * 3 + (available % 4) * 3 / 4
-        } else {
-            ceiling = Int(Int32.max)
-        }
+        let ceiling = GatewayAttachmentLimits.frameSafeMaxBytes(maxPayload: self.policy["maxPayload"]?.intValue)
         return GatewayAttachmentLimits(maxBytes: min(maxBytes, ceiling), maxImageBytes: min(maxImageBytes, ceiling))
     }
 }
