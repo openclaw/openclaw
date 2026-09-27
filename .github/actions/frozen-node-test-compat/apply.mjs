@@ -14,7 +14,7 @@ function readArgument(name) {
   return process.argv[index + 1];
 }
 
-export function applyFrozenNodeTestCompatibility({ root, targetSha }) {
+function applyFrozenNodeTestCompatibility({ root, targetSha }) {
   if (targetSha !== RELEASE_CANDIDATE_SHA) {
     return false;
   }

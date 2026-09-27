@@ -1,10 +1,11 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyFrozenNodeTestCompatibility } from "../../.github/actions/frozen-node-test-compat/apply.mjs";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const candidateSha = "f773aa06a1a93b36b050f1a3f4b57d3d91311541";
+const action = join(process.cwd(), ".github/actions/frozen-node-test-compat/apply.mjs");
 const staleDrain = "    await vi.advanceTimersByTimeAsync(21_000);";
 const staleRoutingTest = `  it("wakes main watchers but only queues notices for nested watchers", async () => {
     vi.useFakeTimers();
@@ -36,14 +37,14 @@ const staleRoutingTest = `  it("wakes main watchers but only queues notices for 
       }),
     );
   });`;
-const tempDirs: string[] = [];
-
-afterEach(() => cleanupTempDirs(tempDirs));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createFixture({ repeatedDrains = 3 }: { repeatedDrains?: number } = {}) {
-  const root = makeTempDir(tempDirs, "openclaw-frozen-node-test-compat-");
+  const root = tempDirs.make("openclaw-frozen-node-test-compat-");
   const testFile = join(root, "src/sessions/session-state-events.test.ts");
   mkdirSync(join(root, "src/sessions"), { recursive: true });
+  execFileSync("git", ["init", "-q", root]);
+  writeFileSync(join(root, ".git/HEAD"), `${candidateSha}\n`);
   writeFileSync(
     testFile,
     [
@@ -64,9 +65,7 @@ describe("frozen Node test compatibility", () => {
   it("repairs only the four attested stale timer drains", () => {
     const fixture = createFixture();
 
-    expect(applyFrozenNodeTestCompatibility({ root: fixture.root, targetSha: candidateSha })).toBe(
-      true,
-    );
+    execFileSync(process.execPath, [action, "--root", fixture.root, "--target-sha", candidateSha]);
 
     const repaired = readFileSync(fixture.testFile, "utf8");
     expect(repaired.match(/await vi\.runAllTimersAsync\(\);/gu)).toHaveLength(4);
@@ -81,9 +80,16 @@ describe("frozen Node test compatibility", () => {
   it("fails closed when the attested test shape drifts", () => {
     const fixture = createFixture({ repeatedDrains: 2 });
 
-    expect(() =>
-      applyFrozenNodeTestCompatibility({ root: fixture.root, targetSha: candidateSha }),
-    ).toThrow("expected one import, one routing test, and three repeated stale drains");
+    const result = spawnSync(
+      process.execPath,
+      [action, "--root", fixture.root, "--target-sha", candidateSha],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "expected one import, one routing test, and three repeated stale drains",
+    );
     expect(readFileSync(fixture.testFile, "utf8")).toContain(staleDrain);
   });
 });
