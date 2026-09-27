@@ -28,8 +28,8 @@ const ownerOptions = (root: Element) =>
     ...root
       .querySelector("#sidebar-sessions-owner")!
       .closest("openclaw-select-picker")!
-      .querySelectorAll<HTMLElement>(".picker-select__option"),
-  ].map((option) => option.textContent!.trim());
+      .querySelectorAll<HTMLElement>(".picker-select__option .picker-select__label"),
+  ].map((label) => label.textContent!.trim());
 
 async function mountFilters(width: number, teammates = 0) {
   const { page } = await import("vitest/browser");
@@ -220,7 +220,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       } else {
         await trigger.click();
       }
-      expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
+      await expect.poll(() => sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
       await expect.poll(() => occlusion).toEqual([false, true, false, true, false]);
     },
   );
@@ -286,7 +286,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       .toBeVisible();
     // Tapping the backdrop dismisses the sheet, like the issues sheet.
     sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel__backdrop")!.click();
-    expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
+    await expect.poll(() => sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
     await expect.element(trigger).toHaveFocus();
   });
 
