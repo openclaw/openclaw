@@ -66,6 +66,8 @@ export class SelectPicker<
   private typeahead = "";
   private typeaheadAt = 0;
   private renderedSections: PickerSection<Option>[] = [];
+  private hoverTimer: ReturnType<typeof setTimeout> | undefined;
+  private hoverOpened = false;
 
   private options(): readonly Option[] {
     const { value, options } = this.params;
@@ -113,6 +115,8 @@ export class SelectPicker<
   }
 
   private closeMenu(restoreFocus = false) {
+    clearTimeout(this.hoverTimer);
+    this.hoverOpened = false;
     this.mode = "closed";
     this.query = "";
     this.collapsedGroups = new Set();
@@ -203,6 +207,42 @@ export class SelectPicker<
 
   private readonly handleFocusOut = (event: FocusEvent) => {
     if (!(event.relatedTarget instanceof Node) || !this.contains(event.relatedTarget)) {
+      this.closeMenu();
+    }
+  };
+
+  // Mouse hover opens a submenu after a short intent delay and closes it after
+  // a grace delay, so the pointer can cross the gap into the flyout. Touch and
+  // pen input skip hover and keep click-to-toggle.
+  private readonly handleHover = (event: PointerEvent) => {
+    if (this.params.variant !== "submenu" || event.pointerType !== "mouse") {
+      return;
+    }
+    clearTimeout(this.hoverTimer);
+    const enter = event.type === "pointerenter";
+    if (enter === (this.mode !== "closed")) {
+      return;
+    }
+    this.hoverTimer = setTimeout(
+      () => {
+        if (enter) {
+          this.hoverOpened = this.openMenu() !== undefined;
+        } else {
+          this.closeMenu(this.contains(this.ownerDocument.activeElement));
+        }
+      },
+      enter ? 120 : 150,
+    );
+  };
+
+  private readonly handleTriggerClick = () => {
+    clearTimeout(this.hoverTimer);
+    if (this.mode === "closed") {
+      this.openMenu();
+    } else if (this.hoverOpened) {
+      // The click that follows a hover-open keeps the submenu open.
+      this.hoverOpened = false;
+    } else {
       this.closeMenu();
     }
   };
@@ -379,7 +419,12 @@ export class SelectPicker<
     const active = rows.find((option) => option.value === this.activeValue);
     const open = this.mode !== "closed";
     return html`
-      <div @focusout=${this.handleFocusOut} @keydown=${this.handleKeydown}>
+      <div
+        @focusout=${this.handleFocusOut}
+        @keydown=${this.handleKeydown}
+        @pointerenter=${this.handleHover}
+        @pointerleave=${this.handleHover}
+      >
         <button
           id=${this.params.id ?? nothing}
           class="picker-select__trigger"
@@ -396,7 +441,7 @@ export class SelectPicker<
           aria-describedby=${this.params.describedBy ?? nothing}
           title=${this.params.title ?? nothing}
           ?disabled=${this.params.disabled}
-          @click=${() => (open ? this.closeMenu() : this.openMenu())}
+          @click=${this.handleTriggerClick}
         >
           ${this.params.variant === "submenu" ? html`<span class="picker-select__name">${this.params.label}</span>` : nothing}
           ${this.leading(selected)}

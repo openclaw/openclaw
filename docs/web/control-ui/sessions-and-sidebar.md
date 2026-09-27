@@ -139,7 +139,7 @@ preferences. Tab moves between rows; Left and Right choose within a segmented
 status control. **Owners** opens a picker with owner avatars and a search field;
 type to filter owners by name, and Escape clears the search before closing.
 **Group by**, **Sort by**, and **Hide empty groups** show their current choices
-and open submenus. Right opens a submenu and Left closes it (reversed in RTL);
+and open submenus on hover or click. Right opens a submenu and Left closes it (reversed in RTL);
 Up and Down move between choices, and Enter selects. Automation, system sessions,
 and message previews use consistent on/off toggles. Escape closes an open picker first, then the popover and returns
 focus to the filter button. **Session sources** opens its Settings destination. In **Show all agents**

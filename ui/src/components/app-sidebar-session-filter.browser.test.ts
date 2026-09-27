@@ -202,6 +202,30 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     },
   );
 
+  it("opens display submenus on mouse hover and leaves touch on click", async () => {
+    const { sidebar, page } = await mountFilters(1440);
+    const { userEvent } = await import("vitest/browser");
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
+    await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+    const sort = page.getByRole("button", { name: "Sort by: Created", exact: true });
+    const sortRow = sidebar.querySelector<HTMLElement>("#sidebar-sessions-sort")!.parentElement!;
+    sortRow.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "touch" }));
+    await settle();
+    await expect.element(sort).toHaveAttribute("aria-expanded", "false");
+    await userEvent.hover(sort);
+    await expect.element(sort).toHaveAttribute("aria-expanded", "true");
+    await userEvent.hover(page.getByRole("option", { name: "Updated", exact: true }));
+    await settle();
+    await sort.click();
+    await expect.element(sort).toHaveAttribute("aria-expanded", "true");
+    await userEvent.hover(page.getByRole("heading", { name: "Filters", exact: true }));
+    await expect.element(sort).toHaveAttribute("aria-expanded", "false");
+    await sort.click();
+    await expect.element(sort).toHaveAttribute("aria-expanded", "true");
+    await sort.click();
+    await expect.element(sort).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("applies every preference instantly and resets only active filters", async () => {
     const { sidebar, sessions, page } = await mountFilters(1440);
     await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
