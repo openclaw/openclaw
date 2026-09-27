@@ -2170,7 +2170,7 @@ src/config/channel-alias-migration.ts	2
 src/config/channel-capabilities.ts	2
 src/config/channel-config-metadata.ts	1
 src/config/channel-configured-shared.ts	1
-src/config/channel-doctor-helpers.ts	7
+src/config/channel-doctor-helpers.ts	5
 src/config/config-env-vars.ts	5
 src/config/config-journal-snapshot.ts	2
 src/config/context-visibility.ts	1

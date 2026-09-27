@@ -67,6 +67,8 @@ that URL because its reverse-proxy upstream cannot be inferred safely. Accounts
 that shared a path and secret on different explicit ports keep their old-port
 routing; assign distinct secrets or paths before moving them to one Gateway port.
 
+A separately installed Telegram plugin on the 2026.9.6 host performs the same config migration, but the host predates Gateway-owned forwarding. Telegram retains the predecessor's direct per-account listener there; accounts need distinct legacy endpoints. Doctor places the listener guidance in its supported warning output and identifies this limitation. On newer hosts, the shared Gateway listener and informational notes remain unchanged.
+
 Microsoft Teams uses the same owner: Doctor moves explicit
 `channels.msteams.webhook.port` to `channels.msteams.legacyWebhook.port`, preserving
 `webhook.path`. Omitted listener settings retain port `3978` with its previous

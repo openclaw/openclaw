@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { TsdownPlugin } from "tsdown";
 import { isTypeScriptPackageEntry } from "../../src/plugins/package-entrypoints.ts";
 import {
   PLUGIN_ACTIVITY_ICON_PATH,
@@ -27,6 +28,64 @@ const env = {
 // Supported hosts lack this binding; publish the canonical pure implementation with the plugin.
 const BUNDLED_GRAPHEME_SDK_IMPORT = "openclaw/plugin-sdk/text-grapheme";
 const QA_PROTOCOL_SDK_IMPORT = "openclaw/plugin-sdk/qa-channel-protocol";
+
+// Only pure helpers missing from supported hosts belong here; runtime owners stay external.
+// Retire each bundled binding once the declared host floor includes its SDK export.
+const BUNDLED_SDK_EXPORTS: Record<string, Record<string, string[]>> = {
+  "openclaw/plugin-sdk/runtime-doctor-migrations": {
+    "src/plugin-sdk/legacy-webhook-listener-migration.ts": [
+      "createLegacyWebhookListenerDoctorContract",
+    ],
+  },
+  "openclaw/plugin-sdk/gateway-config-runtime": {
+    "src/gateway/gateway-http-route-contracts.ts": ["classifyGatewayProbePath"],
+    "src/gateway/server/plugins-http/path-context.ts": [
+      "resolvePluginRoutePathContext",
+      "isProtectedPluginRoutePathFromContext",
+    ],
+  },
+  "openclaw/plugin-sdk/channel-mention-gating": {
+    "src/channels/mention-gating.ts": ["resolveBotThreadMentionPolicy"],
+  },
+};
+const BUNDLED_SDK_PREFIX = "\0openclaw:bundled-sdk:";
+const HOST_SDK_PREFIX = "\0openclaw:host-sdk:";
+
+function createBundledSdkExportsPlugin(repoRoot: string): TsdownPlugin {
+  return {
+    name: "openclaw:bundled-pure-sdk-exports",
+    resolveId(id) {
+      if (Object.hasOwn(BUNDLED_SDK_EXPORTS, id)) {
+        return `${BUNDLED_SDK_PREFIX}${id}`;
+      }
+      if (id.startsWith(HOST_SDK_PREFIX)) {
+        return { id: id.slice(HOST_SDK_PREFIX.length), external: true };
+      }
+      if (id.startsWith(BUNDLED_SDK_PREFIX)) {
+        return id;
+      }
+      return undefined;
+    },
+    load(id) {
+      if (!id.startsWith(BUNDLED_SDK_PREFIX)) {
+        return undefined;
+      }
+      const specifier = id.slice(BUNDLED_SDK_PREFIX.length);
+      const sources = BUNDLED_SDK_EXPORTS[specifier];
+      if (!sources) {
+        return undefined;
+      }
+      return [
+        ...Object.entries(sources).map(
+          ([source, names]) =>
+            `export { ${names.join(", ")} } from ${JSON.stringify(path.join(repoRoot, source))};`,
+        ),
+        // The distinct ID avoids resolving the host passthrough back into this facade.
+        `export * from ${JSON.stringify(`${HOST_SDK_PREFIX}${specifier}`)};`,
+      ].join("\n");
+    },
+  };
+}
 
 type JsonRecord = Record<string, unknown>;
 
@@ -104,11 +163,11 @@ function getStringRecord(value: unknown) {
 
 function createNeverBundleDependencyMatcher(
   packageJson: PluginPackageJson,
-  bundledSdkImports: Record<string, string>,
+  bundledSdkImports: ReadonlySet<string>,
 ) {
   const externalDependencies = collectExternalDependencyNames(packageJson);
   return (id: string) => {
-    if (Object.hasOwn(bundledSdkImports, id)) {
+    if (bundledSdkImports.has(id)) {
       return false;
     }
     if (id === "openclaw" || id.startsWith("openclaw/")) {
@@ -507,6 +566,10 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
         }
       : {}),
   };
+  const bundledSdkSpecifiers = new Set([
+    ...Object.keys(bundledSdkImports),
+    ...Object.keys(BUNDLED_SDK_EXPORTS),
+  ]);
   const { build } = await import("tsdown");
   assertRealOutputRoot(plan.outDir);
   fs.rmSync(plan.outDir, { recursive: true, force: true });
@@ -516,11 +579,14 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     dts: false,
     alias: bundledSdkImports,
     deps: {
-      alwaysBundle: (id) => Object.hasOwn(bundledSdkImports, id),
-      neverBundle: createNeverBundleDependencyMatcher(plan.packageJson, bundledSdkImports),
+      alwaysBundle: (id) => bundledSdkSpecifiers.has(id),
+      neverBundle: createNeverBundleDependencyMatcher(plan.packageJson, bundledSdkSpecifiers),
     },
     entry: plan.entry,
-    plugins: [createPluginInventoryModuleRefsPlugin(plan.packageDir)],
+    plugins: [
+      createBundledSdkExportsPlugin(plan.repoRoot),
+      createPluginInventoryModuleRefsPlugin(plan.packageDir),
+    ],
     outputOptions: {
       // Published plugins still support hosts predating these private source facades.
       paths: {

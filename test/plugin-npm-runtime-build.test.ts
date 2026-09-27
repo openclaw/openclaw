@@ -43,6 +43,112 @@ function expectPluginNpmRuntimeBuildPlan(
 }
 
 describe("plugin npm runtime build planning", () => {
+  it.each(["esm", "cjs"])(
+    "bundles pure SDK additions for an older host while retaining %s host bindings",
+    async (runtimeFormat) => {
+      const packageDir = tempDirs.make("openclaw-plugin-runtime-old-host-");
+      writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: "@openclaw/old-host-fixture",
+          version: "1.0.0",
+          type: "module",
+          openclaw: {
+            extensions: ["./index.ts"],
+            build: { runtimeFormat },
+          },
+        }),
+      );
+      writeFileSync(
+        path.join(packageDir, "index.ts"),
+        [
+          'export { createLegacyWebhookListenerDoctorContract, normalizeChannelConfigEntries } from "openclaw/plugin-sdk/runtime-doctor-migrations";',
+          'export { classifyGatewayProbePath, resolvePluginRoutePathContext, isProtectedPluginRoutePathFromContext, resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";',
+          'export { resolveBotThreadMentionPolicy, resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-mention-gating";',
+        ].join("\n"),
+      );
+      const hostDir = path.join(packageDir, "node_modules", "openclaw");
+      mkdirSync(hostDir, { recursive: true });
+      const hostBindings = {
+        "runtime-doctor-migrations": "normalizeChannelConfigEntries",
+        "gateway-config-runtime": "resolveGatewayPort",
+        "channel-mention-gating": "resolveInboundMentionDecision",
+      };
+      writeFileSync(
+        path.join(hostDir, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          exports: Object.fromEntries(
+            Object.keys(hostBindings).map((name) => [`./plugin-sdk/${name}`, `./${name}.cjs`]),
+          ),
+        }),
+      );
+      for (const [name, binding] of Object.entries(hostBindings)) {
+        writeFileSync(path.join(hostDir, `${name}.cjs`), `exports.${binding} = () => 31337;\n`);
+      }
+
+      const plan = expectPluginNpmRuntimeBuildPlan(
+        await buildPluginNpmRuntime({ repoRoot, packageDir, logLevel: "silent" }),
+      );
+      // Native loading catches absent old-host exports without Vitest's source SDK aliases.
+      const worker = new Worker(
+        `const { parentPort, workerData } = require("node:worker_threads");
+        (async () => {
+          const symbols = new Set(Object.getOwnPropertySymbols(globalThis));
+          const entry = await import(workerData.entry);
+          const cfg = { channels: { telegram: { webhookPort: 8123 } } };
+          const migrated = entry.createLegacyWebhookListenerDoctorContract({
+            channelKey: "telegram", defaultPort: 8787,
+          }).normalizeCompatibilityConfig({ cfg });
+          parentPort.postMessage({
+            hostBindingsPreserved: Object.entries(workerData.hostBindings).every(
+              ([name, binding]) => entry[binding] === require(workerData.hostDir + "/" + name + ".cjs")[binding],
+            ),
+            config: migrated.config,
+            sourceUnchanged: cfg.channels.telegram.webhookPort === 8123,
+            probe: entry.classifyGatewayProbePath("/readyz"),
+            protectedPath: entry.isProtectedPluginRoutePathFromContext(
+              entry.resolvePluginRoutePathContext("/api/channels/telegram"),
+            ),
+            mention: entry.resolveBotThreadMentionPolicy({
+              isBotOwnedThread: true, requireMentionInBotThreads: false, requireMention: true,
+            }).requireMention,
+            newGlobalSymbols: Object.getOwnPropertySymbols(globalThis)
+              .filter((symbol) => !symbols.has(symbol)).map(String),
+          });
+        })().catch((error) => { throw error; });`,
+        {
+          eval: true,
+          workerData: {
+            entry: pathToFileURL(path.join(packageDir, plan.runtimeExtensions[0]!)).href,
+            hostDir,
+            hostBindings,
+          },
+        },
+      );
+      try {
+        const result = await new Promise((resolve, reject) => {
+          worker.once("message", resolve);
+          worker.once("error", reject);
+          worker.once("exit", (code) =>
+            reject(new Error(`Worker exited before replying: ${code}`)),
+          );
+        });
+        expect(result).toEqual({
+          hostBindingsPreserved: true,
+          config: { channels: { telegram: { legacyWebhook: { port: 8123 } } } },
+          sourceUnchanged: true,
+          probe: "ready",
+          protectedPath: true,
+          mention: false,
+          newGlobalSymbols: [],
+        });
+      } finally {
+        await worker.terminate();
+      }
+    },
+  );
+
   it("packages declared theme definitions and artwork outside conventional asset paths", () => {
     const packageDir = tempDirs.make("openclaw-plugin-theme-package-");
     writeFileSync(

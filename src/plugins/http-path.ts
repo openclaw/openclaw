@@ -18,11 +18,7 @@ export function getPluginHttpRouteCanonicalPath(route: { path: string }): string
   return prepared.canonicalPath;
 }
 
-export function prefixMatchPath(pathname: string, prefix: string): boolean {
-  return (
-    pathname === prefix || pathname.startsWith(`${prefix}/`) || pathname.startsWith(`${prefix}%`)
-  );
-}
+export { prefixMatchPath } from "./http-path-prefix.js";
 
 /** Normalizes plugin HTTP paths to leading-slash form with optional fallback. */
 export function normalizePluginHttpPath(
