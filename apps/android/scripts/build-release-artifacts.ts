@@ -365,14 +365,6 @@ function verifyApkSignature(path: string, expectedCertificateSha256: string): vo
   }
 }
 
-function copyArtifact(sourcePath: string, destinationPath: string): void {
-  if (!existsSync(sourcePath)) {
-    throw new Error(`Signed release artifact missing at ${sourcePath}`);
-  }
-
-  copyFileSync(sourcePath, destinationPath);
-}
-
 function verifyArtifactSignature(
   artifact: ReleaseArtifact,
   outputPath: string,
@@ -451,7 +443,10 @@ function main() {
       `openclaw-${version.canonicalVersion}-${artifact.flavorName}-release.${artifact.kind}`,
     );
 
-    copyArtifact(artifact.sourcePath, outputPath);
+    if (!existsSync(artifact.sourcePath)) {
+      throw new Error(`Signed release artifact missing at ${artifact.sourcePath}`);
+    }
+    copyFileSync(artifact.sourcePath, outputPath);
     verifyArtifactSignature(artifact, outputPath, expectedCertificateSha256);
     const hash = writeSha256File(outputPath);
 

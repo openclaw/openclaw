@@ -742,7 +742,7 @@ private fun installedSkillFilterLabel(filter: InstalledSkillFilter): String =
     InstalledSkillFilter.Off -> nativeString("Off")
   }
 
-private fun skillReady(skill: GatewaySkillSummary): Boolean =
+internal fun skillReady(skill: GatewaySkillSummary): Boolean =
   !skill.disabled &&
     skill.eligible &&
     !skill.blockedByAllowlist &&

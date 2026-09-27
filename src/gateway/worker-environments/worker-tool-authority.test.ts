@@ -248,6 +248,7 @@ describe("resolveWorkerToolAuthority", () => {
       "process",
       "sessions_spawn",
       "sessions_send",
+      "presence",
     ]);
   });
 
@@ -268,6 +269,7 @@ describe("resolveWorkerToolAuthority", () => {
       "browser",
       "sessions_spawn",
       "sessions_send",
+      "presence",
     ]);
     expect(
       resolveWorkerToolAuthority({
