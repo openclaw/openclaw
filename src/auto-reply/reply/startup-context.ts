@@ -209,9 +209,9 @@ async function listStartupMemoryPathsByDate(params: {
         continue;
       }
       const { stamp, name, stat } = result.value;
-      const entries = sluggedStatsByStamp.get(stamp) ?? [];
-      entries.push({ name, stat });
-      sluggedStatsByStamp.set(stamp, entries);
+      const stampEntries = sluggedStatsByStamp.get(stamp) ?? [];
+      stampEntries.push({ name, stat });
+      sluggedStatsByStamp.set(stamp, stampEntries);
     }
 
     return new Map(

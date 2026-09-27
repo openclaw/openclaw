@@ -454,7 +454,16 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
             return result;
           }),
         trackDispatchLifecycleWork,
-      ).finally(flushBlockTtsText),
+      ).then(
+        async (result) => {
+          await flushBlockTtsText();
+          return result;
+        },
+        async (error: unknown) => {
+          await flushBlockTtsText();
+          throw error;
+        },
+      ),
   ).catch(async (error: unknown) => {
     await releasePendingContinuation();
     await flushDeferredFinalText();
