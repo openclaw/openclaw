@@ -1429,6 +1429,11 @@ class MainViewModel private constructor(
     }
   }
 
+  suspend fun renameGateway(
+    stableId: String,
+    name: String,
+  ): Boolean = withContext(Dispatchers.IO) { prefs.gatewayRegistry.rename(stableId, name) }
+
   fun disconnect() {
     gatewayConfigOperationSeq.incrementAndGet()
     NodeForegroundService.stop(nodeApp)

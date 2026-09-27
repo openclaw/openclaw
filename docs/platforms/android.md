@@ -21,6 +21,7 @@ The official Android app is available on [Google Play](https://play.google.com/s
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 - Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability.
 - The sidebar marks sessions waiting for an answer or approval, including inactive sessions and collapsed groups. Tap the attention icon, hover over it, or focus it with a keyboard to read the oldest pending request and the count of additional requests of the same kind. The indicator clears when requests resolve, are canceled, or expire. Question previews never include answer drafts.
+- The sidebar and recent Threads view keep cron sessions and system-created probes out of ordinary chat lists, without changing saved pins. The selected conversation stays reachable; named work and human-created background conversations remain visible. Open **Threads → Automations** to find and reopen automation and system conversations, including previously pinned chats. This is a view filter, not a saved setting. **Settings → Automations** still shows scheduled jobs and their recent run summaries. Other sessions without creation metadata remain visible rather than being classified from their titles.
 - **Settings → OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 
 Its reply field switches to masked input for secret prompts. Tap it again if a prompt change closes the keyboard. Android sends sensitive replies without trimming them and clears unsent drafts when you leave this page or background the app.
@@ -58,6 +59,15 @@ changing the current conversation, drafts, attachments, or saved Gateways.
 Adding an already saved Gateway uses its existing connection settings; use
 **Manage Gateways** to replace its setup.
 Saved offline entries remain listed; connection status is separate from selection.
+
+In **Manage Gateways**, tap **Rename** to choose a name used only on this phone.
+The name appears in the sidebar and picker and survives switching Gateways,
+reconnecting, app restarts, and discovery updates. The secondary address still
+distinguishes Gateways with the same name. Clear the name to restore the default.
+Renaming does not change the Gateway's address, identity, or saved credentials.
+Downgrading to an older Android build can discard these local names when that
+build starts and rewrites the registry. Gateway addresses and credentials are
+unaffected; after upgrading again, choose the local names again if needed.
 
 Unsent text and finished attachments stay with their Gateway, agent, and session
 when you switch away and back. Finish recording, stop dictation or Talk, and let
