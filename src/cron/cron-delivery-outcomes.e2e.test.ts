@@ -247,6 +247,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
               await cron.start();
               const job = await cron.add({
                 name: "webhook outcome",
+                enabled: true,
                 schedule: { kind: "every", everyMs: 60_000 },
                 sessionTarget: "isolated",
                 wakeMode: "next-heartbeat",
