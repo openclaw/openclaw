@@ -332,7 +332,6 @@ it.each([
       let blocks = 0;
       const blockStarted = createDeferred();
       const releaseBlock = createDeferred();
-      let concurrentElapsedMs: number | undefined;
       const noSend = new PlatformMessageNotDispatchedError("channel rejected the continuation", {
         cause: new Error("transport unavailable before send"),
       });
@@ -452,7 +451,6 @@ it.each([
           | undefined;
         try {
           await withTestTimeout(blockStarted.promise, 10000, "first transport start");
-          const started = performance.now();
           otherDispatch = dispatchInboundMessageWithBufferedDispatcher({
             ...dispatchParams,
             ctx: {
@@ -468,7 +466,6 @@ it.each([
             10000,
             "other conversation during held transport",
           );
-          concurrentElapsedMs = performance.now() - started;
           expect(other.settledReceipt?.anyVisibleDelivered).toBe(true);
           expect(other.settledReceipt?.counts.block.delivered).toBe(3);
           expect(other.settledReceipt?.counts.final.delivered).toBe(0);
@@ -481,15 +478,6 @@ it.each([
       }
       if (scenario === "direct-no-delivery") {
         await expect(dispatch).rejects.toBe(noSend);
-        console.log(
-          JSON.stringify({
-            scenario,
-            requests: requests.length,
-            attempted,
-            delivered,
-            outcome: "retryable-no-send",
-          }),
-        );
         expect(toolRequestBodies[1]).toContain("Fixture generated image.");
         expect(attempted).toEqual([
           { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] },
@@ -504,18 +492,6 @@ it.each([
           providerFailure = error;
           return undefined;
         });
-        console.log(
-          JSON.stringify({
-            scenario,
-            requests,
-            fallbackEvents,
-            attempted,
-            delivered,
-            result,
-            providerFailure:
-              providerFailure instanceof Error ? providerFailure.message : providerFailure,
-          }),
-        );
         expect(fallbackEvents).toContain("primary-block");
         if (fallbackRejected) {
           expect(requests.map((entry) => entry.model)).toEqual(["answer", "backup"]);
@@ -533,17 +509,6 @@ it.each([
         return;
       }
       const result = await dispatch;
-      console.log(
-        JSON.stringify({
-          scenario,
-          requests: requests.length,
-          requestEndpoints: requests,
-          attempted,
-          delivered,
-          result,
-          concurrentElapsedMs,
-        }),
-      );
       expect(requests).toEqual(
         scenario === "concurrent" || directMedia
           ? [
