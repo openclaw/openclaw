@@ -1,3 +1,4 @@
+import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { WebSocket } from "ws";
 import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type {
@@ -48,7 +49,6 @@ import {
   formatWorkerConnectionFailure,
   isFencedCloseReason,
   resolvePositiveTimeout,
-  toWorkerConnectionError,
   type WorkerConnectionExit,
   type WorkerConnectionOptions,
   type WorkerConnectionState,
@@ -287,7 +287,7 @@ export class WorkerConnection {
             this.reconnectAbort.signal,
           );
         } catch (error) {
-          throw this.isTerminal() ? this.terminalError() : toWorkerConnectionError(error);
+          throw this.isTerminal() ? this.terminalError() : toStructuredErrorObject(error);
         }
         remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
         if (remainingMs <= 0) {
@@ -308,7 +308,7 @@ export class WorkerConnection {
         if (this.isTerminal()) {
           throw this.terminalError();
         }
-        lastFailure = toWorkerConnectionError(error);
+        lastFailure = toStructuredErrorObject(error);
         this.reportConnectionFailure(
           new Error(formatWorkerConnectionFailure(this.options, lastFailure)),
         );
@@ -385,7 +385,7 @@ export class WorkerConnection {
       await this.connectUntilReady();
     } catch (error) {
       if (!this.isTerminal()) {
-        this.finishTerminal({ kind: "failed", error: toWorkerConnectionError(error) });
+        this.finishTerminal({ kind: "failed", error: toStructuredErrorObject(error) });
       }
     } finally {
       this.reconnectPromise = undefined;
@@ -436,7 +436,7 @@ export class WorkerConnection {
       }
     } catch (error) {
       if (!(error instanceof WorkerConnectionInterruptedError) && !this.isTerminal()) {
-        this.finishTerminal({ kind: "failed", error: toWorkerConnectionError(error) });
+        this.finishTerminal({ kind: "failed", error: toStructuredErrorObject(error) });
         return;
       }
     }

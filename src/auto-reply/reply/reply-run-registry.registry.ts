@@ -1,6 +1,7 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { captureDirectEmbeddedMessageInjectionTarget } from "../../agents/embedded-agent-runner/message-injection-target.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
@@ -11,7 +12,7 @@ import { hasGatewayContextOwner } from "../../plugins/runtime/gateway-request-sc
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  replyMessageInjectionTargetOperation,
+  replyMessageInjectionTargetOwner,
   replyRunInterruptTargetOperation,
   type ReplyOperation,
   type ReplyRunInterruptTarget,
@@ -25,6 +26,7 @@ import {
   expireStaleReplyOperation,
   forceClearReplyOperation,
   getAttachedBackend,
+  hasReplyOperationExecutionStarted,
   isReplyOperationPreBackendPhase,
   isReplyRunCompacting,
   isReplyRunEvidenceStale,
@@ -92,6 +94,18 @@ export function isReplyRunEvidenceStaleBySessionId(sessionId: string): boolean {
   return operation ? isReplyRunEvidenceStale(operation) : false;
 }
 
+function allowsDirectMessageInjectionOwner(sessionKey: string): boolean {
+  const operation = replyRunState.activeRunsByKey.get(sessionKey);
+  return (
+    !operation ||
+    (!operation.result &&
+      !operation.abortSignal.aborted &&
+      isReplyOperationPreBackendPhase(operation.phase) &&
+      !hasReplyOperationExecutionStarted(operation) &&
+      !getAttachedBackend(operation))
+  );
+}
+
 export const replyRunRegistry: ReplyRunRegistry = {
   begin(params) {
     return createReplyOperation(params);
@@ -135,12 +149,28 @@ export const replyRunRegistry: ReplyRunRegistry = {
       operation,
     });
     const backend = "injection" in resolved ? resolved.backend : undefined;
-    if (!operation || !backend || !normalizedSessionKey) {
+    if (!normalizedSessionKey) {
       return undefined;
+    }
+    if (!operation || !backend) {
+      return captureDirectEmbeddedMessageInjectionTarget(normalizedSessionKey, () =>
+        allowsDirectMessageInjectionOwner(normalizedSessionKey),
+      );
     }
     const sourceTurnId = replyRunState.sourceTurnByKey.get(normalizedSessionKey);
     return {
-      [replyMessageInjectionTargetOperation]: operation,
+      [replyMessageInjectionTargetOwner]: {
+        projectToolAuthorityFingerprint: (overlay) =>
+          operation.projectToolAuthorityFingerprint(overlay),
+        resolve: (params) => resolveReplyMessageInjectionRejection({ ...params, operation }),
+        recordAccepted: (options) => {
+          operation.recordActivity();
+          if (options?.inboundAudio) {
+            operation.markAcceptedSteeredInboundAudio();
+          }
+        },
+        abort: () => operation.abortByUser(),
+      },
       ...(backend.runId ? { runId: backend.runId } : {}),
       ...(sourceTurnId ? { sourceTurnId } : {}),
     };
@@ -422,10 +452,10 @@ function abortReplyRuns(
     if (isCurrent && !isCurrent(operation)) {
       continue;
     }
-    if (opts.mode === "compacting" && !isReplyRunCompacting(operation)) {
-      continue;
-    }
     try {
+      if (opts.mode === "compacting" && !isReplyRunCompacting(operation)) {
+        continue;
+      }
       if (operation.abortForRestart()) {
         aborted += 1;
       }

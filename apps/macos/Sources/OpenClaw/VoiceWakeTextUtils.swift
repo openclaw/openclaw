@@ -17,8 +17,8 @@ enum VoiceWakeTextUtils {
             .lowercased()
     }
 
-    private static func normalizedTriggerTokens(_ trigger: String) -> [String] {
-        trigger
+    static func normalizedTokens(_ text: String) -> [String] {
+        text
             .split(whereSeparator: { $0.isWhitespace })
             .map { self.normalizeToken(String($0)) }
             .filter { !$0.isEmpty }
@@ -64,7 +64,7 @@ enum VoiceWakeTextUtils {
         var bestMatch: (range: Range<String.Index>, normalizedTrigger: String, tokenCount: Int)?
 
         for trigger in triggers {
-            let normalizedTokens = self.normalizedTriggerTokens(trigger)
+            let normalizedTokens = self.normalizedTokens(trigger)
             guard !normalizedTokens.isEmpty else { continue }
             let rawTrigger = trigger.trimmingCharacters(in: self.whitespaceAndPunctuation)
             let tokenCount = normalizedTokens.count
@@ -104,13 +104,10 @@ enum VoiceWakeTextUtils {
     }
 
     static func startsWithTrigger(transcript: String, triggers: [String]) -> Bool {
-        let tokens = transcript
-            .split(whereSeparator: { $0.isWhitespace })
-            .map { self.normalizeToken(String($0)) }
-            .filter { !$0.isEmpty }
+        let tokens = self.normalizedTokens(transcript)
         guard !tokens.isEmpty else { return false }
         for trigger in triggers {
-            let triggerTokens = self.normalizedTriggerTokens(trigger)
+            let triggerTokens = self.normalizedTokens(trigger)
             guard !triggerTokens.isEmpty, tokens.count >= triggerTokens.count else { continue }
             if zip(triggerTokens, tokens.prefix(triggerTokens.count)).allSatisfy({ $0 == $1 }) {
                 return true
@@ -178,10 +175,7 @@ enum VoiceWakeTextUtils {
             return rawMatch.normalizedTrigger
         }
 
-        let transcriptTokens = transcript
-            .split(whereSeparator: { $0.isWhitespace })
-            .map { self.normalizeToken(String($0)) }
-            .filter { !$0.isEmpty }
+        let transcriptTokens = self.normalizedTokens(transcript)
         guard !transcriptTokens.isEmpty else { return nil }
 
         var bestStartIndex = Int.max
@@ -189,7 +183,7 @@ enum VoiceWakeTextUtils {
         var bestTokens: [String]?
 
         for trigger in triggers {
-            let triggerTokens = self.normalizedTriggerTokens(trigger)
+            let triggerTokens = self.normalizedTokens(trigger)
             guard !triggerTokens.isEmpty, transcriptTokens.count >= triggerTokens.count else { continue }
             for index in 0...(transcriptTokens.count - triggerTokens.count) {
                 let candidate = transcriptTokens[index..<(index + triggerTokens.count)]

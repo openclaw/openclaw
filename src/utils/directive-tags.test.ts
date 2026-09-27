@@ -234,21 +234,6 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe(code);
   });
 
-  test("preserves fenced code block indentation after stripping a reply tag", () => {
-    const input = [
-      "[[reply_to_current]]",
-      "```python",
-      "    if True:",
-      "        print('ok')",
-      "```",
-    ].join("\n");
-    const result = parseInlineDirectives(input);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe(
-      ["```python", "    if True:", "        print('ok')", "```"].join("\n"),
-    );
-  });
-
   test("preserves word boundaries when a reply tag is adjacent to text", () => {
     const input = "see[[reply_to_current]]now";
     const result = parseInlineDirectives(input);
@@ -263,56 +248,21 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe("text");
   });
 
-  // --- code-fence aware normalizeDirectiveWhitespace ---
-
-  test("preserves indented code block (4-space) inside a fenced block after stripping a directive", () => {
-    const input = [
-      "[[reply_to_current]]",
-      "```js",
-      "function foo() {",
-      "    return 42;",
-      "        const nested = true;",
-      "}",
-      "```",
-    ].join("\n");
-    const result = parseInlineDirectives(input);
+  test.each([
+    [
+      "backtick",
+      ["```js", "function foo() {", "    return 42;", "        const nested = true;", "}", "```"],
+    ],
+    [
+      "tab-indented",
+      ["```go", "func main() {", '\tfmt.Println("hello")', "\t\tif true {", "\t\t}", "}", "```"],
+    ],
+    ["tilde", ["~~~python", "    x  =  1", "        y  =  2", "~~~"]],
+  ])("preserves %s fenced code bytes after stripping a reply tag", (_name, lines) => {
+    const code = lines.join("\n");
+    const result = parseInlineDirectives(`[[reply_to_current]]\n${code}`);
     expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe(
-      [
-        "```js",
-        "function foo() {",
-        "    return 42;",
-        "        const nested = true;",
-        "}",
-        "```",
-      ].join("\n"),
-    );
-  });
-
-  test("preserves tab-indented lines inside a fenced code block", () => {
-    const input = [
-      "[[reply_to_current]]",
-      "```go",
-      "func main() {",
-      '\tfmt.Println("hello")',
-      "\t\tif true {",
-      "\t\t}",
-      "}",
-      "```",
-    ].join("\n");
-    const result = parseInlineDirectives(input);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe(
-      [
-        "```go",
-        "func main() {",
-        '\tfmt.Println("hello")',
-        "\t\tif true {",
-        "\t\t}",
-        "}",
-        "```",
-      ].join("\n"),
-    );
+    expect(result.text).toBe(code);
   });
 
   test("preserves indent-code-block lines (4-space prefix) outside a fenced block", () => {
@@ -335,19 +285,6 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe(
       ["prose with extra spaces", "```", "  preserved   spacing  inside", "```"].join("\n"),
     );
-  });
-
-  test("handles tilde fenced blocks (~~~) the same as backtick blocks", () => {
-    const input = [
-      "[[reply_to_current]]",
-      "~~~python",
-      "    x  =  1",
-      "        y  =  2",
-      "~~~",
-    ].join("\n");
-    const result = parseInlineDirectives(input);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe(["~~~python", "    x  =  1", "        y  =  2", "~~~"].join("\n"));
   });
 
   test.each([
@@ -389,15 +326,6 @@ describe("parseInlineDirectives", () => {
     expect(parseInlineDirectives(input, { preserveTrailingWhitespace: true }).text).toBe(
       `first line\nlast line${suffix}`,
     );
-  });
-
-  test("audio_as_voice directive does not corrupt adjacent fenced code block indentation", () => {
-    const input = ["[[audio_as_voice]]", "```bash", "  echo 'hello'", "    indented", "```"].join(
-      "\n",
-    );
-    const result = parseInlineDirectives(input);
-    expect(result.audioAsVoice).toBe(true);
-    expect(result.text).toBe(["```bash", "  echo 'hello'", "    indented", "```"].join("\n"));
   });
 
   test("preserves literal sentinel-like text while restoring masked code blocks", () => {

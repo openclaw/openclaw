@@ -107,6 +107,11 @@ Guest admission or restore authority for unfinished work.
 | `visitor_list`   | `{}`                                                  | Shows grant emails, GitHub labels, dates, current Gateway access, and policy/record drift. |
 | `visitor_revoke` | `github` and/or `email`                               | Removes the matching visitor; an unknown email is a clean no-op.                           |
 
+Each tool also returns structured `details`, visible to Code Mode, with the same
+information as its text: invite returns `outcome`, `email`, optional `githubLogin`,
+`expiresAt`, `gatewayAccess`, and `signInUrl`; revoke returns `outcome`, `emails`,
+and optional `githubLogin`; list returns `counts`, `grants`, `unmanaged`, and `omitted`.
+
 For example, invite a visitor for seven days:
 
 ```json

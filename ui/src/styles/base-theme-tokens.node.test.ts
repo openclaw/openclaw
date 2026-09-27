@@ -92,19 +92,8 @@ describe("Control UI base theme tokens", () => {
   });
 });
 
-/*
- * --bg is mirrored by hand in two places outside base.css, because both must
- * paint before the app stylesheet is parsed or the picker would advertise a
- * colour the theme no longer uses:
- *   - index.html's pre-paint block, which fills the page during first paint
- *   - the Appearance preview chips in config.css, which are theme-invariant and
- *     so cannot read the live token
- * Nothing tied those copies to the palette, and every review pass on the theme
- * work turned up another hand-maintained list that had drifted. Darkening
- * Absolutely moved --bg and silently left both copies behind until a pre-paint
- * assertion caught one of them. This derives the expected values from base.css
- * so a palette edit cannot leave either copy stale again.
- */
+// Absolutely palette edits left both --bg mirrors stale. Pre-paint needs a color
+// before CSS loads; preview chips must remain independent of the active theme.
 describe("Control UI theme --bg mirrors", () => {
   const RESOLVED_THEME_BG_SELECTOR = new Map<string, string>([
     ["dark", ":root"],
@@ -153,8 +142,6 @@ describe("Control UI theme --bg mirrors", () => {
   it("keeps the index.html pre-paint background on every theme's --bg", () => {
     const indexHtml = fs.readFileSync(path.join(uiSrcDir, "..", "index.html"), "utf8");
     const canonical = readCanonicalBackgrounds();
-    const mismatches: string[] = [];
-    let checked = 0;
 
     const prePaint = new Map<string, string>();
     for (const match of indexHtml.matchAll(
@@ -167,25 +154,17 @@ describe("Control UI theme --bg mirrors", () => {
     }
 
     for (const [resolved, background] of canonical) {
-      const painted = prePaint.get(resolved);
-      if (painted === undefined) {
-        mismatches.push(`${resolved}: no pre-paint background in index.html`);
-        continue;
-      }
-      checked += 1;
-      if (painted.toLowerCase() !== background.toLowerCase()) {
-        mismatches.push(`${resolved}: pre-paint ${painted} != --bg ${background}`);
-      }
+      expect(prePaint.get(resolved)?.toLowerCase(), `${resolved}: pre-paint background`).toBe(
+        background.toLowerCase(),
+      );
     }
 
-    expect(mismatches).toEqual([]);
-    expect(checked).toBeGreaterThanOrEqual(RESOLVED_THEME_BG_SELECTOR.size);
+    expect(canonical.size).toBeGreaterThanOrEqual(RESOLVED_THEME_BG_SELECTOR.size);
   });
 
   it("keeps the Appearance preview chips on every theme's --bg", () => {
     const configCss = fs.readFileSync(path.join(stylesDir, "config.css"), "utf8");
     const canonical = readCanonicalBackgrounds();
-    const mismatches: string[] = [];
     let checked = 0;
 
     for (const match of configCss.matchAll(/\.settings-theme-card--([\w-]+)[^{]*\{([^}]*)\}/gu)) {
@@ -208,12 +187,9 @@ describe("Control UI theme --bg mirrors", () => {
         continue;
       }
       checked += 1;
-      if (chip.toLowerCase() !== background.toLowerCase()) {
-        mismatches.push(`${resolved}: chip ${chip} != --bg ${background}`);
-      }
+      expect(chip.toLowerCase(), `${resolved}: chip background`).toBe(background.toLowerCase());
     }
 
-    expect(mismatches).toEqual([]);
     expect(checked).toBeGreaterThan(0);
   });
 

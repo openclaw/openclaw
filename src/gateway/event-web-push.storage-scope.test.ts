@@ -100,6 +100,7 @@ function mockCapturedContext() {
     environment: { OPENCLAW_STATE_DIR: stateDir },
     coordinatorRuntime: { directory: "/synthetic/webpush-coordinator", keepAlive: false },
     admission: {
+      coordinationKey: `path:${databasePath}`,
       databasePath,
       identity: { key: `path:${databasePath}`, canonicalPath: databasePath },
       assertCurrent: () => {},

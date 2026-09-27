@@ -34,6 +34,13 @@ and deferred. Doctor reports the retained source and continues independent migra
 startup reports remaining readiness advisories. An advisory never hides a separate
 required-store refusal.
 
+If Doctor is interrupted during an agent schema or media migration, stop other
+OpenClaw processes using that state and rerun `openclaw doctor --fix`. Doctor
+reclaims a recorded migration owner only when its host, PID, and process start
+identity prove that process has ended. Uncommitted database changes roll back;
+the next pass resumes pending work while retaining the pre-migration backups.
+Older leases without process identity keep their existing expiry before retry.
+
 A step blocked solely by an earlier refusal keeps
 `refusal.code: "blocked-by-prior-refusal"` and includes `originatingRefusal` with
 the first refusal's `stepId`, reason `code`, and human-readable `message`.
@@ -71,6 +78,11 @@ rollback, and backup records remain read-only inventory. Doctor reports how many
 legacy workspace files it left untouched; it does not retire their files or
 proposal history. After the candidate is installed, the real Doctor runs the
 normal import, archival, and relocation against the operator's state.
+
+Plugin migrations with declared files outside the copied state are deferred as
+one plugin operation. Doctor leaves their files and pending markers intact and
+reports the deferral; configuration repair still runs. Reef's legacy directory
+follows this rule, including its archived files.
 
 Completed agent deletions that intentionally kept their files are held back during
 update and migration discovery. Doctor records a recoverable warning naming the

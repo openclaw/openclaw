@@ -3,19 +3,13 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaEvidenceSummaryV3Json } from "./evidence-summary.js";
-import type { QaCliBackendAuthMode } from "./gateway-child.js";
-import type { QaLabLatestReport, QaLabServerHandle } from "./lab-server.types.js";
-import type { QaProviderMode } from "./model-selection.js";
+import type { QaLabLatestReport } from "./lab-server.types.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
-import type { QaThinkingLevel } from "./qa-gateway-config.js";
-import type { QaTransportAdapterFactory, QaTransportId } from "./qa-transport-registry.js";
 import {
   runRuntimeParityScenario,
   type RuntimeId,
   type RuntimeParityCell,
 } from "./runtime-parity.js";
-import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
-import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation, rebaseQaSuiteEvidence } from "./suite-evidence.js";
 import {
@@ -31,8 +25,8 @@ import type {
   QaSuiteRunParams,
   QaSuiteRunner,
   QaSuiteScenarioResult,
-  QaSuiteStartLabFn,
   QaSuiteResult,
+  QaSuiteResolvedRunContext,
 } from "./suite-types.js";
 import {
   createQaSuiteTransportAdapter,
@@ -43,39 +37,28 @@ import {
   writeQaSuiteProgress,
 } from "./suite.js";
 
-export async function runQaRuntimeParitySuite(params: {
-  runQaFlowSuite: QaSuiteRunner;
-  adapterOptions?: QaSuiteRunParams["adapterOptions"];
-  adapterFactories?: readonly QaTransportAdapterFactory[];
-  channelId?: string;
-  evidenceMode?: QaScorecardEvidenceMode;
-  repoRoot: string;
-  outputDir: string;
-  startedAt: Date;
-  providerMode: QaProviderMode;
-  transportId: QaTransportId;
-  primaryModel: string;
-  alternateModel: string;
-  fastMode: boolean;
-  controlUiEnabled?: boolean;
-  thinkingDefault?: QaThinkingLevel;
-  claudeCliAuthMode?: QaCliBackendAuthMode;
-  enabledPluginIds?: string[];
-  channelDriver?: QaScorecardChannelDriver | null;
-  concurrency: number;
-  selectedScenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
-  startLab?: QaSuiteStartLabFn;
-  lab?: QaLabServerHandle;
-  progressEnabled: boolean;
-  scenarioIds?: readonly string[];
-  runtimePair: [RuntimeId, RuntimeId];
-  sutOpenClawCommand?: QaSuiteRunParams["sutOpenClawCommand"];
-  mutateConfig?: QaSuiteRunParams["mutateConfig"];
-  writeEvidenceFile?: boolean;
-  evidenceAnchors?: QaSuiteRunParams["evidenceAnchors"];
-  evidenceContinuation?: QaSuiteRunParams["evidenceContinuation"];
-  onEvidence?: QaSuiteRunParams["onEvidence"];
-}) {
+export async function runQaRuntimeParitySuite(
+  params: Omit<QaSuiteRunParams, "channelDriver" | "scenarioIds"> &
+    Pick<
+      QaSuiteResolvedRunContext,
+      | "repoRoot"
+      | "outputDir"
+      | "startedAt"
+      | "providerMode"
+      | "transportId"
+      | "primaryModel"
+      | "alternateModel"
+      | "fastMode"
+      | "concurrency"
+      | "selectedScenarios"
+      | "progressEnabled"
+    > & {
+      runQaFlowSuite: QaSuiteRunner;
+      channelDriver?: QaSuiteRunParams["channelDriver"] | null;
+      scenarioIds?: readonly string[];
+      runtimePair: [RuntimeId, RuntimeId];
+    },
+) {
   const recording = await createQaSuiteEvidenceInvocation(
     {
       evidenceAnchors: params.evidenceAnchors,

@@ -374,6 +374,33 @@ it("shares reentrant writer context across duplicate module instances", async ()
   expect(queues.size).toBe(0);
 });
 
+it("keeps an active writer's lane through clear cleanup", async () => {
+  const queues = new Map<string, StoreWriterQueue>();
+  const gate = createDeferred();
+  const active = runQueuedStoreWrite({
+    queues,
+    storePath: "cleanup",
+    label: "active",
+    fn: () => gate.promise,
+  });
+  clearStoreWriterQueuesForTest(queues, "test cleanup");
+  let laterStarted = false;
+  const later = runQueuedStoreWrite({
+    queues,
+    storePath: "cleanup",
+    label: "later",
+    fn: async () => {
+      laterStarted = true;
+    },
+  });
+  // A fresh lane would admit this writer while the active one still owns the store.
+  expect(laterStarted).toBe(false);
+  gate.resolve();
+  await Promise.all([active, later]);
+  expect(laterStarted).toBe(true);
+  expect(queues.size).toBe(0);
+});
+
 it.each(["clear", "drain"] as const)(
   "never invokes rejected pending writers after %s cleanup settles",
   async (mode) => {

@@ -4,7 +4,9 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import { createLimiterSpy } from "./auth-rate-limit.test-support.js";
 import {
   assertGatewayAuthConfigured,
   authorizeHttpGatewayConnect,
@@ -15,39 +17,16 @@ import {
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "./net.js";
 
-function createLimiterSpy(): AuthRateLimiter & {
-  check: ReturnType<typeof vi.fn>;
-  recordFailure: ReturnType<typeof vi.fn>;
-  reset: ReturnType<typeof vi.fn>;
-} {
-  const check = vi.fn<AuthRateLimiter["check"]>(
-    (_ip, _scope) => ({ allowed: true, remaining: 10, retryAfterMs: 0 }) as const,
-  );
-  const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>((_ip, _scope) => {});
-  const recordFailureAndDelay = vi.fn<AuthRateLimiter["recordFailureAndDelay"]>(
-    async (ip, scope) => {
-      recordFailure(ip, scope);
-    },
-  );
-  const reset = vi.fn<AuthRateLimiter["reset"]>((_ip, _scope) => {});
-  return {
-    check,
-    recordFailure,
-    recordFailureAndDelay,
-    reset,
-    size: () => 0,
-    prune: () => {},
-    dispose: () => {},
-  };
-}
-
 function createSingleAttemptLimiter() {
-  return createGatewayAuthRateLimiter({
-    maxAttempts: 1,
-    windowMs: 60_000,
-    lockoutMs: 60_000,
-    pruneIntervalMs: 0,
-  });
+  return createGatewayAuthRateLimiter(
+    {
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+    },
+    { scheduler: createTestGatewayScheduler() },
+  );
 }
 
 type TailscaleForwardedRequest = IncomingMessage & {
@@ -992,11 +971,14 @@ describe("gateway auth", () => {
   });
 
   it("keeps genuinely direct loopback requests exempt from lockout", async () => {
-    const limiter = createGatewayAuthRateLimiter({
-      maxAttempts: 1,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-    });
+    const limiter = createGatewayAuthRateLimiter(
+      {
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
     const params = {
       auth: { mode: "password" as const, password: "secret", allowTailscale: false },
       connectAuth: { password: "wrong" },

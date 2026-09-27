@@ -1,3 +1,4 @@
+import type { ZodIssue } from "zod";
 import type { AuthProfileRowRead, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
 import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
 import type { McpOAuthReadOperations } from "../agents/mcp-oauth-store.kernel.js";
@@ -13,6 +14,7 @@ import type {
 } from "../agents/workspace-state-store.kernel.js";
 import type { WorktreeRegistryReadOperations } from "../agents/worktrees/registry-read.worker.js";
 import type { WorktreeRetirementOperations } from "../agents/worktrees/registry-retirement.worker.js";
+import type { WorktreeRunLeaseRowInput } from "../agents/worktrees/run-lease-store.kernel.js";
 import type { AuditEventListQuery, AuditEventListPage } from "../audit/audit-event-types.js";
 import type { AuditWriterOperations } from "../audit/audit-event-writer.types.js";
 import type { ChannelIngressWorkerOperations } from "../channels/message/ingress-queue.worker-contract.js";
@@ -29,10 +31,7 @@ import type {
   RepositoryGitHubPublicationPendingQuery,
   RepositoryGitHubPublicationStatusRow,
 } from "../gateway/github-repository-publication.kernel.js";
-import type {
-  ManagedImageRecord,
-  ManagedImageRecordEntry,
-} from "../gateway/managed-image-record-store.types.js";
+import type { ManagedImageRecordWorkerOperations } from "../gateway/managed-image-record-store.types.js";
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type {
   SessionGroupCatalogMutation,
@@ -44,6 +43,8 @@ import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-envir
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type {
   DeferredPluginMigration,
+  DeferredPluginMigrationRecordInput,
+  recordDeferredPluginMigrationsInTransaction,
   readDeferredPluginMigrationCompletions,
 } from "../infra/deferred-plugin-migrations.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
@@ -81,6 +82,7 @@ import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-in
 import type { HostedCatalogSnapshotWorkerOperations } from "../plugins/official-external-plugin-catalog-snapshot-store.worker-contract.js";
 import type { PluginSourceAdmissionPublication } from "../plugins/plugin-source-admission.types.js";
 import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
+import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker.js";
@@ -102,13 +104,15 @@ import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.contract.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 
 export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; identityKey: string };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = TuiLastSessionWorkerOperations &
+export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
+  TuiLastSessionWorkerOperations &
   WorktreeRetirementOperations &
   WorktreeRegistryReadOperations &
   SessionStateWorkerOperations &
@@ -145,8 +149,10 @@ export type OpenClawStateWorkerOperations = TuiLastSessionWorkerOperations &
   NodeWorkerJournalWorkerOperations &
   TaskRegistryWorkerOperations &
   SkillUploadWorkerOperations &
-  OpenClawStateLeaseLifecycleOperations & {
+  OpenClawStateLeaseLifecycleOperations &
+  ManagedImageRecordWorkerOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
+    "worktrees.admitRunLease": { input: WorktreeRunLeaseRowInput; output: void };
     "worktrees.reapRunLeases": { input: { scopes: string[] }; output: void };
     "worktrees.releaseRunLease": {
       input: { worktreeId: string; token: string };
@@ -221,9 +227,6 @@ export type OpenClawStateWorkerOperations = TuiLastSessionWorkerOperations &
     };
     "promotions.markNotified": { input: { slugs: string[]; now: number }; output: true };
     "promotions.recordClaim": { input: PreparedPromotionClaim; output: void };
-    "managedImages.read": { input: { attachmentId: string }; output: ManagedImageRecord | null };
-    "managedImages.entries": { input: { sessionKey?: string }; output: ManagedImageRecordEntry[] };
-    "managedImages.originalMediaIds": { input: undefined; output: string[] };
     "doctor.databaseBloat": {
       input: undefined;
       output: ReturnType<typeof readSqliteDatabaseBloat>;
@@ -272,6 +275,18 @@ export type OpenClawStateWorkerOperations = TuiLastSessionWorkerOperations &
     "plugins.metadata.sourceAdmission.publish": {
       input: PluginSourceAdmissionPublication;
       output: boolean;
+    };
+    "plugins.deferredMigrations.record": {
+      input: Omit<DeferredPluginMigrationRecordInput, "env"> & {
+        identity: OpenClawStateLeaseIdentity;
+      };
+      output:
+        | {
+            kind: "recorded";
+            transitions: ReturnType<typeof recordDeferredPluginMigrationsInTransaction>;
+          }
+        | { kind: "conflict"; pending: readonly DeferredPluginMigration[] }
+        | { kind: "invalid"; issues: ZodIssue[] };
     };
     "plugins.deferredMigrations.read": {
       input: { artifactPreservingReadOnly: boolean };
@@ -338,6 +353,7 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | "database.inspectIdle"
       | "database.walMaintenance"
       | "agentDatabases.releaseExitedLease"
+      | keyof CaptureWorkerOperations
       | keyof PluginStateWorkerOperations
       | keyof OpenClawStateLeaseLifecycleOperations;
   }

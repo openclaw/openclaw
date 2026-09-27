@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -18,7 +19,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-state-db.paths.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { advanceCronActiveJobGeneration, isCronJobActive } from "../active-jobs.js";
 import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { CronService } from "../service.js";
@@ -71,17 +75,16 @@ beforeEach(async () => {
     `
       import fs from "node:fs";
       import { CronService } from ${JSON.stringify(serviceUrl.href)};
-      import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
       import { deserialize } from "node:v8";
       import { MessagePort } from "node:worker_threads";
+      import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
       const [storePath, jobId, mode, releasePath, outputPath] = process.argv.slice(2);
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
       let activationClock = Date.now();
       const cron = new CronService({
-        scheduler: createTestGatewayScheduler(),
-        nowMs: () => Date.now(),
         ...(mode === "crash-activation" ? { nowMs: () => ++activationClock } : {}),
+        scheduler: createTestGatewayScheduler(),
         storePath,
         cronEnabled: true,
         log: logger,
@@ -261,26 +264,13 @@ async function waitForExit(child: ChildProcess): Promise<void> {
   });
 }
 
-async function waitForImmediate(
-  predicate: () => boolean,
-  description: string,
-  timeoutMs = 1_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() >= deadline) {
-      throw new Error(`Timed out waiting for ${description}`);
-    }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  }
-}
-
-function makeParentService(storePath: string, runCommandJob = vi.fn()) {
+function makeParentService(
+  storePath: string,
+  runCommandJob = vi.fn(),
+  scheduler: GatewayScheduler = createTestGatewayScheduler(),
+) {
   return new CronService({
-    scheduler: createTestGatewayScheduler(),
-    nowMs: () => Date.now(),
+    scheduler,
     storePath,
     cronEnabled: true,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -533,7 +523,12 @@ describe("cron durable run ownership", () => {
     const job = makeCommandJob("restart-mid-run", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const replacementRunner = vi.fn(async () => ({ status: "ok" as const }));
-    const replacement = makeParentService(storePath, replacementRunner);
+    const clock = createGatewaySchedulerClock(now);
+    const replacement = makeParentService(
+      storePath,
+      replacementRunner,
+      createTestGatewayScheduler(clock.clock),
+    );
     let owner: ChildProcess | undefined;
     try {
       await replacement.start();
@@ -555,15 +550,11 @@ describe("cron durable run ownership", () => {
 
       owner.kill("SIGKILL");
       await waitForExit(owner);
-      await vi.waitFor(
-        async () => {
-          expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
-          const recoveredState = (await loadCronStore(storePath)).jobs[0]?.state;
-          expect(recoveredState?.lastError).toContain("interrupted by gateway restart");
-          expect(recoveredState?.nextRunAtMs).toEqual(expect.any(Number));
-        },
-        { timeout: 6_000, interval: 50 },
-      );
+      await clock.advanceBy(2_000);
+      expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
+      const recoveredState = (await loadCronStore(storePath)).jobs[0]?.state;
+      expect(recoveredState?.lastError).toContain("interrupted by gateway restart");
+      expect(recoveredState?.nextRunAtMs).toEqual(expect.any(Number));
 
       await expect(replacement.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
       expect(replacementRunner).toHaveBeenCalledOnce();
@@ -602,7 +593,12 @@ describe("cron durable run ownership", () => {
       )
       .run(job.id);
 
-    const replacement = makeParentService(storePath);
+    const clock = createGatewaySchedulerClock(now);
+    const replacement = makeParentService(
+      storePath,
+      undefined,
+      createTestGatewayScheduler(clock.clock),
+    );
     try {
       await replacement.start();
       const replacementState = (replacement as unknown as { state: CronServiceState }).state;
@@ -610,18 +606,14 @@ describe("cron durable run ownership", () => {
       const completed = waitForLine(owner, "completed");
       await fsPromises.writeFile(releasePath, "release");
       await completed;
-      await vi.waitFor(
-        async () => {
-          expect(replacementState.timer).not.toBe(staleTimer);
-          const persisted = await loadCronStore(storePath);
-          expect(persisted.jobs.find((entry) => entry.id === job.id)?.state.nextRunAtMs).toEqual(
-            expect.any(Number),
-          );
-          expect(
-            persisted.jobs.find((entry) => entry.id === unrelated.id)?.state.nextRunAtMs,
-          ).toEqual(expect.any(Number));
-        },
-        { timeout: 10_000, interval: 50 },
+      await clock.advanceBy(2_000);
+      expect(replacementState.timer).not.toBe(staleTimer);
+      const persisted = await loadCronStore(storePath);
+      expect(persisted.jobs.find((entry) => entry.id === job.id)?.state.nextRunAtMs).toEqual(
+        expect.any(Number),
+      );
+      expect(persisted.jobs.find((entry) => entry.id === unrelated.id)?.state.nextRunAtMs).toEqual(
+        expect.any(Number),
       );
     } finally {
       replacement.stop();
@@ -648,11 +640,15 @@ describe("cron durable run ownership", () => {
     await waitForLine(first, "started");
 
     const replacementRunner = vi.fn(async () => ({ status: "ok" as const }));
-    const replacement = makeParentService(storePath, replacementRunner);
+    const clock = createGatewaySchedulerClock(now);
+    const replacement = makeParentService(
+      storePath,
+      replacementRunner,
+      createTestGatewayScheduler(clock.clock),
+    );
     let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> | undefined;
     let second: ChildProcess | undefined;
     try {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       await replacement.start();
       const replacementState = (replacement as unknown as { state: CronServiceState }).state;
       suspension = tryBeginGatewaySuspendAdmission(() => {});
@@ -672,22 +668,14 @@ describe("cron durable run ownership", () => {
       await waitForLine(second, "started");
       const secondReceiptId = receipts(storePath, job.id)[0]?.receiptId;
       expect(secondReceiptId).toBeDefined();
-      await vi.advanceTimersByTimeAsync(2_000);
-      await waitForImmediate(
-        () => listForeignReceipts(replacementState)[0]?.receiptId === secondReceiptId,
-        "replacement foreign receipt enrollment",
-      );
+      await clock.advanceBy(2_000);
+      expect(listForeignReceipts(replacementState)[0]?.receiptId).toBe(secondReceiptId);
       second.kill("SIGKILL");
       await waitForExit(second);
-      await vi.advanceTimersByTimeAsync(2_000);
+      await clock.advanceBy(2_000);
 
-      await vi.waitFor(
-        async () => {
-          expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
-          expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
-        },
-        { timeout: 1_000, interval: 10 },
-      );
+      expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
+      expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
       expect(replacementState.schedulingPaused).toBe(true);
       expect(replacementState.timer).toBeNull();
       expect(replacementRunner).not.toHaveBeenCalled();

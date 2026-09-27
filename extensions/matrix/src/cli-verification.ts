@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import * as cli from "./cli-shared.js";
 import { registerMatrixVerificationBackupCommands } from "./cli-verification-backup.js";
 import * as verification from "./matrix/actions/verification.js";
+import type { MatrixVerificationSummary } from "./matrix/sdk/verification-manager.js";
 
 function matrixCliVerificationDmLookupOptions(options: cli.MatrixCliVerificationCommandOptions): {
   verificationDmRoomId?: string;
@@ -36,7 +37,7 @@ function formatMatrixVerificationDmFollowupParts(params: {
 }
 
 function formatMatrixVerificationSummaryDmFollowupParts(
-  summary: cli.MatrixCliVerificationSummary,
+  summary: MatrixVerificationSummary,
 ): string[] {
   return formatMatrixVerificationDmFollowupParts({
     roomId: summary.roomId,
@@ -45,7 +46,7 @@ function formatMatrixVerificationSummaryDmFollowupParts(
 }
 
 function formatMatrixVerificationPreferredDmFollowupParts(
-  summary: cli.MatrixCliVerificationSummary,
+  summary: MatrixVerificationSummary,
   options: cli.MatrixCliVerificationCommandOptions,
 ): string[] {
   const summaryParts = formatMatrixVerificationSummaryDmFollowupParts(summary);
@@ -76,7 +77,7 @@ function printMatrixVerificationSasGuidance(
   ]);
 }
 
-function formatMatrixVerificationCommandId(summary: cli.MatrixCliVerificationSummary): string {
+function formatMatrixVerificationCommandId(summary: MatrixVerificationSummary): string {
   return cli.sanitizeMatrixCliText(summary.transactionId ?? summary.id);
 }
 
@@ -95,7 +96,7 @@ async function promptMatrixVerificationSasMatch(): Promise<boolean> {
 }
 
 function printMatrixVerificationRequestGuidance(
-  summary: cli.MatrixCliVerificationSummary,
+  summary: MatrixVerificationSummary,
   accountId?: string,
 ): void {
   const requestId = formatMatrixVerificationCommandId(summary);
@@ -122,9 +123,9 @@ function registerMatrixVerificationSummaryCommand(
       id: string,
       target: NonNullable<Parameters<typeof verification.acceptMatrixVerification>[1]>,
       options: MatrixVerificationCommandOptions,
-    ) => Promise<cli.MatrixCliVerificationSummary>;
+    ) => Promise<MatrixVerificationSummary>;
     afterText?: (
-      summary: cli.MatrixCliVerificationSummary,
+      summary: MatrixVerificationSummary,
       accountId: string,
       options: MatrixVerificationCommandOptions,
     ) => void;
@@ -144,9 +145,7 @@ function registerMatrixVerificationSummaryCommand(
     .option("--json", "Output as JSON")
     .action(async (id: string, options: MatrixVerificationCommandOptions) => {
       const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-      await cli.runMatrixCliCommand({
-        verbose: options.verbose === true,
-        json: options.json === true,
+      await cli.runMatrixCliCommand(options, {
         run: () =>
           params.run(
             id,
@@ -167,9 +166,7 @@ async function runMatrixCliSelfVerificationCommand(
   options: cli.MatrixCliSelfVerificationCommandOptions,
 ): Promise<void> {
   let resolvedAccountId: string | undefined;
-  await cli.runMatrixCliCommand({
-    verbose: options.verbose === true,
-    json: false,
+  await cli.runMatrixCliCommand(options, {
     run: async () => {
       const timeoutMs = cli.parseOptionalInt(options.timeoutMs, "--timeout-ms", { min: 1 });
       const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
@@ -193,7 +190,7 @@ async function runMatrixCliSelfVerificationCommand(
           cli.printMatrixVerificationSas(summary.sas ?? {});
           console.log("Compare this SAS with the other Matrix client.");
         },
-        confirmSas: async () => await promptMatrixVerificationSasMatch(),
+        confirmSas: promptMatrixVerificationSasMatch,
       });
     },
     onText: (summary, verbose) => {
@@ -225,11 +222,9 @@ export function registerMatrixVerificationCommands(root: Command): void {
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
-    .action(async (options: { account?: string; verbose?: boolean; json?: boolean }) => {
+    .action(async (options: cli.MatrixCliOptions) => {
       const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-      await cli.runMatrixCliCommand({
-        verbose: options.verbose === true,
-        json: options.json === true,
+      await cli.runMatrixCliCommand(options, {
         run: async () => await verification.listMatrixVerifications({ accountId, cfg }),
         onText: (summaries) => {
           cli.printAccountLabel(accountId);
@@ -245,9 +240,7 @@ export function registerMatrixVerificationCommands(root: Command): void {
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--timeout-ms <ms>", "How long to wait for the other Matrix client")
     .option("--verbose", "Show detailed diagnostics")
-    .action(async (options: cli.MatrixCliSelfVerificationCommandOptions) => {
-      await runMatrixCliSelfVerificationCommand(options);
-    });
+    .action(runMatrixCliSelfVerificationCommand);
 
   verify
     .command("request")
@@ -260,19 +253,16 @@ export function registerMatrixVerificationCommands(root: Command): void {
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
-      async (options: {
-        account?: string;
-        ownUser?: boolean;
-        userId?: string;
-        deviceId?: string;
-        roomId?: string;
-        verbose?: boolean;
-        json?: boolean;
-      }) => {
+      async (
+        options: cli.MatrixCliOptions & {
+          ownUser?: boolean;
+          userId?: string;
+          deviceId?: string;
+          roomId?: string;
+        },
+      ) => {
         const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
+        await cli.runMatrixCliCommand(options, {
           run: async () => {
             if (
               options.ownUser === true &&
@@ -338,9 +328,7 @@ export function registerMatrixVerificationCommands(root: Command): void {
     .option("--json", "Output as JSON")
     .action(async (id: string, options: cli.MatrixCliVerificationCommandOptions) => {
       const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-      await cli.runMatrixCliCommand({
-        verbose: options.verbose === true,
-        json: options.json === true,
+      await cli.runMatrixCliCommand(options, {
         run: async () =>
           await verification.getMatrixVerificationSas(id, {
             accountId,
@@ -405,17 +393,14 @@ export function registerMatrixVerificationCommands(root: Command): void {
     )
     .option("--json", "Output as JSON")
     .action(
-      async (options: {
-        allowDegradedLocalState?: boolean;
-        account?: string;
-        verbose?: boolean;
-        includeRecoveryKey?: boolean;
-        json?: boolean;
-      }) => {
+      async (
+        options: cli.MatrixCliOptions & {
+          allowDegradedLocalState?: boolean;
+          includeRecoveryKey?: boolean;
+        },
+      ) => {
         const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
+        await cli.runMatrixCliCommand(options, {
           run: async () =>
             await verification.getMatrixVerificationStatus({
               accountId,

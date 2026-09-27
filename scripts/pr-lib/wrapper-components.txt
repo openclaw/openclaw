@@ -117,6 +117,7 @@ scripts/lib/direct-run.mjs
 scripts/lib/error-format.mts
 scripts/lib/extension-test-plan.mts
 scripts/lib/failed-trailer.mts
+scripts/lib/format-duration.mts
 scripts/lib/gateway-server-test-plan.mts
 scripts/lib/list-test-files.mts
 scripts/lib/local-check-runtime.mts
@@ -146,6 +147,7 @@ scripts/lib/vitest-cli-mode.mts
 scripts/lib/vitest-cli.mts
 scripts/lib/vitest-home-selection.mts
 scripts/lib/vitest-local-scheduling.mts
+scripts/lib/vitest-plan-scheduling.mts
 scripts/lib/vitest-process-env.mts
 scripts/lib/vitest-process.mts
 scripts/lib/vitest-resource-ownership.mts
@@ -459,6 +461,7 @@ src/config/redact-snapshot.ts
 src/config/resolution-facts.ts
 src/config/runtime-config-capture-state.ts
 src/config/runtime-overrides.ts
+src/config/runtime-session-changes.ts
 src/config/runtime-snapshot.ts
 src/config/runtime-source-projection.ts
 src/config/runtime-write-application.ts
@@ -646,6 +649,9 @@ src/infra/file-lock-manager.ts
 src/infra/file-lock-sync.ts
 src/infra/file-lock.ts
 src/infra/fixed-window-rate-limit.ts
+src/infra/format-time/duration-units.ts
+src/infra/format-time/format-duration-exact.ts
+src/infra/format-time/format-duration-internal.ts
 src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
@@ -1051,6 +1057,7 @@ src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
+src/plugins/plugin-instance-owned-values.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-value-views.ts
 src/plugins/plugin-instance.ts
@@ -1173,10 +1180,14 @@ src/process/windows-command.ts
 src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts
 src/proxy-capture/paths.ts
+src/proxy-capture/runtime-cleanup.ts
+src/proxy-capture/runtime-fetch-patch.ts
 src/proxy-capture/runtime-owner.ts
+src/proxy-capture/runtime-response-body.ts
 src/proxy-capture/runtime.ts
 src/proxy-capture/store-lifecycle.ts
 src/proxy-capture/store-readonly.ts
+src/proxy-capture/store.async.ts
 src/proxy-capture/store.kernel.ts
 src/proxy-capture/store.sqlite.ts
 src/routing/account-id.ts
@@ -1255,6 +1266,7 @@ src/state/openclaw-agent-db-identity.ts
 src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts
 src/state/openclaw-agent-db-read-error.ts
+src/state/openclaw-agent-db-resources.ts
 src/state/openclaw-agent-db-schema-compatibility.ts
 src/state/openclaw-agent-db-validation-cache.ts
 src/state/openclaw-agent-db.paths.ts
@@ -1343,7 +1355,9 @@ src/state/openclaw-state-worker-context.capture.ts
 src/state/openclaw-state-worker-context.ts
 src/state/openclaw-state-worker-error-identity.ts
 src/state/openclaw-state-worker-error.ts
+src/state/openclaw-state-worker-lease.ts
 src/state/openclaw-state-worker-operation.ts
+src/state/openclaw-state-worker-owner.ts
 src/state/openclaw-state-worker-store.ts
 src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts

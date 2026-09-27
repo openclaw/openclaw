@@ -71,6 +71,8 @@ export function runCiManifestFixture(options: {
   nodeRunnerBackend?: "blacksmith" | "github" | "hybrid" | "runson";
   runnerProfile?: "blacksmith" | "github" | "hybrid";
   targetHostedRunnerProfileContract?: boolean;
+  targetFiles?: string[];
+  missingTargetFiles?: string[];
   uiE2eProjectsCapability?: boolean;
   uiReleaseTier?: boolean;
   uiRealGatewayShards?: boolean;
@@ -81,6 +83,45 @@ export function runCiManifestFixture(options: {
   try {
     const scriptsDir = path.join(root, "scripts", "lib");
     mkdirSync(scriptsDir, { recursive: true });
+    const selectedTargetFiles = new Set(options.targetFiles ?? []);
+    if (!options.nodeTestShards) {
+      selectedTargetFiles.add(
+        options.bundledPlanner
+          ? options.runnerBackend === "runson"
+            ? "test/vitest/vitest.cron.config.ts"
+            : "test/vitest/bundled.config.ts"
+          : "test/vitest/legacy.config.ts",
+      );
+    }
+    const collectSelectedTargetFiles = (plan: Record<string, unknown>) => {
+      const configs = plan.configs;
+      if (Array.isArray(configs)) {
+        for (const config of configs) {
+          if (typeof config === "string") {
+            selectedTargetFiles.add(config);
+          }
+        }
+      }
+      const groups = plan.groups;
+      if (Array.isArray(groups)) {
+        for (const group of groups) {
+          if (group && typeof group === "object") {
+            collectSelectedTargetFiles(group as Record<string, unknown>);
+          }
+        }
+      }
+    };
+    for (const shard of options.nodeTestShards ?? []) {
+      collectSelectedTargetFiles(shard);
+    }
+    for (const missing of options.missingTargetFiles ?? []) {
+      selectedTargetFiles.delete(missing);
+    }
+    for (const file of selectedTargetFiles) {
+      const target = path.join(root, file);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, "export {};\n");
+    }
     if (options.bunTestRuntime) {
       writeFileSync(
         path.join(scriptsDir, "ci-test-runtime.mts"),

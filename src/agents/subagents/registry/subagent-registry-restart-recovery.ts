@@ -36,16 +36,15 @@ export async function recoverInterruptedSubagentRow(
   const isGatewayCurrent = () =>
     agentEvents.isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
     params.isGatewayCurrent?.() !== false;
-  const isCurrent = () => isGatewayCurrent() && params.isCurrent(runId, entry);
-  if (
-    !childSessionKey ||
-    !isCurrent() ||
-    entry.pauseReason === "sessions_yield" ||
-    entry.suppressAnnounceReason === "steer-restart" ||
-    entry.killIntent ||
-    entry.killReconciliation ||
-    entry.execution.status === "queued"
-  ) {
+  const isCurrent = () =>
+    isGatewayCurrent() &&
+    params.isCurrent(runId, entry) &&
+    entry.pauseReason !== "sessions_yield" &&
+    entry.suppressAnnounceReason !== "steer-restart" &&
+    !entry.killIntent &&
+    !entry.killReconciliation &&
+    entry.execution.status !== "queued";
+  if (!childSessionKey || !isCurrent()) {
     return { status: "ignored" };
   }
   const terminalError = getRestartRecoveryReplayError(entry);
@@ -69,6 +68,9 @@ export async function recoverInterruptedSubagentRow(
     );
     if ((!session && !replayTerminal) || !isCurrent()) {
       return { status: "deferred" };
+    }
+    if (!replayTerminal && session?.retained?.isCurrent()) {
+      return { status: "handled", retained: session.retained };
     }
     // Registry custody stores the physical locator; session configuration may
     // still name its logical sessions.json alias. Let the store owner resolve it.

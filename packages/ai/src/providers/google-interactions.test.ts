@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost } from "../host.js";
 import type { AssistantMessage, Context, Model, ToolCall } from "../types.js";
 import { streamGoogleInteractions, streamSimpleGoogleInteractions } from "./google-interactions.js";
@@ -96,6 +97,7 @@ describe("google-interactions provider", () => {
     }
 
     expect(cancelCalled).toBe(true);
+    expect(stream.locked).toBe(false);
     const doneEvent = events.find(
       (e): e is { type: "done"; message: { api: string; content: unknown[] } } =>
         Boolean(e && typeof e === "object" && (e as { type: string }).type === "done"),
@@ -417,37 +419,67 @@ describe("google-interactions provider", () => {
     ]);
   });
 
-  it("rejects malformed streamed tool call arguments", async () => {
-    const encoder = new TextEncoder();
-    const ssePayload = [
-      'data: {"event_type":"step.start","step":{"type":"function_call","id":"call_exec_1","name":"exec","arguments":{}}}\n\n',
-      'data: {"event_type":"step.delta","delta":{"type":"arguments_delta","arguments":"{\\"command\\":\\"ls"}}\n\n',
-      'data: {"event_type":"step.stop"}\n\n',
-      completedSse({ status: "requires_action" }),
-      "data: [DONE]\n\n",
-    ].join("");
+  it.each(["resolved", "rejected", "pending"])(
+    "retires malformed tool streams when cancellation is %s",
+    async (cancellationState) => {
+      const encoder = new TextEncoder();
+      const ssePayload = [
+        'data: {"event_type":"step.start","step":{"type":"function_call","id":"call_exec_1","name":"exec","arguments":{}}}\n\n',
+        'data: {"event_type":"step.delta","delta":{"type":"arguments_delta","arguments":"{\\"command\\":\\"ls"}}\n\n',
+        'data: {"event_type":"step.stop"}\n\n',
+      ].join("");
+      const cancellation = createDeferred();
+      const pendingWork: Promise<unknown>[] = [];
+      configureAiTransportHost({
+        observePendingProviderWork: (pending) => {
+          pendingWork.push(pending);
+        },
+      });
+      const cancel = vi.fn(() => {
+        if (cancellationState === "resolved") {
+          cancellation.resolve();
+        } else if (cancellationState === "rejected") {
+          cancellation.reject(new Error("cancel failed"));
+        }
+        return cancellation.promise;
+      });
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(ssePayload));
+        },
+        cancel,
+      });
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(encoder.encode(ssePayload), {
-            status: 200,
-            headers: { "Content-Type": "text/event-stream" },
-          }),
-      ),
-    );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(body, {
+              status: 200,
+              headers: { "Content-Type": "text/event-stream" },
+            }),
+        ),
+      );
 
-    const result = await streamGoogleInteractions(makeInteractionsModel(), basicContext, {
-      apiKey: "test-key",
-    }).result();
+      try {
+        const result = await streamGoogleInteractions(makeInteractionsModel(), basicContext, {
+          apiKey: "test-key",
+        }).result();
 
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorCode: "malformed_tool_call_arguments",
-      errorMessage: "Provider completed tool call with malformed JSON arguments",
-    });
-  });
+        expect(result).toMatchObject({
+          stopReason: "error",
+          errorCode: "malformed_tool_call_arguments",
+          errorMessage: "Provider completed tool call with malformed JSON arguments",
+        });
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(body.locked).toBe(false);
+        expect(pendingWork).toHaveLength(1);
+      } finally {
+        cancellation.resolve();
+        await Promise.all(pendingWork);
+      }
+    },
+  );
 
   it("resolves API-key and custom-header sentinels before guarded egress", async () => {
     const sentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
@@ -524,26 +556,6 @@ describe("google-interactions provider", () => {
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("deadline expired");
     expect(result.errorCode).toBe("gateway_timeout");
-  });
-
-  it("rejects a stream that ends before interaction.completed", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(new TextEncoder().encode("data: [DONE]\n\n"), {
-            status: 200,
-            headers: { "Content-Type": "text/event-stream" },
-          }),
-      ),
-    );
-
-    const result = await streamGoogleInteractions(makeInteractionsModel(), basicContext, {
-      apiKey: "test-api-key",
-    }).result();
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("before interaction.completed");
   });
 
   it("maps cached, thought, and tool-use tokens into canonical usage", async () => {

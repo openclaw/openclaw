@@ -41,6 +41,7 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import { getMediaDir } from "../media/store.js";
+import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -411,6 +412,19 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                 displayContent: content,
                 idempotencyKey: `${queuedRunId}:generated-media-transcript`,
                 updateMode: "inline",
+                onMessageCommitted: (receipt, acceptCompletion) => {
+                  acceptCompletion(async () => {
+                    if (
+                      !(await attachManagedOutgoingMediaToMessage({
+                        messageId: receipt.messageId,
+                        blocks: readAssistantDisplayContent(receipt.message),
+                        stateDir,
+                      }))
+                    ) {
+                      throw new Error("queued internal generated-media artifact attachment failed");
+                    }
+                  });
+                },
               });
           if (!appended.ok) {
             if (appended.code === "session-rebound") {
@@ -425,15 +439,16 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
             );
           }
           params.queueContext.admission.assertCurrent();
-          const attached = attachManagedOutgoingMediaToMessage({
-            messageId: appended.messageId,
-            blocks: content,
-            stateDir,
-          });
-          if (!attached) {
-            throw new Error("queued internal generated-media artifact attachment failed");
-          }
           if (enriched) {
+            if (
+              !(await attachManagedOutgoingMediaToMessage({
+                messageId: enriched.messageId,
+                blocks: content,
+                stateDir,
+              }))
+            ) {
+              throw new Error("queued internal generated-media artifact attachment failed");
+            }
             await publishAssistantTranscriptRewrite({ scope, rewritten: [enriched] });
           }
         }

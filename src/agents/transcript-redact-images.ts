@@ -59,33 +59,26 @@ function startsWithDataUrl(value: string): boolean {
   return value.slice(0, "data:".length).toLowerCase() === "data:";
 }
 
-function sanitizeImageDataUrlField(
-  source: Record<string, unknown>,
-  key: string,
-  value: string,
-): string | undefined {
-  if (!startsWithDataUrl(value)) {
-    return undefined;
-  }
-  const isImageDataUrlField =
-    (source.type === "input_image" && key === "image_url") ||
-    ((source.type === "image" || source.type === "image_url") && key === "url") ||
-    (source.type === "image" && (key === "source" || key === "data"));
-  return isImageDataUrlField ? sanitizeInlineImageDataUrlForStorage(value) : undefined;
-}
-
-export function sanitizeTranscriptImageDataUrlField(params: {
+export function sanitizeTranscriptImageDataUrlField({
+  source,
+  key,
+  value,
+  preserveImageDataUrlFields,
+}: {
   source: Record<string, unknown>;
   key: string;
   value: string;
   preserveImageDataUrlFields: boolean;
 }): string | undefined {
-  if (params.preserveImageDataUrlFields && params.key === "url") {
-    return startsWithDataUrl(params.value)
-      ? sanitizeInlineImageDataUrlForStorage(params.value)
-      : undefined;
+  if (!startsWithDataUrl(value)) {
+    return undefined;
   }
-  return sanitizeImageDataUrlField(params.source, params.key, params.value);
+  const isImageDataUrlField =
+    (preserveImageDataUrlFields && key === "url") ||
+    (source.type === "input_image" && key === "image_url") ||
+    ((source.type === "image" || source.type === "image_url") && key === "url") ||
+    (source.type === "image" && (key === "source" || key === "data"));
+  return isImageDataUrlField ? sanitizeInlineImageDataUrlForStorage(value) : undefined;
 }
 
 export function shouldPreserveNestedTranscriptImageDataUrlFields(

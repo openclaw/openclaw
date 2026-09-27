@@ -33,7 +33,13 @@ export function registerActivitySummaryPublicationTests(
         agentId: "main",
         storePath: "/tmp/activity-summary-tracked.sqlite",
       };
-      const original = { sessionId: "same-session", lifecycleRevision: "original" };
+      const original = {
+        key: target.key,
+        agentId: target.agentId,
+        storeTarget: { agentId: target.agentId, storePath: target.storePath },
+        generation: Symbol("original"),
+        entry: { sessionId: "same-session", lifecycleRevision: "original" },
+      };
       let current = original;
       const projection = {
         capture: (query: unknown) => {
@@ -61,7 +67,7 @@ export function registerActivitySummaryPublicationTests(
         isCurrent: (record: typeof original) => record === current,
         snapshot: (query: unknown) => {
           expect(query).toEqual(target);
-          return { row: { key: target.key, ...current } };
+          return { row: { key: target.key, ...current.entry } };
         },
       } as unknown as SessionRowProjection;
       let fixture: ReturnType<Start> | undefined;
@@ -76,7 +82,11 @@ export function registerActivitySummaryPublicationTests(
         await readStarted.promise;
         expect(params.broadcast).not.toHaveBeenCalled();
         if (reset) {
-          current = { ...original, lifecycleRevision: "replacement" };
+          current = {
+            ...original,
+            generation: Symbol("replacement"),
+            entry: { ...original.entry, lifecycleRevision: "replacement" },
+          };
         }
         prepared.resolve();
         await vi.advanceTimersByTimeAsync(0);
@@ -87,7 +97,7 @@ export function registerActivitySummaryPublicationTests(
             "sessions.changed",
             expect.objectContaining({
               reason: "activity-summary",
-              session: expect.objectContaining({ key: target.key, ...original }),
+              session: expect.objectContaining({ key: target.key, ...original.entry }),
             }),
             { sessionKeys: [target.key], agentId: target.agentId, dropIfSlow: true },
           );

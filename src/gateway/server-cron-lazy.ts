@@ -31,8 +31,7 @@ type LoadedGatewayCronState = {
   startPromise: Promise<void> | null;
   startGeneration: number | null;
   schedulingPaused: boolean;
-  underlyingStartInFlight: boolean;
-  underlyingStarted: boolean;
+  underlyingStartAttempted: boolean;
 };
 
 /** Creates a cron state proxy that imports the real cron service on first use. */
@@ -75,8 +74,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           startPromise: null,
           startGeneration: null,
           schedulingPaused: false,
-          underlyingStartInFlight: false,
-          underlyingStarted: false,
+          underlyingStartAttempted: false,
         };
         if (schedulingPaused) {
           loaded.state.cron.pauseScheduling();
@@ -98,7 +96,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
 
   const stopResolvedCron = async (resolved: LoadedGatewayCronState): Promise<void> => {
     resolved.phase = "stopped";
-    resolved.underlyingStarted = false;
+    resolved.underlyingStartAttempted = false;
     if (exitWatcherHandoff) {
       // A cancelled startup must join the exact prepared owner's drain, not
       // prepare or stop another owner after its watchers have been adopted.
@@ -165,16 +163,12 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.state.cron.resumeScheduling();
           resolved.schedulingPaused = false;
         }
-        resolved.underlyingStartInFlight = true;
+        resolved.underlyingStartAttempted = true;
         try {
           await resolved.state.cron.start();
-          resolved.underlyingStarted = true;
         } catch (err) {
-          resolved.underlyingStarted = false;
           resolved.phase = startCancelled() ? "stopped" : "idle";
           throw err;
-        } finally {
-          resolved.underlyingStartInFlight = false;
         }
         if (startCancelled()) {
           await stopResolvedCron(resolved);
@@ -219,7 +213,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       releaseSchedulingResumeWaiters();
       if (loaded) {
         loaded.phase = "stopped";
-        loaded.underlyingStarted = false;
+        loaded.underlyingStartAttempted = false;
         loaded.state.cron.stop();
         return;
       }
@@ -233,7 +227,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
               return;
             }
             resolved.phase = "stopped";
-            resolved.underlyingStarted = false;
+            resolved.underlyingStartAttempted = false;
             resolved.state.cron.stop();
           })
           .catch(() => {});
@@ -252,11 +246,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     resumeScheduling() {
       schedulingPaused = false;
       releaseSchedulingResumeWaiters();
-      if (
-        loaded &&
-        loaded.schedulingPaused &&
-        (loaded.underlyingStarted || loaded.underlyingStartInFlight)
-      ) {
+      // A rejected catch-up can still leave live scheduling; the service owns readiness.
+      if (loaded && loaded.schedulingPaused && loaded.underlyingStartAttempted) {
         loaded.state.cron.resumeScheduling();
         loaded.schedulingPaused = false;
       }

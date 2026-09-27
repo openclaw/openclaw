@@ -1,4 +1,3 @@
-// Signal plugin module implements message actions behavior.
 import {
   createActionGate,
   jsonResult,

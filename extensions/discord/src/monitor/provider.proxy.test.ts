@@ -33,8 +33,8 @@ const {
   GatewayIntents,
   baseRegisterClientSpy,
   gatewayDisconnectSpy,
-  captureHttpExchangeSpy,
-  captureWsEventSpy,
+  captureHttpExchangeAsyncSpy,
+  captureWsEventAsyncSpy,
   GatewayPlugin,
   globalFetchMock,
   HttpsAgent,
@@ -71,8 +71,8 @@ const {
   MockWebSocketLocal.prototype.terminate = function () {
     webSocketTerminateSpyLocal();
   };
-  const captureHttpExchangeSpyLocal = vi.fn();
-  const captureWsEventSpyLocal = vi.fn();
+  const captureHttpExchangeAsyncSpyLocal = vi.fn().mockResolvedValue(undefined);
+  const captureWsEventAsyncSpyLocal = vi.fn().mockResolvedValue(undefined);
   const resolveDebugProxySettingsMockLocal = vi.fn(() => ({ enabled: false }));
   const fetchWithSsrFGuardMockLocal = vi.fn(async (params: { url: string; init?: RequestInit }) => {
     const source = (await globalFetchMockLocal(params.url, params.init)) as Response;
@@ -161,8 +161,8 @@ const {
     fetchWithSsrFGuardMock: fetchWithSsrFGuardMockLocal,
     getLastAgent: () => HttpsAgentLocal.lastCreated,
     getLastProxyAgent: () => HttpsProxyAgentLocal.lastCreated,
-    captureHttpExchangeSpy: captureHttpExchangeSpyLocal,
-    captureWsEventSpy: captureWsEventSpyLocal,
+    captureHttpExchangeAsyncSpy: captureHttpExchangeAsyncSpyLocal,
+    captureWsEventAsyncSpy: captureWsEventAsyncSpyLocal,
     httpsAgentSpy: httpsAgentSpyLocal,
     resolveDebugProxySettingsMock: resolveDebugProxySettingsMockLocal,
     resetLastAgent: () => {
@@ -195,8 +195,8 @@ vi.mock("../internal/ws-runtime.js", () => ({
 import { WebSocket } from "../internal/ws-runtime.js";
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  captureHttpExchange: captureHttpExchangeSpy,
-  captureWsEvent: captureWsEventSpy,
+  captureHttpExchangeAsync: captureHttpExchangeAsyncSpy,
+  captureWsEventAsync: captureWsEventAsyncSpy,
   resolveEffectiveDebugProxyUrl: (configuredProxyUrl?: string) =>
     configuredProxyUrl?.trim() || process.env.OPENCLAW_DEBUG_PROXY_URL,
   resolveDebugProxySettings: resolveDebugProxySettingsMock,
@@ -380,8 +380,8 @@ describe("createDiscordGatewayPlugin", () => {
     webSocketSpy.mockClear();
     webSocketCloseSpy.mockClear();
     webSocketTerminateSpy.mockClear();
-    captureHttpExchangeSpy.mockClear();
-    captureWsEventSpy.mockClear();
+    captureHttpExchangeAsyncSpy.mockClear();
+    captureWsEventAsyncSpy.mockClear();
     resolveDebugProxySettingsMock.mockReset().mockReturnValue({ enabled: false });
     resetLastAgent();
   });
@@ -491,7 +491,9 @@ describe("createDiscordGatewayPlugin", () => {
     createWebSocket("wss://gateway.discord.gg/?attempt=1");
     createWebSocket("wss://gateway.discord.gg/?attempt=2");
 
-    const openCalls = captureWsEventSpy.mock.calls.filter(([event]) => event?.kind === "ws-open");
+    const openCalls = captureWsEventAsyncSpy.mock.calls.filter(
+      ([event]) => event?.kind === "ws-open",
+    );
     expect(openCalls).toHaveLength(2);
     expect(openCalls[0]?.[0]?.flowId).not.toBe(openCalls[1]?.[0]?.flowId);
   });
@@ -691,7 +693,7 @@ describe("createDiscordGatewayPlugin", () => {
 
     await registerGatewayClientWithMetadata({ plugin, fetchMock: globalFetchMock });
 
-    expect(captureHttpExchangeSpy).not.toHaveBeenCalled();
+    expect(captureHttpExchangeAsyncSpy).not.toHaveBeenCalled();
   });
 
   it("maps body read failures to fetch failed", async () => {

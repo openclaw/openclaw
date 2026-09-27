@@ -215,16 +215,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const composerAlerts = showComposerInput
     ? html`
         ${renderChatVoiceStatus({
-          status:
-            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-              ? "error"
-              : props.realtimeTalkStatus,
-          detail: props.realtimeTalkVoice?.error ?? props.realtimeTalkDetail,
+          status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
+          detail: props.realtimeTalkDetail,
           onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
-          onDismissError:
-            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-              ? undefined
-              : props.onDismissRealtimeTalkError,
+          onDismissError: props.realtimeTalkCameraError
+            ? undefined
+            : props.onDismissRealtimeTalkError,
         })}
         ${
           props.realtimeTalkInputNotice

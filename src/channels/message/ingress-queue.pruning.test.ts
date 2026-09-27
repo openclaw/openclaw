@@ -32,22 +32,33 @@ describe("channel ingress pruning", () => {
     });
   });
 
-  it("does not prune protected rows while enforcing max-entry limits", async () => {
+  it.each([
+    { ids: ["z", "a"], max: 1, protected: [" a ", "", "   "], retained: ["a", "z"] },
+    {
+      ids: ["a", "z", "\ufffd", "keep\u0000key", "keep\\u0000key"],
+      max: 0,
+      protected: [" a ", "\ud800", "keep\u0000key"],
+      retained: ["a", "keep\u0000key"],
+    },
+  ])("preserves protected IDs and their retention slots: $max", async (fixture) => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir, { now: () => 10 });
 
-      await queue.enqueue("z", { text: "first" });
-      await queue.enqueue("a", { text: "second" });
+      for (const id of fixture.ids) {
+        await queue.enqueue(id, { text: id });
+      }
 
-      expect(await queue.prune({ pendingMaxEntries: 1, protectIds: [" a ", "", "   "] })).toBe(0);
+      expect(
+        await queue.prune({ pendingMaxEntries: fixture.max, protectIds: fixture.protected }),
+      ).toBe(fixture.ids.length - fixture.retained.length);
       expect(
         (await queue.listPending({ limit: "all", orderBy: "id" })).map((row) => row.id),
-      ).toEqual(["a", "z"]);
+      ).toEqual(fixture.retained);
     });
   });
 
   it.each(["pending", "completed", "failed"] as const)(
-    "prunes %s overflow without materializing the retained prefix",
+    "prunes %s overflow without materializing rows",
     async (status) => {
       await withTempState(async (stateDir) => {
         const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -70,10 +81,8 @@ describe("channel ingress pruning", () => {
               })),
             ),
         );
-        const reads = trackSqliteStatementExecutions(db, ["candidates"], (sql) =>
-          sql.startsWith("select") && sql.includes('from "channel_ingress_events"')
-            ? "candidates"
-            : null,
+        const queries = trackSqliteStatementExecutions(db, ["prune"], (sql) =>
+          sql.includes('"channel_ingress_events"') ? "prune" : null,
         );
         try {
           const options = { [`${status}MaxEntries`]: 2 };
@@ -84,11 +93,13 @@ describe("channel ingress pruning", () => {
               { env },
             );
           expect(prune()).toBe(518);
-          expect(reads.rowCounts.candidates).toBe(518);
+          expect(queries.rowCounts.prune).toBe(0);
+          expect(queries.counts.prune).toBeLessThanOrEqual(3);
           expect(prune()).toBe(0);
-          expect(reads.rowCounts.candidates).toBe(518);
+          expect(queries.rowCounts.prune).toBe(0);
+          expect(queries.counts.prune).toBeLessThanOrEqual(4);
         } finally {
-          reads.restore();
+          queries.restore();
         }
         expect(
           executeSqliteQuerySync(

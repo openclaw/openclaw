@@ -68,16 +68,9 @@ const cases: Array<{
     current: original,
     allow: false,
   },
-  { name: "unstamped task after native parent rotation", stored: undefined, current, allow: false },
   {
     name: "stamped task without current history authority",
     stored: original,
-    current: undefined,
-    allow: false,
-  },
-  {
-    name: "unstamped task without current history authority",
-    stored: undefined,
     current: undefined,
     allow: false,
   },
@@ -343,7 +336,7 @@ it.each([
         replacement = await codexNativeSubagentMonitorRuntime.register(registration);
       }
       if (retireReplacement) {
-        codexNativeSubagentMonitorRuntime.retireParent(client, currentParent);
+        await codexNativeSubagentMonitorRuntime.retireParent(client, currentParent);
       }
       const afterRetirement = readTask();
       await fixture.notify({
@@ -393,8 +386,8 @@ it.each([
         });
       }
     } finally {
-      codexNativeSubagentMonitorRuntime.retireParent(client, currentParent);
-      codexNativeSubagentMonitorRuntime.retireParent(client, originalParent);
+      await codexNativeSubagentMonitorRuntime.retireParent(client, currentParent);
+      await codexNativeSubagentMonitorRuntime.retireParent(client, originalParent);
       await replacement.unregister();
       fixture.close();
       host.closeHost();

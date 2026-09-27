@@ -82,16 +82,16 @@ private struct ProPanelBackground: View {
             }
     }
 
-    private var fill: AnyShapeStyle {
+    private var fill: Color {
         let color = self.isProminent ? UIColor.systemBackground : UIColor.secondarySystemGroupedBackground
-        return AnyShapeStyle(Color(uiColor: color))
+        return Color(uiColor: color)
     }
 
-    private var borderStyle: AnyShapeStyle {
+    private var borderStyle: Color {
         if let tint {
-            return AnyShapeStyle(tint.opacity(self.isProminent ? 0.18 : 0.10))
+            return tint.opacity(self.isProminent ? 0.18 : 0.10)
         }
-        return AnyShapeStyle(Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.22 : 0.12))
+        return Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.22 : 0.12)
     }
 }
 
@@ -255,14 +255,6 @@ struct OpenClawSidebarControlButton: View {
         } else {
             button
         }
-    }
-}
-
-struct OpenClawSidebarHeaderLeadingSlot: View {
-    let action: OpenClawSidebarHeaderAction
-
-    var body: some View {
-        OpenClawSidebarControlButton(action: self.action)
     }
 }
 
@@ -501,20 +493,14 @@ struct OpenClawToggleIndicator: View {
 enum OpenClawStatusTone {
     case ok
     case warn
-    case danger
-    case info
     case accent
-    case teal
     case muted
 
     var color: Color {
         switch self {
         case .ok: OpenClawBrand.ok
         case .warn: OpenClawBrand.warn
-        case .danger: OpenClawBrand.danger
-        case .info: OpenClawBrand.info
         case .accent: OpenClawBrand.accent
-        case .teal: OpenClawBrand.teal
         case .muted: OpenClawBrand.textSecondary
         }
     }
@@ -541,25 +527,6 @@ struct OpenClawStatusBadge: View {
             Capsule()
                 .fill(self.tone.color.opacity(self.colorScheme == .dark ? 0.14 : 0.10))
         }
-    }
-}
-
-struct ProValuePill: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let value: String
-    let color: Color
-
-    var body: some View {
-        Text(self.value)
-            .font(OpenClawType.footnoteSemiBold)
-            .foregroundStyle(self.color)
-            .lineLimit(1)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background {
-                Capsule()
-                    .fill(self.color.opacity(self.colorScheme == .dark ? 0.12 : 0.08))
-            }
     }
 }
 
@@ -612,46 +579,5 @@ struct OpenClawGatewayCompactPill: View {
         case .disconnected:
             .muted
         }
-    }
-}
-
-struct ProStatusRow: View {
-    let icon: String
-    let title: OpenClawTextValue
-    let detail: OpenClawTextValue
-    let value: String?
-    let color: Color
-    var actionTitle: OpenClawTextValue?
-    var action: (() -> Void)?
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ProIconBadge(systemName: self.icon, color: self.color)
-            VStack(alignment: .leading, spacing: 4) {
-                self.title.text
-                    .font(OpenClawType.subheadSemiBold)
-                    .lineLimit(1)
-                self.detail.text
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 6) {
-                if let value {
-                    ProValuePill(value: value, color: self.color)
-                }
-                if let actionTitle, let action {
-                    Button(action: action) {
-                        actionTitle.text
-                            .font(OpenClawType.captionSemiBold)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-                }
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
     }
 }

@@ -25,6 +25,7 @@ vi.mock("../runtime-api.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  getOptionalMSTeamsRuntime: () => null,
   getMSTeamsRuntime: getMSTeamsRuntimeMock,
 }));
 

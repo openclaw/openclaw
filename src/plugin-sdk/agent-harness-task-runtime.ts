@@ -39,7 +39,9 @@ import {
 import { DetachedTaskAssignmentUnsupportedError } from "../tasks/detached-task-runtime-contract.js";
 import { captureDetachedTaskRuntimeOwner } from "../tasks/detached-task-runtime-state.js";
 import {
+  createRunningTaskRunAsync,
   finalizeTaskRunByRunIdAsync,
+  recordTaskRunProgressByRunIdAsync,
   setDetachedTaskDeliveryStatusByRunIdAsync,
   transitionTaskAssignmentAsync,
 } from "../tasks/detached-task-runtime.async.js";
@@ -171,6 +173,16 @@ export type AgentHarnessTaskRuntime = {
     params: AgentHarnessScopedSetDeliveryStatusParams,
   ): TaskRecord[];
   listTaskRecords(): TaskRecord[];
+  /** Worker-backed creation on hosts that support asynchronous task persistence. */
+  createRunningTaskRunAsync?(
+    params: AgentHarnessScopedCreateRunningTaskRunParams,
+  ): Promise<TaskRecord>;
+  tryCreateRunningTaskRunAsync?(
+    params: AgentHarnessScopedCreateRunningTaskRunParams,
+  ): Promise<TaskRecord | null>;
+  recordTaskRunProgressByRunIdAsync?(
+    params: AgentHarnessScopedRecordTaskRunProgressParams,
+  ): Promise<TaskRecord[]>;
   /** Worker-backed settlement on hosts that support asynchronous task persistence. */
   finalizeTaskRunByRunIdAsync?(
     params: AgentHarnessScopedFinalizeTaskRunParams,
@@ -180,6 +192,8 @@ export type AgentHarnessTaskRuntime = {
   ): Promise<TaskRecord[]>;
   /** Prepare a run once; the returned accessor checks current resident ownership without I/O. */
   prepareTaskRunRead?(runId: string): Promise<() => TaskRecord[]>;
+  /** Prepare scoped recovery candidates without synchronous database I/O. */
+  prepareTaskRecordsRead?(): Promise<() => TaskRecord[]>;
 };
 
 /** Completion states a harness task can report to its requester. */
@@ -256,6 +270,23 @@ export function createAgentHarnessTaskRuntime(
       executionOwner,
     });
   };
+  const tryCreateRunningTaskRunAsync = async (
+    taskParams: AgentHarnessScopedCreateRunningTaskRunParams,
+  ): Promise<TaskRecord | null> => {
+    assertRunId(taskParams.runId);
+    return await createRunningTaskRunAsync(
+      {
+        ...projectTaskContentForPersistence(incognito, taskParams),
+        runtime,
+        ...(taskKind ? { taskKind } : {}),
+        requesterSessionKey,
+        ownerKey: requesterSessionKey,
+        scopeKind: "session",
+        executionOwner,
+      },
+      assertRuntimeCurrent,
+    );
+  };
   return {
     assertTaskAssignmentSupported() {
       runtimeOwner.assertCurrent();
@@ -271,6 +302,14 @@ export function createAgentHarnessTaskRuntime(
       return task;
     },
     tryCreateRunningTaskRun,
+    tryCreateRunningTaskRunAsync,
+    async createRunningTaskRunAsync(taskParams) {
+      const task = await tryCreateRunningTaskRunAsync(taskParams);
+      if (!task) {
+        throw new Error("Task persistence failed.");
+      }
+      return task;
+    },
     recordTaskRunProgressByRunId(taskParams) {
       assertRunId(taskParams.runId);
       const { expectedTask, completionCustody, ...progress } = projectTaskContentForPersistence(
@@ -325,6 +364,23 @@ export function createAgentHarnessTaskRuntime(
         sessionKey: requesterSessionKey,
       });
     },
+    async recordTaskRunProgressByRunIdAsync(taskParams) {
+      assertRunId(taskParams.runId);
+      assertRuntimeCurrent();
+      const { expectedTask, completionCustody, ...progress } = projectTaskContentForPersistence(
+        incognito,
+        taskParams,
+      );
+      const scoped = { ...progress, runtime, sessionKey: requesterSessionKey };
+      return expectedTask
+        ? await transitionTaskAssignmentAsync(
+            assignmentTransition(
+              { kind: "state", params: scoped },
+              { expectedTask, completionCustody },
+            ),
+          )
+        : await recordTaskRunProgressByRunIdAsync(scoped, assertRuntimeCurrent);
+    },
     async finalizeTaskRunByRunIdAsync(taskParams) {
       assertRunId(taskParams.runId);
       assertRuntimeCurrent();
@@ -362,6 +418,7 @@ export function createAgentHarnessTaskRuntime(
     async prepareTaskRunRead(runId) {
       assertRunId(runId);
       assertRuntimeCurrent();
+      const adapter = runtimeOwner.runtime;
       const read = await prepareTaskRegistryRead();
       assertRuntimeCurrent();
       if (!read) {
@@ -369,7 +426,24 @@ export function createAgentHarnessTaskRuntime(
       }
       return () => {
         assertRuntimeCurrent();
-        return read.getTasksByRunId(runId).filter(matchesScope);
+        const tasks = read.getTasksByRunId(runId).filter(matchesScope);
+        if (adapter && tasks.length === 0) {
+          throw new Error("Custom task runtime has no prepared core projection for this run");
+        }
+        return tasks;
+      };
+    },
+    async prepareTaskRecordsRead() {
+      assertRuntimeCurrent();
+      const read = await prepareTaskRegistryRead();
+      assertRuntimeCurrent();
+      if (!read) {
+        throw new Error("Harness task read did not stabilize");
+      }
+      const owners = new Set([requesterSessionKey]);
+      return () => {
+        assertRuntimeCurrent();
+        return read.listTaskRecordsForOwnerTree(owners).filter(matchesScope);
       };
     },
     listTaskRecords() {

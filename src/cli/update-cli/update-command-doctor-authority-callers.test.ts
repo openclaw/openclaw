@@ -236,7 +236,7 @@ describe("unproved Doctor authority callers", () => {
     expect(adoptUpdateRun(run.runId).origin.driver?.pid).toBe(process.pid);
     recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
     recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
-    recordDeferredPluginMigrations({
+    await recordDeferredPluginMigrations({
       pending: [
         {
           pluginId: "pending-fixture",

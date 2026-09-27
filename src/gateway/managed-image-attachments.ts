@@ -32,6 +32,7 @@ import { resolveDeliveryQueueStateEnv } from "../infra/delivery-queue-sqlite.js"
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import { createImageProcessor, getImageMetadata } from "../media/media-services.js";
@@ -66,14 +67,17 @@ import {
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import {
+  resolveManagedImageOriginalPath,
+  deleteManagedImageRecordArtifacts,
+  insertManagedImageRecordWithFile,
+} from "./managed-image-attachments.custody.js";
+import {
   resolveManagedMediaKind,
   type ManagedMediaKind,
 } from "./managed-image-attachments.media-kind.js";
 import {
-  attachManagedImageRecordToMessage,
-  claimManagedImageRecordCleanupIfCurrent,
-  deleteClaimedManagedImageRecord,
-  insertManagedImageRecord,
+  attachManagedImageRecordsToMessage,
+  captureManagedImageContext,
   listManagedImageOriginalMediaIds,
   listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
@@ -334,20 +338,6 @@ async function resizeManagedImageBufferToLimits(params: {
   };
 }
 
-function resolveManagedImageOriginalPath(record: ManagedImageRecord) {
-  if (
-    !path.isAbsolute(record.original.mediaRoot) ||
-    record.original.mediaSubdir !== MANAGED_OUTGOING_ORIGINALS_SUBDIR ||
-    !record.original.mediaId ||
-    record.original.mediaId.includes("/") ||
-    record.original.mediaId.includes("\\") ||
-    record.original.mediaId.includes("\0")
-  ) {
-    throw new Error("Managed image record has an unsafe media identity");
-  }
-  return path.join(record.original.mediaRoot, record.original.mediaSubdir, record.original.mediaId);
-}
-
 function resolveManagedImageOriginalsDir(stateDir: string): string {
   const runtimeMediaRoot =
     path.resolve(stateDir) === path.resolve(resolveStateDir())
@@ -568,26 +558,6 @@ async function getVariantStats(params: { buffer: Buffer; sizeBytes: number }) {
   };
 }
 
-async function deleteManagedImageRecordArtifacts(
-  record: ManagedImageRecord,
-  stateDir = resolveStateDir(),
-  alreadyClaimed = false,
-) {
-  if (!alreadyClaimed && !claimManagedImageRecordCleanupIfCurrent(record, stateDir)) {
-    return { deletedRecord: false, deletedFileCount: 0 };
-  }
-  try {
-    await fs.rm(resolveManagedImageOriginalPath(record), { force: true });
-  } catch {
-    // Keep the durable cleanup claim so the next sweep retries this exact file.
-    return { deletedRecord: false, deletedFileCount: 0 };
-  }
-  return {
-    deletedRecord: deleteClaimedManagedImageRecord(record, stateDir),
-    deletedFileCount: 1,
-  };
-}
-
 export async function cleanupManagedOutgoingMediaRecords(params?: {
   stateDir?: string;
   nowMs?: number;
@@ -699,18 +669,31 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   return { deletedRecordCount, deletedFileCount, retainedCount };
 }
 
-export async function removeManagedOutgoingMediaBlocks(params: {
-  blocks: readonly Record<string, unknown>[];
-  messageId: string | null;
-  stateDir?: string;
-}): Promise<void> {
+export async function removeManagedOutgoingMediaBlocks(
+  params: {
+    blocks: readonly Record<string, unknown>[];
+    messageId: string | null;
+    stateDir?: string;
+  },
+  context?: ReturnType<typeof captureManagedImageContext>,
+): Promise<void> {
   const stateDir = params.stateDir ?? resolveStateDir();
   const messageId = params.messageId;
+  const refs = collectManagedOutgoingAttachmentRefs(params.blocks);
+  if (refs.length === 0) {
+    return;
+  }
+  const captured = context ?? captureManagedImageContext(stateDir);
   await Promise.all(
-    collectManagedOutgoingAttachmentRefs(params.blocks).map(async ({ attachmentId }) => {
-      const record = await readManagedImageRecord(attachmentId, stateDir);
+    refs.map(async ({ attachmentId }) => {
+      const record = await readManagedImageRecord(attachmentId, stateDir, captured);
       if (record?.messageId === messageId) {
-        await deleteManagedImageRecordArtifacts(record, stateDir);
+        if (
+          await captureChannelReadScope()?.discardResource(resolveManagedImageOriginalPath(record))
+        ) {
+          return;
+        }
+        await deleteManagedImageRecordArtifacts(record, stateDir, false, captured);
       }
     }),
   );
@@ -1201,26 +1184,18 @@ export function attachManagedOutgoingMediaToMessage(params: {
   messageId: string;
   blocks?: readonly Record<string, unknown>[];
   stateDir?: string;
-}) {
+}): Promise<boolean> {
   const messageId = params.messageId.trim();
-  if (!messageId) {
-    return false;
-  }
   const refs = collectManagedOutgoingAttachmentRefs(params.blocks);
-  if (refs.length === 0) {
-    return false;
+  if (!messageId || refs.length === 0) {
+    return Promise.resolve(false);
   }
-  return refs
-    .map(({ attachmentId, sessionKey }) =>
-      attachManagedImageRecordToMessage({
-        attachmentId,
-        sessionKey,
-        messageId,
-        updatedAt: new Date().toISOString(),
-        stateDir: params.stateDir,
-      }),
-    )
-    .every(Boolean);
+  return attachManagedImageRecordsToMessage({
+    attachments: refs,
+    messageId,
+    updatedAt: new Date().toISOString(),
+    stateDir: params.stateDir,
+  });
 }
 
 export async function createManagedOutgoingMediaBlocks(params: {
@@ -1246,6 +1221,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
       return [];
     }
     const stateDir = params.stateDir ?? resolveStateDir();
+    const context = captureManagedImageContext(stateDir);
     const limits = resolveManagedImageAttachmentLimits(params.limits);
     const blocks: ManagedMediaBlock[] = [];
     let resolvedLocalRoots: readonly string[] | undefined;
@@ -1268,6 +1244,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
           : (inferredKind ?? "media");
 
       let savedOriginalPath: string | null = null;
+      let insertedRecord: ManagedImageRecord | undefined;
       try {
         params.assertCurrent?.();
         const parsedDataUrl = parseMediaDataUrl(mediaUrl, fallbackLabel, limits);
@@ -1471,28 +1448,9 @@ export async function createManagedOutgoingMediaBlocks(params: {
           }
         }
         const block = buildManagedMediaBlock(record, playback);
-        const readScope = captureChannelReadScope();
-        const originalPath = savedOriginal.path;
-        readScope?.registerResource({
-          key: `managed-media-record:${stateDir}:${record.attachmentId}`,
-          settle: async (accepted) => {
-            if (accepted || !claimManagedImageRecordCleanupIfCurrent(record, stateDir)) {
-              return;
-            }
-            // The retained descriptor owns file deletion; metadata cleanup never unlinks by path.
-            await readScope.discardResource(originalPath);
-            try {
-              await fs.lstat(originalPath);
-            } catch (error) {
-              if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-                deleteClaimedManagedImageRecord(record, stateDir);
-                return;
-              }
-              throw error;
-            }
-          },
-        });
-        insertManagedImageRecord(record, stateDir);
+        await insertManagedImageRecordWithFile(record, savedOriginal.path, stateDir, context);
+        insertedRecord = record;
+        context.admission.assertCurrent();
         const durationMs = asNonNegativeFiniteNumber(item.durationMs);
         const width = asNonNegativeFiniteNumber(item.width);
         const height = asNonNegativeFiniteNumber(item.height);
@@ -1507,16 +1465,25 @@ export async function createManagedOutgoingMediaBlocks(params: {
         }
       } catch (error) {
         if (savedOriginalPath) {
-          await unlinkIfExists(savedOriginalPath);
+          if (captureChannelReadScope()) {
+            await unlinkIfExists(savedOriginalPath);
+          } else if (insertedRecord) {
+            await deleteManagedImageRecordArtifacts(insertedRecord, stateDir, false, context);
+          } else if (!hasSqliteWorkerOutcomeUnknown(error)) {
+            await unlinkIfExists(savedOriginalPath);
+          }
         }
         try {
           params.assertCurrent?.();
         } catch (authorityError) {
-          await removeManagedOutgoingMediaBlocks({
-            blocks,
-            messageId: params.messageId ?? null,
-            stateDir,
-          });
+          await removeManagedOutgoingMediaBlocks(
+            {
+              blocks,
+              messageId: params.messageId ?? null,
+              stateDir,
+            },
+            context,
+          );
           throw authorityError;
         }
         const sanitizedError = getSanitizedManagedImageAttachmentError(error, label, hintedKind);
@@ -1532,11 +1499,14 @@ export async function createManagedOutgoingMediaBlocks(params: {
           params.onPrepareError?.(sanitizedError);
           continue;
         }
-        await removeManagedOutgoingMediaBlocks({
-          blocks,
-          messageId: params.messageId ?? null,
-          stateDir,
-        });
+        await removeManagedOutgoingMediaBlocks(
+          {
+            blocks,
+            messageId: params.messageId ?? null,
+            stateDir,
+          },
+          context,
+        );
         throw sanitizedError;
       }
     }

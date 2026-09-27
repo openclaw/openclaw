@@ -321,6 +321,33 @@ class OwnedGroupTest(unittest.TestCase):
 
 
 class PhotoContentTest(unittest.TestCase):
+    def lookup_driver(self, *steps):
+        pending = list(steps)
+        requests = []
+
+        def request(payload, timeout=20):
+            requests.append((payload, timeout))
+            self.assertTrue(pending, f"Unexpected TDLib request: {payload}")
+            expected, result = pending.pop(0)
+            method = payload["@type"]
+            if method == "loadChats":
+                method = payload["chat_list"]["@type"]
+            self.assertEqual(method, expected)
+            if isinstance(result, driver.DriverError):
+                raise result
+            return result
+
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        instance.client = SimpleNamespace(request=request, requests=requests)
+        self.addCleanup(self.assertEqual, pending, [])
+        return instance
+
+    def lookup_error(self, method="getChat", code=400, message="Chat not found", error_type=driver.TdRequestError):
+        return error_type(
+            f"{method} failed ({code}): {message}",
+            tdlib_code=code, tdlib_message=message, tdlib_method=method,
+        )
+
     def test_text_photo_and_album_preserve_forum_topic_and_reply_with_pinned_api(self):
         class Transport:
             def __init__(self):
@@ -343,6 +370,14 @@ class PhotoContentTest(unittest.TestCase):
             self.assertEqual(request["reply_to"]["@type"], "inputMessageReplyToMessage")
             self.assertNotIn("message_thread_id", request)
             self.assertNotIn("reply_to_message_id", request)
+        content = instance.client.requests[1]["input_message_content"]
+        self.assertEqual(content["@type"], "inputMessagePhoto")
+        self.assertEqual(content["photo"]["@type"], "inputPhoto")
+        self.assertEqual(content["photo"]["photo"]["@type"], "inputFileLocal")
+        self.assertEqual(content["show_caption_above_media"], False)
+        self.assertIsNone(content["self_destruct_type"])
+        self.assertEqual(content["has_spoiler"], False)
+        self.assertNotIn("ttl", content)
 
     def test_rejects_unsafe_prebuilt_archive_members(self):
         class FakeTar:
@@ -359,21 +394,6 @@ class PhotoContentTest(unittest.TestCase):
             driver.extract_prebuilt_archive(archive, tempfile.gettempdir())
         self.assertFalse(archive.extracted)
 
-    def test_uses_current_tdlib_photo_shape(self):
-        instance = driver.UserDriver.__new__(driver.UserDriver)
-        instance.config = {}
-        instance.bot_config = {}
-        with tempfile.NamedTemporaryFile(suffix=".jpg") as photo:
-            content = instance.photo_content(photo.name, "caption")
-
-        self.assertEqual(content["@type"], "inputMessagePhoto")
-        self.assertEqual(content["photo"]["@type"], "inputPhoto")
-        self.assertEqual(content["photo"]["photo"]["@type"], "inputFileLocal")
-        self.assertEqual(content["show_caption_above_media"], False)
-        self.assertIsNone(content["self_destruct_type"])
-        self.assertEqual(content["has_spoiler"], False)
-        self.assertNotIn("ttl", content)
-
     def test_uses_test_dc_for_test_session(self):
         instance = driver.UserDriver.__new__(driver.UserDriver)
         instance.config = {
@@ -389,25 +409,11 @@ class PhotoContentTest(unittest.TestCase):
         self.assertEqual(current["database_encryption_key"], "database-key")
 
     def test_credential_check_accepts_chat_found_after_bounded_list_refresh(self):
-        class FakeClient:
-            def __init__(self):
-                self.requests = []
-
-            def request(self, payload, timeout=20):
-                self.requests.append((payload, timeout))
-                if payload["@type"] == "getChat":
-                    if len([request for request, _timeout in self.requests if request["@type"] == "getChat"]) > 1:
-                        return {"id": -1001}
-                    raise driver.DriverError(
-                        "getChat failed (400): Chat not found",
-                        tdlib_code=400,
-                        tdlib_message="Chat not found",
-                        tdlib_method="getChat",
-                    )
-                return {"@type": "ok"}
-
-        instance = driver.UserDriver.__new__(driver.UserDriver)
-        instance.client = FakeClient()
+        instance = self.lookup_driver(
+            ("getChat", self.lookup_error(error_type=driver.DriverError)),
+            ("chatListMain", {"@type": "ok"}),
+            ("getChat", {"id": -1001}),
+        )
         self.assertEqual(
             instance.resolve_chat("-1001", credential_deadline=driver.time.monotonic() + 20),
             -1001,
@@ -419,24 +425,12 @@ class PhotoContentTest(unittest.TestCase):
         self.assertLessEqual(instance.client.requests[1][1], 10)
 
     def test_credential_check_classifies_exhausted_chat_list(self):
-        class FakeClient:
-            def request(self, payload, timeout=20):
-                if payload["@type"] == "getChat":
-                    raise driver.TdRequestError(
-                        "getChat failed (400): Chat not found",
-                        tdlib_code=400,
-                        tdlib_message="Chat not found",
-                        tdlib_method="getChat",
-                    )
-                raise driver.TdRequestError(
-                    "loadChats failed (404): Not Found",
-                    tdlib_code=404,
-                    tdlib_message="Not Found",
-                    tdlib_method="loadChats",
-                )
-
-        instance = driver.UserDriver.__new__(driver.UserDriver)
-        instance.client = FakeClient()
+        exhausted = self.lookup_error("loadChats", 404, "Not Found")
+        instance = self.lookup_driver(
+            ("getChat", self.lookup_error()),
+            ("chatListMain", exhausted),
+            ("chatListArchive", exhausted),
+        )
         with self.assertRaisesRegex(driver.DriverError, "exhausting") as raised:
             instance.resolve_chat("-1001", credential_deadline=driver.time.monotonic() + 20)
         self.assertEqual(
@@ -444,38 +438,18 @@ class PhotoContentTest(unittest.TestCase):
         )
 
     def test_credential_check_loads_archived_chat_before_classifying_absence(self):
-        class FakeClient:
-            def __init__(self):
-                self.requests = []
-
-            def request(self, payload, timeout=20):
-                self.requests.append(payload)
-                if payload["@type"] == "getChat" and len(self.requests) == 1:
-                    raise driver.TdRequestError(
-                        "getChat failed (400): Chat not found",
-                        tdlib_code=400,
-                        tdlib_message="Chat not found",
-                        tdlib_method="getChat",
-                    )
-                if payload["@type"] == "loadChats" and payload["chat_list"]["@type"] == "chatListMain":
-                    raise driver.TdRequestError(
-                        "loadChats failed (404): Not Found",
-                        tdlib_code=404,
-                        tdlib_message="Not Found",
-                        tdlib_method="loadChats",
-                    )
-                if payload["@type"] == "getChat":
-                    return {"id": -1001}
-                return {"@type": "ok"}
-
-        instance = driver.UserDriver.__new__(driver.UserDriver)
-        instance.client = FakeClient()
+        instance = self.lookup_driver(
+            ("getChat", self.lookup_error()),
+            ("chatListMain", self.lookup_error("loadChats", 404, "Not Found")),
+            ("chatListArchive", {"@type": "ok"}),
+            ("getChat", {"id": -1001}),
+        )
         self.assertEqual(
             instance.resolve_chat("-1001", credential_deadline=driver.time.monotonic() + 20),
             -1001,
         )
         self.assertEqual(
-            [payload["@type"] for payload in instance.client.requests],
+            [payload["@type"] for payload, _timeout in instance.client.requests],
             ["getChat", "loadChats", "loadChats", "getChat"],
         )
 
@@ -486,46 +460,21 @@ class PhotoContentTest(unittest.TestCase):
             tdlib_timed_out=True,
         )
 
-        class FakeClient:
-            def request(self, payload, timeout=20):
-                if payload["@type"] == "getChat":
-                    raise driver.TdRequestError(
-                        "getChat failed (400): Chat not found",
-                        tdlib_code=400,
-                        tdlib_message="Chat not found",
-                        tdlib_method="getChat",
-                    )
-                raise list_timeout
-
-        instance = driver.UserDriver.__new__(driver.UserDriver)
-        instance.client = FakeClient()
+        instance = self.lookup_driver(
+            ("getChat", self.lookup_error()),
+            ("chatListMain", list_timeout),
+        )
         with self.assertRaises(driver.DriverError) as raised:
             instance.resolve_chat("-1001", credential_deadline=driver.time.monotonic() + 20)
         self.assertIs(raised.exception, list_timeout)
         self.assertEqual(raised.exception.diagnostic_code, "")
 
     def test_ordinary_numeric_chat_refreshes_the_main_chat_list(self):
-        class FakeClient:
-            def __init__(self):
-                self.requests = []
-                self.get_chat_calls = 0
-
-            def request(self, payload, timeout=20):
-                self.requests.append((payload, timeout))
-                if payload["@type"] == "getChat":
-                    self.get_chat_calls += 1
-                    if self.get_chat_calls == 1:
-                        raise driver.DriverError(
-                            "getChat failed (400): Chat not found",
-                            tdlib_code=400,
-                            tdlib_message="Chat not found",
-                            tdlib_method="getChat",
-                        )
-                    return {"id": -1001}
-                return {"@type": "ok"}
-
-        instance = driver.UserDriver.__new__(driver.UserDriver)
-        instance.client = FakeClient()
+        instance = self.lookup_driver(
+            ("getChat", self.lookup_error(error_type=driver.DriverError)),
+            ("chatListMain", {"@type": "ok"}),
+            ("getChat", {"id": -1001}),
+        )
         self.assertEqual(instance.resolve_chat("-1001"), -1001)
         self.assertEqual(
             [payload["@type"] for payload, _timeout in instance.client.requests],
@@ -534,13 +483,7 @@ class PhotoContentTest(unittest.TestCase):
 
     def test_numeric_chat_propagates_unrelated_tdlib_failures(self):
         failure = driver.DriverError("Timed out waiting for getChat")
-
-        class FakeClient:
-            def request(self, _payload, timeout=20):
-                raise failure
-
-        instance = driver.UserDriver.__new__(driver.UserDriver)
-        instance.client = FakeClient()
+        instance = self.lookup_driver(("getChat", failure))
         with self.assertRaises(driver.DriverError) as raised:
             instance.resolve_chat("-1001")
         self.assertIs(raised.exception, failure)
@@ -570,17 +513,10 @@ class PhotoContentTest(unittest.TestCase):
                 "type": {"@type": "textEntityTypeTextUrl", "url": "https://example.com/qa"},
             },
         ]
-        message = {
-            "id": message_id,
-            "chat_id": -1001,
-            "sender_id": {"user_id": 101},
-            "date": 123,
-            "reply_to": {"message_id": 7},
-            "content": {
-                "@type": "messageText",
-                "text": {"@type": "formattedText", "text": text, "entities": entities},
-            },
-        }
+        message = native_message({
+            "@type": "messageText",
+            "text": {"@type": "formattedText", "text": text, "entities": entities},
+        }, message_id=message_id)
         client = observation_client({101: {"username": "sut_bot"}})
         created = driver.serve_update(
             {"@type": "updateNewMessage", "message": message}, client, known

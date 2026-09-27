@@ -197,3 +197,10 @@ function readCompletionStatus(
     ? undefined
     : { status: "failed", statusLabel: "errored", result: error.trim() || "(no output)" };
 }
+
+export function isNoFinalCompletion(completion: CodexNativeSubagentCompletion): boolean {
+  return (
+    completion.status === "succeeded" &&
+    completion.statusLabel === "completed_without_final_message"
+  );
+}

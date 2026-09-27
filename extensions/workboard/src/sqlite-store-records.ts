@@ -1,9 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type {
-  WorkboardArtifact,
   WorkboardAttachment,
   WorkboardCard,
-  WorkboardComment,
   WorkboardDiagnostic,
   WorkboardEvent,
   WorkboardExecution,
@@ -66,6 +64,15 @@ export function requiredNumber(row: Row, key: string): number {
 
 function optional<T extends object>(value: T): T | undefined {
   return Object.keys(value).length > 0 ? value : undefined;
+}
+
+export function definedFields<T extends object>(fields: T): T {
+  for (const key in fields) {
+    if (fields[key] === undefined) {
+      delete fields[key];
+    }
+  }
+  return fields;
 }
 
 export function asBlobContent(value: string): Uint8Array {
@@ -208,31 +215,18 @@ function readEvents(
   preloaded?: CardChildRows,
 ): WorkboardEvent[] | undefined {
   const events = childRows(db, "workboard_card_events", cardId, preloaded).map((row) => {
-    const event: WorkboardEvent = {
+    return definedFields({
       id: requiredString(row, "id"),
       // SAFETY: insertChildren persists the event kind from WorkboardEvent.
       kind: requiredString(row, "kind") as WorkboardEvent["kind"],
       at: requiredNumber(row, "at"),
-    };
-    const fromStatus = stringValue(row, "from_status");
-    const toStatus = stringValue(row, "to_status");
-    const sessionKey = stringValue(row, "session_key");
-    const runId = stringValue(row, "run_id");
-    if (fromStatus) {
       // SAFETY: Event status transitions are persisted from WorkboardEvent without translation.
-      event.fromStatus = fromStatus as WorkboardEvent["fromStatus"];
-    }
-    if (toStatus) {
+      fromStatus: stringValue(row, "from_status") as WorkboardEvent["fromStatus"],
       // SAFETY: Event status transitions are persisted from WorkboardEvent without translation.
-      event.toStatus = toStatus as WorkboardEvent["toStatus"];
-    }
-    if (sessionKey) {
-      event.sessionKey = sessionKey;
-    }
-    if (runId) {
-      event.runId = runId;
-    }
-    return event;
+      toStatus: stringValue(row, "to_status") as WorkboardEvent["toStatus"],
+      sessionKey: stringValue(row, "session_key"),
+      runId: stringValue(row, "run_id"),
+    });
   });
   return events.length > 0 ? events : undefined;
 }
@@ -242,38 +236,32 @@ function readExecution(row: Row): WorkboardExecution | undefined {
   if (!id) {
     return undefined;
   }
-  return {
+  return definedFields<WorkboardExecution>({
     id,
     kind: "agent-session",
     // SAFETY: insertCard persists the execution mode from WorkboardExecution.
     mode: requiredString(row, "execution_mode") as WorkboardExecution["mode"],
     // SAFETY: insertCard persists the execution status from WorkboardExecution.
     status: requiredString(row, "execution_status") as WorkboardExecution["status"],
-    ...(stringValue(row, "execution_engine")
-      ? { engine: stringValue(row, "execution_engine") }
-      : {}),
-    ...(stringValue(row, "execution_model") ? { model: stringValue(row, "execution_model") } : {}),
-    ...(stringValue(row, "execution_session_key")
-      ? { sessionKey: stringValue(row, "execution_session_key") }
-      : {}),
-    ...(stringValue(row, "execution_run_id")
-      ? { runId: stringValue(row, "execution_run_id") }
-      : {}),
+    engine: stringValue(row, "execution_engine"),
+    model: stringValue(row, "execution_model"),
+    sessionKey: stringValue(row, "execution_session_key"),
+    runId: stringValue(row, "execution_run_id"),
     startedAt: requiredNumber(row, "execution_started_at"),
     updatedAt: requiredNumber(row, "execution_updated_at"),
-  };
+  });
 }
 
 export function readAttachment(row: Row): WorkboardAttachment {
-  return {
+  return definedFields({
     id: requiredString(row, "id"),
     cardId: requiredString(row, "card_id"),
     createdAt: requiredNumber(row, "created_at"),
     fileName: requiredString(row, "file_name"),
     byteSize: requiredNumber(row, "byte_size"),
-    ...(stringValue(row, "mime_type") ? { mimeType: stringValue(row, "mime_type") } : {}),
-    ...(stringValue(row, "note") ? { note: stringValue(row, "note") } : {}),
-  };
+    mimeType: stringValue(row, "mime_type"),
+    note: stringValue(row, "note"),
+  });
 }
 
 function readMetadata(
@@ -283,145 +271,75 @@ function readMetadata(
 ): WorkboardMetadata | undefined {
   const cardId = requiredString(row, "id");
   const attempts = childRows(db, "workboard_card_attempts", cardId, preloaded).map((child) => {
-    const entry: WorkboardRunAttempt = {
+    return definedFields({
       id: requiredString(child, "id"),
       // SAFETY: Attempt rows preserve WorkboardRunAttempt.status.
       status: requiredString(child, "status") as WorkboardRunAttempt["status"],
       startedAt: requiredNumber(child, "started_at"),
-    };
-    const endedAt = numberValue(child, "ended_at");
-    const engine = stringValue(child, "engine");
-    const mode = stringValue(child, "mode");
-    const model = stringValue(child, "model");
-    const sessionKey = stringValue(child, "session_key");
-    const runId = stringValue(child, "run_id");
-    const error = stringValue(child, "error");
-    if (endedAt !== undefined) {
-      entry.endedAt = endedAt;
-    }
-    if (engine) {
-      // SAFETY: Attempt rows preserve WorkboardRunAttempt.engine.
-      entry.engine = engine as WorkboardRunAttempt["engine"];
-    }
-    if (mode) {
+      endedAt: numberValue(child, "ended_at"),
+      engine: stringValue(child, "engine"),
       // SAFETY: Attempt rows preserve WorkboardRunAttempt.mode.
-      entry.mode = mode as WorkboardRunAttempt["mode"];
-    }
-    if (model) {
-      entry.model = model;
-    }
-    if (sessionKey) {
-      entry.sessionKey = sessionKey;
-    }
-    if (runId) {
-      entry.runId = runId;
-    }
-    if (error) {
-      entry.error = error;
-    }
-    return entry;
+      mode: stringValue(child, "mode") as WorkboardRunAttempt["mode"],
+      model: stringValue(child, "model"),
+      sessionKey: stringValue(child, "session_key"),
+      runId: stringValue(child, "run_id"),
+      error: stringValue(child, "error"),
+    });
   });
   const comments = childRows(db, "workboard_card_comments", cardId, preloaded).map((child) => {
-    const entry: WorkboardComment = {
+    return definedFields({
       id: requiredString(child, "id"),
       body: requiredString(child, "body"),
       createdAt: requiredNumber(child, "created_at"),
-    };
-    const updatedAt = numberValue(child, "updated_at");
-    if (updatedAt !== undefined) {
-      entry.updatedAt = updatedAt;
-    }
-    return entry;
+      updatedAt: numberValue(child, "updated_at"),
+    });
   });
   const links = childRows(db, "workboard_card_links", cardId, preloaded).map((child) => {
-    const entry: WorkboardLink = {
+    return definedFields({
       id: requiredString(child, "id"),
       // SAFETY: Link rows preserve WorkboardLink.type.
       type: requiredString(child, "type") as WorkboardLink["type"],
       createdAt: requiredNumber(child, "created_at"),
-    };
-    const targetCardId = stringValue(child, "target_card_id");
-    const title = stringValue(child, "title");
-    const url = stringValue(child, "url");
-    if (targetCardId) {
-      entry.targetCardId = targetCardId;
-    }
-    if (title) {
-      entry.title = title;
-    }
-    if (url) {
-      entry.url = url;
-    }
-    return entry;
+      targetCardId: stringValue(child, "target_card_id"),
+      title: stringValue(child, "title"),
+      url: stringValue(child, "url"),
+    });
   });
   const proof = childRows(db, "workboard_card_proof", cardId, preloaded).map((child) => {
-    const entry: WorkboardProof = {
+    return definedFields({
       id: requiredString(child, "id"),
       // SAFETY: Proof rows preserve WorkboardProof.status.
       status: requiredString(child, "status") as WorkboardProof["status"],
       createdAt: requiredNumber(child, "created_at"),
-    };
-    const label = stringValue(child, "label");
-    const command = stringValue(child, "command");
-    const url = stringValue(child, "url");
-    const note = stringValue(child, "note");
-    if (label) {
-      entry.label = label;
-    }
-    if (command) {
-      entry.command = command;
-    }
-    if (url) {
-      entry.url = url;
-    }
-    if (note) {
-      entry.note = note;
-    }
-    return entry;
+      label: stringValue(child, "label"),
+      command: stringValue(child, "command"),
+      url: stringValue(child, "url"),
+      note: stringValue(child, "note"),
+    });
   });
   const artifacts = childRows(db, "workboard_card_artifacts", cardId, preloaded).map((child) => {
-    const entry: WorkboardArtifact = {
+    return definedFields({
       id: requiredString(child, "id"),
       createdAt: requiredNumber(child, "created_at"),
-    };
-    const label = stringValue(child, "label");
-    const url = stringValue(child, "url");
-    const artifactPath = stringValue(child, "path");
-    const mimeType = stringValue(child, "mime_type");
-    if (label) {
-      entry.label = label;
-    }
-    if (url) {
-      entry.url = url;
-    }
-    if (artifactPath) {
-      entry.path = artifactPath;
-    }
-    if (mimeType) {
-      entry.mimeType = mimeType;
-    }
-    return entry;
+      label: stringValue(child, "label"),
+      url: stringValue(child, "url"),
+      path: stringValue(child, "path"),
+      mimeType: stringValue(child, "mime_type"),
+    });
   });
   const attachments = childRows(db, "workboard_card_attachments", cardId, preloaded).map(
     readAttachment,
   );
   const workerLogs = childRows(db, "workboard_worker_logs", cardId, preloaded).map((child) => {
-    const entry: WorkboardWorkerLog = {
+    return definedFields({
       id: requiredString(child, "id"),
       createdAt: requiredNumber(child, "created_at"),
       // SAFETY: Worker log rows preserve WorkboardWorkerLog.level.
       level: requiredString(child, "level") as WorkboardWorkerLog["level"],
       message: requiredString(child, "message"),
-    };
-    const sessionKey = stringValue(child, "session_key");
-    const runId = stringValue(child, "run_id");
-    if (sessionKey) {
-      entry.sessionKey = sessionKey;
-    }
-    if (runId) {
-      entry.runId = runId;
-    }
-    return entry;
+      sessionKey: stringValue(child, "session_key"),
+      runId: stringValue(child, "run_id"),
+    });
   });
   const diagnostics = childRows(db, "workboard_card_diagnostics", cardId, preloaded).map(
     (child) => ({
@@ -440,26 +358,16 @@ function readMetadata(
   );
   const notifications = childRows(db, "workboard_card_notifications", cardId, preloaded).map(
     (child) => {
-      const entry: WorkboardNotification = {
+      return definedFields({
         id: requiredString(child, "id"),
         // SAFETY: Notification rows preserve WorkboardNotification.kind.
         kind: requiredString(child, "kind") as WorkboardNotification["kind"],
         createdAt: requiredNumber(child, "created_at"),
         message: requiredString(child, "message"),
-      };
-      const sequence = numberValue(child, "sequence");
-      const sessionKey = stringValue(child, "session_key");
-      const runId = stringValue(child, "run_id");
-      if (sequence !== undefined) {
-        entry.sequence = sequence;
-      }
-      if (sessionKey) {
-        entry.sessionKey = sessionKey;
-      }
-      if (runId) {
-        entry.runId = runId;
-      }
-      return entry;
+        sequence: numberValue(child, "sequence"),
+        sessionKey: stringValue(child, "session_key"),
+        runId: stringValue(child, "run_id"),
+      });
     },
   );
   const protocol = workerProtocolRow(db, cardId, preloaded);
@@ -527,22 +435,18 @@ export function readCard(db: DatabaseSync, row: Row, preloaded?: CardChildRows):
   const metadata = readMetadata(db, row, preloaded);
   const events = readEvents(db, card.id, preloaded);
   const execution = readExecution(row);
-  return {
+  return definedFields({
     ...card,
-    ...(stringValue(row, "notes") ? { notes: stringValue(row, "notes") } : {}),
-    ...(stringValue(row, "agent_id") ? { agentId: stringValue(row, "agent_id") } : {}),
-    ...(stringValue(row, "session_key") ? { sessionKey: stringValue(row, "session_key") } : {}),
-    ...(stringValue(row, "run_id") ? { runId: stringValue(row, "run_id") } : {}),
-    ...(stringValue(row, "task_id") ? { taskId: stringValue(row, "task_id") } : {}),
-    ...(stringValue(row, "source_url") ? { sourceUrl: stringValue(row, "source_url") } : {}),
-    ...(execution ? { execution } : {}),
-    ...(numberValue(row, "started_at") !== undefined
-      ? { startedAt: numberValue(row, "started_at") }
-      : {}),
-    ...(numberValue(row, "completed_at") !== undefined
-      ? { completedAt: numberValue(row, "completed_at") }
-      : {}),
-    ...(events ? { events } : {}),
-    ...(metadata ? { metadata } : {}),
-  };
+    notes: stringValue(row, "notes"),
+    agentId: stringValue(row, "agent_id"),
+    sessionKey: stringValue(row, "session_key"),
+    runId: stringValue(row, "run_id"),
+    taskId: stringValue(row, "task_id"),
+    sourceUrl: stringValue(row, "source_url"),
+    execution,
+    startedAt: numberValue(row, "started_at"),
+    completedAt: numberValue(row, "completed_at"),
+    events,
+    metadata,
+  });
 }

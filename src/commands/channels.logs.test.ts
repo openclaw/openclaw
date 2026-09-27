@@ -127,6 +127,18 @@ describe("channelsLogsCommand", () => {
       shadow: { module: "external-chat-shadow/send" },
       match: { module: "external-chat/send" },
     },
+    {
+      label: "channel runtime subsystem",
+      channel: "discord",
+      shadow: { subsystem: "channels/discord-archive" },
+      match: { subsystem: "channels/discord" },
+    },
+    {
+      label: "nested channel runtime module",
+      channel: "discord",
+      shadow: { module: "channels/discord-archive/send" },
+      match: { module: "channels/discord/send" },
+    },
   ])("matches channel boundaries and excludes a shadow $label", async (fixture) => {
     await fs.writeFile(
       logPath,
@@ -139,6 +151,13 @@ describe("channelsLogsCommand", () => {
     await channelsLogsCommand({ channel: fixture.channel, json: true }, runtime);
 
     expect(readJsonPayload().lines.map((line) => line.message)).toEqual(["match"]);
+
+    runtime.log.mockClear();
+    await channelsLogsCommand({ channel: fixture.channel }, runtime);
+
+    const output = runtime.log.mock.calls.flat().join("\n");
+    expect(output).toContain("2026-04-25T12:00:00.000Z info match");
+    expect(output).not.toContain("shadow");
   });
 
   it("rejects an unknown explicit channel without widening output", async () => {

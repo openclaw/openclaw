@@ -24,7 +24,6 @@ import {
   formatExecApprovalContinuationSourceOutput,
 } from "./bash-tools.exec-approval-output.js";
 import {
-  buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
   isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
@@ -171,10 +170,8 @@ export async function executeNodeHostCommand(
       ask: hostAsk,
       ...unavailableDecisionRequestParams,
       commandHighlighting: params.commandHighlighting,
-      ...buildExecApprovalRequesterContext({
-        agentId: prepared.agentId,
-        sessionKey: prepared.sessionKey,
-      }),
+      agentId: prepared.agentId,
+      sessionKey: prepared.sessionKey,
       approvalReviewerDeviceIds: params.approvalReviewerDeviceId
         ? [params.approvalReviewerDeviceId]
         : undefined,

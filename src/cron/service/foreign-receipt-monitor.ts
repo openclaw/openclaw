@@ -1,3 +1,4 @@
+import type { GatewayScheduledJob } from "../../infra/gateway-scheduler.js";
 import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
 import type { CronRunReceiptRecoveryCandidate } from "../store/run-receipt.types.js";
 import type { CronServiceState } from "./state.js";
@@ -9,7 +10,7 @@ type Monitor = {
   byJobId: Map<string, CronRunReceiptRecoveryCandidate>;
   waiters: Map<string, Set<(settled: boolean) => void>>;
   reconcile?: () => Promise<void>;
-  timer: NodeJS.Timeout | null;
+  timer: GatewayScheduledJob | null;
 };
 const monitors = new WeakMap<CronServiceState, Monitor>();
 
@@ -28,23 +29,23 @@ function arm(state: CronServiceState): void {
   if (state.stopped || current.timer || current.byJobId.size === 0 || !reconcile) {
     return;
   }
-  current.timer = setTimeout(() => {
-    runInDetachedAsyncContext(() => {
-      current.timer = null;
-      const work = state.deps.runSchedulerOwned
-        ? state.deps.runSchedulerOwned(reconcile)
-        : reconcile();
-      void work
-        .catch((error: unknown) => {
+  current.timer = state.deps.scheduler.schedule({
+    id: `cron:${state.deps.storePath}:foreign-receipts`,
+    atMs: state.deps.scheduler.now() + CRON_FOREIGN_RECEIPT_RECHECK_MS,
+    everyMs: CRON_FOREIGN_RECEIPT_RECHECK_MS,
+    run: () =>
+      runInDetachedAsyncContext(() => {
+        const work = state.deps.runSchedulerOwned
+          ? state.deps.runSchedulerOwned(reconcile)
+          : reconcile();
+        return work.catch((error: unknown) => {
           state.deps.log.warn(
             { err: String(error) },
             "cron: foreign receipt reconciliation failed",
           );
-        })
-        .finally(() => arm(state));
-    });
-  }, CRON_FOREIGN_RECEIPT_RECHECK_MS);
-  current.timer.unref?.();
+        });
+      }),
+  });
 }
 
 export function configureForeignReceiptMonitor(
@@ -104,6 +105,10 @@ export function waitForForeignReceipt(
 export function removeForeignReceipt(state: CronServiceState, jobId: string): void {
   const current = monitor(state);
   current.byJobId.delete(jobId);
+  if (current.byJobId.size === 0) {
+    current.timer?.cancel();
+    current.timer = null;
+  }
   for (const finish of current.waiters.get(jobId) ?? []) {
     finish(true);
   }
@@ -112,7 +117,7 @@ export function removeForeignReceipt(state: CronServiceState, jobId: string): vo
 export function stopForeignReceiptMonitor(state: CronServiceState): void {
   const current = monitor(state);
   if (current.timer) {
-    clearTimeout(current.timer);
+    current.timer.cancel();
     current.timer = null;
   }
   current.byJobId.clear();

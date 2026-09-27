@@ -82,7 +82,7 @@ private object SystemContactsDataSource : ContactsDataSource {
     } else {
       // Escape wildcard characters so user text remains a substring search, not a LIKE pattern.
       selection = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} LIKE ? ESCAPE '\\'"
-      selectionArgs = arrayOf("%${escapeLikePattern(request.query)}%")
+      selectionArgs = arrayOf("%${escapeSqlLikeLiteral(request.query)}%")
     }
     val sortOrder = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} COLLATE NOCASE ASC LIMIT ${request.limit}"
     resolver
@@ -291,8 +291,6 @@ private object SystemContactsDataSource : ContactsDataSource {
         return cursor.getString(0)?.trim()?.ifEmpty { null }
       }
   }
-
-  private fun escapeLikePattern(pattern: String): String = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
   private fun queryContactValues(
     resolver: ContentResolver,

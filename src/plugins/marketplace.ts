@@ -18,6 +18,7 @@ import type { TimedInstallModeOptions } from "../infra/install-mode-options.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { isImmutableGitCommitRef } from "./git-install.js";
@@ -847,7 +848,7 @@ async function downloadUrlToTempFile(
       const finalFileName = resolveSafeMarketplaceDownloadFileName(finalUrl, sourceFileName);
       const fileName = resolveArchiveKind(finalFileName) ? finalFileName : sourceFileName;
       workspace = await tempWorkspace({
-        rootDir: os.tmpdir(),
+        rootDir: resolvePreferredOpenClawTmpDir(),
         prefix: "openclaw-marketplace-download-",
       });
       const createdWorkspace = workspace;

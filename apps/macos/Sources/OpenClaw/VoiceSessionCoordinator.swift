@@ -39,7 +39,7 @@ final class VoiceSessionCoordinator {
         self.session = session
         VoiceWakeOverlayController.shared.startSession(
             token: token,
-            source: VoiceWakeOverlayController.Source(rawValue: source.rawValue) ?? .wakeWord,
+            source: source,
             transcript: text,
             attributed: attributedText,
             forwardEnabled: forwardEnabled,
@@ -51,6 +51,11 @@ final class VoiceSessionCoordinator {
         guard let session, session.token == token else { return }
         self.session?.text = text
         VoiceWakeOverlayController.shared.updatePartial(token: token, transcript: text, attributed: attributed)
+    }
+
+    func updateEditedText(token: UUID, text: String) {
+        guard self.session?.token == token else { return }
+        self.session?.text = text
     }
 
     func finalize(

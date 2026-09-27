@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   listReadOnlyChannelPluginsForConfig: vi.fn<() => ChannelPlugin[]>(() => []),
   resolveChannelAccountSnapshot: vi.fn(),
   listTrustedChannelPluginCatalogEntries: vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
-  listManifestInstalledChannelIds: vi.fn<() => Set<string>>(() => new Set()),
+  listPluginContributionIds: vi.fn<() => readonly string[]>(() => []),
   resolveMissingOfficialExternalChannelPluginRepairHints: vi.fn(),
   callGateway: vi.fn(),
   resolvePluginControlPlaneWorkspace: vi.fn<typeof resolvePluginControlPlaneWorkspace>(() => ({
@@ -67,8 +67,8 @@ vi.mock("./channel-setup/trusted-catalog.js", () => ({
   listTrustedChannelPluginCatalogEntries: mocks.listTrustedChannelPluginCatalogEntries,
 }));
 
-vi.mock("./channel-setup/discovery.js", () => ({
-  listManifestInstalledChannelIds: mocks.listManifestInstalledChannelIds,
+vi.mock("../plugins/plugin-registry.js", () => ({
+  listPluginContributionIds: mocks.listPluginContributionIds,
 }));
 
 vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
@@ -135,8 +135,8 @@ describe("channels list", () => {
     mocks.resolveChannelAccountSnapshot.mockReset();
     mocks.listTrustedChannelPluginCatalogEntries.mockReset();
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([]);
-    mocks.listManifestInstalledChannelIds.mockReset();
-    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
+    mocks.listPluginContributionIds.mockReset();
+    mocks.listPluginContributionIds.mockReturnValue([]);
     mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReset();
     mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([]);
     mocks.callGateway.mockReset();
@@ -179,7 +179,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("telegram", "Telegram"),
     ]);
-    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set(["telegram"]));
+    mocks.listPluginContributionIds.mockReturnValue(["telegram"]);
 
     await channelsListCommand({ json: true }, runtime);
 
@@ -220,7 +220,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("qqbot", "QQ Bot"),
     ]);
-    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set(["qqbot"]));
+    mocks.listPluginContributionIds.mockReturnValue(["qqbot"]);
     mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
 
     await channelsListCommand({ all: true, json: true }, runtime);
@@ -276,10 +276,10 @@ describe("channels list", () => {
       workspaceDir: "/tmp/research-workspace",
       discovery: mocks.metadataSnapshot.discovery,
     });
-    expect(mocks.listManifestInstalledChannelIds).toHaveBeenCalledWith({
-      cfg: config,
-      workspaceDir: "/tmp/research-workspace",
-      index: mocks.metadataSnapshot.index,
+    expect(mocks.listPluginContributionIds).toHaveBeenCalledWith({
+      contribution: "channels",
+      includeDisabled: true,
+      lookUpTable: mocks.metadataSnapshot,
     });
   });
 
@@ -477,7 +477,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("qqbot", "QQ Bot"),
     ]);
-    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
+    mocks.listPluginContributionIds.mockReturnValue([]);
     mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({}));
 
     await channelsListCommand({}, runtime);
@@ -530,7 +530,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("discord", "Discord"),
     ]);
-    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
+    mocks.listPluginContributionIds.mockReturnValue([]);
     mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([
       {
         pluginId: "discord",
@@ -570,7 +570,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("qqbot", "QQ Bot"),
     ]);
-    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
+    mocks.listPluginContributionIds.mockReturnValue([]);
     mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({}));
 
     await channelsListCommand({ all: true }, runtime);
@@ -624,7 +624,7 @@ describe("channels list", () => {
       { ...createCatalogEntry("qqbot", "QQ Bot"), officialDocsPath: "/channels/qqbot" },
       { ...createCatalogEntry("telegram", "Telegram"), officialDocsPath: "/channels/telegram" },
     ]);
-    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set(["telegram"]));
+    mocks.listPluginContributionIds.mockReturnValue(["telegram"]);
     mocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({
         channels: {
@@ -666,7 +666,7 @@ describe("channels list", () => {
       createCatalogEntry("wecom", "WeCom duplicate"),
       createCatalogEntry("qqbot", "QQ Bot"),
     ]);
-    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set(["wecom", "telegram"]));
+    mocks.listPluginContributionIds.mockReturnValue(["wecom", "telegram"]);
     mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([
       {
         channelId: "discord",
@@ -678,16 +678,16 @@ describe("channels list", () => {
 
     await channelsListCommand({ all: true, json }, runtime);
 
-    expect(mocks.listManifestInstalledChannelIds).toHaveBeenCalledOnce();
+    expect(mocks.listPluginContributionIds).toHaveBeenCalledOnce();
     expect(mocks.listTrustedChannelPluginCatalogEntries).toHaveBeenCalledWith({
       cfg: {},
       workspaceDir: "/tmp/workspace",
       discovery: mocks.metadataSnapshot.discovery,
     });
-    expect(mocks.listManifestInstalledChannelIds).toHaveBeenCalledWith({
-      cfg: {},
-      workspaceDir: "/tmp/workspace",
-      index: mocks.metadataSnapshot.index,
+    expect(mocks.listPluginContributionIds).toHaveBeenCalledWith({
+      contribution: "channels",
+      includeDisabled: true,
+      lookUpTable: mocks.metadataSnapshot,
     });
     expect(mocks.resolveMissingOfficialExternalChannelPluginRepairHints).toHaveBeenCalledOnce();
     expect(mocks.resolveMissingOfficialExternalChannelPluginRepairHints).toHaveBeenCalledWith({
@@ -738,7 +738,7 @@ describe("channels list", () => {
       mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
         createCatalogEntry("wecom", "WeCom"),
       ]);
-      mocks.listManifestInstalledChannelIds.mockReturnValue(new Set(["wecom"]));
+      mocks.listPluginContributionIds.mockReturnValue(["wecom"]);
       mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({}));
 
       await channelsListCommand({ all: true }, runtime);

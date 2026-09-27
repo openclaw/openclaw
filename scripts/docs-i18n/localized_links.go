@@ -230,64 +230,22 @@ func (ri *routeIndex) localizeBodyLinks(body string) string {
 	masked = maskMatches(masked, fencedTildeCodeBlock, state.Next, &placeholders, mapping)
 	masked = maskMatches(masked, inlineCodeRe, state.Next, &placeholders, mapping)
 
-	masked = rewriteMarkdownLinkTargets(masked, ri)
-	masked = rewriteHrefTargets(masked, ri)
+	masked = rewriteCapturedTargets(masked, markdownLinkTargetRe, ri, true)
+	masked = rewriteCapturedTargets(masked, hrefDoubleQuotedValueRe, ri, false)
+	masked = rewriteCapturedTargets(masked, hrefSingleQuotedValueRe, ri, false)
 
 	return unmaskMarkdown(masked, placeholders, mapping)
 }
 
-func rewriteMarkdownLinkTargets(text string, ri *routeIndex) string {
-	matches := markdownLinkTargetRe.FindAllStringSubmatchIndex(text, -1)
-	if len(matches) == 0 {
-		return text
-	}
-
-	var out strings.Builder
-	pos := 0
-	for _, span := range matches {
-		fullStart, targetStart, targetEnd := span[0], span[2], span[3]
-		if fullStart < pos {
-			continue
+func rewriteCapturedTargets(text string, re *regexp.Regexp, ri *routeIndex, skipImages bool) string {
+	return re.ReplaceAllStringFunc(text, func(match string) string {
+		if skipImages && strings.HasPrefix(match, "!") {
+			return match
 		}
-
-		out.WriteString(text[pos:targetStart])
-		target := text[targetStart:targetEnd]
-		if text[fullStart] == '!' {
-			out.WriteString(target)
-		} else {
-			out.WriteString(ri.localizeURL(target))
-		}
-		pos = targetEnd
-	}
-	out.WriteString(text[pos:])
-	return out.String()
-}
-
-func rewriteHrefTargets(text string, ri *routeIndex) string {
-	text = rewriteCapturedTargets(text, hrefDoubleQuotedValueRe, 2, ri)
-	text = rewriteCapturedTargets(text, hrefSingleQuotedValueRe, 2, ri)
-	return text
-}
-
-func rewriteCapturedTargets(text string, re *regexp.Regexp, groupIndex int, ri *routeIndex) string {
-	matches := re.FindAllStringSubmatchIndex(text, -1)
-	if len(matches) == 0 {
-		return text
-	}
-
-	var out strings.Builder
-	pos := 0
-	for _, span := range matches {
-		start, end := span[groupIndex], span[groupIndex+1]
-		if start < pos || start < 0 || end < 0 {
-			continue
-		}
-		out.WriteString(text[pos:start])
-		out.WriteString(ri.localizeURL(text[start:end]))
-		pos = end
-	}
-	out.WriteString(text[pos:])
-	return out.String()
+		span := re.FindStringSubmatchIndex(match)
+		start, end := span[2], span[3]
+		return match[:start] + ri.localizeURL(match[start:end]) + match[end:]
+	})
 }
 
 func (ri *routeIndex) localizeURL(raw string) string {

@@ -73,6 +73,32 @@ export type Row = {
   parents: Set<string>;
   generation: string | symbol;
 };
+
+/** Sharing fences every publication; selection holds only unchanged metadata. */
+export function createSessionRowProjectionRevisions() {
+  let sharing: object | undefined;
+  let selection: object | undefined;
+  const invalidate = (metadataChanged = false) => {
+    sharing = undefined;
+    if (metadataChanged) {
+      selection = undefined;
+    }
+  };
+  return {
+    sharing: () => (sharing ??= {}),
+    selection: () => (selection ??= {}),
+    invalidate,
+    replace(previous: Row | undefined, row: Row) {
+      invalidate(
+        !previous ||
+          previous.generation !== row.generation ||
+          previous.hasBoard !== row.hasBoard ||
+          !isDeepStrictEqual(previous.entry, row.entry),
+      );
+    },
+  };
+}
+
 export type Query = {
   agentId?: string;
   storePath?: string;
@@ -85,7 +111,11 @@ export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
 export type SnapshotOptions = Pick<
   Inputs,
   "now" | "includeDerivedTitles" | "includeLastMessage" | "excludedChildKeys"
-> & { active?: boolean; subagentRuns?: SessionListRowContext["subagentRuns"] };
+> & {
+  active?: boolean;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
+  preparedFacts?: ReturnType<NonNullable<Row["facts"]>["present"]>;
+};
 export type Lookup = { agentId: string; key: string; storePath?: string };
 type RowTarget = Pick<Row, "agentId" | "key" | "storeTarget">;
 export const identity = (row: RowTarget) =>
@@ -209,11 +239,6 @@ export function seedSessionRowEntries(params: {
       const row = create(fields, entry);
       put(row);
       acquisitions.push({ row, entry });
-    } else {
-      const row = rows.get(id)!;
-      if (row.entry?.archivedAt !== undefined) {
-        acquisitions.push({ row, entry });
-      }
     }
   }
   for (const id of rows.keys()) {
@@ -342,7 +367,7 @@ export function present(
     activeModel: active ? (live ?? undefined) : record.fallbackModel,
     excludedChildKeys: options.excludedChildKeys,
   });
-  Object.assign(row, record.facts?.present());
+  Object.assign(row, options.preparedFacts ?? record.facts?.present());
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;

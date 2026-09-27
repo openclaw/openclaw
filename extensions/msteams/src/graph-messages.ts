@@ -23,24 +23,11 @@ type GraphPinnedMessagesResponse = {
   "@odata.nextLink"?: string;
 };
 
-/**
- * Resolve the Graph API path prefix for a conversation.
- * If `to` contains "/" it's a `teamId/channelId` (channel path),
- * otherwise it's a chat ID.
- */
-/**
- * Strip common target prefixes (`conversation:`, `user:`) so raw
- * conversation IDs can be used directly in Graph paths.
- */
 function stripTargetPrefix(raw: string): string {
-  const trimmed = raw.trim();
-  if (/^conversation:/i.test(trimmed)) {
-    return trimmed.slice("conversation:".length).trim();
-  }
-  if (/^user:/i.test(trimmed)) {
-    return trimmed.slice("user:".length).trim();
-  }
-  return trimmed;
+  return raw
+    .trim()
+    .replace(/^(conversation|user):/i, "")
+    .trim();
 }
 
 /**
@@ -54,12 +41,10 @@ export async function resolveGraphConversationId(to: string): Promise<string> {
   const isUserTarget = /^user:/i.test(trimmed);
   const cleaned = stripTargetPrefix(trimmed);
 
-  // teamId/channelId or already a conversation ID (19:xxx) — use directly
   if (!isUserTarget) {
     return cleaned;
   }
 
-  // user:<aadId> — look up the conversation store for the real chat ID
   const store = createMSTeamsConversationStoreState();
   const found = await store.findPreferredDmByUserId(cleaned);
   if (!found) {
@@ -122,9 +107,6 @@ type GetMessageMSTeamsResult = {
   createdAt: string | undefined;
 };
 
-/**
- * Retrieve a single message by ID from a chat or channel via Graph API.
- */
 export async function getMessageMSTeams(
   params: MSTeamsMessageTarget,
 ): Promise<GetMessageMSTeamsResult> {
@@ -141,17 +123,6 @@ export async function getMessageMSTeams(
   };
 }
 
-/**
- * Pin a message in a chat conversation via Graph API.
- *
- * Chat pinning uses the v1.0 endpoint: `POST /chats/{chatId}/pinnedMessages`.
- *
- * Channel pinning uses `POST /teams/{teamId}/channels/{channelId}/pinnedMessages`.
- * **Note:** The channel pin endpoint may require the Graph beta API or specific
- * tenant-level permissions. As of March 2026, general availability is not
- * confirmed for all tenants. If the call returns 404 or 403, the endpoint may
- * not be enabled for the target tenant.
- */
 export async function pinMessageMSTeams(
   params: MSTeamsMessageTarget,
 ): Promise<{ ok: true; pinnedMessageId?: string }> {
@@ -160,8 +131,6 @@ export async function pinMessageMSTeams(
   const conv = resolveConversationPath(conversationId);
 
   if (conv.kind === "channel") {
-    // Graph v1.0 does not expose pinnedMessages on channels — only on chats.
-    // Attempting this would 404.
     throw new Error(
       "Pin/unpin is not supported for channel messages on Graph v1.0. " +
         "Only chat conversations support pinned messages.",
@@ -188,14 +157,6 @@ type UnpinMessageMSTeamsParams = {
   pinnedMessageId: string;
 };
 
-/**
- * Unpin a message in a chat conversation via Graph API.
- * `pinnedMessageId` is the pinned-message resource ID (from pin or list-pins),
- * not the underlying chat message ID.
- *
- * Channel unpin uses `DELETE /teams/{teamId}/channels/{channelId}/pinnedMessages/{id}`.
- * See the note on {@link pinMessageMSTeams} regarding beta/GA status.
- */
 export async function unpinMessageMSTeams(
   params: UnpinMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
@@ -222,16 +183,8 @@ type ListPinsMSTeamsResult = {
   pins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }>;
 };
 
-/** Maximum number of pagination pages to follow to avoid unbounded loops. */
 const LIST_PINS_MAX_PAGES = 10;
 
-/**
- * List all pinned messages in a chat conversation via Graph API.
- * Follows `@odata.nextLink` pagination to collect the full pin set.
- *
- * Channel list-pins uses the same endpoint pattern as channel pin/unpin.
- * See the note on {@link pinMessageMSTeams} regarding beta/GA status.
- */
 export async function listPinsMSTeams(
   params: ListPinsMSTeamsParams,
 ): Promise<ListPinsMSTeamsResult> {
@@ -247,8 +200,7 @@ export async function listPinsMSTeams(
   }
 
   const path = `${conv.basePath}/pinnedMessages?$expand=message`;
-  const allPins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }> =
-    [];
+  const allPins: ListPinsMSTeamsResult["pins"] = [];
 
   let res = await fetchGraphJson<GraphPinnedMessagesResponse>({ token, path });
   let pages = 1;
@@ -274,10 +226,6 @@ export async function listPinsMSTeams(
 
   return { pins: allPins };
 }
-
-// ---------------------------------------------------------------------------
-// Reactions
-// ---------------------------------------------------------------------------
 
 type GraphReaction = {
   reactionType?: string;
@@ -379,10 +327,6 @@ export async function listReactionsMSTeams(
 
   return { reactions };
 }
-
-// ---------------------------------------------------------------------------
-// Search
-// ---------------------------------------------------------------------------
 
 type SearchMessagesMSTeamsParams = {
   cfg: OpenClawConfig;

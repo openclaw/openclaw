@@ -540,12 +540,12 @@ enum CommandResolver {
         let transport = GatewayRemoteConfig.resolveTransport(root: root)
         let remote = (root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
         let hasConfiguredTarget = remote?.keys.contains("sshTarget") == true
-        let configuredTarget = self.sanitizedTarget(remote?["sshTarget"] as? String ?? "")
+        let configuredTarget = self.normalizeSSHTargetInput(remote?["sshTarget"] as? String ?? "")
         // Canonical config wins after an offline edit. UserDefaults remains the
         // compatibility fallback for older configs that never stored SSH fields.
         let target = hasConfiguredTarget
             ? configuredTarget
-            : self.sanitizedTarget(defaults.string(forKey: remoteTargetKey) ?? "")
+            : self.normalizeSSHTargetInput(defaults.string(forKey: remoteTargetKey) ?? "")
         let hasConfiguredIdentity = remote?.keys.contains("sshIdentity") == true
         let configuredIdentity = (remote?["sshIdentity"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -576,14 +576,6 @@ enum CommandResolver {
 
     static func connectionModeIsRemote(defaults: UserDefaults = AppDefaults.standard) -> Bool {
         self.connectionSettings(defaults: defaults).mode == .remote
-    }
-
-    private static func sanitizedTarget(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("ssh ") {
-            return trimmed.replacingOccurrences(of: "ssh ", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return trimmed
     }
 
     struct SSHParsedTarget: Equatable, Sendable {
@@ -655,7 +647,7 @@ enum CommandResolver {
         return URL(fileURLWithPath: expanded)
     }
 
-    private static func normalizeSSHTargetInput(_ target: String) -> String {
+    static func normalizeSSHTargetInput(_ target: String) -> String {
         var trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("ssh ") {
             trimmed = trimmed.replacingOccurrences(of: "ssh ", with: "")

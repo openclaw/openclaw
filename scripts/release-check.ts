@@ -1,6 +1,4 @@
 #!/usr/bin/env -S node --import tsx
-// Release Check script supports OpenClaw repository automation.
-
 import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
 import {
   copyFileSync,
@@ -37,7 +35,7 @@ import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { isLegacyPluginDependencyInstallStagePath } from "./lib/package-dist-inventory.ts";
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
-import { resolveNpmRunner } from "./npm-runner.mts";
+import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
@@ -280,20 +278,15 @@ function checkBundledExtensionMetadata() {
       ),
     )
     .toSorted((left, right) => left.localeCompare(right));
-  const errors = [...manifestErrors, ...dependencyConflictErrors];
-  if (errors.length > 0) {
-    console.error("release-check: bundled extension manifest validation failed:");
-    for (const error of errors) {
-      console.error(`  - ${error}`);
-    }
-    process.exit(1);
-  }
+  checkValidationErrors("bundled extension manifest", [
+    ...manifestErrors,
+    ...dependencyConflictErrors,
+  ]);
 }
 
-function checkSkillShellScriptsExecutable() {
-  const errors = collectSkillShellScriptExecutableErrors();
+function checkValidationErrors(label: string, errors: string[]) {
   if (errors.length > 0) {
-    console.error("release-check: skill shell script permission validation failed:");
+    console.error(`release-check: ${label} validation failed:`);
     for (const error of errors) {
       console.error(`  - ${error}`);
     }
@@ -303,22 +296,9 @@ function checkSkillShellScriptsExecutable() {
 
 export function resolveReleaseNpmCommand(
   args: string[],
-  params: {
-    comSpec?: string;
-    env?: NodeJS.ProcessEnv;
-    execPath?: string;
-    existsSync?: typeof existsSync;
-    platform?: NodeJS.Platform;
-  } = {},
+  params: Omit<NpmRunnerParams, "npmArgs"> = {},
 ) {
-  return resolveNpmRunner({
-    comSpec: params.comSpec,
-    env: params.env,
-    execPath: params.execPath,
-    existsSync: params.existsSync,
-    npmArgs: args,
-    platform: params.platform,
-  });
+  return resolveNpmRunner({ ...params, npmArgs: args });
 }
 
 function execNpm(
@@ -704,18 +684,11 @@ function verifyPackedInstalledPackage(params: {
   tmpRoot: string;
 }): void {
   const invocation = resolvePackedInstalledBinaryCommandInvocation(params.prefixDir, ["--version"]);
-  const installedBinaryVersion = runReleaseCheckCommand(
-    {
-      command: invocation.command,
-      args: invocation.args,
-      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    },
-    {
-      cwd: params.tmpRoot,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  ).trim();
+  const installedBinaryVersion = runReleaseCheckCommand(invocation, {
+    cwd: params.tmpRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
   const errors = collectPackedInstalledPackageVerificationErrors({
     // The selected source checkout is immutable release input. Its companion
     // manifests are the exact inputs packed by the following plugin preflight.
@@ -1220,18 +1193,6 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
   return errors;
 }
 
-function checkAppcastSparkleVersions() {
-  const xml = readFileSync(appcastPath, "utf8");
-  const errors = collectAppcastSparkleVersionErrors(xml);
-  if (errors.length > 0) {
-    console.error("release-check: appcast sparkle version validation failed:");
-    for (const error of errors) {
-      console.error(`  - ${error}`);
-    }
-    process.exit(1);
-  }
-}
-
 // Critical functions that channel extension plugins import from openclaw/plugin-sdk.
 // If any are missing from the compiled output, plugins crash at runtime (#27569).
 const requiredPluginSdkExports = [
@@ -1352,8 +1313,11 @@ function runCriticalPluginSdkEntrypointImportSmoke(packageRoot: string) {
 
 async function main() {
   const { values } = parseArgs({ options: { tarball: { type: "string" } } });
-  checkAppcastSparkleVersions();
-  checkSkillShellScriptsExecutable();
+  checkValidationErrors(
+    "appcast sparkle version",
+    collectAppcastSparkleVersionErrors(readFileSync(appcastPath, "utf8")),
+  );
+  checkValidationErrors("skill shell script permission", collectSkillShellScriptExecutableErrors());
   checkBundledExtensionMetadata();
   const temporaryDir = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
   try {

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayHttpServer } from "./server-http.js";
@@ -259,12 +260,10 @@ describe("node workspace transfer HTTP routing", () => {
   });
 
   it("rate-limits invalid transfer auth before invoking the callback again", async () => {
-    const limiter = createGatewayAuthRateLimiter({
-      maxAttempts: 1,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      exemptLoopback: false,
-    });
+    const limiter = createGatewayAuthRateLimiter(
+      { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
+      { scheduler: createTestGatewayScheduler() },
+    );
     activeLimiters.push(limiter);
     const callback = vi.fn<NodeWorkspaceTransferHttpCallback>(async () => ({
       kind: "unauthorized",

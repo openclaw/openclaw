@@ -281,7 +281,7 @@ describe("gateway connection state", () => {
         bootId: "members",
         cfg: {},
       });
-      state.attachSessionRowProjection(projection);
+      const detach = state.attachSessionRowProjection(projection);
       const peers = Array.from({ length: 50 }, (_, index) => {
         const peer = makeClient(`viewer-${index}`, { count: 0 });
         peer.client.authenticatedUserProfile = {
@@ -391,6 +391,7 @@ describe("gateway connection state", () => {
         expect(publicationDirtyRows.every((count) => count > 0)).toBe(true);
       } finally {
         stopPublication();
+        detach();
         projection.dispose();
         state.mentionInbox.dispose();
       }

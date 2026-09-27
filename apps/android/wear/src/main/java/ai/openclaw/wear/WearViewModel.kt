@@ -153,6 +153,9 @@ internal data class WearUiState(
 
   val conversationFailure: WearConversationFailure?
     get() = failure ?: WearConversationFailure.INTERNAL_ERROR.takeIf { replyTerminal?.outcome == WearReplyOutcome.Error }
+
+  val contextChangeBusy: Boolean
+    get() = controlBusy || talkBusy || realtimeTalk.active || realtimeCapturing || realtimePlaying
 }
 
 internal fun WearUiState.resetForPhoneChange(): WearUiState = WearUiState()
@@ -510,11 +513,7 @@ internal class WearViewModel(
   fun openSession(session: WearSession) {
     val current = mutableState.value
     if (
-      current.controlBusy ||
-      current.talkBusy ||
-      current.realtimeTalk.active ||
-      current.realtimeCapturing ||
-      current.realtimePlaying ||
+      current.contextChangeBusy ||
       current.selectedSession?.key == session.key
     ) {
       return
@@ -853,38 +852,24 @@ internal class WearViewModel(
     val phoneNodeId = current.phoneNodeId ?: return
     val routeGeneration = phoneRouteGeneration
     if (
-      current.controlBusy ||
-      current.talkBusy ||
-      current.realtimeTalk.active ||
-      current.realtimeCapturing ||
-      current.realtimePlaying ||
+      current.contextChangeBusy ||
       current.activeAgentId == agentId ||
       WearProxyCapability.AgentControls !in current.proxyCapabilities
     ) {
       return
     }
-    val controlAction = beginControlAction(phoneNodeId, routeGeneration) ?: return
-    viewModelScope.launch {
-      try {
-        if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
-        repository.selectAgent(agentId, phoneNodeId, current.proxyCapabilities)
-        if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
-        mutableState.update { state ->
-          if (isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
-            sendAttemptTracker.reset()
-            state.switchAgentContext(agentId)
-          } else {
-            state
-          }
+    launchControlAction(phoneNodeId, routeGeneration, endLoadingOnFailure = true) {
+      repository.selectAgent(agentId, phoneNodeId, current.proxyCapabilities)
+      if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launchControlAction
+      mutableState.update { state ->
+        if (isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
+          sendAttemptTracker.reset()
+          state.switchAgentContext(agentId)
+        } else {
+          state
         }
-        refresh()
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
-        recordFailureForControlRoute(err, phoneNodeId, routeGeneration, loading = false)
-      } finally {
-        finishControlAction(controlAction)
       }
+      refresh()
     }
   }
 
@@ -894,61 +879,47 @@ internal class WearViewModel(
     val session = current.selectedSession ?: return
     val routeGeneration = phoneRouteGeneration
     if (
-      current.controlBusy ||
-      current.talkBusy ||
-      current.realtimeTalk.active ||
-      current.realtimeCapturing ||
-      current.realtimePlaying ||
+      current.contextChangeBusy ||
       current.selectedModelRef == modelRef ||
       !current.containsModelRef(modelRef) ||
       WearProxyCapability.ModelControls !in current.proxyCapabilities
     ) {
       return
     }
-    val controlAction = beginControlAction(phoneNodeId, routeGeneration) ?: return
-    viewModelScope.launch {
-      try {
-        if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
-        cancelModelLoad()
-        val responseRequest = eventSequenceTracker.beginResponseRequest()
-        val selection =
-          repository.selectModel(
-            sessionKey = session.key,
-            modelRef = modelRef,
-            phoneNodeId = phoneNodeId,
-            capabilities = current.proxyCapabilities,
-          )
-        if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
-        val currentSession = mutableState.value.selectedSession ?: return@launch
-        if (!wearSessionRequestIsCurrent(session, currentSession, selection.phoneNodeId)) return@launch
-        if (
-          !eventSequenceTracker.isResponseCurrent(
-            responseRequest,
-            selection.eventStreamId,
-            selection.eventSequence,
-          )
-        ) {
-          // A response older than the accepted event stream cannot overwrite newer session state.
-          loadSessions(selection.phoneNodeId)
-          return@launch
-        }
-        val acceptedModelRef = selection.selectedModelRef
-        val updatedSession = currentSession.copy(modelRef = acceptedModelRef)
-        mutableState.update { state ->
-          if (!isCurrentControlRoute(phoneNodeId, routeGeneration, state)) return@update state
-          val selectedSession = state.selectedSession ?: return@update state
-          if (!wearSessionRequestIsCurrent(session, selectedSession, selection.phoneNodeId)) return@update state
-          state.switchModelContext(acceptedModelRef)
-        }
-        if (isCurrentControlRoute(phoneNodeId, routeGeneration)) {
-          loadModels(updatedSession)
-        }
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
-        recordFailureForControlRoute(err, phoneNodeId, routeGeneration)
-      } finally {
-        finishControlAction(controlAction)
+    launchControlAction(phoneNodeId, routeGeneration) {
+      cancelModelLoad()
+      val responseRequest = eventSequenceTracker.beginResponseRequest()
+      val selection =
+        repository.selectModel(
+          sessionKey = session.key,
+          modelRef = modelRef,
+          phoneNodeId = phoneNodeId,
+          capabilities = current.proxyCapabilities,
+        )
+      if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launchControlAction
+      val currentSession = mutableState.value.selectedSession ?: return@launchControlAction
+      if (!wearSessionRequestIsCurrent(session, currentSession, selection.phoneNodeId)) return@launchControlAction
+      if (
+        !eventSequenceTracker.isResponseCurrent(
+          responseRequest,
+          selection.eventStreamId,
+          selection.eventSequence,
+        )
+      ) {
+        // A response older than the accepted event stream cannot overwrite newer session state.
+        loadSessions(selection.phoneNodeId)
+        return@launchControlAction
+      }
+      val acceptedModelRef = selection.selectedModelRef
+      val updatedSession = currentSession.copy(modelRef = acceptedModelRef)
+      mutableState.update { state ->
+        if (!isCurrentControlRoute(phoneNodeId, routeGeneration, state)) return@update state
+        val selectedSession = state.selectedSession ?: return@update state
+        if (!wearSessionRequestIsCurrent(session, selectedSession, selection.phoneNodeId)) return@update state
+        state.switchModelContext(acceptedModelRef)
+      }
+      if (isCurrentControlRoute(phoneNodeId, routeGeneration)) {
+        loadModels(updatedSession)
       }
     }
   }
@@ -964,30 +935,20 @@ internal class WearViewModel(
     ) {
       return
     }
-    val controlAction = beginControlAction(phoneNodeId, routeGeneration) ?: return
-    viewModelScope.launch {
-      try {
-        if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
-        if (!enabled) {
-          disconnectRealtimeTalk()
-        }
-        val status = repository.setGatewayEnabled(enabled, phoneNodeId, current.proxyCapabilities)
-        if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
-        mutableState.update { state ->
-          if (!isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
-            state
-          } else {
-            applyWearGatewayControlStatus(state, status, enabled)
-          }
-        }
-        refresh()
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
-        recordFailureForControlRoute(err, phoneNodeId, routeGeneration, loading = false)
-      } finally {
-        finishControlAction(controlAction)
+    launchControlAction(phoneNodeId, routeGeneration, endLoadingOnFailure = true) {
+      if (!enabled) {
+        disconnectRealtimeTalk()
       }
+      val status = repository.setGatewayEnabled(enabled, phoneNodeId, current.proxyCapabilities)
+      if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launchControlAction
+      mutableState.update { state ->
+        if (!isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
+          state
+        } else {
+          applyWearGatewayControlStatus(state, status, enabled)
+        }
+      }
+      refresh()
     }
   }
 
@@ -1818,6 +1779,31 @@ internal class WearViewModel(
       requestedRouteGeneration = routeGeneration,
       currentRouteGeneration = phoneRouteGeneration,
     )
+
+  private fun launchControlAction(
+    phoneNodeId: String,
+    routeGeneration: Long,
+    endLoadingOnFailure: Boolean = false,
+    action: suspend () -> Unit,
+  ) {
+    val owner = beginControlAction(phoneNodeId, routeGeneration) ?: return
+    viewModelScope.launch {
+      try {
+        if (isCurrentControlRoute(phoneNodeId, routeGeneration)) action()
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        recordFailureForControlRoute(
+          err,
+          phoneNodeId,
+          routeGeneration,
+          loading = !endLoadingOnFailure && mutableState.value.loading,
+        )
+      } finally {
+        finishControlAction(owner)
+      }
+    }
+  }
 
   private fun beginControlAction(
     phoneNodeId: String,

@@ -1,7 +1,3 @@
-/**
- * Process-local cache for Codex app-server app inventories, keyed by runtime
- * identity and safe to refresh in the background.
- */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import {
   isFutureDateTimestampMs,
@@ -18,19 +14,16 @@ import type {
   v2,
 } from "./protocol.js";
 
-/** Default app inventory cache freshness window. */
 const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
 // Codex app/read rejects metadata requests containing more than 100 app IDs.
 const CODEX_APP_READ_BATCH_LIMIT = 100;
 const MAX_SERIALIZED_ERROR_MESSAGE_LENGTH = 500;
 
-/** App-server request function used to read installed apps and their metadata. */
 export type CodexAppInventoryRequest = <Method extends "app/installed" | "app/read">(
   method: Method,
   params: CodexAppServerRequestParams<Method>,
 ) => Promise<CodexAppServerRequestResult<Method>>;
 
-/** Runtime identity fields that affect visible Codex app inventory. */
 export type CodexAppInventoryCacheKeyInput = {
   codexHome?: string;
   endpoint?: string;
@@ -41,13 +34,11 @@ export type CodexAppInventoryCacheKeyInput = {
   appServerVersion?: string;
 };
 
-/** Last refresh diagnostic stored with a cache key or snapshot. */
 type CodexAppInventoryCacheDiagnostic = {
   message: string;
   atMs: number;
 };
 
-/** Immutable app inventory snapshot returned from cache reads and refreshes. */
 export type CodexAppInventorySnapshot = {
   key: string;
   apps: CodexAppServerRequestResult<"app/read">["apps"];
@@ -60,10 +51,8 @@ export type CodexAppInventorySnapshot = {
   lastError?: CodexAppInventoryCacheDiagnostic;
 };
 
-/** Freshness state for a cache read. */
 type CodexAppInventoryReadState = "fresh" | "stale" | "missing";
 
-/** Cache read result plus refresh scheduling state. */
 export type CodexAppInventoryCacheRead = {
   state: CodexAppInventoryReadState;
   key: string;
@@ -93,7 +82,6 @@ type InFlightRefresh = {
   targetAppIds: ReadonlySet<string>;
 };
 
-/** In-memory app inventory cache with coalesced refreshes per key. */
 export class CodexAppInventoryCache {
   private readonly ttlMs: number;
   private readonly entries = new Map<string, CacheEntry>();
@@ -107,7 +95,6 @@ export class CodexAppInventoryCache {
     this.ttlMs = options.ttlMs ?? CODEX_APP_INVENTORY_CACHE_TTL_MS;
   }
 
-  /** Reads a snapshot and schedules refresh when missing, stale, or forced. */
   read(params: RefreshParams): CodexAppInventoryCacheRead {
     const nowMs = resolveDateTimestampMs(params.nowMs);
     const entry = this.entries.get(params.key);
@@ -138,11 +125,6 @@ export class CodexAppInventoryCache {
       refreshScheduled,
       ...(entry.lastError ? { diagnostic: entry.lastError } : {}),
     };
-  }
-
-  /** Forces or joins an immediate refresh for a cache key. */
-  refreshNow(params: RefreshParams): Promise<CodexAppInventorySnapshot> {
-    return this.refresh(params);
   }
 
   /**
@@ -185,7 +167,6 @@ export class CodexAppInventoryCache {
     return this.revision;
   }
 
-  /** Clears all cached snapshots, diagnostics, in-flight requests, and revision state. */
   clear(): void {
     this.entries.clear();
     this.inFlight.clear();
@@ -194,22 +175,17 @@ export class CodexAppInventoryCache {
     this.revision = 0;
   }
 
-  /** Returns the monotonically increasing cache revision. */
   getRevision(): number {
     return this.revision;
   }
 
   private scheduleRefresh(params: RefreshParams): boolean {
-    const existing = this.inFlight.get(params.key);
-    if (existing && !params.forceRefetch && doesInFlightRefreshCover(existing, params)) {
-      return true;
-    }
-    const promise = this.refresh(params);
-    promise.catch(() => undefined);
+    void this.refreshNow(params).catch(() => undefined);
     return true;
   }
 
-  private async refresh(params: RefreshParams): Promise<CodexAppInventorySnapshot> {
+  /** Forces or joins an immediate refresh for a cache key. */
+  async refreshNow(params: RefreshParams): Promise<CodexAppInventorySnapshot> {
     const existing = this.inFlight.get(params.key);
     if (existing && !params.forceRefetch && doesInFlightRefreshCover(existing, params)) {
       return existing.promise;
@@ -417,7 +393,6 @@ function doesInFlightRefreshCover(existing: InFlightRefresh, params: RefreshPara
   );
 }
 
-/** Serializes a refresh failure without leaking large or sensitive error data. */
 export function serializeCodexAppInventoryError(error: unknown): Record<string, unknown> {
   const record = isRecord(error) ? error : undefined;
   const data = record && "data" in record ? redactErrorData(record.data) : undefined;
@@ -434,10 +409,8 @@ export function serializeCodexAppInventoryError(error: unknown): Record<string, 
   };
 }
 
-/** Shared app inventory cache used by Codex app-server runtime paths. */
 export const defaultCodexAppInventoryCache = new CodexAppInventoryCache();
 
-/** Builds a stable cache key from build versions and runtime identity fields. */
 export function buildCodexAppInventoryCacheKey(
   input: CodexAppInventoryCacheKeyInput,
   openClawVersion: string,

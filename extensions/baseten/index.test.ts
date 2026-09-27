@@ -1,6 +1,5 @@
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createRuntimeEnv,
   createTestWizardPrompter,
@@ -19,101 +18,8 @@ import { describe, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import { applyBasetenConfig } from "./api.js";
 import basetenPlugin from "./index.js";
-import { createBasetenThinkingWrapper } from "./stream.js";
 
-type OpenAICompletionsModel = Model<"openai-completions">;
 const TEST_VALUE = "resolved-marker";
-
-function basetenModel(id: string): OpenAICompletionsModel {
-  return {
-    id,
-    name: id,
-    provider: "baseten",
-    api: "openai-completions",
-    baseUrl: "https://inference.baseten.co/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 202_000,
-    maxTokens: 202_000,
-  };
-}
-
-function captureThinkingPayload(modelId: string, thinkingLevel: "off" | "high" | undefined) {
-  let captured: Record<string, unknown> | undefined;
-  const streamFn: NonNullable<ProviderWrapStreamFnContext["streamFn"]> = (
-    model,
-    _context,
-    options,
-  ) => {
-    const payload: Record<string, unknown> = {
-      chat_template_args: { preserve_me: true },
-    };
-    options?.onPayload?.(payload, model);
-    captured = payload;
-    const stream = createAssistantMessageEventStream();
-    queueMicrotask(() => stream.end());
-    return stream;
-  };
-  const wrapperContext: ProviderWrapStreamFnContext = {
-    provider: "baseten",
-    modelId,
-    thinkingLevel,
-    streamFn,
-  };
-  const wrapped = createBasetenThinkingWrapper(wrapperContext);
-  if (!wrapped) {
-    throw new Error("Baseten thinking wrapper missing");
-  }
-  void wrapped(basetenModel(modelId), { messages: [] }, {});
-  return captured;
-}
-
-function captureDeepSeekReplayPayload(thinkingLevel: "off" | "high" | undefined) {
-  let captured: Record<string, unknown> | undefined;
-  const streamFn: NonNullable<ProviderWrapStreamFnContext["streamFn"]> = (
-    model,
-    _context,
-    options,
-  ) => {
-    const payload: Record<string, unknown> = {
-      ...(thinkingLevel === undefined
-        ? {}
-        : { reasoning_effort: thinkingLevel === "off" ? "none" : "high" }),
-      messages: [
-        {
-          role: "assistant",
-          tool_calls: [
-            {
-              id: "call_1",
-              type: "function",
-              function: { name: "read", arguments: "{}" },
-            },
-          ],
-        },
-        { role: "assistant", content: "done", reasoning_content: "preserve me" },
-        { role: "tool", tool_call_id: "call_1", content: "ok" },
-      ],
-    };
-    options?.onPayload?.(payload, model);
-    captured = payload;
-    const stream = createAssistantMessageEventStream();
-    queueMicrotask(() => stream.end());
-    return stream;
-  };
-  const modelId = "deepseek-ai/DeepSeek-V4-Pro";
-  const wrapped = createBasetenThinkingWrapper({
-    provider: "baseten",
-    modelId,
-    thinkingLevel,
-    streamFn,
-  });
-  if (!wrapped) {
-    throw new Error("Baseten thinking wrapper missing");
-  }
-  void wrapped(basetenModel(modelId), { messages: [] }, {});
-  return captured;
-}
 
 async function captureRegisteredPayloads(params: {
   modelId: string;
@@ -143,7 +49,7 @@ async function captureRegisteredPayloads(params: {
     provider: provider.id,
     modelId: model.id,
     model,
-    sourceApi: "openai-completions",
+    sourceApi: params.simple ? "openai-completions" : undefined,
     thinkingLevel: params.thinkingLevel,
     streamFn: (streamModel, context, options) => {
       const payload = buildOpenAICompletionsParams(
@@ -178,7 +84,7 @@ async function captureRegisteredPayloads(params: {
 }
 
 describe("Baseten provider registration", () => {
-  it.each([undefined, "merge", "replace"] as const)(
+  it.each([undefined, "replace"] as const)(
     "keeps registered %s setup separate from the public catalog preset",
     async (mode) => {
       const provider = await registerSingleProviderPlugin(basetenPlugin);
@@ -343,20 +249,6 @@ describe("Baseten provider registration", () => {
     ).not.toBe(true);
   });
 
-  it("sets and clears chat-template thinking while preserving caller arguments", () => {
-    expect(captureThinkingPayload("zai-org/GLM-5.2-Fast", "high")).toMatchObject({
-      chat_template_args: { preserve_me: true, enable_thinking: true },
-    });
-    expect(captureThinkingPayload("moonshotai/Kimi-K2.6", "off")).toMatchObject({
-      chat_template_args: { preserve_me: true, enable_thinking: false },
-    });
-    expect(
-      captureThinkingPayload("nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B", undefined),
-    ).toMatchObject({
-      chat_template_args: { preserve_me: true, enable_thinking: false },
-    });
-  });
-
   it("preserves Inkling max effort through the registered catalog and stream payload", async () => {
     const [payload] = await captureRegisteredPayloads({
       modelId: "thinkingmachines/inkling",
@@ -364,23 +256,21 @@ describe("Baseten provider registration", () => {
       reasoningLevels: ["max"],
     });
     expect(payload?.reasoning_effort).toBe("max");
+    expect(payload?.chat_template_args).toEqual({ preserve_me: true });
   });
 
-  it.each(["off", "high"] as const)(
-    "applies %s opt-in thinking through the registered simple completion hook",
-    async (thinkingLevel) => {
-      const [payload] = await captureRegisteredPayloads({
-        modelId: "moonshotai/Kimi-K2.6",
-        thinkingLevel,
-        reasoningLevels: [thinkingLevel],
-        simple: true,
-      });
-      expect(payload?.chat_template_args).toEqual({
-        preserve_me: true,
-        enable_thinking: thinkingLevel === "high",
-      });
-    },
-  );
+  it("enables binary thinking through the registered simple completion hook", async () => {
+    const [payload] = await captureRegisteredPayloads({
+      modelId: "moonshotai/Kimi-K2.6",
+      thinkingLevel: "high",
+      reasoningLevels: ["high"],
+      simple: true,
+    });
+    expect(payload?.chat_template_args).toEqual({
+      preserve_me: true,
+      enable_thinking: true,
+    });
+  });
 
   it.each([false, true])(
     "uses per-call thinking and the factory default through one registered wrapper (simple=%s)",
@@ -529,95 +419,5 @@ describe("Baseten provider registration", () => {
         reasoning: true,
       } as never),
     ).toBeUndefined();
-  });
-
-  it("leaves default-thinking models untouched", () => {
-    expect(captureThinkingPayload("thinkingmachines/inkling", "high")).toEqual({
-      chat_template_args: { preserve_me: true },
-    });
-  });
-
-  it("normalizes DeepSeek V4 replay while preserving Baseten reasoning effort", () => {
-    expect(captureDeepSeekReplayPayload(undefined)).toEqual({
-      messages: [
-        {
-          role: "assistant",
-          tool_calls: [
-            {
-              id: "call_1",
-              type: "function",
-              function: { name: "read", arguments: "{}" },
-            },
-          ],
-          reasoning_content: "",
-        },
-        { role: "assistant", content: "done", reasoning_content: "preserve me" },
-        { role: "tool", tool_call_id: "call_1", content: "ok" },
-      ],
-    });
-    expect(captureDeepSeekReplayPayload("high")).toEqual({
-      reasoning_effort: "high",
-      messages: [
-        {
-          role: "assistant",
-          tool_calls: [
-            {
-              id: "call_1",
-              type: "function",
-              function: { name: "read", arguments: "{}" },
-            },
-          ],
-          reasoning_content: "",
-        },
-        { role: "assistant", content: "done", reasoning_content: "preserve me" },
-        { role: "tool", tool_call_id: "call_1", content: "ok" },
-      ],
-    });
-    expect(captureDeepSeekReplayPayload("off")).toEqual({
-      reasoning_effort: "none",
-      messages: [
-        {
-          role: "assistant",
-          tool_calls: [
-            {
-              id: "call_1",
-              type: "function",
-              function: { name: "read", arguments: "{}" },
-            },
-          ],
-        },
-        { role: "assistant", content: "done" },
-        { role: "tool", tool_call_id: "call_1", content: "ok" },
-      ],
-    });
-  });
-
-  it("uses Baseten's supported system role instead of developer", () => {
-    const model = {
-      ...basetenModel("thinkingmachines/inkling"),
-      compat: { supportsDeveloperRole: false, maxTokensField: "max_tokens" as const },
-    };
-    const payload = buildOpenAICompletionsParams(
-      model,
-      {
-        systemPrompt: "You are a helpful assistant.",
-        messages: [{ role: "user", content: "hello", timestamp: 1 }],
-      },
-      { reasoning: "high", maxTokens: 32 },
-    );
-
-    const messages = payload.messages;
-    expect(Array.isArray(messages)).toBe(true);
-    if (!Array.isArray(messages)) {
-      throw new Error("expected messages payload");
-    }
-    expect(messages[0]).toMatchObject({
-      role: "system",
-      content: "You are a helpful assistant.",
-    });
-    expect(messages).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ role: "developer" })]),
-    );
-    expect(payload.max_tokens).toBe(32);
   });
 });

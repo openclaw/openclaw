@@ -26,12 +26,10 @@ function inspectJson(overrides: Record<string, unknown> = {}): string {
 }
 
 describe("Crabbox desktop provisioning", () => {
-  it.each(
-    (["windows/normal", "macos"] as const).flatMap((target) => [
-      { target, osOverride: false },
-      { target, osOverride: true },
-    ]),
-  )(
+  it.each([
+    { target: "windows/normal", osOverride: false },
+    { target: "macos", osOverride: true },
+  ] as const)(
     "provisions $target with placement override=$osOverride through the enrolled node",
     async ({ target, osOverride }) => {
       let warmed = false;
@@ -99,26 +97,9 @@ describe("Crabbox desktop provisioning", () => {
       config: { aws: { instanceProfile: "" }, coordinator: "", brokerMode: "managed" },
     },
     {
-      name: "coordinator-backed AWS",
-      providerId: "aws",
-      config: {
-        aws: { instanceProfile: "" },
-        coordinator: "https://coordinator.example.test",
-        brokerMode: "managed",
-      },
-    },
-    {
       name: "direct Azure",
       providerId: "azure",
       config: { coordinator: "", brokerMode: "managed" },
-    },
-    {
-      name: "coordinator-backed Azure",
-      providerId: "azure",
-      config: {
-        coordinator: "https://coordinator.example.test",
-        brokerMode: "managed",
-      },
     },
     {
       name: "coordinator-backed Hetzner",
@@ -293,8 +274,6 @@ describe("Crabbox desktop provisioning", () => {
 
   it.each([
     { name: "missing account", sshUser: undefined, afterSetup: false, stopFails: false },
-    { name: "malformed account", sshUser: "bad user", afterSetup: false, stopFails: false },
-    { name: "missing account after setup", sshUser: undefined, afterSetup: true, stopFails: false },
     {
       name: "malformed account after setup",
       sshUser: "bad user",

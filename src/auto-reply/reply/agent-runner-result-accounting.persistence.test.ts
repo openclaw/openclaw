@@ -148,7 +148,7 @@ async function createFixture() {
   replyOperation.setPhase("running");
   retainReplyOperationUntilComplete(replyOperation);
   operations.push(replyOperation);
-  const context: FinalizeReplyAgentRunInput = {
+  const context: FinalizeReplyAgentRunInput & { storePath: string } = {
     activeIsNewSession: false,
     activeSessionEntry: entry,
     activeSessionStore: sessionStore,

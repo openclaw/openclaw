@@ -510,7 +510,7 @@ function expectInstallDockerfileContract(
 ): string {
   const dockerfile = readFileSync(dockerfilePath, "utf8");
 
-  expect(dockerfile).toContain("# syntax=docker/dockerfile:1.7");
+  expect(dockerfile).toContain("# syntax=docker/dockerfile:1.27.0");
   expect(dockerfile).toMatch(/^FROM \S+@sha256:[a-f0-9]{64}$/m);
   expect(dockerfile).toContain("apt-get");
   expect(dockerfile).toContain("bash");
@@ -2562,7 +2562,7 @@ syncBuiltinESMExports();
     expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"');
     expect(script).toContain("docker_e2e_restore_package_dist_from_image");
     expect(script).toContain(
-      'COMMAND_TIMEOUT_MS="$(read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"',
+      'COMMAND_TIMEOUT_MS="$(docker_e2e_read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"',
     );
     expect(script).toContain(
       'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"',

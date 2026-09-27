@@ -45,7 +45,7 @@ final class CanvasManager {
 
         if !ensured.created {
             controller.presentAnchoredPanel(anchorProvider: anchorProvider)
-            controller.applyPreferredPlacement(placement)
+            controller.preferredPlacement = placement
 
             // Existing session: only navigate when an explicit target was provided.
             if let normalizedTarget {
@@ -56,7 +56,7 @@ final class CanvasManager {
             return controller.directoryPath
         }
 
-        controller.applyPreferredPlacement(placement)
+        controller.preferredPlacement = placement
 
         // New session: default to the local document root.
         controller.showCanvas(path: normalizedTarget ?? "/")
@@ -135,7 +135,7 @@ final class CanvasManager {
         let controller = try CanvasWindowController(
             sessionKey: session,
             root: Self.canvasRoot,
-            presentation: .panel(anchorProvider: anchorProvider))
+            anchorProvider: anchorProvider)
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)
         }

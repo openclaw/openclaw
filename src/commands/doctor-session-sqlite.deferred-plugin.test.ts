@@ -35,7 +35,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import {
+  seedConcurrentDeferredPluginMigration,
+  seedDeferredPluginSessionSource,
+} from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
@@ -51,7 +54,7 @@ describe("session sources needed by deferred plugin migrations", () => {
     "admits verified partial imports with $damage without replaying or retiring damaged history (archive interrupted: $interrupted)",
     async ({ damage, interrupted }) => {
       await withOpenClawTestState({ label: "deferred-damaged-session-source" }, async (state) => {
-        const { cfg, storePath, originals, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
           state,
           "default",
         );
@@ -106,7 +109,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         expect(
           loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" }),
         ).toBeUndefined();
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["fixture-plugin"],
@@ -150,7 +153,7 @@ describe("session sources needed by deferred plugin migrations", () => {
     "retains an ordinary import's $kind when another Doctor records pending work before unlink (unused agent: $unusedAgent)",
     async ({ kind, unusedAgent }) => {
       await withOpenClawTestState({ label: "deferred-plugin-archive-race" }, async (state) => {
-        const { cfg, storePath, originals, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
           state,
           unusedAgent ? "legacy-root" : "external",
         );
@@ -160,7 +163,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         }
         const run = () =>
           runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["fixture-plugin"],
@@ -177,7 +180,7 @@ describe("session sources needed by deferred plugin migrations", () => {
             const result = await publish(options);
             if (!pendingChanged && options.sourcePath === protectedSource) {
               pendingChanged = true;
-              recordDeferredPluginMigrations({
+              await recordDeferredPluginMigrations({
                 env: state.env,
                 pending: [
                   {
@@ -229,7 +232,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         ).toBeUndefined();
         expect(fs.readFileSync(protectedSource)).toEqual(originals.get(protectedSource));
 
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["fixture-plugin"],
@@ -295,7 +298,7 @@ describe("session sources needed by deferred plugin migrations", () => {
           storePath,
           originals,
           scope,
-        } = seedDeferredPluginSessionSource(
+        } = await seedDeferredPluginSessionSource(
           state,
           "external",
           "fixture-plugin",
@@ -321,7 +324,7 @@ describe("session sources needed by deferred plugin migrations", () => {
             ? path.join(path.dirname(storePath), "deleted-orphan-one.jsonl")
             : storePath;
         if (siblingPending) {
-          recordDeferredPluginMigrations({
+          await recordDeferredPluginMigrations({
             env: state.env,
             pending: [
               {
@@ -402,17 +405,10 @@ describe("session sources needed by deferred plugin migrations", () => {
         let pendingChanged = false;
         const changePending = () => {
           pendingChanged = true;
-          recordDeferredPluginMigrations({
-            env: state.env,
-            pending: [
-              {
-                pluginId: pendingChange === "plugin" ? "fixture-plugin" : "new-plugin",
-                reason: "A concurrent Doctor found additional migration work.",
-                command: "openclaw doctor --fix",
-                requiresStateMigration: true,
-              },
-            ],
-          });
+          seedConcurrentDeferredPluginMigration(
+            state,
+            pendingChange === "plugin" ? "fixture-plugin" : "new-plugin",
+          );
         };
         if (pendingChange === "plugin") {
           const unlink = fs.unlinkSync;
@@ -536,7 +532,7 @@ describe("session sources needed by deferred plugin migrations", () => {
     "verifies canonical import and retains $layout originals until resolution without replay (missing transcript: $missingTranscript)",
     async ({ layout, missingTranscript }) => {
       await withOpenClawTestState({ label: "deferred-plugin-session-source" }, async (state) => {
-        const { cfg, storePath, originals, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
           state,
           layout === "legacy-root-with-unused-agent" || layout === "legacy-root-custom-store"
             ? "legacy-root"
@@ -609,7 +605,7 @@ describe("session sources needed by deferred plugin migrations", () => {
           expect(fs.readFileSync(file)).toEqual(bytes);
         }
 
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["fixture-plugin"],
@@ -703,7 +699,7 @@ describe("session sources needed by deferred plugin migrations", () => {
       fs.mkdirSync(directory, { recursive: true });
       const storePath = path.join(directory, "sessions.json");
       fs.writeFileSync(storePath, "{}");
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         env: state.env,
         pending: [
           {
@@ -745,7 +741,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         fs.writeFileSync(storePath, "{}");
         const scope = { agentId: "main", storePath, env: state.env };
         const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [
             {
@@ -811,7 +807,7 @@ describe("session sources needed by deferred plugin migrations", () => {
 
   it("admits mixed top-level sources only after the live owner has a verified import", async () => {
     await withOpenClawTestState({ label: "deferred-mixed-retained-owner" }, async (state) => {
-      const { cfg, storePath, originals, scope } = seedDeferredPluginSessionSource(
+      const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
         state,
         "legacy-root",
       );
@@ -897,7 +893,7 @@ describe("session sources needed by deferred plugin migrations", () => {
     "keeps readiness blocked for a retained source with %s state",
     async (kind) => {
       await withOpenClawTestState({ label: `deferred-readiness-${kind}` }, async (state) => {
-        const { cfg, storePath } = seedDeferredPluginSessionSource(
+        const { cfg, storePath } = await seedDeferredPluginSessionSource(
           state,
           kind === "unimported-owner" ? "external" : "legacy-root",
         );
@@ -962,7 +958,7 @@ describe("session sources needed by deferred plugin migrations", () => {
     "imports a previously %s missing transcript without replaying canonical metadata",
     async (kind) => {
       await withOpenClawTestState({ label: "deferred-transcript-appears" }, async (state) => {
-        const { cfg, storePath, originals, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
           state,
           "default",
           "fixture-plugin",

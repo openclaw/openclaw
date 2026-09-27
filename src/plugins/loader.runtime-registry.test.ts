@@ -730,7 +730,7 @@ describe("resolvePluginLoadCacheContext", () => {
     }
   });
 
-  it("loads a custom profile's install records instead of reusing the process snapshot", () => {
+  it("loads a custom profile's install records instead of reusing the process snapshot", async () => {
     const profileEnv = { ...process.env, OPENCLAW_STATE_DIR: makePluginLoaderTempDir() };
     const profileInstallRecords: Record<string, PluginInstallRecord> = {
       demo: {
@@ -741,7 +741,7 @@ describe("resolvePluginLoadCacheContext", () => {
     };
     // Writing an installed index invalidates the current metadata generation,
     // so prepare the custom profile before installing the process snapshot.
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       env: profileEnv,
       candidates: [],
       reason: "source-changed",

@@ -26,15 +26,17 @@ import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginCache, getScopedPluginCache, type PluginCache } from "../plugins/plugin-cache.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
+import { registerBareRootArgumentTests } from "./run-main.bare-root.test-support.js";
+import {
+  makeProxyHandle,
+  registerRunMainProxyExitTests,
+} from "./run-main.proxy-exit.test-support.js";
 import { registerRunMainTimelineTests } from "./run-main.timeline.test-support.js";
-import { getPendingCliDisposers } from "./runtime-cleanup.js";
-import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 
 const readOnlyCoreOptions = { isolateEnv: true, observe: false, pluginValidation: "core-only" };
 
@@ -520,14 +522,6 @@ async function runGatewayBeforeHook(opts: { reset?: boolean } = {}): Promise<voi
 
 function makeProgram<T>(primary: string | undefined, parseAsync: T) {
   return { commands: [{ name: () => primary, aliases: () => [] }], parseAsync };
-}
-
-function makeProxyHandle() {
-  return {
-    proxyUrl: "http://127.0.0.1:19876",
-    stop: vi.fn(async () => {}),
-    kill: vi.fn(),
-  };
 }
 
 async function withCliTty(value: boolean, fn: () => Promise<void>): Promise<void> {
@@ -3069,152 +3063,11 @@ describe("runCli exit behavior", () => {
     expect(tryRouteCliMock).not.toHaveBeenCalled();
   });
 
-  it("stops the managed proxy after normal gateway runtime completion", async () => {
-    const handle = makeProxyHandle();
-    startProxyMock.mockResolvedValueOnce(handle);
-
-    await runCli(["node", "openclaw", "gateway", "run"]);
-
-    expect(startProxyMock).toHaveBeenCalledWith(undefined);
-    expect(stopProxyMock).toHaveBeenCalledOnce();
-    expect(stopProxyMock).toHaveBeenCalledWith(handle);
-  });
-
-  it("stops the managed proxy and exits after SIGINT", async () => {
-    const handle = makeProxyHandle();
-    startProxyMock.mockResolvedValueOnce(handle);
-    let resolveRoute: (value: boolean) => void = () => {};
-    tryRouteCliMock.mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        resolveRoute = resolve;
-      }),
-    );
-
-    const processOnceSpy = vi.spyOn(process, "once");
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number | string) => {
-      void code;
-      return undefined as never;
-    }) as typeof process.exit);
-    let finishCompanionCleanup: (() => void) | undefined;
-    const unregisterCompanionCleanup = registerSignalExitBarrier(
-      () =>
-        new Promise<void>((resolve) => {
-          finishCompanionCleanup = resolve;
-        }),
-    );
-
-    try {
-      const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
-      await vi.waitFor(() => {
-        expect(
-          processOnceSpy.mock.calls.some(
-            ([event, listener]) => event === "SIGINT" && typeof listener === "function",
-          ),
-        ).toBe(true);
-      });
-
-      const sigintHandler = processOnceSpy.mock.calls.find(([event]) => event === "SIGINT")?.[1];
-      if (typeof sigintHandler !== "function") {
-        throw new Error("SIGINT handler was not registered");
-      }
-      sigintHandler();
-
-      await vi.waitFor(() => {
-        expect(stopProxyMock).toHaveBeenCalledWith(handle);
-      });
-      expect(exitSpy).not.toHaveBeenCalled();
-      if (!finishCompanionCleanup) {
-        throw new Error("companion signal cleanup did not start");
-      }
-      finishCompanionCleanup();
-      await vi.waitFor(() => {
-        expect(exitSpy).toHaveBeenCalledWith(130);
-      });
-
-      resolveRoute(true);
-      await runPromise;
-      expect(stopProxyMock).toHaveBeenCalledTimes(1);
-    } finally {
-      unregisterCompanionCleanup();
-      exitSpy.mockRestore();
-      processOnceSpy.mockRestore();
-    }
-  });
-
-  it("keeps the original signal proxy stop pending through bounded command cleanup", async () => {
-    const handle = makeProxyHandle();
-    const route = createDeferredCore<boolean>();
-    const stopping = createDeferredCore();
-    const resume = createDeferredCore();
-    startProxyMock.mockResolvedValueOnce(handle);
-    tryRouteCliMock.mockReturnValueOnce(route.promise);
-    stopProxyMock.mockImplementationOnce(async () => {
-      stopping.resolve();
-      await resume.promise;
-    });
-    const running = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
-    let barrier: Promise<void> | undefined;
-    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      await vi.waitFor(() => expect(tryRouteCliMock).toHaveBeenCalled());
-      barrier = waitForSignalExitBarriers();
-      await stopping.promise;
-      vi.useFakeTimers();
-      route.resolve(true);
-      await vi.waitFor(() => expect(getPendingCliDisposers()).toContain("managed-proxy"));
-      await vi.advanceTimersByTimeAsync(5_000);
-      await running;
-      expect(getPendingCliDisposers()).toContain("managed-proxy");
-      expect(stderr).toHaveBeenCalledWith(expect.stringContaining("managed-proxy"));
-      expect(stopProxyMock).toHaveBeenCalledExactlyOnceWith(handle);
-    } finally {
-      route.resolve(true);
-      resume.resolve();
-      vi.useRealTimers();
-      await barrier;
-      await running;
-      stderr.mockRestore();
-    }
-    expect(getPendingCliDisposers()).not.toContain("managed-proxy");
-  });
-
-  it("synchronously kills the managed proxy during hard process exit", async () => {
-    const handle = makeProxyHandle();
-    startProxyMock.mockResolvedValueOnce(handle);
-    let resolveRoute: (value: boolean) => void = () => {};
-    tryRouteCliMock.mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        resolveRoute = resolve;
-      }),
-    );
-
-    const processOnceSpy = vi.spyOn(process, "once");
-    try {
-      const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
-      // Only the managed-proxy kill hook registers here: the debug-capture
-      // finalize hook stays unloaded unless the capture env requests it.
-      await vi.waitFor(() => {
-        expect(
-          processOnceSpy.mock.calls.reduce(
-            (count, [event]) => count + (event === "exit" ? 1 : 0),
-            0,
-          ),
-        ).toBe(1);
-      });
-
-      const exitHandler = processOnceSpy.mock.calls.find(([event]) => event === "exit")?.[1];
-      if (typeof exitHandler !== "function") {
-        throw new Error("exit handler was not registered");
-      }
-      exitHandler(0 as never);
-
-      expect(handle.kill).toHaveBeenCalledWith("SIGTERM");
-      resolveRoute(true);
-      await runPromise;
-      expect(stopProxyMock).not.toHaveBeenCalledWith(handle);
-    } finally {
-      processOnceSpy.mockRestore();
-    }
+  registerRunMainProxyExitTests({
+    runCli: (argv) => runCli(argv),
+    startProxyMock,
+    stopProxyMock,
+    tryRouteCliMock,
   });
 
   it.each([
@@ -3316,21 +3169,15 @@ describe("runCli exit behavior", () => {
     });
   });
 
-  it("points noninteractive fresh bare root invocations to onboarding automation", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: false,
-      valid: true,
-      sourceConfig: {},
-    });
-
-    await expectNonInteractiveBareCliError(
-      "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
-      () => {
-        expect(setupWizardCommandMock).not.toHaveBeenCalled();
-        expect(tryRouteCliMock).not.toHaveBeenCalled();
-        expect(buildProgramMock).not.toHaveBeenCalled();
-      },
-    );
+  registerBareRootArgumentTests({
+    runCli: (argv) => runCli(argv),
+    readConfigFileSnapshotMock,
+    buildProgramMock,
+    setupWizardCommandMock,
+    runTuiMock,
+    tryRouteCliMock,
+    withInteractiveTty,
+    expectNonInteractiveBareCliError,
   });
 
   it("starts the gateway-backed TUI for bare root invocations when config already exists", async () => {

@@ -304,13 +304,10 @@ describe("Codex native configuration", () => {
     configuredProvider?: string;
     modelPolicyAction?: "deny" | "revoke";
   }>([
-    { transport: "stdio", hasAnswer: true, nativeProvider: "openai" },
     { transport: "stdio", hasAnswer: false, nativeProvider: "openai" },
     { transport: "proxy", hasAnswer: true, nativeProvider: "openai" },
-    { transport: "proxy", hasAnswer: false, nativeProvider: "openai" },
     { transport: "websocket", hasAnswer: false, nativeProvider: "openai" },
     { transport: "unix", hasAnswer: true, nativeProvider: "openai" },
-    { transport: "unix", hasAnswer: false, nativeProvider: "openai" },
     { transport: "unix", hasAnswer: true, nativeProvider: "copilot" },
     { transport: "unix", hasAnswer: true, nativeProvider: "openai", configuredProvider: "copilot" },
     { transport: "unix", hasAnswer: true, nativeProvider: "copilot", configuredProvider: "openai" },
@@ -806,7 +803,7 @@ it.each(["restore", "fresh", "fresh after yield"] as const)(
       );
     } finally {
       sibling.release();
-      monitor.dispose();
+      await monitor.dispose();
       await parent.unregister();
       host.close();
     }

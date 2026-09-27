@@ -6,6 +6,9 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/openai/binary-transport.test.ts",
+  "extensions/openai/tts.test.ts",
+  "extensions/microsoft/speech-provider.test.ts",
   "extensions/discord/src/monitor/ingress.test.ts",
   "extensions/discord/src/monitor/message-handler.ingress-recovery.test.ts",
   "extensions/feishu/src/monitor.message-handler.ingress.test.ts",
@@ -328,6 +331,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/action-runtime.test.ts",
   "extensions/telegram/src/bot-handlers.message-context.runtime.test.ts",
   "extensions/telegram/src/bot-message-context.body.test.ts",
+  "extensions/telegram/src/bot-message-context.bot-threads.test.ts",
   "extensions/telegram/src/bot-message-context.dm-session.test.ts",
   "extensions/telegram/src/bot-message-context.prompt-context.test.ts",
   "extensions/telegram/src/bot-message-dispatch.delivery-transcript.test.ts",
@@ -355,6 +359,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/channel.gateway.test.ts",
   "extensions/telegram/src/message-cache.retained.test.ts",
   "extensions/telegram/src/message-cache.test.ts",
+  "extensions/telegram/src/monitor.webhook-identity.test.ts",
   "extensions/telegram/src/outbound-adapter.telegram-http.test.ts",
   "extensions/telegram/src/outbound-message-context.test.ts",
   "extensions/telegram/src/poll-registry.test.ts",

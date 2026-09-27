@@ -20,15 +20,6 @@ const hookMocks = vi.hoisted(() => ({
 }));
 
 const beforeToolCallMocks = vi.hoisted(() => ({
-  BeforeToolCallBlockedError: class BeforeToolCallBlockedError extends Error {
-    reason: string;
-
-    constructor(reason: string) {
-      super(reason);
-      this.name = "BeforeToolCallBlockedError";
-      this.reason = reason;
-    }
-  },
   consumeAdjustedParamsForToolCall: vi.fn((_toolCallId: string): unknown => undefined),
   recordAdjustedParamsForToolCall: vi.fn(),
   recordStructuredReplayTrustForToolCall: vi.fn(),
@@ -108,7 +99,6 @@ async function loadFreshAfterToolCallModulesForTest() {
     peekPreExecutionBlockedToolCall: vi.fn(() => false),
   }));
   vi.doMock("./agent-tools.before-tool-call.js", () => ({
-    BeforeToolCallBlockedError: beforeToolCallMocks.BeforeToolCallBlockedError,
     buildBlockedToolResult: ({ reason }: { reason: string }) => ({
       content: [{ type: "text", text: reason }],
       details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
@@ -118,8 +108,6 @@ async function loadFreshAfterToolCallModulesForTest() {
     recordAdjustedParamsForToolCall: beforeToolCallMocks.recordAdjustedParamsForToolCall,
     recordStructuredReplayTrustForToolCall:
       beforeToolCallMocks.recordStructuredReplayTrustForToolCall,
-    isBeforeToolCallBlockedError: (error: unknown) =>
-      error instanceof beforeToolCallMocks.BeforeToolCallBlockedError,
     isToolWrappedWithBeforeToolCallHook: beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook,
     runBeforeToolCallHook: beforeToolCallMocks.runBeforeToolCallHook,
   }));

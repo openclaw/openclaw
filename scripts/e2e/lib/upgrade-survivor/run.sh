@@ -264,6 +264,7 @@ write_summary() {
     SUMMARY_INSTALLED_VERSION="$installed_version" \
     SUMMARY_CANDIDATE_INSTALL_MODE="$candidate_install_mode" \
     SUMMARY_SCENARIO="$SCENARIO" \
+    SUMMARY_MISSING_LOAD_PATH_APPLICABILITY="${missing_load_path_applicability:-}" \
     SUMMARY_UPDATE_RESTART_MODE="$UPDATE_RESTART_MODE" \
     SUMMARY_UPDATE_OUTCOME="${update_outcome:-unknown}" \
     SUMMARY_UPDATE_REPAIR_REQUIRED="$update_repair_required" \
@@ -322,6 +323,13 @@ const summary = {
     version: process.env.SUMMARY_BASELINE_VERSION || null,
   },
   scenario: process.env.SUMMARY_SCENARIO || "base",
+  missingLoadPath: process.env.SUMMARY_MISSING_LOAD_PATH_APPLICABILITY
+    ? {
+        applicability: process.env.SUMMARY_MISSING_LOAD_PATH_APPLICABILITY,
+        reason: process.env.SUMMARY_MISSING_LOAD_PATH_APPLICABILITY === "unsupported-driver"
+          ? "published-cli-rejects-invalid-config-before-staging" : null,
+      }
+    : null,
   candidate: {
     kind: process.env.OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND || null,
     spec: process.env.OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC || process.env.OPENCLAW_CURRENT_PACKAGE_TGZ || null,
@@ -780,60 +788,8 @@ NODE
 
   if configured_plugin_installs_enabled; then
     mkdir -p "$package_dir"
-    FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="$candidate_version" node <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-const root = process.env.FIXTURE_PACKAGE_DIR;
-const version = process.env.FIXTURE_PACKAGE_VERSION;
-if (!version) {
-  throw new Error("missing fixture package version");
-}
-fs.mkdirSync(root, { recursive: true });
-fs.writeFileSync(
-  path.join(root, "package.json"),
-  `${JSON.stringify(
-    {
-      name: "@openclaw/brave-plugin",
-      version,
-      openclaw: { extensions: ["./index.js"] },
-    },
-    null,
-    2,
-  )}\n`,
-);
-fs.writeFileSync(
-  path.join(root, "openclaw.plugin.json"),
-  `${JSON.stringify(
-    {
-      id: "brave",
-      activation: { onStartup: false },
-      setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
-      contracts: { webSearchProviders: ["brave"] },
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          webSearch: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              apiKey: { type: ["string", "object"] },
-              mode: { type: "string", enum: ["web", "llm-context"] },
-              baseUrl: { type: ["string", "object"] },
-            },
-          },
-        },
-      },
-    },
-    null,
-    2,
-  )}\n`,
-);
-fs.writeFileSync(
-  path.join(root, "index.js"),
-  `module.exports = { id: "brave", name: "Brave Fixture", register() {} };\n`,
-);
-NODE
+    FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="$candidate_version" \
+      node scripts/e2e/lib/fixture.mjs brave-plugin
     tar -czf "$tarball" -C "$fixture_root" package
     registry_args+=("@openclaw/brave-plugin" "$candidate_version" "$tarball")
   fi

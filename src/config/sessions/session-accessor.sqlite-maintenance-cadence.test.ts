@@ -11,6 +11,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import {
   applySessionEntryReplacements,
+  appendTranscriptEventSync,
   assignSessionOwner,
   listSessionParticipantsReadOnly,
   loadSessionEntry,
@@ -523,7 +524,7 @@ it.each([
 });
 
 it.each([false, true])(
-  "discards a prepared maintenance snapshot after a write (foreign: %s)",
+  "discards a prepared maintenance snapshot after a candidate changes (foreign: %s)",
   (foreign) => {
     const { database, options, storePath } = createStore(1, Date.now() - 31 * DAY_MS);
     const operation = createSessionMaintenancePlanningOperation({
@@ -541,7 +542,15 @@ it.each([false, true])(
       expect(database.db.isTransaction).toBe(false);
       // A write can finish after preparation and before maintenance enters its writer.
       if (foreign) {
-        writer.exec("CREATE TABLE maintenance_revision_noise (value INTEGER)");
+        writer
+          .prepare(
+            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'newer') WHERE session_key = ?",
+          )
+          .run(key(0));
+        // The foreign writer certifies its valid postimage, like the ordinary entry owner.
+        writer
+          .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+          .run(key(0));
       } else {
         writeSessionEntry(database, key(0), {
           sessionId: "cadence-0",
@@ -552,9 +561,7 @@ it.each([false, true])(
       expect(reclaimSessionMaintenanceInTransaction(operation, {}, prepared)).toEqual({
         kind: "maintenance-plan-stale",
       });
-      expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.label).toBe(
-        foreign ? undefined : "newer",
-      );
+      expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.label).toBe("newer");
       expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
     } finally {
       prepared.release();
@@ -569,11 +576,78 @@ it.each([false, true])(
         value: { archived: 1 },
       });
       expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
-        ...(foreign ? {} : { label: "newer" }),
+        label: "newer",
         archiveReason: "age-retention",
       });
     } finally {
       fresh.release();
+    }
+  },
+);
+
+it("commits a prepared plan after an unrelated foreign write", () => {
+  const { database, options, storePath } = createStore(1, Date.now() - 31 * DAY_MS);
+  const operation = createSessionMaintenancePlanningOperation({
+    databaseOptions: options,
+    input: {
+      maintenance: resolveMaintenanceConfigFromInput(),
+      storePath,
+      archiveDirectory: path.join(path.dirname(storePath), "archives"),
+      preservation: captureSessionMaintenancePreservation(storePath),
+    },
+  });
+  const prepared = prepareSessionMaintenanceInWorker(operation);
+  const writer = new DatabaseSync(database.path);
+  try {
+    writer.exec("CREATE TABLE maintenance_unrelated_noise (value INTEGER)");
+    expect(reclaimSessionMaintenanceInTransaction(operation, {}, prepared)).toMatchObject({
+      kind: "maintenance-plan",
+      value: { archived: 1 },
+    });
+  } finally {
+    prepared.release();
+    writer.close();
+  }
+});
+
+it.each(["transcript append", "protected parent"] as const)(
+  "refuses a prepared plan after a %s changes its candidates",
+  (mutation) => {
+    const { database, options, storePath } = createStore(2, Date.now() - 31 * DAY_MS);
+    const activeKey = key(1);
+    writeSessionEntry(database, activeKey, { sessionId: "cadence-1", updatedAt: Date.now() });
+    const operation = createSessionMaintenancePlanningOperation({
+      databaseOptions: options,
+      input: {
+        activeSessionKeys: [activeKey],
+        maintenance: resolveMaintenanceConfigFromInput(),
+        storePath,
+        archiveDirectory: path.join(path.dirname(storePath), "archives"),
+        preservation: captureSessionMaintenancePreservation(storePath),
+      },
+    });
+    const prepared = prepareSessionMaintenanceInWorker(operation);
+    try {
+      if (mutation === "transcript append") {
+        expect(
+          appendTranscriptEventSync(
+            { storePath, sessionKey: key(0), sessionId: "cadence-0" },
+            { type: "custom", id: "concurrent-event", data: { synthetic: true } },
+          ).ok,
+        ).toBe(true);
+      } else {
+        writeSessionEntry(database, activeKey, {
+          sessionId: "cadence-1",
+          updatedAt: Date.now(),
+          parentSessionKey: key(0),
+        });
+      }
+      expect(reclaimSessionMaintenanceInTransaction(operation, {}, prepared)).toEqual({
+        kind: "maintenance-plan-stale",
+      });
+      expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
+    } finally {
+      prepared.release();
     }
   },
 );
