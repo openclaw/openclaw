@@ -201,6 +201,10 @@ openclaw-lobster-pet[data-dex-complete]::after {
   --lob-glint: #cfe3ff;
 }
 
+.lobster-pet--palette-clawnstantine {
+  --lob-glint: #ffe09a;
+}
+
 .lobster-pet--palette-clawtron {
   --lob-glint: #ffb020;
 }

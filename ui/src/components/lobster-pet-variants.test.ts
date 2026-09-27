@@ -1,9 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { lobsterPetSeed } from "./lobster-pet-contract.ts";
-import { canonicalLobsterLook, createLobsterPetLook } from "./lobster-pet-look.ts";
+import {
+  canonicalLobsterLook,
+  createLobsterPetLook,
+  lobsterPetName,
+  renderLobsterSvg,
+} from "./lobster-pet-look.ts";
 import { moonPhaseFraction } from "./lobster-pet-moon.ts";
 import { LOBSTER_PALETTE_WEIGHTS, LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
@@ -29,7 +35,7 @@ describe("lobster pet variants", () => {
     let shinies = 0;
     const total = 20_000;
     const neutralDate = new Date("2026-07-15T12:00:00");
-    expect(LOBSTER_PET_PALETTES).toHaveLength(42);
+    expect(LOBSTER_PET_PALETTES).toHaveLength(43);
     for (let seed = 0; seed < total; seed++) {
       const look = createLobsterPetLook(seed, neutralDate);
       counts.set(look.palette.id, (counts.get(look.palette.id) ?? 0) + 1);
@@ -41,6 +47,7 @@ describe("lobster pet variants", () => {
       expect(counts.get(id) ?? 0).toBeGreaterThan(0);
     }
     for (const grail of [
+      "clawnstantine",
       "clawtron",
       "selene",
       "geode",
@@ -80,7 +87,7 @@ describe("lobster pet variants", () => {
     const retroWeight = expectDefined(weights.get("retro"), "retro weight");
     const totalWeight = [...weights.values()].reduce((sum, weight) => sum + weight, 0);
     const crimsonWeight = expectDefined(weights.get("crimson"), "crimson weight");
-    expect(totalWeight).toBeCloseTo(79.15, 10);
+    expect(totalWeight).toBeCloseTo(80.15, 10);
     expect(crimsonWeight / totalWeight).toBeGreaterThan(0.25);
     expect(goldenRetroWeight).toBeLessThan(retroWeight);
     for (const [paletteId, weight] of weights) {
@@ -91,6 +98,19 @@ describe("lobster pet variants", () => {
     expect(counts.get("crimson") ?? 0).toBeGreaterThan(total * 0.25);
     expect(shinies).toBeGreaterThan(0);
     expect(shinies).toBeLessThan(total * 0.006);
+  });
+
+  it("keeps Clawnstantine's name and regalia without a random accessory or freckles", () => {
+    const look = expectDefined(
+      findLobsterLook("clawnstantine", new Date("2026-07-15T12:00:00")),
+      "Clawnstantine look",
+    );
+    expect(lobsterPetName(look, 0)).toBe("Clawnstantine");
+    const container = document.createElement("div");
+    render(renderLobsterSvg({ ...canonicalLobsterLook(look.palette), freckles: true }), container);
+    expect(container.querySelector(".lob-clawnstantine__laurel")).not.toBeNull();
+    expect(container.querySelector(".lob-freckles")).toBeNull();
+    expect(container.querySelectorAll(".lob-eye-open circle")).toHaveLength(4);
   });
 
   it("mixes four stable, distinct donor palettes only for chimera", () => {

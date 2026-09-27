@@ -19,6 +19,7 @@ const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
   bee: "Buzz",
   rubberduck: "Debuggy",
   watermelon: "Pips",
+  clawnstantine: "Clawnstantine",
   clawtron: "Clawtron",
   selene: "Selene",
   geode: "Amethyst",
@@ -116,6 +117,10 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
     hint: "Quack.",
   },
   watermelon: { flavor: "Contains 6% lobster.", hint: "Ripe when thumped." },
+  clawnstantine: {
+    flavor: "Built an empire. Still rules from the ledge.",
+    hint: "All tides lead here.",
+  },
   clawtron: { flavor: "60% rivets, 40% love.", hint: "Beep boop snip." },
   selene: { flavor: "Carries the current moon on its belly.", hint: "Waxes and wanes." },
   geode: { flavor: "Rock outside, amethyst inside.", hint: "Crack the surface." },

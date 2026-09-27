@@ -142,6 +142,23 @@ const BLUEPRINT_MARKS = svg`
   </g>
 `;
 
+// Laurel and imperial sash belong to the shell, not the random wardrobe.
+const CLAWNSTANTINE_REGALIA = svg`
+  <g class="lob-clawnstantine">
+    <path d="M25 48 Q60 59 95 48 L95 69 Q88 88 74 93 L46 93 Q32 88 25 69 Z" fill="#4e296e" />
+    <path d="M33 72 Q60 91 87 72" fill="none" stroke="#a576c4" stroke-width="2" />
+    <path d="M82 46 L91 51 Q75 78 46 93 L36 88 Q66 72 82 46 Z" fill="#e5bc62" />
+    <path d="M84 51 Q68 75 42 89" fill="none" stroke="#fff0bc" stroke-width="2" />
+    <circle cx="85" cy="49" r="6" fill="#e5bc62" />
+    <circle cx="85" cy="49" r="3" fill="#58c8b5" />
+    <g class="lob-clawnstantine__laurel" fill="#e5bc62" stroke="#bd8a38" stroke-width="0.6">
+      <path d="M31 27 Q31 15 50 11 M89 27 Q89 15 70 11" fill="none" stroke="#e5bc62" stroke-width="2" />
+      <path d="M33 25 Q23 21 28 15 Q35 17 33 25 Z M37 19 Q28 13 34 9 Q41 12 37 19 Z M43 14 Q38 7 44 6 Q49 9 43 14 Z" />
+      <path d="M87 25 Q97 21 92 15 Q85 17 87 25 Z M83 19 Q92 13 86 9 Q79 12 83 19 Z M77 14 Q82 7 76 6 Q71 9 77 14 Z" />
+    </g>
+  </g>
+`;
+
 const MECHA_PLATES = svg`
   <g class="lob-mecha">
     <g fill="none" stroke="#5f6a75" stroke-width="1.5">
@@ -221,6 +238,7 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "phosphor",
   "heisenbug",
   "blueprint",
+  "clawnstantine",
   "clawtron",
   "selene",
   "pixel",
@@ -335,6 +353,7 @@ export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResul
   geode: GEODE_FACETS,
   phosphor: PHOSPHOR_SCANLINES,
   blueprint: BLUEPRINT_MARKS,
+  clawnstantine: CLAWNSTANTINE_REGALIA,
   clawtron: MECHA_PLATES,
   banana: BANANA_MARKS,
   bee: BEE_PARTS,
