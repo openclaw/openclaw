@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
+import * as loggingConfig from "../logging/config.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
   formatDeliveryQueueHealthLine,
   formatGatewayClosedDiagnostic,
@@ -390,7 +393,7 @@ describe("formatHealthChannelLines", () => {
     ]);
   });
 
-  it("surfaces activated plugin failures without promoting inactive load errors", () => {
+  it("surfaces activated and configured plugin failures without promoting inactive errors", () => {
     const summary = createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} });
     summary.plugins = {
       loaded: ["calendar"],
@@ -409,34 +412,109 @@ describe("formatHealthChannelLines", () => {
           failurePhase: "load",
           error: "inactive plugin load failed",
         },
+        ...(["explicit", "auto", "default"] as const).map((activationSource) => ({
+          id: activationSource,
+          origin: "config" as const,
+          activated: false,
+          activationSource,
+          failurePhase: "load" as const,
+          error: "runtime entry missing",
+        })),
+        {
+          id: "disabled",
+          origin: "workspace",
+          activated: false,
+          activationSource: "disabled",
+          error: "disabled plugin ignored",
+        },
       ],
     };
 
     expect(formatHealthChannelLines(summary)).toStrictEqual([
       "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",
+      "Plugin explicit: failed - runtime entry missing; run openclaw doctor",
+      "Plugin auto: failed - runtime entry missing; run openclaw doctor",
+      "Plugin default: failed - runtime entry missing; run openclaw doctor",
     ]);
   });
 
-  it("bounds activated plugin failure details and summarizes omitted failures", () => {
-    const summary = createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} });
-    summary.plugins = {
-      loaded: [],
-      errors: Array.from({ length: 22 }, (_, index) => ({
-        id: `plugin-${index}`,
-        origin: "workspace",
-        activated: true,
-        error: "x".repeat(600),
-      })),
-    };
+  it("masks raw and terminal-normalized plugin diagnostics with built-in and custom patterns", () => {
+    const configSpy = vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue({
+      redactPatterns: ["deploymentMarker7"],
+    });
+    try {
+      registerSecretValueForRedaction("plugin9X");
+      registerSecretValueForRedaction("lineA9\nlineB7");
+      const summary = createHealthSummary();
+      summary.plugins = {
+        loaded: [],
+        errors: [
+          {
+            id: "plug\u001b[31min9X",
+            origin: "config",
+            activated: true,
+            error: "lineA9\nlineB7 password=mockPass7X deploymentMarker7 visible context",
+          },
+        ],
+      };
 
-    const lines = formatHealthChannelLines(summary);
-
-    expect(lines).toHaveLength(21);
-    expect(lines[0]).toBe(`Plugin plugin-0: failed - ${"x".repeat(500)}; run openclaw doctor`);
-    expect(lines.at(-1)).toBe(
-      "Plugins: failed - 2 additional activated failures; run openclaw doctor",
-    );
+      expect(formatHealthChannelLines(summary)).toEqual([
+        "Plugin ***: failed - *** password=*** *** visible context; run openclaw doctor",
+      ]);
+    } finally {
+      resetSecretRedactionRegistryForTest();
+      configSpy.mockRestore();
+    }
   });
+
+  it.each([20, 21])(
+    "bounds %s combined plugin warnings without counting hidden errors",
+    (count) => {
+      const summary = createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} });
+      summary.plugins = {
+        loaded: [],
+        errors: [
+          ...Array.from({ length: 10 }, (_, index) => ({
+            id: `plugin-${index}`,
+            origin: "workspace" as const,
+            activated: true,
+            error: "x".repeat(600),
+          })),
+          { id: "inactive", origin: "workspace", activated: false, error: "hidden inactive" },
+          {
+            id: "disabled",
+            origin: "workspace",
+            activated: false,
+            activationSource: "disabled",
+            error: "hidden disabled",
+          },
+        ],
+        unavailable: Array.from({ length: count - 10 }, (_, index) => ({
+          id: `unavailable-${index}`,
+          state: "configured-unavailable",
+          diagnostic: {
+            kind: "plugin-verification",
+            reason: "unreadable-package-json",
+            detail: "manifest unreadable",
+          },
+        })),
+      };
+      const original = structuredClone(summary);
+
+      const lines = formatHealthChannelLines(summary);
+
+      expect(summary).toEqual(original);
+      expect(lines).toHaveLength(count);
+      expect(lines[0]).toBe(`Plugin plugin-0: failed - ${"x".repeat(500)}; run openclaw doctor`);
+      expect(lines.filter((line) => line.startsWith("Plugin unavailable-"))).toHaveLength(10);
+      expect(lines.join("\n")).not.toContain("hidden");
+      expect(lines.filter((line) => line.startsWith("Plugins:"))).toEqual(
+        count === 21
+          ? ["Plugins: warning - 1 additional plugin warnings; run openclaw doctor"]
+          : [],
+      );
+    },
+  );
 });
 
 describe("formatDeliveryQueueHealthLine", () => {

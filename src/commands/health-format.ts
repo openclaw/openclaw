@@ -6,6 +6,7 @@ import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { formatDurationHuman } from "../infra/format-time/format-duration.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 
 export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
   if (!isGatewayTransportError(err) || err.kind !== "closed" || err.code === undefined) {
@@ -132,7 +133,15 @@ const formatAccountProbeTiming = (summary: ChannelAccountHealthSummary): string 
   return `${handle}:${accountId}:${timing}`;
 };
 
-/** Formats terse channel and activated-plugin health lines for shared CLI surfaces. */
+function formatPluginDiagnostic(text: string, maxChars: number): string {
+  // Terminal cleanup can join fragments into a secret; mask both complete forms before truncating.
+  return redactToolPayloadText(sanitizeTerminalText(redactToolPayloadText(text))).slice(
+    0,
+    maxChars,
+  );
+}
+
+/** Formats terse channel and actionable plugin health lines for shared CLI surfaces. */
 export const formatHealthChannelLines = (
   summary: HealthSummary,
   opts: {
@@ -258,15 +267,33 @@ export const formatHealthChannelLines = (
             : "unknown";
     lines.push(`${label}: ${passiveState}`);
   }
-  const failedPlugins = (summary.plugins?.errors ?? []).filter((plugin) => plugin.activated);
-  for (const plugin of failedPlugins.slice(0, 20)) {
-    const id = sanitizeTerminalText(plugin.id).slice(0, 120);
-    const error = sanitizeTerminalText(plugin.error).slice(0, 500);
-    lines.push(`Plugin ${id}: failed - ${error}; run openclaw doctor`);
+  const pluginWarnings = [
+    ...(summary.plugins?.errors ?? [])
+      .filter(
+        (plugin) =>
+          plugin.activated ||
+          plugin.activationSource === "explicit" ||
+          plugin.activationSource === "auto" ||
+          plugin.activationSource === "default",
+      )
+      .map(({ id, error }) => ({ id, state: "failed", detail: error })),
+    ...(summary.plugins?.unavailable ?? []).map(({ id, diagnostic }) => ({
+      id,
+      state: "unavailable",
+      detail: diagnostic.detail ? `${diagnostic.reason}: ${diagnostic.detail}` : diagnostic.reason,
+    })),
+  ];
+  for (const plugin of pluginWarnings.slice(0, 20)) {
+    const id = formatPluginDiagnostic(plugin.id, 120);
+    const diagnostic = formatPluginDiagnostic(plugin.detail, 500);
+    // Deep status splits at the first colon, so plugin IDs must not become its state prefix.
+    const label = id.includes(":") ? "Plugin" : `Plugin ${id}`;
+    const detail = id.includes(":") ? `${id}: ${diagnostic}` : diagnostic;
+    lines.push(`${label}: ${plugin.state} - ${detail}; run openclaw doctor`);
   }
-  if (failedPlugins.length > 20) {
+  if (pluginWarnings.length > 20) {
     lines.push(
-      `Plugins: failed - ${failedPlugins.length - 20} additional activated failures; run openclaw doctor`,
+      `Plugins: warning - ${pluginWarnings.length - 20} additional plugin warnings; run openclaw doctor`,
     );
   }
   return lines;
