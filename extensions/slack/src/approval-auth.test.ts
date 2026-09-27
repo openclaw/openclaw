@@ -7,6 +7,7 @@ import {
   isSlackApprovalAuthorizedSender,
   isSlackPluginApprovalAuthorizedSender,
 } from "./approval-auth.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 
 function pluginRequest(
   policySubject?: PluginApprovalRequest["request"]["policySubject"],
@@ -115,6 +116,44 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
   const pluginReviewer = "team:T11111111:user:U22222222";
   const toolReviewer = "team:T11111111:user:U33333333";
   const legacyReviewer = "team:T11111111:user:U44444444";
+
+  it("rejects a reviewer whose workspace differs from the bot account", () => {
+    const defaultInstallation = registerSlackInstallationState("default", "workspace", "T11111111");
+    const opsInstallation = registerSlackInstallationState("ops", "workspace", "T22222222");
+    try {
+      const cfg: OpenClawConfig = {
+        channels: {
+          slack: {
+            accounts: {
+              default: { botToken: "xoxb-default", appToken: "xapp-default" },
+              ops: { botToken: "xoxb-ops", appToken: "xapp-ops" },
+            },
+          },
+        },
+        approvals: { plugin: { slack: { approvers: [defaultReviewer] } } },
+      };
+      const request = pluginRequest({ pluginKey: "diffs", tool: "diffs" });
+      expect(
+        isSlackPluginApprovalAuthorizedSender({
+          cfg,
+          accountId: "default",
+          senderId: defaultReviewer,
+          request,
+        }),
+      ).toBe(true);
+      expect(
+        isSlackPluginApprovalAuthorizedSender({
+          cfg,
+          accountId: "ops",
+          senderId: defaultReviewer,
+          request,
+        }),
+      ).toBe(false);
+    } finally {
+      defaultInstallation.release();
+      opsInstallation.release();
+    }
+  });
 
   it("applies exact tool, plugin, then Agent reviewer lists within the bot workspace", () => {
     const cfg: OpenClawConfig = {

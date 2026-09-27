@@ -7,6 +7,7 @@ import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normaliz
 import { resolveSlackAccount, resolveSlackAccountAllowFrom } from "./accounts.js";
 import { resolvePluginApprovalSlackApprovers } from "./approval-plugin-policy.js";
 import { normalizeSlackApproverTarget } from "./exec-approvals.js";
+import { getSlackInstallationTeamId } from "./installation-identity-state.js";
 import {
   resolveSlackAllowListMatch,
   resolveSlackUserAllowListForTeam,
@@ -23,10 +24,15 @@ function resolveSlackApprovalInputs(params: SlackApprovalContext) {
   };
 }
 
-function slackApprovalTargetMatches(senderId: string, approvers: readonly string[]): boolean {
+function slackApprovalTargetMatches(
+  senderId: string,
+  approvers: readonly string[],
+  accountTeamId?: string,
+): boolean {
   const sender = parseSlackTarget(senderId, { defaultKind: "user" });
   return (
     sender?.kind === "user" &&
+    (!accountTeamId || sender.teamId?.toLowerCase() === accountTeamId.toLowerCase()) &&
     resolveSlackAllowListMatch({
       allowList: normalizeStringEntriesLower([...approvers]),
       teamId: sender.teamId,
@@ -82,7 +88,15 @@ export function isSlackPluginApprovalAuthorizedSender(
   const configured = resolvePluginApprovalSlackApprovers(params.cfg, params.request);
   return configured === undefined
     ? isSlackApprovalAuthorizedSender(params)
-    : Boolean(params.senderId && slackApprovalTargetMatches(params.senderId, configured));
+    : Boolean(
+        params.senderId &&
+        // Custody must count only reviewers in the bot's authenticated workspace.
+        slackApprovalTargetMatches(
+          params.senderId,
+          configured,
+          getSlackInstallationTeamId(resolveSlackAccount(params).accountId),
+        ),
+      );
 }
 
 export function getSlackApprovalApproversForTeam(
