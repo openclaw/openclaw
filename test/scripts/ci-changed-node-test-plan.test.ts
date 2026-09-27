@@ -2011,13 +2011,57 @@ describe("CI changed Node test plan", () => {
       writeFileSync(path.join(cwd, file), source);
     }
     for (const changedPath of [helper, direct]) {
-      const shards = createChangedNodeTestShards([changedPath], { cwd });
+      const onSelectionEvidence = vi.fn();
+      const shards = createChangedNodeTestShards([changedPath], { cwd, onSelectionEvidence });
       expect(shards).not.toBeNull();
       expect(selectedFiles(shards).toSorted()).toEqual([direct, indirect]);
+      expect(onSelectionEvidence).toHaveBeenCalledWith({
+        prunableTargets: changedPath === helper ? [indirect] : [],
+      });
     }
     const explicit = createChangedNodeTestShards([helper, e2e], { cwd });
     expect(explicit).not.toBeNull();
     expect(selectedFiles(explicit).toSorted()).toEqual([e2e, direct, indirect].toSorted());
+  });
+
+  it("reports only transitive import-only targets while preserving overlapping floor owners", () => {
+    const cwd = argvTempDirs.make("changed-selection-evidence-");
+    const source = "src/example/runtime.ts";
+    const transitive = "src/consumers/transitive.test.ts";
+    materializeSourcePolicyFixtures(cwd);
+    for (const [file, content] of Object.entries({
+      [source]: "export const value = 1;\n",
+      "src/middle/barrel.ts": 'export * from "../example/runtime.js";\n',
+      "src/middle/reader.ts": 'new URL("../example/runtime.ts", import.meta.url);\n',
+      "src/middle/wrapper.ts": 'import "./reader.js";\n',
+      "src/consumers/direct.test.ts": 'import "../example/runtime.js";\n',
+      [transitive]: 'import "../middle/barrel.js";\n',
+      "src/example/neighbor.test.ts": 'import "../middle/barrel.js";\n',
+      "src/consumers/reader.test.ts": 'import "../middle/reader.js";\n',
+      "src/consumers/mixed.test.ts":
+        'import "../middle/barrel.js";\nimport "../middle/wrapper.js";\n',
+      [taskBoundaryTest]: 'import "../middle/barrel.js";\n',
+    })) {
+      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+      writeFileSync(path.join(cwd, file), content);
+    }
+    const onSelectionEvidence = vi.fn();
+    const shards = createChangedNodeTestShards([source], { cwd, onSelectionEvidence });
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards)).toEqual(
+      expect.arrayContaining([
+        transitive,
+        "src/consumers/direct.test.ts",
+        "src/example/neighbor.test.ts",
+        "src/consumers/reader.test.ts",
+        "src/consumers/mixed.test.ts",
+        taskBoundaryTest,
+      ]),
+    );
+    expect(onSelectionEvidence).toHaveBeenLastCalledWith({ prunableTargets: [transitive] });
+    expect(createChangedNodeTestShards([source], { cwd })).toEqual(shards);
+    createChangedNodeTestShards([source, transitive], { cwd, onSelectionEvidence });
+    expect(onSelectionEvidence).toHaveBeenLastCalledWith({ prunableTargets: [] });
   });
 
   it("keeps task boundary scanning beside ordinary importers without claiming unowned sources", () => {

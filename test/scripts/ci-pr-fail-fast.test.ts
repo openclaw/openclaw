@@ -369,7 +369,7 @@ describe("PR failure monitor", () => {
     expect(f.recordFailure).toHaveBeenCalledWith({ id: 101, name: "row-101", runAttempt: 1 });
   });
 
-  it("finishes a successful selected graph without waiting on its own gate", async () => {
+  it("finishes a successful selected graph without waiting on its gate or reacting to shadow failures", async () => {
     const f = fixture({
       jobs: [
         job(1),
@@ -377,6 +377,8 @@ describe("PR failure monitor", () => {
         job(3),
         job(4, null, "pr-fail-fast"),
         job(5, null, "openclaw/ci-gate"),
+        job(6, "failure", "codex-test-selection"),
+        job(7, "timed_out", "codex-test-selection-report"),
       ],
     });
     expect(await f.monitor(3)).toBe("completed");

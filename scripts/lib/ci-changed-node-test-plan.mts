@@ -93,6 +93,10 @@ type ChangedTargetValidation = {
   dedicatedNativeChecks?: { macos: boolean; ios: boolean; android: boolean };
   onFallback?: PlanDiagnostic;
 };
+type SelectionEvidence = {
+  importDepths: Map<string, number>;
+  nonImportTargets: Set<string>;
+};
 
 /** Ordinary UI unit entries retain their unit owner; fixtures and their consumers retain E2E. */
 export function hasUiE2eAffectingChange(changedPaths: string[], options: CwdOptions = {}) {
@@ -367,13 +371,35 @@ function resolvePreciseChangedTargets(
   documentationPaths: ReadonlySet<string>,
   additionalTargets: string[] = [],
   validation: ChangedTargetValidation = {},
+  evidence?: SelectionEvidence,
 ) {
+  for (const target of additionalTargets) {
+    evidence?.nonImportTargets.add(target);
+  }
+  const onNonImportTargets = evidence
+    ? (targets: readonly string[]) => {
+        for (const target of targets) {
+          evidence.nonImportTargets.add(target);
+        }
+      }
+    : undefined;
   const resolveTargetPlan = (paths: string[]) => {
     const consumers = resolveAffectedTestsFromImportGraph(paths, cwd, {
       tooling: true,
       forceFull: true,
       resolveAliases: true,
       runtimeOnly: true,
+      onNonImportTargets,
+      onImportDepths: evidence
+        ? (depths) => {
+            for (const [target, depth] of depths) {
+              evidence.importDepths.set(
+                target,
+                Math.min(depth, evidence.importDepths.get(target) ?? Infinity),
+              );
+            }
+          }
+        : undefined,
     });
     const plan = resolveChangedTestTargetPlan(paths, {
       broad: true,
@@ -383,6 +409,7 @@ function resolvePreciseChangedTargets(
       includeExtensionImpact: false,
       resolveAliases: true,
       runtimeOnly: true,
+      onNonImportTargets,
     });
     // UI routing can return the source itself; instruction pages are not test targets.
     return {
@@ -610,9 +637,13 @@ export function createChangedNodeTestShards(
       dedicatedBuildArtifacts?: boolean;
       dedicatedUiE2e?: boolean;
       dedicatedMaxLinesRatchet?: boolean;
+      onSelectionEvidence?: (evidence: { prunableTargets: string[] }) => void;
     } = {},
 ): ChangedNodeTestShard[] | null {
   const cwd = options.cwd ?? process.cwd();
+  const evidence: SelectionEvidence | undefined = options.onSelectionEvidence
+    ? { importDepths: new Map(), nonImportTargets: new Set() }
+    : undefined;
   const fallback = (reason: string) => {
     options.onFallback?.(reason);
     return null;
@@ -787,6 +818,7 @@ export function createChangedNodeTestShards(
     dependencyConsumers.sources.length === 0 &&
     configPaths.length === 0
   ) {
+    options.onSelectionEvidence?.({ prunableTargets: [] });
     return [];
   }
   const configOwnedInputs = configPaths.length
@@ -956,6 +988,7 @@ export function createChangedNodeTestShards(
         : []),
     ],
     options,
+    evidence,
   );
   if (resolvedTargetPlans === null) {
     return null;
@@ -970,6 +1003,7 @@ export function createChangedNodeTestShards(
     regularPaths.length > 0 &&
     changedPaths.every((file) => livePaths.includes(file) || documentationPaths.has(file))
   ) {
+    options.onSelectionEvidence?.({ prunableTargets: [] });
     return [];
   }
   const targetPlans = resolvedTargetPlans.filter(
@@ -1203,7 +1237,39 @@ export function createChangedNodeTestShards(
     ...boundaryShards,
   ];
   // Covered source targets keep build-artifacts ownership even with no Node rows.
-  return shards.length > 0 || targets.length < resolvedTargetPlans.length
-    ? shards
-    : fallback("no executable Node owner");
+  if (shards.length === 0 && targets.length >= resolvedTargetPlans.length) {
+    return fallback("no executable Node owner");
+  }
+  if (evidence) {
+    const changedDirectories = new Set(
+      changedPaths
+        .filter((file) => !isTestFileTarget(file))
+        .map((file) => path.posix.dirname(file)),
+    );
+    // Absence from this list is floor evidence. Whole-suite and policy owners
+    // remain authoritative even when the same file is also import-reachable.
+    const prunableTargets = prTargetPlans
+      .filter(
+        ({ target, plans }) =>
+          (evidence.importDepths.get(target) ?? 0) >= 2 &&
+          !evidence.nonImportTargets.has(target) &&
+          !changedPaths.includes(target) &&
+          !changedDirectories.has(path.posix.dirname(target)) &&
+          !extensionFallbackRoots.some((root) => target.startsWith(`${root}/`)) &&
+          !isBoundaryTestFile(target) &&
+          !plans.some(({ config }) =>
+            wholeOwnerShards.some((shard) =>
+              shard.groups?.some(
+                (group) =>
+                  group.configs.includes(config) &&
+                  (!group.includePatterns ||
+                    group.includePatterns.some((pattern) => path.matchesGlob(target, pattern))),
+              ),
+            ),
+          ),
+      )
+      .map(({ target }) => target);
+    options.onSelectionEvidence?.({ prunableTargets });
+  }
+  return shards;
 }

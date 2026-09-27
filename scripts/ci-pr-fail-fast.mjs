@@ -2,7 +2,12 @@ import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const TERMINAL_FAILURES = new Set(["failure", "timed_out"]);
-const CONTROL_JOBS = new Set(["pr-fail-fast", "openclaw/ci-gate"]);
+const CONTROL_JOBS = new Set([
+  "pr-fail-fast",
+  "openclaw/ci-gate",
+  "codex-test-selection",
+  "codex-test-selection-report",
+]);
 
 /** @param {unknown} value */
 function record(value) {

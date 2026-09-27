@@ -3785,6 +3785,74 @@ setImmediate(() => {
     },
   );
 
+  it("keeps Codex selection observational and limited to same-repository PR first attempts", () => {
+    const workflow = readCiWorkflow();
+    const selection = workflow.jobs["codex-test-selection"];
+    const report = workflow.jobs["codex-test-selection-report"];
+    const context = {
+      eventName: "pull_request" as const,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      preflightOutputs: { run_checks_node_core_nondist: "true" },
+    };
+    const eligible = (overrides = {}) =>
+      evaluateWorkflowExpression(`\${{ ${selection.if} }}`, { ...context, ...overrides });
+    expect(eligible()).toBe(true);
+    for (const overrides of [
+      { eventName: "push" },
+      { eventName: "workflow_dispatch" },
+      { headRepository: "contributor/openclaw" },
+      { runAttempt: 2 },
+      { preflightResult: "failure" },
+      { preflightOutputs: { run_checks_node_core_nondist: "false" } },
+      { codexSelection: "off" },
+    ]) {
+      expect(eligible(overrides), JSON.stringify(overrides)).toBe(false);
+    }
+    expect(selection.needs).toEqual(["preflight"]);
+    expect(selection.permissions).toEqual({ contents: "read" });
+    expect(selection["runs-on"]).toBe("ubuntu-24.04");
+    expect(selection["timeout-minutes"]).toBe(15);
+    expect(report.permissions).toEqual({ actions: "read", contents: "read" });
+    expect(report["runs-on"]).toBe("ubuntu-24.04");
+    expect(report.needs).toEqual([
+      "preflight",
+      "codex-test-selection",
+      "checks-node-core-test-nondist-shard",
+    ]);
+    for (const result of ["success", "failure", "cancelled", "skipped"] as const) {
+      expect(
+        evaluateWorkflowExpression(`\${{ ${report.if} }}`, {
+          ...context,
+          cancelled: true,
+          additionalNeeds: { "codex-test-selection": { outputs: {}, result } },
+        }),
+      ).toBe(result === "success");
+    }
+    for (const name of ["codex-test-selection", "codex-test-selection-report"]) {
+      expect(workflow.jobs["ci-gate"].needs).not.toContain(name);
+      expect(workflow.jobs["pr-fail-fast"].needs).not.toContain(name);
+    }
+    const codex = selection.steps.find((step: WorkflowStep) => step.id === "codex");
+    expect(codex).toMatchObject({
+      uses: "openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e",
+      "continue-on-error": true,
+      "timeout-minutes": 8,
+      with: {
+        sandbox: "read-only",
+        "safety-strategy": "drop-sudo",
+        "output-schema-file": ".github/codex/prompts/ci-test-selection.schema.json",
+      },
+    });
+    expect(
+      selection.steps.find((step: WorkflowStep) => step.name === "Finalize shadow test selection")
+        .if,
+    ).toBe("always()");
+    expect(selection.steps[0].env.CHECKOUT_SHA).toBe(
+      "${{ needs.preflight.outputs.checkout_revision }}",
+    );
+  });
+
   it("keeps CodeQL critical quality scans off Blacksmith registrations", () => {
     const source = readCriticalQualityWorkflow();
     const workflow = parse(source);

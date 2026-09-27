@@ -164,6 +164,7 @@ type ChangedTestTargetOptions = {
   runtimeOnly?: boolean;
   includeExtensionImpact?: boolean;
   watchMode?: boolean;
+  onNonImportTargets?: (targets: readonly string[]) => void;
 };
 
 type ChangedTestTargetPlan = {
@@ -188,12 +189,14 @@ type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode
 type ImportGraph = {
   files: readonly string[];
   reverseImports: Map<string, string[]>;
+  nonImportReverseImports: Map<string, string[]>;
   testFiles: Set<string>;
 };
 type ImportGraphEdges = {
   file: string;
   specifiers: string[];
   typeOnlySpecifiers: Set<string>;
+  nonImportSpecifiers: Set<string>;
   imports: Set<string>;
   references: Set<string>;
 };
@@ -2013,11 +2016,12 @@ function readImportGraphEdges(
     .map((file) => ({ file, parseImports: !cachedImportGraphEdges.has(cacheKey(file)) }))
     .filter(({ parseImports }) => parseImports || terms.length > 0);
   return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES).map(
-    ({ file, imports, typeOnlyImports, matches, references }) => {
+    ({ file, imports, typeOnlyImports, nonImportSpecifiers, matches, references }) => {
       const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
         file,
         specifiers: imports,
         typeOnlySpecifiers: new Set(typeOnlyImports),
+        nonImportSpecifiers: new Set(nonImportSpecifiers),
         imports: resolve(file, imports),
         references: new Set<string>(),
       };
@@ -2269,6 +2273,7 @@ function getImportGraph(
     fileSet.add(file);
   }
   const reverseImports = new Map<string, string[]>();
+  const nonImportReverseImports = new Map<string, string[]>();
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
@@ -2300,11 +2305,16 @@ function getImportGraph(
         const importers = reverseImports.get(imported) ?? [];
         importers.push(file);
         reverseImports.set(imported, importers);
+        if (edges.nonImportSpecifiers.has(specifier)) {
+          const readers = nonImportReverseImports.get(imported) ?? [];
+          readers.push(file);
+          nonImportReverseImports.set(imported, readers);
+        }
       }
     }
   }
 
-  const graph = { files, reverseImports, testFiles };
+  const graph = { files, reverseImports, nonImportReverseImports, testFiles };
   cachedImportGraphs.set(cacheKey, { graph, additionalPaths: missingKey });
   return graph;
 }
@@ -2370,7 +2380,11 @@ export function hasImportGraphImpactOnTargets(
 export function resolveAffectedTestsFromImportGraph(
   changedPath: string | string[],
   cwd: string,
-  options: ImportGraphOptions & { forceFull?: boolean } = {},
+  options: ImportGraphOptions & {
+    forceFull?: boolean;
+    onImportDepths?: (depths: ReadonlyMap<string, number>) => void;
+    onNonImportTargets?: (targets: readonly string[]) => void;
+  } = {},
 ) {
   const paths = typeof changedPath === "string" ? [changedPath] : changedPath;
   if (
@@ -2382,6 +2396,8 @@ export function resolveAffectedTestsFromImportGraph(
   if (
     !options.resolveAliases &&
     !options.runtimeOnly &&
+    !options.onImportDepths &&
+    !options.onNonImportTargets &&
     options.forceFull !== true &&
     typeof changedPath === "string"
   ) {
@@ -2392,9 +2408,14 @@ export function resolveAffectedTestsFromImportGraph(
   }
 
   const queue = typeof changedPath === "string" ? [changedPath] : [...changedPath];
-  const { reverseImports, testFiles } = getImportGraph(cwd, options, queue);
+  const { reverseImports, nonImportReverseImports, testFiles } = getImportGraph(
+    cwd,
+    options,
+    queue,
+  );
   const seen = new Set(queue);
   const targets = [];
+  const depths = options.onImportDepths ? new Map(queue.map((file) => [file, 0])) : undefined;
 
   for (const current of queue) {
     for (const importer of reverseImports.get(current) ?? []) {
@@ -2402,6 +2423,7 @@ export function resolveAffectedTestsFromImportGraph(
         continue;
       }
       seen.add(importer);
+      depths?.set(importer, (depths.get(current) ?? 0) + 1);
       if (testFiles.has(importer)) {
         targets.push(importer);
       }
@@ -2409,6 +2431,24 @@ export function resolveAffectedTestsFromImportGraph(
     }
   }
 
+  if (depths) {
+    options.onImportDepths?.(new Map(targets.map((file) => [file, depths.get(file) ?? 0])));
+  }
+  if (options.onNonImportTargets) {
+    // A longer file-reader path still protects a test reached by a shorter
+    // import path. Propagate every non-import edge after reachability settles.
+    const readers = new Set(queue.flatMap((file) => nonImportReverseImports.get(file) ?? []));
+    const readerQueue = [...readers];
+    for (const reader of readerQueue) {
+      for (const importer of reverseImports.get(reader) ?? []) {
+        if (!readers.has(importer)) {
+          readers.add(importer);
+          readerQueue.push(importer);
+        }
+      }
+    }
+    options.onNonImportTargets(readerQueue.filter((file) => testFiles.has(file)));
+  }
   return [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -2606,14 +2646,18 @@ function resolveToolingChangedTestTargets(
 ) {
   const targets = [];
   for (const changedPath of changedPaths) {
-    const testTargets =
-      SOURCE_TEST_TARGETS.get(changedPath) ?? resolveToolingTestTargets(changedPath, cwd, options);
+    const mappedTargets = SOURCE_TEST_TARGETS.get(changedPath);
+    if (mappedTargets) {
+      options.onNonImportTargets?.(mappedTargets);
+    }
+    const testTargets = mappedTargets ?? resolveToolingTestTargets(changedPath, cwd, options);
     if (!testTargets) {
       return null;
     }
     targets.push(...testTargets);
     if (CHANNEL_PLUGIN_SHAPE_PARITY_WIRING_PATHS.has(changedPath)) {
       targets.push(CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET);
+      options.onNonImportTargets?.([CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET]);
     }
   }
   return [...new Set(targets)];
@@ -3838,7 +3882,7 @@ function resolveToolingTestTargets(
       changedPath,
     )
   ) {
-    return resolveToolingTestOwnerTargets(
+    const targets = resolveToolingTestOwnerTargets(
       "ci-git-owner",
       "ci-linux-git",
       "ci-platform-checkout",
@@ -3848,8 +3892,11 @@ function resolveToolingTestTargets(
       "release-workflow-git-lifecycle",
       workflowGuards,
     );
+    options.onNonImportTargets?.(targets);
+    return targets;
   }
   if (changedPath.startsWith("test/scripts/") && isTestFileTarget(changedPath)) {
+    options.onNonImportTargets?.([changedPath]);
     return [changedPath];
   }
   if (BROAD_CHANGED_FALLBACK_PATTERNS.some((pattern) => pattern.test(changedPath))) {
@@ -3864,7 +3911,9 @@ function resolveToolingTestTargets(
   const githubYaml = isGithubWorkflowOrActionYaml(implementationPath);
   const exactOwners = EXACT_TOOLING_TARGETS.get(implementationPath);
   if (exactOwners && !githubYaml) {
-    return resolveToolingTestOwnerTargets(...exactOwners);
+    const targets = resolveToolingTestOwnerTargets(...exactOwners);
+    options.onNonImportTargets?.(targets);
+    return targets;
   }
   const exactTargets = exactOwners ? resolveToolingTestOwnerTargets(...exactOwners) : [];
   const semanticTargets = resolveSemanticToolingTargets(implementationPath);
@@ -3936,7 +3985,7 @@ function resolveToolingTestTargets(
     githubYaml || (semanticTargets.length === 0 && !hasDirectOwner)
       ? resolveDirectToolingReferenceTests(implementationPath, cwd)
       : [];
-  const targets = [
+  const ownerTargets = [
     ...(!hasDirectOwner && isRoutableChangedTarget(changedPath) && isTestFileTarget(changedPath)
       ? [changedPath]
       : []),
@@ -3944,18 +3993,23 @@ function resolveToolingTestTargets(
     ...(explicitTargets ?? []),
     ...semanticTargets,
     ...(conventionalTargets ?? []),
-    ...importGraphTargets,
+  ];
+  const trailingOwnerTargets = [
     ...referenceTargets,
     ...(githubYamlGuardTargets ?? []),
     // Root aliases also control native bundling; keep the existing tooling owners.
     ...(changedPath === "tsconfig.json" ? MERMAID_RENDERER_TEST_TARGETS : []),
   ];
+  options.onNonImportTargets?.([...ownerTargets, ...trailingOwnerTargets]);
+  const targets = [...ownerTargets, ...importGraphTargets, ...trailingOwnerTargets];
   if (targets.length > 0 || isWorkflowLintConfigPath(implementationPath)) {
     return uniqueOrdered(targets);
   }
-  return isToolingScriptPath(implementationPath) || facts.surface === "rootTooling"
-    ? [TOOLING_VITEST_CONFIG]
-    : null;
+  if (isToolingScriptPath(implementationPath) || facts.surface === "rootTooling") {
+    options.onNonImportTargets?.([TOOLING_VITEST_CONFIG]);
+    return [TOOLING_VITEST_CONFIG];
+  }
+  return null;
 }
 
 function shouldUseBroadChangedTargets(env = process.env) {
@@ -4044,18 +4098,31 @@ function resolvePreciseChangedTestTargets(
       : null) ??
     (/^extensions\/[^/]+\/openclaw\.plugin\.json$/u.test(changedPath)
       ? [changedPath, DOCS_CONFIG_EXAMPLES_TEST_TARGET]
-      : null) ??
-    resolveToolingTestTargets(changedPath, cwd, options) ??
+      : null);
+  if (mappedTargets) {
+    options.onNonImportTargets?.(mappedTargets);
+    return mappedTargets;
+  }
+  const toolingTargets = resolveToolingTestTargets(changedPath, cwd, options);
+  if (toolingTargets) {
+    return toolingTargets;
+  }
+  const fixtureTargets =
     resolveAppcastTargets(changedPath) ??
     resolvePromptSnapshotFixtureTargets(changedPath) ??
     resolvePackageFixtureTargets(changedPath, cwd);
-  if (mappedTargets) {
-    return mappedTargets;
+  if (fixtureTargets) {
+    options.onNonImportTargets?.(fixtureTargets);
+    return fixtureTargets;
   }
   if (isRoutableChangedTarget(changedPath) && isTestFileTarget(changedPath)) {
+    options.onNonImportTargets?.([changedPath]);
     return [changedPath];
   }
   const siblingTest = resolveSiblingTestTarget(changedPath, cwd);
+  if (siblingTest) {
+    options.onNonImportTargets?.([siblingTest]);
+  }
   if (
     siblingTest &&
     !shouldCombineSiblingTestWithImportGraph(changedPath) &&
@@ -4064,6 +4131,9 @@ function resolvePreciseChangedTestTargets(
     return [siblingTest];
   }
   if (shouldRouteChangedTargetWithoutImportGraph(changedPath)) {
+    if (isControlUiSourcePath(changedPath)) {
+      options.onNonImportTargets?.([changedPath]);
+    }
     return isControlUiSourcePath(changedPath) ? [changedPath] : null;
   }
   if (options.skipImportGraph === true) {
@@ -4128,6 +4198,7 @@ export function resolveChangedTestTargetPlan(
       targets.push(...preciseTargets);
       if (needsPluginShapeParity) {
         targets.push(CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET);
+        options.onNonImportTargets?.([CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET]);
       }
       continue;
     }
@@ -4141,9 +4212,11 @@ export function resolveChangedTestTargetPlan(
     }
     if (isRoutableChangedTarget(changedPath)) {
       targets.push(changedPath);
+      options.onNonImportTargets?.([changedPath]);
     }
     if (needsPluginShapeParity) {
       targets.push(CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET);
+      options.onNonImportTargets?.([CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET]);
     }
   }
   if (
@@ -4152,13 +4225,15 @@ export function resolveChangedTestTargetPlan(
     changedLanes.extensionImpactFromCore
   ) {
     targets.push("extensions");
+    options.onNonImportTargets?.(["extensions"]);
   }
+  const schemaTargets = options.watchMode
+    ? []
+    : executableChangedPaths.flatMap(resolveKovaSchemaTestTargets);
+  options.onNonImportTargets?.(schemaTargets);
   const plan: ChangedTestTargetPlan = {
     mode: "targets",
-    targets: uniqueOrdered([
-      ...targets,
-      ...(options.watchMode ? [] : executableChangedPaths.flatMap(resolveKovaSchemaTestTargets)),
-    ]),
+    targets: uniqueOrdered([...targets, ...schemaTargets]),
   };
   if (skippedBroadFallbackPaths.length > 0) {
     plan.skippedBroadFallbackPaths = [...new Set(skippedBroadFallbackPaths)];

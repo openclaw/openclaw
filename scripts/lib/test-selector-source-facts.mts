@@ -262,7 +262,7 @@ function sourceTokens(source: string): {
 function importFacts(
   source: string,
   classifyTypes = true,
-): { imports: string[]; typeOnlyImports: string[] } {
+): { imports: string[]; typeOnlyImports: string[]; nonImportSpecifiers: string[] } {
   const { tokens, uncertain, possibleJsx } = sourceTokens(source);
   let runtimeSource: string | undefined;
   let unresolvedJsx = false;
@@ -275,11 +275,15 @@ function importFacts(
     }
   }
   const imports = new Set<string>();
+  const nonImportSpecifiers = new Set<string>();
   let needsTypeStrip = false;
-  const add = (token: SourceToken | undefined, fileUrl = false) => {
+  const add = (token: SourceToken | undefined, fileUrl = false, nonImport = false) => {
     if (token?.literal) {
       const specifier = fileUrl ? token.value.replace(/[?#].*$/u, "") : token.value;
       imports.add(specifier);
+      if (nonImport) {
+        nonImportSpecifiers.add(specifier);
+      }
     }
   };
   for (let index = 0; index < tokens.length; index++) {
@@ -292,12 +296,12 @@ function importFacts(
       if (
         [",", "import", ".", "meta", ".", "url"].every((value, step) => next(step + 4) === value)
       ) {
-        add(tokens[index + 3], true);
+        add(tokens[index + 3], true, true);
       }
       continue;
     }
     if (token.value === "require" && next(1) === "." && next(2) === "resolve" && next(3) === "(") {
-      add(tokens[index + 4]);
+      add(tokens[index + 4], false, true);
       continue;
     }
     if (
@@ -308,7 +312,7 @@ function importFacts(
       next(4) === "resolve" &&
       next(5) === "("
     ) {
-      add(tokens[index + 6]);
+      add(tokens[index + 6], false, true);
       continue;
     }
     if ((token.value === "import" || token.value === "require") && next(1) === "(") {
@@ -351,10 +355,14 @@ function importFacts(
         imports.add(specifier);
       }
     }
-    return { imports: [...imports], typeOnlyImports: [] };
+    return { imports: [...imports], typeOnlyImports: [], nonImportSpecifiers: [...imports] };
   }
   if (!classifyTypes || (!needsTypeStrip && runtimeSource === undefined)) {
-    return { imports: [...imports], typeOnlyImports: [] };
+    return {
+      imports: [...imports],
+      typeOnlyImports: [],
+      nonImportSpecifiers: [...nonImportSpecifiers],
+    };
   }
   try {
     // Node's parser distinguishes import types from calls and preserves named
@@ -362,12 +370,13 @@ function importFacts(
     runtimeSource ??= nodeModule.stripTypeScriptTypes(source, { mode: "strip" });
   } catch {
     // JSX and transform-required syntax remain conservatively connected.
-    return { imports: [...imports], typeOnlyImports: [] };
+    return { imports: [...imports], typeOnlyImports: [], nonImportSpecifiers: [...imports] };
   }
   const runtime = new Set(importFacts(runtimeSource, false).imports);
   return {
     imports: [...imports],
     typeOnlyImports: [...imports].filter((specifier) => !runtime.has(specifier)),
+    nonImportSpecifiers: [...nonImportSpecifiers],
   };
 }
 
@@ -587,6 +596,7 @@ function parseFacts(value: unknown) {
     typeof value !== "object" ||
     !("imports" in value) ||
     !("typeOnlyImports" in value) ||
+    !("nonImportSpecifiers" in value) ||
     !("matches" in value) ||
     !("references" in value)
   ) {
@@ -595,6 +605,7 @@ function parseFacts(value: unknown) {
   return {
     imports: parseStrings(value.imports),
     typeOnlyImports: parseStrings(value.typeOnlyImports),
+    nonImportSpecifiers: parseStrings(value.nonImportSpecifiers),
     matches: parseStrings(value.matches),
     references: parseStrings(value.references),
   };
@@ -681,11 +692,14 @@ async function readSourceFacts() {
       return null;
     }
     const { matches, references } = matchTerms(source);
-    const facts = parseImports ? importFacts(source) : { imports: [], typeOnlyImports: [] };
+    const facts = parseImports
+      ? importFacts(source)
+      : { imports: [], typeOnlyImports: [], nonImportSpecifiers: [] };
     if (parseImports) {
       // Vitest loads these modules from config values instead of JavaScript imports.
       const configured = new Set(configuredRuntimeImports(source, file));
       facts.imports = [...new Set([...facts.imports, ...configured])];
+      facts.nonImportSpecifiers = [...new Set([...facts.nonImportSpecifiers, ...configured])];
       facts.typeOnlyImports = facts.typeOnlyImports.filter(
         (specifier) => !configured.has(specifier),
       );

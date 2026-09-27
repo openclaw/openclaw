@@ -89,6 +89,47 @@ selected on every admitted canonical main run, so it does not depend on a later
 owner-path match. Ordinary manual CI and Full Release Validation also select it
 independently of changed paths, subject to the target's Docker seed capability.
 
+## Codex test selection shadow
+
+Trusted same-repository pull requests on their first attempt also record a
+Codex proposal for the existing nondist Node test plan. The full deterministic
+plan still runs. Neither the selector nor its report gates merging or triggers
+PR fail-fast. Set `OPENCLAW_CI_CODEX_SELECTION=off` to disable both jobs; an unset
+variable enables shadow collection.
+
+The deterministic floor includes changed tests, direct importers, tests in the
+changed source's directory, and every non-import owner: policy watches,
+filesystem scanners, manifest and file readers, and whole-suite inventories.
+Only tests selected solely through imports at depth two or greater can be
+proposed for pruning. The existing import graph supplies depth and provenance;
+Vitest supplies whole-config file inventories. Broad fallbacks, diffs exceeding
+320,000 characters, and plans without prunable files skip Codex. Prompt diffs
+are limited to 80,000 characters and explicitly marked when truncated.
+
+Missing or invalid output, a failed or timed-out proposal, and low confidence
+keep every candidate. Unknown keep entries are counted and ignored; directory
+prefixes expand only when they appeared in the prompt. Selection artifacts
+contain `selection.json`, the prepared inventory, prompt, output, and a short
+summary. Report artifacts contain `report.json`, failing test classifications,
+and a summary. Both are retained for 14 days. Per-file timing estimates appear
+only when the existing timing source covers every pruned file; these are test
+seconds, not expected workflow wall-time savings.
+
+The report reads only the current run attempt's Node job logs. A failing file
+proposed for pruning is a **MISS**. Cancelled, skipped, missing, or unreadable
+jobs remain unknown. Existing workflow cancellation can interrupt the selector;
+the report runs only after the selector succeeds, so some failed attempts have
+no comparison. These observations inform a later decision about enforcement.
+
+For offline evaluation, `node scripts/ci-codex-test-selection.mjs prepare --base
+<base> --head <head>` produces the prompt and an all-candidate selection without
+calling Codex. `backtest` with the same arguments invokes `codex exec` in a
+read-only sandbox and finalizes the proposal; `--model` selects a local model.
+`--output-dir` chooses the artifact directory. Historical heads use a temporary
+checkout and the current planner's policy over that checkout; they require
+compatible installed dependencies. CI instead replays preflight's exact planner
+options and uses its emitted matrix as the candidate source.
+
 ## Process proof tier
 
 Pull requests and exact-head `release_gate` fallbacks omit Docker seed, QA Smoke,
