@@ -53,6 +53,7 @@ import {
   projectMessageMedia,
   schedulePairingQrExpiryRefresh,
   type ArtifactDownloadResolver,
+  type AttachmentItem,
 } from "./chat-message-media.ts";
 import {
   renderMessageJson,
@@ -81,6 +82,18 @@ import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-confl
 import { renderToolPreview } from "./widget-card.ts";
 
 registerChatMessageMetadataEnglish();
+
+function messageVideoSlots(
+  projection: Pick<
+    ReturnType<typeof projectMessageMedia>,
+    "orderedContent" | "supplementalAttachments"
+  >,
+): AttachmentItem[] {
+  return [...projection.orderedContent, ...projection.supplementalAttachments].filter(
+    (item): item is AttachmentItem =>
+      item.type === "attachment" && item.attachment.kind === "video",
+  );
+}
 
 function imageMessageIdentity(message: unknown, sessionKey: string | undefined) {
   const identity = readSessionMessageIdentity(message);
@@ -191,6 +204,9 @@ export function renderGroupedMessage(
     connectionEpoch?: number;
     assistantAttachmentAuthToken?: string | null;
     resolveArtifactDownload?: ArtifactDownloadResolver;
+    getTurnVideoMessages?: (
+      key: string,
+    ) => readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[] | undefined;
     onRequestOpenImage?: () => number;
     onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
     onAssistantAttachmentLoaded?: () => void;
@@ -253,6 +269,30 @@ export function renderGroupedMessage(
   const hasUserFiles = normalizedRole === "user" && hasUserFileAttachments(cardAttachments);
   const imageRenderOptions = {
     galleryImages: images,
+    galleryVideos: (selected: AttachmentItem) => {
+      const local = messageVideoSlots({ orderedContent, supplementalAttachments });
+      const slot = local.indexOf(selected);
+      const turn = opts.getTurnVideoMessages?.(messageKey);
+      if (!turn || slot < 0) {
+        return { index: slot, items: local };
+      }
+      const items: AttachmentItem[] = [];
+      let index = -1;
+      for (const entry of turn) {
+        if (entry.key === messageKey) {
+          index = items.length + slot;
+          items.push(...local);
+        } else {
+          const prepared = prepareChatMessageRender(entry.message);
+          items.push(
+            ...messageVideoSlots(
+              projectMessageMedia(prepared.message, prepared.normalizedMessage.content),
+            ),
+          );
+        }
+      }
+      return { index, items };
+    },
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
     policyKey: opts.mediaPolicyKey,

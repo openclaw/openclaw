@@ -215,6 +215,14 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           sandbox,
           cwd: options?.cwd,
           fsPolicy: options?.fsPolicy,
+          activeModel:
+            options?.modelProvider && options.modelId
+              ? {
+                  provider: options.modelProvider,
+                  model: options.modelId,
+                  supportsImages: options.modelHasVision === true,
+                }
+              : undefined,
           deferAutoModelResolution: true,
         })
       : null;

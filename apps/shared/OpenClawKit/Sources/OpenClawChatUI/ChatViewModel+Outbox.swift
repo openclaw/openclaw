@@ -441,6 +441,9 @@ extension OpenClawChatViewModel {
             retryCount: 0,
             lastError: nil)
         await self.waitForBootstrapOutboxBranchCapture(for: session)
+        // Recheck restored or stale drafts before durable admission; an oversized
+        // row would otherwise retry the same connection-closing frame after reconnect.
+        guard await self.validateAttachmentBudgetForSend(draftAttachments, session: session) else { return false }
         let accepted = await outbox.enqueueCommand(command)
         guard accepted else {
             if self.isCurrentSession(session) {
@@ -666,6 +669,7 @@ extension OpenClawChatViewModel {
                 text: nil,
                 mimeType: attachment.mimeType,
                 fileName: attachment.fileName,
+                sizeBytes: attachment.data.count,
                 durationSeconds: attachment.durationSeconds,
                 content: AnyCodable(attachment.data.base64EncodedString()))
         })
