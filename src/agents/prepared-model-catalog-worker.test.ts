@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
@@ -12,6 +13,15 @@ import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.ca
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 describe("prepared model catalog worker input", () => {
+  it("keeps state lifecycle acquisition out of the catalog isolate", () => {
+    const source = fs.readFileSync(
+      new URL("./prepared-model-catalog.worker.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).not.toContain("auth-profiles/store-runtime");
+    expect(source).not.toContain("captureOpenClawStateWorkerContext");
+  });
+
   it("reuses captured config digests while workers independently reconstruct them", () => {
     const marker = "synthetic-worker-roster-boundary";
     const digests = vi.spyOn(cryptoDigest, "sha256Base64Url");
@@ -164,6 +174,18 @@ describe("prepared model catalog worker input", () => {
       fingerprintPreparedModelWorkerRequest(cloned, {
         ...request,
         syntheticAuth: [{ ...request.syntheticAuth[0]!, result: null }],
+      }),
+    ).not.toBe(fingerprint);
+    expect(
+      fingerprintPreparedModelWorkerRequest(cloned, {
+        ...request,
+        authStore: {
+          ...cloned.authStore,
+          profiles: {
+            ...cloned.authStore.profiles,
+            "fresh:default": { type: "token", provider: "fresh", token: "fresh-token" },
+          },
+        },
       }),
     ).not.toBe(fingerprint);
   });

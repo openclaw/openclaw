@@ -1,3 +1,4 @@
+import { getHeapStatistics } from "node:v8";
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -36,7 +37,6 @@ import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth-runti
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { modelCatalogRouteVariantKey, modelCatalogRowToEntry } from "./model-catalog-entry.js";
@@ -53,7 +53,7 @@ import {
   type PreparedModelCatalogWorkerData,
   type PreparedModelCatalogWorkerTask,
   type PreparedModelWorkerRequest,
-  type PreparedModelWorkerResult,
+  type PreparedModelWorkerPayload,
 } from "./prepared-model-catalog-worker.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
@@ -73,9 +73,8 @@ type WorkerGeneration = {
 };
 
 function refreshAuthStore(params: {
-  agentDir: string;
-  inheritedAuthDir?: string;
   authStore: PreparedModelCatalogWorkerInput["authStore"];
+  durableAuthStore?: PreparedModelCatalogWorkerInput["authStore"];
   config: PreparedModelCatalogWorkerInput["input"]["config"];
   env: NodeJS.ProcessEnv;
   profileIds?: readonly string[];
@@ -83,10 +82,9 @@ function refreshAuthStore(params: {
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }) {
   const durable = preserveResolvedSecretBackedCredentials({
-    next: loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-      allowKeychainPrompt: false,
-      ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
-    }),
+    // Persisted rows are prepared by the host's canonical state lifecycle. The catalog
+    // isolate must never open another state owner merely because it reconstructs plugins.
+    next: params.durableAuthStore ?? params.authStore,
     existing: params.authStore,
   });
   const persistedProfileIds = new Set(params.authStore.runtimePersistedProfileIds ?? []);
@@ -201,7 +199,7 @@ async function runCatalogRequest(
   request: PreparedModelWorkerRequest,
   work: AsyncWorkScope,
   prepareGeneration: () => Promise<WorkerGeneration>,
-): Promise<PreparedModelWorkerResult> {
+): Promise<PreparedModelWorkerPayload> {
   const directoryOwner = value.input.agentId
     ? { agentId: value.input.agentId, agentDir: value.input.agentDir, env: value.input.env }
     : undefined;
@@ -278,9 +276,8 @@ async function runCatalogRequest(
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
     const authStore = refreshAuthStore({
-      agentDir: value.input.agentDir,
-      inheritedAuthDir: value.input.inheritedAuthDir,
       authStore: value.authStore,
+      durableAuthStore: request.authStore,
       config: value.input.config,
       env: value.input.env,
       ...(request.kind === "auth-refresh" && request.profileIds
@@ -459,7 +456,7 @@ async function runCatalogRequest(
         runtimeModels.set(provider, []);
       }
     }
-    const result: PreparedModelWorkerResult = {
+    const result: PreparedModelWorkerPayload = {
       status: "ok",
       kind: "catalog",
       generationFingerprint,
@@ -588,7 +585,7 @@ if (parentPort) {
             // Drop the settled predecessor instead of retaining its callbacks through that scope.
             previous = undefined;
           }
-          return result;
+          return { ...result, workerHeapUsedBytes: getHeapStatistics().used_heap_size };
         } finally {
           await attempted?.release();
         }

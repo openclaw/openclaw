@@ -31,6 +31,11 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
+  assertCatalogWorkerHeapLimit,
+  CATALOG_WORKER_HEAP_LIMIT_MB,
+} from "./prepared-model-catalog-worker-heap.js";
+import { prepareCatalogWorkerAuthStore } from "./prepared-model-catalog-worker-state.js";
+import {
   setPreparedModelFullCatalogAuth,
   type PreparedModelRuntimeAuth,
   type PreparedModelRuntimeAuthScope,
@@ -83,11 +88,13 @@ type PreparedModelWorkerCommand =
 
 export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
   Readonly<{
+    /** Host-prepared persisted rows; workers never acquire a state lifecycle. */
+    authStore?: AuthProfileStore;
     syntheticAuth: PreparedSyntheticAuthFacts;
     clawInstallSchemaVersions: ReturnType<typeof captureClawInstallSchemaVersionFacts>;
   }>;
 
-export type PreparedModelWorkerResult =
+export type PreparedModelWorkerPayload =
   | Readonly<
       PreparedModelRuntimeAuth & {
         status: "ok";
@@ -113,13 +120,15 @@ export type PreparedModelWorkerResult =
     }>
   | Readonly<{ status: "failed"; error: string }>;
 
+export type PreparedModelWorkerResult = PreparedModelWorkerPayload &
+  Readonly<{ workerHeapUsedBytes: number }>;
+
 // Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
 // discovery while bounding a wedged provider; expiry rejects and never returns partial results.
 export const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 
 const GATEWAY_CATALOG_WORKERS = 1;
 // Leave room for source loaders and overlapping generations without inheriting the host heap budget.
-const CATALOG_WORKER_HEAP_LIMIT_MB = 512;
 type CatalogPool = WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
 type CatalogPoolBorrower = {
   agentDir: string;
@@ -488,6 +497,7 @@ export function createPreparedModelCatalogWorker(
       message.reconstructedFingerprint,
     );
   const validate = (message: PreparedModelWorkerResult) => {
+    assertCatalogWorkerHeapLimit(message.workerHeapUsedBytes);
     if (!gatewayOwned) {
       assertCurrent();
     }
@@ -607,11 +617,16 @@ export function createPreparedModelCatalogWorker(
       requestPool = pool =
         shared?.pool ?? pool ?? createCatalogPool(workerInput.input.env, validate);
       pending = requestPool.run(
-        () => {
+        async () => {
+          assertCurrent();
+          // Keep the state database's single lifecycle owner on the host. Task preparation
+          // joins every reader cleanup before cloning the plain store into the worker.
+          const authStore = await prepareCatalogWorkerAuthStore(input);
           assertCurrent();
           task.onRecovery = onRecovery;
           const workerRequest = {
             ...value,
+            authStore,
             clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: input.env }),
           };
           expectedFingerprint = fingerprintPreparedModelWorkerRequest(workerInput, workerRequest);
