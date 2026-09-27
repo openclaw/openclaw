@@ -258,6 +258,31 @@ describe("splitMediaFromOutput", () => {
     }
   });
 
+  it.each([
+    // An inner quote can be followed by whitespace rather than a character. The quote pair still
+    // encloses one value, so `main` reads one reference: `'/tmp/parents' photos/photo.png'` is a single
+    // path whose name holds an apostrophe, not a quoted reference plus a stray tail. Counting the two
+    // tokens the tokenizer returns for it as a quoted list disabled unwrapping while the quoted-token
+    // guard blocked reconstruction, so one attachment became two.
+    ["MEDIA:'/tmp/parents' photos/photo.png'", ["/tmp/parents' photos/photo.png"]],
+    ['MEDIA:"/tmp/parents" photos/photo.png"', ['/tmp/parents" photos/photo.png']],
+    // The same value beside a quoted sibling. The tail does not close a chunk, so the payload is not a
+    // list of quoted references; `main` fuses the ambiguous remainder into the first value and this
+    // branch keeps that reading rather than inventing a second reference out of the tail.
+    [
+      "MEDIA:'/tmp/parents' photos/photo.png' '/tmp/second.png'",
+      ["/tmp/parents' photos/photo.png' '/tmp/second.png"],
+    ],
+  ] as const)(
+    "keeps an inner quote followed by whitespace inside one quoted reference: %s",
+    (input, mediaUrls) => {
+      expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
+      expect(splitMediaFromOutput(input).segments).toEqual(
+        mediaUrls.map((url) => ({ type: "media", url })),
+      );
+    },
+  );
+
   it("keeps a quoted relative reference separate from the quoted reference before it", () => {
     // Explicit quotes already delimit each reference. The unquoted-path reconstruction heuristic exists
     // for bare paths with real filename spaces, so it must not reach across those quotes and fuse the

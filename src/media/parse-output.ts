@@ -260,13 +260,16 @@ function tokenizeMediaDirectiveParts(payload: string): MediaDirectiveToken[] {
   }));
 }
 
-// A payload the tokenizer reads as two or more references lists them, even when its first and last
-// characters are the same quote: `MEDIA:"/tmp/a.png" "/tmp/b.png"` starts and ends with a quote but
-// holds two references. A single quoted value whose own text ends with that quote, such as
-// `MEDIA:"https://example.com/video.mp4?token=ends""`, leaves that final quote outside every pair and
-// tokenizes as one reference, so it still unwraps as one value.
+// A payload lists separate references only when the tokenizer reads every one of its tokens as an
+// explicitly quoted chunk, at least two of them: `MEDIA:"/tmp/a.png" "/tmp/b.png"` starts and ends
+// with a quote and holds two quoted references, so it splits. Counting any two tokens is too weak:
+// `MEDIA:'/tmp/parents' photos/photo.png'` also starts and ends with a quote, but its pair encloses
+// one value whose name holds that quote, so the stray tail must not pass for a second reference. With
+// no list present the payload keeps `main`'s reading: a single quoted value unwraps as a whole,
+// including one whose own text ends with that quote (`MEDIA:"https://example.com/video.mp4?token=ends""`).
 function listsSeparateQuotedReferences(payload: string): boolean {
-  return tokenizeMediaDirectiveParts(payload).length >= 2;
+  const tokens = tokenizeMediaDirectiveParts(payload);
+  return tokens.length >= 2 && tokens.every((entry) => isQuotedChunk(entry.token));
 }
 
 function splitMediaDirectiveParts(payload: string): string[] {
