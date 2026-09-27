@@ -1,6 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob } from "../infra/gateway-scheduler.js";
-import { gatewayUpdateCampaign } from "../infra/update-campaign.js";
 import type { UpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
 import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
 import {
@@ -81,7 +80,7 @@ export function startUpdateRunWatcher(params: {
       }
       watched ??= { runId: run.runId };
       const terminal = run.status !== "running";
-      gatewayUpdateCampaign.reconcileRun(run);
+      params.lifecycle.campaign?.reconcileRun(run);
       if (watched.revision !== run.updatedAtMs || terminal) {
         params.broadcast(GATEWAY_EVENT_UPDATE_RUN_CHANGED, {
           runId: run.runId,

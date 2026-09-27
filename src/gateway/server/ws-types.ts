@@ -77,9 +77,6 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     /** Additional access captured at authenticated admission; independent of socket lifetime. */
     operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
   };
-  canvasHostUrl?: string;
-  canvasCapability?: string;
-  canvasCapabilityExpiresAtMs?: number;
   invalidatedReason?: string;
 };
 

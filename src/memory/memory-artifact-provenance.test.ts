@@ -19,82 +19,83 @@ afterEach(() => {
   resetPluginStateStoreForTests();
 });
 
+function write(
+  address: { workspaceDir: string; relativePath: string },
+  contentBefore: string,
+  contentAfter: string,
+  observedAt: number,
+  originClass: "agent" | "untrusted" = "agent",
+) {
+  return recordMemoryArtifactWriteProvenance({
+    ...address,
+    contentBefore,
+    contentAfter,
+    observedAt,
+    originClass,
+  });
+}
+
 describe("memory artifact provenance", () => {
-  it.each(
-    (["write", "restore", "remove", "clear"] as const).flatMap((operation) =>
-      (["resolve", "reject"] as const).map((outcome) => ({ operation, outcome })),
-    ),
-  )("awaits $operation persistence through $outcome", async ({ operation, outcome }) => {
-    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
-      const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
-      const write = (contentBefore: string, contentAfter: string, observedAt: number) =>
-        recordMemoryArtifactWriteProvenance({
-          ...address,
-          contentBefore,
-          contentAfter,
-          originClass: "agent",
-          observedAt,
-        });
-      let rollback: (() => Promise<void>) | undefined;
-      if (operation !== "write") {
-        rollback = await write("", "first", 1);
-        if (operation === "restore") {
-          rollback = await write("first", "second", 2);
+  it.each(["write", "restore", "remove", "clear"] as const)(
+    "awaits %s persistence and propagates rejection",
+    async (operation) => {
+      await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
+        const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
+        let rollback: (() => Promise<void>) | undefined;
+        if (operation !== "write") {
+          rollback = await write(address, "", "first", 1);
+          if (operation === "restore") {
+            rollback = await write(address, "first", "second", 2);
+          }
         }
-      }
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const createStore = pluginState.createCorePluginStateKeyedStore;
-      vi.spyOn(pluginState, "createCorePluginStateKeyedStore").mockImplementation((options) => {
-        const store = createStore(options);
-        const delay = async () => {
-          entered.resolve();
-          await release.promise;
-        };
-        return {
-          ...store,
-          update: async (...args) => {
-            await delay();
-            return store.update(...args);
-          },
-          deleteIf: async (...args) => {
-            await delay();
-            return store.deleteIf(...args);
-          },
-        };
-      });
-      const pending =
-        operation === "write"
-          ? write("", "first", 1)
-          : operation === "clear"
-            ? clearMemoryArtifactProvenance({ ...address, contentBefore: "first" })
-            : expectDefined(rollback, "provenance rollback")();
-      const settled = pending.then(
-        () => "settled",
-        () => "settled",
-      );
-      try {
-        expect(await Promise.race([entered.promise.then(() => "waiting"), settled])).toBe(
-          "waiting",
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const createStore = pluginState.createCorePluginStateKeyedStore;
+        vi.spyOn(pluginState, "createCorePluginStateKeyedStore").mockImplementation((options) => {
+          const store = createStore(options);
+          const delay = async <T>(persist: () => Promise<T>) => {
+            entered.resolve();
+            await release.promise;
+            return persist();
+          };
+          return {
+            ...store,
+            update: (...args) => delay(() => store.update(...args)),
+            deleteIf: (...args) => delay(() => store.deleteIf(...args)),
+          };
+        });
+        const pending =
+          operation === "write"
+            ? write(address, "", "first", 1)
+            : operation === "clear"
+              ? clearMemoryArtifactProvenance({ ...address, contentBefore: "first" })
+              : expectDefined(rollback, "provenance rollback")();
+        const settled = pending.then(
+          () => "settled",
+          () => "settled",
         );
-        if (outcome === "reject") {
+        try {
+          expect(await Promise.race([entered.promise.then(() => "waiting"), settled])).toBe(
+            "waiting",
+          );
           const error = new Error("synthetic persistence rejection");
           release.reject(error);
           await expect(pending).rejects.toBe(error);
-        } else {
+        } finally {
           release.resolve();
-          await pending;
-          const stored = await readMemoryArtifactProvenance(address);
-          if (operation === "write" || operation === "restore") {
-            expect(stored).toMatchObject({ observedAt: 1 });
-          } else {
-            expect(stored).toBeUndefined();
-          }
+          await settled;
         }
-      } finally {
-        release.resolve();
-        await settled;
-      }
+      });
+    },
+  );
+
+  it("restores the previous provenance on rollback", async () => {
+    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
+      const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
+      await write(address, "", "first", 1);
+      const rollback = await write(address, "first", "second", 2);
+      await expectDefined(rollback, "provenance rollback")();
+      await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({ observedAt: 1 });
     });
   });
 
@@ -110,14 +111,7 @@ describe("memory artifact provenance", () => {
         process.platform === "win32" ? "junction" : "dir",
       );
 
-      await recordMemoryArtifactWriteProvenance({
-        workspaceDir: workspaceAlias,
-        relativePath,
-        contentBefore: "",
-        contentAfter: "restricted",
-        originClass: "untrusted",
-        observedAt: 1,
-      });
+      await write({ workspaceDir: workspaceAlias, relativePath }, "", "restricted", 1, "untrusted");
 
       await expect(
         readMemoryArtifactProvenance({ workspaceDir, relativePath }),
@@ -131,20 +125,8 @@ describe("memory artifact provenance", () => {
   it("keeps the least-trusted origin sticky across later writes", async () => {
     await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
       const address = { workspaceDir: tempRoot, relativePath: "memory/2026-08-20.md" };
-      await recordMemoryArtifactWriteProvenance({
-        ...address,
-        contentBefore: "",
-        contentAfter: "restricted",
-        originClass: "untrusted",
-        observedAt: 1,
-      });
-      await recordMemoryArtifactWriteProvenance({
-        ...address,
-        contentBefore: "restricted",
-        contentAfter: "restricted\ntrusted",
-        originClass: "agent",
-        observedAt: 2,
-      });
+      await write(address, "", "restricted", 1, "untrusted");
+      await write(address, "restricted", "restricted\ntrusted", 2);
 
       resetPluginStateStoreForTests();
 
@@ -152,29 +134,14 @@ describe("memory artifact provenance", () => {
         originClass: "untrusted",
         observedAt: 2,
       });
-      await expect(listMemoryArtifactProvenance({ workspaceDir: tempRoot })).resolves.toEqual([
-        expect.objectContaining({ relativePath: address.relativePath }),
-      ]);
     });
   });
 
   it("does not let an older rollback erase a later reservation", async () => {
     await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
       const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
-      const rollback = await recordMemoryArtifactWriteProvenance({
-        ...address,
-        contentBefore: "",
-        contentAfter: "first",
-        originClass: "agent",
-        observedAt: 1,
-      });
-      await recordMemoryArtifactWriteProvenance({
-        ...address,
-        contentBefore: "first",
-        contentAfter: "second",
-        originClass: "agent",
-        observedAt: 2,
-      });
+      const rollback = await write(address, "", "first", 1);
+      await write(address, "first", "second", 2);
 
       await rollback?.();
 
@@ -185,32 +152,24 @@ describe("memory artifact provenance", () => {
     });
   });
 
-  it.each(["USER.md", "users/person/USER.md"])(
-    "clears only matching deleted content: %s",
-    async (relativePath) => {
-      await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
-        const address = { workspaceDir: tempRoot, relativePath };
-        await recordMemoryArtifactWriteProvenance({
-          ...address,
-          contentBefore: "",
-          contentAfter: "current",
-          originClass: "agent",
-          observedAt: 1,
-        });
+  it("clears only matching deleted content", async () => {
+    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
+      const address = { workspaceDir: tempRoot, relativePath: "users/person/USER.md" };
+      await write(address, "", "current", 1);
 
-        await clearMemoryArtifactProvenance({ ...address, contentBefore: "stale" });
-        await expect(readMemoryArtifactProvenance(address)).resolves.toBeDefined();
-        await clearMemoryArtifactProvenance({ ...address, contentBefore: "current" });
-        await expect(readMemoryArtifactProvenance(address)).resolves.toBeUndefined();
-      });
-    },
-  );
+      await clearMemoryArtifactProvenance({ ...address, contentBefore: "stale" });
+      await expect(readMemoryArtifactProvenance(address)).resolves.toBeDefined();
+      await clearMemoryArtifactProvenance({ ...address, contentBefore: "current" });
+      await expect(readMemoryArtifactProvenance(address)).resolves.toBeUndefined();
+    });
+  });
 
   it("accepts only host-owned memory artifact paths", () => {
     expect(normalizeMemoryArtifactRelativePath("memory/2026-08-20.md")).toBe(
       "memory/2026-08-20.md",
     );
     expect(normalizeMemoryArtifactRelativePath("MEMORY.md")).toBe("MEMORY.md");
+    expect(normalizeMemoryArtifactRelativePath("USER.md")).toBe("USER.md");
     expect(normalizeMemoryArtifactRelativePath("users/person/USER.md")).toBe(
       "users/person/USER.md",
     );

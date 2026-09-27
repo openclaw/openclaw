@@ -1,5 +1,3 @@
-// Gateway node subscription manager.
-// Maintains bidirectional node/session fanout indexes.
 import { isLiveTextAppend } from "./live-text-continuity.js";
 import {
   serializeEventPayload,
@@ -18,33 +16,8 @@ type NodeSendEventFn = (opts: {
   preparePayload?: NodeEventPayloadPreparation;
 }) => void | Promise<unknown>;
 
-type NodeSubscriptionManager = {
-  subscribe: (nodeId: string, pairingGeneration: string, sessionKey: string) => void;
-  unsubscribe: (nodeId: string, pairingGeneration: string, sessionKey: string) => void;
-  unsubscribeAll: (nodeId: string, pairingGeneration?: string) => void;
-  hasSubscribers: (sessionKey: string) => boolean;
-  updatePairingGeneration: (params: {
-    nodeId: string;
-    previousPairingGeneration: string;
-    nextPairingGeneration: string;
-    preserveSubscriptions: boolean;
-  }) => void;
-  sendToSession: (
-    sessionKey: string,
-    event: string,
-    payload: unknown,
-    sendEvent?: NodeSendEventFn | null,
-    opts?: GatewayBroadcastOpts,
-  ) => Promise<void>;
-  sendToAllSubscribed: (
-    event: string,
-    payload: unknown,
-    sendEvent?: NodeSendEventFn | null,
-  ) => Promise<void>;
-};
-
 /** Manages node subscriptions to gateway session events. */
-export function createNodeSubscriptionManager(): NodeSubscriptionManager {
+export function createNodeSubscriptionManager() {
   type Subscription = { pairingGeneration: string };
   type Recipient = { pairingGeneration: string; subscriptions: Map<string, Subscription> };
   type Publication = {
@@ -403,7 +376,7 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     subscribe,
     unsubscribe,
     unsubscribeAll,
-    hasSubscribers: (sessionKey) => sessionSubscribers.has(sessionKey.trim()),
+    hasSubscribers: (sessionKey: string) => sessionSubscribers.has(sessionKey.trim()),
     updatePairingGeneration,
     sendToSession,
     sendToAllSubscribed,
