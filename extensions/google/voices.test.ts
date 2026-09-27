@@ -133,7 +133,6 @@ describe("Google project voices", () => {
   });
 
   it("stores a replicated voice from source and consent recordings", async () => {
-    const preview = Buffer.from("replicated-preview");
     const sourceAudio = Buffer.from("source-wav");
     const consentAudio = Buffer.from("consent-wav");
     const release = vi.fn(async () => {});
@@ -141,7 +140,6 @@ describe("Google project voices", () => {
       response: jsonResponse({
         id: "voice_replicated",
         display_name: "Bobby",
-        sample_audio: { data: preview.toString("base64"), mime_type: "audio/wav" },
       }),
       release,
     });
@@ -155,7 +153,7 @@ describe("Google project voices", () => {
     });
     expect(replicated?.id).toBe("voice_replicated");
     expect(replicated?.name).toBe("Bobby");
-    expect(replicated?.previewAudio.equals(preview)).toBe(true);
+    expect(replicated?.previewAudio.equals(Buffer.alloc(0))).toBe(true);
     const request = requireFirstRecordArg(postJsonRequestMock, "Google voice replicate request");
     expect(request.url).toBe("https://generativelanguage.googleapis.com/v1beta/voices");
     expect(request.body).toMatchObject({

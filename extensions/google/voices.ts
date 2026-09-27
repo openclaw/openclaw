@@ -444,7 +444,13 @@ function parseStoredGoogleVoice(
   if (!id?.startsWith("voice_")) {
     throw new Error(`Google voice ${action} response did not include a voice_ id`);
   }
+  const name = trim(voice.display_name) ?? trim(voice.displayName) ?? fallbackName;
+  // CreateVoice leaves sample_audio unset for replicated voices; prompted voices
+  // still return a preview clip. https://ai.google.dev/api/voices
   if (!preview) {
+    if (action === "replication") {
+      return { id, name, preview: Buffer.alloc(0), mimeType: "audio/wav" };
+    }
     throw new Error(`Google voice ${action} response missing preview audio`);
   }
   const canonical = canonicalizeGoogleProviderBase64(preview.data);
@@ -453,7 +459,7 @@ function parseStoredGoogleVoice(
   }
   return {
     id,
-    name: trim(voice.display_name) ?? trim(voice.displayName) ?? fallbackName,
+    name,
     preview: Buffer.from(canonical, "base64"),
     mimeType: preview.mimeType,
   };

@@ -425,8 +425,9 @@ openclaw infer tts replicate \
 ```
 
 Google stores that voice on the project for a year, in the same 200-voice
-bucket as prompted voices. Speak it later with the returned `voice_…` id.
-OpenClaw does not synthesize the consent statement for you.
+bucket as prompted voices. CreateVoice does not return `sample_audio` for
+replicated voices; a `voice_…` id is the success signal. Speak it later with
+that id. OpenClaw does not synthesize the consent statement for you.
 
 Control UI records both takes in place: Settings → Communications → Voice →
 **Create from my voice**. That path captures 24 kHz WAV in the browser and
