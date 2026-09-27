@@ -11,6 +11,7 @@ import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { parseDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
+import { SYSTEM_SERVICE_UPDATE_SETTLED_MARKER } from "./update-managed-service-handoff-service.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -238,6 +239,10 @@ describe("managed service update handoff command", () => {
       const settled = vi.fn();
       const observed = barrier?.then(settled, settled);
       const child = await spawned.promise;
+      // The real helper confirms updater cleanup before an unsignalled close.
+      if (!signal) {
+        child.stdout.write(SYSTEM_SERVICE_UPDATE_SETTLED_MARKER);
+      }
       Object.assign(child, { exitCode: signal ? null : 0, signalCode: signal });
       child.emit("exit", signal ? null : 0, signal);
       await Promise.resolve();
