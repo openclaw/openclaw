@@ -1,5 +1,6 @@
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
+// Ollama node inference exposes local models to agents through paired node hosts.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   readFiniteNumberParam,
@@ -170,19 +171,35 @@ async function discoverOllamaNodeModels(
     ...(signal ? { signal } : {}),
   });
   const rows = models
-    .map((model): NodeModel => ({
-      name: model.name,
-      loaded: loadedNames.has(model.name),
-      ...(typeof model.size === "number" ? { size: model.size } : {}),
-      ...(typeof model.modified_at === "string" ? { modifiedAt: model.modified_at } : {}),
-      ...(model.details?.family ? { family: model.details.family } : {}),
-      ...(model.details?.parameter_size ? { parameterSize: model.details.parameter_size } : {}),
-      ...(model.details?.quantization_level
-        ? { quantization: model.details.quantization_level }
-        : {}),
-      ...(typeof model.contextWindow === "number" ? { contextWindow: model.contextWindow } : {}),
-      ...(model.capabilities ? { capabilities: model.capabilities } : {}),
-    }))
+    .map((model): NodeModel => {
+      const details = model.details;
+      const row: NodeModel = {
+        name: model.name,
+        loaded: loadedNames.has(model.name),
+      };
+      if (typeof model.size === "number") {
+        row.size = model.size;
+      }
+      if (typeof model.modified_at === "string") {
+        row.modifiedAt = model.modified_at;
+      }
+      if (details?.family) {
+        row.family = details.family;
+      }
+      if (details?.parameter_size) {
+        row.parameterSize = details.parameter_size;
+      }
+      if (details?.quantization_level) {
+        row.quantization = details.quantization_level;
+      }
+      if (typeof model.contextWindow === "number") {
+        row.contextWindow = model.contextWindow;
+      }
+      if (model.capabilities) {
+        row.capabilities = model.capabilities;
+      }
+      return row;
+    })
     .toSorted((left, right) => {
       if (left.loaded !== right.loaded) {
         return left.loaded ? -1 : 1;

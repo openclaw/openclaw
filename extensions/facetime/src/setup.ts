@@ -532,7 +532,7 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     liveCallProofRequired: true,
     checks,
     actions: [...new Set(checks.flatMap((check) => (check.actionId ? [check.actionId] : [])))].map(
-      (id) => ({ id, ...SETUP_ACTIONS[id] }),
+      (id) => Object.assign({ id }, SETUP_ACTIONS[id]),
     ),
   };
 }

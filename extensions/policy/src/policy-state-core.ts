@@ -1,3 +1,4 @@
+// Policy plugin channel, model, MCP, and network evidence.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -18,12 +19,22 @@ export function scanPolicyChannels(cfg: Record<string, unknown>): readonly Polic
   return Object.entries(configuredChannels(cfg))
     .filter(([id]) => !RESERVED_CHANNEL_CONFIG_KEYS.has(id))
     .toSorted(([a], [b]) => a.localeCompare(b))
-    .map(([id, value]): PolicyChannelEvidence => ({
-      id,
-      provider: id,
-      source: `oc://openclaw.config/channels/${id}`,
-      ...(isRecord(value) && typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}),
-    }));
+    .map(([id, value]) => {
+      const entry: {
+        id: string;
+        provider: string;
+        source: string;
+        enabled?: boolean;
+      } = {
+        id,
+        provider: id,
+        source: `oc://openclaw.config/channels/${id}`,
+      };
+      if (isRecord(value) && typeof value.enabled === "boolean") {
+        entry.enabled = value.enabled;
+      }
+      return entry;
+    });
 }
 
 export function scanPolicyMcpServers(
@@ -31,15 +42,28 @@ export function scanPolicyMcpServers(
 ): readonly PolicyMcpServerEvidence[] {
   return Object.entries(configuredMcpServers(cfg))
     .toSorted(([a], [b]) => a.localeCompare(b))
-    .map(([id, value]): PolicyMcpServerEvidence => ({
-      id,
-      transport: mcpServerTransport(value),
-      source: `oc://openclaw.config/mcp/servers/${ocPathSegment(id)}`,
-      ...(isRecord(value) && typeof value.command === "string" ? { command: value.command } : {}),
-      ...(isRecord(value) && typeof value.url === "string"
-        ? { url: redactMcpUrlForEvidence(value.url) }
-        : {}),
-    }));
+    .map(([id, value]) => {
+      const entry: {
+        id: string;
+        transport: "stdio" | "sse" | "streamable-http" | "unknown";
+        source: string;
+        command?: string;
+        url?: string;
+      } = {
+        id,
+        transport: mcpServerTransport(value),
+        source: `oc://openclaw.config/mcp/servers/${ocPathSegment(id)}`,
+      };
+      if (isRecord(value)) {
+        if (typeof value.command === "string") {
+          entry.command = value.command;
+        }
+        if (typeof value.url === "string") {
+          entry.url = redactMcpUrlForEvidence(value.url);
+        }
+      }
+      return entry;
+    });
 }
 
 export function scanPolicyModelProviders(
