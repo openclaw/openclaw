@@ -487,6 +487,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             ...terminalTarget,
             admittedSessionId: target.sessionId,
             clientRunId: runId,
+            controlUiVisible: true,
             startedAt: 1_000,
             error: "Late duplicate rejection",
             status: "failed" as const,
