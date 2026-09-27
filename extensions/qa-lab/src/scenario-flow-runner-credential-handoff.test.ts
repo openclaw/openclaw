@@ -18,6 +18,8 @@ type ReplySequence =
   | "config-write-migrations"
   | "unexpected-migration-marker"
   | "tilde-file-ref"
+  | "relative-file-ref"
+  | "array-root-file-ref"
   | "drops-embeddings-destination"
   | "drops-unrelated-config"
   | "invalid-single-value-ref"
@@ -113,18 +115,27 @@ async function runCredentialHandoffScenario(replySequence: ReplySequence) {
           replySequence === "invalid-provider-alias" ||
           replySequence === "invalid-json-pointer-ref" ||
           replySequence === "tilde-file-ref" ||
+          replySequence === "relative-file-ref" ||
+          replySequence === "array-root-file-ref" ||
           replySequence === "symlink-file-ref" ||
           replySequence === "sibling-file-ref" ||
           replySequence === "escaped-file-ref"
         ) {
           const jsonProvider =
-            replySequence === "json-file-ref" || replySequence === "invalid-json-pointer-ref";
+            replySequence === "json-file-ref" ||
+            replySequence === "invalid-json-pointer-ref" ||
+            replySequence === "array-root-file-ref";
           const providerAlias = replySequence === "invalid-provider-alias" ? "QA_KEY" : "qa_key";
-          secretFile = jsonProvider
-            ? JSON.stringify({
-                qa: { [replySequence === "invalid-json-pointer-ref" ? "~2key" : "key"]: newKey },
-              })
-            : `${newKey}\n`;
+          secretFile =
+            replySequence === "array-root-file-ref"
+              ? JSON.stringify([{ key: newKey }])
+              : jsonProvider
+                ? JSON.stringify({
+                    qa: {
+                      [replySequence === "invalid-json-pointer-ref" ? "~2key" : "key"]: newKey,
+                    },
+                  })
+                : `${newKey}\n`;
           configText = JSON.stringify({
             ...updatedConfigValue,
             memory: {
@@ -139,7 +150,9 @@ async function runCredentialHandoffScenario(replySequence: ReplySequence) {
                     id: jsonProvider
                       ? replySequence === "invalid-json-pointer-ref"
                         ? "/qa/~2key"
-                        : "/qa/key"
+                        : replySequence === "array-root-file-ref"
+                          ? "/0/key"
+                          : "/qa/key"
                       : replySequence === "invalid-single-value-ref"
                         ? "wrong"
                         : "value",
@@ -152,7 +165,11 @@ async function runCredentialHandoffScenario(replySequence: ReplySequence) {
                 [providerAlias]: {
                   source: "file",
                   path:
-                    replySequence === "tilde-file-ref" ? "~/state/secrets/key.txt" : providerPath,
+                    replySequence === "tilde-file-ref"
+                      ? "~/state/secrets/key.txt"
+                      : replySequence === "relative-file-ref"
+                        ? "state/secrets/key.txt"
+                        : providerPath,
                   mode: jsonProvider ? "json" : "singleValue",
                 },
               },
@@ -328,6 +345,18 @@ describe("operator key handoff scenario assertions", () => {
   it("rejects a tilde key path even when it resolves inside the isolated state directory", async () => {
     await expect(runCredentialHandoffScenario("tilde-file-ref")).rejects.toThrow(
       "The embeddings key file provider path is not absolute.",
+    );
+  });
+
+  it("rejects a relative file-provider path", async () => {
+    await expect(runCredentialHandoffScenario("relative-file-ref")).rejects.toThrow(
+      "The embeddings key file provider path is not absolute.",
+    );
+  });
+
+  it("rejects a JSON array-root key file that OpenClaw cannot resolve", async () => {
+    await expect(runCredentialHandoffScenario("array-root-file-ref")).rejects.toThrow(
+      "The embeddings key file provider payload is not a JSON object.",
     );
   });
 

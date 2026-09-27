@@ -156,13 +156,19 @@ flow:
                 args:
                   - ref: providerRealPath
                   - utf8
+              - set: parsedProviderPayload
+                value:
+                  expr: "fileProvider.mode === 'singleValue' ? undefined : JSON.parse(providerPayload.replace(/^\uFEFF/, ''))"
+              - assert:
+                  expr: "fileProvider.mode === 'singleValue' || (parsedProviderPayload !== null && typeof parsedProviderPayload === 'object' && !Array.isArray(parsedProviderPayload))"
+                  message: The embeddings key file provider payload is not a JSON object.
               - set: resolvedKey
                 value:
                   expr: >-
                     fileProvider.mode === 'singleValue'
                       ? providerPayload.replace(/^\uFEFF/, '').replace(/\r?\n$/, '')
                       : updatedKey.id.startsWith('/')
-                        ? updatedKey.id.slice(1).split('/').reduce((value, segment) => value?.[segment.replace(/~1/g, '/').replace(/~0/g, '~')], JSON.parse(providerPayload.replace(/^\uFEFF/, '')))
+                        ? updatedKey.id.slice(1).split('/').reduce((value, segment) => value?.[segment.replace(/~1/g, '/').replace(/~0/g, '~')], parsedProviderPayload)
                         : undefined
             else:
               - set: resolvedKey
