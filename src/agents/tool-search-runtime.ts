@@ -725,7 +725,7 @@ function projectToolResultValue(result: AgentToolResult<unknown>): unknown {
   if (details === undefined || details === null) {
     return { message };
   }
-  return isRecord(details) && details.message === undefined ? { ...details, message } : details;
+  return isRecord(details) ? { ...details, message } : details;
 }
 
 function hasErrorMessage(details: unknown): boolean {

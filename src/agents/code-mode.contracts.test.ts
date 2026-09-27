@@ -136,18 +136,20 @@ it("keeps an explicit tool error's text when its details carry no message", asyn
   const tools = [
     errorTool("flag_only", reason, { error: true }),
     errorTool("no_details", "Gateway unavailable.", undefined),
+    errorTool("blank_message", "Visitor store is locked.", { error: true, message: " " }),
     errorTool("structured", "Rendered failure.", { status: "failed", error: "structured" }),
   ];
   applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...tools] });
   const result = resultDetails(
     await expectDefined(h.tools[0], "exec").execute("tool-error-text", {
-      code: "return [await flag_only(), await no_details(), await structured()];",
+      code: "return [await flag_only(), await no_details(), await blank_message(), await structured()];",
     }),
   );
   expect(result.status, JSON.stringify(result)).toBe("completed");
   expect(result.value).toEqual([
     { error: true, message: reason },
     { message: "Gateway unavailable." },
+    { error: true, message: "Visitor store is locked." },
     { status: "failed", error: "structured" },
   ]);
 });
