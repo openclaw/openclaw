@@ -313,35 +313,30 @@ export function createSlackProgressRuntime(runtimeParams: {
     payload: ReplyPayload,
     kind: ReplyDispatchKind,
   ): Promise<LivePreviewDeliveryResult> =>
-    withNativeStreamOrder(() => appendNativeNarrationNow(payload, kind));
-
-  const appendNativeNarrationNow = async (
-    payload: ReplyPayload,
-    kind: ReplyDispatchKind,
-  ): Promise<LivePreviewDeliveryResult> => {
-    // The same preamble reaches us as a reply payload and as the compositor
-    // headline behind the card title. The card updates it in place, so
-    // streaming it as text too would print the line twice.
-    if (isRenderedAsProgressTitle(payload.text)) {
-      return { visibleReplySent: false };
-    }
-    const narrationUpdate = resolveNarrationUpdate(payload.text?.trimEnd());
-    if (!narrationUpdate.delta) {
-      return { visibleReplySent: false };
-    }
-    const result = await delivery.deliverWithStreaming({
-      payload,
-      kind,
-      streamText: narrationUpdate.delta,
-      appendSeparator: false,
-      taskDisplayMode: "plan",
+    withNativeStreamOrder(async () => {
+      // The same preamble reaches us as a reply payload and as the compositor
+      // headline behind the card title. The card updates it in place, so
+      // streaming it as text too would print the line twice.
+      if (isRenderedAsProgressTitle(payload.text)) {
+        return { visibleReplySent: false };
+      }
+      const narrationUpdate = resolveNarrationUpdate(payload.text?.trimEnd());
+      if (!narrationUpdate.delta) {
+        return { visibleReplySent: false };
+      }
+      const result = await delivery.deliverWithStreaming({
+        payload,
+        kind,
+        streamText: narrationUpdate.delta,
+        appendSeparator: false,
+        taskDisplayMode: "plan",
+      });
+      if (result.visibleReplySent && !delivery.streamFailed) {
+        nativeNarrationRenderedText = narrationUpdate.next.rendered;
+        nativeNarrationSourceText = narrationUpdate.next.source;
+      }
+      return result;
     });
-    if (result.visibleReplySent && !delivery.streamFailed) {
-      nativeNarrationRenderedText = narrationUpdate.next.rendered;
-      nativeNarrationSourceText = narrationUpdate.next.source;
-    }
-    return result;
-  };
 
   const resetProgressTurnState = () => {
     progressWorkCounter.reset();

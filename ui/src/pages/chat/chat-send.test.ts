@@ -1369,8 +1369,8 @@ describe("handleSendChat", () => {
     };
     await host.sessions.refresh({ agentId: "main", force: true });
     await host.sessions.refreshList(query);
-    expect(host.sessionsResult?.sessions[0]).toMatchObject(authoritativeRow);
-    expect(host.sessions.listSnapshot(query).result?.sessions[0]).toMatchObject(authoritativeRow);
+    expect(host.sessionsResult?.sessions[0]).toEqual(authoritativeRow);
+    expect(host.sessions.listSnapshot(query).result?.sessions[0]).toEqual(authoritativeRow);
   });
 
   it("uses the canonical main destination for an immediate send", async () => {

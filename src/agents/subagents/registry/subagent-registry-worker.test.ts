@@ -63,6 +63,7 @@ function run(): SubagentRunRecord {
 function context(): OpenClawStateWorkerContext {
   return {
     admission: {
+      coordinationKey: "synthetic",
       databasePath: "/synthetic/state.sqlite",
       identity: { key: "synthetic", canonicalPath: "/synthetic/state.sqlite" },
       assertCurrent: vi.fn(),

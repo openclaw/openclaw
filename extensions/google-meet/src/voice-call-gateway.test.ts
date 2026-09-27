@@ -115,6 +115,8 @@ describe("Google Meet voice-call gateway", () => {
       throw new Error("localhost gateway server did not receive a TCP port");
     }
 
+    // Control readiness and deadlines while socket I/O and setImmediate stay real.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const stopAndWait = vi.spyOn(actual.GatewayClient.prototype, "stopAndWait");
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
@@ -127,9 +129,11 @@ describe("Google Meet voice-call gateway", () => {
       });
       const gateway = createGateway(config);
 
-      await expect(
+      const rejected = expect(
         getMeetingVoiceCallGatewayCall({ gateway, callId: "call-1" }),
       ).rejects.toMatchObject({ code: "ECONNRESET", message: "socket hang up" });
+      await vi.advanceTimersByTimeAsync(2);
+      await rejected;
       expect(connectionCount).toBe(1);
       expect(gatewayMocks.actualClients).toHaveLength(1);
 

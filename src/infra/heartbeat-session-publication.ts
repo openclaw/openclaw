@@ -228,29 +228,47 @@ export async function publishHeartbeatSessionReply(params: {
       // Accept at the committed-message boundary, while the writer still owns it.
       // A later drain failure cannot revoke a notification already published here.
       updateMode: "none",
-      onMessageCommitted: (receipt) => {
+      onMessageCommitted: (receipt, acceptCompletion) => {
         assertCurrent(receipt.messageId);
-        if (attachMedia && !attachMedia({ messageId: receipt.messageId, blocks: displayMedia })) {
-          throw new Error("heartbeat source receipt media custody is unavailable");
+        const publish = (): Promise<HeartbeatSessionPublication> => {
+          const messageSeq = readCommittedTranscriptMessageSequence(receipt);
+          assertCurrent(receipt.messageId);
+          // Replays invalidate history without emitting the assistant message again.
+          return publishTranscriptUpdate(
+            scope,
+            receipt.appended
+              ? {
+                  lifecycleRevision: expected.expectedLifecycleRevision ?? undefined,
+                  message: receipt.message,
+                  messageId: receipt.messageId,
+                  ...(messageSeq !== undefined ? { messageSeq } : {}),
+                }
+              : {},
+          ).then(
+            () => ({ ok: true, messageId: receipt.messageId }),
+            (error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }),
+          );
+        };
+        if (!attachMedia) {
+          acceptedPublication = publish();
+          return;
         }
-        const messageSeq = readCommittedTranscriptMessageSequence(receipt);
-        assertCurrent(receipt.messageId);
-        // The canonical emitter runs synchronously. Replays invalidate history,
-        // without emitting the same assistant message inline again.
-        acceptedPublication = publishTranscriptUpdate(
-          scope,
-          receipt.appended
-            ? {
-                lifecycleRevision: expected.expectedLifecycleRevision ?? undefined,
-                message: receipt.message,
-                messageId: receipt.messageId,
-                ...(messageSeq !== undefined ? { messageSeq } : {}),
-              }
-            : {},
-        ).then(
-          () => ({ ok: true, messageId: receipt.messageId }),
-          (error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }),
-        );
+        const completion = attachMedia({
+          messageId: receipt.messageId,
+          blocks: readAssistantDisplayContent(receipt.message),
+        }).then((attached) => {
+          if (!attached) {
+            throw new Error("heartbeat source receipt media custody is unavailable");
+          }
+          return publish();
+        });
+        acceptedPublication = completion.catch((error: unknown) => ({
+          ok: false,
+          reason: formatErrorMessage(error),
+        }));
+        acceptCompletion(async () => {
+          await completion;
+        });
       },
     });
     return (

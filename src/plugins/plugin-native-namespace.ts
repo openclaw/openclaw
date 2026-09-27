@@ -146,9 +146,12 @@ function inspectDirectory(
         const manifestFile = path.join(root, "package.json");
         if (isPathInside(packageBoundary, root) && fs.existsSync(manifestFile)) {
           // Use the generation owner's declared dependency selection, each with its own boundary.
+          // Only the namespace package and admitted dependencies are selected scopes; other nested
+          // manifests resolve what is installed, and Node reports a truly missing import at load.
           capturePluginDependencies({
             root,
             manifestFile,
+            incidental: Boolean(relative) && !admittedDependency,
             references: new Map(),
             resolve,
             capture(name, dependency) {

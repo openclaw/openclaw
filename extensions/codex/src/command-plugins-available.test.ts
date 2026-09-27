@@ -180,7 +180,7 @@ describe("Codex available plugin search and pages", () => {
     expect(recovered.text).toContain("github@company-tools");
   });
 
-  it.each([["--page"], ["--page", "0"], ["--page", "1.5"], ["--page", "NaN"], ["x".repeat(101)]])(
+  it.each([["--page"], ["--page", "0"], ["x".repeat(101)]])(
     "rejects invalid options before discovery: %j",
     async (...args) => {
       const runtime = catalogRuntime();

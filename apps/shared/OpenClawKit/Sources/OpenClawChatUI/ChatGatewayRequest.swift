@@ -97,6 +97,13 @@ public enum OpenClawChatGatewayRequests {
         OpenClawChatGatewayRequest(method: "agents.list", timeoutMs: timeoutMs)
     }
 
+    public static func agentIdentity(agentID: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "agent.identity.get",
+            params: ["agentId": AnyCodable(agentID.trimmingCharacters(in: .whitespacesAndNewlines))],
+            timeoutMs: self.shortTimeoutMs)
+    }
+
     public static func modelsList(agentID: String?, sessionKey: String? = nil) -> OpenClawChatGatewayRequest {
         var params: [String: AnyCodable] = [:]
         self.add(agentID, to: &params, key: "agentId")

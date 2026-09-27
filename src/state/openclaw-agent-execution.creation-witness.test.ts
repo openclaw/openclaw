@@ -7,7 +7,10 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
-import { readOpenClawAgentDatabaseRegistryToken } from "./openclaw-agent-db-registry-listing.js";
+import {
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
+  readOpenClawAgentDatabaseRegistryToken,
+} from "./openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -73,6 +76,9 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
   const existingTranscript = { kind: "session-transcript-initialized", sessionKey };
   try {
     await creator.prepare(source());
+    const registry = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+      env: options.env,
+    }).read();
     await expect(creator.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
       {
         ...existingTranscript,
@@ -82,6 +88,7 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
     await expect(sibling.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
       existingTranscript,
     );
+    expect(registry.assertCurrent).not.toThrow();
     expect(sibling.path).toBe(options.path);
     expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
     await Promise.all([creator.release(), sibling.release()]);
@@ -100,6 +107,7 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
       await expect(
         reopened.runExisting(source(), (scope) => scope.execute(command)),
       ).resolves.toEqual(existingTranscript);
+      expect(registry.assertCurrent).not.toThrow();
       await closeOpenClawAgentDatabaseByPathAsync(aliased.path, options.agentId);
       expect(() => reopened.assertCurrent()).toThrow(/closed/);
     } finally {
@@ -111,6 +119,7 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
     });
     try {
       await replacement.prepare(source());
+      expect(registry.assertCurrent).toThrow("registry changed");
       await expect(
         replacement.runExisting(source(), (scope) => scope.execute(command)),
       ).resolves.toEqual({

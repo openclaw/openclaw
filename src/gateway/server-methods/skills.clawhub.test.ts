@@ -1,6 +1,7 @@
 // ClawHub skills tests cover install/update/detail/status flows, security
 // verdicts, local skill cards, and workspace skill status reports.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const loadConfigMock = vi.fn(() => ({}));
@@ -94,6 +95,11 @@ async function expectEmptySecurityVerdictsWithoutFetch(): Promise<void> {
 }
 
 describe("skills gateway handlers (clawhub)", () => {
+  afterEach(async () => {
+    // skills.status opens real watchers; close them so they cannot outlive this file.
+    await closeSkillsWatchers(true);
+  });
+
   beforeEach(() => {
     loadConfigMock.mockReset();
     listAgentIdsMock.mockReset();

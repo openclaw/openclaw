@@ -71,6 +71,17 @@ export function startTaskRunByRunIdAsync(
   );
 }
 
+export function recordTaskRunProgressByRunIdAsync(
+  params: Parameters<DetachedTaskLifecycleRuntime["recordTaskRunProgressByRunId"]>[0],
+  assertCurrent?: () => void,
+) {
+  return mutateDetachedTask(
+    { kind: "state", params },
+    (runtime) => runtime.recordTaskRunProgressByRunId(params),
+    assertCurrent,
+  );
+}
+
 export function finalizeTaskRunByRunIdAsync(
   params: DetachedTaskFinalizeParams,
   assertCurrent?: () => void,

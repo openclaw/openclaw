@@ -45,6 +45,7 @@ const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
 const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
 const bunCompatibleConfigs = new Set([
   "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+  "test/vitest/vitest.extension-memory.config.ts",
   gatewayClientConfig,
 ]);
 // Measured whole-file admission; the rest of agents-support retains Node.
@@ -149,7 +150,8 @@ function supportsRuntimePartition(args: string[]): boolean {
   return args.every(
     (arg) =>
       arg === "--testNamePattern=(?!)" ||
-      /^--(?:maxWorkers|testTimeout|hookTimeout)=\d+$/u.test(arg),
+      /^--(?:maxWorkers|testTimeout|hookTimeout)=\d+$/u.test(arg) ||
+      /^--exclude=[\w./-]+\.test\.[cm]?[jt]sx?$/u.test(arg),
   );
 }
 

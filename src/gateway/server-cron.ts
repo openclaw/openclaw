@@ -1,14 +1,12 @@
-// Gateway cron runtime service runs scheduled agent turns, heartbeat wakeups,
-// plugin hooks, notifications, and cron lifecycle cleanup.
 import fs from "node:fs/promises";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import {
-  listAgentEntries,
   listAgentIds,
+  resolveAgentEntry,
   tryResolveAmbientOwnerAgentId,
-} from "../agents/agent-scope.js";
+} from "../agents/agent-scope-config.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
 import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
@@ -71,7 +69,7 @@ import type {
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
-import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import {
   resolveHeartbeatForWake,
   resolveHeartbeatTimeoutOverrideSeconds,
@@ -246,15 +244,11 @@ function reconcileCronExitWatchers(params: {
   params.exitWatchers.reconcile(params.jobs);
 }
 
-/** Pick only the keys whose values are not `undefined` from an object. */
-function pickDefined<T extends Record<string, unknown>>(
-  obj: T,
-  keys: (keyof T)[],
-): Partial<Pick<T, (typeof keys)[number]>> {
-  const result: Partial<Pick<T, (typeof keys)[number]>> = {};
+function pickDefined<T extends Record<string, unknown>>(obj: T, keys: (keyof T)[]): Partial<T> {
+  const result: Partial<T> = {};
   for (const k of keys) {
     if (obj[k] !== undefined) {
-      (result as Record<string, unknown>)[k as string] = obj[k];
+      result[k] = obj[k];
     }
   }
   return result;
@@ -387,13 +381,8 @@ async function finalizeCronCompletionAnnouncement(params: {
   }
 }
 
-function isCommandCronJob(job: CronJob | null | undefined): boolean {
-  return job?.payload?.kind === "command";
-}
-
 const CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS = 10_000;
 
-/** Build the cron service state used by Gateway startup and lazy cron loading. */
 export function buildGatewayCronService(params: {
   scheduler: GatewayScheduler;
   cfg: OpenClawConfig;
@@ -417,12 +406,6 @@ export function buildGatewayCronService(params: {
   // same explicit opt-in while omitted config keeps the guard strict.
   const webhookSsrfPolicy = mergeSsrFPolicies(params.cfg.cron?.webhookSsrfPolicy);
 
-  const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
-    listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === agentId);
-
-  const hasConfiguredAgent = (cfg: OpenClawConfig, agentId: string) =>
-    Boolean(findAgentEntry(cfg, agentId));
-
   const resolveCronAgent = (requested?: string | null) => {
     const runtimeConfig = getRuntimeConfig();
     const normalized =
@@ -431,7 +414,7 @@ export function buildGatewayCronService(params: {
     if (
       normalized !== undefined &&
       normalized !== defaultAgentId &&
-      !hasConfiguredAgent(runtimeConfig, normalized)
+      !resolveAgentEntry(runtimeConfig, normalized)
     ) {
       throw new Error(`cron job agent is unavailable: ${normalized}`);
     }
@@ -1049,7 +1032,7 @@ export function buildGatewayCronService(params: {
       // when the job is known.
       const pluginJob = jobSnapshot ? toPluginCronJob(jobSnapshot) : undefined;
       const hookSummary =
-        isCommandCronJob(jobSnapshot) && typeof evt.summary === "string"
+        jobSnapshot?.payload?.kind === "command" && typeof evt.summary === "string"
           ? redactCronCommandSummaryForExternalDelivery(evt.summary)
           : evt.summary;
       const hookEvt: PluginHookCronChangedEvent = {
@@ -1485,11 +1468,11 @@ export function buildGatewayCronService(params: {
   // Serialize accepted-config convergence; newer requests and stop supersede this tail.
   let systemJobReconcileEpoch = 0;
   let systemJobReconcileTail = Promise.resolve<GatewaySystemJobReconciliationResult>("converged");
-  let systemJobRetryTimer: NodeJS.Timeout | undefined;
+  let systemJobRetryTimer: GatewayScheduledJob | undefined;
   const stopSystemJobReconcileRetry = () => {
     // Also invalidate any in-flight pass so a post-stop retry cannot fire.
     systemJobReconcileEpoch += 1;
-    clearTimeout(systemJobRetryTimer);
+    systemJobRetryTimer?.cancel();
     systemJobRetryTimer = undefined;
   };
   const reconcileSystemJobs = (): Promise<GatewaySystemJobReconciliationResult> => {
@@ -1519,11 +1502,11 @@ export function buildGatewayCronService(params: {
           converged &&= ok;
         }
         if (!converged) {
-          systemJobRetryTimer = setTimeout(() => {
-            systemJobRetryTimer = undefined;
-            void reconcileSystemJobs();
-          }, 30_000);
-          systemJobRetryTimer.unref?.();
+          systemJobRetryTimer = params.scheduler.schedule({
+            id: `cron:${storePath}:system-jobs`,
+            delayMs: 30_000,
+            run: reconcileSystemJobs,
+          });
         }
         return converged ? "converged" : "retry-scheduled";
       } catch (error) {

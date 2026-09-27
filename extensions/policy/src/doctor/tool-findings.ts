@@ -1,5 +1,6 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { PolicyToolEvidence } from "../policy-state-types.js";
 import type { PolicyEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
 import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
@@ -331,27 +332,42 @@ function toolPostureLabel(entry: PolicyToolPostureEvidence): string {
   return entry.agentId === undefined ? "global tools config" : `agent '${entry.agentId}'`;
 }
 
+function toolMetadataFinding(
+  tool: PolicyToolEvidence,
+  policyDocName: string,
+  checkId: (typeof POLICY_CHECK_IDS)[number],
+  message: string,
+  fixHint: string,
+): HealthFinding {
+  return {
+    checkId,
+    severity: "error",
+    message,
+    source: "policy",
+    path: "AGENTS.md",
+    line: tool.line,
+    ocPath: tool.source,
+    target: tool.source,
+    requirement: `oc://${policyDocName}/tools/requireMetadata`,
+    fixHint,
+  };
+}
+
 export function toolRiskFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
   return (evidence.tools ?? [])
     .filter((tool) => tool.risk === undefined)
-    .map((tool): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyMissingToolRisk,
-        severity: "error",
-        message: `AGENTS.md tool '${tool.id}' has no explicit risk classification.`,
-        source: "policy",
-        path: "AGENTS.md",
-        line: tool.line,
-        ocPath: tool.source,
-        target: tool.source,
-        requirement: `oc://${policyDocName}/tools/requireMetadata`,
-        fixHint:
-          "Declare risk:low, risk:medium, risk:high, risk:critical, or an R0-R5 review alias.",
-      };
-    });
+    .map((tool) =>
+      toolMetadataFinding(
+        tool,
+        policyDocName,
+        CHECK_IDS.policyMissingToolRisk,
+        `AGENTS.md tool '${tool.id}' has no explicit risk classification.`,
+        "Declare risk:low, risk:medium, risk:high, risk:critical, or an R0-R5 review alias.",
+      ),
+    );
 }
 
 export function toolUnknownRiskFindings(
@@ -364,20 +380,15 @@ export function toolUnknownRiskFindings(
         tool.risk !== undefined &&
         !KNOWN_RISK_LEVELS.includes(tool.risk as (typeof KNOWN_RISK_LEVELS)[number]),
     )
-    .map((tool): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyUnknownToolRisk,
-        severity: "error",
-        message: `AGENTS.md tool '${tool.id}' declares unknown risk '${tool.risk}'.`,
-        source: "policy",
-        path: "AGENTS.md",
-        line: tool.line,
-        ocPath: tool.source,
-        target: tool.source,
-        requirement: `oc://${policyDocName}/tools/requireMetadata`,
-        fixHint: `Use one of: ${KNOWN_RISK_LEVELS.join(", ")}.`,
-      };
-    });
+    .map((tool) =>
+      toolMetadataFinding(
+        tool,
+        policyDocName,
+        CHECK_IDS.policyUnknownToolRisk,
+        `AGENTS.md tool '${tool.id}' declares unknown risk '${tool.risk}'.`,
+        `Use one of: ${KNOWN_RISK_LEVELS.join(", ")}.`,
+      ),
+    );
 }
 
 export function toolSensitivityFindings(
@@ -387,18 +398,13 @@ export function toolSensitivityFindings(
   return (evidence.tools ?? []).flatMap((tool): HealthFinding[] => {
     if (tool.sensitivity === undefined) {
       return [
-        {
-          checkId: CHECK_IDS.policyMissingToolSensitivity,
-          severity: "error",
-          message: `AGENTS.md tool '${tool.id}' has no declared artifact sensitivity.`,
-          source: "policy",
-          path: "AGENTS.md",
-          line: tool.line,
-          ocPath: tool.source,
-          target: tool.source,
-          requirement: `oc://${policyDocName}/tools/requireMetadata`,
-          fixHint: `Declare sensitivity as one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
-        },
+        toolMetadataFinding(
+          tool,
+          policyDocName,
+          CHECK_IDS.policyMissingToolSensitivity,
+          `AGENTS.md tool '${tool.id}' has no declared artifact sensitivity.`,
+          `Declare sensitivity as one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
+        ),
       ];
     }
     if (
@@ -409,18 +415,13 @@ export function toolSensitivityFindings(
       return [];
     }
     return [
-      {
-        checkId: CHECK_IDS.policyUnknownToolSensitivity,
-        severity: "error",
-        message: `AGENTS.md tool '${tool.id}' declares unknown sensitivity '${tool.sensitivity}'.`,
-        source: "policy",
-        path: "AGENTS.md",
-        line: tool.line,
-        ocPath: tool.source,
-        target: tool.source,
-        requirement: `oc://${policyDocName}/tools/requireMetadata`,
-        fixHint: `Use one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
-      },
+      toolMetadataFinding(
+        tool,
+        policyDocName,
+        CHECK_IDS.policyUnknownToolSensitivity,
+        `AGENTS.md tool '${tool.id}' declares unknown sensitivity '${tool.sensitivity}'.`,
+        `Use one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
+      ),
     ];
   });
 }
@@ -431,18 +432,13 @@ export function toolOwnerFindings(
 ): readonly HealthFinding[] {
   return (evidence.tools ?? [])
     .filter((tool) => tool.owner === undefined)
-    .map((tool): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyMissingToolOwner,
-        severity: "error",
-        message: `AGENTS.md tool '${tool.id}' has no declared owner.`,
-        source: "policy",
-        path: "AGENTS.md",
-        line: tool.line,
-        ocPath: tool.source,
-        target: tool.source,
-        requirement: `oc://${policyDocName}/tools/requireMetadata`,
-        fixHint: "Declare owner:<team-or-person> for this tool.",
-      };
-    });
+    .map((tool) =>
+      toolMetadataFinding(
+        tool,
+        policyDocName,
+        CHECK_IDS.policyMissingToolOwner,
+        `AGENTS.md tool '${tool.id}' has no declared owner.`,
+        "Declare owner:<team-or-person> for this tool.",
+      ),
+    );
 }

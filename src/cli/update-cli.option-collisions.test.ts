@@ -65,7 +65,6 @@ type UpdateFinalizeCommandOptions = {
   channel?: string;
   json?: boolean;
   timeout?: string;
-  restart?: boolean;
   yes?: boolean;
 };
 
@@ -183,13 +182,13 @@ describe("update cli option collisions", () => {
       name: "forwards parent-captured options to hidden `update finalize`",
       argv: ["update", "finalize", "--json", "--timeout", "17", "--no-restart"],
       handler: updateFinalizeCommand,
-      expected: { json: true, timeout: "17", restart: false },
+      expected: { json: true, timeout: "17" },
     },
     {
       name: "forwards parent-captured --json/--timeout to `update repair`",
       argv: ["update", "repair", "--json", "--timeout", "19"],
       handler: updateFinalizeCommand,
-      expected: { json: true, timeout: "19", restart: false },
+      expected: { json: true, timeout: "19" },
     },
     {
       name: "forwards repair channel and confirmation options",
@@ -277,7 +276,6 @@ describe("update cli option collisions", () => {
       expect(firstCallOptions(updateFinalizeCommand)).toMatchObject({
         channel: "beta",
         json: true,
-        restart: false,
         timeout: "31",
         yes: true,
       } satisfies UpdateFinalizeCommandOptions);

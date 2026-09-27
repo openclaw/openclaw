@@ -215,8 +215,15 @@ function openAgentDatabaseBackend(
       let registration: OpenClawAgentDatabaseRegistrationCommit | undefined;
       let openingResult: Result<OpenClawAgentDatabase, unknown>;
       try {
-        const opened = openOpenClawAgentDatabase(options, lease, (receipt) => {
-          registration = receipt;
+        const opened = openOpenClawAgentDatabase(options, lease, {
+          starting: () =>
+            requestSqliteWorkerOperationAdmission({
+              stage: "prepare",
+              facts: { kind: "agent-registration-start", lease: lease.receipt },
+            }),
+          committed(receipt) {
+            registration = receipt;
+          },
         });
         database = opened;
         releaseBorrow = retainAgentDatabase(opened.db);
@@ -304,6 +311,24 @@ function openAgentDatabaseBackend(
       ensureOpenClawAgentDatabasePermissions(input.databasePath, options);
     }
   };
+  const writeTransaction = <T>(
+    operationLabel: string,
+    owner: string,
+    write: (current: OpenClawAgentDatabase) => T,
+  ): T => {
+    const opened = openWriter();
+    return runOpenClawAgentWriteTransaction(
+      (current) => {
+        if (current.db !== opened.db) {
+          throw new Error(`${owner} lost its canonical database owner`);
+        }
+        admit("transaction");
+        return write(current);
+      },
+      options,
+      { operationLabel },
+    );
+  };
   let providerReview:
     | typeof import("../config/sessions/provider-review-store.worker.js")
     | undefined;
@@ -379,35 +404,23 @@ function openAgentDatabaseBackend(
       return entryReader.readSessionEntryRow(openWriter(), command.input.sessionKey)?.entry;
     }
     if (command.type === "trajectory.events.append" && trajectory) {
-      const opened = openWriter();
       const append = trajectory.appendSqliteTrajectoryRuntimeEventsInTransaction;
-      return runOpenClawAgentWriteTransaction(
-        (current) => {
-          if (current.db !== opened.db) {
-            throw new Error("Trajectory append lost its canonical database owner");
-          }
-          admit("transaction");
-          append(current, command.input);
-          deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
-          admit("commit");
-        },
-        options,
-        { operationLabel: "trajectory.runtime.append" },
-      );
+      return writeTransaction("trajectory.runtime.append", "Trajectory append", (current) => {
+        append(current, command.input);
+        deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
+        admit("commit");
+      });
     }
     if (
       (command.type === "session.archives.preparePublication" ||
         command.type === "session.archives.recordPublication") &&
       archives
     ) {
-      const opened = openWriter();
       const kernel = archives;
-      return runOpenClawAgentWriteTransaction(
+      return writeTransaction(
+        "session.archive.publish",
+        "Session archive publication",
         (current) => {
-          if (current.db !== opened.db) {
-            throw new Error("Session archive publication lost its canonical database owner");
-          }
-          admit("transaction");
           const result =
             command.type === "session.archives.preparePublication"
               ? kernel.prepareSessionTranscriptArchivePublishPlans(current, command.input)
@@ -419,8 +432,6 @@ function openAgentDatabaseBackend(
           admit("commit");
           return result;
         },
-        options,
-        { operationLabel: "session.archive.publish" },
       );
     }
     if (command.type === "session.transcript.initialize" && transcript) {
@@ -428,13 +439,10 @@ function openAgentDatabaseBackend(
         transcript.assertIdentity;
       assertIdentity(command.input);
       const initialize = transcript.initialize;
-      const opened = openWriter();
-      return runOpenClawAgentWriteTransaction(
+      return writeTransaction(
+        "session.entry.create-with-transcript",
+        "Session transcript",
         (current) => {
-          if (current.db !== opened.db) {
-            throw new Error("Session transcript lost its canonical database owner");
-          }
-          admit("transaction");
           const publication: SessionTranscriptInitializationPublication = {
             kind: "session-transcript-initialized",
             sessionKey: command.input.sessionKey,
@@ -453,51 +461,40 @@ function openAgentDatabaseBackend(
           admit("commit", publication);
           return publication;
         },
-        options,
-        { operationLabel: "session.entry.create-with-transcript" },
       );
     }
     if (command.type === "session.entries.replace" && replacements) {
-      const opened = openWriter();
       const replace = replacements.commitSessionEntryReplacementsInDatabase;
       const preparePublication = replacements.prepareSessionEntryReplacementPublication;
-      return runOpenClawAgentWriteTransaction(
-        (current) => {
-          if (current.db !== opened.db) {
-            throw new Error("Session replacement lost its canonical database owner");
+      return writeTransaction("session.entry-replacements", "Session replacement", (current) => {
+        const result = replace(current, command.input, () => {
+          const initialization = command.input.initializeTranscript;
+          if (!initialization) {
+            return;
           }
-          admit("transaction");
-          const result = replace(current, command.input, () => {
-            const initialization = command.input.initializeTranscript;
-            if (!initialization) {
-              return;
+          try {
+            if (!transcript) {
+              throw new Error("Session transcript initialization was not prepared");
             }
-            try {
-              if (!transcript) {
-                throw new Error("Session transcript initialization was not prepared");
-              }
-              const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =
-                transcript.assertIdentity;
-              assertIdentity(initialization);
-              transcript.initialize(
-                current,
-                { agentId: input.agentId, path: input.databasePath, ...initialization },
-                initialization.cwd,
-              );
-            } catch (error) {
-              throw Object.assign(new Error(formatErrorMessage(error), { cause: error }), {
-                name: "SessionTranscriptInitializationError",
-              });
-            }
-          });
-          const publication = preparePublication(result);
-          deferSqliteWorkerCommitReceipt(current.db, publication);
-          admit("commit", publication);
-          return result;
-        },
-        options,
-        { operationLabel: "session.entry-replacements" },
-      );
+            const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =
+              transcript.assertIdentity;
+            assertIdentity(initialization);
+            transcript.initialize(
+              current,
+              { agentId: input.agentId, path: input.databasePath, ...initialization },
+              initialization.cwd,
+            );
+          } catch (error) {
+            throw Object.assign(new Error(formatErrorMessage(error), { cause: error }), {
+              name: "SessionTranscriptInitializationError",
+            });
+          }
+        });
+        const publication = preparePublication(result);
+        deferSqliteWorkerCommitReceipt(current.db, publication);
+        admit("commit", publication);
+        return result;
+      });
     }
     if (command.type === "session.providerReview.compare" && providerReview) {
       return providerReview.compareSessionProviderReviewInWorker(

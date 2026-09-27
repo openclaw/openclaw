@@ -1,4 +1,3 @@
-// Codex tests cover persisted binding codecs and SQLite serialization.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +14,26 @@ import {
 } from "./session-binding.js";
 import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 
+function importBinding(fields: Record<string, unknown>) {
+  return createStoredCodexAppServerBinding({
+    schemaVersion: 2,
+    threadId: "thread-1",
+    cwd: "/repo",
+    ...fields,
+  });
+}
+
+function pluginEntry(fields: Record<string, unknown>) {
+  return {
+    configKey: "app",
+    marketplaceName: "openai-curated",
+    pluginName: "plugin",
+    allowDestructiveActions: true,
+    mcpServerNames: [],
+    ...fields,
+  };
+}
+
 afterEach(async () => {
   vi.useRealTimers();
   await closeOpenClawStateDatabaseAsync();
@@ -22,53 +41,36 @@ afterEach(async () => {
 });
 
 describe("Codex app-server binding codec", () => {
-  it("normalizes the retired approval policy in persisted bindings", () => {
+  it.each([
+    { stored: "on-failure", expected: "on-request" },
+    { stored: "untrusted", expected: "untrusted" },
+  ])("reads persisted approval policy $stored as $expected", ({ stored, expected }) => {
     expect(
       readCodexAppServerThreadBinding({
-        threadId: "thread-legacy-policy",
+        threadId: "thread-policy",
         cwd: "/repo",
-        approvalPolicy: "on-failure",
-        sandbox: "workspace-write",
-      }),
-    ).toMatchObject({
-      threadId: "thread-legacy-policy",
-      cwd: "/repo",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-    });
-  });
-
-  it("preserves the effective managed approval policy in persisted thread bindings", () => {
-    expect(
-      readCodexAppServerThreadBinding({
-        threadId: "thread-untrusted-policy",
-        cwd: "/repo",
-        approvalPolicy: "untrusted",
+        approvalPolicy: stored,
         sandbox: "workspace-write",
       }),
     ).toEqual({
-      threadId: "thread-untrusted-policy",
+      threadId: "thread-policy",
       cwd: "/repo",
-      approvalPolicy: "untrusted",
+      approvalPolicy: expected,
       sandbox: "workspace-write",
     });
   });
 
   it("rejects unsafe marketplace names in imported plugin app ownership", () => {
-    const imported = createStoredCodexAppServerBinding({
-      schemaVersion: 2,
-      threadId: "thread-unsafe-plugin",
-      cwd: "/repo/company",
+    const imported = importBinding({
       pluginAppPolicyContext: {
         fingerprint: "unsafe-plugin-policy",
         apps: {
-          github: {
+          github: pluginEntry({
             configKey: "security-review",
             marketplaceName: "../unsafe-marketplace",
             pluginName: "security-review",
-            allowDestructiveActions: true,
             mcpServerNames: ["github"],
-          },
+          }),
         },
         pluginAppIds: { "security-review": ["github"] },
       },
@@ -83,10 +85,7 @@ describe("Codex app-server binding codec", () => {
       mcp_servers: { legacy: { command: "node" } },
     });
     const nativeSkillIsolationFingerprint = `sha256:${"b".repeat(64)}`;
-    const imported = createStoredCodexAppServerBinding({
-      schemaVersion: 2,
-      threadId: "thread-legacy-fingerprints",
-      cwd: "/repo",
+    const imported = importBinding({
       updatedAt: "2026-01-01T00:00:00.000Z",
       dynamicToolsFingerprint: rawDynamicToolsFingerprint,
       nativeSkillIsolationFingerprint,
@@ -99,10 +98,7 @@ describe("Codex app-server binding codec", () => {
     });
 
     const existingHash = `sha256:${"a".repeat(64)}`;
-    const canonical = createStoredCodexAppServerBinding({
-      schemaVersion: 2,
-      threadId: "thread-canonical-fingerprints",
-      cwd: "/repo",
+    const canonical = importBinding({
       updatedAt: "2026-01-01T00:00:00.000Z",
       dynamicToolsFingerprint: "[]",
       userMcpServersFingerprint: existingHash,
@@ -180,8 +176,7 @@ describe("Codex app-server binding codec", () => {
           state: "active",
           binding,
         });
-        const imported = createStoredCodexAppServerBinding({
-          schemaVersion: 2,
+        const imported = importBinding({
           ...binding,
           updatedAt: "2026-01-01T00:00:00.000Z",
         });
@@ -202,10 +197,8 @@ describe("Codex app-server binding codec", () => {
 
   it("maps the legacy sidecar update timestamp to the history watermark", () => {
     const updatedAt = "2026-01-01T00:00:00.000Z";
-    const stored = createStoredCodexAppServerBinding({
+    const stored = importBinding({
       schemaVersion: 1,
-      threadId: "thread-1",
-      cwd: "/repo",
       createdAt: "2025-12-31T00:00:00.000Z",
       updatedAt,
     });
@@ -216,29 +209,21 @@ describe("Codex app-server binding codec", () => {
   });
 
   it("normalizes version 1 destructive approval modes during import", () => {
-    const stored = createStoredCodexAppServerBinding({
+    const stored = importBinding({
       schemaVersion: 1,
-      threadId: "thread-1",
-      cwd: "/repo",
       pluginAppPolicyContext: {
         fingerprint: "policy-1",
         apps: {
-          allow: {
+          allow: pluginEntry({
             configKey: "allow",
-            marketplaceName: "openai-curated",
             pluginName: "allow-plugin",
-            allowDestructiveActions: true,
             destructiveApprovalMode: "auto",
-            mcpServerNames: [],
-          },
-          prompt: {
+          }),
+          prompt: pluginEntry({
             configKey: "prompt",
-            marketplaceName: "openai-curated",
             pluginName: "prompt-plugin",
-            allowDestructiveActions: true,
             destructiveApprovalMode: "on-request",
-            mcpServerNames: [],
-          },
+          }),
         },
         pluginAppIds: {},
       },
@@ -252,57 +237,29 @@ describe("Codex app-server binding codec", () => {
     );
   });
 
-  it("preserves version 2 ask approval mode and drops invalid policy contexts", () => {
-    const policyContext = {
-      fingerprint: "policy-2",
-      apps: {
-        app: {
-          configKey: "app",
-          marketplaceName: "openai-curated",
-          pluginName: "plugin",
-          allowDestructiveActions: true,
-          destructiveApprovalMode: "ask",
-          mcpServerNames: [],
-        },
-      },
-      pluginAppIds: {},
-    };
-    const stored = createStoredCodexAppServerBinding({
-      schemaVersion: 2,
-      threadId: "thread-2",
-      cwd: "/repo",
-      pluginAppPolicyContext: policyContext,
-    });
-    const invalid = createStoredCodexAppServerBinding({
-      schemaVersion: 2,
-      threadId: "thread-invalid",
-      cwd: "/repo",
+  it("drops imported policy contexts with a forbidden appId field", () => {
+    const invalid = importBinding({
       pluginAppPolicyContext: {
-        ...policyContext,
-        apps: { app: { ...policyContext.apps.app, appId: "not-allowed" } },
+        fingerprint: "policy-2",
+        apps: { app: pluginEntry({ destructiveApprovalMode: "ask", appId: "not-allowed" }) },
+        pluginAppIds: {},
       },
     });
 
-    expect(stored?.binding.pluginAppPolicyContext?.apps.app?.destructiveApprovalMode).toBe("ask");
     expect(invalid?.binding.pluginAppPolicyContext).toBeUndefined();
   });
 
   it("round-trips workspace-directory plugin policy context", () => {
-    const stored = createStoredCodexAppServerBinding({
-      schemaVersion: 2,
-      threadId: "thread-workspace-plugin",
-      cwd: "/repo",
+    const stored = importBinding({
       pluginAppPolicyContext: {
         fingerprint: "policy-workspace",
         apps: {
-          workspaceData: {
+          workspaceData: pluginEntry({
             configKey: "workspaceData",
             marketplaceName: "workspace-directory",
             pluginName: "workspace-data@workspace-directory",
-            allowDestructiveActions: true,
             destructiveApprovalMode: "ask",
-            mcpServerNames: [],
-          },
+          }),
         },
         pluginAppIds: { workspaceData: ["workspace-data"] },
       },

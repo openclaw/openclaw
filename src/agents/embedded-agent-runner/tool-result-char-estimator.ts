@@ -10,22 +10,13 @@ import {
   COMPACTION_SUMMARY_SUFFIX,
   bashExecutionToText,
 } from "../runtime/index.js";
-import { prepareToolResultTextChars } from "./tool-result-text-budget.js";
+import { isToolResultTextBlock, prepareToolResultTextChars } from "./tool-result-text-budget.js";
 
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 export const TOOL_IMAGE_CHARS = IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
-
-function isTextBlock(block: unknown): block is { type: "text"; text: string } {
-  return (
-    Boolean(block) &&
-    typeof block === "object" &&
-    (block as { type?: unknown }).type === "text" &&
-    typeof (block as { text?: unknown }).text === "string"
-  );
-}
 
 function isImageBlock(block: unknown): boolean {
   return (
@@ -69,7 +60,7 @@ function estimateContentBlockChars(content: unknown[], toolResult = false): numb
   const weight = toolResult ? TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE : 1;
   let chars = 0;
   for (const block of content) {
-    if (isTextBlock(block)) {
+    if (isToolResultTextBlock(block) && block.type === "text") {
       chars += toolResult
         ? prepareToolResultTextChars(block, block.text, weight)
         : block.text.length;

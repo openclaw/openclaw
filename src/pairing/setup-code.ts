@@ -384,7 +384,7 @@ const PAIRING_SETUP_CODE_RE = /^[A-Za-z0-9_-]+$/u;
 /** Decode the current setup payload plus additive fields emitted by older pairing surfaces. */
 export function decodePairingSetupCode(
   input: string,
-  options: { nowMs?: number } = {},
+  options: { nowMs?: number; allowExpired?: boolean } = {},
 ): PairingSetupPayload {
   const trimmed = input.trim();
   const setupCode = trimmed.toLowerCase().startsWith(PAIRING_SETUP_URL_PREFIX)
@@ -432,7 +432,7 @@ export function decodePairingSetupCode(
       throw new Error("Invalid pairing setup payload.");
     }
     expiresAtMs = candidate;
-    if (candidate <= (options.nowMs ?? Date.now())) {
+    if (!options.allowExpired && candidate <= (options.nowMs ?? Date.now())) {
       throw new Error("Pairing setup code has expired.");
     }
   }

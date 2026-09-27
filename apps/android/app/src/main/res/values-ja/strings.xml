@@ -1557,6 +1557,7 @@
     <string name="native_d68f3aaa52604f24" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"現在の応答が完了してから、新しいチャットを開始してください。"</string>
     <string name="native_d696a35bdd1883da" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"プロフィール"</string>
     <string name="native_d6a99dbee26515ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gatewayから報告されると、プロバイダーの制限がここに表示されます。"</string>
+    <string name="native_d6b3e8c828d37420" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Presence"</string>
     <string name="native_d6bfda034106ecd6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 件の問題"</string>
     <string name="native_d6f931ca6d5f5b60" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"\"%1$s\" 内のスレッドは保持され、未分類に戻ります。"</string>
     <string name="native_d70604e843046137" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"推奨"</string>

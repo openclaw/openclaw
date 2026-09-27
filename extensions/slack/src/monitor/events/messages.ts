@@ -235,18 +235,8 @@ export function registerSlackMessageEvents(params: {
         event: message,
         ctx,
       });
-      if (assistantChangedInbound) {
-        noteConversationMessage(assistantChangedInbound, eventScope);
-        await handleSlackMessage(assistantChangedInbound, {
-          source: "message",
-          eventScope,
-          ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
-          ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
-        });
-        return;
-      }
-
       if (
+        !assistantChangedInbound &&
         message.subtype === "message_changed" &&
         isSelfAttributedMessageChange({
           event: message as SlackMessageChangedEvent,
@@ -259,7 +249,9 @@ export function registerSlackMessageEvents(params: {
         return;
       }
 
-      const subtypeHandler = resolveSlackMessageSubtypeHandler(message);
+      const subtypeHandler = assistantChangedInbound
+        ? undefined
+        : resolveSlackMessageSubtypeHandler(message);
       if (subtypeHandler) {
         const ingressContext = await authorizeAndResolveSlackSystemEventContext({
           ctx,
@@ -282,8 +274,9 @@ export function registerSlackMessageEvents(params: {
         return;
       }
 
-      noteConversationMessage(message, eventScope);
-      await handleSlackMessage(message, {
+      const inbound = assistantChangedInbound ?? message;
+      noteConversationMessage(inbound, eventScope);
+      await handleSlackMessage(inbound, {
         source: "message",
         eventScope,
         ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),

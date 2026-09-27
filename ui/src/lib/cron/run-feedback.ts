@@ -10,12 +10,13 @@ export function cronRunNotStartedMessage(result: CronRunResult): string {
       return t("cron.runNotStarted.notDue");
     case "already-running":
       return t("cron.runNotStarted.alreadyRunning");
-    case "restart-recovery-pending":
-      return t("cron.runNotStarted.recoveryPending");
     case "invalid-spec":
       return t("cron.runNotStarted.invalidSpec");
     case "stopped":
       return t("cron.runNotStarted.stopped");
+    case "disabled":
+    case "ownerless":
+      break;
   }
   return t("cron.runNotStarted.unknown");
 }

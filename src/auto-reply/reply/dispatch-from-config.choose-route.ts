@@ -201,6 +201,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const blockDeliveryOutcomes = new Map<string, Array<Promise<BlockDelivery>>>();
   const recordBlockOutcome = (payload: ReplyPayload, outcome: Promise<BlockDelivery>) => {
     setBlockReplyDelivery(outcome, payload);
+    if (getReplyPayloadMetadata(payload)?.independentDeliveryIntentId !== undefined) {
+      return;
+    }
     const key = createBlockReplyContentKey(payload);
     const outcomes = blockDeliveryOutcomes.get(key) ?? [];
     outcomes.push(outcome);

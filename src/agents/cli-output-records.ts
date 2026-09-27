@@ -172,17 +172,10 @@ function collectCliText(value: unknown): string {
   if (!isRecord(value)) {
     return "";
   }
-  if (typeof value.response === "string") {
-    return value.response;
-  }
-  if (typeof value.text === "string") {
-    return value.text;
-  }
-  if (typeof value.result === "string") {
-    return value.result;
-  }
-  if (typeof value.content === "string") {
-    return value.content;
+  for (const field of ["response", "text", "result", "content"] as const) {
+    if (typeof value[field] === "string") {
+      return value[field];
+    }
   }
   if (Array.isArray(value.content)) {
     return value.content.map((entry) => collectCliText(entry)).join("");
@@ -196,20 +189,12 @@ function collectCliText(value: unknown): string {
 function unwrapNestedCliResultText(raw: string): string {
   let text = raw;
   for (let depth = 0; depth < 8; depth += 1) {
-    const trimmed = text.trim();
-    if (!trimmed.startsWith("{")) {
+    const parsed = safeParseJsonRecord(text.trim());
+    if (!parsed || parsed.type !== "result" || typeof parsed.result !== "string") {
       return text;
     }
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (!isRecord(parsed) || parsed.type !== "result" || typeof parsed.result !== "string") {
-        return text;
-      }
-      // Claude can wrap a result payload inside repeated JSON-string result envelopes.
-      text = parsed.result;
-    } catch {
-      return text;
-    }
+    // Claude can wrap a result payload inside repeated JSON-string result envelopes.
+    text = parsed.result;
   }
   return text;
 }

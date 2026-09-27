@@ -853,9 +853,9 @@ private fun contentText(element: JsonElement?): String =
 
 private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyException("invalid_response", "$method returned invalid data")
 
-private fun JsonObject.string(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+internal fun JsonObject?.string(name: String): String? = (this?.get(name) as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
-private fun JsonObject.boolean(name: String): Boolean? = (this[name] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
+internal fun JsonObject?.boolean(name: String): Boolean? = (this?.get(name) as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
 
 private fun JsonObject.long(name: String): Long? = (this[name] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
 

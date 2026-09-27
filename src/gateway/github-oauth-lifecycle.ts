@@ -144,6 +144,22 @@ export function createGitHubOAuthLifecycle(params: {
     });
     let nextConfig = current;
     let metadataWritten = false;
+    const completeAuthorization = async (
+      config: OpenClawConfig,
+    ): Promise<ToolsGitHubAuthorizePollResult> => {
+      queueDeviceCleanup(record.requestId);
+      if (record.expectedIdentity?.kind === "oauth") {
+        queueOAuthCleanup(record.expectedIdentity.profileId);
+      }
+      return {
+        status: "success",
+        githubStatus: await resolveGitHubToolIdentityStatus({
+          config,
+          agentId: record.agentId,
+          selectedScope: record.scope,
+        }),
+      };
+    };
     try {
       await installManagedGitHubProfile({
         profileDir,
@@ -222,18 +238,7 @@ export function createGitHubOAuthLifecycle(params: {
             if (inspected.state === "valid" && inspected.record.pendingInitial) {
               writeGitHubOAuthRecord({ ...inspected.record, pendingInitial: undefined });
             }
-            queueDeviceCleanup(record.requestId);
-            if (record.expectedIdentity?.kind === "oauth") {
-              queueOAuthCleanup(record.expectedIdentity.profileId);
-            }
-            return {
-              status: "success",
-              githubStatus: await resolveGitHubToolIdentityStatus({
-                config: persistedConfig,
-                agentId: record.agentId,
-                selectedScope: record.scope,
-              }),
-            };
+            return await completeAuthorization(persistedConfig);
           }
         } catch {
           // The commit outcome is unknown. Preserve the profile and refresh
@@ -251,18 +256,7 @@ export function createGitHubOAuthLifecycle(params: {
     } finally {
       committingRequests.delete(record.requestId);
     }
-    queueDeviceCleanup(record.requestId);
-    if (record.expectedIdentity?.kind === "oauth") {
-      queueOAuthCleanup(record.expectedIdentity.profileId);
-    }
-    return {
-      status: "success",
-      githubStatus: await resolveGitHubToolIdentityStatus({
-        config: nextConfig,
-        agentId: record.agentId,
-        selectedScope: record.scope,
-      }),
-    };
+    return await completeAuthorization(nextConfig);
   };
 
   const pollOnce = async (requestId: string): Promise<ToolsGitHubAuthorizePollResult> => {
@@ -289,13 +283,12 @@ export function createGitHubOAuthLifecycle(params: {
       queueDeviceCleanup(requestId);
       return { status: "failed", reason: "identity_changed" };
     }
-    const activeRecord = currentRecord;
     if (result.kind === "authorized") {
-      return await installDeviceTokens(activeRecord, result.tokens);
+      return await installDeviceTokens(currentRecord, result.tokens);
     }
     if (result.kind === "waiting") {
       writeGitHubDeviceAuthorizationRecord({
-        ...activeRecord,
+        ...currentRecord,
         pollIntervalMs: result.pollIntervalMs,
         nextPollAtMs: result.nextPollAtMs,
       });
@@ -558,17 +551,10 @@ export function createGitHubOAuthLifecycle(params: {
         }
       }
       const requestId = `github-device-${randomBytes(16).toString("hex")}`;
-      const { createdAtMs, expiresAtMs, pollIntervalMs, nextPollAtMs } = authorization;
       writeGitHubDeviceAuthorizationRecord({
         version: 1,
         requestId,
-        deviceCode: authorization.deviceCode,
-        userCode: authorization.userCode,
-        verificationUri: authorization.verificationUri,
-        createdAtMs,
-        expiresAtMs,
-        pollIntervalMs,
-        nextPollAtMs,
+        ...authorization,
         agentId: input.agentId,
         scope: input.scope,
         expectedIdentity,
@@ -578,8 +564,8 @@ export function createGitHubOAuthLifecycle(params: {
         requestId,
         userCode: authorization.userCode,
         verificationUri: authorization.verificationUri,
-        expiresInMs: Math.max(0, expiresAtMs - Date.now()),
-        pollAfterMs: pollIntervalMs,
+        expiresInMs: Math.max(0, authorization.expiresAtMs - Date.now()),
+        pollAfterMs: authorization.pollIntervalMs,
       };
     },
     pollAuthorization: (requestId: string): Promise<ToolsGitHubAuthorizePollResult> =>
@@ -595,7 +581,7 @@ export function createGitHubOAuthLifecycle(params: {
       return existed;
     },
     status,
-    retireProfile: (profileId: string) => queueOAuthCleanup(profileId),
+    retireProfile: queueOAuthCleanup,
     refreshEffectiveIdentity: async (agentId: string): Promise<void> => {
       if (stopping) {
         return;

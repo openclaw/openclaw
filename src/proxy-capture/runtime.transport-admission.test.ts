@@ -36,6 +36,7 @@ vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) 
 vi.mock("../state/openclaw-state-worker-context.js", () => ({
   captureOpenClawStateWorkerContext: () => ({
     admission: {
+      coordinationKey: "synthetic",
       databasePath: "/synthetic/state.sqlite",
       identity: { key: "synthetic", canonicalPath: "/synthetic/state.sqlite" },
       assertCurrent() {},

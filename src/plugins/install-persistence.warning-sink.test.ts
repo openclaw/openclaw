@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyExclusiveSlotSelectionMock,
   configWriteMock,
+  createEmptyUninstallActions,
   applyPluginUninstallDirectoryRemovalMock,
   buildPluginSnapshotReportMock,
   loadPluginManifestRegistryMock,
@@ -43,7 +44,7 @@ describe("plugin install persistence warning audiences", () => {
       ok: true,
       config: {},
       pluginId: "workboard",
-      actions: {},
+      actions: createEmptyUninstallActions(),
       directoryRemoval: { target: "/private/previous-source/workboard" },
     });
     applyPluginUninstallDirectoryRemovalMock.mockResolvedValueOnce({
@@ -161,7 +162,7 @@ describe("plugin install persistence warning audiences", () => {
         ok: true,
         config: {},
         pluginId: "workboard",
-        actions: {},
+        actions: createEmptyUninstallActions(),
         directoryRemoval: { target: "/private/previous-source/workboard" },
       });
       applyPluginUninstallDirectoryRemovalMock.mockResolvedValueOnce({

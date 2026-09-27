@@ -361,31 +361,27 @@ export function markBackgroundTaskTerminal(
   },
 ): void {
   try {
+    const terminal = {
+      runId: record.runId,
+      taskId: record.taskId,
+      runtime: "acp" as const,
+      sessionKey: record.childSessionKey,
+      endedAt: params.endedAt,
+      lastEventAt: params.lastEventAt,
+      progressSummary: params.progressSummary,
+      terminalSummary: params.terminalSummary,
+    };
     if (params.status === "succeeded") {
       completeTaskRunByRunId({
-        runId: record.runId,
-        taskId: record.taskId,
-        runtime: "acp",
-        sessionKey: record.childSessionKey,
-        endedAt: params.endedAt,
-        lastEventAt: params.lastEventAt,
-        progressSummary: params.progressSummary,
-        terminalSummary: params.terminalSummary,
+        ...terminal,
         terminalOutcome: params.terminalOutcome,
       });
       return;
     }
     failTaskRunByRunId({
-      runId: record.runId,
-      taskId: record.taskId,
-      runtime: "acp",
-      sessionKey: record.childSessionKey,
+      ...terminal,
       status: params.status,
-      endedAt: params.endedAt,
-      lastEventAt: params.lastEventAt,
       error: params.error,
-      progressSummary: params.progressSummary,
-      terminalSummary: params.terminalSummary,
     });
   } catch (error) {
     logVerbose(

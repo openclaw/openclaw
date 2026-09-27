@@ -23,7 +23,7 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { createPluginCache, withPluginCache, type PluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { getPluginRegistryForContext } from "../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { RuntimeEnv } from "../runtime.js";

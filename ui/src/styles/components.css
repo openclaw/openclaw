@@ -1672,6 +1672,11 @@ openclaw-session-progress-hovercard-provider {
   background: var(--ok);
 }
 
+.person-activity-card__status--idle > span {
+  background: var(--warn);
+}
+
+.person-activity-card__status--unknown > span,
 .person-activity-card__status--offline > span {
   background: var(--muted);
 }

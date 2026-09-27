@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { childOf, retainedSnapshots, sqliteFamily } from "./fixture-files.mjs";
 import {
   resolveWorkerCellExport,
   resolveWorkerCellFunctionBinding,
@@ -42,16 +43,6 @@ function writeJson(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" });
 }
 
-function within(root, file) {
-  const relative = path.relative(root, file);
-  return (
-    relative !== "" &&
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
-}
-
 function context() {
   const required = (key) => {
     const value = process.env[key];
@@ -63,13 +54,13 @@ function context() {
   const stateDir = required("OPENCLAW_STATE_DIR");
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   assert(
-    configPath && within(stateDir, path.resolve(configPath)),
+    configPath && childOf(stateDir, path.resolve(configPath)),
     "Config must belong to the scenario state",
   );
-  assert(within(root, stateDir), "State must belong to the scenario runtime");
+  assert(childOf(root, stateDir), "State must belong to the scenario runtime");
   const tempRoots = [required("TMPDIR"), required("XDG_CACHE_HOME")];
   assert(
-    tempRoots.every((dir) => within(root, dir)),
+    tempRoots.every((dir) => childOf(root, dir)),
     "Snapshot roots must belong to the scenario runtime",
   );
   return {
@@ -98,34 +89,6 @@ function fixture(ctx) {
   );
   assert.equal(expected.configPath, ctx.configPath, "Projects fixture belongs to another config");
   return expected;
-}
-
-function retainedSnapshots(roots) {
-  const retained = [];
-  const visit = (dir) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const file = path.join(dir, entry.name);
-      if (/^openclaw-(?:sqlite-readonly-|doctor-lint-state-)/.test(entry.name)) {
-        retained.push(file);
-      }
-      if (entry.isDirectory()) {
-        visit(file);
-      }
-    }
-  };
-  for (const root of new Set(roots)) {
-    visit(root);
-  }
-  return retained.toSorted((a, b) => a.localeCompare(b));
-}
-
-function sqliteFamily(databasePath) {
-  return Object.fromEntries(
-    ["", "-wal", "-shm", "-journal"].flatMap((suffix) => {
-      const file = `${databasePath}${suffix}`;
-      return fs.existsSync(file) ? [[suffix || "main", digest(file)]] : [];
-    }),
-  );
 }
 
 export function assertProjectsInventory(inventory, baseline) {
@@ -206,7 +169,7 @@ async function artifactPreservingReader(ctx, stage, packageRoot) {
 
 async function snapshot(ctx, stage, packageRoot) {
   const expected = fixture(ctx);
-  const familyBefore = sqliteFamily(ctx.databasePath);
+  const familyBefore = sqliteFamily(ctx.databasePath, digest);
   const reader = await artifactPreservingReader(ctx, stage, packageRoot);
   const observed = reader.read(
     ({ db }) => ({
@@ -226,7 +189,7 @@ async function snapshot(ctx, stage, packageRoot) {
     { path: ctx.databasePath, env: process.env },
   );
   assert(observed, "Projects state database is missing");
-  const familyAfter = sqliteFamily(ctx.databasePath);
+  const familyAfter = sqliteFamily(ctx.databasePath, digest);
   assert.deepEqual(
     familyAfter,
     familyBefore,

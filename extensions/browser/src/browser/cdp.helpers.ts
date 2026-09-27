@@ -513,7 +513,13 @@ export async function fetchCdpChecked(
     }
   };
   try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
+    const requestHeaders = init?.headers;
+    const headers = getHeadersWithAuth(
+      url,
+      requestHeaders instanceof Headers || Array.isArray(requestHeaders)
+        ? Object.fromEntries(new Headers(requestHeaders))
+        : requestHeaders,
+    );
     const fetchUrl = stripCdpUrlCredentials(url);
     const res = await withManagedProxyForCdpUrl(fetchUrl, () =>
       withNoProxyForCdpUrl(fetchUrl, async () => {

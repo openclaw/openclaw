@@ -173,6 +173,7 @@ describe("workboard doctor contract", () => {
         env,
       });
       await attachmentStore.register("broken", { version: 1 });
+      await attachmentStore.register("null-attachment", { version: 1, attachment: null });
       await attachmentStore.register("attachment-1", {
         version: 1,
         attachment: {
@@ -228,8 +229,14 @@ describe("workboard doctor contract", () => {
       ]);
       expect(result.warnings).toEqual([
         expect.stringContaining("Skipped malformed legacy Workboard attachment entry broken"),
+        expect.stringContaining(
+          "Skipped malformed legacy Workboard attachment entry null-attachment",
+        ),
       ]);
-      expect((await attachmentStore.entries()).map((entry) => entry.key)).toEqual(["broken"]);
+      expect((await attachmentStore.entries()).map((entry) => entry.key)).toEqual([
+        "broken",
+        "null-attachment",
+      ]);
 
       const reopenedStores = createWorkboardSqliteStores({ env, workerModuleUrl });
       expect(await reopenedStores.attachments.lookup("attachment-1")).toMatchObject({

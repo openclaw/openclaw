@@ -78,12 +78,7 @@ export function normalizeAcpErrorCode(code: string | undefined): AcpRuntimeError
     return "ACP_TURN_FAILED";
   }
   const normalized = code.trim().toUpperCase();
-  for (const allowed of ACP_ERROR_CODES) {
-    if (allowed === normalized) {
-      return allowed;
-    }
-  }
-  return "ACP_TURN_FAILED";
+  return ACP_ERROR_CODES.find((allowed) => allowed === normalized) ?? "ACP_TURN_FAILED";
 }
 
 export function createUnsupportedControlError(params: {

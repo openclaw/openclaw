@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -7,7 +8,15 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
 import { findMarkdownImageSpans } from "../../packages/markdown-core/src/image-spans.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
+import type { CurrentTranscriptProjection } from "../config/sessions/session-accessor.sqlite-projection-read.js";
+import {
+  iterateVisibleMessageRange,
+  resolveVisibleMessagePositions,
+} from "../config/sessions/session-accessor.sqlite-reset-window.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { hasSqlitePostCommitScope } from "../infra/sqlite-post-commit.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
@@ -282,17 +291,13 @@ function collectArtifactsFromMessage(params: {
   }
 }
 
-async function readArtifactList(
-  scope: SessionTranscriptReadScope,
-  query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
-  readers: ArtifactReaders,
-): Promise<ArtifactRecord[]> {
+function createArtifactListCollector(query: Extract<SessionArtifactReadQuery, { kind: "list" }>) {
   const artifacts: ArtifactRecord[] = [];
   const collection = { artifacts, count: 0 };
   const downloadArtifactIds = query.downloadArtifactIds
     ? new Set(query.downloadArtifactIds)
     : undefined;
-  await readers.visitSessionMessagesAsync(scope, (message, seq) => {
+  const visit = (message: unknown, seq: number) => {
     collectArtifactsFromMessage({
       message,
       messageFallbackSeq: seq,
@@ -304,7 +309,74 @@ async function readArtifactList(
       includeDownloadData: query.includeDownloadData,
       downloadArtifactIds,
     });
+  };
+  return { artifacts, visit };
+}
+
+const summaryLists = new WeakMap<
+  DatabaseSync,
+  Map<string, { revision: string; artifacts: ArtifactRecord[] }>
+>();
+
+/** Reuse metadata only after admission and revision selection in the worker's current snapshot. */
+export function readArtifactSummariesFromProjection(
+  projection: CurrentTranscriptProjection,
+  query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
+): ArtifactRecord[] {
+  const cacheable =
+    !hasSqlitePostCommitScope(projection.database.db) &&
+    !resolveSessionTranscriptReadFence(projection.resolved);
+  let cache = summaryLists.get(projection.database.db);
+  if (!cache && cacheable) {
+    cache = new Map();
+    summaryLists.set(projection.database.db, cache);
+  }
+  const key = JSON.stringify([
+    projection.resolved.sessionId,
+    query.sessionKey,
+    query.runId,
+    query.taskId,
+    query.messageRole,
+  ]);
+  const revision = JSON.stringify([
+    projection.generation,
+    projection.state.indexedSeq,
+    projection.state.leafEventId,
+    projection.state.activeMessageCount,
+  ]);
+  const cached = cacheable ? cache?.get(key) : undefined;
+  if (cached?.revision === revision) {
+    return cached.artifacts;
+  }
+  const { artifacts, visit } = createArtifactListCollector({
+    ...query,
+    includeDownloadData: false,
   });
+  const visible = resolveVisibleMessagePositions(projection);
+  for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
+    const message = asOptionalRecord(entry.event)?.message;
+    if (message !== undefined) {
+      visit(message, entry.seq);
+    }
+  }
+  if (cacheable && cache) {
+    cache.delete(key);
+    // Bound both metadata bytes and query variants; transcript payloads never enter this cache.
+    if (Buffer.byteLength(JSON.stringify(artifacts)) <= 256 * 1024) {
+      cache.set(key, { revision, artifacts });
+      pruneMapToMaxSize(cache, 32);
+    }
+  }
+  return artifacts;
+}
+
+async function readArtifactList(
+  scope: SessionTranscriptReadScope,
+  query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
+  readers: ArtifactReaders,
+): Promise<ArtifactRecord[]> {
+  const { artifacts, visit } = createArtifactListCollector(query);
+  await readers.visitSessionMessagesAsync(scope, visit);
   return artifacts;
 }
 

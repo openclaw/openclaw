@@ -61,6 +61,13 @@ deduplication, not exactly-once processing. See
 
 ### Replay limits
 
+Both transports record the account's bot identity before accepting updates, even
+without a polling offset. Replacing a known bot clears its old ingress rows before
+the replacement starts. Same-bot restarts and token rotations retain queued work
+and replay protection, as do legacy queues without a known previous identity.
+If identity preparation fails, account startup stops with an error asking you to
+restart the account; an interrupted reset retains the previous identity for retry.
+
 For each Telegram account queue, completed tombstones and failed rows are
 retained for up to 30 days and capped at 1,000 entries per class. Whichever
 limit is reached first ends retention for that class. Completion scrubs the

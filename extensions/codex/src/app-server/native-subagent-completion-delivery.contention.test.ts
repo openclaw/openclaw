@@ -21,6 +21,89 @@ import {
 describe("native completion database contention", () => {
   registerCodexEventProjectorTestLifecycle();
 
+  it("preserves a native receipt while an earlier turn start awaits persistence", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const tasks: AgentHarnessTaskRuntime =
+      runtime.createAgentHarnessTaskRuntime.getMockImplementation()!();
+    const writeStarted = createDeferred<void>();
+    const releaseWrite = createDeferred<void>();
+    const completionStarted = createDeferred<void>();
+    let holdProgress = false;
+    tasks.recordTaskRunProgressByRunIdAsync = async (params) => {
+      if (holdProgress) {
+        holdProgress = false;
+        writeStarted.resolve();
+        await releaseWrite.promise;
+      }
+      return runtime.recordTaskRunProgressByRunId(params);
+    };
+    // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
+    const deliver = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
+    const observed = vi
+      .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
+      .mockImplementation(function (
+        this: CodexNativeSubagentCompletionDelivery,
+        state,
+        child,
+        trigger,
+      ) {
+        const attempt = deliver.call(this, state, child, trigger);
+        completionStarted.resolve();
+        return attempt;
+      });
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+      recoveryPollDelaysMs: [],
+    });
+    const pending: Promise<void>[] = [];
+    let owner: Awaited<ReturnType<typeof registerParent>> | undefined;
+    try {
+      owner = await registerParent(monitor);
+      owner.bindTurn("parent-turn");
+      await notifyChildStarted(client);
+      holdProgress = true;
+      pending.push(client.notify(turnStartedNotification("turn-a")));
+      await writeStarted.promise;
+      pending.push(
+        client.notify(
+          childTurnCompletedNotification({
+            turnId: "turn-a",
+            status: "completed",
+            items: [
+              {
+                type: "agentMessage",
+                id: "final",
+                phase: "final_answer",
+                text: "Delivered result.",
+              },
+            ],
+          }),
+        ),
+        client.notify(
+          nativeCompletionNotification({ turnId: "parent-turn", result: "Delivered result." }),
+        ),
+      );
+      await completionStarted.promise;
+      releaseWrite.resolve();
+      await Promise.all(pending);
+      expect(runtime.listTaskRecords()).toEqual([
+        expect.objectContaining({
+          status: "succeeded",
+          deliveryStatus: "delivered",
+          terminalSummary: "Delivered result.",
+        }),
+      ]);
+      expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+    } finally {
+      releaseWrite.resolve();
+      await Promise.allSettled(pending);
+      await monitor.dispose();
+      await owner?.unregister();
+      observed.mockRestore();
+      client.close();
+    }
+  });
+
   it("retains a completion while task lookup is unavailable", async () => {
     vi.useFakeTimers();
     const client = createClient();
@@ -81,7 +164,7 @@ describe("native completion database contention", () => {
       );
     } finally {
       runtime.listTaskRecords.mockImplementation(list);
-      monitor.dispose();
+      await monitor.dispose();
       await owner?.unregister();
       await Promise.allSettled(pending);
       observed.mockRestore();
@@ -123,7 +206,7 @@ describe("native completion database contention", () => {
       });
       expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
     } finally {
-      monitor.dispose();
+      await monitor.dispose();
       client.close();
       vi.useRealTimers();
     }
@@ -174,7 +257,7 @@ describe("native completion database contention", () => {
         expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
         expect(vi.getTimerCount()).toBe(0);
       } finally {
-        monitor.dispose();
+        await monitor.dispose();
         client.close();
         vi.useRealTimers();
       }
@@ -237,9 +320,8 @@ describe("native completion database contention", () => {
         if (change === "receipt") {
           delivery.applyReceipts(state, [child.runId], new Map([[child.runId, child]]));
         } else {
-          monitor.retireParent("parent-thread");
+          pending.push(monitor.retireParent("parent-thread"));
         }
-        const priorReleases = releases.mock.calls.length;
         releaseWrite.resolve();
         await Promise.all(pending);
         expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
@@ -249,12 +331,14 @@ describe("native completion database contention", () => {
             terminalSummary: "Late receipt result.",
           });
         } else {
-          expect(releases.mock.calls.length).toBe(priorReleases);
+          expect(releases.mock.calls.filter(([releasedChild]) => releasedChild === child)).toEqual([
+            [child],
+          ]);
         }
       } finally {
         releaseWrite.resolve();
         await Promise.allSettled(pending);
-        monitor.dispose();
+        await monitor.dispose();
         client.close();
         releases.mockRestore();
         observed.mockRestore();
@@ -287,7 +371,7 @@ describe("native completion database contention", () => {
         expect.objectContaining({ result: "Earlier terminal event." }),
       );
     } finally {
-      monitor.dispose();
+      await monitor.dispose();
       client.close();
     }
   });
@@ -434,9 +518,9 @@ describe("native completion database contention", () => {
         releaseRead.resolve();
         await receiptNotification?.catch(() => undefined);
         await settle();
-        monitor.retireParent("parent-thread");
-        monitor.retireParent("rotated-parent");
-        monitor.dispose();
+        await monitor.retireParent("parent-thread");
+        await monitor.retireParent("rotated-parent");
+        await monitor.dispose();
         await observer?.unregister();
         await parent?.unregister();
         await settle();

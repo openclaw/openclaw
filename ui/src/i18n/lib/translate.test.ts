@@ -8,8 +8,9 @@ import {
   installSafeLocalStorageForTesting,
 } from "../../test-helpers/storage.ts";
 import { registerBackgroundTasksEnglish } from "../locales/en-background-tasks.ts";
+import type { Locale } from "./registry.ts";
 import { createI18nManagerForTesting } from "./translate.test-support.ts";
-import type { Locale, TranslationMap } from "./types.ts";
+import type { TranslationMap } from "./types.ts";
 
 const german = { common: { health: "Gesundheit" } } satisfies TranslationMap;
 const spanish = { common: { health: "Salud" } } satisfies TranslationMap;

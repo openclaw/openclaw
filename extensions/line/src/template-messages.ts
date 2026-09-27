@@ -6,7 +6,7 @@ import {
   uriAction,
   type Action,
 } from "./actions.js";
-import type { LineTemplateMessagePayload } from "./types.js";
+import type { LineTemplateActionPayload, LineTemplateMessagePayload } from "./types.js";
 
 type TemplateMessage = messagingApi.TemplateMessage;
 type TextMessage = messagingApi.TextMessage;
@@ -19,14 +19,7 @@ const COMPACT_TEMPLATE_TEXT_LIMIT = 60;
 const TEMPLATE_ALT_TEXT_LIMIT = 1500;
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-type TemplatePayloadAction = {
-  type?: "uri" | "postback" | "message";
-  uri?: string;
-  data?: string;
-  label: string;
-};
-
-function buildTemplatePayloadAction(action: TemplatePayloadAction): Action {
+function buildTemplatePayloadAction(action: LineTemplateActionPayload): Action {
   if (action.type === "uri" && action.uri) {
     return uriAction(action.label, action.uri);
   }
@@ -173,7 +166,7 @@ function createCarouselMessage(
 /**
  * Create a confirm template (yes/no style dialog)
  */
-export function createConfirmTemplate(
+function createConfirmTemplate(
   text: string,
   confirmAction: Action,
   cancelAction: Action,
@@ -195,7 +188,7 @@ export function createConfirmTemplate(
 /**
  * Create a button template with title, text, and action buttons
  */
-export function createButtonTemplate(
+function createButtonTemplate(
   title: string | undefined,
   text: string,
   actions: Action[],
@@ -237,32 +230,7 @@ export function createButtonTemplate(
   };
 }
 
-/**
- * Create a carousel template with multiple columns
- */
-export function createTemplateCarousel(
-  columns: CarouselColumn[],
-  options?: {
-    imageAspectRatio?: "rectangle" | "square";
-    imageSize?: "cover" | "contain";
-    altText?: string;
-  },
-): TemplateMessage {
-  const outcome = normalizeCarousel(columns, options?.altText);
-  if (outcome.kind !== "template") {
-    throw new Error(
-      outcome.kind === "empty"
-        ? "LINE carousel has no deliverable text or action labels."
-        : "LINE carousel columns violate provider consistency requirements.",
-    );
-  }
-  return createCarouselMessage(outcome.columns, options);
-}
-
-/**
- * Create a carousel column for use with createTemplateCarousel
- */
-export function createCarouselColumn(params: {
+function createCarouselColumn(params: {
   title?: string;
   text: string;
   actions: Action[];
@@ -280,18 +248,14 @@ export function createCarouselColumn(params: {
     title: normalizedTitle,
     textOnlyLimit: 120,
   });
-  return {
+  return normalizeCarouselColumn({
     title: truncateOptionalTemplateText(normalizedTitle, 40),
     text: truncateTemplateText(params.text, textLimit),
-    actions: params.actions
-      .map((action) => normalizeLineAction(action))
-      .filter((action) => action.label !== undefined && action.label !== "")
-      .slice(0, 3), // LINE limit: max 3 actions per column
+    actions: params.actions,
     thumbnailImageUrl: params.thumbnailImageUrl,
     imageBackgroundColor: params.imageBackgroundColor,
-    defaultAction:
-      params.defaultAction === undefined ? undefined : normalizeLineAction(params.defaultAction),
-  };
+    defaultAction: params.defaultAction,
+  });
 }
 
 /**
@@ -311,9 +275,7 @@ export function buildTemplateMessageFromPayload(
     }
 
     case "buttons": {
-      const actions: Action[] = payload.actions
-        .slice(0, 4)
-        .map((action) => buildTemplatePayloadAction(action));
+      const actions: Action[] = payload.actions.slice(0, 4).map(buildTemplatePayloadAction);
 
       return createButtonTemplate(payload.title, payload.text, actions, {
         thumbnailImageUrl: payload.thumbnailImageUrl,
@@ -323,15 +285,11 @@ export function buildTemplateMessageFromPayload(
 
     case "carousel": {
       const columns: CarouselColumn[] = payload.columns.map((col) => {
-        const colActions: Action[] = col.actions.map((action) =>
-          buildTemplatePayloadAction(action),
-        );
-
         return createCarouselColumn({
           title: col.title,
           text: col.text,
           thumbnailImageUrl: col.thumbnailImageUrl,
-          actions: colActions,
+          actions: col.actions.map(buildTemplatePayloadAction),
         });
       });
 
@@ -350,5 +308,3 @@ export function buildTemplateMessageFromPayload(
       return null;
   }
 }
-
-export type { TemplateMessage, ConfirmTemplate, ButtonsTemplate, CarouselTemplate, CarouselColumn };

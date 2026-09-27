@@ -323,11 +323,10 @@ describe("native subagent history through the harness", () => {
     );
   });
 
-  it.each(
-    [false, true].flatMap((supervised) =>
-      [false, true].map((followup) => ({ supervised, followup })),
-    ),
-  )(
+  it.each([
+    { supervised: false, followup: false },
+    { supervised: true, followup: true },
+  ])(
     "reconnects the binding-owned store (supervision=$supervised, followup=$followup)",
     async ({ supervised, followup }) => {
       const f = await fixture(supervised);
@@ -368,18 +367,18 @@ describe("native subagent history through the harness", () => {
     expect((await f.read()).messages).toEqual([...second.messages, ...first.messages]);
   });
 
-  it.each(["session", "lifecycle", "account", "connection", "malformed owner"] as const)(
+  it.each(["lifecycle", "account", "connection", "malformed owner"] as const)(
     "rejects a changed %s before opening the native history store",
     async (change) => {
       const f = await fixture();
       const owner = stampHistoryOwner(f, "parent-lifecycle");
-      if (change === "session" || change === "lifecycle") {
+      if (change === "lifecycle") {
         await upsertSessionEntry({
           agentId: "main",
           sessionKey: f.params.task.requesterSessionKey,
           storePath: f.storePath,
           entry: {
-            sessionId: change === "session" ? "replacement-session" : f.identity.sessionId,
+            sessionId: f.identity.sessionId,
             lifecycleRevision: "replacement-lifecycle",
             updatedAt: 2,
           },

@@ -132,7 +132,7 @@ describe("update-cli", () => {
     const installFlags = ["--no-fund", "--no-audit", "--loglevel=error", "--min-release-age=0"];
     expect(installArgvs).toEqual([
       installPrefix.concat(installFlags),
-      installPrefix.concat("--omit=optional", installFlags),
+      installPrefix.concat(installFlags, "--omit=optional"),
     ]);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });

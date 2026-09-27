@@ -408,6 +408,7 @@
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
           "serviceTier": { "type": ["string", "null"] },
+          "enableUltrafast": { "type": "boolean", "default": false },
           "cyberFailover": {
             "type": "object",
             "additionalProperties": false,
@@ -743,6 +744,11 @@
     "appServer.serviceTier": {
       "label": "Service Tier",
       "help": "Optional Codex app-server service tier. Use priority, flex, or null. Legacy fast is accepted as priority.",
+      "advanced": true
+    },
+    "appServer.enableUltrafast": {
+      "label": "Enable Ultrafast (for supported models)",
+      "help": "Use Ultrafast when the selected model advertises access; otherwise keep the current tier. Shared Fast off remains off.",
       "advanced": true
     },
     "appServer.networkProxy": {

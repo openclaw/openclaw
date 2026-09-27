@@ -76,7 +76,8 @@ it("releases the SIWC callback port when OAuth expires before the wizard note is
 
     retry = start();
     // SIWC publishes this note only after its callback listener has bound successfully.
-    expect(await retry.next()).toMatchObject({
+    const retried = await retry.next();
+    expect(retried, retry.getError()).toMatchObject({
       done: false,
       step: {
         type: "note",

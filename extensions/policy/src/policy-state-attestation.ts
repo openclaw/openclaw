@@ -1,27 +1,9 @@
-// Policy plugin attestation hashing.
 import { createHash } from "node:crypto";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyAttestation, PolicyEvidence } from "./policy-state-types.js";
 
 export function policyDocumentHash(policy: unknown): string {
   return sha256(stableJson(policy));
-}
-
-function policyWorkspaceHash(evidence: PolicyEvidence): string {
-  return sha256(stableJson(evidence));
-}
-
-function policyFindingsHash(findings: readonly unknown[]): string {
-  return sha256(stableJson(findings));
-}
-
-function policyAttestationHash(input: {
-  readonly ok: boolean;
-  readonly policyHash?: string;
-  readonly workspaceHash: string;
-  readonly findingsHash: string;
-}): string {
-  return sha256(stableJson(input));
 }
 
 export function createPolicyAttestation(input: {
@@ -32,8 +14,8 @@ export function createPolicyAttestation(input: {
   readonly evidence: PolicyEvidence;
   readonly findings: readonly unknown[];
 }): PolicyAttestation {
-  const workspaceHash = policyWorkspaceHash(input.evidence);
-  const findingsHash = policyFindingsHash(input.findings);
+  const workspaceHash = policyDocumentHash(input.evidence);
+  const findingsHash = policyDocumentHash(input.findings);
   return {
     checkedAt: input.checkedAt,
     ...(input.policyHash === undefined
@@ -49,7 +31,7 @@ export function createPolicyAttestation(input: {
       hash: workspaceHash,
     },
     findingsHash,
-    attestationHash: policyAttestationHash({
+    attestationHash: policyDocumentHash({
       ok: input.ok,
       policyHash: input.policyHash,
       workspaceHash,

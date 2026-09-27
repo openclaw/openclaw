@@ -542,12 +542,8 @@ vi.mock("../commands/doctor-workspace-status.js", () => ({
   collectWorkspaceStatusHealthFindings: mocks.collectWorkspaceStatusHealthFindings,
 }));
 
-vi.mock("../commands/doctor-state-integrity.js", () => ({
-  collectWorkspaceBackupTip: mocks.collectWorkspaceBackupTip,
-  noteWorkspaceBackupTip: vi.fn(),
-}));
-
 vi.mock("../commands/doctor-workspace.js", () => ({
+  collectWorkspaceBackupTip: mocks.collectWorkspaceBackupTip,
   MEMORY_SYSTEM_PROMPT: "Enable memory system for better recall.",
   shouldSuggestMemorySystem: mocks.shouldSuggestMemorySystem,
 }));

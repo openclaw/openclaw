@@ -22,6 +22,9 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveOptionalNativeText
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.node.asObjectOrNull
+import ai.openclaw.app.node.asStringOrNull
+import ai.openclaw.app.nonBlankString
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.chat.chatModelSendBlocked
@@ -82,7 +85,7 @@ private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHM
 private val MANAGED_MEDIA_PATH_REGEX =
   Regex("^/api/chat/media/outgoing/[^/]+/([0-9a-fA-F-]{36})/full(?:\\?.*)?$")
 
-internal fun chatOutboxQueueFailureText(): NativeText = ChatController.queueFailureText()
+internal fun chatOutboxQueueFailureText(): NativeText = nativeText("Could not queue message for later delivery.")
 
 internal fun selectChatAgentSessionKey(
   candidates: List<ChatSessionEntry>,
@@ -2183,10 +2186,7 @@ class ChatController internal constructor(
         element.asObjectOrNull()
           ?: throw IllegalStateException("sessions.branches.list returned an invalid branch")
       val leaf =
-        obj["leafEntryId"]
-          .asStringOrNull()
-          ?.trim()
-          ?.takeIf { it.isNotEmpty() }
+        obj.nonBlankString("leafEntryId")
           ?: throw IllegalStateException("sessions.branches.list returned a branch without a leaf")
       val headline =
         obj["headline"].asStringOrNull()
@@ -2202,17 +2202,9 @@ class ChatController internal constructor(
         obj["active"].asBooleanOrNull()
           ?: throw IllegalStateException("sessions.branches.list returned an invalid active flag")
       val updatedAt =
-        obj["updatedAt"]?.let { value ->
-          when (value) {
-            JsonNull -> {
-              null
-            }
-
-            else -> {
-              value.asStringOrNull()
-                ?: throw IllegalStateException("sessions.branches.list returned an invalid timestamp")
-            }
-          }
+        obj["updatedAt"]?.takeUnless { it is JsonNull }?.let { value ->
+          value.asStringOrNull()
+            ?: throw IllegalStateException("sessions.branches.list returned an invalid timestamp")
         }
       SessionBranch(
         leafEntryId = leaf,
@@ -2352,13 +2344,15 @@ class ChatController internal constructor(
     val requestSessionKey = _sessionKey.value
     val requestTracksDefaultAgent = activeSessionTracksDefaultAgent(requestSessionKey)
     val requestDefaultAgentRevision = currentDefaultAgentRevision()
-    val ownerAgentId =
-      resolveAgentIdForSessionKey(requestSessionKey)
-        ?: return when {
-          archived -> emptyList()
-          query == null -> sessions.value
-          else -> filterSessionEntries(sessions.value, query)
-        }
+
+    fun cachedMatches(): List<ChatSessionEntry> =
+      when {
+        archived -> emptyList()
+        query == null -> sessions.value
+        else -> filterSessionEntries(sessions.value, query)
+      }
+
+    val ownerAgentId = resolveAgentIdForSessionKey(requestSessionKey) ?: return cachedMatches()
 
     fun requestOwnerIsCurrent(): Boolean {
       val currentAgentId = resolveAgentIdForSessionKey(_sessionKey.value)
@@ -2377,11 +2371,7 @@ class ChatController internal constructor(
         // A superseded search owns the results now; never repaint stale fallback rows.
         throw err
       } catch (_: Throwable) {
-        when {
-          archived -> emptyList()
-          query == null -> sessions.value
-          else -> filterSessionEntries(sessions.value, query)
-        }
+        cachedMatches()
       }
     return synchronized(gatewayScopeApplyLock) {
       if (!requestOwnerIsCurrent()) {
@@ -2898,7 +2888,7 @@ class ChatController internal constructor(
         // Only explicit deletion events/responses authorize purging local state.
         if (root["sessionId"].asStringOrNull().isNullOrBlank()) error("missing durable session identity")
         val info = parseSessionEntry(root["sessionInfo"].asObjectOrNull(), settingsKey.sessionKey) ?: error("missing session settings")
-        val thinkingLevel = root["thinkingLevel"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+        val thinkingLevel = root.nonBlankString("thinkingLevel")
         val entry = if (thinkingLevel == null) info else info.copy(thinkingLevel = thinkingLevel)
         val entryOwner = resolveAgentIdFromMainSessionKey(entry.key) ?: entry.ownerAgentId ?: ownerAgentId
         if (entry.key != settingsKey.sessionKey || entryOwner != ownerAgentId) error("session settings owner changed")
@@ -3903,16 +3893,6 @@ class ChatController internal constructor(
         refreshHistoryForRecovery()
       }
 
-      "progressCard.changed" -> {
-        if (payloadJson.isNullOrBlank()) return
-        handleProgressCardChanged(payloadJson)
-      }
-
-      "chat" -> {
-        if (payloadJson.isNullOrBlank()) return
-        handleChatEvent(payloadJson)
-      }
-
       "chat.metadata.changed" -> {
         refreshCommands()
       }
@@ -3929,35 +3909,42 @@ class ChatController internal constructor(
         }
       }
 
-      "session.observer" -> {
+      else -> {
         if (payloadJson.isNullOrBlank()) return
-        handleSessionObserverEvent(payloadJson)
-      }
+        when (event) {
+          "progressCard.changed" -> {
+            handleProgressCardChanged(payloadJson)
+          }
 
-      "session.message" -> {
-        if (payloadJson.isNullOrBlank()) return
-        val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
-        applySessionEvent(payload = payload, refreshWhenMissing = false)
-      }
+          "chat" -> {
+            handleChatEvent(payloadJson)
+          }
 
-      "agent" -> {
-        if (payloadJson.isNullOrBlank()) return
-        handleAgentEvent(payloadJson)
-      }
+          "session.observer" -> {
+            handleSessionObserverEvent(payloadJson)
+          }
 
-      "task" -> {
-        if (payloadJson.isNullOrBlank()) return
-        handleTaskEvent(payloadJson)
-      }
+          "agent" -> {
+            handleAgentEvent(payloadJson)
+          }
 
-      "question.requested" -> {
-        if (payloadJson.isNullOrBlank()) return
-        handleQuestionRequested(payloadJson)
-      }
+          "task" -> {
+            handleTaskEvent(payloadJson)
+          }
 
-      "question.resolved" -> {
-        if (payloadJson.isNullOrBlank()) return
-        handleQuestionResolved(payloadJson)
+          "question.requested" -> {
+            handleQuestionRequested(payloadJson)
+          }
+
+          "question.resolved" -> {
+            handleQuestionResolved(payloadJson)
+          }
+
+          "session.message" -> {
+            val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+            applySessionEvent(payload = payload, refreshWhenMissing = false)
+          }
+        }
       }
     }
   }
@@ -5480,10 +5467,6 @@ class ChatController internal constructor(
     }
   }
 
-  companion object {
-    internal fun queueFailureText(): NativeText = nativeText("Could not queue message for later delivery.")
-  }
-
   /** Re-queues a failed outbox item and flushes immediately when the gateway is healthy. */
   fun retryOutboxCommand(id: String) {
     scope.launch {
@@ -6367,7 +6350,7 @@ class ChatController internal constructor(
           // Only show streaming text for runs we initiated in this controller.
           if (!isPending) return
           val text = parseAssistantDeltaText(payload)
-          if (!text.isNullOrEmpty()) {
+          if (text != null) {
             updateStreamingAssistantText(runId, text)
           }
         }
@@ -6587,11 +6570,11 @@ class ChatController internal constructor(
   ) {
     val eventObject = eventSessionObject(payload)
     val entry = eventObject?.let(::parseSessionEntry)
-    val eventKey = entry?.key ?: payload["sessionKey"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+    val eventKey = entry?.key ?: payload.nonBlankString("sessionKey")
     val eventOwner =
       eventKey?.let(::resolveAgentIdFromMainSessionKey)
         ?: entry?.ownerAgentId
-        ?: payload["agentId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+        ?: payload.nonBlankString("agentId")
     val visibleOwner = resolveAgentIdForSessionKey(_sessionKey.value)
     // Retire remembered choices for every agent before filtering updates to the visible session.
     if (entry?.archived == true && eventOwner != null) {
@@ -6671,10 +6654,8 @@ class ChatController internal constructor(
     }
     val ownedEntry = reconcileSessionObserverProjectionOwner(entry, eventOwner)
     val terminalRunId =
-      payload["runId"]
-        .asStringOrNull()
-        ?.trim()
-        ?.takeIf(String::isNotEmpty)
+      payload
+        .nonBlankString("runId")
         ?.takeIf { phase == "end" || phase == "error" }
     val terminalWasLocal = terminalRunId?.let(::isLocallyOwnedRun) == true
     val terminalWasAdvertised = terminalRunId?.let { it in advertisedRunIds() } == true
@@ -6733,7 +6714,7 @@ class ChatController internal constructor(
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
     val sessionKey = payload["sessionKey"].asStringOrNull()?.trim()
     if (!sessionKey.isNullOrEmpty() && sessionKey != _sessionKey.value) return
-    val runId = payload["runId"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+    val runId = payload.nonBlankString("runId")
     val projection = runId?.let(pendingRunProjectionsByRunId::get)
     if (projection != null && projection.owner != currentChatComposerRoutingOwner()) return
 
@@ -6782,7 +6763,7 @@ class ChatController internal constructor(
     when (stream) {
       "assistant" -> {
         val text = data?.get("text")?.asStringOrNull()
-        if (!text.isNullOrEmpty()) {
+        if (text != null) {
           updateStreamingAssistantText(runId, text)
         }
       }
@@ -6871,7 +6852,7 @@ class ChatController internal constructor(
           ChatProgressCard(
             revision = legacyProgressCardRevision.incrementAndGet(),
             updatedAt = payload["ts"].asLongOrNull() ?: 0L,
-            markdown = planData["explanation"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+            markdown = planData.nonBlankString("explanation"),
             steps = steps,
           )
       }
@@ -6949,15 +6930,10 @@ class ChatController internal constructor(
     val message = payload["message"].asObjectOrNull() ?: return null
     if (message["role"].asStringOrNull() != "assistant") return null
     val content = message["content"].asArrayOrNull() ?: return null
-    for (item in content) {
-      val obj = item.asObjectOrNull() ?: continue
-      if (obj["type"].asStringOrNull() != "text") continue
-      val text = obj["text"].asStringOrNull()
-      if (!text.isNullOrEmpty()) {
-        return text
-      }
+    return content.firstNotNullOfOrNull { item ->
+      val obj = item.asObjectOrNull()?.takeIf { it["type"].asStringOrNull() == "text" }
+      obj?.get("text").asStringOrNull()
     }
-    return null
   }
 
   private fun publishPendingToolCalls() {
@@ -6971,17 +6947,15 @@ class ChatController internal constructor(
   private fun handleTaskEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
     if (payload["action"].asStringOrNull() == "deleted") {
-      payload["taskId"]
-        .asStringOrNull()
-        ?.trim()
-        ?.takeIf(String::isNotEmpty)
+      payload
+        .nonBlankString("taskId")
         ?.let(::removeSubagentActivity)
       return
     }
     val task = payload["task"].asObjectOrNull() ?: return
     if (task["runtime"].asStringOrNull() != "subagent") return
     if (task["sessionKey"].asStringOrNull()?.trim() != _sessionKey.value) return
-    val taskId = task["id"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return
+    val taskId = task.nonBlankString("id") ?: return
     val status = task["status"].asStringOrNull()?.trim()?.lowercase() ?: return
     if (status !in setOf("queued", "running", "completed", "failed", "cancelled", "timed_out")) return
 
@@ -6990,10 +6964,10 @@ class ChatController internal constructor(
     synchronized(subagentActivityLock) {
       val existing = _subagentActivities.value[taskId]
       if (terminal && existing == null && subagentActivityExpiryJobs.containsKey(taskId)) return@synchronized
-      val lastActivity = task["lastActivity"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+      val lastActivity = task.nonBlankString("lastActivity")
       val fallback =
-        task["progressSummary"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
-          ?: task["lastToolName"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+        task.nonBlankString("progressSummary")
+          ?: task.nonBlankString("lastToolName")
       val activity =
         ChatSubagentActivity(
           id = taskId,
@@ -7003,10 +6977,10 @@ class ChatController internal constructor(
               ?: if (terminal) existing?.snippet ?: fallback else fallback ?: existing?.snippet,
           diffStat = parseChatDiffStat(task["diffStat"], includeFiles = true) ?: existing?.diffStat,
           terminalSummary =
-            task["terminalSummary"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+            task.nonBlankString("terminalSummary")
               ?: existing?.terminalSummary,
           error =
-            task["error"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+            task.nonBlankString("error")
               ?: existing?.error,
           startedAtMs =
             task["startedAt"]?.let(::parseTaskTimestampMs)
@@ -7020,7 +6994,7 @@ class ChatController internal constructor(
               null
             },
           childSessionKey =
-            task["childSessionKey"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+            task.nonBlankString("childSessionKey")
               ?: existing?.childSessionKey,
         )
       _subagentActivities.value = _subagentActivities.value + (taskId to activity)
@@ -7710,7 +7684,7 @@ class ChatController internal constructor(
 
   private fun parseInFlightRun(root: JsonObject): ChatInFlightRun? {
     val obj = root["inFlightRun"].asObjectOrNull() ?: return null
-    val runId = obj["runId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val runId = obj.nonBlankString("runId") ?: return null
     return ChatInFlightRun(
       runId = runId,
       text = obj["text"].asStringOrNull().orEmpty(),
@@ -7753,25 +7727,18 @@ class ChatController internal constructor(
   ): ChatSessionEntry? {
     if (obj == null) return null
     val key =
-      obj["key"]
-        .asStringOrNull()
-        ?.trim()
-        .orEmpty()
-        .ifEmpty {
-          obj["sessionKey"]
-            .asStringOrNull()
-            ?.trim()
-            .orEmpty()
-        }.ifEmpty { fallbackKey?.trim().orEmpty() }
-    if (key.isEmpty()) return null
+      obj.nonBlankString("key")
+        ?: obj.nonBlankString("sessionKey")
+        ?: fallbackKey?.trim()?.takeIf(String::isNotEmpty)
+        ?: return null
     return ChatSessionEntry(
       key = key,
-      sessionId = obj["sessionId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      sessionId = obj.nonBlankString("sessionId"),
       updatedAtMs = obj["updatedAt"].asLongOrNull(),
-      ownerAgentId = obj["agentId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-      classification = obj["classification"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-      accountId = obj["accountId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-      peerKind = obj["peerKind"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      ownerAgentId = obj.nonBlankString("agentId"),
+      classification = obj.nonBlankString("classification"),
+      accountId = obj.nonBlankString("accountId"),
+      peerKind = obj.nonBlankString("peerKind"),
       isMain = obj["isMain"].asBooleanOrNull(),
       isBackground = obj["isBackground"].asBooleanOrNull(),
       hasClassificationMetadata =
@@ -7873,12 +7840,12 @@ class ChatController internal constructor(
 
   private fun parseSessionAgentStatus(element: JsonElement?): ChatSessionAgentStatus? {
     val obj = element.asObjectOrNull() ?: return null
-    val note = obj["note"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val note = obj.nonBlankString("note") ?: return null
     val expiresAt = obj["expiresAt"].asLongOrNull() ?: return null
     return ChatSessionAgentStatus(
       note = note,
       expiresAt = expiresAt,
-      attention = obj["attention"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      attention = obj.nonBlankString("attention"),
     )
   }
 
@@ -7913,9 +7880,9 @@ class ChatController internal constructor(
     return array
       .mapNotNull { item ->
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val rawId = obj["id"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+        val rawId = obj.nonBlankString("id") ?: return@mapNotNull null
         val id = normalizeThinking(rawId)
-        val label = obj["label"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id
+        val label = obj.nonBlankString("label") ?: id
         ChatThinkingLevelOption(id = id, label = label)
       }.distinctBy { it.id }
   }
@@ -8437,7 +8404,7 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
       ) {
         return null
       }
-      val path = preview["url"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return null
+      val path = preview.nonBlankString("url") ?: return null
       if (!ChatWidgetUrlResolver.supportsTarget(path)) return null
       ChatMessageContent(
         type = "canvas",
@@ -8519,13 +8486,7 @@ private fun toolResultText(element: JsonElement?): String? =
       buildString {
         // Keep ordered text blocks, but never materialize an unbounded result projection.
         for (item in element) {
-          val text =
-            item
-              .asObjectOrNull()
-              ?.get("text")
-              .asStringOrNull()
-              ?.trim()
-              ?.takeIf(String::isNotEmpty) ?: continue
+          val text = item.asObjectOrNull().nonBlankString("text") ?: continue
           if (isNotEmpty()) append('\n')
           append(text.take((CHAT_TOOL_RESULT_MAX_CHARS + 1 - length).coerceAtLeast(0)))
           if (length > CHAT_TOOL_RESULT_MAX_CHARS) break
@@ -8587,13 +8548,10 @@ private fun parseToolActivityContent(
   // not name; losing it creates a spurious generic "Tool" row.
   val name =
     listOf("name", "toolName", "tool_name")
-      .firstNotNullOfOrNull { key ->
-        obj[key].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
-      }.orEmpty()
+      .firstNotNullOfOrNull(obj::nonBlankString)
+      .orEmpty()
   val id =
-    listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId", "id").firstNotNullOfOrNull { key ->
-      obj[key].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
-    }
+    listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId", "id").firstNotNullOfOrNull(obj::nonBlankString)
   if (name.isEmpty() && id == null) return null
   val args = (obj["arguments"] ?: obj["input"] ?: obj["args"]).asObjectOrNull()
   val result = if (resultBlock) boundedToolText(toolResultText(obj["content"] ?: obj["result"] ?: obj["text"]), CHAT_TOOL_RESULT_MAX_CHARS) else null
@@ -8745,11 +8703,10 @@ private fun parseCreatedSessionKey(
     runCatching { json.parseToJsonElement(sessionJson).asObjectOrNull() }.getOrNull()
       ?: return null
 
-  fun clean(value: String?): String? = value?.trim()?.takeIf { it.isNotEmpty() }
-  return clean(root["key"].asStringOrNull())
-    ?: clean(root["sessionKey"].asStringOrNull())
+  return root.nonBlankString("key")
+    ?: root.nonBlankString("sessionKey")
     ?: root["session"].asObjectOrNull()?.let { session ->
-      clean(session["key"].asStringOrNull()) ?: clean(session["sessionKey"].asStringOrNull())
+      session.nonBlankString("key") ?: session.nonBlankString("sessionKey")
     }
 }
 
@@ -8781,7 +8738,7 @@ private fun parseChatCommandEntry(obj: JsonObject?): ChatCommandEntry? {
   return ChatCommandEntry(
     name = name,
     description = obj["description"].asStringOrNull()?.trim().orEmpty(),
-    category = obj["category"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    category = obj.nonBlankString("category"),
     textAliases = aliases,
     acceptsArgs = obj["acceptsArgs"].asBooleanOrNull() ?: false,
   )
@@ -8946,8 +8903,6 @@ private fun messageContentIdentityKey(message: ChatMessage): String? {
   return listOf(role, contentFingerprint).joinToString(separator = "|")
 }
 
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
-
 private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun parseSessionEditorAttachments(value: JsonElement?): List<SessionEditorAttachment> =
@@ -8973,13 +8928,6 @@ private fun parseSessionEditorAttachments(value: JsonElement?): List<SessionEdit
     if (decoded.isEmpty() || decoded.size.toLong() > OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES) return@mapNotNull null
     SessionEditorAttachment(mimeType = mimeType, data = data)
   } ?: emptyList()
-
-private fun JsonElement?.asStringOrNull(): String? =
-  when (this) {
-    is JsonNull -> null
-    is JsonPrimitive -> content
-    else -> null
-  }
 
 private fun JsonElement?.asJsonStringOrNull(): String? =
   (this as? JsonPrimitive)
