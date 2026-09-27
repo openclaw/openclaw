@@ -205,24 +205,34 @@ function createPerRequestEnvProxyAgent(
   }
   const routes = new Map<NodeProxyProtocol, ProxylineNodeAgent["addRequest"]>();
   const agents: ProxylineNodeAgent[] = [];
+  let initializationError: unknown;
   for (const protocol of ["http", "https"] as const) {
     const value = protocol === "http" ? proxies.httpProxy : proxies.httpsProxy;
     if (!value) {
       continue;
     }
-    const proxyUrl = proxyUrlWithDefaultScheme(value, protocol);
-    const agent = createFixedNodeProxyAgent(proxyUrl, {
-      protocol: options.protocol,
-      proxyTls: resolveActiveManagedProxyTlsOptions({ proxyUrl: proxyUrl.href, env }),
-      agentOptions: options.agentOptions,
-      proxyConnect: options.proxyConnect,
-    });
-    routes.set(protocol, agent.addRequest.bind(agent));
-    agents.push(agent);
+    try {
+      const proxyUrl = proxyUrlWithDefaultScheme(value, protocol);
+      const agent = createFixedNodeProxyAgent(proxyUrl, {
+        protocol: options.protocol,
+        proxyTls: resolveActiveManagedProxyTlsOptions({ proxyUrl: proxyUrl.href, env }),
+        agentOptions: options.agentOptions,
+        proxyConnect: options.proxyConnect,
+      });
+      routes.set(protocol, agent.addRequest.bind(agent));
+      agents.push(agent);
+    } catch (error) {
+      // An invalid route must fail when selected, without disabling the other
+      // protocol or turning a configured proxy request into a direct request.
+      initializationError = error;
+      routes.set(protocol, () => {
+        throw error;
+      });
+    }
   }
   const router = agents.at(-1);
   if (!router) {
-    return undefined;
+    throw initializationError;
   }
   const direct = {
     http: new HttpAgent(options.agentOptions),
