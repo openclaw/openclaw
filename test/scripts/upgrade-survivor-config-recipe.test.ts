@@ -651,7 +651,7 @@ esac
     { version: "2026.6.34", batched: true },
   ])("batches only supported final baselines: $version", ({ version, batched }) => {
     const steps = resolveUpgradeSurvivorConfigStepsForBaseline("base", version);
-    expect(steps).toHaveLength(batched ? 12 : 14);
+    expect(steps).toHaveLength(batched ? 13 : 15);
     expect(steps.filter((step) => step.argv[2] === "--batch-json")).toHaveLength(batched ? 1 : 0);
     expect(configLeafWrites(steps).filter((entry) => entry.path.startsWith("channels."))).toEqual([
       expect.objectContaining({ path: "channels.discord" }),
@@ -670,6 +670,7 @@ esac
       "discord-channel",
       "telegram-channel",
       "whatsapp-channel",
+      "tool-search",
       "logging",
       "logging",
       "validate",
@@ -758,6 +759,14 @@ esac
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(summary.acceptedIntents).toContain("acpx-openclaw-tools-bridge");
       expect(summary.baselineVersion).toBe("2026.6.1");
+      expect(summary.acceptedIntents).toContain("tool-search");
+      expect(loggedArgs).toContainEqual([
+        "config",
+        "set",
+        "tools.toolSearch",
+        '{"mode":"code","codeTimeoutMs":5000}',
+        "--strict-json",
+      ]);
       expect(loggedArgs.at(-1)).toEqual(["config", "validate"]);
       expect(loggedArgs).toContainEqual(
         expect.arrayContaining([
@@ -786,6 +795,7 @@ esac
       "skills",
       "plugins",
       "channels",
+      "tools-tool-search",
       "plugins-configured-installs",
       "channels-whatsapp-unset",
       "channels-matrix",
@@ -809,6 +819,7 @@ esac
       "discord-channel",
       "telegram-channel",
       "whatsapp-channel",
+      "tool-search",
       "configured-plugin-installs",
       "validate",
     ]);
