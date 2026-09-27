@@ -969,6 +969,7 @@ src/plugins/host-hook-cleanup-timeout.ts
 src/plugins/host-hook-json.ts
 src/plugins/host-hook-runtime.ts
 src/plugins/host-hooks.ts
+src/plugins/http-path-prefix.ts
 src/plugins/http-path.ts
 src/plugins/http-route-owner.ts
 src/plugins/install-channel-specs.ts
