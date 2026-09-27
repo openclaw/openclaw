@@ -107,7 +107,7 @@ export function buildFullReleaseCandidateRequest(
 export function buildFullReleaseCandidateBinding(input: {
   artifact: FullReleaseCandidateRecord;
   manifest: FullReleaseCandidateRecord;
-}): FullReleaseCandidateBinding;
+}): RecordedFullReleaseCandidateBinding;
 export function canonicalFullReleaseCandidateRequestJson(value: unknown): string;
 export function candidateRequestSha256(value: unknown): string;
 export function fullReleaseCandidateArtifactName(requestSha256: string): string;
