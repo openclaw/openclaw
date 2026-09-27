@@ -224,8 +224,10 @@ dependencies link at the captured package root. Capture does not add `node_modul
 individual source files, so native-addon loaders can still locate their package
 root and its build assets.
 
-Native artifacts are admitted with their complete companion directory, so a
-binary's real path retains its sibling files. Installer-owned directories use
+Native artifacts are admitted with their owning package directory, preserving
+the binary's package-relative path and declared companion library dependencies.
+Artifacts without an admitted package root retain their containing directory.
+Installer-owned directories use
 hardlinks or an existing retained-directory reference; files inspected by plugin
 safety checks keep independent copies. Mutable source trees retain one private
 directory snapshot per admitted identity, preserving old binary and companion

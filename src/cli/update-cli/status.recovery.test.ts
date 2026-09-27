@@ -47,7 +47,7 @@ vi.mock("../../infra/update-check.js", async (importOriginal) => ({
 }));
 vi.mock("./shared.js", () => ({
   resolveUpdateRoot: async () => "/fixture/new-cli",
-  parseTimeoutMsOrExit: () => undefined,
+  parseUpdateTimeoutMs: () => undefined,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

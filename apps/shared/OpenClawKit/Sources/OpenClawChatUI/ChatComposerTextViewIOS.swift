@@ -30,6 +30,8 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         context.coordinator.scheduleInteractionUpdate(textView)
         self.configureHistoryHandlers(textView)
 
+        // Publishing native input can re-enter SwiftUI with the previous rendered value.
+        guard !context.coordinator.isReportingTextChange else { return }
         let isEcho = context.coordinator.lastReportedText == self.text
         if textView.isFirstResponder, isEcho {
             return
@@ -69,6 +71,7 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: ChatComposerTextViewIOS
         var isProgrammaticUpdate = false
+        private(set) var isReportingTextChange = false
         var lastReportedText: String?
         private var interactionUpdateScheduled = false
 
@@ -122,6 +125,8 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             guard !self.isProgrammaticUpdate, textView.isFirstResponder else { return }
+            self.isReportingTextChange = true
+            defer { self.isReportingTextChange = false }
             self.lastReportedText = textView.text
             self.parent.text = textView.text
             textView.invalidateIntrinsicContentSize()

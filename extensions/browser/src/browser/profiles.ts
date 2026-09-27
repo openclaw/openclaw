@@ -1,12 +1,5 @@
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-cdp";
 /**
- * Browser profile allocation helpers.
- *
- * Validates profile names and allocates CDP ports/colors for newly persisted
- * browser profiles.
- */
-
-/**
  * CDP port allocation for browser profiles.
  *
  * Default port range: 18800-18899 (100 profiles max)

@@ -125,27 +125,24 @@ export function captureNativeSubagentMonitorWork() {
 export function observeCompletionAttempts() {
   const attempts = new Map<Promise<void>, string>();
   const started = new Set<{ runId: string; resolve: (attempt: Promise<void>) => void }>();
-  const original = vi.spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending");
-  // Keep Vitest's typed call-through delegate without leaving it installed on the prototype.
-  original.mockRestore();
-  const observer = vi
-    .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
-    .mockImplementation(function (
-      this: CodexNativeSubagentCompletionDelivery,
-      state,
-      child,
-      trigger,
-    ) {
-      const attempt = original.call(this, state, child, trigger);
-      attempts.set(attempt, child.runId);
-      for (const waiter of started) {
-        if (waiter.runId === child.runId) {
-          started.delete(waiter);
-          waiter.resolve(attempt);
-        }
+  const prototype = CodexNativeSubagentCompletionDelivery.prototype;
+  const observer = vi.spyOn(prototype, "deliverPending");
+  prototype.deliverPending = function (
+    this: CodexNativeSubagentCompletionDelivery,
+    state,
+    child,
+    trigger,
+  ) {
+    const attempt = observer.call(this, state, child, trigger);
+    attempts.set(attempt, child.runId);
+    for (const waiter of started) {
+      if (waiter.runId === child.runId) {
+        started.delete(waiter);
+        waiter.resolve(attempt);
       }
-      return attempt;
-    });
+    }
+    return attempt;
+  };
   onTestFinished(() => observer.mockRestore());
   return {
     next(runId: string) {

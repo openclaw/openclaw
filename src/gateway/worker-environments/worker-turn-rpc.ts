@@ -17,10 +17,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceCancelParams,
-  WorkerInferenceCancelResult,
-  WorkerInferenceErrorReason,
   WorkerInferenceStartParams,
-  WorkerInferenceStartResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   WorkerSkillWorkshopParamsSchema,
@@ -37,6 +34,10 @@ import {
 } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
+import type {
+  WorkerInferenceCancelApplicationResult,
+  WorkerInferenceStartApplicationResult,
+} from "./inference.types.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
 import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
 import {
@@ -94,17 +95,11 @@ type WorkerLiveEventServiceResult =
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
 type WorkerInferenceStartServiceResult =
-  | {
-      ok: true;
-      result: WorkerInferenceStartResult;
-      launch: () => void;
-    }
-  | { ok: false; reason: WorkerInferenceErrorReason }
+  | WorkerInferenceStartApplicationResult
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
 type WorkerInferenceCancelServiceResult =
-  | { ok: true; result: WorkerInferenceCancelResult }
-  | { ok: false; reason: WorkerInferenceErrorReason }
+  | WorkerInferenceCancelApplicationResult
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
 type WorkerSessionToolServiceResult =

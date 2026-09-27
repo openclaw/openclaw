@@ -139,7 +139,7 @@ function buildManagedDreamingPatch(
     patch.enabled = true;
   }
 
-  const scheduleKind = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.schedule?.kind));
+  const scheduleKind = normalizeLowercaseStringOrEmpty(job.schedule?.kind);
   const scheduleExpr = normalizeOptionalString(job.schedule?.expr);
   const scheduleTz = normalizeOptionalString(job.schedule?.tz);
   if (
@@ -150,11 +150,11 @@ function buildManagedDreamingPatch(
     patch.schedule = desired.schedule;
   }
 
-  const sessionTarget = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.sessionTarget));
+  const sessionTarget = normalizeLowercaseStringOrEmpty(job.sessionTarget);
   if (sessionTarget !== desired.sessionTarget) {
     patch.sessionTarget = desired.sessionTarget;
   }
-  const wakeMode = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.wakeMode));
+  const wakeMode = normalizeLowercaseStringOrEmpty(job.wakeMode);
   if (wakeMode !== "now") {
     patch.wakeMode = "now";
   }
@@ -165,7 +165,7 @@ function buildManagedDreamingPatch(
   if (payloadNeedsUpdate) {
     patch.payload = desired.payload;
   }
-  const deliveryMode = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.delivery?.mode));
+  const deliveryMode = normalizeLowercaseStringOrEmpty(job.delivery?.mode);
   if (deliveryMode !== "none") {
     patch.delivery = desired.delivery;
   }

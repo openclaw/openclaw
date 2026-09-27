@@ -6,6 +6,7 @@ import { createManagedHandoffTestBinding } from "../../test/helpers/managed-hand
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyCliProfileEnv } from "../cli/profile.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
+import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import type { GatewayService } from "../daemon/service.js";
@@ -254,11 +255,14 @@ async function runInstallationCase(params: {
       if (params.profile) {
         applyCliProfileEnv({ profile: params.profile, homedir: () => home });
       }
+      const sourcePath =
+        params.platform === "win32" ? resolveGatewayTaskScriptPath(process.env) : undefined;
       if (params.inspectionScenario) {
         openOpenClawStateDatabase();
         closeOpenClawStateDatabaseForTest();
       }
       let command: GatewayServiceCommandConfig = {
+        ...(sourcePath ? { sourcePath } : {}),
         programArguments: [
           mocks.runtimePath,
           path.join(oldRoot, "dist/index.js"),
@@ -373,7 +377,11 @@ async function runInstallationCase(params: {
           if (installFails) {
             throw new Error("Synthetic native install rollback");
           }
-          command = { programArguments: plan.programArguments, environment: { HOME: home } };
+          command = {
+            ...(sourcePath ? { sourcePath } : {}),
+            programArguments: plan.programArguments,
+            environment: { HOME: home },
+          };
           running = true;
         },
         restart: async () => {

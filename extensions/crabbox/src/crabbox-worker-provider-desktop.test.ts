@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
+import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import {
   commandResult,
   createWarmProvider,
@@ -197,7 +198,7 @@ describe("Crabbox desktop provisioning", () => {
         provider: providerId,
         desktop: true,
       }),
-    ).toBe(149 * 60_000 + 15_000);
+    ).toBe(148 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS + 15_000);
     expect(calls.filter(({ argv }) => argv[1] === "run")).toHaveLength(1);
     expect(calls.find(({ argv }) => argv[1] === "run")?.options.timeoutMs).toBe(30 * 60_000);
     expect(setupOrder).toEqual(["enrollment", "desktop"]);
