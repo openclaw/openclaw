@@ -194,9 +194,11 @@ export async function readPullRequestBranchFacts(
   input: GitReadOperations["pull-request.branch-facts"]["input"],
 ): Promise<GitReadOperations["pull-request.branch-facts"]["output"]> {
   const landing = await resolveBranchLanding(input.root, input);
-  // A matching stats base proves Git resolved the common tip. Equal recorded
-  // IDs alone can name missing objects and must retain the error fallback.
+  const stats = landing.statsBase ? await diffStatsAgainst(input.root, landing.statsBase) : null;
+  // The diff validates equal recorded tips without a separate ancestry probe.
+  // Missing objects must still retain the unknown-comparison fallback.
   const noPushedChanges =
+    stats !== null &&
     landing.defaultSha !== null &&
     landing.defaultSha === landing.pushedSha &&
     landing.statsBase === landing.defaultSha;
@@ -209,6 +211,5 @@ export async function readPullRequestBranchFacts(
       landing.pushedSha,
       input.defaultBranch,
     ));
-  const stats = landing.statsBase ? await diffStatsAgainst(input.root, landing.statsBase) : null;
   return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
 }
