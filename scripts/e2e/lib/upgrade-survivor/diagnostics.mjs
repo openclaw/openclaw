@@ -2018,6 +2018,12 @@ export function publishDiagnostics(
       "Upgrade survivor diagnostics: some inputs omitted; see failure.json omissions.\n",
     );
   }
+  // Return only published failure coordinates; logs and configuration stay in the artifact.
+  return {
+    phase: sanitize(report.phase, "phase"),
+    exitStatus: report.exitStatus,
+    signal: report.signal,
+  };
 }
 
 if (import.meta.main) {

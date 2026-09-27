@@ -1776,6 +1776,13 @@ export async function tailFile(file: string, lines: number, maxBytes = LOG_TAIL_
 async function printFailureSummary(failures: LaneResult[], tailLines: number) {
   console.error(`ERROR: ${failures.length} Docker lane(s) failed.`);
   for (const failure of failures) {
+    // Keep commands, paths, and captured output out of check annotations.
+    if (process.env.GITHUB_ACTIONS === "true") {
+      const status = Number.isInteger(failure.status) ? failure.status : "unknown";
+      console.error(
+        `::error title=Docker lane failure::status=${status}; timedOut=${failure.timedOut === true}; noOutputTimedOut=${failure.noOutputTimedOut === true}`,
+      );
+    }
     console.error(`---- ${failure.name} failed (status=${failure.status}): ${failure.logFile}`);
     const tail = await tailFile(failure.logFile, tailLines);
     if (tail) {

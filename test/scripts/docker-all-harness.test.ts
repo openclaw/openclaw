@@ -1350,6 +1350,7 @@ if (${JSON.stringify(failure)} === "timeout") {
         ["live-models", "gateway-concurrency"],
         {
           env: {
+            GITHUB_ACTIONS: "true",
             OPENCLAW_DOCKER_ALL_FAIL_FAST: "0",
             OPENCLAW_DOCKER_ALL_PARALLELISM: "1",
           },
@@ -1362,6 +1363,12 @@ if (${JSON.stringify(failure)} === "timeout") {
       expect(live.attempts).toHaveLength(1);
       expect(live.status).not.toBe(0);
       expect(live.timedOut).toBe(failure === "timeout");
+      const annotations = result.stderr.split("\n").filter((line) => line.startsWith("::error"));
+      expect(annotations).toEqual([
+        `::error title=Docker lane failure::status=${live.status}; timedOut=${failure === "timeout"}; noOutputTimedOut=false`,
+      ]);
+      expect(annotations.join("")).not.toContain(command);
+      expect(annotations.join("")).not.toContain(fixture.root);
       expect(
         summary.lanes.find((lane: { name: string }) => lane.name === "gateway-concurrency").status,
       ).toBe(0);
