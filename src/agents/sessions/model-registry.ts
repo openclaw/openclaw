@@ -696,6 +696,10 @@ export class ModelRegistry {
           input: runtimeInput,
           cost: normalizeResolvedPricing(modelDef.cost ?? {}),
           contextWindow: modelDef.contextWindow ?? 128000,
+          // Provenance travels with the provider-supplied window only.
+          ...(modelDef.contextWindow !== undefined && modelDef.contextWindowSource === "synthetic"
+            ? { contextWindowSource: "synthetic" }
+            : {}),
           contextTokens: modelDef.contextTokens,
           contextWindows: modelDef.contextWindows,
           contextWindowDefault: modelDef.contextWindowDefault,
@@ -1044,6 +1048,9 @@ export class ModelRegistry {
           input: modelDef.input,
           cost: modelDef.cost,
           contextWindow: modelDef.contextWindow,
+          ...(modelDef.contextWindow !== undefined && modelDef.contextWindowSource === "synthetic"
+            ? { contextWindowSource: "synthetic" }
+            : {}),
           contextTokens: modelDef.contextTokens,
           contextWindows: modelDef.contextWindows,
           contextWindowDefault: modelDef.contextWindowDefault,
@@ -1093,6 +1100,7 @@ export interface ProviderConfigInput {
     input: ("text" | "image")[];
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
+    contextWindowSource?: "synthetic";
     contextTokens?: number;
     contextWindows?: ModelCatalogContextWindowOption[];
     contextWindowDefault?: string;

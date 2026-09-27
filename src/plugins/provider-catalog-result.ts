@@ -38,6 +38,7 @@ const MODEL_DEFINITION_CONFIG_KEYS = [
   "input",
   "cost",
   "contextWindow",
+  "contextWindowSource",
   "contextTokens",
   "maxTokens",
   "thinkingLevelMap",

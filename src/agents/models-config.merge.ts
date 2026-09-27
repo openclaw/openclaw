@@ -208,18 +208,27 @@ export function mergeProviderModels(
       baseUrl: _baseUrl,
       headers: _headers,
       maxTokensSource: _maxTokensSource,
+      contextWindowSource: implicitContextWindowSource,
       ...implicitMetadata
     } = implicitModel;
+    // Authored sizing is author intent, never a replaceable provider estimate.
+    const authoredSizing =
+      asPositiveFiniteNumber(explicitModel.contextWindow) !== undefined ||
+      asPositiveFiniteNumber(explicitModel.contextTokens) !== undefined;
+    const { contextWindowSource: _explicitContextWindowSource, ...explicitFields } = explicitModel;
     return Object.assign(
       {},
       implicitMetadata,
-      explicitModel,
+      explicitFields,
       {
         input,
         cost,
         reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },
+      !authoredSizing && implicitContextWindowSource === "synthetic"
+        ? { contextWindowSource: implicitContextWindowSource }
+        : {},
       contextTokens === undefined ? {} : { contextTokens },
       maxTokens === undefined ? {} : { maxTokens },
       maxTokensSource === undefined ? {} : { maxTokensSource },

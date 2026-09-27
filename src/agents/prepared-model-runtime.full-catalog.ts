@@ -527,14 +527,17 @@ export function materializePreparedModelCatalog(
     entry.contextWindowSource === "synthetic" &&
     sourceEntries.some(
       (accepted) =>
-        accepted.contextWindowSource !== "synthetic" &&
         !accepted.nativeRuntime &&
         accepted.provider === entry.provider &&
         accepted.id === entry.id &&
         Boolean(accepted.api) &&
         accepted.api === entry.api &&
         modelTransportRoutesMatch(accepted, entry) &&
-        (accepted.contextTokens ?? accepted.contextWindow ?? 0) > 0,
+        // Only a reported limit grants replacement: a real prompt limit, or a native
+        // window that is not itself a provider estimate.
+        (accepted.contextTokens ??
+          (accepted.contextWindowSource === "synthetic" ? undefined : accepted.contextWindow) ??
+          0) > 0,
     );
   const identityKey = createModelCatalogIdentityKeyResolver();
   // Re-enrich exact harness observations from this API generation, not a pre-await projection.

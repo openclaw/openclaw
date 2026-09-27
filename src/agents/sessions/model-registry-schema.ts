@@ -145,6 +145,7 @@ const ModelDefinitionSchema = Type.Object({
     }),
   ),
   contextWindow: Type.Optional(Type.Number()),
+  contextWindowSource: Type.Optional(Type.Literal("synthetic")),
   contextTokens: Type.Optional(Type.Number()),
   maxTokens: Type.Optional(Type.Number()),
   params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),

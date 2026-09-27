@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { copyProviderCatalogResultEntries } from "../plugins/provider-catalog-result.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { buildStatusMessageParts, statusModelRefs } from "../status/status-message.test-support.js";
 import { prepareContextWindowCaches } from "./context-cache-projection.js";
@@ -12,6 +13,7 @@ import { orderModelCatalogForPicker } from "./model-catalog-order.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
+import { mergeProviderModels } from "./models-config.merge.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import {
   materializePreparedModelCatalog,
@@ -444,7 +446,7 @@ describe("synthetic configured context publication", () => {
     credentials: { fixture: { type: "api_key" as const, key: account } },
   });
   async function budget(
-    entries = [discovered],
+    entries: ModelCatalogEntry[] = [discovered],
     staticEntry: ModelCatalogEntry = fallback,
     config: OpenClawConfig = {},
   ) {
@@ -591,5 +593,150 @@ describe("synthetic configured context publication", () => {
         expected,
       );
     }
+  });
+
+  describe("account /models rows without a reported native window", () => {
+    // What the Copilot /models mapping publishes when max_context_window_tokens is
+    // absent/invalid but max_prompt_tokens is real.
+    const missingNative = {
+      ...discovered,
+      contextWindow: 777_000,
+      contextWindowSource: "synthetic" as const,
+      contextTokens: 777_000,
+    };
+
+    it("(a) keeps the estimate synthetic across the provider-result copy and merge", () => {
+      const [[, copied]] = copyProviderCatalogResultEntries({
+        providerId: "fixture",
+        result: { provider: { baseUrl: discovered.baseUrl, models: [missingNative] } } as never,
+      }) as unknown as [[string, { models: Array<Record<string, unknown>> }]];
+      expect(copied.models[0]).toMatchObject({
+        contextWindowSource: "synthetic",
+        contextTokens: 777_000,
+      });
+      const merged = mergeProviderModels(
+        { models: [missingNative] },
+        { models: [{ id: "new-model", name: "New model" } as never] },
+        { providerId: "fixture" },
+      );
+      expect(merged.models?.[0]).toHaveProperty("contextWindowSource", "synthetic");
+      expect(modelCatalogRowToEntry(missingNative)).toHaveProperty(
+        "contextWindowSource",
+        "synthetic",
+      );
+    });
+
+    it("(a) uses the real prompt limit but does not become authoritative native capacity", async () => {
+      // The accepted prompt limit supersedes the 128k fallback...
+      expect(await budget([missingNative])).toBe(777_000);
+      // ...but a row that only carries a synthetic native estimate grants no replacement.
+      const estimateOnly = { ...missingNative, contextTokens: undefined, contextWindow: 128_000 };
+      expect(await budget([estimateOnly], { ...fallback, contextWindow: 64_000 })).toBe(64_000);
+    });
+
+    it("(b) preserves a genuinely reported native 128k window as a real constraint", async () => {
+      const reported = { ...discovered, contextWindow: 128_000, contextTokens: undefined };
+      expect(await budget([reported])).toBe(128_000);
+      // A real reported 128k row is authority to replace the synthetic fallback row.
+      expect(await budget([reported], { ...fallback, contextWindow: 200_000 })).toBe(128_000);
+    });
+
+    it("(c) keeps authored sizing and clears synthetic provenance", async () => {
+      for (const limits of [{ contextTokens: 64_000 }, { contextWindow: 64_000 }]) {
+        const merged = mergeProviderModels(
+          { models: [missingNative] },
+          { models: [{ id: "new-model", name: "New model", ...limits } as never] },
+          { providerId: "fixture" },
+        );
+        expect(merged.models?.[0]).not.toHaveProperty("contextWindowSource");
+        const config: OpenClawConfig = {
+          models: {
+            providers: {
+              fixture: {
+                baseUrl: discovered.baseUrl,
+                models: [{ id: "new-model", ...limits } as never],
+              },
+            },
+          },
+        };
+        expect(await budget([missingNative], fallback, config)).toBe(64_000);
+      }
+    });
+
+    it("(d) failed discovery, another account, API, endpoint or provider supply no authority", async () => {
+      // other API / endpoint / provider
+      expect(await budget([{ ...missingNative, api: "openai-completions" as const }])).toBe(
+        128_000,
+      );
+      // A fallback bound to another endpoint is not this account's route.
+      expect(
+        await budget([missingNative], { ...fallback, baseUrl: "https://other.example/v1" }),
+      ).toBe(128_000);
+      expect(await budget([{ ...missingNative, provider: "other" }])).toBe(128_000);
+      // failed first discovery: no accepted origin
+      const failed = prepareModelCatalogPublication(
+        {
+          entries: [],
+          routeVariants: [],
+          staticEntries: [missingNative],
+          providerOutcomes: [{ provider: "fixture", status: "unavailable" }],
+        },
+        new Map(),
+        undefined,
+        auth("account-a"),
+        (provider) => provider,
+        new Map(),
+      );
+      expect(failed.discoveryOrigins).toEqual([]);
+      const catalog = materializePreparedModelCatalog(failed.catalog, [], [fallback], new Set());
+      expect(
+        catalog.staticEntries?.some((entry) => entry.contextWindowSource === "synthetic"),
+      ).toBe(true);
+      replaceContextWindowCaches(
+        await prepareContextWindowCaches({ config: {}, modelCatalog: catalog }),
+      );
+      expect(resolveContextTokens({ cfg: {}, provider: "fixture", model: "new-model" })).toBe(
+        128_000,
+      );
+    });
+
+    it("(d) a retained inventory from another account cannot replace the fallback", async () => {
+      const accepted = prepareModelCatalogPublication(
+        {
+          entries: [missingNative],
+          routeVariants: [],
+          providerOutcomes: [{ provider: "fixture", status: "ready", profileId: "a" }],
+        },
+        new Map(),
+        undefined,
+        auth("account-a"),
+        (provider) => provider,
+        new Map(),
+      );
+      const failedOtherAccount = prepareModelCatalogPublication(
+        {
+          entries: [],
+          routeVariants: [],
+          providerOutcomes: [{ provider: "fixture", status: "unavailable", profileId: "a" }],
+        },
+        new Map(),
+        { ...accepted, providers: new Map() },
+        auth("account-b"),
+        (provider) => provider,
+        new Map(),
+      );
+      const catalog = materializePreparedModelCatalog(
+        failedOtherAccount.catalog,
+        [],
+        [fallback],
+        new Set(failedOtherAccount.discoveryOrigins.map(({ provider }) => provider)),
+      );
+      replaceContextWindowCaches(
+        await prepareContextWindowCaches({ config: {}, modelCatalog: catalog }),
+      );
+      expect(resolveContextTokens({ cfg: {}, provider: "fixture", model: "new-model" })).toBe(
+        128_000,
+      );
+    });
   });
 });
