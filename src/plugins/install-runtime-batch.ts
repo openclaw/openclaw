@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { readCurrentConfigForPolicyCheck } from "../config/io.runtime.js";
+import { readCurrentConfigForPolicyCheckWithMigrations } from "../config/io.runtime.js";
 import type { ConfigReplaceResult } from "../config/mutate.js";
+import {
+  readDeferredPluginMigrationsAsync,
+  type DeferredPluginMigration,
+} from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
@@ -37,6 +41,7 @@ type PluginSourceCleanup = (
 
 type PreparedPluginSourceCleanup = (
   index: InstalledPluginIndex,
+  deferredPluginMigrations: readonly DeferredPluginMigration[],
   assertOwned: () => void,
   warn: (message: string) => void,
 ) => Promise<void>;
@@ -129,7 +134,7 @@ export class PluginInstallRuntimeBatch {
         }
         const configPath = entry.commit.write.configWrite.path;
         const original = fs.lstatSync(sourcePath, { bigint: true, throwIfNoEntry: false });
-        entry.cleanups.push(async (index, assertOwned, warn) => {
+        entry.cleanups.push(async (index, deferredPluginMigrations, assertOwned, warn) => {
           const assertUnclaimed = () => {
             assertOwned();
             const current = fs.lstatSync(sourcePath, { bigint: true, throwIfNoEntry: false });
@@ -140,9 +145,10 @@ export class PluginInstallRuntimeBatch {
             ) {
               throw new Error(`Retired plugin source changed before cleanup: ${sourcePath}`);
             }
-            const config = readCurrentConfigForPolicyCheck({
+            const config = readCurrentConfigForPolicyCheckWithMigrations({
               configPath,
               env: this.options.env ?? process.env,
+              deferredPluginMigrations,
             });
             if (
               createInstalledPluginOwnershipResolver(index, this.options.env).isSourceInUse(
@@ -285,7 +291,12 @@ export class PluginInstallRuntimeBatch {
         if (!index) {
           throw new Error("Plugin index disappeared before source cleanup");
         }
-        // Index producers share this lease; these cleanups retire filesystem sources only.
+        const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({
+          env: this.options.env,
+          path: lease.databasePath,
+        });
+        assertOwned();
+        // Index and obligation writers share this lease; cleanups retire filesystem sources only.
         const records = index.installRecords;
         const assertCurrent = () => {
           assertOwned();
@@ -301,7 +312,7 @@ export class PluginInstallRuntimeBatch {
         };
         for (const cleanup of sourceCleanups) {
           assertCurrent();
-          await cleanup(index, assertCurrent, warn);
+          await cleanup(index, deferredPluginMigrations, assertCurrent, warn);
           assertCurrent();
         }
       });

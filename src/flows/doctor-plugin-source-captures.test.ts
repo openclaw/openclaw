@@ -14,12 +14,41 @@ import {
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 
-const { note, readCommand, census, processMembers } = vi.hoisted(() => ({
+const { note, readCommand, census, processMembers, ps, sysctl } = vi.hoisted(() => ({
   note: vi.fn(),
   readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(),
   census: vi.fn<typeof inspectOtherOpenClawProcesses>(),
   processMembers: vi.fn(),
+  ps: vi.fn(),
+  sysctl: vi.fn(),
 }));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawnSync: ps,
+}));
+vi.mock("node:module", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:module")>();
+  const createRequire = (file: string | URL) => {
+    const require = actual.createRequire(file);
+    return Object.assign(
+      (id: string) =>
+        id === "koffi"
+          ? {
+              load: () => ({
+                func: (signature: string) => (signature.includes("sysctl(") ? sysctl : () => 0),
+              }),
+              errno: () => 22,
+            }
+          : require(id),
+      require,
+    );
+  };
+  return new Proxy(actual, {
+    get(target, key, receiver) {
+      return key === "createRequire" ? createRequire : Reflect.get(target, key, receiver);
+    },
+  });
+});
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand }),
@@ -35,6 +64,7 @@ vi.mock("../process/supervisor/service-child-group-ownership.js", async (importO
 }));
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
+const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
 let parent: string;
 let stateDir: string;
 let environmentTmp: string;
@@ -63,11 +93,18 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  if (getuidDescriptor) {
+    Object.defineProperty(process, "getuid", getuidDescriptor);
+  } else {
+    Reflect.deleteProperty(process, "getuid");
+  }
   vi.unstubAllEnvs();
   note.mockClear();
   readCommand.mockReset();
   census.mockReset();
   processMembers.mockReset();
+  ps.mockReset();
+  sysctl.mockReset();
 });
 
 async function runCaptureReport(repair = false, update = false) {
@@ -118,6 +155,72 @@ function inspectAsLaterProcess() {
   // The fixtures model captures left by an earlier process, without sleeps or backdated files.
   vi.spyOn(performance, "timeOrigin", "get").mockReturnValue(Date.now() + 1_000);
 }
+
+it.each([
+  { sameUid: false, foreignCapture: false, removed: true },
+  { sameUid: true, foreignCapture: false, removed: false },
+  { sameUid: false, foreignCapture: true, removed: false },
+])(
+  "repairs legacy captures through Darwin's unreadable-argv census (same UID=$sameUid, foreign capture=$foreignCapture)",
+  async ({ sameUid, foreignCapture, removed }) => {
+    mockProcessPlatform("darwin");
+    const uid = fs.statSync(parent).uid;
+    Object.defineProperty(process, "getuid", { configurable: true, value: () => uid });
+    const peer = 2_000_000_000;
+    const file = write(systemTmp, "openclaw-plugin-build-legacy/source.cjs", "capture");
+    if (foreignCapture) {
+      const lstat = fsPromises.lstat.bind(fsPromises);
+      vi.spyOn(fsPromises, "lstat").mockImplementation(async (target, options) => {
+        const stat = await lstat(target, options);
+        if (target === path.dirname(file)) {
+          Object.assign(stat, { uid: uid + 1 });
+        }
+        return stat;
+      });
+    }
+    inspectAsLaterProcess();
+    ps.mockReturnValue({
+      status: 0,
+      stdout: `${process.pid} ${process.pid} S 0 ${uid}\n${peer} ${peer} S 0 ${sameUid ? uid : uid + 1}\n`,
+    });
+    sysctl.mockImplementation((mib: Int32Array, _count: number, output: Buffer, size: Buffer) => {
+      if (mib[1] === 8) {
+        output.writeInt32LE(4096);
+        size.writeBigUInt64LE(4n);
+        return 0;
+      }
+      if (mib[2] === peer) {
+        return -1;
+      }
+      output.writeInt32LE(1);
+      const length = output.write("/node\0openclaw-doctor\0", 4) + 4;
+      size.writeBigUInt64LE(BigInt(length));
+      return 0;
+    });
+    const group = await vi.importActual<
+      typeof import("../process/supervisor/service-child-group-ownership.js")
+    >("../process/supervisor/service-child-group-ownership.js");
+    processMembers.mockImplementation(group.readProcessGroupMembers);
+    const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
+      "../infra/openclaw-process-census.js",
+    );
+    census.mockImplementation(actual.inspectOtherOpenClawProcesses);
+    // The synthetic PID is live for this proof; a real kernel absence must not bypass argv handling.
+    const kill = process.kill.bind(process);
+    vi.spyOn(process, "kill").mockImplementation((pid, signal) =>
+      pid === peer && signal === 0 ? true : kill(pid, signal),
+    );
+    const output = await duringMaintenance(() => runCaptureReport(true));
+    expect(fs.existsSync(file)).toBe(!removed);
+    expect(output).toContain(
+      sameUid
+        ? `Could not classify PID ${peer}`
+        : foreignCapture
+          ? "owned by another UID"
+          : "Removed 1 legacy plugin capture root(s)",
+    );
+  },
+);
 
 it.each([
   { identity: "unrelated", removed: true },

@@ -130,7 +130,7 @@ async function runStateLeaseOwnerInScope<T>(
       : undefined;
   const workerStorage =
     invocation.kind === "worker"
-      ? createOpenClawStateLeaseWorkerStorage(invocation.context)
+      ? createOpenClawStateLeaseWorkerStorage(invocation.context, validated.processBound)
       : undefined;
   let workerOperations: ReturnType<typeof createOpenClawStateLeaseWorkerOwner> | undefined;
   let assertAcquisitionCurrent: (() => void) | undefined;
@@ -301,7 +301,12 @@ async function runStateLeaseOwnerInScope<T>(
               )
             : acquireLease(
                 validated.database,
-                { identity, operationLabel: validated.operationLabel, leaseMs: validated.leaseMs },
+                {
+                  identity,
+                  operationLabel: validated.operationLabel,
+                  leaseMs: validated.leaseMs,
+                  processBound: validated.processBound,
+                },
                 assertCurrent,
                 signal,
               );
