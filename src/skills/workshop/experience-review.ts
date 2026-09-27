@@ -16,6 +16,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { validateSessionTranscriptContextAnchor } from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import type { SessionModelContextLimits } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -30,7 +31,11 @@ import { resolveSkillWorkshopConfig } from "./config.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
 import { SKILL_WORKSHOP_MAINTENANCE_TOOLS } from "./maintenance-prompt.js";
-import { assertSkillReviewRunSucceeded } from "./review-outcome.js";
+import {
+  assertSkillReviewRunSucceeded,
+  SkillReviewOversizedContextError,
+  SkillReviewOversizedRequestError,
+} from "./review-outcome.js";
 import { runSkillWorkshopReview } from "./review-run.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import type { SkillWorkshopProposalMutationBudget } from "./types.js";
@@ -161,11 +166,30 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     if (executionRoot) {
       await fs.mkdir(executionRoot, { recursive: true });
     }
-    const sessionManager = await SessionManager.openModelContextAsync(candidate.source, {
-      cwd: executionRoot ?? workspaceDir,
-      through: candidate.source,
-      signal: abortSignal,
-    });
+    const workshopCfg = resolveSkillWorkshopConfig(config);
+    const contextLimits: SessionModelContextLimits | undefined =
+      workshopCfg.autonomous.maxReviewContextBytes === undefined
+        ? undefined
+        : {
+            maxBytes: workshopCfg.autonomous.maxReviewContextBytes,
+            maxEvents: 10_000,
+            overflow: "reject",
+          };
+    let sessionManager: Awaited<ReturnType<typeof SessionManager.openModelContextAsync>>;
+    try {
+      sessionManager = await SessionManager.openModelContextAsync(candidate.source, {
+        cwd: executionRoot ?? workspaceDir,
+        through: candidate.source,
+        signal: abortSignal,
+        ...(contextLimits ? { limits: contextLimits } : {}),
+      });
+    } catch (error) {
+      // A configured complete-context bound rejects instead of dropping retained evidence.
+      if (contextLimits && error instanceof RangeError) {
+        throw new SkillReviewOversizedContextError(error.message);
+      }
+      throw error;
+    }
     abortSignal.throwIfAborted();
     const { listWritableWorkshopSkillSummaries } = await import("./workspace-skill-read.js");
     abortSignal.throwIfAborted();
@@ -246,6 +270,12 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
         silentExpected: true,
         allowEmptyAssistantReplyAsSilent: true,
         terminalReplyExpectation: "optional",
+        ...(workshopCfg.autonomous.maxReviewContextTokens !== undefined
+          ? { contextTokenBudget: workshopCfg.autonomous.maxReviewContextTokens }
+          : {}),
+        ...(workshopCfg.autonomous.overflowPolicy
+          ? { reviewOverflowPolicy: workshopCfg.autonomous.overflowPolicy }
+          : {}),
         toolExecutionAllow:
           mode === "auto" ? [...SKILL_WORKSHOP_MAINTENANCE_TOOLS] : ["skill_workshop"],
         skillWorkshopProposalOnly: mode === "propose",
@@ -280,6 +310,32 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
         }
       : undefined;
   } catch (error) {
+    const oversizedReason =
+      error instanceof SkillReviewOversizedRequestError
+        ? `oversized-request: estimatedPromptTokens=${error.estimatedPromptTokens} promptBudgetBeforeReserve=${error.promptBudgetBeforeReserve}`
+        : error instanceof SkillReviewOversizedContextError
+          ? `oversized-request: ${error.limitReason}`
+          : null;
+    if (oversizedReason) {
+      const policy = resolveSkillWorkshopConfig(config).autonomous.overflowPolicy;
+      if (!policy) {
+        throw error;
+      }
+      await recordSkillExperienceReviewOutcome(
+        foregroundPromptContext.agentId,
+        workspaceDir,
+        {
+          attemptedAtMs,
+          outcome: policy === "fail" ? "failed" : "skipped",
+          error: truncateUtf16Safe(oversizedReason, 300),
+        },
+        outcomeStore,
+      );
+      if (policy === "fail") {
+        throw error;
+      }
+      return;
+    }
     await recordSkillExperienceReviewOutcome(
       foregroundPromptContext.agentId,
       workspaceDir,

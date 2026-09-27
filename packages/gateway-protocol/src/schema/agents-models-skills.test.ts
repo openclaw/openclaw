@@ -696,6 +696,11 @@ describe("SkillsCuratorStatusResultSchema", () => {
           proposalId: "proposal-1",
           usage: { inputTokens: 40, cachedInputTokens: 20, outputTokens: 10 },
         },
+        overflowed: {
+          attemptedAtMs: 103,
+          outcome: "skipped",
+          error: "oversized-request: estimatedPromptTokens=85000 promptBudgetBeforeReserve=25000",
+        },
       },
     };
 

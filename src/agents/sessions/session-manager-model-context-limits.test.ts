@@ -433,6 +433,30 @@ it("rejects a cut that would give an ambiguous result a new unique owner", async
   });
 });
 
+it.each(["sync", "async"])(
+  "rejects the context when overflow: reject is set and limits are exceeded (%s)",
+  async (mode) => {
+    await withHistory(`context-overflow-reject-${mode}`, async ({ scope, source, verifyRead }) => {
+      source.appendMessage(makeUserMessage("older message", 0));
+      source.appendMessage(makeUserMessage("newer message", 1));
+      const full = source.buildSessionContext();
+      await verifyRead(async () => {
+        const options = { limits: { maxBytes: 16_384, maxEvents: 1, overflow: "reject" as const } };
+        if (mode === "async") {
+          await expect(SessionManager.openModelContextAsync(scope, options)).rejects.toThrow(
+            /Complete session context exceeds the model-context limit/u,
+          );
+        } else {
+          expect(() => SessionManager.openModelContext(scope, options)).toThrow(
+            /Complete session context exceeds the model-context limit/u,
+          );
+        }
+        expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(full);
+      });
+    });
+  },
+);
+
 it.each(["latest message", "compaction boundary", "latest tool pair", "latest tool call"])(
   "rejects an oversized %s without returning empty or stale context",
   async (kind) => {

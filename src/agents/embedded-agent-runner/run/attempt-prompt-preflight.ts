@@ -20,11 +20,29 @@ import {
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
+import { formatReviewPreflightOverflowMessage } from "./review-overflow.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+/** Review-owned precheck overflow. Carries the measured numbers so the curator
+ * record can name the cause instead of a generic provider failure. */
+function reviewPreflightOverflowError(snapshot: PreflightRecoveryBudgetSnapshot): Error {
+  return new Error(
+    formatReviewPreflightOverflowMessage({
+      estimatedPromptTokens: snapshot.estimatedPromptTokens,
+      promptBudgetBeforeReserve: snapshot.promptBudgetBeforeReserve,
+    }),
+  );
+}
 
 type AttemptPromptPreflightParams = Pick<
   EmbeddedRunAttemptParams,
-  "config" | "modelId" | "provider" | "sessionFile" | "sessionId" | "sessionKey"
+  | "config"
+  | "modelId"
+  | "provider"
+  | "sessionFile"
+  | "sessionId"
+  | "sessionKey"
+  | "reviewOverflowPolicy"
 >;
 
 type AttemptPromptPreflightState = {
@@ -246,6 +264,27 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     if (checkpointPressure && checkpointPressure.route !== "fits") {
       // Only the actual canonical window can require recovery; the raw-history
       // maximum above remains diagnostic even when it exceeds this window.
+      // A detached review has no recovery path either, so it records the
+      // measured overflow instead of entering compaction.
+      if (attempt.reviewOverflowPolicy) {
+        log.warn(
+          `[skill-review-preflight-overflow] skipping provider attempt for ` +
+            `${attempt.provider}/${attempt.modelId} reviewOverflowPolicy=${attempt.reviewOverflowPolicy} ` +
+            `route=${checkpointPressure.route} estimatedPromptTokens=${checkpointPressure.estimatedPromptTokens} ` +
+            `promptBudgetBeforeReserve=${checkpointPressure.promptBudgetBeforeReserve}`,
+        );
+        return {
+          ...input.state,
+          contextBudgetStatus,
+          preflightRecovery: {
+            route: checkpointPressure.route,
+            ...buildPreflightRecoveryBudgetSnapshot(checkpointPressure),
+          },
+          promptError: reviewPreflightOverflowError(checkpointPressure),
+          promptErrorSource: "precheck",
+          skipPromptSubmission: true,
+        };
+      }
       return {
         ...input.state,
         contextBudgetStatus,
@@ -259,6 +298,25 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       };
     }
     if (preemptiveCompaction.route !== "fits") {
+      if (attempt.reviewOverflowPolicy) {
+        log.warn(
+          `[skill-review-preflight-overflow] skipping provider attempt for ` +
+            `${attempt.provider}/${attempt.modelId} reviewOverflowPolicy=${attempt.reviewOverflowPolicy} ` +
+            `route=${preemptiveCompaction.route} estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
+            `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve}`,
+        );
+        return {
+          ...input.state,
+          contextBudgetStatus,
+          preflightRecovery: {
+            route: preemptiveCompaction.route,
+            ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+          },
+          promptError: reviewPreflightOverflowError(preemptiveCompaction),
+          promptErrorSource: "precheck",
+          skipPromptSubmission: true,
+        };
+      }
       // This pressure estimate is diagnostic only; it never compacts or discards history.
       // Real compaction runs through explicit preflight or provider-overflow recovery.
       log.info(

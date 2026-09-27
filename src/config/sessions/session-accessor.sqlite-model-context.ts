@@ -54,6 +54,8 @@ export type SessionModelContextLimits = {
   maxEvents: number;
   /** Detached model views may omit result bodies; evidence and fork readers remain strict. */
   toolResultOverflow?: "omit";
+  /** Admit only the complete retained context; exceeding a limit rejects instead of selecting a suffix. */
+  overflow?: "reject";
 };
 type ModelContextRequest = {
   entry: ContextEntry;
@@ -166,6 +168,17 @@ function selectBoundedModelRequests(
   readSizes: TranscriptContextSnapshot["readModelEntrySizes"],
   limits: SessionModelContextLimits,
 ): ModelContextRequest[] {
+  if (limits.overflow === "reject") {
+    // A shortened selection would drop retained evidence; admit only the complete context.
+    const sizes = readSizes(requests);
+    const totalBytes = [...sizes.values()].reduce((total, size) => total + size, 0);
+    if (totalBytes > limits.maxBytes || requests.length > limits.maxEvents) {
+      throw new RangeError(
+        `Complete session context exceeds the model-context limit: ${totalBytes} bytes, ${requests.length} events`,
+      );
+    }
+    return requests;
+  }
   const boundary = requests.find(
     ({ entry }) => entry.type === "compaction" || entry.type === "reset",
   );

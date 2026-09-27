@@ -310,6 +310,111 @@ describe("attempt prompt preflight", () => {
     );
   });
 
+  it("stops an oversized review before provider submission and keeps ordinary runs diagnostic", async () => {
+    const input = {
+      attempt,
+      compactionReplayEnabled: true,
+      contextEngineAssemblySucceeded: false,
+      contextEnginePromptAuthority: "assembled" as const,
+      contextTokenBudget: 100,
+      hookMessagesForCurrentPrompt: [],
+      includeBoundaryTimestamp: false,
+      promptForPrecheck: "x".repeat(4_000),
+      reserveTokens: 20,
+      sessionMessageCount: 0,
+      state: {
+        contextBudgetStatus: undefined,
+        preflightRecovery: undefined,
+        promptError: null,
+        promptErrorSource: null,
+        skipPromptSubmission: false,
+      },
+      systemPrompt: "",
+      toolResultMaxChars: 1_000,
+    };
+    const ordinary = await prepareEmbeddedAttemptPromptPreflight(input);
+    expect(ordinary.skipPromptSubmission).toBe(false);
+    expect(ordinary.promptError).toBeNull();
+
+    const review = await prepareEmbeddedAttemptPromptPreflight({
+      ...input,
+      attempt: { ...attempt, reviewOverflowPolicy: "skip" },
+    });
+    expect(review.skipPromptSubmission).toBe(true);
+    expect(review.promptErrorSource).toBe("precheck");
+    expect(review.promptError).toMatchObject({
+      message: expect.stringMatching(
+        /^Skill experience review prompt exceeds effective budget: estimatedPromptTokens=\d+ promptBudgetBeforeReserve=\d+$/u,
+      ),
+    });
+    expect(review.preflightRecovery).toEqual(
+      expect.objectContaining({
+        route: "compact_only",
+        estimatedPromptTokens: expect.any(Number),
+        promptBudgetBeforeReserve: expect.any(Number),
+      }),
+    );
+  });
+
+  it("stops an oversized review at a compaction replay checkpoint", async () => {
+    const owner = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "covered" }],
+      model: attempt.model.id,
+    });
+    const item = { type: "compaction" as const, id: "cmp_review", encrypted_content: "opaque" };
+    captureOpenAIResponsesCompaction(
+      owner,
+      item,
+      "retained-users",
+      attempt.model,
+      testing.buildOpenAIResponsesReasoningReplayMetadata(attempt.model, attempt),
+      [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "retained content ".repeat(8_000) }],
+        },
+        item,
+      ],
+    );
+    const result = await prepareEmbeddedAttemptPromptPreflight({
+      attempt: { ...attempt, reviewOverflowPolicy: "skip" },
+      compactionReplayEnabled: true,
+      activeContextEngine: { info: { id: "owner", name: "Owner", ownsCompaction: true } },
+      contextEngineAssemblySucceeded: true,
+      contextEnginePromptAuthority: "assembled",
+      contextTokenBudget: 1_000,
+      hookMessagesForCurrentPrompt: [owner],
+      includeBoundaryTimestamp: false,
+      promptForPrecheck: "follow-up",
+      reserveTokens: 100,
+      sessionMessageCount: 1,
+      systemPrompt: "",
+      toolResultMaxChars: 1_000,
+      state: {
+        contextBudgetStatus: undefined,
+        preflightRecovery: undefined,
+        promptError: null,
+        promptErrorSource: null,
+        skipPromptSubmission: false,
+      },
+    });
+    expect(result.skipPromptSubmission).toBe(true);
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.promptError).toMatchObject({
+      message: expect.stringMatching(
+        /^Skill experience review prompt exceeds effective budget: estimatedPromptTokens=\d+ promptBudgetBeforeReserve=\d+$/u,
+      ),
+    });
+    expect(result.preflightRecovery).toEqual(
+      expect.objectContaining({
+        route: "compact_only",
+        estimatedPromptTokens: expect.any(Number),
+        promptBudgetBeforeReserve: expect.any(Number),
+      }),
+    );
+  });
+
   it("records heuristic pressure without short-circuiting the provider attempt", async () => {
     const result = await prepareEmbeddedAttemptPromptPreflight({
       attempt,

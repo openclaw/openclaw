@@ -470,6 +470,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     ...(runtime.contextTokenBudget === undefined
       ? {}
       : { contextTokenBudget: runtime.contextTokenBudget }),
+    ...(params.reviewOverflowPolicy ? { reviewOverflowPolicy: params.reviewOverflowPolicy } : {}),
     ...(runtime.modelContextWindow === undefined
       ? {}
       : { modelContextWindow: runtime.modelContextWindow }),

@@ -70,14 +70,16 @@ retain separate candidates. Experience reviews use one Workshop slot within the
 [shared background work budget](/concepts/queue#background-work).
 The foreground answer never waits for the model's review.
 
-OpenClaw records where the completed turn ends, then reads its full model context
+OpenClaw records where the completed turn ends, then reads that turn's model context
 asynchronously after the quiet period. The reviewer connects earlier requirements
 and corrections with observed results across that retained conversation, even
 when the latest turn is routine. Later messages are excluded. If the saved
 turn was rewritten or removed, the review records a failure instead of using
 different evidence. The review runs under a private detached session identity.
 Its messages never enter the foreground transcript or session record. Reviews
-retain the foreground session's sandbox policy.
+retain the foreground session's sandbox policy. Optional review guards can reject
+an oversized complete context or assembled prompt before provider dispatch;
+upgrades preserve the existing unbounded path until a guard is configured.
 
 In `auto` mode, the reviewer uses ordinary directory, file, patch, and shell
 tools under the source session's permissions. It can inspect complete skills and

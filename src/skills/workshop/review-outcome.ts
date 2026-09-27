@@ -1,11 +1,47 @@
+import { parseReviewPreflightOverflowMessage } from "../../agents/embedded-agent-runner/run/review-overflow.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { resolveToolDisplay } from "../../agents/tool-display.js";
+
+export class SkillReviewOversizedRequestError extends Error {
+  readonly estimatedPromptTokens: number;
+  readonly promptBudgetBeforeReserve: number;
+  constructor(params: { estimatedPromptTokens: number; promptBudgetBeforeReserve: number }) {
+    super(
+      `Skill experience review prompt exceeds effective budget: ` +
+        `estimatedPromptTokens=${params.estimatedPromptTokens} ` +
+        `promptBudgetBeforeReserve=${params.promptBudgetBeforeReserve}`,
+    );
+    this.name = "SkillReviewOversizedRequestError";
+    this.estimatedPromptTokens = params.estimatedPromptTokens;
+    this.promptBudgetBeforeReserve = params.promptBudgetBeforeReserve;
+  }
+}
+
+/** The bounded review context itself cannot be admitted within the configured limits. */
+export class SkillReviewOversizedContextError extends Error {
+  readonly limitReason: string;
+  constructor(limitReason: string) {
+    super(`Skill experience review context exceeds the configured review limit: ${limitReason}`);
+    this.name = "SkillReviewOversizedContextError";
+    this.limitReason = limitReason;
+  }
+}
 
 export function assertSkillReviewRunSucceeded(
   result: Pick<EmbeddedAgentRunResult, "meta" | "payloads">,
 ): void {
   const errorPayload = result.payloads?.find((payload) => payload.isError);
   const unresolvedError = result.meta.toolSummary?.unresolvedError;
+  const terminalError = result.meta.error;
+  const parsedOverflow =
+    terminalError?.kind === "context_overflow"
+      ? parseReviewPreflightOverflowMessage(terminalError.message)
+      : null;
+  if (parsedOverflow) {
+    throw new SkillReviewOversizedRequestError(parsedOverflow);
+  }
+  // A provider context overflow after dispatch means the review ran and its
+  // tools may have settled; it stays a failed review, never a pre-dispatch skip.
   const message =
     result.meta.error?.message.trim() ||
     result.meta.failureSignal?.message.trim() ||

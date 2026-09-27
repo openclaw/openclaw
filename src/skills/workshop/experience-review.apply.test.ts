@@ -144,6 +144,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   runEmbeddedAgent.mockReset();
+  vi.restoreAllMocks();
   await testState.cleanup();
   await tempDirs.cleanup();
 });
@@ -806,5 +807,170 @@ describe("experience review maintenance", () => {
       content: expect.stringContaining("Keep this manual revision pending"),
     });
     expect(inspected?.record.autonomousCapture).toBeUndefined();
+  });
+
+  it("preserves the unbounded review path when no guard is configured", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-overflow-compatible-");
+    const openModelContextAsync = vi.spyOn(SessionManager, "openModelContextAsync");
+    const config = { skills: { workshop: { autonomous: { mode: "propose" as const } } } };
+    runEmbeddedAgent.mockResolvedValue({ meta: { durationMs: 1 } });
+    const candidate = await captureReviewFixture(
+      reviewFixture(workspaceDir, config, { sessionKey: "agent:main:overflow-compatible" }),
+    );
+
+    await runCapturedExperienceReview(candidate);
+
+    expect(openModelContextAsync).toHaveBeenCalledOnce();
+    expect(openModelContextAsync.mock.calls[0]?.[1]).not.toHaveProperty("limits");
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("contextTokenBudget");
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("reviewOverflowPolicy");
+  });
+
+  it("passes the configured bound and records a skipped oversized review", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-overflow-skip-");
+    const openModelContextAsync = vi.spyOn(SessionManager, "openModelContextAsync");
+    const config = {
+      skills: {
+        workshop: {
+          autonomous: {
+            mode: "propose" as const,
+            maxReviewContextBytes: 16 * 1024 * 1024,
+            maxReviewContextTokens: 25_000,
+          },
+        },
+      },
+    };
+    runEmbeddedAgent.mockResolvedValue({
+      meta: {
+        durationMs: 5,
+        error: {
+          kind: "context_overflow",
+          message:
+            "Skill experience review prompt exceeds effective budget: estimatedPromptTokens=85000 promptBudgetBeforeReserve=25000",
+        },
+      },
+    });
+    const candidate = await captureReviewFixture(
+      reviewFixture(workspaceDir, config, {
+        runId: "foreground-overflow-run",
+        sessionKey: "agent:main:overflow-skip",
+      }),
+    );
+
+    await runCapturedExperienceReview(candidate);
+
+    expect(openModelContextAsync).toHaveBeenCalledWith(
+      candidate.source,
+      expect.objectContaining({
+        limits: {
+          maxBytes: 16 * 1024 * 1024,
+          maxEvents: 10_000,
+          overflow: "reject",
+        },
+      }),
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewOverflowPolicy: "skip", contextTokenBudget: 25_000 }),
+    );
+    expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
+      outcome: "skipped",
+      error: "oversized-request: estimatedPromptTokens=85000 promptBudgetBeforeReserve=25000",
+    });
+  });
+
+  it("surfaces an oversized review when the operator chooses fail", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-overflow-fail-");
+    const config = {
+      skills: {
+        workshop: {
+          autonomous: {
+            mode: "propose" as const,
+            overflowPolicy: "fail" as const,
+          },
+        },
+      },
+    };
+    runEmbeddedAgent.mockResolvedValue({
+      meta: {
+        durationMs: 5,
+        error: {
+          kind: "context_overflow",
+          message:
+            "Skill experience review prompt exceeds effective budget: estimatedPromptTokens=85000 promptBudgetBeforeReserve=32000",
+        },
+      },
+    });
+
+    await expect(
+      runSkillExperienceReview(
+        reviewFixture(workspaceDir, config, { sessionKey: "agent:main:overflow-fail" }),
+      ),
+    ).rejects.toThrow("estimatedPromptTokens=85000 promptBudgetBeforeReserve=32000");
+    expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
+      outcome: "failed",
+      error: "oversized-request: estimatedPromptTokens=85000 promptBudgetBeforeReserve=32000",
+    });
+  });
+
+  it("records a provider context overflow after dispatch as a failed review", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-overflow-dispatched-");
+    const config = {
+      skills: {
+        workshop: {
+          autonomous: {
+            mode: "auto" as const,
+            overflowPolicy: "skip" as const,
+          },
+        },
+      },
+    };
+    runEmbeddedAgent.mockResolvedValue({
+      meta: {
+        durationMs: 5,
+        error: { kind: "context_overflow", message: "provider rejected oversized prompt" },
+      },
+    });
+
+    await expect(
+      runSkillExperienceReview(
+        reviewFixture(workspaceDir, config, { sessionKey: "agent:main:overflow-dispatched" }),
+      ),
+    ).rejects.toThrow("provider rejected oversized prompt");
+    expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
+      outcome: "failed",
+      error: expect.stringContaining("provider rejected oversized prompt"),
+    });
+  });
+
+  it("records a bounded-context extraction overflow before provider dispatch", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-overflow-extraction-");
+    const config = {
+      skills: {
+        workshop: {
+          autonomous: {
+            mode: "propose" as const,
+            maxReviewContextBytes: 4_096,
+            overflowPolicy: "skip" as const,
+          },
+        },
+      },
+    };
+    const candidate = await captureReviewFixture(
+      reviewFixture(workspaceDir, config, { sessionKey: "agent:main:overflow-extraction" }),
+    );
+    const limitReason = "Required session context boundary exceeds the model-context limit";
+    const openModelContextAsync = vi
+      .spyOn(SessionManager, "openModelContextAsync")
+      .mockRejectedValueOnce(new RangeError(limitReason));
+
+    await runCapturedExperienceReview(candidate);
+
+    expect(openModelContextAsync).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
+      outcome: "skipped",
+      error: `oversized-request: ${limitReason}`,
+    });
   });
 });

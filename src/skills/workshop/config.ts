@@ -1,12 +1,18 @@
 // Workshop config helpers resolve skill workshop settings from OpenClaw config.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SkillsWorkshopAutonomousMode } from "../../config/types.skills.js";
+import type {
+  SkillsWorkshopAutonomousMode,
+  SkillsWorkshopOverflowPolicy,
+} from "../../config/types.skills.js";
 
 /** Runtime configuration for the skill workshop proposal flow. */
 type SkillWorkshopConfig = {
   autonomous: {
     mode: SkillsWorkshopAutonomousMode;
+    maxReviewContextTokens?: number;
+    maxReviewContextBytes?: number;
+    overflowPolicy?: SkillsWorkshopOverflowPolicy;
   };
   approvalPolicy: "pending" | "auto";
   maxPending: number;
@@ -39,12 +45,41 @@ function readApprovalPolicy(value: unknown, fallback: SkillWorkshopConfig["appro
   return value === "pending" || value === "auto" ? value : fallback;
 }
 
+function readOverflowPolicy(value: unknown): SkillsWorkshopOverflowPolicy | undefined {
+  return value === "skip" || value === "fail" ? value : undefined;
+}
+
+function readOptionalPositiveInteger(value: unknown, min: number, max: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min) {
+    return undefined;
+  }
+  return Math.min(Math.trunc(value), max);
+}
+
 export function resolveSkillWorkshopConfig(config?: OpenClawConfig): SkillWorkshopConfig {
   const raw = asNullableRecord(config?.skills?.workshop) ?? {};
   const autonomous = asNullableRecord(raw.autonomous) ?? {};
+  const maxReviewContextTokens = readOptionalPositiveInteger(
+    autonomous.maxReviewContextTokens,
+    1024,
+    2_000_000,
+  );
+  const maxReviewContextBytes = readOptionalPositiveInteger(
+    autonomous.maxReviewContextBytes,
+    1024,
+    256 * 1024 * 1024,
+  );
+  const configuredOverflowPolicy = readOverflowPolicy(autonomous.overflowPolicy);
+  const reviewGuardConfigured =
+    maxReviewContextTokens !== undefined ||
+    maxReviewContextBytes !== undefined ||
+    configuredOverflowPolicy !== undefined;
   return {
     autonomous: {
       mode: readAutonomousMode(autonomous.mode, DEFAULT_CONFIG.autonomous.mode),
+      ...(maxReviewContextTokens !== undefined ? { maxReviewContextTokens } : {}),
+      ...(maxReviewContextBytes !== undefined ? { maxReviewContextBytes } : {}),
+      ...(reviewGuardConfigured ? { overflowPolicy: configuredOverflowPolicy ?? "skip" } : {}),
     },
     approvalPolicy: readApprovalPolicy(raw.approvalPolicy, DEFAULT_CONFIG.approvalPolicy),
     maxPending: readInteger(raw.maxPending, DEFAULT_CONFIG.maxPending, 1, 200),

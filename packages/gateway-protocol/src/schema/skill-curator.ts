@@ -41,6 +41,7 @@ const SkillExperienceReviewStatusSchema = closedObject({
     Type.Literal("applied"),
     Type.Literal("proposed"),
     Type.Literal("nothing"),
+    Type.Literal("skipped"),
     Type.Literal("failed"),
   ]),
   proposalId: Type.Optional(Type.String()),

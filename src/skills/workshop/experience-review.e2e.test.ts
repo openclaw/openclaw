@@ -127,6 +127,48 @@ function readToolOutput(request: Request | undefined, callId: string): string {
 }
 
 describe("Workshop draft-only review through the real provider and tool owners", () => {
+  it("rejects an oversized review before provider dispatch and records the skipped outcome", async () => {
+    let providerRequests = 0;
+    await withServer(
+      (_request, response) => {
+        providerRequests += 1;
+        writeOpenAiResponsesText(response, {
+          text: "NO_REPLY",
+          messageId: "msg_unexpected_oversized_review",
+          responseId: "resp_unexpected_oversized_review",
+        });
+      },
+      async (baseUrl) => {
+        const workspaceDir = await tempDirs.make("workshop-real-overflow-skip-");
+        const candidate = await createExperienceReviewCandidate(
+          "real-pre-dispatch-overflow",
+          positiveMessages(),
+          {
+            workspaceDir,
+            modelId,
+            baseUrl: `${baseUrl}/v1`,
+            apiKey: "test-t…lder",
+            maxReviewContextTokens: 1_024,
+            overflowPolicy: "skip",
+          },
+        );
+        loadAgentRuntimePluginRegistryHandle({ config: candidate.config, workspaceDir });
+
+        await runSkillExperienceReview(candidate);
+
+        expect(providerRequests).toBe(0);
+        expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)).toEqual([
+          expect.objectContaining({
+            outcome: "skipped",
+            error: expect.stringMatching(
+              /^oversized-request: estimatedPromptTokens=\d+ promptBudgetBeforeReserve=\d+$/,
+            ),
+          }),
+        ]);
+      },
+    );
+  }, 300_000);
+
   it("reviews the completed deep turn when shallow work finishes before the idle window", async () => {
     const requests: Request[] = [];
     const handlerErrors: unknown[] = [];
