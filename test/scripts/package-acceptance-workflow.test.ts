@@ -4045,10 +4045,12 @@ function runNpmTelegramInputValidation(overrides: Record<string, string>) {
 }
 
 function runNpmTelegramArtifactValidation(params: {
+  currentRunAttempt?: string;
   currentRunId: string;
+  producerJobConclusion?: "failure" | "success";
   producerRunId: string;
   producerStatus: "completed" | "in_progress" | "pending" | "queued" | "requested" | "waiting";
-  producerConclusion: "success" | null;
+  producerConclusion: "failure" | "success" | null;
 }) {
   const job = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
   const script = workflowStep(job, "Validate package artifact identity").run;
@@ -4062,6 +4064,7 @@ function runNpmTelegramArtifactValidation(params: {
     `#!/bin/sh
 case "$*" in
   *actions/artifacts*) printf '%s\\n' "$MOCK_ARTIFACT_JSON" ;;
+  *actions/runs*/jobs*) printf '%s\\n' "$MOCK_JOBS_JSON" ;;
   *actions/runs*) printf '%s\\n' "$MOCK_ATTEMPT_JSON" ;;
   *) exit 2 ;;
 esac
@@ -4081,6 +4084,7 @@ esac
       ARTIFACT_RUN_ATTEMPT: attempt,
       ARTIFACT_RUN_ID: params.producerRunId,
       GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_RUN_ATTEMPT: params.currentRunAttempt ?? attempt,
       GITHUB_RUN_ID: params.currentRunId,
       MOCK_ARTIFACT_JSON: JSON.stringify({
         created_at: "2026-07-15T08:49:20Z",
@@ -4097,6 +4101,20 @@ esac
         run_started_at: "2026-07-15T08:39:00Z",
         status: params.producerStatus,
         updated_at: "2026-07-15T08:49:30Z",
+      }),
+      MOCK_JOBS_JSON: JSON.stringify({
+        jobs: [
+          {
+            completed_at: "2026-07-15T08:49:30Z",
+            conclusion: params.producerJobConclusion ?? "success",
+            id: 654,
+            name: "Run package acceptance / Resolve package candidate",
+            run_attempt: Number(attempt),
+            run_id: Number(params.producerRunId),
+            started_at: "2026-07-15T08:39:00Z",
+            status: "completed",
+          },
+        ],
       }),
       PATH: `${binDir}:${process.env.PATH}`,
     },
@@ -13223,6 +13241,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "artifact_created_at > attempt_completed_at",
       "Package Telegram artifact creation time is outside the declared producer run attempt.",
       "Package Telegram artifact producer run attempt does not match the requested tuple.",
+      "actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}/jobs?per_page=100",
+      "Resolve package candidate",
+      "Prior-attempt Package Telegram artifact lacks one exact successful producer job.",
+      "Package Telegram artifact creation time is outside the successful producer job.",
     ]);
     expect(runStep.env).toMatchObject({
       PACKAGE_FILE_NAME: "${{ inputs.package_file_name || '' }}",
@@ -13280,6 +13302,34 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
 
     expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("accepts a prior-attempt artifact from the exact successful package producer", () => {
+    const result = runNpmTelegramArtifactValidation({
+      currentRunAttempt: "3",
+      currentRunId: "123",
+      producerConclusion: "failure",
+      producerRunId: "123",
+      producerStatus: "completed",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("rejects a prior-attempt artifact when the package producer failed", () => {
+    const result = runNpmTelegramArtifactValidation({
+      currentRunAttempt: "3",
+      currentRunId: "123",
+      producerConclusion: "failure",
+      producerJobConclusion: "failure",
+      producerRunId: "123",
+      producerStatus: "completed",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Prior-attempt Package Telegram artifact lacks one exact successful producer job.",
+    );
   });
 
   it("rejects queued artifacts after GitHub assigns a conclusion", () => {

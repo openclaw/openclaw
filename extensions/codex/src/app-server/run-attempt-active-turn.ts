@@ -253,7 +253,7 @@ export function activateCodexAttemptTurn(
             : "Codex cancellation could not confirm the turn stopped; background terminals may still be running.",
         );
       }
-      if (resources.nativeProcessAuthority) {
+      if (resources.nativeProcessAuthority?.requiresProcessAdmission) {
         await resources.nativeProcessAuthority.cancelTurn(
           resourceState.client,
           resourceState.thread.threadId,

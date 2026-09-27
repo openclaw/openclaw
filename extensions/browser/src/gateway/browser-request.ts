@@ -34,6 +34,7 @@ import { resolveBrowserNodeTarget } from "../browser-node-routing.js";
 import {
   BROWSER_PROXY_ERROR_ENVELOPE,
   parseBrowserProxyFailure,
+  parseBrowserProxyRoute,
   type BrowserProxyEnvelope,
 } from "../browser-proxy-envelope.js";
 import { resolveBrowserProxyTimeouts } from "../browser-proxy-timeouts.js";
@@ -54,6 +55,7 @@ import type { BrowserRequest } from "../browser/routes/types.js";
 import { startBrowserControlServiceFromConfig } from "../control-service.js";
 import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 import { withTimeout } from "../sdk-node-runtime.js";
+import { applyBrowserRequestTabScope, browserTabScopeSchema } from "./browser-request-tab-scope.js";
 
 const logger = createSubsystemLogger("browser");
 const dashboardRequestSchema = z.object({
@@ -72,6 +74,20 @@ type BrowserRequestParams = {
   body?: unknown;
   timeoutMs?: number;
   dashboard?: unknown;
+  tabScope?: unknown;
+};
+
+type BrowserGatewayNode = Pick<
+  NodeSession,
+  "nodeId" | "displayName" | "platform" | "deviceFamily" | "caps" | "commands" | "declaredCommands"
+>;
+type BrowserGatewayRequest = Parameters<GatewayRequestHandlers["browser.request"]>[0];
+type BrowserGatewayRequestOptions = Omit<BrowserGatewayRequest, "context"> & {
+  context: {
+    nodeRegistry: Pick<BrowserGatewayRequest["context"]["nodeRegistry"], "invoke"> & {
+      listConnected(): BrowserGatewayNode[];
+    };
+  };
 };
 
 export async function handleBrowserGatewayRequest({
@@ -81,7 +97,7 @@ export async function handleBrowserGatewayRequest({
   client,
   signal: invocationSignal,
   hasCurrentClientAuthority,
-}: Parameters<GatewayRequestHandlers["browser.request"]>[0]) {
+}: BrowserGatewayRequestOptions) {
   const reject = (...error: Parameters<typeof errorShape>) =>
     respond(false, undefined, errorShape(...error));
   const typed = params as BrowserRequestParams;
@@ -108,6 +124,20 @@ export async function handleBrowserGatewayRequest({
       throw new Error("Browser requester is no longer active");
     }
   };
+
+  const parsedTabScope =
+    typed.tabScope === undefined ? undefined : browserTabScopeSchema.safeParse(typed.tabScope);
+  if (
+    parsedTabScope &&
+    (!parsedTabScope.success || typed.dashboard !== undefined || path === "/dashboard")
+  ) {
+    reject(
+      ErrorCodes.INVALID_REQUEST,
+      "tabScope requires a valid session tab scope and cannot be combined with dashboard",
+    );
+    return;
+  }
+  const tabScope = parsedTabScope?.data;
 
   if (
     (typed.target !== undefined && typed.target !== "host" && !explicitNode) ||
@@ -227,7 +257,7 @@ export async function handleBrowserGatewayRequest({
     reject(ErrorCodes.INVALID_REQUEST, "this browser route must run on the Gateway host");
     return;
   }
-  let nodeTarget: NodeSession | null = null;
+  let nodeTarget: BrowserGatewayNode | null = null;
   if (!forceHostLocal && typed.target !== "host") {
     try {
       nodeTarget = await resolveBrowserNodeTarget({
@@ -298,6 +328,7 @@ export async function handleBrowserGatewayRequest({
   }
 
   if (nodeTarget && preparedUpload) {
+    const resolvedNodeTarget = nodeTarget;
     const allowlist = resolveNodeCommandAllowlist(cfg, nodeTarget);
     const allowed = isNodeCommandAllowed({
       command: proxyCommand,
@@ -314,29 +345,38 @@ export async function handleBrowserGatewayRequest({
     }
 
     const { proxyTimeoutMs, nodeInvokeTimeoutMs } = resolveBrowserProxyTimeouts(timeoutMs);
-    const proxyParams = {
-      method: methodRaw,
-      path,
-      query,
-      body: preparedUpload.body,
-      upload: preparedUpload.upload,
-      timeoutMs: proxyTimeoutMs,
-      profile: resolveRequestedBrowserProfile({ query, body }),
-      errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
-    };
-    let res;
-    try {
+    const invokeProxy = async (
+      proxyRequest: Record<string, unknown>,
+      command = BROWSER_PROXY_COMMAND,
+    ) => {
       assertRequesterCurrent();
-      res = await context.nodeRegistry.invoke({
-        nodeId: nodeTarget.nodeId,
-        command: proxyCommand,
-        params: proxyParams,
+      const invoked = await context.nodeRegistry.invoke({
+        nodeId: resolvedNodeTarget.nodeId,
+        command,
+        params: {
+          ...proxyRequest,
+          timeoutMs: proxyTimeoutMs,
+          errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
+        },
         timeoutMs: nodeInvokeTimeoutMs,
         signal: requestSignal,
         isDispatchAuthorized: isRequesterCurrent,
         idempotencyKey: crypto.randomUUID(),
       });
       assertRequesterCurrent();
+      return invoked;
+    };
+    const proxyParams = {
+      method: methodRaw,
+      path,
+      query,
+      body: preparedUpload.body,
+      upload: preparedUpload.upload,
+      profile: resolveRequestedBrowserProfile({ query, body }),
+    };
+    let res;
+    try {
+      res = await invokeProxy(proxyParams, proxyCommand);
     } catch (error) {
       reject(ErrorCodes.UNAVAILABLE, String(error));
       return;
@@ -370,9 +410,48 @@ export async function handleBrowserGatewayRequest({
       try {
         const result = await persistBrowserProxyResultFiles(proxy.result, proxy.files);
         assertRequesterCurrent();
-        respond(true, result);
-      } catch {
-        reject(ErrorCodes.UNAVAILABLE, "browser proxy file transfer failed");
+        const resolvedRoute = parseBrowserProxyRoute(proxy);
+        const scopedResult = tabScope
+          ? await applyBrowserRequestTabScope({
+              scope: tabScope,
+              method: methodRaw,
+              path,
+              body,
+              result,
+              nodeTarget,
+              profile:
+                resolvedRoute?.status === "resolved"
+                  ? resolvedRoute.profile
+                  : resolveRequestedBrowserProfile({ query, body }),
+              requestedProfile: resolveRequestedBrowserProfile({ query, body }),
+              assertCurrent: assertRequesterCurrent,
+              closeTab: async (targetId, profile) => {
+                const closed = await invokeProxy({
+                  method: "DELETE",
+                  path: `/tabs/${encodeURIComponent(targetId)}`,
+                  query: { targetIdMode: "raw" },
+                  profile,
+                });
+                const closePayload = closed.payloadJSON
+                  ? safeParseJson(closed.payloadJSON)
+                  : closed.payload;
+                if (
+                  !closed.ok ||
+                  parseBrowserProxyFailure(closePayload) ||
+                  !asNullableRecord(closePayload)?.result
+                ) {
+                  throw new Error("Failed to close newly opened browser node tab");
+                }
+              },
+            })
+          : result;
+        assertRequesterCurrent();
+        respond(true, scopedResult);
+      } catch (error) {
+        reject(
+          ErrorCodes.UNAVAILABLE,
+          tabScope ? String(error) : "browser proxy file transfer failed",
+        );
       }
       return;
     }
@@ -408,8 +487,12 @@ export async function handleBrowserGatewayRequest({
             hasCurrentClientAuthority?.() !== false,
         }
       : undefined;
+  let resolvedProfile: string | undefined;
   const assertCurrent: NonNullable<BrowserRequest["assertCurrent"]> = async (profile) => {
     assertRequesterCurrent();
+    if (profile) {
+      resolvedProfile = profile.name;
+    }
     await assertDashboardCurrent?.(profile);
     assertRequesterCurrent();
   };
@@ -447,9 +530,41 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  respond(true, result.body);
+  try {
+    const scopedResult = tabScope
+      ? await applyBrowserRequestTabScope({
+          scope: tabScope,
+          method: methodRaw,
+          path,
+          body,
+          result: result.body,
+          profile: resolvedProfile,
+          requestedProfile: resolveRequestedBrowserProfile({ query, body }),
+          defaultProfile: ready.resolved.defaultProfile,
+          assertCurrent: assertRequesterCurrent,
+          closeTab: async (targetId, profile) => {
+            assertRequesterCurrent();
+            const closed = await dispatcher.dispatch({
+              method: "DELETE",
+              path: `/tabs/${encodeURIComponent(targetId)}`,
+              query: { profile, targetIdMode: "raw" },
+              signal: requestSignal,
+              ...(requester ? { requester } : {}),
+              assertCurrent,
+            });
+            assertRequesterCurrent();
+            if (closed.status >= 400) {
+              throw new Error(`Failed to close newly opened browser tab (${closed.status})`);
+            }
+          },
+        })
+      : result.body;
+    respond(true, scopedResult);
+  } catch (error) {
+    reject(ErrorCodes.UNAVAILABLE, String(error));
+  }
 }
 
-export const browserHandlers: GatewayRequestHandlers = {
+export const browserHandlers = {
   "browser.request": handleBrowserGatewayRequest,
-};
+} satisfies GatewayRequestHandlers;

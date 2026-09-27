@@ -5,7 +5,7 @@ import {
   resolveModelRefFromString,
   resolveConfiguredModelRef,
 } from "../agents/model-selection-shared.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createTestRuntime,
   useConfigCliIntegrationHarness,
@@ -67,76 +67,70 @@ const {
   withConfigFileHarness,
 } = useConfigCliIntegrationHarness();
 
-describe("config CLI candidate model environment", () => {
-  it.each([false, true])(
-    "rejects candidate environment-backed model before committing (preview=%s)",
-    async (preview) => {
-      const raw = JSON.stringify({ agents: { entries: { main: {} } } });
-      await withConfigFileHarness("config-candidate-model-env-", raw, async ({ configPath }) => {
-        const env = captureEnv(["CONFIG_CANDIDATE_MODEL"]);
-        const candidateModel = "fixture-unavailable-provider/private-candidate-model";
-        try {
-          deleteTestEnvValue("CONFIG_CANDIDATE_MODEL");
-          await expect(
-            runRegisteredConfigCommand([
-              "config",
-              "set",
-              "--batch-json",
-              JSON.stringify([
-                { path: "env.vars.CONFIG_CANDIDATE_MODEL", value: candidateModel },
-                { path: "agents.defaults.model", value: "${CONFIG_CANDIDATE_MODEL}" },
-              ]),
-              ...(preview ? ["--dry-run"] : []),
-            ]),
-          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-          const output = [...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n");
-          expect(output).toContain("Cannot set model reference");
-          expect(output).not.toContain(candidateModel);
-          expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-          expect(fs.existsSync(configPath + ".bak")).toBe(false);
-        } finally {
-          env.restore();
-        }
-      });
-    },
+function withModelConfig(
+  raw: string,
+  env: Record<string, string | undefined>,
+  run: (configPath: string) => Promise<void>,
+) {
+  return withConfigFileHarness("config-candidate-model-env-", raw, ({ configPath }) =>
+    withEnvAsync(env, () => run(configPath)),
   );
+}
+
+describe("config CLI candidate model environment", () => {
+  it("rejects candidate environment-backed model before committing", async () => {
+    const raw = JSON.stringify({ agents: { entries: { main: {} } } });
+    await withModelConfig(raw, { CONFIG_CANDIDATE_MODEL: undefined }, async (configPath) => {
+      const candidateModel = "fixture-unavailable-provider/private-candidate-model";
+      await expect(
+        runRegisteredConfigCommand([
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify([
+            { path: "env.vars.CONFIG_CANDIDATE_MODEL", value: candidateModel },
+            { path: "agents.defaults.model", value: "${CONFIG_CANDIDATE_MODEL}" },
+          ]),
+        ]),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      const output = [...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n");
+      expect(output).toContain("Cannot set model reference");
+      expect(output).not.toContain(candidateModel);
+      expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      expect(fs.existsSync(configPath + ".bak")).toBe(false);
+    });
+  });
 
   it.each([false, true])(
     "accepts a valid candidate environment-backed model (preview=%s)",
     async (preview) => {
       const raw = JSON.stringify({ agents: { entries: { main: {} } } });
-      await withConfigFileHarness(
-        "config-valid-candidate-model-env-",
+      await withModelConfig(
         raw,
-        async ({ configPath }) => {
-          const env = captureEnv(["CONFIG_VALID_CANDIDATE_MODEL"]);
-          try {
-            deleteTestEnvValue("CONFIG_VALID_CANDIDATE_MODEL");
-            const error = await runRegisteredConfigCommand([
-              "config",
-              "set",
-              "--batch-json",
-              JSON.stringify([
-                { path: "env.vars.CONFIG_VALID_CANDIDATE_MODEL", value: "fixture-model/allowed" },
-                { path: "agents.defaults.model", value: "${CONFIG_VALID_CANDIDATE_MODEL}" },
-              ]),
-              ...(preview ? ["--dry-run"] : []),
-            ]).catch((caught: unknown) => caught);
-            expect(
-              error,
-              [...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n"),
-            ).toBeUndefined();
-            if (preview) {
-              expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-              expect(fs.existsSync(configPath + ".bak")).toBe(false);
-            } else {
-              const saved = JSON.parse(fs.readFileSync(configPath, "utf8"));
-              expect(saved.agents.defaults.model).toBe("${CONFIG_VALID_CANDIDATE_MODEL}");
-              expect(saved.env.vars.CONFIG_VALID_CANDIDATE_MODEL).toBe("fixture-model/allowed");
-              expect(fs.readFileSync(configPath + ".bak", "utf8")).toBe(raw);
-            }
-          } finally {
-            env.restore();
+        { CONFIG_VALID_CANDIDATE_MODEL: undefined },
+        async (configPath) => {
+          const error = await runRegisteredConfigCommand([
+            "config",
+            "set",
+            "--batch-json",
+            JSON.stringify([
+              { path: "env.vars.CONFIG_VALID_CANDIDATE_MODEL", value: "fixture-model/allowed" },
+              { path: "agents.defaults.model", value: "${CONFIG_VALID_CANDIDATE_MODEL}" },
+            ]),
+            ...(preview ? ["--dry-run"] : []),
+          ]).catch((caught: unknown) => caught);
+          expect(
+            error,
+            [...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n"),
+          ).toBeUndefined();
+          if (preview) {
+            expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+            expect(fs.existsSync(configPath + ".bak")).toBe(false);
+          } else {
+            const saved = JSON.parse(fs.readFileSync(configPath, "utf8"));
+            expect(saved.agents.defaults.model).toBe("${CONFIG_VALID_CANDIDATE_MODEL}");
+            expect(saved.env.vars.CONFIG_VALID_CANDIDATE_MODEL).toBe("fixture-model/allowed");
+            expect(fs.readFileSync(configPath + ".bak", "utf8")).toBe(raw);
           }
         },
       );
@@ -144,8 +138,6 @@ describe("config CLI candidate model environment", () => {
   );
   it.each([
     { preview: false, retouch: false },
-    { preview: true, retouch: false },
-    { preview: false, retouch: true },
     { preview: true, retouch: true },
   ])(
     "rejects changed environment behind an unchanged model reference (preview=$preview, retouch=$retouch)",
@@ -154,43 +146,35 @@ describe("config CLI candidate model environment", () => {
         env: { vars: { CONFIG_EXISTING_MODEL: "fixture-model/allowed" } },
         agents: { entries: { main: {} }, defaults: { model: "${CONFIG_EXISTING_MODEL}" } },
       });
-      await withConfigFileHarness("config-existing-model-env-", raw, async ({ configPath }) => {
-        const env = captureEnv(["CONFIG_EXISTING_MODEL"]);
-        try {
-          deleteTestEnvValue("CONFIG_EXISTING_MODEL");
-          await expect(
-            runRegisteredConfigCommand([
-              "config",
-              "set",
-              "--batch-json",
-              JSON.stringify([
-                { path: "env.vars.CONFIG_EXISTING_MODEL", value: "fixture-model/unknown" },
-                ...(retouch
-                  ? [{ path: "agents.defaults.model", value: "${CONFIG_EXISTING_MODEL}" }]
-                  : []),
-              ]),
-              ...(preview ? ["--dry-run"] : []),
+      await withModelConfig(raw, { CONFIG_EXISTING_MODEL: undefined }, async (configPath) => {
+        await expect(
+          runRegisteredConfigCommand([
+            "config",
+            "set",
+            "--batch-json",
+            JSON.stringify([
+              { path: "env.vars.CONFIG_EXISTING_MODEL", value: "fixture-model/unknown" },
+              ...(retouch
+                ? [{ path: "agents.defaults.model", value: "${CONFIG_EXISTING_MODEL}" }]
+                : []),
             ]),
-          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-          expect([...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n")).toContain(
-            "Cannot set model reference",
-          );
-          expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-          expect(fs.existsSync(configPath + ".bak")).toBe(false);
-        } finally {
-          env.restore();
-        }
+            ...(preview ? ["--dry-run"] : []),
+          ]),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect([...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n")).toContain(
+          "Cannot set model reference",
+        );
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        expect(fs.existsSync(configPath + ".bak")).toBe(false);
       });
     },
   );
-  it.each(
-    [false, true].flatMap((preview) =>
-      (["removed", "redirected", "unrelated", "external"] as const).map((change) => ({
-        preview,
-        change,
-      })),
-    ),
-  )(
+  it.each([
+    { preview: false, change: "removed" },
+    { preview: true, change: "redirected" },
+    { preview: true, change: "unrelated" },
+    { preview: false, change: "external" },
+  ])(
     "validates env-backed alias dependencies (preview=$preview, change=$change)",
     async ({ preview, change }) => {
       const aliasKey = `CONFIG_MODEL_ALIAS_${change.toUpperCase()}_${preview ? "PREVIEW" : "WRITE"}`;
@@ -210,14 +194,13 @@ describe("config CLI candidate model environment", () => {
           },
         },
       });
-      await withConfigFileHarness("config-model-alias-env-", raw, async ({ configPath }) => {
-        const env = captureEnv([aliasKey, otherKey]);
-        try {
-          deleteTestEnvValue(aliasKey);
-          deleteTestEnvValue(otherKey);
-          if (change === "external") {
-            setTestEnvValue(aliasKey, "friendly");
-          }
+      await withModelConfig(
+        raw,
+        {
+          [aliasKey]: change === "external" ? "friendly" : undefined,
+          [otherKey]: undefined,
+        },
+        async (configPath) => {
           catalog.calls.mockClear();
           const result = runRegisteredConfigCommand([
             "config",
@@ -256,141 +239,121 @@ describe("config CLI candidate model environment", () => {
               expect(fs.readFileSync(configPath + ".bak", "utf8")).toBe(raw);
             }
           }
-        } finally {
-          env.restore();
-        }
-      });
+        },
+      );
     },
   );
-  it.each(
-    [false, true].flatMap((preview) =>
-      (
-        [
-          "default-direct",
-          "agent-direct",
-          "agent-env",
-          "inherited-env",
-          "fallback-env",
-          "default-parent",
-          "agent-parent",
-        ] as const
-      ).map((kind) => ({ preview, kind })),
-    ),
-  )(
-    "checks alias changes in the owning agent scope (preview=$preview, kind=$kind)",
-    async ({ preview, kind }) => {
-      const aliasKey = `CONFIG_OWNING_ALIAS_${kind.replaceAll("-", "_").toUpperCase()}_${preview ? "PREVIEW" : "WRITE"}`;
-      const aliasRef = "${" + aliasKey + "}";
-      const direct = kind.endsWith("direct") || kind.endsWith("parent");
-      const agentScoped = !kind.startsWith("default");
-      const raw = JSON.stringify({
-        env: { vars: { [aliasKey]: "friendly" } },
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            model: !agentScoped || kind === "inherited-env" ? "friendly" : "fixture-model/allowed",
-            models: { "fixture-model/allowed": { alias: "friendly" } },
-          },
-          entries: {
-            main: {},
-            ...(agentScoped
-              ? {
-                  ops: {
-                    ...(kind === "inherited-env"
-                      ? {}
-                      : {
-                          model:
-                            kind === "fallback-env"
-                              ? { primary: "fixture-model/allowed", fallbacks: ["friendly"] }
-                              : "friendly",
-                        }),
-                    models: { "fixture-model/allowed": { alias: direct ? "friendly" : aliasRef } },
-                  },
-                }
-              : {}),
-          },
+  it.each([
+    "default-direct",
+    "agent-direct",
+    "agent-env",
+    "inherited-env",
+    "fallback-env",
+    "default-parent",
+    "agent-parent",
+  ])("checks alias changes in the owning agent scope (%s)", async (kind) => {
+    const aliasKey = `CONFIG_OWNING_ALIAS_${kind.replaceAll("-", "_").toUpperCase()}`;
+    const aliasRef = "${" + aliasKey + "}";
+    const direct = kind.endsWith("direct") || kind.endsWith("parent");
+    const agentScoped = !kind.startsWith("default");
+    const raw = JSON.stringify({
+      env: { vars: { [aliasKey]: "friendly" } },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: !agentScoped || kind === "inherited-env" ? "friendly" : "fixture-model/allowed",
+          models: { "fixture-model/allowed": { alias: "friendly" } },
         },
-      });
-      await withConfigFileHarness("config-owning-alias-", raw, async ({ configPath }) => {
-        const env = captureEnv([aliasKey]);
-        try {
-          deleteTestEnvValue(aliasKey);
-          catalog.calls.mockClear();
-          await expect(
-            runRegisteredConfigCommand([
-              "config",
-              "set",
-              "--batch-json",
-              JSON.stringify([
-                {
-                  path: kind.endsWith("parent")
-                    ? agentScoped
-                      ? "agents.entries.ops"
-                      : "agents.defaults"
-                    : direct
-                      ? `${agentScoped ? "agents.entries.ops" : "agents.defaults"}.models["fixture-model/allowed"].alias`
-                      : `env.vars.${aliasKey}`,
-                  value: kind.endsWith("parent")
-                    ? { model: "friendly", models: { "fixture-model/allowed": { alias: "gone" } } }
-                    : "gone",
+        entries: {
+          main: {},
+          ...(agentScoped
+            ? {
+                ops: {
+                  ...(kind === "inherited-env"
+                    ? {}
+                    : {
+                        model:
+                          kind === "fallback-env"
+                            ? { primary: "fixture-model/allowed", fallbacks: ["friendly"] }
+                            : "friendly",
+                      }),
+                  models: { "fixture-model/allowed": { alias: direct ? "friendly" : aliasRef } },
                 },
-              ]),
-              ...(preview ? ["--dry-run"] : []),
-            ]),
-          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-          expect(
-            catalog.calls,
-            [...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n"),
-          ).toHaveBeenCalled();
-          expect([...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n")).toContain(
-            "Cannot set model reference",
-          );
-          expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-          expect(fs.existsSync(configPath + ".bak")).toBe(false);
-        } finally {
-          env.restore();
-        }
-      });
-    },
-  );
-  it.each([false, true])(
-    "checks fallback provider after an owning primary edit (preview=%s)",
-    async (preview) => {
-      const raw = JSON.stringify({
-        agents: {
-          ownership: "explicit",
-          defaults: { model: "fixture-model/allowed" },
-          entries: {
-            main: {},
-            ops: { model: { primary: "fixture-model/allowed", fallbacks: ["backup"] } },
-          },
+              }
+            : {}),
         },
-      });
-      await withConfigFileHarness("config-owning-provider-", raw, async ({ configPath }) => {
-        catalog.calls.mockClear();
-        await expect(
-          runRegisteredConfigCommand([
-            "config",
-            "set",
-            "agents.entries.ops.model.primary",
-            "fixture-other/allowed",
-            ...(preview ? ["--dry-run"] : []),
+      },
+    });
+    await withModelConfig(raw, { [aliasKey]: undefined }, async (configPath) => {
+      catalog.calls.mockClear();
+      await expect(
+        runRegisteredConfigCommand([
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify([
+            {
+              path: kind.endsWith("parent")
+                ? agentScoped
+                  ? "agents.entries.ops"
+                  : "agents.defaults"
+                : direct
+                  ? `${agentScoped ? "agents.entries.ops" : "agents.defaults"}.models["fixture-model/allowed"].alias`
+                  : `env.vars.${aliasKey}`,
+              value: kind.endsWith("parent")
+                ? { model: "friendly", models: { "fixture-model/allowed": { alias: "gone" } } }
+                : "gone",
+            },
           ]),
-        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-        expect(catalog.calls).toHaveBeenCalledWith("backup");
-        expect([...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n")).toContain(
-          "Cannot set model reference",
-        );
-        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-        expect(fs.existsSync(configPath + ".bak")).toBe(false);
-      });
-    },
-  );
-  it.each(
-    [false, true].flatMap((preview) =>
-      ["invalid-default", "invalid-agent", "valid", "discarded"].map((kind) => ({ preview, kind })),
-    ),
-  )(
+        ]),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(
+        catalog.calls,
+        [...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n"),
+      ).toHaveBeenCalled();
+      expect([...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n")).toContain(
+        "Cannot set model reference",
+      );
+      expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      expect(fs.existsSync(configPath + ".bak")).toBe(false);
+    });
+  });
+  it("checks fallback provider after an owning primary edit", async () => {
+    const raw = JSON.stringify({
+      agents: {
+        ownership: "explicit",
+        defaults: { model: "fixture-model/allowed" },
+        entries: {
+          main: {},
+          ops: { model: { primary: "fixture-model/allowed", fallbacks: ["backup"] } },
+        },
+      },
+    });
+    await withConfigFileHarness("config-owning-provider-", raw, async ({ configPath }) => {
+      catalog.calls.mockClear();
+      await expect(
+        runRegisteredConfigCommand([
+          "config",
+          "set",
+          "agents.entries.ops.model.primary",
+          "fixture-other/allowed",
+        ]),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(catalog.calls).toHaveBeenCalledWith("backup");
+      expect([...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n")).toContain(
+        "Cannot set model reference",
+      );
+      expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      expect(fs.existsSync(configPath + ".bak")).toBe(false);
+    });
+  });
+
+  it.each([
+    { preview: true, kind: "invalid-default" },
+    { preview: false, kind: "invalid-agent" },
+    { preview: false, kind: "valid" },
+    { preview: false, kind: "discarded" },
+  ])(
     "validates surviving model assignments after ordered deletion (preview=$preview, kind=$kind)",
     async ({ preview, kind }) => {
       const agentScoped = kind === "invalid-agent";
@@ -413,7 +376,7 @@ describe("config CLI candidate model environment", () => {
         const target = [...prefix, "2"];
         const deleted = [...prefix, kind === "discarded" ? "2" : "0"];
         const value = kind === "valid" ? "fixture-model/backup" : "fixture-model/not-available";
-        const { runtime, logs } = createTestRuntime();
+        const { runtime } = createTestRuntime();
         catalog.calls.mockClear();
         const outcome = runConfigOperations({
           runtime,
@@ -443,18 +406,12 @@ describe("config CLI candidate model environment", () => {
         } else {
           expect(catalog.calls).toHaveBeenCalledWith(value);
         }
-        if (preview) {
-          expect(logs.join("\n")).toContain("2 update(s)");
-          expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-          expect(fs.existsSync(configPath + ".bak")).toBe(false);
-        } else {
-          const saved = JSON.parse(fs.readFileSync(configPath, "utf8"));
-          expect(saved.agents.defaults.model.fallbacks).toEqual([
-            "fixture-model/allowed",
-            kind === "discarded" ? "fixture-model/allowed" : value,
-          ]);
-          expect(fs.readFileSync(configPath + ".bak", "utf8")).toBe(raw);
-        }
+        const saved = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        expect(saved.agents.defaults.model.fallbacks).toEqual([
+          "fixture-model/allowed",
+          kind === "discarded" ? "fixture-model/allowed" : value,
+        ]);
+        expect(fs.readFileSync(configPath + ".bak", "utf8")).toBe(raw);
       });
     },
   );

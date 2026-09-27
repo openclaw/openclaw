@@ -254,13 +254,14 @@ function formatCronStatusForDisplay(job: CronJob) {
   const streamDisabled =
     job.enabled && job.schedule?.kind === "stream" && state.streamStatus === "disabled";
   const undelivered = status === "ok" && state.lastDeliveryStatus === "not-delivered";
+  const deliveryUnknown = status === "ok" && state.lastDeliveryStatus === "unknown";
   const suppressed =
     undelivered && !streamDisabled && state.deliverySuppressionReason !== undefined;
   // The recorded non-outcome, not completion success, distinguishes silence from failed best-effort delivery.
   const color =
     status === "error"
       ? theme.error
-      : status === "running" || (undelivered && !suppressed)
+      : status === "running" || deliveryUnknown || (undelivered && !suppressed)
         ? theme.warn
         : status === "ok"
           ? theme.success
@@ -275,6 +276,8 @@ function formatCronStatusForDisplay(job: CronJob) {
         : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
   } else if (undelivered) {
     label = suppressed ? "ok (suppressed)" : "ok (not delivered)";
+  } else if (deliveryUnknown) {
+    label = "delivery unknown";
   }
   return { label, color };
 }

@@ -880,12 +880,12 @@ export function buildGatewayCronService(params: {
       });
       return { ...result, ...completion };
     },
-    sendCronWebhook: async ({ job, event, abortSignal, onDeliveryAccepted }) => {
-      await sendGatewayCronWebhook({
+    sendCronWebhook: async ({ job, event, abortSignal, onDeliveryState }) => {
+      return await sendGatewayCronWebhook({
         job,
         event,
         abortSignal,
-        onDeliveryAccepted,
+        onDeliveryState,
         webhookToken: params.cfg.cron?.webhookToken,
         ssrfPolicy: webhookSsrfPolicy,
       });

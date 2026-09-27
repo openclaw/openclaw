@@ -360,6 +360,7 @@ extension OpenClawChatViewModel {
         }
 
         guard await self.prepareLiveRoute(for: draft) else { return }
+        guard await self.validateAttachmentBudgetForSend(draft.attachments, session: draft.session) else { return }
         guard self.composerModelAvailabilityMessage == nil else {
             logDiagnostic("chat.ui send ignored reason=model-auth sessionKey=\(sessionKey)")
             return
@@ -597,6 +598,7 @@ extension OpenClawChatViewModel {
                     text: nil,
                     mimeType: payload.mimeType,
                     fileName: payload.fileName,
+                    sizeBytes: attachment.data.count,
                     durationSeconds: attachment.durationSeconds,
                     content: AnyCodable(payload.content)))
         }

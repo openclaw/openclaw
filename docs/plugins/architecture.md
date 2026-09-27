@@ -234,6 +234,11 @@ directory snapshot per admitted identity, preserving old binary and companion
 bytes through in-place edits. Files in this namespace are prepared at admission;
 module execution remains on demand. Registrations share admission facts without
 sharing their runtime authority.
+When native packages share a dependency, admission reconciles identities only for
+its own hardlinks, even when the filesystem's ctime has not advanced. Recorded
+digests are checked against installed bytes before promotion, including companions
+previously captured as independent copies. Unchanged companions remain valid during
+Doctor and reload; source content checks still reject edits.
 When file symlinks are unavailable, a generation can use hardlinks only if its
 directory preserves every captured companion and the selected host SDK. Otherwise
 that plugin reports a load error asking for file symlink support; the update

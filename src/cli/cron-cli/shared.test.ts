@@ -472,37 +472,40 @@ describe("printCronList", () => {
   });
 
   it.each([
-    { label: "required", bestEffort: false },
-    { label: "best-effort", bestEffort: true },
-    { label: "default", bestEffort: undefined },
-  ])(
-    "makes $label undelivered automation output visible without changing JSON status",
-    ({ bestEffort }) => {
+    ["required", false, "not-delivered", "HTTP 503", "ok (not delivered)"],
+    ["best-effort", true, "not-delivered", "HTTP 503", "ok (not delivered)"],
+    ["default", undefined, "not-delivered", "HTTP 503", "ok (not delivered)"],
+    ["required", false, "unknown", "request timed out", "delivery unknown"],
+    ["best-effort", true, "unknown", "request timed out", "delivery unknown"],
+  ] as const)(
+    "shows %s delivery outcomes (best effort %s, status %s) without changing JSON status",
+    (_policy, bestEffort, deliveryStatus, deliveryError, expectedStatus) => {
       const job = createBaseJob({
-        id: "undelivered-job",
+        id: "delivery-job",
         delivery: {
-          mode: "announce",
-          ...(bestEffort === undefined ? {} : { bestEffort }),
+          mode: "webhook",
+          to: "https://example.invalid/hook",
+          bestEffort,
         },
         state: {
           lastRunStatus: "ok",
-          lastDeliveryStatus: "not-delivered",
-          lastDeliveryError: "primary route rejected",
+          lastDeliveryStatus: deliveryStatus,
+          lastDeliveryError: deliveryError,
         },
       });
 
       const list = createRuntimeLogCapture();
       printCronList([job], list.runtime);
-      expectLogsToInclude(list.logs, "ok (not delivered)");
+      expectLogsToInclude(list.logs, expectedStatus);
 
       const show = createRuntimeLogCapture();
       printCronShow(job, show.runtime);
-      expectLogsToInclude(show.logs, "status: ok (not delivered)");
-      expectLogsToInclude(show.logs, "last delivery error: primary route rejected");
+      expectLogsToInclude(show.logs, `status: ${expectedStatus}`);
+      expectLogsToInclude(show.logs, `last delivery error: ${deliveryError}`);
 
       expect(enrichCronJsonWithStatus(job)).toMatchObject({
         status: "ok",
-        state: { lastRunStatus: "ok", lastDeliveryStatus: "not-delivered" },
+        state: { lastRunStatus: "ok", lastDeliveryStatus: deliveryStatus },
       });
       expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({
         jobs: [{ status: "ok" }],
