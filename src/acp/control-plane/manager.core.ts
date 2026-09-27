@@ -95,7 +95,10 @@ export class AcpSessionManager {
     });
     registerAcpSessionManagerDisposer(this, async (reason) => {
       this.stopping = true;
-      const acceptedTurns = [...this.acceptedTurns.values()].flatMap((turns) => [...turns]);
+      const acceptedTurns = [];
+      for (const turns of this.acceptedTurns.values()) {
+        acceptedTurns.push(...turns);
+      }
       await Promise.all(
         acceptedTurns.map(async (acceptedTurn) => {
           try {

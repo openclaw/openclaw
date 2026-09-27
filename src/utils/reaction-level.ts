@@ -64,7 +64,6 @@ export function resolveReactionLevel(params: {
         agentReactionsEnabled: true,
         agentReactionGuidance: "extensive",
       };
-    case "minimal":
     default:
       return {
         level: "minimal",

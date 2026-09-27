@@ -62,7 +62,8 @@ type JsonContainer = {
 
 const JSON_TOKEN_RE = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}[\]]/g;
 
-function skipWhitespace(text: string, offset: number): number {
+function skipWhitespace(text: string, start: number): number {
+  let offset = start;
   while (
     text[offset] === " " ||
     text[offset] === "\t" ||
