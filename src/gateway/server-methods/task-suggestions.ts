@@ -51,7 +51,7 @@ import type {
   GatewayRequestHandlers,
   RespondFn,
 } from "./types.js";
-import { defineValidatedGatewayMethod } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 type TaskSuggestionAcceptMode = NonNullable<TaskSuggestionsAcceptParams["mode"]>;
 
@@ -301,7 +301,7 @@ async function deliverSuggestedTaskToSourceSession(params: {
 }
 
 export const taskSuggestionsHandlers: GatewayRequestHandlers = {
-  "taskSuggestions.list": defineValidatedGatewayMethod(
+  "taskSuggestions.list": defineValidatedGatewayHandler(
     "taskSuggestions.list",
     validateTaskSuggestionsListParams,
     ({ params, respond, context, client }) => {
@@ -343,7 +343,7 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       );
     },
   ),
-  "taskSuggestions.create": defineValidatedGatewayMethod(
+  "taskSuggestions.create": defineValidatedGatewayHandler(
     "taskSuggestions.create",
     validateTaskSuggestionsCreateParams,
     ({ params, respond, context }) => {
@@ -387,7 +387,7 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       respond(true, { taskId: suggestion.id, suggestion }, undefined);
     },
   ),
-  "taskSuggestions.accept": defineValidatedGatewayMethod(
+  "taskSuggestions.accept": defineValidatedGatewayHandler(
     "taskSuggestions.accept",
     validateTaskSuggestionsAcceptParams,
     async (options) => {
@@ -528,7 +528,7 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       }
     },
   ),
-  "taskSuggestions.dismiss": defineValidatedGatewayMethod(
+  "taskSuggestions.dismiss": defineValidatedGatewayHandler(
     "taskSuggestions.dismiss",
     validateTaskSuggestionsDismissParams,
     ({ params, respond, context, client }) => {

@@ -118,47 +118,65 @@ beforeEach(() => {
 
 describe("chat send stop ownership", () => {
   it("stops selected-agent work without cancelling the compatibility owner's run", async () => {
-    const { fixture, params } = preAdmissionFixture("stop-selected-agent");
-    const cfg: OpenClawConfig = {
-      session: { scope: "global", store: "/tmp/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    };
-    params.request.stopCommand = true;
-    Object.assign(params.session, {
-      cfg,
-      sessionKey: "global",
-      rawSessionKey: "global",
-      agentId: "research",
-      selectedAgent: { ok: true, agentId: "research" },
-      entry: undefined,
-    });
-    for (const [runId, agentId] of [
-      ["selected", "research"],
-      ["compatibility", undefined],
-    ]) {
-      fixture.context.dedupe.set(`agent:${runId}`, {
-        ts: 100,
-        ok: true,
-        payload: { runId, sessionKey: "global", agentId, status: "accepted" },
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { fixture, params } = preAdmissionFixture("stop-selected-agent");
+      const cfg: OpenClawConfig = {
+        session: {
+          scope: "global",
+          store: state.statePath("agents", "{agentId}", "sessions", "sessions.sqlite"),
+        },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      };
+      await state.writeConfig(cfg);
+      fixture.context.getRuntimeConfig = () => cfg;
+      params.request.stopCommand = true;
+      params.request.p = {
+        sessionKey: "global",
+        agentId: "research",
+        idempotencyKey: "stop-selected-agent",
+        message: "/stop",
+      };
+      Object.assign(params.session, {
+        cfg,
+        sessionKey: "global",
+        rawSessionKey: "global",
+        sessionLoadKey: "global",
+        sessionLoadOptions: { agentId: "research" },
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "research" }),
+        agentId: "research",
+        requestedAgentId: "research",
+        selectedAgent: { ok: true, agentId: "research" },
+        backingSessionId: undefined,
+        entry: undefined,
       });
-    }
+      for (const [runId, agentId] of [
+        ["selected", "research"],
+        ["compatibility", undefined],
+      ]) {
+        fixture.context.dedupe.set(`agent:${runId}`, {
+          ts: 100,
+          ok: true,
+          payload: { runId, sessionKey: "global", agentId, status: "accepted" },
+        });
+      }
 
-    expect(await runChatSendPreAdmission(params)).toBe(false);
-    expect(fixture.respond).toHaveBeenCalledWith(true, {
-      ok: true,
-      aborted: true,
-      runIds: ["selected"],
-    });
-    expect(fixture.context.dedupe.get("agent:selected")?.payload).toMatchObject({
-      status: "timeout",
-      summary: "aborted",
-    });
-    expect(fixture.context.dedupe.get("agent:compatibility")?.payload).toMatchObject({
-      status: "accepted",
+      expect(await runChatSendPreAdmission(params)).toBe(false);
+      expect(fixture.respond).toHaveBeenCalledWith(true, {
+        ok: true,
+        aborted: true,
+        runIds: ["selected"],
+      });
+      expect(fixture.context.dedupe.get("agent:selected")?.payload).toMatchObject({
+        status: "timeout",
+        summary: "aborted",
+      });
+      expect(fixture.context.dedupe.get("agent:compatibility")?.payload).toMatchObject({
+        status: "accepted",
+      });
     });
   });
 });

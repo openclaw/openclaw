@@ -10,6 +10,7 @@ import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { WORKER_BUNDLE_RSYNC_RECEIVER_PATH } from "../../shared/worker-bundle-hash.js";
+import { sleep } from "../../utils/sleep.js";
 import {
   type PreparedWorkerSsh,
   workerSshCommandOptions,
@@ -56,12 +57,15 @@ export function waitForQuiescenceRenewal(
   if (signal.aborted) {
     return Promise.resolve(false);
   }
-  return delay(intervalMs, true, { signal }).catch((error: unknown) => {
-    if (signal.aborted) {
-      return false;
-    }
-    throw error;
-  });
+  return sleep(intervalMs, signal).then(
+    () => true,
+    (error: unknown) => {
+      if (signal.aborted) {
+        return false;
+      }
+      throw error;
+    },
+  );
 }
 
 export function workerWorkspaceCommandSucceeded(result: SpawnResult): boolean {
