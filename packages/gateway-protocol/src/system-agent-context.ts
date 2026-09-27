@@ -28,11 +28,10 @@ export type SystemAgentPluginReference = {
 };
 
 function addDeclaredCapabilities(reference: SystemAgentPluginReference, value: unknown): void {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const raw = asProtocolRecord(value);
+  if (!raw) {
     return;
   }
-  // SAFETY: the guard excludes null and arrays; each accepted group is validated below.
-  const raw = value as Record<string, unknown>;
   // Reserve the omission marker before adding names. The setting keeps priority
   // and no clipped identifier can be mistaken for an actual tool or provider.
   const declared: PluginDeclaredCapabilities = { incomplete: true };
@@ -84,11 +83,10 @@ function addDeclaredCapabilities(reference: SystemAgentPluginReference, value: u
 export function normalizeSystemAgentPluginReference(
   value: unknown,
 ): SystemAgentPluginReference | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const raw = asProtocolRecord(value);
+  if (!raw) {
     return undefined;
   }
-  // SAFETY: the guard above excludes null and arrays; fields remain unknown until checked.
-  const raw = value as Record<string, unknown>;
   if (typeof raw.id !== "string" || !/^[A-Za-z0-9@][A-Za-z0-9@._/-]{0,127}$/u.test(raw.id)) {
     return undefined;
   }
@@ -103,9 +101,8 @@ export function normalizeSystemAgentPluginReference(
   if (typeof raw.installed === "boolean") {
     reference.installed = raw.installed;
   }
-  if (raw.setting && typeof raw.setting === "object" && !Array.isArray(raw.setting)) {
-    // SAFETY: the branch establishes a non-null object; each accepted field is validated below.
-    const setting = raw.setting as Record<string, unknown>;
+  const setting = asProtocolRecord(raw.setting);
+  if (setting) {
     if (
       Array.isArray(setting.path) &&
       setting.path.length > 0 &&
@@ -133,3 +130,4 @@ export function normalizeSystemAgentPluginReference(
     ? reference
     : undefined;
 }
+import { asProtocolRecord } from "./protocol-value-normalization.js";

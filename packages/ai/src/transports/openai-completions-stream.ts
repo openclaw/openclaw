@@ -147,14 +147,13 @@ export async function processCompletionsStream(
     directMode && currentBlock && currentBlock.type !== "toolCall"
       ? (contentBlockIndices.get(currentBlock) ?? output.content.length - 1)
       : output.content.length - 1;
-  const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   let chunkPushedEvent = false;
   const pushStreamEvent = (event: AssistantMessageEvent) => {
     chunkPushedEvent = true;
     stream.push(event);
   };
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
-    const nextBytes = measureUtf8Bytes(next.text);
+    const nextBytes = Buffer.byteLength(next.text, "utf8");
     if (pendingPostToolCallBytes + nextBytes > MAX_POST_TOOL_CALL_BUFFER_BYTES) {
       throw new Error("Exceeded post-tool-call delta buffer limit");
     }
@@ -163,17 +162,12 @@ export async function processCompletionsStream(
     if (
       !previous ||
       previous.kind !== next.kind ||
-      (previous.kind === "text" && next.kind === "text" && previous.source !== next.source)
+      (previous.kind === "text" && next.kind === "text" && previous.source !== next.source) ||
+      (previous.kind === "thinking" &&
+        next.kind === "thinking" &&
+        previous.signature !== next.signature)
     ) {
       pendingPostToolCallDeltas.push(next);
-      return;
-    }
-    if (next.kind === "thinking" && previous.kind === "thinking") {
-      if (previous.signature !== next.signature) {
-        pendingPostToolCallDeltas.push(next);
-        return;
-      }
-      previous.text += next.text;
       return;
     }
     previous.text += next.text;
@@ -349,20 +343,6 @@ export async function processCompletionsStream(
   const appendFilteredVisibleTextDelta = (text: string) => {
     appendRecoveredParts(deepSeekToolCallRecoverer?.push(text) ?? [{ kind: "text", text }]);
   };
-  const appendRoutedContentDelta = (delta: CompletionsReasoningDelta) => {
-    if (delta.kind === "text") {
-      appendFilteredVisibleTextDelta(delta.text);
-      return;
-    }
-    if (!emitReasoning) {
-      return;
-    }
-    if (currentBlock?.type === "toolCall" && !directMode) {
-      queuePostToolCallDelta(delta);
-    } else {
-      appendThinkingDelta(delta);
-    }
-  };
   const appendPartitionedVisibleDelta = (delta: { kind: "text" | "thinking"; text: string }) => {
     if (delta.kind === "text") {
       appendFilteredVisibleTextDelta(delta.text);
@@ -514,7 +494,13 @@ export async function processCompletionsStream(
         } else {
           const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
           beginReasoning(hasLaterVisibleText);
-          appendRoutedContentDelta(contentDelta);
+          if (emitReasoning) {
+            if (currentBlock?.type === "toolCall" && !directMode) {
+              queuePostToolCallDelta(contentDelta);
+            } else {
+              appendThinkingDelta(contentDelta);
+            }
+          }
         }
       }
       if (!hasReasoningThinking) {
@@ -678,10 +664,7 @@ export function shouldEmitOpenAICompletionsReasoning(
     return false;
   }
   const effort = options?.reasoningEffort ?? options?.reasoning ?? "high";
-  if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
-    return false;
-  }
-  return true;
+  return Boolean(effort && isOpenAICompletionsThinkingEnabled(effort));
 }
 
 function hasOpenAICompletionsReasoningUsageActivity(

@@ -100,15 +100,17 @@ export const SessionCatalogHostSchema = closedObject({
 });
 
 export const SessionCatalogSchema = closedObject({
-  id: NonEmptyString,
-  label: NonEmptyString,
-  capabilities: SessionCatalogCapabilitiesSchema,
+  ...SessionCatalogDescriptorSchema.properties,
   shareRoute: Type.Optional(SessionCatalogShareRouteSchema),
   hosts: Type.Array(SessionCatalogHostSchema),
   error: Type.Optional(SessionCatalogErrorSchema),
 });
 
-const SessionsCatalogListCommonProperties = {
+export const SessionsCatalogListParamsSchema = closedObject({
+  catalogId: Type.Optional(NonEmptyString),
+  /** Return catalog labels and capabilities with empty hosts, without listing sessions. */
+  metadataOnly: Type.Optional(Type.Boolean()),
+  cursors: Type.Optional(Type.Record(NonEmptyString, Type.String())),
   agentId: Type.Optional(NonEmptyString),
   progressId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   /** Opt into pending hosts completed by incremental publications for this progressId. */
@@ -116,14 +118,6 @@ const SessionsCatalogListCommonProperties = {
   search: Type.Optional(Type.String()),
   limitPerHost: Type.Optional(Type.Integer({ minimum: 1 })),
   hostIds: Type.Optional(Type.Array(NonEmptyString)),
-};
-
-export const SessionsCatalogListParamsSchema = closedObject({
-  catalogId: Type.Optional(NonEmptyString),
-  /** Return catalog labels and capabilities with empty hosts, without listing sessions. */
-  metadataOnly: Type.Optional(Type.Boolean()),
-  cursors: Type.Optional(Type.Record(NonEmptyString, Type.String())),
-  ...SessionsCatalogListCommonProperties,
 });
 
 export const SessionsCatalogListResultSchema = closedObject({
