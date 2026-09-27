@@ -254,16 +254,35 @@ export function createConfigFileWriteGuard(
     // Recovery owns later transitions and uses the enclosing owner's current authority.
     return { assertCurrent: assertRollbackOwner, publicationIdentity: publishedIdentity };
   };
-  const fileSystem: typeof fs = publication?.preserveDirectoryMode
-    ? {
-        ...fsModule,
-        fchmodSync: (fd, mode) => {
-          if (!fsModule.fstatSync(fd).isDirectory()) {
-            fsModule.fchmodSync(fd, mode);
-          }
-        },
+  let stagedIdentity: ConfigFileWriteIdentity | undefined;
+  const fileSystem: typeof fs = {
+    ...fsModule,
+    writeFileSync: new Proxy(fsModule.writeFileSync, {
+      apply(target, thisArg, args) {
+        const result = Reflect.apply(target, thisArg, args);
+        if (typeof args[0] === "number") {
+          stagedIdentity = fsModule.fstatSync(args[0], { bigint: true });
+        }
+        return result;
+      },
+    }),
+    renameSync(source, destination) {
+      fsModule.renameSync(source, destination);
+      if (destination === configPath && stagedIdentity) {
+        // fs-safe's verified receipt arrives later; a successful rename already needs recovery.
+        onDestinationState({ state: "published", path: configPath, ...stagedIdentity });
       }
-    : fsModule;
+    },
+    ...(publication?.preserveDirectoryMode
+      ? {
+          fchmodSync: (fd, mode) => {
+            if (!fsModule.fstatSync(fd).isDirectory()) {
+              fsModule.fchmodSync(fd, mode);
+            }
+          },
+        }
+      : {}),
+  };
   return {
     fileSystem,
     assertCurrent: current,
