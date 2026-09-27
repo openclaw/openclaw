@@ -1,8 +1,11 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createPnpmRunnerSpawnSpec } from "../../scripts/pnpm-runner.mts";
+import { resolveNodePackageBin } from "../../scripts/run-node-package-bin.mts";
 import { mergeProcessEnv } from "../../src/infra/process-env.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -81,6 +84,39 @@ function writeShim(modules: string, tool: string): void {
 }
 
 describe("Node package tool commands", () => {
+  it.each(["root", "ui"])("adapts the %s Vitest worker when launched from ui", (scope) => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const config = path.join(createTempDir("openclaw-jsdom-preload-"), "vitest.config.mjs");
+    const report = path.join(path.dirname(config), "report.json");
+    fs.writeFileSync(
+      config,
+      `export default ${JSON.stringify({
+        test: {
+          root: repoRoot,
+          include: ["test/jsdom-compat.test.ts"],
+          pool: process.versions.bun ? "forks" : "threads",
+          execArgv: [
+            `--import=${pathToFileURL(path.join(repoRoot, "test/vitest/vitest.jsdom-preload.mts")).href}`,
+          ],
+          testNamePattern: "preserves Blob bytes|keeps the DOM FileReader",
+        },
+      })};\n`,
+    );
+    const args =
+      scope === "root"
+        ? [resolveNodePackageBin("vitest", createRequire(import.meta.url))]
+        : [path.join(repoRoot, "scripts/run-node-package-bin.mts"), "vitest"];
+    const result = spawnSync(
+      process.execPath,
+      [...args, "run", "--config", config, "--reporter=json", "--outputFile", report],
+      { cwd: path.join(repoRoot, "ui"), encoding: "utf8", timeout: 10_000 },
+    );
+    expect(result.error).toBeUndefined();
+    const reported = fs.readFileSync(report, "utf8");
+    expect(result.status, `${result.stdout}${result.stderr}${reported}`).toBe(0);
+    expect(JSON.parse(reported).numPassedTests).toBe(2);
+  });
+
   it.each(
     commands.flatMap(({ directory, script, tool, args }) =>
       (directory === "." ? ["hoisted"] : ["hoisted", "isolated"]).map((layout) => ({
