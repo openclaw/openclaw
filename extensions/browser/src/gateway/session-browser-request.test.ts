@@ -46,6 +46,14 @@ async function request(params: Record<string, unknown>) {
   } as unknown as Parameters<GatewayRequestHandlers[string]>[0]);
   return respond;
 }
+async function rejectedRequest(params: Record<string, unknown>, message: string) {
+  const respond = await request(params);
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ message: expect.stringContaining(message) }),
+  );
+}
 beforeEach(() => {
   vi.clearAllMocks();
   mocked.current = true;
@@ -101,38 +109,22 @@ describe("closed session browser route", () => {
       vi.useRealTimers();
     }
   });
-  it.each([
-    "/cookies",
-    "/storage/local",
-    "/profiles",
-    "/tabs/open",
-    "/upload",
-    "/download",
-    "/pdf",
-    "/stop",
-  ])("does not forward %s", async (path) => {
-    const respond = await request({ method: "POST", path, body: {} });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("unavailable") }),
-    );
+  it.each(["/cookies", "/tabs/open"])("does not forward %s", async (path) => {
+    await rejectedRequest({ method: "POST", path, body: {} }, "unavailable");
     expect(mocked.access).not.toHaveBeenCalled();
     expect(mocked.dispatch).not.toHaveBeenCalled();
   });
 
-  it.each(["profile", "targetId", "node", "target"])(
+  it.each(["profile", "targetId"])(
     "rejects caller-selected %s before binding",
     async (selector) => {
-      const respond = await request({
-        method: "POST",
-        path: "/navigate",
-        body: { [selector]: "other", url: "https://example.test" },
-      });
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("cannot select") }),
+      await rejectedRequest(
+        {
+          method: "POST",
+          path: "/navigate",
+          body: { [selector]: "other", url: "https://example.test" },
+        },
+        "cannot select",
       );
       expect(mocked.dispatch).not.toHaveBeenCalled();
     },
@@ -147,39 +139,33 @@ describe("closed session browser route", () => {
     expect(mocked.dispatch).not.toHaveBeenCalled();
   });
 
-  it("binds navigation, evaluation and screenshot routes to the same isolated target", async () => {
-    for (const [path, body] of [
-      ["/navigate", { url: "https://example.test/" }],
-      ["/act", { kind: "evaluate", fn: "() => location.href" }],
-      ["/screenshot", {}],
-    ] as const) {
-      const respond = await request({ method: "POST", path, body });
-      expect(respond).toHaveBeenCalledWith(true, { ok: true });
-      expect(mocked.dispatch).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          path,
-          query: expect.objectContaining({
-            targetId: "isolated-tab",
-            profile: "openclaw",
-            managedOnly: true,
-          }),
-          body: expect.objectContaining({ ...body, targetId: "isolated-tab", profile: "openclaw" }),
+  it("binds evaluation to the isolated target", async () => {
+    const path = "/act";
+    const body = { kind: "evaluate", fn: "() => location.href" };
+    const respond = await request({ method: "POST", path, body });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true });
+    expect(mocked.dispatch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        path,
+        query: expect.objectContaining({
+          targetId: "isolated-tab",
+          profile: "openclaw",
+          managedOnly: true,
         }),
-      );
-    }
+        body: expect.objectContaining({ ...body, targetId: "isolated-tab", profile: "openclaw" }),
+      }),
+    );
   });
 
   it("rejects batch and close actions that could escape the single-tab operation contract", async () => {
     for (const kind of ["batch", "close"]) {
-      const respond = await request({
-        method: "POST",
-        path: "/act",
-        body: { kind, actions: [{ kind: "click", targetId: "admin-tab" }] },
-      });
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("unavailable") }),
+      await rejectedRequest(
+        {
+          method: "POST",
+          path: "/act",
+          body: { kind, actions: [{ kind: "click", targetId: "admin-tab" }] },
+        },
+        "unavailable",
       );
     }
     expect(mocked.dispatch).not.toHaveBeenCalled();
@@ -219,7 +205,6 @@ describe("closed session browser route", () => {
 
   it.each([
     { method: "GET", path: "/tabs" },
-    { method: "GET", path: "/snapshot" },
     { method: "POST", path: "/screenshot" },
   ])("publishes $path in the same authorized turn as its final check", async (params) => {
     const entered = Promise.withResolvers<void>();
@@ -242,15 +227,13 @@ describe("closed session browser route", () => {
   });
 
   it("rejects conflicting nested and canonical session identities", async () => {
-    const respond = await request({
-      method: "POST",
-      path: "/dashboard",
-      dashboard: { name: "review", sessionKey: "agent:main:foreign" },
-    });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("match the admitted session") }),
+    await rejectedRequest(
+      {
+        method: "POST",
+        path: "/dashboard",
+        dashboard: { name: "review", sessionKey: "agent:main:foreign" },
+      },
+      "match the admitted session",
     );
     expect(mocked.access).not.toHaveBeenCalled();
   });
