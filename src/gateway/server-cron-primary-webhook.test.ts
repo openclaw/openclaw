@@ -37,7 +37,7 @@ describe("sendGatewayCronWebhook", () => {
   it("propagates cancellation and the remaining run deadline without retrying", async () => {
     const controller = new AbortController();
     const ssrfPolicy = { allowedHostnames: ["127.0.0.1"] };
-    const started = createDeferredCore<void>();
+    const started = createDeferredCore();
     mocks.fetchWithSsrFGuard.mockImplementationOnce(async (request: GuardedFetchOptions) => {
       request.beforeRequest?.();
       started.resolve();

@@ -110,8 +110,8 @@ async function deliverPrimaryWebhook(
     const outcome = await state.deps.sendCronWebhook({
       job,
       abortSignal,
-      onDeliveryState: (outcome) => {
-        progress.webhookDelivery = outcome;
+      onDeliveryState: (delivery) => {
+        progress.webhookDelivery = delivery;
       },
       event: {
         jobId: job.id,
