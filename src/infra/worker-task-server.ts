@@ -1,4 +1,5 @@
 import { parentPort, type MessagePort, type Transferable } from "node:worker_threads";
+import { routeLogsToStderr } from "../logging/console.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
@@ -55,6 +56,8 @@ export function serveOwnedWorkerTasks<Output>(
   if (!port) {
     return;
   }
+  // Results use the host port; worker-local diagnostics must keep JSON stdout clean.
+  routeLogsToStderr();
   let memorySamplesStarted = false;
   let active: WorkerConversation | undefined;
   let execution = Promise.resolve();

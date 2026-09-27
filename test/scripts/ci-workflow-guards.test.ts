@@ -7964,7 +7964,7 @@ server.listen(0, "127.0.0.1", () => {
       "actionlint install",
     );
 
-    expect(setupGo.with).toEqual({ "go-version": "1.25.0", cache: false });
+    expect(setupGo.with).toEqual({ "go-version": "1.27.1", cache: false });
     expect(steps.indexOf(setupGo)).toBeLessThan(steps.indexOf(install));
     expect(install.run).toContain(`ACTIONLINT_REVISION="${revision}"`);
     expect(install.run).toContain('export GOBIN="$RUNNER_TEMP/actionlint-bin"');

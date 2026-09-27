@@ -31,6 +31,11 @@ Internal updates, including subagent completion reports, also use this steering 
 
 In the built-in runtime, each steered user input gets its own delivered answer in order. A later answer does not replace a completed answer to an earlier input, even when steering skipped its pending tools.
 
+A steered channel reply carries that message's quoted or forwarded context into
+the model input. Quoted content stays conversation data; commands and answers to
+pending questions use the literal incoming text. Text-only transcript entries
+also retain the literal input.
+
 The native Codex app-server harness exposes `turn/steer` instead of OpenClaw runtime's internal steering queue. OpenClaw batches queued prompts for the configured quiet window, then sends a single `turn/steer` request with all collected user input in arrival order. Codex's upstream turn scheduler owns its tool scheduling and drains pending input at model boundaries; OpenClaw does not add per-tool preemption to that runtime. A transcript commit confirms persistence, not that a later model request has read the input.
 
 Codex review and manual compaction turns reject same-turn steering. When a runtime cannot accept steering in `steer` mode, OpenClaw waits for the active run to finish before starting the prompt.
