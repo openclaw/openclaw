@@ -30,13 +30,14 @@ Use the current template and a real body file. Preserve human credit and keep
 branches editable by maintainers when safe. For a fork, consider GitHub's
 Actions/secrets warning before enabling edits.
 
-For unfinished-work handoffs, publish a draft, disclose unverified checks, and
-stop at the requested handoff.
+Apply requirements to the requested operation, not every step in a larger workflow.
+If one route fails, use another supported, authorized route rather than treating
+the failure as a task-wide blocker; retain the requirements of that operation.
 
-For merge preparation, create as draft, wait for non-null `mergeable`, then mark
-ready. Confirm CI attached to the pushed head. A merge-ref startup failure cannot
-be rerun; the
-hourly PR CI sweeper can re-fire it, or use an authorized close/reopen after
+Create as draft; when merge readiness is requested, wait for non-null `mergeable`,
+then mark ready and confirm CI attached to the pushed head. A merge-ref startup
+failure cannot be rerun; the hourly PR CI sweeper can re-fire it, or use an
+authorized close/reopen after
 verifying the missing attachment. Do not rebase merely because main advanced.
 Refresh only for a conflict, failing guard, explicit request, or material stale
 base risk. An explicitly requested landing of one's own draft includes marking
@@ -60,7 +61,8 @@ Do not disclose private desktop content, identifiers, model routes, or secrets.
 
 ## Review, prepare, merge
 
-When preparing or merging a main-targeted PR, use only the native sequence:
+For main-targeted merge preparation and merging, use the native sequence below.
+Do not require the whole sequence for an operation with its own supported path.
 
 ```bash
 scripts/pr review-init <pr>
