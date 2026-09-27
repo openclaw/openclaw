@@ -41,7 +41,7 @@ it("retains admission after the last writer closes with a reader-pinned WAL", as
     if (args[0] === pathname) {
       const prepare = database.prepare.bind(database);
       vi.spyOn(database, "prepare").mockImplementation((sql) => {
-        if (/^PRAGMA integrity_check;?$/.test(sql)) {
+        if (/^PRAGMA integrity_check(?:\('sqlite_schema'\))?;?$/.test(sql)) {
           checks += 1;
         }
         return prepare(sql);
@@ -96,7 +96,7 @@ it.each(["sync", "async", "admitted"] as const)(
       if (args[0] === pathname) {
         const prepare = database.prepare.bind(database);
         vi.spyOn(database, "prepare").mockImplementation((sql) => {
-          if (/^PRAGMA (integrity_check|foreign_key_check);$/.test(sql)) {
+          if (/^PRAGMA (integrity_check|foreign_key_check)(?:\('sqlite_schema'\))?;$/.test(sql)) {
             checks.push(sql);
           }
           return prepare(sql);

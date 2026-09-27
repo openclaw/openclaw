@@ -33,6 +33,7 @@ import {
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { createPresenceActivityController } from "../../lit/presence-activity-controller.ts";
 import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderCurrentWork } from "./current-work-view.ts";
@@ -92,6 +93,10 @@ class ActivityPage extends OpenClawLightDomElement {
   @state() private autoFollow = true;
   @state() private runInspector: RunInspectorState = { status: "empty" };
   @state() private presencePayload: PresencePayload | undefined;
+  private readonly activityExpiry = createPresenceActivityController(
+    this,
+    () => projectPresencePayload(this.presencePayload).users,
+  );
 
   private liveActivity: LiveActivity | null = null;
   private liveActivityRevision = -1;
@@ -145,6 +150,7 @@ class ActivityPage extends OpenClawLightDomElement {
     );
 
   override willUpdate(changed: PropertyValues) {
+    this.activityExpiry.sync();
     if (changed.has("routeLocation")) {
       this.routeData = this.routeLocation
         ? resolveActivityRouteData(

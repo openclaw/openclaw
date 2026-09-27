@@ -6,7 +6,6 @@ import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayDreamingSummary
-import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.GatewaySkillWorkshopSummary
@@ -80,7 +79,6 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -105,7 +103,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.window.layout.DisplayFeature
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -1118,7 +1115,7 @@ private fun HomeAttentionPanel(
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text(text = nativeString("Needs attention"), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.warning)
+      Text(text = nativeString("Needs attention"), style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
       rows.forEach { row ->
         HomeAttentionListRow(
           row = row,
@@ -1149,7 +1146,7 @@ private fun SectionLabel(
   ) {
     Text(
       text = localizedUppercase(localizedTitle, currentAppLanguage().languageTag),
-      style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+      style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
     action?.invoke()
@@ -1183,7 +1180,7 @@ private fun HomeAttentionListRow(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        Text(text = nativeString(row.subtitle), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = nativeString(row.subtitle), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -1245,18 +1242,13 @@ private fun RecentSessionList(
   onOpen: (String, String?) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-    Column {
-      rows.forEachIndexed { index, row ->
-        RecentSessionRowContent(
-          title = row.title,
-          source = row.source,
-          metadata = row.metadata,
-          onClick = { onOpen(row.key, row.ownerAgentId) },
-        )
-        if (index != rows.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.48f), thickness = 1.dp)
-        }
-      }
+    ClawSeparatedColumn(items = rows, dividerColor = ClawTheme.colors.border.copy(alpha = 0.48f)) { row ->
+      RecentSessionRowContent(
+        title = row.title,
+        source = row.source,
+        metadata = row.metadata,
+        onClick = { onOpen(row.key, row.ownerAgentId) },
+      )
     }
   }
 }
@@ -1292,9 +1284,9 @@ private fun RecentSessionRowContent(
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = source, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = source, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
+      Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = nativeString("Open thread"),
@@ -1544,10 +1536,7 @@ private fun usageSummaryText(count: Int): String =
   }
 
 private fun skillsSummaryText(skills: List<GatewaySkillSummary>): String {
-  val ready =
-    skills.count {
-      !it.disabled && it.eligible && !it.blockedByAllowlist && !it.blockedByAgentFilter && it.missingCount == 0
-    }
+  val ready = skills.count(::skillReady)
   return if (skills.isEmpty()) {
     nativeString("No skills")
   } else {
@@ -1610,12 +1599,7 @@ private fun nodesDevicesStatus(summary: GatewayNodesDevicesSummary): Boolean? =
     else -> null
   }
 
-private fun GatewayNodesDevicesSummary.hasNodeCapabilityApprovalPending(): Boolean =
-  nodes.any { node ->
-    node.approvalState is GatewayNodeCapabilityApproval.PendingApproval ||
-      node.approvalState is GatewayNodeCapabilityApproval.PendingReapproval ||
-      node.approvalState == GatewayNodeCapabilityApproval.Unapproved
-  }
+private fun GatewayNodesDevicesSummary.hasNodeCapabilityApprovalPending(): Boolean = nodes.any { node -> nodeCapabilityApprovalNeedsUserAction(node.approvalState) }
 
 internal fun channelsSummaryText(summary: GatewayChannelsSummary): String {
   val connected = summary.channels.count { it.connected }

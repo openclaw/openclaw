@@ -87,6 +87,7 @@ export function createDeferredGatewayUpdateCheck(params: {
     }
     started = true;
     runWatcher = startUpdateRunWatcher({
+      lifecycle,
       broadcast: (event, payload) =>
         params.broadcastToConnIds(event, payload, params.getClientConnIds()),
       log: params.log,

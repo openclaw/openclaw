@@ -28,27 +28,29 @@ not enter a restart loop. Add the reported binding and restart the Gateway.
 
 ## Channel webhook listeners
 
-Feishu and Telegram now receive webhooks on Gateway HTTP routes. Their plugin-owned
+Feishu, Nextcloud Talk, and Telegram receive webhooks on Gateway HTTP routes. Their plugin-owned
 Doctor migrations move an explicitly configured `webhookPort` and effective bind host
 into `legacyWebhook: { port, host? }`. An explicit host without a port keeps that
-host with the channel's previous port (`3000` for Feishu, `8787` for Telegram).
+host with the channel's previous port (`3000` for Feishu, `8788` for Nextcloud Talk,
+`8787` for Telegram).
 Doctor validates and backs up the config through the normal write flow. The
 compatibility listener forwards only its registered webhook
 routes through the same Gateway request pipeline, preserving signatures and retry
 responses during channel restarts.
 
-The exported Telegram, Feishu, and Microsoft Teams config types retain deprecated
-listener input properties (`webhookPort`, `webhookHost`, or `webhook.port`) until
-the next Plugin SDK major. TypeScript config
-producers remain source-compatible, but parsed runtime config uses only
-`legacyWebhook`; run Doctor before using legacy inputs. This type compatibility
-window does not schedule removal of the default listener.
+The exported Feishu, Microsoft Teams, Nextcloud Talk, and Telegram config types
+retain deprecated listener input properties (`webhookPort`, `webhookHost`, or
+`webhook.port`) until the next Plugin SDK major. TypeScript config producers remain
+source-compatible, but parsed runtime config uses only `legacyWebhook`; run Doctor
+before using legacy inputs. This type compatibility window does not schedule
+removal of the default listener.
 
 Update the external callback or reverse-proxy upstream to the Gateway port and
 the channel's webhook path, verify delivery, then set `legacyWebhook: false` to
 close the old port. Omitting `legacyWebhook` preserves Feishu's previous
-`127.0.0.1:3000` listener or Telegram's `127.0.0.1:8787` listener whenever the
-account uses webhook mode. An explicit object selects its configured endpoint;
+`127.0.0.1:3000` listener, Nextcloud Talk's `0.0.0.0:8788` listener, or Telegram's
+`127.0.0.1:8787` listener while webhook transport is active.
+An explicit object selects its configured endpoint;
 an account-level value overrides the
 channel-level setting. Doctor explains the canonical Gateway route and opt-out
 without changing implicit settings. A shared compatibility port closes when no
@@ -172,6 +174,51 @@ or a migration fails. Follow the
 from the refusal. See [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters)
 for the publication contract and the remaining risk for an old CLI stalled
 beyond the grace period.
+
+## Native Codex recovery after Tasks removal
+
+The Codex plugin's `codex-native-task-assignments` Doctor migration preserves
+recoverable native child work when upgrading from the Tasks runtime. It runs
+through the existing plugin state-migration lifecycle, including update-time
+Doctor. After a direct binary replacement, run `openclaw doctor --fix` before
+starting the new Gateway.
+
+During maintenance, Doctor reads a snapshot of
+`~/.openclaw/state/openclaw.sqlite` and selects legacy `task_runs` records with
+`runtime = 'subagent'` and `task_kind = 'codex-native'`. It imports only uniquely
+identified, unacknowledged work whose `nativeHistory` owner stamp matches the
+current requester's physical session, lifecycle revision, and Codex connection.
+These ownership stamps are already present in published 2026.9.4 state.
+The original native parent may differ
+after native thread rotation, but rotation cannot supply missing requester
+ownership. Initial children and follow-ups already promoted into Task rows keep
+their exact child and turn locators. A persisted terminal summary, status, and
+completion time remain available when native history no longer contains the
+result.
+
+Terminal deliveries marked `failed` after exhausting their retry budget remain
+historical and are not automatically restarted.
+
+The migration writes `nativeSubagentAssignments` and the per-source Task ID
+marker `nativeSubagentTaskImport` together in one compare-and-apply operation on
+the existing `app-server-thread-bindings` plugin state. A changed binding is
+preserved and reported for retry. Acknowledgement can consume the assignment,
+while the import marker survives acknowledgement, native rotation, clear, and
+reset so unchanged legacy rows cannot resurrect completed work. The shared
+database is declared in the migration's backup inventory; every source Task row
+remains byte-identical. There is no new SQL table, schema-version bump, Tasks
+runtime reader, or replacement Task ledger. Native execution and completion
+delivery continue to require current requester authority.
+
+Unstamped records, including 2026.9.2-era rows, cannot establish the missing
+physical requester and connection history. Doctor also preserves ambiguous
+duplicate run IDs and records whose ownership no longer matches. It emits a
+recoverable warning identifying the Task and native run, without disabling the
+Gateway or unrelated sessions. Inspect the child in its original native Codex
+account, or restore the pre-update backup with its matching OpenClaw version to
+finish delivery. After resolving a repairable binding conflict, run
+`openclaw doctor --fix` again. The migration does not guess ownership from the
+current parent alone.
 
 ## Replay a July 2026 config upgrade
 

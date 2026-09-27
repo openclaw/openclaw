@@ -299,12 +299,10 @@ async function applyCodexAuthProfileConfig(
       base: "runtime",
       afterWrite: { mode: "auto" },
       mutate(draft) {
-        const current = draft;
-        if (hasAuthProfileConfigConflict(current, profile, Boolean(ctx.overwrite))) {
+        if (hasAuthProfileConfigConflict(draft, profile, Boolean(ctx.overwrite))) {
           throw new CodexAuthConfigConflict();
         }
-        const next = applyConfig(current);
-        replaceConfigDraft(draft, next);
+        replaceConfigDraft(draft, applyConfig(draft));
       },
     });
     return "configured";
@@ -491,10 +489,10 @@ async function applyCodexAuthItem(
       candidate.kind === credentialKind &&
       (!sourceProfileId || candidate.profileId === sourceProfileId),
   );
-  if (!credential) {
-    return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_NO_LONGER_PRESENT)];
-  }
-  if (item.details?.sourceCredentialFingerprint !== sourceCredentialFingerprint(credential)) {
+  if (
+    !credential ||
+    item.details?.sourceCredentialFingerprint !== sourceCredentialFingerprint(credential)
+  ) {
     return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_NO_LONGER_PRESENT)];
   }
   if (

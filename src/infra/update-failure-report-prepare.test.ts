@@ -21,6 +21,57 @@ function prepareDiagnosticReport(reason: string) {
 }
 
 describe("update report diagnostic command boundary", () => {
+  it.each(["GLIBC_2.33", "GLIBC_2.2.5", "GLIBC_2.33-private", "GLIBC_PRIVATE"])(
+    "retains only a numeric missing glibc version from a snapshot failure: %s",
+    async (version) => {
+      const message =
+        "Update state snapshot failed (exit): native no-replace move is unavailable | helper-unavailable\n" +
+        `Caused by: /lib/x86_64-linux-gnu/libc.so.6: version \`${version}' not found (required by /home/private-user/private-prefix/fs-safe-native.node) | ERR_DLOPEN_FAILED\n` +
+        "private-loader-text token=synthetic-private-token";
+      const fact = createUpdateFailureFact({
+        check: "snapshot",
+        code: "candidate-snapshot-failed",
+        message,
+      });
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "snapshot-native-loader",
+          result: {
+            mode: "npm",
+            status: "error",
+            reason: "runtime-verification-failed",
+            durationMs: 0,
+            steps: [
+              {
+                name: "candidate snapshot",
+                command: "",
+                cwd: "",
+                durationMs: 0,
+                exitCode: 1,
+                failureFacts: [fact],
+              },
+            ],
+          },
+        },
+        context,
+      );
+      if (version === "GLIBC_2.33" || version === "GLIBC_2.2.5") {
+        expect(report.body).toContain(`${version} not found`);
+      } else {
+        expect(report.body).not.toContain("GLIBC_");
+      }
+      for (const privateText of [
+        "private-user",
+        "private-prefix",
+        "private-loader-text",
+        "synthetic-private-token",
+        "/lib/",
+      ]) {
+        expect(report.body).not.toContain(privateText);
+      }
+    },
+  );
+
   it.each(["installed", "candidate"])(
     "retains sanitized rejected fields from %s admission",
     async (owner) => {

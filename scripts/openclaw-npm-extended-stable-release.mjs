@@ -492,34 +492,6 @@ function validateRequestFromRepository() {
         : packageVersionAt("refs/remotes/origin/main"),
     });
   }
-  if (bypassExtendedStableGuard) {
-    execFileSync(
-      "git",
-      [
-        "fetch",
-        "--no-tags",
-        "origin",
-        `+refs/heads/${extendedStableBranch}:refs/remotes/origin/${extendedStableBranch}`,
-      ],
-      { stdio: "inherit" },
-    );
-    execFileSync(
-      "git",
-      ["fetch", "--no-tags", "origin", `+refs/tags/${releaseTag}:refs/tags/${releaseTag}`],
-      { stdio: "inherit" },
-    );
-    return validateExtendedStableNpmReleaseRequest({
-      npmDistTag,
-      bypassExtendedStableGuard,
-      releaseTag,
-      npmWorkflowRef,
-      checkoutSha: git(["rev-parse", "HEAD"]),
-      tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
-      extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
-      packageVersion,
-      mainPackageVersion: "",
-    });
-  }
   execFileSync(
     "git",
     [
@@ -527,7 +499,7 @@ function validateRequestFromRepository() {
       "--no-tags",
       "origin",
       `+refs/heads/${extendedStableBranch}:refs/remotes/origin/${extendedStableBranch}`,
-      "+refs/heads/main:refs/remotes/origin/main",
+      ...(bypassExtendedStableGuard ? [] : ["+refs/heads/main:refs/remotes/origin/main"]),
     ],
     { stdio: "inherit" },
   );
@@ -545,7 +517,9 @@ function validateRequestFromRepository() {
     tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
     extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
     packageVersion,
-    mainPackageVersion: packageVersionAt("refs/remotes/origin/main"),
+    mainPackageVersion: bypassExtendedStableGuard
+      ? ""
+      : packageVersionAt("refs/remotes/origin/main"),
   });
 }
 

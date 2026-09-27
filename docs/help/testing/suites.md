@@ -141,6 +141,9 @@ Native dependency policy:
       the remaining value must use plain decimal digits without leading zeros,
       so values such as `1e5` or `007` are rejected. Unset the variable to
       disable the watchdog.
+      Canceling a compiler shard batch joins each compiler, including forced
+      termination when needed, before releasing checkout artifact ownership so
+      the next build or check can proceed.
 
   </Accordion>
 
@@ -311,9 +314,9 @@ node scripts/run-vitest.mjs --isolated-image "$IMAGE_ID" run \
   ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts
 ```
 
-The adapter requires Linux, an existing rootless Podman installation, checkout-local `pnpm install --frozen-lockfile` dependencies, and native Node and pnpm executables compatible with the image. Put the native pnpm executable matching `package.json` on `PATH`, or select it through the existing `npm_execpath` environment variable; a Corepack/download shim is not an offline executable. The image must already contain the Chromium revision required by the installed Playwright package under `/ms-playwright`, including its headless shell and system libraries. The runner checks versions and launches Chromium before starting the test command. SELinux-labeled hosts are not supported by this initial adapter: it refuses before creating a container rather than relabeling shared host files or disabling enforcement. Use an already supported isolated runner instead of changing host security policy.
+The adapter requires Linux, an existing rootless Podman installation with its native init helper (normally catatonit), checkout-local `pnpm install --frozen-lockfile` dependencies, and native Node and pnpm executables compatible with the image. Put the native pnpm executable matching `package.json` on `PATH`, or select it through the existing `npm_execpath` environment variable; a Corepack/download shim is not an offline executable. The image must already contain the Chromium revision required by the installed Playwright package under `/ms-playwright`, including its headless shell and system libraries. The runner checks versions and launches Chromium before starting the test command. SELinux-labeled hosts are not supported by this initial adapter: it refuses before creating a container rather than relabeling shared host files or disabling enforcement. Use an already supported isolated runner instead of changing host security policy.
 
-It runs Vitest, Chromium, the provider fixture, and the test Gateway in the same network-none namespace. Host proxy settings stay unchanged; host credentials, Gateway state, Git metadata, and private scratch are not exposed to the container. There are no published ports or external network access. Missing prerequisites fail with setup guidance instead of installing packages or weakening isolation.
+It runs Vitest, Chromium, the provider fixture, and the test Gateway in the same network-none namespace. Podman’s init owns PID 1 so detached test children are reaped after their launchers exit; the Node entrypoint still owns the test invocation and cleanup. Host proxy settings stay unchanged; host credentials, Gateway state, Git metadata, and private scratch are not exposed to the container. There are no published ports or external network access. Missing prerequisites fail with setup guidance instead of installing packages or weakening isolation.
 
 Use the ordinary local config, not the CI-only prebuilt config. For the canonical Control UI E2E config, the adapter runs the existing private-QA `ciArtifacts` build inside the container before admitting tests; backend readiness alone does not mean the dashboard assets are ready. The isolated source snapshot uses tracked working-tree files, including staged new files; stage a new test before selecting it. Keep source and dependencies unchanged during the invocation, and keep dependency installation separate. The initial interface supports exact tracked test files, a tracked config, and console reporters; it does not export files from the disposable snapshot. This route is not suitable for live-provider tests or tests that must contact services outside their own container.
 

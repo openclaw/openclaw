@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Covers CLI-backed attempt execution and session-binding persistence.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerGeneratedMediaTaskActivity } from "../../agents/media-generation-activity.js";
 import { persistAcpDispatchTranscript } from "../../auto-reply/reply/dispatch-acp-transcript.runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -30,8 +31,6 @@ import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
-import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -53,6 +52,7 @@ import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { buildConfiguredModelCatalog } from "../model-selection-shared.js";
 import { resolveReplyExpectation } from "../reply-completion.js";
@@ -596,15 +596,12 @@ describe("CLI attempt execution", () => {
       runCliAgentMock.mockResolvedValueOnce(makeCliResult("recovered"));
       runEmbeddedAgentMock.mockResolvedValueOnce({ meta: { durationMs: 1 } });
 
-      await runAgentAttempt({
+      await runStoredAttempt({
         providerOverride: runtime === "cli" ? "claude-cli" : "openai",
         modelOverride: runtime === "cli" ? "opus" : "gpt-5.4",
         sessionEntry,
         sessionKey,
         sessionStore,
-        storePath,
-        workspaceDir: tmpDir,
-        agentDir,
         opts: { pinnedWidgetAuthoring: true },
         runContext: { replyToMode: "all" },
       });
@@ -628,12 +625,11 @@ describe("CLI attempt execution", () => {
     onAgentEvent?: RunAgentAttemptParams["onAgentEvent"];
     classifyResult?: RunAgentAttemptParams["classifyResult"];
   }) {
-    await runAgentAttempt({
+    await runStoredAttempt({
       providerOverride: "claude-cli",
       modelOverride: "opus",
       sessionEntry: params.sessionEntry,
       sessionKey: params.sessionKey,
-      workspaceDir: tmpDir,
       cwd: params.cwd,
       body: params.body,
       classifyResult: params.classifyResult,
@@ -643,9 +639,7 @@ describe("CLI attempt execution", () => {
         abortSignal: params.abortSignal,
       },
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
-      agentDir,
       sessionStore: params.sessionStore,
-      storePath,
     });
   }
 

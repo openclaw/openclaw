@@ -22,6 +22,7 @@ import type { SessionTranscriptWorkerReadError } from "./session-transcript-work
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type ChatHistoryPage = {
+  windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
   messages: unknown[];
@@ -65,6 +66,7 @@ export type SessionHistoryMessage = Record<string, unknown> & {
 };
 
 export type PaginatedSessionHistory = {
+  windowReset?: boolean;
   items: SessionHistoryMessage[];
   messages: SessionHistoryMessage[];
   nextCursor?: string;
@@ -148,7 +150,7 @@ export type SessionHistoryWorkerRequest =
     }
   | {
       kind: "transcript-binding";
-      params: { target: SessionTranscriptReadScope; run?: { id: string; maxBytes: number } };
+      params: { target: SessionTranscriptReadScope };
     }
   | { kind: "rpc"; params: ChatHistoryPageParams & { sessionId: string; storePath: string } }
   | { kind: "message-lookup"; params: { target: SessionTranscriptReadScope; messageId: string } }

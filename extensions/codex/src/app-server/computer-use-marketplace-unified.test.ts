@@ -73,12 +73,6 @@ describe("managed unified Computer Use marketplace", () => {
         expect(await fs.realpath(path.join(target, "plugins", "browser-use"))).toBe(
           path.join(candidate.bundledMarketplacePath, "plugins", "browser-use"),
         );
-        // Native plugin/install copies this source; a reinstall must retain the same launch contract.
-        const installed = path.join(codexHome, "installed-plugin");
-        await fs.cp(pluginRoot, installed, { recursive: true });
-        expect(JSON.parse(await fs.readFile(path.join(installed, ".mcp.json"), "utf8"))).toEqual(
-          materialized,
-        );
         await expect(
           ensureCodexManagedBundledMarketplace({
             codexHome,

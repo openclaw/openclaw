@@ -1,25 +1,14 @@
-import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  clearSessionStoreCacheForTest,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawStateDatabaseAsync,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
-import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
+import { describe, expect, it, vi } from "vitest";
 import { createClientHarness } from "./app-server/test-support.js";
-import { codexDiagnosticsFeedbackState } from "./command-diagnostics-state.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import {
   createCodexRuntimeContextOverrides,
   runCommand,
   writeTestBinding,
+  useCodexCommandTestState,
 } from "./commands.test-support.js";
 import {
   steerCodexConversationTurn as steerCodexConversationTurnImpl,
@@ -31,23 +20,10 @@ const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("Codex command authority", () => {
   let tempDir: string;
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      codexDiagnosticsFeedbackState.clear();
-      resetSharedCodexAppServerClientForTests();
-      await closeOpenClawAgentDatabasesAsync();
-      await closeOpenClawStateDatabaseAsync();
-      clearRuntimeAuthProfileStoreSnapshots();
-      clearSessionStoreCacheForTest();
-      vi.unstubAllEnvs();
-      cleanup();
-    }),
-  );
-
-  beforeEach(() => {
-    resetCodexTestBindingStore();
-    tempDir = tempDirs.make("openclaw-codex-command-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+  useCodexCommandTestState({
+    onSetup: (stateDir) => {
+      tempDir = stateDir;
+    },
   });
 
   it.each([

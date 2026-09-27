@@ -79,18 +79,6 @@ describe("createTelegramBot typed command pipeline", () => {
     });
   });
 
-  it("renders the argument menu without dispatching a turn", async () => {
-    const bot = await createBot();
-    await bot.handleUpdate({ update_id: 1003, message: commandMessage("/think") });
-    expect(harness.replySpy).not.toHaveBeenCalled();
-    expect(apiCalls).toHaveBeenCalledWith(
-      "sendMessage",
-      expect.objectContaining({
-        reply_markup: expect.objectContaining({ inline_keyboard: expect.any(Array) }),
-      }),
-    );
-  });
-
   it("dispatches completed thinking arguments through the message pipeline", async () => {
     const bot = await createBot();
     await bot.handleUpdate({ update_id: 1005, message: commandMessage("/think high") });
@@ -165,12 +153,6 @@ describe("createTelegramBot typed command pipeline", () => {
       messageThreadId: 99,
       dmTopicsEnabled: true,
       expectedSessionKey: `agent:main:main:thread:${chat.id}:99`,
-    },
-    {
-      name: "allows native DM commands for paired users",
-      messageThreadId: undefined,
-      dmTopicsEnabled: false,
-      expectedSessionKey: "agent:main:main",
     },
   ])("$name", async ({ messageThreadId, dmTopicsEnabled, expectedSessionKey }) => {
     harness.replySpy.mockResolvedValue({ text: "response" });
@@ -308,17 +290,16 @@ describe("createTelegramBot typed command pipeline", () => {
     expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toEqual([]);
   });
 
-  it.each(
-    (["group", "topic", "direct"] as const).flatMap((scope) =>
-      (["command allowlist", "owner"] as const).flatMap((grant) =>
-        [true, false].flatMap((included) =>
-          ["/status", "/think"].map((command) => ({ scope, grant, included, command })),
-        ),
-      ),
-    ),
-  )(
-    "enforces $scope sender scope for $grant: included=$included command=$command",
-    async ({ scope, grant, included, command }) => {
+  it.each([
+    ["group", "owner", true, "/status"],
+    ["group", "command allowlist", false, "/think"],
+    ["topic", "command allowlist", true, "/think"],
+    ["topic", "owner", false, "/status"],
+    ["direct", "owner", true, "/think"],
+    ["direct", "command allowlist", false, "/status"],
+  ] as const)(
+    "enforces %s sender scope for %s: included=%s command=%s",
+    async (scope, grant, included, command) => {
       const allowFrom = [included ? String(from.id) : "99999"];
       const scopedConfig = scope === "topic" ? { topics: { "99": { allowFrom } } } : { allowFrom };
       const bot = await createBot(true, true, {

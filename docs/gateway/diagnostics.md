@@ -137,6 +137,11 @@ and does not change admission, ordering, or warning thresholds.
 The Gateway records a bounded, payload-free stability stream by default when
 diagnostics are enabled. It captures operational facts, not content.
 
+The existing diagnostic heartbeat debug log includes `nextWakeAtMs`, the earliest
+pending wake time in the Gateway scheduler as a Unix timestamp in milliseconds
+(or `none` when no wake is pending). Overdue diagnostic heartbeats run once after sleep;
+the scheduler does not replay missed ticks.
+
 The same heartbeat also samples liveness when the event loop or CPU looks
 saturated, emitting `diagnostic.liveness.warning` events with event-loop delay,
 event-loop utilization, CPU-core ratio, active/waiting/queued session counts,
@@ -164,6 +169,14 @@ available and contain fixed phase names and numbers, not patch values or session
 keys. Repeated stage visits contribute to the counts and totals. Parallel and
 nested stages can overlap, so their totals are neither an exclusive breakdown
 of request time nor CPU measurements.
+
+Session collaboration reads emit queued `diagnostic.phase.completed` events to
+interested diagnostic listeners. `session.members.list` and
+`session.members.listEvidence` separate `profiles`, `evidence`, and `projection`
+waits; `session.discussion.info` and `session.discussion.open` report `provider`
+time, including remote provider requests. Phase names use the method as their
+prefix and contain no session keys or response data. Membership evidence uses
+the existing projection worker lane so full transcript reads do not block it.
 
 With diagnostics and warning logs enabled, `sessions.create` calls lasting at
 least one second emit `slow session create`. Its `elapsedMs` and

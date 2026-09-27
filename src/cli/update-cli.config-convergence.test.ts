@@ -488,6 +488,7 @@ describe("update-cli", () => {
   });
 
   it("restores pre-update channels when post-core resume sees post-doctor config without them", async () => {
+    const updateStartedAtMs = Date.now();
     const preUpdateConfig = stableWhatsAppConfig();
     const postDoctorConfig = stableConfig({ meta: { lastTouchedVersion: "2026.5.14" } });
     await setupPostCoreConfigFixture({
@@ -496,7 +497,7 @@ describe("update-cli", () => {
       postDoctorConfig,
     });
 
-    await runPostCoreUpdate();
+    await runPostCoreUpdate({ OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: String(updateStartedAtMs) });
 
     const syncConfig = syncPluginCall()?.config as
       | (OpenClawConfig & { meta?: { lastTouchedVersion?: string } })
@@ -518,6 +519,7 @@ describe("update-cli", () => {
   });
 
   it("restores pre-update channel model overrides when post-core resume restores a channel", async () => {
+    const updateStartedAtMs = Date.now();
     const preUpdateConfig = {
       update: { channel: "stable" },
       channels: {
@@ -551,7 +553,7 @@ describe("update-cli", () => {
     } as OpenClawConfig;
     await setupPostCoreConfigFixture({ preUpdateConfig, postDoctorConfig });
 
-    await runPostCoreUpdate();
+    await runPostCoreUpdate({ OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: String(updateStartedAtMs) });
 
     const syncConfig = syncPluginCall()?.config as
       | (OpenClawConfig & {
@@ -618,7 +620,10 @@ describe("update-cli", () => {
     });
     mockNoopPostUpdatePluginConvergence();
 
-    await runPostCoreUpdate({ OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath });
+    await runPostCoreUpdate({
+      OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
+      OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: undefined,
+    });
 
     const syncConfig = syncPluginCall()?.config as
       | (OpenClawConfig & { channels?: { whatsapp?: { token?: string } } })
@@ -635,6 +640,7 @@ describe("update-cli", () => {
   });
 
   it("resolves included pre-update channels for old post-core parents", async () => {
+    const updateStartedAtMs = Date.now();
     const tempDir = createCaseDir("openclaw-update");
     const configPath = path.join(tempDir, "openclaw.json");
     const channelsPath = path.join(tempDir, "channels.json5");
@@ -659,7 +665,10 @@ describe("update-cli", () => {
     mockPostDoctorSnapshot(configPath, postDoctorConfig);
     mockNoopPostUpdatePluginConvergence();
 
-    await runPostCoreUpdate({ WHATSAPP_TOKEN: "resolved-token" });
+    await runPostCoreUpdate({
+      WHATSAPP_TOKEN: "resolved-token",
+      OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: String(updateStartedAtMs),
+    });
 
     const syncConfig = syncPluginCall()?.config as
       | (OpenClawConfig & { channels?: { whatsapp?: { token?: string } } })

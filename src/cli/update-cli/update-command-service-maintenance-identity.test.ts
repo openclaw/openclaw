@@ -1,13 +1,21 @@
 // Share the native service observations and scoped state with the other maintenance suites.
 import "./update-command-service-maintenance.test-support.js";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import * as ancestry from "../../infra/restart-stale-pids.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 
 const { mocks, withServiceHome, fixtureGatewayPid } =
   await import("./update-command-service-maintenance.test-support.js");
+
+beforeEach(() => {
+  vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+    pids: new Set([1, process.ppid, process.pid]),
+    complete: true,
+  });
+});
 
 it.each([
   { label: "changed account", uid: 3002 },

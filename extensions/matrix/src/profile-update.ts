@@ -32,7 +32,7 @@ export async function applyMatrixProfileUpdate(params: {
   }
 
   const synced = await updateMatrixOwnProfile({
-    cfg: params.cfg,
+    cfg: params.cfg ?? persistedCfg,
     accountId,
     displayName: displayName ?? undefined,
     avatarUrl: avatarUrl ?? undefined,

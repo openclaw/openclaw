@@ -26,7 +26,7 @@ import { ChannelType, MessageType, type User } from "../internal/discord.js";
 import {
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
-  resolveDiscordShouldRequireMention,
+  resolveDiscordMentionPolicy,
 } from "./allow-list.js";
 import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
@@ -581,17 +581,17 @@ export async function preflightDiscordMessage(
     memberRoleIds,
   });
 
-  const threadOwnerId = threadChannel
-    ? (resolveDiscordChannelInfoSafe(threadChannel).ownerId ?? channelInfo?.ownerId)
-    : undefined;
-  const shouldRequireMentionByConfig = resolveDiscordShouldRequireMention({
+  const mentionPolicy = resolveDiscordMentionPolicy({
     isGuildMessage,
     isThread: Boolean(threadChannel),
     botId,
-    threadOwnerId,
+    threadOwnerId: threadChannel
+      ? (resolveDiscordChannelInfoSafe(threadChannel).ownerId ?? channelInfo?.ownerId)
+      : undefined,
     channelConfig,
     guildInfo,
   });
+  const shouldRequireMentionByConfig = mentionPolicy.requireMention;
   const shouldRequireMention = resolvePreflightMentionRequirement({
     shouldRequireMention: shouldRequireMentionByConfig,
     bypassMentionRequirement,
@@ -629,15 +629,14 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const mentionText = hasTypedText ? baseText : "";
   const { implicitMentionKinds, wasMentioned: wasNormallyMentioned } = resolveDiscordMentionState({
-    authorIsBot: Boolean(author.bot),
     botId,
+    authorIsBot: Boolean(author.bot),
     hasAnyMention,
     isDirectMessage,
     isExplicitlyMentioned: explicitlyMentioned,
     mentionRegexes,
-    mentionText,
+    mentionText: hasTypedText ? baseText : "",
     mentionedEveryone: message.mentionedEveryone,
     referencedAuthorId: message.referencedMessage?.author?.id,
     senderIsPluralKit: sender.isPluralKit,
@@ -665,7 +664,7 @@ export async function preflightDiscordMessage(
       : params.cfg.broadcast?.[`discord:${messageChannelId}`] !== undefined
         ? messageChannelId
         : (threadParentId ?? messageChannelId),
-    text: mentionText || preflightTranscript || "",
+    text: (hasTypedText ? baseText : "") || preflightTranscript || "",
     sessionKey: boundSessionKey || effectiveRoute.sessionKey,
     acpBinding: Boolean(configuredBinding),
   });
@@ -743,6 +742,7 @@ export async function preflightDiscordMessage(
     policy: {
       isGroup: isGuildMessage,
       requireMention: shouldRequireMention,
+      allowedImplicitMentionKinds: mentionPolicy.allowedImplicitMentionKinds,
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,

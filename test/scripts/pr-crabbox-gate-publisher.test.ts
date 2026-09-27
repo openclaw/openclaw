@@ -1,6 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   appendCrabboxOutputTail,
@@ -36,6 +39,10 @@ type PublisherWorkflow = {
       environment: string;
       permissions: Record<string, string>;
       steps: Array<{
+        id?: string;
+        if?: string;
+        uses?: string;
+        "continue-on-error"?: boolean;
         env?: Record<string, string>;
         run?: string;
         with?: Record<string, unknown>;
@@ -265,7 +272,16 @@ function crabboxRunner() {
         CRABBOX_ENV_ALLOW: "CI",
         NO_COLOR: "1",
       });
-      expect(childEnv).not.toHaveProperty("AWS_PROFILE");
+      for (const name of [
+        "AWS_PROFILE",
+        "GH_TOKEN",
+        "GH_APP_TOKEN",
+        "GITHUB_OUTPUT",
+        "CRABBOX_PROOF_RUN_ID",
+        "CRABBOX_PROOF_LEASE_ID",
+      ]) {
+        expect(childEnv).not.toHaveProperty(name);
+      }
       return {
         exitCode: 0,
         stdout: "",
@@ -452,6 +468,22 @@ describe("protected main ancestry", () => {
 });
 
 describe("Crabbox gate publisher boundary", () => {
+  let outputRoot: string;
+  let outputPath: string;
+  beforeEach(() => {
+    outputRoot = mkdtempSync(path.join(tmpdir(), "crabbox-publisher-test-"));
+    outputPath = path.join(outputRoot, "output");
+  });
+  afterEach(() => rmSync(outputRoot, { force: true, recursive: true }));
+
+  function phaseEnv(phase: "proof" | "publish", overrides: NodeJS.ProcessEnv = {}) {
+    return env({
+      ...(phase === "proof"
+        ? { GITHUB_OUTPUT: outputPath }
+        : { CRABBOX_PROOF_RUN_ID: runId, CRABBOX_PROOF_LEASE_ID: leaseId }),
+      ...overrides,
+    });
+  }
   function harness(
     overrides: {
       ancestry?: Record<string, unknown>;
@@ -539,38 +571,17 @@ describe("Crabbox gate publisher boundary", () => {
     return { broker, github, orderedCalls, organization, runCrabbox: crabboxRunner() };
   }
 
-  it("preflights authority, launches under the service token, and revalidates before publish", async () => {
+  it("uses fresh membership authority after a proof outlives the initial token", async () => {
     const values = harness();
-    await expect(
-      runPublisher({
-        ...values,
-        clock: () => Date.parse("2026-08-28T02:00:00Z"),
-        env: env({ AWS_PROFILE: "must-not-leak" }),
-        event: event(),
-        resolvePlan: () => gatePlan(),
+    let clockNow = Date.parse("2026-08-28T00:00:00Z");
+    const initialOrganization = {
+      request: vi.fn(async () => {
+        if (clockNow >= Date.parse("2026-08-28T01:00:00Z")) {
+          throw new Error("installation token expired");
+        }
+        return activeMembership();
       }),
-    ).resolves.toMatchObject({
-      checkId: 88,
-      context: { baseSha, headSha, leaseId, runId, workflowSha },
-    });
-    expect(values.runCrabbox).toHaveBeenCalledTimes(2);
-    expect(values.orderedCalls.slice(0, 6)).toEqual([
-      "organization:GET:/orgs/openclaw/memberships/maintainer",
-      "github:GET:/repos/openclaw/openclaw/pulls/130481",
-      `github:GET:/repos/openclaw/openclaw/compare/${baseSha}...${workflowSha}`,
-      "github:GET:/repos/openclaw/openclaw/git/ref/heads/main",
-      `github:GET:/repos/openclaw/openclaw/compare/${workflowSha}...${mainSha}`,
-      "github:GET:/repos/openclaw/openclaw/git/ref/heads/main",
-    ]);
-    expect(values.orderedCalls).toContain(
-      `github:GET:/repos/openclaw/openclaw/compare/${workflowSha}...${laterMainSha}`,
-    );
-    expect(values.orderedCalls.at(-1)).toBe("github:POST:/repos/openclaw/openclaw/check-runs");
-  });
-
-  it("evaluates proof freshness after the remote run completes", async () => {
-    const values = harness();
-    let clockNow = Date.parse("2026-08-28T01:00:00Z");
+    };
     const runCrabbox = vi.fn(async (input: Parameters<typeof values.runCrabbox>[0]) => {
       const result = await values.runCrabbox(input);
       if (input.args[0] === "run") {
@@ -578,16 +589,195 @@ describe("Crabbox gate publisher boundary", () => {
       }
       return result;
     });
+    const resolvePlan = vi.fn(() => gatePlan());
     await expect(
       runPublisher({
         ...values,
+        phase: "proof",
         clock: () => clockNow,
-        env: env(),
+        env: phaseEnv("proof", {
+          AWS_PROFILE: "must-not-leak",
+          GH_TOKEN: "job-token",
+          GH_APP_TOKEN: "initial-token",
+        }),
+        event: event(),
+        organization: initialOrganization,
+        resolvePlan,
+        runCrabbox,
+      }),
+    ).resolves.toMatchObject({ checkId: null, context: { runId, leaseId } });
+    expect(initialOrganization.request).toHaveBeenCalledTimes(1);
+    expect(readFileSync(outputPath, "utf8")).toBe(`run_id=${runId}\nlease_id=${leaseId}\n`);
+    expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
+    expect(values.runCrabbox).toHaveBeenCalledTimes(2);
+    expect(values.broker.request).toHaveBeenCalledWith(`/v1/runs/${runId}`);
+
+    values.broker.request.mockClear();
+    values.runCrabbox.mockClear();
+    await expect(
+      runPublisher({
+        ...values,
+        phase: "publish",
+        clock: () => clockNow,
+        env: phaseEnv("publish"),
+        event: event(),
+        resolvePlan,
+      }),
+    ).resolves.toMatchObject({
+      checkId: 88,
+      context: { baseSha, headSha, runId, leaseId, workflowSha },
+    });
+    expect(resolvePlan).toHaveBeenCalledTimes(2);
+    expect(values.runCrabbox).not.toHaveBeenCalled();
+    expect(values.broker.request.mock.calls[0]).toEqual(["/v1/whoami"]);
+    expect(values.organization.request).toHaveBeenCalledTimes(2);
+    expect(values.orderedCalls.at(-1)).toBe("github:POST:/repos/openclaw/openclaw/check-runs");
+  });
+
+  it.each([
+    ["failed native command", 255, {}, /command failed/u],
+    ["malformed run ID", 0, { id: "run_bad\nextra=1" }, /identity/u],
+    ["unfinished release", 0, { phase: "running" }, /lifecycle/u],
+    ["failed proof", 0, { state: "failed", exitCode: 1 }, /result/u],
+  ] as const)("does not hand off %s", async (_label, exitCode, run, failure) => {
+    const values = harness({ run });
+    const runCrabbox = vi.fn(async (input: Parameters<typeof values.runCrabbox>[0]) => {
+      const result = await values.runCrabbox(input);
+      return input.args[0] === "run" ? { ...result, exitCode } : result;
+    });
+    await expect(
+      runPublisher({
+        ...values,
+        phase: "proof",
+        clock: () => proofEndedAt,
+        env: phaseEnv("proof"),
         event: event(),
         resolvePlan: () => gatePlan(),
         runCrabbox,
       }),
-    ).resolves.toMatchObject({ checkId: 88 });
+    ).rejects.toThrow(failure);
+    expect(existsSync(outputPath)).toBe(false);
+    expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
+  });
+
+  it("refuses publication when both fresh token steps provide no token", () => {
+    writeFileSync(outputPath, JSON.stringify(event()));
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/pr-crabbox-gate-publisher.mjs", "--publish"],
+      {
+        encoding: "utf8",
+        env: phaseEnv("publish", {
+          GITHUB_EVENT_PATH: outputPath,
+          GH_TOKEN: "job-token",
+          GH_APP_TOKEN: "",
+        }),
+        input: "",
+        timeout: 10_000,
+      },
+    );
+    // Supply the actual CLI event as a file; no remote or inherited credentials.
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("GH_APP_TOKEN is required");
+  });
+
+  it("propagates output-write failure after joined proof without publishing", async () => {
+    const values = harness();
+    await expect(
+      runPublisher({
+        ...values,
+        phase: "proof",
+        clock: () => proofEndedAt,
+        env: phaseEnv("proof", { GITHUB_OUTPUT: outputRoot }),
+        event: event(),
+        resolvePlan: () => gatePlan(),
+      }),
+    ).rejects.toThrow(/EISDIR/u);
+    expect(values.runCrabbox).toHaveBeenCalledTimes(2);
+    expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
+  });
+
+  it.each([
+    ["missing output destination", "proof", { GITHUB_OUTPUT: "" }],
+    ["missing run", "publish", { CRABBOX_PROOF_RUN_ID: "" }],
+    ["missing lease", "publish", { CRABBOX_PROOF_LEASE_ID: "" }],
+    ["injected run", "publish", { CRABBOX_PROOF_RUN_ID: `${runId}\nextra=1` }],
+    ["injected lease", "publish", { CRABBOX_PROOF_LEASE_ID: `${leaseId}\nextra=1` }],
+  ] as const)("rejects %s before external work", async (_label, phase, overrides) => {
+    const values = harness();
+    await expect(
+      runPublisher({
+        ...values,
+        phase,
+        env: phaseEnv(phase, overrides),
+        event: event(),
+        resolvePlan: () => gatePlan(),
+      }),
+    ).rejects.toThrow();
+    expect(values.orderedCalls).toEqual([]);
+    expect(values.runCrabbox).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["changed head", { pull: { head: { repo: { full_name: repository }, sha: "f".repeat(40) } } }],
+    [
+      "changed base",
+      { pull: { base: { ref: "main", repo: { full_name: repository }, sha: "f".repeat(40) } } },
+    ],
+    ["revoked administrator", { membership: { ...activeMembership(), role: "member" } }],
+    ["changed broker principal", { principal: { owner: "other-owner" } }],
+    ["mismatched lease", { run: { leaseID: "cbx_other" } }],
+    ["expired completed proof", { run: { endedAt: "2026-08-28T01:00:00Z" } }],
+  ])("revalidates %s in the publication phase", async (_label, overrides) => {
+    const values = harness(overrides);
+    await expect(
+      runPublisher({
+        ...values,
+        phase: "publish",
+        clock: () => Date.parse("2026-08-28T03:00:00.001Z"),
+        env: phaseEnv("publish"),
+        event: event(),
+        resolvePlan: () => gatePlan(),
+      }),
+    ).rejects.toThrow();
+    expect(values.runCrabbox).not.toHaveBeenCalled();
+    expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
+  });
+
+  it("rechecks membership immediately before publication", async () => {
+    const values = harness();
+    values.organization.request.mockResolvedValueOnce(activeMembership()).mockResolvedValueOnce({
+      ...activeMembership(),
+      role: "member",
+    });
+    await expect(
+      runPublisher({
+        ...values,
+        phase: "publish",
+        clock: () => proofEndedAt,
+        env: phaseEnv("publish"),
+        event: event(),
+        resolvePlan: () => gatePlan(),
+      }),
+    ).rejects.toThrow(/not an active/u);
+    expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
+  });
+
+  it("recomputes the publication plan instead of trusting output metadata", async () => {
+    const values = harness();
+    await expect(
+      runPublisher({
+        ...values,
+        phase: "publish",
+        clock: () => proofEndedAt,
+        env: phaseEnv("publish"),
+        event: event(),
+        resolvePlan: () => ({ ...gatePlan(), targets: [] }),
+      }),
+    ).rejects.toThrow(/canonical exact-head gate/u);
+    expect(values.runCrabbox).not.toHaveBeenCalled();
+    expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
   });
 
   it("rejects non-admin, closed, or non-ancestor input before provisioning", async () => {
@@ -599,8 +789,9 @@ describe("Crabbox gate publisher boundary", () => {
       const values = harness(overrides);
       await expect(
         runPublisher({
+          phase: "proof",
           ...values,
-          env: env(),
+          env: phaseEnv("proof"),
           event: event(),
           resolvePlan: () => gatePlan(),
         }),
@@ -615,9 +806,10 @@ describe("Crabbox gate publisher boundary", () => {
     });
     await expect(
       runPublisher({
+        phase: "publish",
         ...values,
         clock: () => Date.parse("2026-08-28T02:00:00Z"),
-        env: env(),
+        env: phaseEnv("publish"),
         event: event(),
         resolvePlan: () => gatePlan(),
       }),
@@ -640,9 +832,10 @@ describe("Crabbox gate publisher boundary", () => {
       const values = harness(overrides);
       await expect(
         runPublisher({
+          phase: "publish",
           ...values,
           clock: () => Date.parse("2026-08-28T02:00:00Z"),
-          env: env(),
+          env: phaseEnv("publish"),
           event: event(),
           resolvePlan: () => gatePlan(),
         }),
@@ -690,6 +883,50 @@ describe("Crabbox broker authentication", () => {
 });
 
 describe("Crabbox gate workflow", () => {
+  it("refreshes membership only after proof and never falls back to its old token", () => {
+    const {
+      jobs: {
+        publish: { steps },
+      },
+    } = parseYaml(
+      readFileSync(".github/workflows/pr-crabbox-gate-publisher.yml", "utf8"),
+    ) as PublisherWorkflow;
+    const proofIndex = steps.findIndex((step) => step.id === "proof");
+    const proof = steps[proofIndex];
+    const fresh = steps[proofIndex + 1];
+    const fallback = steps[proofIndex + 2];
+    const publish = steps[proofIndex + 3];
+    expect(proof).toMatchObject({ run: "node scripts/pr-crabbox-gate-publisher.mjs --proof" });
+    expect(proof?.["continue-on-error"]).toBeUndefined();
+    expect(fresh).toMatchObject({
+      id: "publish-app-token",
+      if: "success() && steps.proof.outcome == 'success'",
+      uses: "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+      "continue-on-error": true,
+      with: { "app-id": "2729701", "permission-members": "read" },
+    });
+    expect(fallback).toMatchObject({
+      id: "publish-app-token-fallback",
+      if: "success() && steps.proof.outcome == 'success' && steps.publish-app-token.outcome == 'failure'",
+      uses: fresh?.uses,
+      "continue-on-error": true,
+      with: { "app-id": "2971289", "permission-members": "read" },
+    });
+    expect(publish).toMatchObject({
+      if: "success() && steps.proof.outcome == 'success'",
+      env: {
+        CRABBOX_PROOF_RUN_ID: "${{ steps.proof.outputs.run_id }}",
+        CRABBOX_PROOF_LEASE_ID: "${{ steps.proof.outputs.lease_id }}",
+        GH_APP_TOKEN:
+          "${{ steps.publish-app-token.outputs.token || steps.publish-app-token-fallback.outputs.token }}",
+        GH_TOKEN: "${{ github.token }}",
+      },
+      run: "node scripts/pr-crabbox-gate-publisher.mjs --publish",
+    });
+    expect(publish?.["continue-on-error"]).toBeUndefined();
+    expect(steps.at(-1)).toBe(publish);
+  });
+
   it("pins the publisher-owned run to protected main", () => {
     const workflow = parseYaml(
       readFileSync(".github/workflows/pr-crabbox-gate-publisher.yml", "utf8"),
@@ -733,7 +970,7 @@ describe("Crabbox gate workflow", () => {
         CRABBOX_COORDINATOR_TOKEN:
           "${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}",
       },
-      run: "node scripts/pr-crabbox-gate-publisher.mjs",
+      run: "node scripts/pr-crabbox-gate-publisher.mjs --publish",
     });
   });
 });

@@ -31,10 +31,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import type { PublicationSessionIdentity } from "./github-publication-availability.js";
 import { deferSharedGitHubPublicationChanged } from "./github-publication-events.js";
 import {
   readSharedGitHubPublicationWorkspace,
-  type SharedGitHubPublicationSession,
   type SharedGitHubPublicationSelector,
 } from "./github-publication-shared-read.js";
 import type { WorkerSessionTurnClaim } from "./worker-environments/placement-store.js";
@@ -120,7 +120,7 @@ export function readKnownGitHubPublicationPullRequestUrlsInDatabase(
 
 /** Shared observation never initializes schema, prepares identity, or resumes publication. */
 export function readSharedGitHubPublicationRequest(
-  session: SharedGitHubPublicationSession,
+  session: PublicationSessionIdentity,
   selector: SharedGitHubPublicationSelector,
   entry: SessionEntry,
 ): GitHubPublicationRow | undefined {

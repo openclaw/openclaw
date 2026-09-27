@@ -342,7 +342,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
     | `plugin-sdk/browser-cdp` | Private host runtime; `parseBrowserHttpUrl` and `redactCdpUrl` for Browser URL handling. JavaScript-only package export, not a typed third-party SDK contract. |
     | `plugin-sdk/browser-config` | Private-local after July 2026; Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
-    | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
+    | `plugin-sdk/agent-harness-completion` | Private-local JavaScript-only host runtime for official harness plugins; native completion delivery using a host-issued requester scope, retained completion custody, and a source-bound event sink; no generic Task lifecycle |
     | `plugin-sdk/agent-harness-session-runtime` | Private-local JavaScript-only host runtime for official harness plugins; binding leases, generation admission, initialization rollback, and transactional deletion; not a third-party plugin API |
     | `plugin-sdk/agent-harness-attempt-runtime` | Private-local JavaScript-only host runtime for official harness plugins; execution/settlement deadlines, cancellation, and lifecycle/event publication; not a third-party plugin API |
     | `plugin-sdk/agent-harness-runtime` | Agent-harness runtime helpers, including the bounded `agentHarnessStructuredInput` form/URL compilation and execution surface. `acquireSessionWriteLock`, `resolveSessionWriteLockAcquireTimeoutMs`, `resolveSessionWriteLockOptions`, and `SessionWriteLockAcquireTimeoutConfig` are deprecated no-op compatibility exports scheduled for removal in the 2026.10 release train. They no longer block or create lock sidecars; harnesses should rely on OpenClaw's per-session lane plus the durable writer claim and in-transaction fence. |
@@ -488,7 +488,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/speech-settings` | Lightweight TTS config resolution and normalization primitives without provider registries or synthesis runtime |
     | `plugin-sdk/realtime-transcription` | Private-local after July 2026; Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
     | `plugin-sdk/realtime-transcription-session` | Private-local JavaScript-only host runtime for official plugins; shared WebSocket session construction and types without loading the host provider registry. Use this for provider implementation imports. |
-    | `plugin-sdk/realtime-bootstrap-context` | Private-local after July 2026; Realtime profile bootstrap helper for bounded `IDENTITY.md`, `USER.md`, and `SOUL.md` context injection |
+    | `plugin-sdk/realtime-bootstrap-context` | Private-local after July 2026; `resolveRealtimeBootstrapContextInstructions` loads bounded profile context, with optional workspace-relative `files: readonly string[]` and `maxChars` (default `12000`). `resolveRealtimeVoiceAgentContextInstructions` adds the always-present agent-context paragraph and configured identity when `includeIdentity: true` (default `false`). Default profile names and their type remain available as `REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES` and `RealtimeBootstrapContextFileName`. |
     | `plugin-sdk/realtime-voice-audio-queue` | Private-local JavaScript-only host runtime for bundled or separately published official plugins; narrow bounded audio queue seam for lazy realtime voice provider facades without importing the broader realtime voice runtime; not for third-party plugins |
     | `plugin-sdk/realtime-voice-playback` | Private official-plugin facade for audio audibility and output activity tracking. Source workers avoid session runtimes; published plugins use the established `realtime-voice` host binding for compatibility. |
     | `plugin-sdk/realtime-voice-provider` | Private-local JavaScript-only host runtime for official plugins; provider types, audio formats/codecs, audio energy and output activity, response outcomes, and connection lifecycle primitives without host provider registries or agent-consult execution. Media workers use this surface to keep host session runtimes off their startup path. |
@@ -575,6 +575,15 @@ direct store operations, and capture calls wherever the owning flow permits.
 HTTP capture reads a cloned response body: waiting for that read must not delay
 handing the original response to its caller. WebSocket event callbacks likewise
 leave capture completion to their lifecycle owner.
+
+The published 2026.9.6 host does not expose these async capture operations. Plugins
+supporting that host must read optional diagnostic operations from the SDK module
+namespace and check availability before calling them. Ordinary channel or provider
+operations continue without those diagnostics; configured proxy routing still
+applies. Do not fall back to synchronous capture writes. Features that require
+capture storage or readback must report an unavailable capability instead of
+claiming successful capture. Remove these availability checks when the plugin's
+minimum supported host includes the async operations.
 
 For long-lived streams, observe capture completion separately and let the runtime
 finalizer settle it during cleanup. If a maintenance callback returns or awaits

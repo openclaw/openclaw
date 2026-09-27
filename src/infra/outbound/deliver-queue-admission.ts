@@ -3,7 +3,7 @@ import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
-import { throwSqliteLifecycleErrors } from "../sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../sqlite-lifecycle-errors.js";
 import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import {
   collectPayloadMediaSources,

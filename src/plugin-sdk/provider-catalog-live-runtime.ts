@@ -213,7 +213,8 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
         liveModelCatalogAuthCacheKey(params),
       ],
       ttlMs: params.ttlMs,
-      load: async () => await fetchLiveProviderModelIds(params),
+      signal: params.signal,
+      load: async (signal) => await fetchLiveProviderModelIds({ ...params, signal }),
       shouldCache: (modelIds) => modelIds.length > 0 || params.discoveryMode === "strict",
     });
     const liveModelIdSet = new Set(liveModelIds);
@@ -450,6 +451,7 @@ export function buildOpenAICompatibleProviderFamilyCatalog(params: {
               apiKey: auth.apiKey,
               discoveryApiKey: auth.discoveryApiKey,
               profileId: auth.profileId,
+              signal: ctx.signal,
               discoveryMode: params.discoveryMode,
             }),
           })),
@@ -496,6 +498,7 @@ export async function buildOpenAICompatibleProviderCatalog(
     discoveryApiKey: auth.discoveryApiKey,
     modelDiscovery: params.modelDiscovery,
     profileId: auth.profileId,
+    signal: params.ctx.signal,
     discoveryMode: params.discoveryMode,
   });
 }

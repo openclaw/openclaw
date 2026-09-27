@@ -13,12 +13,8 @@ import {
   getSkillCuratorStatus,
   SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE,
 } from "../../skills/workshop/curator.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-function respondSkillWorkshopError(respond: RespondFn, err: unknown) {
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(err)));
-}
 
 function respondRetiredSkillCuratorAction(
   { params, respond }: GatewayRequestHandlerOptions,
@@ -27,7 +23,14 @@ function respondRetiredSkillCuratorAction(
   if (!assertValidParams(params, validateSkillsCuratorActionParams, method, respond)) {
     return;
   }
-  respondSkillWorkshopError(respond, new Error(SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE));
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      formatErrorMessage(SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE),
+    ),
+  );
 }
 
 export const skillsCuratorHandlers: GatewayRequestHandlers = {

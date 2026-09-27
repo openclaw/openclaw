@@ -17,7 +17,6 @@ import { copyReplyPayloadMetadata, type ReplyPayload } from "openclaw/plugin-sdk
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
-  flushDraftLane,
   resetLaneState,
   rotateAnswerLaneAfterQueuedBlocksSettle,
 } from "./bot-message-dispatch-draft.js";
@@ -171,7 +170,7 @@ function createDeliveryBaseOptions(turn: Turn) {
     thread: turn.context.threadSpec,
     tableMode: turn.tableMode,
     chunkMode: turn.chunkMode,
-    richMessages: turn.telegramCfg.richMessages,
+    richMessages: turn.richMessages,
     linkPreview: turn.telegramCfg.linkPreview,
     replyQuoteMessageId: turn.replyQuoteMessageId,
     replyQuoteText: turn.replyQuoteText,
@@ -650,7 +649,7 @@ export function createDeliveryState(
     lanes: config.lanes,
     applyTextToPayload,
     sendPayload: async (payload, options) => await sendPayload(getTurn(), payload, options),
-    flushDraftLane: async (lane) => await flushDraftLane(getTurn(), lane),
+    flushDraftLane: async (lane) => await lane.stream?.flush(),
     stopDraftLane: async (lane) => await lane.stream?.stop(),
     clearDraftLane: async (lane) => await lane.stream?.clear(),
     editStreamMessage: async ({ messageId, text, textMode, buttons }) => {
@@ -676,7 +675,7 @@ export function createDeliveryState(
       resolveFinalTelegramPresentationText({
         payload,
         text,
-        richMessages: getTurn().telegramCfg.richMessages === true,
+        richMessages: getTurn().richMessages,
         allowWebAppButtons:
           resolveTelegramTargetChatType(String(getTurn().context.chatId)) === "direct",
       }),

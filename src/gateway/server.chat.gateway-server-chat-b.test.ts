@@ -3535,7 +3535,7 @@ describe("gateway server chat", () => {
       expect(responses[0]?.ok).toBe(true);
       await waitForFast(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
       expect(captured?.replyOptions?.images).toEqual([
-        { type: "image", data: pngB64, mimeType: "image/png", sourceIndex: 0 },
+        { type: "image", data: pngB64, mimeType: "image/png", sourceIndex: 0, fileName: "dot.png" },
       ]);
       expect(captured?.ctx?.media).toEqual([
         expect.objectContaining({

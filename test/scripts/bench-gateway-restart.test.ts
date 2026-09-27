@@ -30,6 +30,9 @@ import {
 type RestartSampleFixture = Parameters<typeof testing.summarizeCase>[1][number];
 type ProbeFixture = RestartSampleFixture["initialHealthz"];
 
+const wallClockSetTimeout = setTimeout;
+const wallClockClearTimeout = clearTimeout;
+
 function createProbeFixture(
   ms: ProbeFixture["ms"],
   overrides: Partial<ProbeFixture> = {},
@@ -96,12 +99,15 @@ async function withWallClockDeadline<T>(
     return await Promise.race([
       promise,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), timeoutMs);
+        timer = wallClockSetTimeout(
+          () => reject(new Error(`${label} exceeded ${timeoutMs}ms`)),
+          timeoutMs,
+        );
         timer.unref?.();
       }),
     ]);
   } finally {
-    clearTimeout(timer);
+    wallClockClearTimeout(timer);
   }
 }
 
@@ -335,6 +341,8 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       server.listen(0, "127.0.0.1", resolve);
     });
     try {
+      // Freeze the probe deadline while real HTTP delivers headers; the watchdog stays on wall time.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("test server did not bind to a TCP port");
@@ -349,6 +357,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       ).resolves.toEqual({ errorKind: null, status: 200 });
       expect(requestMethod).toBe("HEAD");
     } finally {
+      vi.useRealTimers();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

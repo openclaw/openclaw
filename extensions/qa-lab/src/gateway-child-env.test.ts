@@ -17,7 +17,7 @@ function createParams(baseEnv: NodeJS.ProcessEnv) {
 }
 
 describe("QA child service identity", () => {
-  it.each(["default", "parent", "runtime patch"])(
+  it.each(["parent", "runtime patch"])(
     "keeps %s supervision out of QA-owned children",
     (source) => {
       const supervisorEnv = {

@@ -4,7 +4,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
-import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { createErrorChannelPlugin } from "./status.channel-plugin.test-helpers.js";
 import type { StatusScanResult } from "./status.scan-result.js";
@@ -375,8 +374,6 @@ async function createMockStatusScanResult(
       heartbeat: { defaultAgentId: "main", agents: [] },
       channelSummary: [],
       queuedSystemEvents: [],
-      tasks: mocks.getInspectableTaskRegistrySummary(),
-      taskAudit: mocks.getInspectableTaskAuditSummary(),
       sessions,
     },
     memory: null,
@@ -435,41 +432,6 @@ const mocks = vi.hoisted(() => ({
   }),
   runSecurityAudit: vi.fn().mockResolvedValue(createDefaultSecurityAuditResult()),
   buildPluginCompatibilityNotices: vi.fn((): PluginCompatibilityNotice[] => []),
-  getInspectableTaskRegistrySummary: vi.fn().mockReturnValue({
-    total: 0,
-    active: 0,
-    terminal: 0,
-    failures: 0,
-    byStatus: {
-      queued: 0,
-      running: 0,
-      succeeded: 0,
-      failed: 0,
-      timed_out: 0,
-      cancelled: 0,
-      lost: 0,
-    },
-    byRuntime: {
-      subagent: 0,
-      acp: 0,
-      cli: 0,
-      cron: 0,
-    },
-  }),
-  getInspectableTaskAuditSummary: vi.fn().mockReturnValue({
-    total: 0,
-    warnings: 0,
-    errors: 0,
-    byCode: {
-      stale_queued: 0,
-      stale_running: 0,
-      lost: 0,
-      delivery_failed: 0,
-      missing_cleanup: 0,
-      inconsistent_timestamps: 0,
-    },
-  }),
-  getInspectableTaskAuditFindings: vi.fn().mockReturnValue([]),
   resolveGatewayService: vi.fn().mockReturnValue(createServiceFixture("gateway")),
   resolveNodeService: vi.fn().mockReturnValue(createServiceFixture("node")),
 }));
@@ -676,11 +638,6 @@ vi.mock("../node-host/config.js", () => ({
   loadNodeHostConfig: mocks.loadNodeHostConfig,
   loadNodeHostConfigReadOnly: mocks.loadNodeHostConfig,
 }));
-vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  getInspectableTaskRegistrySummary: mocks.getInspectableTaskRegistrySummary,
-  getInspectableTaskAuditSummary: mocks.getInspectableTaskAuditSummary,
-  getInspectableTaskAuditFindings: mocks.getInspectableTaskAuditFindings,
-}));
 vi.mock("../security/audit.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
 }));
@@ -854,24 +811,7 @@ describe("statusCommand", () => {
     });
     mocks.buildPluginCompatibilityNotices.mockReset();
     mocks.buildPluginCompatibilityNotices.mockReturnValue([]);
-    mocks.getInspectableTaskRegistrySummary.mockReset();
-    mocks.getInspectableTaskRegistrySummary.mockReturnValue(createEmptyTaskRegistrySummary());
-    mocks.getInspectableTaskAuditSummary.mockReset();
-    mocks.getInspectableTaskAuditSummary.mockReturnValue({
-      total: 0,
-      warnings: 0,
-      errors: 0,
-      byCode: {
-        stale_queued: 0,
-        stale_running: 0,
-        lost: 0,
-        delivery_failed: 0,
-        missing_cleanup: 0,
-        inconsistent_timestamps: 0,
-      },
-    });
-    mocks.getInspectableTaskAuditFindings.mockReset();
-    mocks.getInspectableTaskAuditFindings.mockReturnValue([]);
+
     mocks.runSecurityAudit.mockReset();
     mocks.runSecurityAudit.mockResolvedValue(createDefaultSecurityAuditResult());
     mocks.resolveGatewayService.mockReset();
@@ -906,10 +846,6 @@ describe("statusCommand", () => {
     expect(payload.gatewayService.label).toBe("LaunchAgent");
     expect(payload.nodeService.label).toBe("LaunchAgent");
     expect(payload.pluginCompatibility).toBeUndefined();
-    expect(payload.tasks.total).toBe(0);
-    expect(payload.tasks.active).toBe(0);
-    expect(payload.tasks.byStatus.queued).toBe(0);
-    expect(payload.tasks.byStatus.running).toBe(0);
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
 
     runtimeLogMock.mockClear();
@@ -1075,7 +1011,6 @@ describe("statusCommand", () => {
       "Channels",
       "WhatsApp",
       "no workspaces bootstrapping",
-      "Tasks",
       "Sessions",
       "+1000",
       "50%",
@@ -1093,66 +1028,6 @@ describe("statusCommand", () => {
     expectLogsInclude(logs, "40% hit");
     expectLogsInclude(logs, "read 2.0k");
     expect(logs.join("\n")).not.toContain("no bootstrap files");
-  });
-
-  it("shows a maintenance hint when task audit errors are present", async () => {
-    mocks.getInspectableTaskRegistrySummary.mockReturnValue({
-      total: 1,
-      active: 1,
-      terminal: 0,
-      failures: 1,
-      byStatus: {
-        queued: 0,
-        running: 1,
-        succeeded: 0,
-        failed: 0,
-        timed_out: 0,
-        cancelled: 0,
-        lost: 0,
-      },
-      byRuntime: {
-        subagent: 0,
-        acp: 1,
-        cli: 0,
-        cron: 0,
-      },
-    });
-    mocks.getInspectableTaskAuditSummary.mockReturnValue({
-      total: 1,
-      warnings: 0,
-      errors: 1,
-      byCode: {
-        stale_queued: 0,
-        stale_running: 1,
-        lost: 0,
-        delivery_failed: 0,
-        missing_cleanup: 0,
-        inconsistent_timestamps: 0,
-      },
-    });
-    mocks.getInspectableTaskAuditFindings.mockReturnValue([
-      {
-        severity: "error",
-        code: "stale_running",
-        detail: "running task appears stuck",
-        task: {
-          taskId: "stale-running-task",
-          runtime: "acp",
-          ownerKey: "agent:main:main",
-          requesterSessionKey: "agent:main:main",
-          scopeKind: "session",
-          task: "Stale task",
-          status: "running",
-          deliveryStatus: "pending",
-          notifyPolicy: "done_only",
-          createdAt: Date.now() - 60_000,
-        },
-      },
-    ]);
-
-    const joined = await runStatusAndGetJoinedLogs();
-
-    expect(joined).toContain("tasks maintenance --apply");
   });
 
   it("uses prompt-side denominator for cached percentages", async () => {

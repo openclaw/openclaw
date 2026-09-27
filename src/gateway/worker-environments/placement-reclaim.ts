@@ -17,6 +17,7 @@ import {
   completeMovedWorkspaceTeardown,
   completeReclaimedWorkspaceTeardown,
 } from "./placement-teardown.js";
+import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import type {
   WorkerPlacementAuthorization,
   WorkerPlacementReclaimRequest,
@@ -162,14 +163,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                 const stillOwnsEmptyResult = (): boolean => {
                   const owned = placements.get(current.sessionId);
                   const currentEnvironment = environments.get(current.environmentId);
-                  const pendingResult = placements
-                    .listPendingWorkspaceResults(reclaimClaim.sessionId)
-                    .find(
-                      (pending) =>
-                        pending.sessionId === reclaimClaim.sessionId &&
-                        pending.claimId === reclaimClaim.claimId &&
-                        pending.runId === reclaimClaim.runId,
-                    );
+                  const pendingResult = findPendingWorkerWorkspaceResult(placements, reclaimClaim);
                   return (
                     (allowCommitted || !manifestAccepted) &&
                     owned?.state === "draining" &&
@@ -286,14 +280,10 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                     reauthorize?.();
                     assertCurrent();
                     placements.acceptWorkspaceResult(reclaimClaim);
-                    const recordedStagedResultRef = placements
-                      .listPendingWorkspaceResults(reclaimClaim.sessionId)
-                      .find(
-                        (result) =>
-                          result.sessionId === reclaimClaim.sessionId &&
-                          result.claimId === reclaimClaim.claimId &&
-                          result.runId === reclaimClaim.runId,
-                      )?.stagedResultRef;
+                    const recordedStagedResultRef = findPendingWorkerWorkspaceResult(
+                      placements,
+                      reclaimClaim,
+                    )?.stagedResultRef;
                     const conflictPaths = applied?.conflictPaths ?? [];
                     if (conflictPaths.length > 0 && !recordedStagedResultRef) {
                       throw new Error("Cloud worker stop conflict has no staged result reference");
@@ -400,14 +390,10 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                 error instanceof WorkerWorkspaceFinalFenceError &&
                   error.reclaimDisposition === "retry",
               ).catch(() => undefined);
-              const pendingReclaimResult = placements
-                .listPendingWorkspaceResults(reclaimClaim.sessionId)
-                .find(
-                  (pending) =>
-                    pending.sessionId === reclaimClaim.sessionId &&
-                    pending.claimId === reclaimClaim.claimId &&
-                    pending.runId === reclaimClaim.runId,
-                );
+              const pendingReclaimResult = findPendingWorkerWorkspaceResult(
+                placements,
+                reclaimClaim,
+              );
               if (pendingReclaimResult && pendingReclaimResult.workspaceAcceptedAtMs !== null) {
                 placements.handoffWorkspaceResultRecovery(reclaimClaim);
                 // The tracked sweep retries cleanup after this lifecycle/placement fence releases.

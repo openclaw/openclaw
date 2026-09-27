@@ -7,19 +7,21 @@ const scenarioId = "whatsapp-participant-identity-inspection";
 const driverPhone = "+15550000001";
 const groupJid = "120363000000000000@g.us";
 
-type Failure =
-  | "missing-group"
-  | "extra-run"
-  | "unknown-person"
-  | "room-principal"
-  | "wrong-run"
-  | "wrong-execution"
-  | "raw-phone"
-  | "raw-group"
-  | "verified-generic"
-  | "different-person"
-  | "missing-human"
-  | "changed-after-restart";
+const invalidEvidence = [
+  ["missing-group", "requires groupJid"],
+  ["extra-run", "exactly one newly admitted run"],
+  ["unknown-person", "retain the admitted person"],
+  ["room-principal", "retain the admitted person"],
+  ["wrong-run", "retain the admitted person"],
+  ["wrong-execution", "must agree with run discovery"],
+  ["raw-phone", "exclude raw route and participant references"],
+  ["raw-group", "exclude raw route and participant references"],
+  ["verified-generic", "keep generic decisions unverified"],
+  ["different-person", "same participant"],
+  ["missing-human", "must agree with run discovery"],
+  ["changed-after-restart", "changed or exposed private references after restart"],
+] as const;
+type Failure = (typeof invalidEvidence)[number][0];
 
 async function runIdentityFlow(failure?: Failure) {
   const state = createQaBusState();
@@ -153,20 +155,7 @@ describe("WhatsApp participant identity executable flow", () => {
     expect(proof.restarted).toBe(true);
   });
 
-  it.each([
-    ["missing-group", "requires groupJid"],
-    ["extra-run", "exactly one newly admitted run"],
-    ["unknown-person", "retain the admitted person"],
-    ["room-principal", "retain the admitted person"],
-    ["wrong-run", "retain the admitted person"],
-    ["wrong-execution", "must agree with run discovery"],
-    ["raw-phone", "exclude raw route and participant references"],
-    ["raw-group", "exclude raw route and participant references"],
-    ["verified-generic", "keep generic decisions unverified"],
-    ["different-person", "same participant"],
-    ["missing-human", "must agree with run discovery"],
-    ["changed-after-restart", "changed or exposed private references after restart"],
-  ] satisfies Array<[Failure, string]>)("rejects %s evidence", async (failure, error) => {
+  it.each(invalidEvidence)("rejects %s evidence", async (failure, error) => {
     await expect(runIdentityFlow(failure)).rejects.toThrow(error);
   });
 });

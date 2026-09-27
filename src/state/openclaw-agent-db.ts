@@ -47,7 +47,7 @@ import { createOpenClawAgentDatabaseAdmissionOwner } from "./openclaw-agent-db-a
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
-  OpenClawAgentDatabaseRegistrationCommit,
+  OpenClawAgentDatabaseRegistrationObserver,
 } from "./openclaw-agent-db-contract.js";
 import {
   registerOpenClawAgentDatabaseIdentity,
@@ -102,6 +102,7 @@ import {
   clearOpenClawAgentDatabaseValidationCache,
   adoptOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidation,
+  hasRevokedOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidation,
   setOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
@@ -192,11 +193,11 @@ export function clearOpenClawAgentDatabaseOpenFailure(
 export function openOpenClawAgentDatabase(
   options: OpenClawAgentDatabaseOptions,
   preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
-  onRegistrationCommitted?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void,
+  registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
 ): OpenClawAgentDatabase {
   const run = () =>
     runSqliteIntegrityOperationSync(
-      openOpenClawAgentDatabaseSteps(options, undefined, preparedLease, onRegistrationCommitted),
+      openOpenClawAgentDatabaseSteps(options, undefined, preparedLease, registrationObserver),
     );
   const scope = getOpenClawDatabaseMaintenanceScope();
   return scope ? scope.run(run) : run();
@@ -210,7 +211,7 @@ function* openOpenClawAgentDatabaseSteps(
   options: OpenClawAgentDatabaseOptions,
   pending?: PendingAgentDatabaseOpen,
   preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
-  onRegistrationCommitted?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void,
+  registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
 ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
   const agentId = normalizeAgentId(options.agentId);
   assertAgentDatabaseAdmitted(agentId, { env: options.env });
@@ -300,6 +301,7 @@ function* openOpenClawAgentDatabaseSteps(
   }
   let verification: OpenClawAgentIntegrityVerification | undefined;
   let reuseIntegrity = false;
+  let integrityRevoked = false;
   const validation = pending?.validation ?? preparedLease?.validation;
   const captureVerification: OpenClawAgentIntegrityVerificationReceiver = (
     record,
@@ -308,6 +310,7 @@ function* openOpenClawAgentDatabaseSteps(
   ) => {
     verification = record;
     reuseIntegrity = runtimeIntegrityAllowed;
+    integrityRevoked = invalidated;
     if (invalidated && validation) {
       // Stale-peer cleanup precedes adoption of proof already transferred by the host.
       Atomics.store(new Int32Array(validation.valid), 0, 0);
@@ -370,6 +373,12 @@ function* openOpenClawAgentDatabaseSteps(
         assertExistingAgentSchemaOwner(existingSchema, agentId, pathname);
         // Runtime proof survives last-lease close; cold opens require clean-close proof.
         // Runtime proof carries owner revocation; every open still checks schema convergence.
+        diagnostics.integrityGateReason =
+          integrityRevoked || hasRevokedOpenClawAgentDatabaseValidation(pathname, validation)
+            ? "revoked"
+            : !reuseIntegrity
+              ? "lease-class"
+              : "no-proof";
         const requiresCurrentVersionConvergence = yield* agentDatabaseIntegrityBeforeMutationSteps(
           db,
           agentId,
@@ -377,7 +386,11 @@ function* openOpenClawAgentDatabaseSteps(
           diagnostics,
           verification,
           isValidatedReopen && reuseIntegrity,
+          true,
         );
+        if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {
+          delete diagnostics.integrityGateReason;
+        }
         if (isValidatedReopen && (!existingSchema || requiresCurrentVersionConvergence)) {
           // New files and same-version divergence cannot inherit an earlier validation.
           // The existing full path initializes or converges them before exposure.
@@ -404,6 +417,9 @@ function* openOpenClawAgentDatabaseSteps(
         finishPhase("schema");
         return maintenance;
       } catch (err) {
+        if (diagnostics.integrityGateOutcome === "failed") {
+          finishPhase("validation");
+        }
         maintenance?.close();
         if (db.isOpen) {
           db.close();
@@ -446,7 +462,7 @@ function* openOpenClawAgentDatabaseSteps(
     if (!isValidatedReopen) {
       registerOpenClawAgentDatabase(
         { agentId, path: pathname, env: options.env },
-        onRegistrationCommitted,
+        registrationObserver,
       );
       setOpenClawAgentDatabaseValidation(database);
     }

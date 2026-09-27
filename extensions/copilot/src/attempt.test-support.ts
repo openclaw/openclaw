@@ -1,9 +1,5 @@
 import type { CopilotClient } from "@github/copilot-sdk";
 import type { AgentHarnessAttemptResult as AgentHarnessAttemptResultContract } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type {
-  AgentHarnessTaskRecord,
-  AgentHarnessTaskRuntime,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { vi } from "vitest";
 import type { CopilotClientPool } from "./runtime.js";
 
@@ -23,39 +19,6 @@ export function projectAgentRunAttemptTerminal(terminal: AgentHarnessAttemptResu
   };
 }
 
-export function makeFailingNativeTaskRuntime(failure: Error): AgentHarnessTaskRuntime {
-  const task: AgentHarnessTaskRecord = {
-    taskId: "native-task",
-    runId: "copilot-agent:call-1",
-    runtime: "subagent",
-    taskKind: "copilot-native",
-    requesterSessionKey: "agent:main:main",
-    ownerKey: "agent:main:main",
-    scopeKind: "session",
-    task: "inspect",
-    status: "running",
-    notifyPolicy: "silent",
-    deliveryStatus: "not_applicable",
-    createdAt: 0,
-  };
-  return {
-    assertTaskAssignmentSupported: () => undefined,
-    createRunningTaskRun: () => task,
-    createRunningTaskRunAsync: async () => task,
-    tryCreateRunningTaskRun: () => task,
-    recordTaskRunProgressByRunId: () => [],
-    finalizeTaskRunByRunId: () => {
-      throw failure;
-    },
-    setDetachedTaskDeliveryStatusByRunId: () => [],
-    listTaskRecords: () => [task],
-    prepareTaskRunRead: async () => () => [task],
-    finalizeTaskRunByRunIdAsync: async () => {
-      throw failure;
-    },
-  };
-}
-
 export type SessionEventShape = {
   data: Record<string, unknown>;
   id: string;
@@ -72,7 +35,9 @@ export type FakeSession = {
   disconnect: ReturnType<typeof vi.fn<() => Promise<void>>>;
   emit: (eventType: string, data: Record<string, unknown>) => void;
   id: string;
-  off: ReturnType<typeof vi.fn>;
+  off: ReturnType<
+    typeof vi.fn<(eventType: string, handler: (event: SessionEventShape) => void) => void>
+  >;
   on: ReturnType<typeof vi.fn>;
   rpc: {
     history: {

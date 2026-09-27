@@ -115,7 +115,7 @@ describe("outbound enqueue worker", () => {
     openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
     await closeOpenClawStateDatabaseAsync();
     const context = captureDeliveryQueueStateContext(stateDir);
-    const sql = observeHostDataSql({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
+    const sql = observeHostDataSql();
     let id: string;
     try {
       id = await enqueueDelivery(payload, undefined, undefined, context);

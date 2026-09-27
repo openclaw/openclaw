@@ -1,5 +1,3 @@
-// `openclaw update status`: combines install metadata, configured channel, and remote update checks.
-
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -38,7 +36,7 @@ import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
-import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
+import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 
 async function readUpdateRecoverySetStatus() {
@@ -82,12 +80,8 @@ async function readChannelStatusIssues(
   }
 }
 
-/** Print update status in JSON or table form for scripts and humans. */
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  if (timeoutMs === null) {
-    return;
-  }
+  const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
 
   const [root, config, runtimeFindings] = await Promise.all([
     resolveUpdateRoot(),

@@ -1,5 +1,8 @@
-import path from "node:path";
 import type { AgentToolParam } from "openai/resources/beta/agents/agents";
+import {
+  resolveAgentWorkspaceMemoryRouting,
+  shouldIncludeAgentHarnessRuntimeContext,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
@@ -14,7 +17,6 @@ import {
   SKILL_WORKSHOP_TOOL_NAME,
   type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 
 /** The native session owns this snapshot until OpenClaw resets its binding. */
 export async function buildAgentsApiInstructions(
@@ -23,13 +25,12 @@ export async function buildAgentsApiInstructions(
 ): Promise<string> {
   const toolNames = new Set(tools.map((tool) => tool.name));
   const workspaceDir = params.bootstrapWorkspaceDir ?? params.workspaceDir;
-  const memoryToolNames = ["memory_search", "memory_get"].filter((name) => toolNames.has(name));
-  const memoryToolRouted =
-    memoryToolNames.length > 0 &&
-    params.config !== undefined &&
-    params.agentId !== undefined &&
-    path.resolve(resolveAgentWorkspaceDir(params.config, params.agentId)) ===
-      path.resolve(workspaceDir);
+  const { memoryToolNames, memoryToolRouted } = resolveAgentWorkspaceMemoryRouting({
+    config: params.config,
+    agentId: params.agentId,
+    workspaceDir,
+    toolNames,
+  });
   // Use the same loader, privacy rules, personal-user selection and budgets as Codex.
   // Preparation failure must remain retryable before a native session is bound.
   const workspace = await prepareAgentWorkspaceContext({
@@ -45,7 +46,7 @@ export async function buildAgentsApiInstructions(
     runKind: params.bootstrapContextRunKind,
     warn: (message) => embeddedAgentLog.warn(message),
     memoryToolRouted,
-    memoryTools: shouldIncludeRuntimeContext(params)
+    memoryTools: shouldIncludeAgentHarnessRuntimeContext(params)
       ? { toolNames: [...toolNames], citationsMode: params.config?.memory?.citations }
       : undefined,
   });
@@ -118,7 +119,7 @@ export function buildAgentsApiTurnContext(
   params: AgentHarnessAttemptParamsV2,
   tools: readonly AgentToolParam.AgentToolConfigParamFunction[],
 ): string | undefined {
-  if (!shouldIncludeRuntimeContext(params)) {
+  if (!shouldIncludeAgentHarnessRuntimeContext(params)) {
     return undefined;
   }
   const toolNames = new Set(tools.map((tool) => tool.name));
@@ -143,12 +144,6 @@ export function buildAgentsApiTurnContext(
     }),
     "Current user request:",
   ]);
-}
-
-function shouldIncludeRuntimeContext(params: AgentHarnessAttemptParamsV2): boolean {
-  return !(
-    params.bootstrapContextMode === "lightweight" && params.bootstrapContextRunKind === "cron"
-  );
 }
 
 function joinSections(sections: readonly (string | undefined)[]): string {

@@ -96,7 +96,8 @@ struct MacGatewayChatTransportMappingTests {
     }
 
     private func withSessionTransport(
-        _ run: (MacGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
+        connectInitially: Bool = true,
+        _ run: @MainActor (MacGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
     {
         let recorder = RequestRecorder()
         let session = GatewayTestWebSocketSession(taskFactory: {
@@ -104,16 +105,22 @@ struct MacGatewayChatTransportMappingTests {
                 guard sendIndex > 0 else { return }
                 let id = try #require(GatewayWebSocketTestSupport.requestID(from: message))
                 let method = try #require(GatewayWebSocketTestSupport.requestMethod(from: message))
+                let data: Data = switch message {
+                case let .data(value): value
+                case let .string(value): Data(value.utf8)
+                @unknown default: throw URLError(.cannotParseResponse)
+                }
                 if method != "health" {
-                    let data: Data = switch message {
-                    case let .data(value): value
-                    case let .string(value): Data(value.utf8)
-                    @unknown default: throw URLError(.cannotParseResponse)
-                    }
                     await recorder.append(data)
                 }
+                let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                let params = frame["params"] as? [String: Any]
                 let payload = switch method {
                 case "agents.list": GatewayWebSocketTestSupport.agentCatalogPayload
+                case "agent.identity.get":
+                    try String(decoding: JSONEncoder().encode(AgentIdentityResult(
+                        agentid: #require(params?["agentId"] as? String),
+                        name: "Assistant", namesource: "default", avatar: "A")), as: UTF8.self)
                 case "sessions.rewind": #"{"editorText":"rewound draft"}"#
                 case "sessions.fork": #"{"sessionKey":"forked","editorText":"continued draft"}"#
                 default: #"{"ok":true}"#
@@ -124,7 +131,10 @@ struct MacGatewayChatTransportMappingTests {
                 if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
                 return .data(GatewayWebSocketTestSupport.connectOkData(
                     id: socket.snapshotConnectRequestID() ?? "connect",
-                    methods: ["agents.list", "sessions.patch", "sessions.delete", "sessions.rewind", "sessions.fork"],
+                    methods: [
+                        "agents.list", "agent.identity.get", "sessions.patch", "sessions.delete", "sessions.rewind",
+                        "sessions.fork",
+                    ],
                     capabilities: ["session-unread-ack-contract"]))
             })
         })
@@ -132,7 +142,9 @@ struct MacGatewayChatTransportMappingTests {
             configProvider: { (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil) },
             sessionBox: WebSocketSessionBox(session: session))
         do {
-            _ = try await gateway.request(method: "health", params: nil)
+            if connectInitially {
+                _ = try await gateway.request(method: "health", params: nil)
+            }
             let transport = MacGatewayChatTransport(connection: gateway, defaultGlobalAgentID: "agent-a")
             try await run(transport, recorder)
             await gateway.shutdown()
@@ -147,23 +159,37 @@ struct MacGatewayChatTransportMappingTests {
             let expected = OpenClawChatAgentsListResponse(
                 defaultId: "system",
                 agents: [
-                    OpenClawChatAgentChoice(id: "zeta", name: " Zeta ", workspaceGit: true),
-                    OpenClawChatAgentChoice(id: "legacy"),
-                    OpenClawChatAgentChoice(id: "alpha", workspaceGit: false),
+                    OpenClawChatAgentChoice(id: "zeta", name: " Zeta ", emoji: "A", workspaceGit: true),
+                    OpenClawChatAgentChoice(id: "legacy", name: "Assistant", emoji: "A"),
+                    OpenClawChatAgentChoice(id: "alpha", name: "Assistant", emoji: "A", workspaceGit: false),
                 ],
                 sessionRoutingContract: "per-sender|main|system")
-            #expect(try await transport.listAgents() == expected)
+            var catalog: OpenClawChatAgentsListResponse?
+            try await transport.loadAgents { catalog = $0 }
+            #expect(catalog == expected)
             let lease = try #require(await transport.acquireNewSessionRouteLease())
-            #expect(try await lease.listAgents() == expected)
+            try await lease.loadAgents { catalog = $0 }
+            #expect(catalog == expected)
             await transport.connection.shutdown()
             await #expect(throws: Error.self) {
-                _ = try await lease.listAgents()
+                try await lease.loadAgents { _ in Issue.record("Retired roster published") }
             }
             let frames = try await recorder.snapshot().map {
                 try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
             }
-            #expect(frames.map { $0["method"] as? String } == ["agents.list", "agents.list"])
-            #expect(frames.allSatisfy { ($0["params"] as? [String: Any])?.isEmpty == true })
+            let batch = ["agents.list"] + Array(repeating: "agent.identity.get", count: 3)
+            #expect(frames.map { $0["method"] as? String } == batch + batch)
+            let identityRequests = frames.filter { $0["method"] as? String == "agent.identity.get" }
+            #expect(identityRequests.compactMap { ($0["params"] as? [String: Any])?["agentId"] as? String }.sorted() ==
+                ["alpha", "alpha", "legacy", "legacy", "zeta", "zeta"])
+        }
+    }
+
+    @Test func `catalog loading connects before acquiring its identity lease`() async throws {
+        try await self.withSessionTransport(connectInitially: false) { transport, _ in
+            var catalog: OpenClawChatAgentsListResponse?
+            try await transport.loadAgents { catalog = $0 }
+            #expect(catalog?.agents.map(\.displayName) == ["Zeta", "Assistant", "Assistant"])
         }
     }
 

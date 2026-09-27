@@ -5,7 +5,6 @@ import {
   isInsideCode,
   stripReasoningTagsFromText,
 } from "openclaw/plugin-sdk/text-chunking";
-import type { TelegramReasoningStepState } from "./bot-message-dispatch.types.js";
 
 // A durable reasoning message already marked channel-side: 🧠 + italic body
 // (see markReasoningMessage). Detect it so a re-split passes it through
@@ -119,7 +118,7 @@ export function splitTelegramReasoningText(
   };
 }
 
-export function createTelegramReasoningStepState(): TelegramReasoningStepState {
+export function createTelegramReasoningStepState() {
   let reasoningStatus: "none" | "hinted" | "delivered" = "none";
   let bufferedFinalAnswer: ReplyPayload | undefined;
 
@@ -133,7 +132,7 @@ export function createTelegramReasoningStepState(): TelegramReasoningStepState {
       reasoningStatus = "delivered";
     },
     shouldBufferFinalAnswer: () => reasoningStatus === "hinted" && !bufferedFinalAnswer,
-    bufferFinalAnswer(value) {
+    bufferFinalAnswer(value: ReplyPayload) {
       bufferedFinalAnswer = value;
     },
     takeBufferedFinalAnswer() {

@@ -1503,7 +1503,7 @@ internal fun SetupQrScanner(
               Icon(imageVector = Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(28.dp))
             }
           }
-          Text(text = nativeString("Scan QR code"), style = ClawTheme.type.title.copy(fontSize = 20.sp, lineHeight = 25.sp), color = ClawTheme.colors.text, textAlign = TextAlign.Center)
+          Text(text = nativeString("Scan QR code"), style = ClawTheme.type.title.copy(lineHeight = 25.sp), color = ClawTheme.colors.text, textAlign = TextAlign.Center)
           Text(
             text = nativeString("Open the camera and frame the code from openclaw qr."),
             style = ClawTheme.type.caption,
@@ -2632,12 +2632,12 @@ private fun PermissionRow(row: PermissionRowModel) {
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
           text = row.title.resolveNativeTextResource(),
-          style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
+          style = ClawTheme.type.title.copy(fontSize = ClawTheme.type.section.fontSize, lineHeight = 23.sp),
           color = ClawTheme.colors.text,
         )
         Text(
           text = row.subtitle.resolveNativeTextResource(),
-          style = ClawTheme.type.body,
+          style = ClawTheme.type.body.copy(fontSize = ClawTheme.type.caption.fontSize),
           color = ClawTheme.colors.textMuted,
         )
       }
@@ -3223,7 +3223,9 @@ private fun rememberPermissionState(
       )
   val callLogAvailable = SensitiveFeatureConfig.callLogEnabled
   var motionGranted by rememberSaveable { mutableStateOf(!motionAvailable || hasPermission(context, Manifest.permission.ACTIVITY_RECOGNITION)) }
-  var smsGranted by rememberSaveable { mutableStateOf(currentSmsGranted) }
+  var smsReadGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.READ_SMS)) }
+  var smsSendGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.SEND_SMS)) }
+  val smsGranted = !smsAvailable || (smsReadGranted && smsSendGranted)
   var callLogGranted by rememberSaveable { mutableStateOf(!callLogAvailable || hasPermission(context, Manifest.permission.READ_CALL_LOG)) }
   val lifecycleOwner = LocalLifecycleOwner.current
   val requestScope = rememberCoroutineScope()
@@ -3244,7 +3246,8 @@ private fun rememberPermissionState(
           notificationsGranted = Build.VERSION.SDK_INT < 33 || hasPermission(context, Manifest.permission.POST_NOTIFICATIONS)
           notificationListenerGranted = DeviceNotificationListenerService.isAccessEnabled(context)
           motionGranted = !motionAvailable || hasPermission(context, Manifest.permission.ACTIVITY_RECOGNITION)
-          smsGranted = !smsAvailable || (hasPermission(context, Manifest.permission.SEND_SMS) && hasPermission(context, Manifest.permission.READ_SMS))
+          smsReadGranted = hasPermission(context, Manifest.permission.READ_SMS)
+          smsSendGranted = hasPermission(context, Manifest.permission.SEND_SMS)
           callLogGranted = !callLogAvailable || hasPermission(context, Manifest.permission.READ_CALL_LOG)
         }
       }
@@ -3282,13 +3285,8 @@ private fun rememberPermissionState(
           true
         }
       motionGranted = permissions[Manifest.permission.ACTIVITY_RECOGNITION] ?: motionGranted
-      smsGranted =
-        !smsAvailable ||
-        mergedRequiredPermissionGrantState(
-          permissions = permissions,
-          requiredPermissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS),
-          currentlyGranted = { permission -> hasPermission(context, permission) },
-        )
+      smsReadGranted = permissions[Manifest.permission.READ_SMS] ?: hasPermission(context, Manifest.permission.READ_SMS)
+      smsSendGranted = permissions[Manifest.permission.SEND_SMS] ?: hasPermission(context, Manifest.permission.SEND_SMS)
       callLogGranted = permissions[Manifest.permission.READ_CALL_LOG] ?: callLogGranted
       requestScope.launch { requester.showSettingsForPermanentDenials(permissions) }
     }
@@ -3369,7 +3367,18 @@ private fun rememberPermissionState(
         null
       },
       if (smsAvailable) {
-        PermissionRowModel(PermissionRowId.Sms, nativeText("SMS"), nativeText("Device access; Gateway opt-in still required"), Icons.Default.Notifications, smsGranted) {
+        PermissionRowModel(
+          PermissionRowId.Sms,
+          nativeText("SMS"),
+          when {
+            smsReadGranted && !smsSendGranted -> nativeText("Read allowed; send not granted. Gateway opt-in still required.")
+            smsSendGranted && !smsReadGranted -> nativeText("Send allowed; read not granted. Gateway opt-in still required.")
+            else -> nativeText("Device access; Gateway opt-in still required")
+          },
+          Icons.Default.Notifications,
+          smsGranted,
+          if (smsReadGranted != smsSendGranted) nativeText("Partial") else permissionRowStatusText(smsGranted),
+        ) {
           request(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
         }
       } else {

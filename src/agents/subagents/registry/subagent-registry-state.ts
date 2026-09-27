@@ -30,7 +30,6 @@ import {
   indexedSnapshotRows,
   getPersistedSubagentRunsSnapshot,
   loadPersistedSubagentRunsForRead,
-  mergeSelectedFullRuns,
   prepareSubagentRunsCache,
   readCompactSubagentRuns,
   rememberSubagentRunsSnapshot,
@@ -207,10 +206,11 @@ export function publishSubagentRunsAfterAtomicStore(
   runs: Map<string, SubagentRunRecord>,
   changedRunIds: readonly string[],
   deferredObserverEvents: Array<() => void>,
+  databasePath?: string,
 ): void {
   supersedePendingSubagentRegistryWrites(changedRunIds);
   subagentRuns.settleCompletionAuthorities(runs, changedRunIds);
-  const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds);
+  const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds, { databasePath });
   const events = updateCommittedSwarmNotifications(runs, changedRunIds);
   deferredObserverEvents.push(() => {
     emitSubagentRegistryPersisted(keys, changedRunIds);
@@ -660,20 +660,4 @@ export function getSubagentRunsSnapshotForChildSession(
     load: () => loadSubagentRunsForChildSessionFromSqlite(key),
     matches: (entry) => entry.childSessionKey === key,
   });
-}
-
-/** Merge fresh durable rows with this source's unpublished facts and current live owners. */
-export function getPreparedSubagentRunsSnapshotForChildSession(
-  inMemoryRuns: Map<string, SubagentRunRecord>,
-  childSessionKey: string,
-  persisted: readonly SubagentRunRecord[],
-  context: OpenClawStateWorkerContext,
-): Map<string, SubagentRunRecord> {
-  return mergeSelectedFullRuns(
-    persistedSubagentRunsReadCache,
-    inMemoryRuns,
-    new Map(persisted.map((entry) => [entry.runId, structuredClone(entry)])),
-    (entry) => entry.childSessionKey === childSessionKey,
-    { context, fresh: true },
-  );
 }

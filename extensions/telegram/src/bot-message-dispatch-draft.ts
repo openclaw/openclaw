@@ -2,6 +2,7 @@ import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import type {
   TelegramDispatchTurn as Turn,
   TelegramDispatchTurnConfig as TurnConfig,
@@ -24,6 +25,12 @@ import { recordSentMessage } from "./sent-message-cache.js";
 const draftLogger = createSubsystemLogger("telegram/draft-stream");
 const DRAFT_MIN_INITIAL_CHARS = 30;
 
+type Cancel = NonNullable<
+  Parameters<
+    TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
+  >[0]["dispatcherOptions"]["onBeforeDeliverCancelled"]
+>;
+
 function resolveDraftPartialText(
   previous: string,
   update: TelegramDraftPartialTextUpdate,
@@ -36,10 +43,10 @@ function resolveDraftPartialText(
 }
 
 function renderStreamText(
-  turn: Pick<Turn, "tableMode" | "telegramCfg">,
+  turn: Pick<Turn, "richMessages" | "tableMode" | "telegramCfg">,
   text: string,
 ): TelegramDraftPreview {
-  return turn.telegramCfg.richMessages === true
+  return turn.richMessages
     ? {
         text,
         richMessage: buildTelegramRichMarkdown(text, {
@@ -85,9 +92,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
         )
       : Math.min(
           params.textLimit,
-          params.telegramCfg.richMessages === true
-            ? TELEGRAM_RICH_TEXT_LIMIT
-            : TELEGRAM_TEXT_CHUNK_LIMIT,
+          params.richMessages ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT,
         );
   const renderDraftText = (text: string): TelegramDraftPreview => renderStreamText(params, text);
 
@@ -104,7 +109,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
             params.draftReplyToMessageId != null
               ? params.replyQuoteByMessageId[String(params.draftReplyToMessageId)]
               : undefined,
-          richMessages: params.telegramCfg.richMessages,
+          richMessages: params.richMessages,
           linkPreview: params.telegramCfg.linkPreview,
           minInitialChars: DRAFT_MIN_INITIAL_CHARS,
           renderText: renderDraftText,
@@ -557,6 +562,18 @@ export function dropQueuedAnswerBlockRotation(
   recomputeTelegramQueuedAnswerBlockRotations(turn);
 }
 
+export function handleBeforeDeliverCancelled(
+  turn: Turn,
+  payload: Parameters<Cancel>[0],
+  info: Parameters<Cancel>[1],
+): ReturnType<Cancel> {
+  return info.kind === "block"
+    ? enqueueDraftEvent(turn, async () => {
+        dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
+      })
+    : undefined;
+}
+
 export function isQueuedAnswerBlock(
   turn: Turn,
   payload: ReplyPayload,
@@ -583,7 +600,3 @@ export async function cleanupDrafts(turn: Turn, superseded: boolean): Promise<vo
     failed: superseded || turn.dispatchError != null || turn.agentRunFailed,
   });
 }
-
-export const waitForDraftEvents = (turn: Turn) => turn.draftEventQueue;
-
-export const flushDraftLane = (_turn: Turn, lane: DraftLaneState) => lane.stream?.flush();

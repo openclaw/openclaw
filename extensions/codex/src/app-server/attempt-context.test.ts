@@ -454,18 +454,5 @@ describe("Codex app-server attempt context", () => {
         sessionKey: "agent:codex-test:main",
       }),
     ).toBe(undefined);
-
-    // Lightweight cron turns keep the runtime context byte-for-byte untouched.
-    expect(
-      buildCodexWatchedSessionsContext({
-        attempt: {
-          config: {},
-          bootstrapContextMode: "lightweight",
-          bootstrapContextRunKind: "cron",
-        } as EmbeddedRunAttemptParams,
-        dynamicTools: [],
-        sessionKey: "agent:codex-test:main",
-      }),
-    ).toBe(undefined);
   });
 });

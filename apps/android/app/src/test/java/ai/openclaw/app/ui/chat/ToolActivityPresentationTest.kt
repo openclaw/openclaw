@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatAgentActivity
 import ai.openclaw.app.chat.ChatToolActivity
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -19,13 +20,15 @@ class ToolActivityPresentationTest {
     val unknown =
       ai.openclaw.app.chat
         .ChatAgentActivity("unknown", "tool", "end", "Outcome unknown")
+    val skipped = ChatAgentActivity("skipped", "tool", "end", "Read draft", status = "skipped")
     val tools =
       listOf(
         tool("process").copy(activity = quiet, activityPrepared = true),
         tool("arbitrary_name").copy(activity = failed, activityPrepared = true),
         tool("read").copy(activity = unknown, activityPrepared = true),
+        tool("read").copy(activity = skipped, activityPrepared = true),
       )
-    assertEquals("Check process (failed), Outcome unknown", completedToolGroupSummary(tools))
+    assertEquals("Check process (failed), Outcome unknown, Read draft (skipped)", completedToolGroupSummary(tools))
     assertEquals("Tool details", completedToolGroupSummary(listOf(tools.first())))
     assertEquals("Tool details", completedToolGroupSummary(emptyList()))
   }
@@ -114,6 +117,36 @@ class ToolActivityPresentationTest {
     assertEquals("Tool error", presentation.outputLabel)
     assertEquals("permission denied", presentation.output)
     assertEquals("Failed", presentation.outcome)
+  }
+
+  @Test
+  fun `prepared outcomes override raw errors in result and progress presentation`() {
+    val outcomes =
+      listOf(
+        Triple("skipped", "Skipped", false),
+        Triple("blocked", "Blocked", false),
+        Triple("failed", "Failed", true),
+        Triple("completed", null, false),
+        Triple(null, null, false),
+      )
+    for ((status, outcome, failed) in outcomes) {
+      for (rawError in listOf(false, true)) {
+        for (result in listOf(null, "Result detail")) {
+          val call =
+            tool("exec", result = result, isError = rawError).copy(
+              activity = ChatAgentActivity("exec-id", "tool", "end", "Check draft", status = status),
+              activityPrepared = true,
+            )
+          val presentation = completedToolResultPresentation(call)
+          assertEquals(result != null || failed, presentation.expandable)
+          assertEquals(if (failed) "Tool error" else null, presentation.outputLabel)
+          assertEquals(result ?: if (failed) "No output — tool failed." else null, presentation.output)
+          assertEquals(outcome, presentation.outcome)
+          val receipt = if (failed) "Progress update failed" else outcome ?: "Progress cleared"
+          assertEquals(receipt, progressReceiptLabel(call.copy(name = "progress_card")))
+        }
+      }
+    }
   }
 
   @Test

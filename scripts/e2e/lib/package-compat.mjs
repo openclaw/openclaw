@@ -12,11 +12,15 @@ export function fixtureCapabilityConsentArgs(help) {
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  // Frozen v2026.6.35/v2026.7.33 runners pass the candidate version here.
-  // Supported candidates have no package-acceptance exemptions.
+  // Frozen runners call the release-security probe from their retained upgrade
+  // harness. Only v2026.6.35 predates that ClawHub endpoint.
   console.log(
     process.argv[2] === "fixture-consent"
       ? fixtureCapabilityConsentArgs(readFileSync(0, "utf8")).join("\n")
-      : "0",
+      : process.argv[2] === "--clawhub-release-security-mode"
+        ? process.argv[3] === "2026.6.35"
+          ? "absent"
+          : "required"
+        : "0",
   );
 }

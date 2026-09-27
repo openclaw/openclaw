@@ -37,12 +37,6 @@ const NO_CODING_TOOL_CONSTRUCTION_PLAN: OpenClawCodingToolConstructionPlan = {
   includePluginTools: false,
 };
 
-function cloneCodingToolConstructionPlan(
-  plan: OpenClawCodingToolConstructionPlan,
-): OpenClawCodingToolConstructionPlan {
-  return { ...plan };
-}
-
 function isBundleMcpAllowlistName(normalized: string): boolean {
   // Bundle MCP tools use the synthetic bundle name or `bundle__tool` separator form.
   return normalized === "bundle-mcp" || normalized.includes(TOOL_NAME_SEPARATOR);
@@ -130,14 +124,14 @@ function resolveCodingToolConstructionPlanForAllowlist(
   toolsAllow?: string[],
 ): OpenClawCodingToolConstructionPlan {
   if (!toolsAllow) {
-    return cloneCodingToolConstructionPlan(ALL_CODING_TOOL_CONSTRUCTION_PLAN);
+    return { ...ALL_CODING_TOOL_CONSTRUCTION_PLAN };
   }
   const restrictions = readToolAllowlistIntersection(toolsAllow);
   if (!restrictions && toolsAllow.length === 0) {
-    return cloneCodingToolConstructionPlan(NO_CODING_TOOL_CONSTRUCTION_PLAN);
+    return { ...NO_CODING_TOOL_CONSTRUCTION_PLAN };
   }
   if (!restrictions && hasWildcardToolAllowlist(toolsAllow)) {
-    return cloneCodingToolConstructionPlan(ALL_CODING_TOOL_CONSTRUCTION_PLAN);
+    return { ...ALL_CODING_TOOL_CONSTRUCTION_PLAN };
   }
   const constructionEntries = restrictions?.flat() ?? toolsAllow;
   const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(constructionEntries));
@@ -206,7 +200,7 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
     return {
       constructTools: false,
       includeCoreTools: false,
-      codingToolConstructionPlan: cloneCodingToolConstructionPlan(NO_CODING_TOOL_CONSTRUCTION_PLAN),
+      codingToolConstructionPlan: { ...NO_CODING_TOOL_CONSTRUCTION_PLAN },
     };
   }
   const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {

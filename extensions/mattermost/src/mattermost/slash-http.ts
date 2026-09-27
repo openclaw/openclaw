@@ -1,10 +1,3 @@
-/**
- * HTTP callback handler for Mattermost slash commands.
- *
- * Receives POST requests from Mattermost when a slash command is invoked,
- * validates the token, and routes the command through the standard inbound pipeline.
- */
-
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
@@ -427,7 +420,6 @@ async function authorizeSlashInvocation(params: {
   const { account, cfg, client, commandText, channelId, senderId, senderName, log } = params;
   const core = getMattermostRuntime();
 
-  // Resolve channel info so we can enforce DM vs group/channel policies.
   let channelInfo: MattermostChannel | null = null;
   try {
     channelInfo = await fetchMattermostChannel(client, channelId);
@@ -525,12 +517,6 @@ async function authorizeSlashInvocation(params: {
   };
 }
 
-/**
- * Create the HTTP request handler for Mattermost slash command callbacks.
- *
- * This handler is registered as a plugin HTTP route and receives POSTs
- * from the Mattermost server when a user invokes a registered slash command.
- */
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
   const { account, cfg, runtime, registeredCommands, triggerMap, log, bodyTimeoutMs } = params;
 
@@ -593,7 +579,6 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    // Extract command info
     const client = createMattermostClient({
       baseUrl: account.baseUrl ?? "",
       botToken: account.botToken ?? "",
@@ -653,7 +638,6 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       text: "Processing...",
     });
 
-    // Now handle the command asynchronously (post reply as a message)
     try {
       await handleSlashCommandAsync({
         account,
@@ -765,24 +749,16 @@ async function handleSlashCommandAsync(params: {
       route,
       data,
     });
+    const viewParams = { ownerUserId: senderId, data, currentModel };
     const view =
       pickerEntry.kind === "summary"
-        ? renderMattermostModelSummaryView({
-            ownerUserId: senderId,
-            currentModel,
-          })
+        ? renderMattermostModelSummaryView(viewParams)
         : pickerEntry.kind === "providers"
-          ? renderMattermostProviderPickerView({
-              ownerUserId: senderId,
-              data,
-              currentModel,
-            })
+          ? renderMattermostProviderPickerView(viewParams)
           : renderMattermostModelsPickerView({
-              ownerUserId: senderId,
-              data,
+              ...viewParams,
               provider: pickerEntry.provider,
               page: 1,
-              currentModel,
             });
 
     await sendMessageMattermost(
@@ -794,7 +770,6 @@ async function handleSlashCommandAsync(params: {
     return;
   }
 
-  // Build inbound context — the command text is the body
   const ctxPayload = finalizeInboundContext({
     Body: commandText,
     BodyForAgent: commandText,

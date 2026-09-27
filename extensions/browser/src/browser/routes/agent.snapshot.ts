@@ -1,4 +1,3 @@
-// Browser snapshot, navigation, and screenshot routes.
 import path from "node:path";
 import {
   ensureMediaDir,
@@ -132,7 +131,6 @@ async function rescaleAnnotationsForNormalization(params: {
   return scaleAnnotations(params.annotations, next.width / orig.width, next.height / orig.height);
 }
 
-/** Register snapshot, screenshot, and navigation endpoints. */
 export function registerBrowserAgentSnapshotRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
