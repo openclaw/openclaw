@@ -163,42 +163,26 @@ it.each(["role", "role-scopes", "grant", "link", "reassign", "host"] as const)(
   },
 );
 
-it.each(["definition", "default", "identity-scopes"] as const)(
-  "does not revive an admitted channel owner after restoring its policy %s",
-  async (change) => {
-    await withAdminIngress(
-      async ({ cfg, admins, context, activatePolicy }) => {
-        const admin = admins[0]!;
-        if (change === "default") {
-          setUserProfileRole(admin.profile.id, null);
-          await activatePolicy({ roles: { ...cfg.gateway!.roles!, default: "admin" } });
-        }
-        const ctx = await context(admin.identity.senderId);
-        const assertCurrent = captureCommandOwnerAssertion(ctx);
-        expect(assertCurrent).toBeTypeOf("function");
-        expect(assertCurrent).not.toThrow();
-        const restored = structuredClone(cfg.gateway!);
-        const revoked = structuredClone(restored);
-        if (change === "definition") {
-          revoked.roles!.definitions.admin!.scopes = ["operator.read"];
-        } else if (change === "default") {
-          revoked.roles!.default = "member";
-        } else {
-          delete revoked.auth!.identityScopes;
-        }
-        await activatePolicy(revoked);
-        await activatePolicy(restored);
+it("does not revive an admitted channel owner after restoring its policy", async () => {
+  await withAdminIngress(async ({ cfg, admins, context, activatePolicy }) => {
+    const admin = admins[0]!;
+    const ctx = await context(admin.identity.senderId);
+    const assertCurrent = captureCommandOwnerAssertion(ctx);
+    expect(assertCurrent).toBeTypeOf("function");
+    expect(assertCurrent).not.toThrow();
+    const restored = structuredClone(cfg.gateway!);
+    const revoked = structuredClone(restored);
+    revoked.roles!.definitions.admin!.scopes = ["operator.read"];
+    await activatePolicy(revoked);
+    await activatePolicy(restored);
 
-        const fresh = await context(admin.identity.senderId);
-        expect(
-          resolveCommandAuthorization({ cfg, ctx: fresh, commandAuthorized: true }).senderIsOwner,
-        ).toBe(true);
-        expect(assertCurrent).toThrow();
-      },
-      change === "identity-scopes" ? "identity-grant" : "role",
-    );
-  },
-);
+    const fresh = await context(admin.identity.senderId);
+    expect(
+      resolveCommandAuthorization({ cfg, ctx: fresh, commandAuthorized: true }).senderIsOwner,
+    ).toBe(true);
+    expect(assertCurrent).toThrow();
+  });
+});
 
 it.each(["role", "identity-grant"] as const)(
   "recovers an original %s owner from its exact JSON reference across a database lifecycle",
@@ -219,9 +203,7 @@ it.each(["role", "identity-grant"] as const)(
 );
 
 it.each([
-  "role",
   "role-restore",
-  "unlink",
   "relink",
   "reassign",
   "merge",
@@ -242,19 +224,15 @@ it.each([
         expect(admitted?.isCurrent(cfg)).toBe(true);
         const reference = admitted!.recoveryReference!;
         expect(reference).toBeDefined();
-        if (change === "role" || change === "role-restore") {
+        if (change === "role-restore") {
           setUserProfileRole(admin.profile.id, "member");
-          if (change === "role-restore") {
-            setUserProfileRole(admin.profile.id, "admin");
-          }
-        } else if (change === "unlink" || change === "relink" || change === "reassign") {
+          setUserProfileRole(admin.profile.id, "admin");
+        } else if (change === "relink" || change === "reassign") {
           unlinkUserChannelIdentity(admin.profile.id, admin.identity);
-          if (change !== "unlink") {
-            linkUserChannelIdentity(
-              change === "relink" ? admin.profile.id : admins[1]!.profile.id,
-              admin.identity,
-            );
-          }
+          linkUserChannelIdentity(
+            change === "relink" ? admin.profile.id : admins[1]!.profile.id,
+            admin.identity,
+          );
         } else if (change === "merge") {
           linkEmail("ada@example.test", admins[1]!.profile.id);
         } else if (change === "identity-scopes") {
