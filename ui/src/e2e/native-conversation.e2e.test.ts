@@ -1,6 +1,7 @@
-import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
@@ -67,6 +68,9 @@ async function headerLeadingInset(page: Page) {
 suite.define(() => {
   it("keeps a single web conversation with in-page native navigation and Dashboard handoff", async () => {
     await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
+      const proofDir = captureUiProofEnabled
+        ? createControlUiE2eArtifactDir("native-conversation")
+        : undefined;
       await page.addInitScript(() => {
         Object.assign(window, {
           __OPENCLAW_NATIVE_EMBED__: {
@@ -186,9 +190,8 @@ suite.define(() => {
       expect(await pane.locator(".chat-thread").boundingBox()).toMatchObject({ y: 52 });
       const leadingBox = await header.locator(".chat-pane__header-leading").boundingBox();
       expect(leadingBox!.y + leadingBox!.height / 2).toBe(26);
-      if (captureUiProofEnabled) {
-        await mkdir(".artifacts/pr-proof", { recursive: true });
-        await page.screenshot({ path: ".artifacts/pr-proof/conversation-titlebar.png" });
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "conversation-titlebar.png") });
       }
       const dragMessages = () =>
         page.evaluate(() => (window as ConversationTestWindow).windowDragMessages);
@@ -239,9 +242,8 @@ suite.define(() => {
       );
       await pane.getByRole("button", { name: "Close tab: notes.txt", exact: true }).click();
       await fileView.waitFor({ state: "detached" });
-      if (captureUiProofEnabled) {
-        await mkdir(".artifacts/pr-proof", { recursive: true });
-        await page.screenshot({ path: ".artifacts/pr-proof/conversation-initial.png" });
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "conversation-initial.png") });
       }
       await composer.fill("Verify the web composer");
       await pane.getByRole("button", { name: "Send message", exact: true }).click();
@@ -338,8 +340,8 @@ suite.define(() => {
       await command(page, "focus-composer", {}, "focus");
       expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
       expect(await headerLeadingInset(page)).toBe(12);
-      if (captureUiProofEnabled) {
-        await page.screenshot({ path: ".artifacts/pr-proof/conversation-navigated.png" });
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "conversation-navigated.png") });
       }
     });
   });
