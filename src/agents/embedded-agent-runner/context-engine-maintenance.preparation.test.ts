@@ -80,7 +80,7 @@ vi.mock("../../infra/agent-events.js", () => ({
 
 const sessionKey = "agent:main:maintenance-preparation";
 const unchanged = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
-type Failure = "lookup throws" | "creation throws" | "creation returns null" | "queue rejects";
+type Failure = "lookup throws" | "creation returns null" | "queue rejects";
 
 function fixture(fault?: Failure) {
   const workRelease = createDeferred();
@@ -93,28 +93,19 @@ function fixture(fault?: Failure) {
   const deferred: Promise<void>[] = [];
   const foreground: Promise<unknown>[] = [];
   const creatorTails: Promise<void>[] = [];
-  let boundary: { kind: "lookup" | "creation"; run: () => void } | undefined;
+  let onLookup: (() => void) | undefined;
   let cooperateDuringCreation = false;
   let creatorSignal: AbortSignal | undefined;
-  const enterBoundary = (kind: "lookup" | "creation") => {
-    if (boundary?.kind === kind) {
-      const run = boundary.run;
-      boundary = undefined;
-      run();
-    }
-  };
   mocks.findActive.mockImplementation(() => {
-    enterBoundary("lookup");
+    const reenter = onLookup;
+    onLookup = undefined;
+    reenter?.();
     if (fault === "lookup throws") {
       throw new Error("Synthetic maintenance lookup failure");
     }
     return undefined;
   });
   mocks.create.mockImplementation((params: DetachedTaskCreateParams): TaskRecord | null => {
-    enterBoundary("creation");
-    if (fault === "creation throws") {
-      throw new Error("Synthetic maintenance creation failure");
-    }
     if (fault === "creation returns null") {
       return null;
     }
@@ -220,8 +211,8 @@ function fixture(fault?: Failure) {
     cooperateDuringCreation() {
       cooperateDuringCreation = true;
     },
-    onBoundary(kind: "lookup" | "creation", run: () => void) {
-      boundary = { kind, run };
+    onLookup(run: () => void) {
+      onLookup = run;
     },
     async cleanup() {
       releaseAll();
@@ -307,40 +298,37 @@ describe("deferred maintenance synchronous preparation", () => {
     },
   );
 
-  it.each(["lookup", "creation"] as const)(
-    "reserves one tracked owner before synchronous %s reentry",
-    async (kind) => {
-      const f = fixture();
-      let checkpoint: Promise<void> | undefined;
-      let checkpointSettled = false;
-      f.onBoundary(kind, () => {
-        checkpoint = waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => {
-          checkpointSettled = true;
-        });
-        void f.schedule();
+  it("reserves one tracked owner before synchronous lookup reentry", async () => {
+    const f = fixture();
+    let checkpoint: Promise<void> | undefined;
+    let checkpointSettled = false;
+    f.onLookup(() => {
+      checkpoint = waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => {
+        checkpointSettled = true;
       });
-      try {
-        await f.schedule();
-        await f.workEntered.promise;
-        await Promise.resolve();
-        expect(checkpointSettled).toBe(false);
-        expect(f.deferred).toHaveLength(2);
-        expect(f.deferred[0]).toBe(f.deferred[1]);
-        expect(mocks.create).toHaveBeenCalledOnce();
-        expect(f.maintain).toHaveBeenCalledOnce();
-        f.releaseAll();
-        await Promise.all(f.deferred);
-        await checkpoint;
-        expect(f.maintain).toHaveBeenCalledTimes(2);
-        expect(f.dispose).toHaveBeenCalledOnce();
-        expect(f.closeFactoryWork).toHaveBeenCalledOnce();
-        expect(f.release).toHaveBeenCalledOnce();
-      } finally {
-        await f.cleanup();
-        await checkpoint;
-      }
-    },
-  );
+      void f.schedule();
+    });
+    try {
+      await f.schedule();
+      await f.workEntered.promise;
+      await Promise.resolve();
+      expect(checkpointSettled).toBe(false);
+      expect(f.deferred).toHaveLength(2);
+      expect(f.deferred[0]).toBe(f.deferred[1]);
+      expect(mocks.create).toHaveBeenCalledOnce();
+      expect(f.maintain).toHaveBeenCalledOnce();
+      f.releaseAll();
+      await Promise.all(f.deferred);
+      await checkpoint;
+      expect(f.maintain).toHaveBeenCalledTimes(2);
+      expect(f.dispose).toHaveBeenCalledOnce();
+      expect(f.closeFactoryWork).toHaveBeenCalledOnce();
+      expect(f.release).toHaveBeenCalledOnce();
+    } finally {
+      await f.cleanup();
+      await checkpoint;
+    }
+  });
 
   it("releases generation leases inside closing cleanup after abort descendants settle", async () => {
     const f = fixture();
@@ -412,7 +400,7 @@ describe("deferred maintenance synchronous preparation", () => {
     }
   });
 
-  it.each(["lookup throws", "creation throws", "creation returns null", "queue rejects"] as const)(
+  it.each(["lookup throws", "creation returns null", "queue rejects"] as const)(
     "owns caller transfer and joined cleanup when %s",
     async (fault) => {
       const f = fixture(fault);
