@@ -131,8 +131,7 @@ jobs remain unknown. Codex sees only the diff and candidate inventory; result
 logs are fetched afterward by the report step, whose read-only Actions token is
 not passed to Codex. These observations inform a later decision about enforcement.
 
-For offline evaluation, `node scripts/ci-codex-test-selection.mjs prepare --base
-<base> --head <head>` produces the prompt and an all-candidate selection without
+For offline evaluation, `node scripts/ci-codex-test-selection.mjs prepare --base <base> --head <head>` produces the prompt and an all-candidate selection without
 calling Codex. `backtest` with the same arguments invokes `codex exec` in a
 read-only sandbox and finalizes the proposal; `--model` selects a local model.
 `--output-dir` chooses the artifact directory. Historical heads use a temporary
