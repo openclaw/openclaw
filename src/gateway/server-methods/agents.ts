@@ -768,18 +768,23 @@ export const agentsHandlers: GatewayRequestHandlers = {
                   throw unresolvedPath.preparationError;
                 }
                 deletion.fenceCleanupPaths(
-                  cleanupPlan.map((cleanupPath) => ({
-                    path: cleanupPath.path,
-                    canonicalPath: cleanupPath.trashPath,
-                    parentPath: cleanupPath.parentPath,
-                    kind: cleanupPath.kind,
-                    sourcePaths: cleanupPath.sourcePaths,
-                    dev: cleanupPath.preparedIdentity?.dev ?? null,
-                    ino: cleanupPath.preparedIdentity?.ino ?? null,
-                    coversDescendants: cleanupPath.trashCoversDescendants,
-                    done: cleanupPath.done,
-                    ...(cleanupPath.note ? { note: cleanupPath.note } : {}),
-                  })),
+                  cleanupPlan.map((cleanupPath) => {
+                    const journalPath: AgentDeletionJournalCleanupPath = {
+                      path: cleanupPath.path,
+                      canonicalPath: cleanupPath.trashPath,
+                      parentPath: cleanupPath.parentPath,
+                      kind: cleanupPath.kind,
+                      sourcePaths: cleanupPath.sourcePaths,
+                      dev: cleanupPath.preparedIdentity?.dev ?? null,
+                      ino: cleanupPath.preparedIdentity?.ino ?? null,
+                      coversDescendants: cleanupPath.trashCoversDescendants,
+                      done: cleanupPath.done,
+                    };
+                    if (cleanupPath.note) {
+                      journalPath.note = cleanupPath.note;
+                    }
+                    return journalPath;
+                  }),
                 );
               }
             }
