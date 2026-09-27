@@ -244,7 +244,7 @@ const recoveryInspectionRecordSchema = z
         !record.package ||
         record.claimKind !== "recovery" ||
         record.effects.length !== 0 ||
-        !isRecoverablePreparationNative(record.nativeManager, true) ||
+        !isRecoverablePreparationNative(record.nativeManager) ||
         record.handoff ||
         record.checkpoint ||
         record.afterImages !== undefined ||
