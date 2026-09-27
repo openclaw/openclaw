@@ -193,11 +193,37 @@ export async function withDurableMessageSendContextCore<T>(
 }
 
 async function withMessageSendContext<T>(
-  params: DurableMessageSendContextParams,
+  input: DurableMessageSendContextParams,
   run: (ctx: DurableMessageSendContext) => Promise<T>,
   deliver: typeof deliverOutboundPayloadsInternal,
   conversationDeliveryTarget?: ConversationDeliveryTarget,
 ): Promise<T> {
+  let params = input;
+  const publicationAuthorities = params.payloads.flatMap((payload) => {
+    const authority = getReplyPayloadMetadata(payload)?.publicationAuthority;
+    return authority ? [authority] : [];
+  });
+  if (publicationAuthorities.length > 0) {
+    const original = params;
+    const assertPublicationCurrent = () => {
+      for (const authority of publicationAuthorities) {
+        authority.assertCurrent();
+      }
+    };
+    params = {
+      ...params,
+      recoveryMode: "reconcile-only",
+      onPlatformSendDispatch: async () => {
+        assertPublicationCurrent();
+        await original.onPlatformSendDispatch?.();
+        assertPublicationCurrent();
+      },
+      assertDirectAdapterHandoff: () => {
+        original.assertDirectAdapterHandoff?.();
+        assertPublicationCurrent();
+      },
+    };
+  }
   let deliveryIntent: OutboundDeliveryIntent | undefined;
   const {
     attempt,

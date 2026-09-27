@@ -302,6 +302,11 @@ export type ReplyPayloadMetadata = {
   assistantTranscriptIdempotencyKey?: string;
   /** Original session-writer claim that must still hold at final delivery. */
   sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
+  /** Live-only publication permission, checked again at the channel handoff. */
+  publicationAuthority?: {
+    assertCurrent: () => void;
+    recoveryMode: "reconcile-only";
+  };
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
   /** One host-visible status gates a child-completion wake for this exact turn. */

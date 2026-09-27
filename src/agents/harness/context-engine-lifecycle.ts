@@ -29,23 +29,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { estimateRenderedLlmBoundaryTokenPressure } from "../embedded-agent-runner/run/preemptive-compaction.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
-import type { AgentMessage } from "../runtime/index.js";
-import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
-import {
-  createFixedRequestTokenEstimator,
-  type FixedRequestTokenPressure,
-} from "../sessions/context-token-pressure.js";
-import {
-  completedTurnMessageAnchor,
-  type CompletedTurnMessageAnchor,
-} from "../sessions/session-manager-message-anchor.js";
-import {
-  clearContextEngineAssemblySnapshot,
-  readContextEngineAssemblyBudget,
-  recordContextEngineAssemblySnapshot,
-  type ContextEngineAssemblySnapshot,
-} from "./context-engine-assembly-attempt.js";
-import type { ContextEngineTurnAttemptFacts } from "./context-engine-turn-attempt.js";
+import { estimateTokens, type AgentMessage } from "../runtime/index.js";
 
 export {
   buildAfterTurnRuntimeContext as buildHarnessContextEngineRuntimeContext,
@@ -173,39 +157,26 @@ export async function bootstrapHarnessContextEngine(
   });
 }
 
-type HarnessContextEngineAssemblyParams = Omit<
-  HarnessRuntimeSettingsParams,
-  "modelId" | "tokenBudget"
-> & {
-  sessionId: string;
-  sessionKey?: string;
-  agentId?: string;
-  appendOnlyRuntimeContext?: boolean;
-  clearsTurnScopedSystemUpdates?: boolean;
-  messages: AgentMessage[];
-  tokenBudget?: number;
-  availableTools?: Set<string>;
-  citationsMode?: MemoryCitationsMode;
-  sandboxed?: boolean;
-  /** Current repository identity passed to memory prompt sections. */
-  memoryProjectKey?: string;
-  modelId: string;
-  prompt?: string;
-  runtimeContext?: ContextEngineRuntimeContext;
-  transcriptReadFence?: UserTurnTranscriptAdmissionReceipt;
-  promptBudget?: {
-    contextTokens?: number;
-    reserveTokens: number;
-    inputTokens?: number;
-    systemPrompt: string;
-    prompt: string;
-  };
-};
-
-export async function assembleHarnessContextEngine(params: HarnessContextEngineAssemblyParams) {
-  clearContextEngineAssemblySnapshot();
-  const contextEngine = params.contextEngine;
-  if (!contextEngine) {
+export async function assembleHarnessContextEngine(
+  params: Omit<HarnessRuntimeSettingsParams, "modelId" | "tokenBudget"> & {
+    sessionId: string;
+    sessionKey?: string;
+    agentId?: string;
+    appendOnlyRuntimeContext?: boolean;
+    messages: AgentMessage[];
+    /** Settled evidence from the still-active logical turn, outside the history fence. */
+    currentTurnMessages?: readonly AgentMessage[];
+    tokenBudget?: number;
+    availableTools?: Set<string>;
+    citationsMode?: MemoryCitationsMode;
+    sandboxed?: boolean;
+    modelId: string;
+    prompt?: string;
+    runtimeContext?: ContextEngineRuntimeContext;
+    transcriptReadFence?: UserTurnTranscriptAdmissionReceipt;
+  },
+) {
+  if (!params.contextEngine) {
     return undefined;
   }
   const assembled = await runWithHarnessSourceFence(params, async () => {
@@ -292,12 +263,19 @@ async function assembleHarnessContextEngineWithinSourceScope(
     tokenBudget,
   };
   const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
+  const retainedTokens =
+    params.currentTurnMessages?.reduce((sum, message) => sum + estimateTokens(message), 0) ?? 0;
+  const historyBudget =
+    params.tokenBudget === undefined ? undefined : params.tokenBudget - retainedTokens;
+  if (historyBudget !== undefined && historyBudget <= 0) {
+    throw new Error("Context overflow: retained logical-turn evidence exceeds the token budget");
+  }
   const assemble = () =>
     contextEngine.assemble({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       messages,
-      tokenBudget,
+      tokenBudget: historyBudget,
       ...(params.availableTools ? { availableTools: params.availableTools } : {}),
       ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
       model: params.modelId,
@@ -321,102 +299,21 @@ async function assembleHarnessContextEngineWithinSourceScope(
             projectKey: params.memoryProjectKey,
           },
           assemble,
-        );
-  return { result: ensureAssembleResultShape(result, contextEngine.info.id), snapshot };
-}
-
-type PreparedHarnessContextEnginePrompt = {
-  estimateFixedRequest: ReturnType<typeof createFixedRequestTokenEstimator>;
-  messages: AgentMessage[];
-  systemPrompt: string;
-  contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
-  unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
-};
-
-export async function prepareHarnessContextEnginePrompt(
-  params: Parameters<typeof assembleHarnessContextEngine>[0] & {
-    promptBudget: NonNullable<Parameters<typeof assembleHarnessContextEngine>[0]["promptBudget"]>;
-    repairToolUseResultPairing: boolean;
-    isOpenAIResponsesApi: boolean;
-    warn: (message: string) => void;
-  },
-): Promise<PreparedHarnessContextEnginePrompt> {
-  clearContextEngineAssemblySnapshot();
-  const initial: PreparedHarnessContextEnginePrompt = {
-    estimateFixedRequest: createFixedRequestTokenEstimator(),
-    messages: params.messages,
-    systemPrompt: params.promptBudget.systemPrompt,
-    contextEnginePromptAuthority: "assembled",
+        ),
+  );
+  const assembled = ensureAssembleResultShape(result, contextEngine.info.id);
+  if (!params.currentTurnMessages?.length) {
+    return assembled;
+  }
+  const estimatedTokens = assembled.estimatedTokens + retainedTokens;
+  return {
+    ...assembled,
+    messages: [...assembled.messages, ...params.currentTurnMessages],
+    estimatedTokens,
+    ...(params.tokenBudget !== undefined && estimatedTokens > params.tokenBudget
+      ? { promptAuthority: "preassembly_may_overflow" as const }
+      : {}),
   };
-  const contextEngine = params.contextEngine;
-  if (!contextEngine) {
-    return {
-      ...initial,
-      messages: params.repairToolUseResultPairing
-        ? sanitizeToolUseResultPairingForModel(initial.messages, params.isOpenAIResponsesApi)
-        : initial.messages,
-    };
-  }
-  let snapshot: ContextEngineAssemblySnapshot | undefined;
-  const prepared = await runWithHarnessSourceFence(params, async () => {
-    const tokenBudget = resolveAssemblyHistoryTokenBudget(
-      params,
-      initial.estimateFixedRequest({ systemPrompt: params.promptBudget.systemPrompt }),
-    );
-    // Windowing and replay hooks can leave orphaned results before assembly.
-    const pipelineMessages = params.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairingForModel(params.messages, params.isOpenAIResponsesApi)
-      : params.messages;
-    const preassemblyMessages = pipelineMessages.slice();
-    // Repair before the final byte bound: synthetic results also consume budget.
-    // Keep both operations inside the retained source-authority fence.
-    const prepareAssembly = (assembled: AssembleResult) =>
-      boundContextEngineAssembly(
-        {
-          ...assembled,
-          messages: params.repairToolUseResultPairing
-            ? sanitizeToolUseResultPairingForModel(assembled.messages, params.isOpenAIResponsesApi)
-            : assembled.messages,
-        },
-        resolveContextEngineTranscriptByteLimit(contextEngine),
-        tokenBudget,
-        undefined,
-        params.clearsTurnScopedSystemUpdates,
-      );
-    let bounded: AssembleResult;
-    try {
-      const assembled = await assembleHarnessContextEngineWithinSourceScope(
-        params,
-        contextEngine,
-        tokenBudget,
-        pipelineMessages,
-      );
-      bounded = prepareAssembly(assembled.result);
-      snapshot = assembled.snapshot;
-    } catch (error) {
-      params.warn(`context engine assemble failed, using pipeline messages: ${String(error)}`);
-      bounded = prepareAssembly({ messages: pipelineMessages, estimatedTokens: 0 });
-    }
-    const authority = bounded.promptAuthority ?? "assembled";
-    return {
-      estimateFixedRequest: initial.estimateFixedRequest,
-      messages: bounded.messages,
-      systemPrompt: bounded.systemPromptAddition
-        ? prependSystemPromptAdditionAfterCacheBoundary({
-            systemPrompt: initial.systemPrompt,
-            systemPromptAddition: bounded.systemPromptAddition,
-          })
-        : initial.systemPrompt,
-      contextEnginePromptAuthority: authority,
-      ...(authority === "preassembly_may_overflow"
-        ? { unwindowedContextEngineMessagesForPrecheck: preassemblyMessages }
-        : {}),
-    };
-  });
-  if (snapshot) {
-    recordContextEngineAssemblySnapshot(snapshot);
-  }
-  return prepared;
 }
 
 /** Invalid plugin results must fail here so the runner can fall back without poisoning state. */

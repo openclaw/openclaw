@@ -72,7 +72,7 @@ import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.
 import { buildCompletedAgentUsageMeta, mergeCompletedAgentUsage } from "./completed-usage.js";
 import { resolveGlobalLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
+import { createEmbeddedLogicalTurnContinuation } from "./logical-turn-continuation.js";
 import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import { createEmbeddedRunStageSummaryEmitter } from "./run/attempt-stage-timing.js";
 import { publishClaimedSessionWriter } from "./run/compaction-accounting-bridge.js";
@@ -233,9 +233,7 @@ async function runEmbeddedAgentForSession(
     throwIfAborted();
     return enqueueGlobal(async () => {
       const started = Date.now();
-      const onAgentEvent = serializeAgentEventCallback(params.onAgentEvent);
-      params = { ...params, onAgentEvent };
-      const refresh = createEmbeddedAgentPluginRuntimeRefresh(params);
+      const refresh = createEmbeddedLogicalTurnContinuation(params);
       const usage = createUsageAccumulator();
       const diagnosticUsage = createUsageAccumulator();
       let refreshed = false;

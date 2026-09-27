@@ -112,6 +112,7 @@ function createQueuedDelivery(
     enqueuedAt: Date.now(),
     ...projectQueuedDeliveryOptions(params),
     queuePolicy: params.queuePolicy,
+    recoveryMode: params.recoveryMode,
     requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
     retryAmbiguousFinalText: params.retryAmbiguousFinalText,
     ...(params.initialProducerClaim ??

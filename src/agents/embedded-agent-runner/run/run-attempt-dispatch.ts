@@ -386,11 +386,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
         pluginRefresh.bindConsumer(() => attemptControls.isCurrent() && isCurrent());
       }
     },
-    pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
-    pluginRuntimeRefreshUserPrompt: params.pluginRuntimeRefreshUserPrompt,
-    continuation: sessionPromptState.continuation,
-    runCleanupSettlement: params.runCleanupSettlement,
-    joinObservation: params.joinObservation,
+    continuationMessages: params.continuationMessages ?? params.pluginRuntimeRefreshMessages,
+    captureContinuationMessages: params.reviewSettledDraft ? true : undefined,
+    pluginRuntimeRefreshMessages:
+      params.continuationMessages ?? params.pluginRuntimeRefreshMessages,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,

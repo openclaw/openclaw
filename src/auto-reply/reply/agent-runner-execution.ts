@@ -76,6 +76,7 @@ import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyMediaContext, type ReplyMediaContext } from "./reply-media-paths.js";
@@ -234,126 +235,55 @@ async function executeAgentTurnInternalLoop(
   }
   let didNotifyAgentRunStart = false;
   let lastRunStartupPhase: ReturnType<typeof resolveRunStartupPhase>;
-  // Failed candidates cannot lend prepared facts or late callbacks to their successor.
-  const createAgentRunStartCallbacks = () => {
-    let active = true;
-    let preparedTranscriptStart: PreparedReplyTranscriptStart | null | undefined =
-      (params.opts?.onPreparedAgentRunStart || params.opts?.onAgentRunStart) && params.sessionKey
-        ? undefined
-        : null;
-    let transcriptStartPreparation: Promise<void> | undefined;
-    const prepareAgentRunStart = () => {
-      if (
-        !active ||
-        didNotifyAgentRunStart ||
-        preparedTranscriptStart !== undefined ||
-        !params.sessionKey
-      ) {
-        return undefined;
-      }
-      if (transcriptStartPreparation) {
-        return transcriptStartPreparation;
-      }
-      const target = {
-        agentId: effectiveRun.agentId,
-        sessionId: params.replyOperation?.sessionId ?? effectiveRun.sessionId,
-        sessionKey: params.sessionKey,
-        storePath:
-          params.storePath ??
-          resolveSessionStorePathCore(runtimeConfig.session?.store, {
-            agentId: effectiveRun.agentId,
-          }),
-      };
-      return (transcriptStartPreparation = (async () => {
-        using _ = agentTurnTiming.observe(params.opts?.onTranscriptStartPreparation);
-        const { readSessionTranscriptStartAsync } =
-          await import("../../config/sessions/session-transcript-watermark.js");
-        const prepared = await readSessionTranscriptStartAsync(target);
-        preparedRunAdmission.assertSourceCurrent();
-        params.opts?.abortSignal?.throwIfAborted();
-        params.replyOperation?.abortSignal?.throwIfAborted();
-        if (active && !didNotifyAgentRunStart) {
-          preparedTranscriptStart = prepared;
-        }
-      })());
-    };
-    const notifyAgentRunStart = (transcriptStart?: PreparedReplyTranscriptStart | null) => {
-      const prepared = transcriptStart === undefined ? preparedTranscriptStart : transcriptStart;
-      if (!active || didNotifyAgentRunStart || prepared === undefined) {
-        return;
-      }
-      didNotifyAgentRunStart = true;
-      if (params.replyOperation) {
-        markReplyOperationExecutionStarted(params.replyOperation);
-      }
-      params.followupRun.run.internalEventExecution?.onStarted(runId);
-      notifyPreparedAgentRunStart(params.opts, {
-        runId,
-        executionIdentityToken: admittedRunContext.current?.executionIdentityToken,
-        transcriptStart: prepared,
-      });
-    };
-    const signalExecutionPhaseForTyping = (
-      info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
-    ) => {
-      if (!active) {
-        return;
-      }
-      agentTurnTiming.logExecutionPhaseIfSlow({
-        runId,
-        sessionId: params.followupRun.run.sessionId,
-        sessionKey: params.sessionKey,
-        phase: info.phase,
-      });
-      const startupPhase = resolveRunStartupPhase(info.phase);
-      if (startupPhase && startupPhase !== lastRunStartupPhase) {
-        lastRunStartupPhase = startupPhase;
+  const notifyAgentRunStart = () => {
+    if (didNotifyAgentRunStart) {
+      return;
+    }
+    didNotifyAgentRunStart = true;
+    if (params.replyOperation) {
+      markReplyOperationExecutionStarted(params.replyOperation);
+    }
+    if (!readGroupParticipationRun(params.replyOperation)?.isPrivate) {
+      params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
+    }
+  };
+  const signalExecutionPhaseForTyping = (
+    info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
+  ) => {
+    agentTurnTiming.logExecutionPhaseIfSlow({
+      runId,
+      sessionId: params.followupRun.run.sessionId,
+      sessionKey: params.sessionKey,
+      phase: info.phase,
+    });
+    const startupPhase = resolveRunStartupPhase(info.phase);
+    if (startupPhase && startupPhase !== lastRunStartupPhase) {
+      lastRunStartupPhase = startupPhase;
+      if (!readGroupParticipationRun(params.replyOperation)?.isPrivate) {
         emitAgentRunStatusEvent({ runId, phase: startupPhase });
       }
-      if (
-        info.phase === "turn_accepted" ||
-        info.phase === "model_call_started" ||
-        info.phase === "process_spawned"
-      ) {
-        params.mcpAppContextLease?.commit();
-      }
-      if (info.phase === "before_agent_reply") {
-        // A dispatched hook can accept external work even when it declines the reply.
-        params.followupRun.run.internalEventExecution?.onStarted(runId);
-      }
-      const isUserVisibleExecutionActivity =
-        info.phase === "turn_accepted" ||
-        info.phase === "process_spawned" ||
-        info.phase === "model_call_started" ||
-        info.phase === "tool_execution_started" ||
-        info.phase === "assistant_output_started";
-      if (isUserVisibleExecutionActivity) {
-        notifyAgentRunStart();
-        void (
-          params.typingSignals.signalExecutionActivity?.() ?? params.typingSignals.signalRunStart()
-        ).catch((err: unknown) => {
-          logVerbose(`execution phase typing signal failed: ${String(err)}`);
-        });
-      }
-      const automation = params.followupRun.run.scheduledAutomation;
-      automation?.onExecutionPhase?.({
-        ...info,
-        jobId: automation.job.id,
-        agentId: effectiveRun.agentId,
-        sessionId: params.followupRun.run.sessionId,
-        sessionKey: params.sessionKey,
-        runId,
-      });
-    };
-    return {
-      prepareAgentRunStart,
-      notifyAgentRunStart,
-      hasAgentRunStarted: () => didNotifyAgentRunStart,
-      signalExecutionPhaseForTyping,
-      close: () => {
-        active = false;
-      },
-    };
+    }
+    if (info.phase === "model_call_started" || info.phase === "process_spawned") {
+      commitMcpAppModelContext();
+    }
+    const isUserVisibleExecutionActivity =
+      info.phase === "turn_accepted" ||
+      info.phase === "process_spawned" ||
+      info.phase === "model_call_started" ||
+      info.phase === "tool_execution_started" ||
+      info.phase === "assistant_output_started";
+    if (!isUserVisibleExecutionActivity) {
+      return;
+    }
+    notifyAgentRunStart();
+    if (readGroupParticipationRun(params.replyOperation)?.isPrivate) {
+      return;
+    }
+    void (
+      params.typingSignals.signalExecutionActivity?.() ?? params.typingSignals.signalRunStart()
+    ).catch((err: unknown) => {
+      logVerbose(`execution phase typing signal failed: ${String(err)}`);
+    });
   };
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
   let cycle: AgentFallbackCycleResult;
@@ -713,7 +643,41 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
-  return await runAgentTurnWithOutcome(executionParams, runId, () =>
-    executeAgentTurnOutcome(executionParams, runId),
-  );
+  try {
+    if (readGroupParticipationRun(params.replyOperation)?.mode === "observe") {
+      const recorder = params.followupRun.userTurnTranscriptRecorder;
+      if (recorder && !recorder.hasPersisted()) {
+        const persisted = await recorder.persistApproved({
+          expectedSessionId: params.followupRun.run.sessionId,
+          ...(params.sessionKey
+            ? {
+                target: {
+                  agentId: params.followupRun.run.agentId,
+                  sessionId: params.followupRun.run.sessionId,
+                  sessionKey: params.sessionKey,
+                  storePath: params.storePath,
+                  sessionEntry: params.getActiveSessionEntry(),
+                  sessionStore: params.activeSessionStore,
+                  config: params.followupRun.run.config,
+                  cwd: params.followupRun.run.workspaceDir,
+                },
+              }
+            : {}),
+        });
+        if (!persisted) {
+          throw new Error("The group source could not be committed to its session");
+        }
+      }
+      params.replyOperation?.abortSignal.throwIfAborted();
+      const result: AgentTurnExecutionResult = { runId, outcome: { kind: "observed" } };
+      recordAgentTurnExecutionOutcome(executionParams, result);
+      return result;
+    }
+    const result = await executeAgentTurnOutcome(executionParams, runId);
+    recordAgentTurnExecutionOutcome(executionParams, result);
+    return result;
+  } catch (error) {
+    recordAgentTurnExecutionOutcome(executionParams, undefined);
+    throw error;
+  }
 }

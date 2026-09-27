@@ -82,6 +82,8 @@ export type QueuedDeliveryPayload = {
   to: string;
   accountId?: string;
   queuePolicy?: "required" | "best_effort";
+  /** Recovery may reconcile a previous send but cannot start a new send. */
+  recoveryMode?: "reconcile-only";
   requireUnknownSendReconciliation?: boolean;
   retryAmbiguousFinalText?: true;
   /** Current failed attempt had a typed transport error and no accepted message. */

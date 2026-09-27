@@ -49,6 +49,7 @@ import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { createFollowupSpeechPreparer } from "./followup-delivery-tts.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./queue.js";
@@ -67,8 +68,78 @@ import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import { buildWaitingStatusPayload } from "./waiting-status.js";
 
-function resolveFollowupPayloadContext(turn: AdmittedFollowupTurn) {
-  return {
+type FollowupDeliveryDecision =
+  | {
+      kind: "deliver";
+      payloads: ReplyPayload[];
+      resolved?: { provider: string; model: string };
+    }
+  | {
+      kind: "suppress";
+      reason: "send-policy" | "room-event" | "silent" | "message-tool-only" | "aborted";
+    }
+  | {
+      kind: "retry-source-delivery";
+      run: FollowupRun;
+      finalTextLength: number;
+      resolved: { provider: string; model: string };
+    };
+
+/** Resolves one final queued delivery action without performing transport I/O. */
+export async function resolveFollowupDeliveryDecision(params: {
+  turn: AdmittedFollowupTurn;
+  execution: AgentTurnExecutionResult;
+  accounting?: AccountedAgentTurn & {
+    compactionNotice?: ReplyPayload;
+    diagnosticsPayload?: ReplyPayload;
+  };
+  opts?: InternalGetReplyOptions;
+}): Promise<FollowupDeliveryDecision> {
+  const { turn, execution, accounting, opts } = params;
+  if (turn.sendPolicy === "deny") {
+    return { kind: "suppress", reason: "send-policy" };
+  }
+  if (
+    turn.queued.currentInboundEventKind === "room_event" &&
+    !isInternalMessageChannel(turn.queued.originatingChannel)
+  ) {
+    return { kind: "suppress", reason: "room-event" };
+  }
+  if (execution.outcome.kind === "observed") {
+    return { kind: "suppress", reason: "silent" };
+  }
+  const sourcePolicy = resolveSourceReplyVisibilityPolicy({
+    cfg: turn.config,
+    ctx: {
+      ChatType: turn.queued.originatingChatType ?? turn.queued.run.chatType,
+      InboundEventKind: turn.queued.currentInboundEventKind,
+      Provider: turn.queued.originatingChannel ?? turn.queued.run.messageProvider,
+      Surface: turn.queued.originatingChannel ?? turn.queued.run.messageProvider,
+    },
+    requested: turn.queued.run.sourceReplyDeliveryMode ?? opts?.sourceReplyDeliveryMode,
+    sendPolicy: turn.sendPolicy,
+  });
+  const terminalReplyExpectation =
+    turn.queued.run.terminalReplyExpectation ??
+    resolveSourceReplyExpectation({
+      ctx: {
+        InboundEventKind: turn.queued.currentInboundEventKind,
+        InputProvenance: turn.queued.run.inputProvenance,
+      },
+      cfg: turn.config,
+    });
+  const isInteractive =
+    terminalReplyExpectation === "required" ||
+    (!isSyntheticSourceReplyTurn({ inputProvenance: turn.queued.run.inputProvenance }) &&
+      !isInternalMessageChannel(
+        turn.queued.originatingChannel ?? turn.queued.run.messageProvider,
+      ) &&
+      Boolean(
+        turn.queued.originatingTo?.trim() ||
+        opts?.onBlockReply ||
+        turn.queued.queuedFollowupReplyDisposition?.kind === "deliver",
+      ));
+  const deliveryContext = {
     cfg: turn.config,
     messageProvider: turn.queued.run.messageProvider,
     originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
@@ -171,6 +242,18 @@ export async function resolveFollowupDeliveryDecision(params: {
         markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),
       ),
     );
+  if (readGroupParticipationRun(turn.operation)?.isPrivate) {
+    const payloads = resolveFollowupDeliveryPayloads({
+      ...deliveryContext,
+      payloads:
+        accounting?.payloadArray.filter(
+          (payload) => getReplyPayloadMetadata(payload)?.publicationAuthority !== undefined,
+        ) ?? [],
+    });
+    return payloads.length > 0
+      ? { kind: "deliver", payloads }
+      : { kind: "suppress", reason: "silent" };
+  }
   if (execution.outcome.kind === "rejected") {
     if (!isInteractive) {
       return { kind: "suppress" as const, reason: "silent" as const };

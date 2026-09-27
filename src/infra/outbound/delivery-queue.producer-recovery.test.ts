@@ -82,6 +82,82 @@ describe("exhausted delivery producer recovery", () => {
     return claimId;
   }
 
+  it("expires an unsent live-owner draft while ordinary replies remain recoverable", async () => {
+    await queueStorage.enqueueDeliveryOnce(
+      {
+        channel: "directchat",
+        to: "recipient",
+        payloads: [{ text: "Volunteer draft" }],
+        recoveryMode: "reconcile-only",
+      },
+      "volunteer-draft",
+      tmpDir(),
+    );
+    await enqueue("ordinary-reply");
+    closeOpenClawStateDatabaseForTest();
+    const deliver = vi.fn().mockResolvedValue([]);
+    await recoverPendingDeliveries({
+      cfg: {},
+      log: createRecoveryLog(),
+      deliver,
+      stateDir: tmpDir(),
+    });
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(deliver.mock.calls[0]?.[0].payloads).toEqual([{ text: "ordinary-reply" }]);
+    expect(await queueStorage.loadPendingDelivery("volunteer-draft", tmpDir())).toBeNull();
+  });
+
+  it.each(["sent", "not_sent", "unresolved"] as const)(
+    "reconciles a live-owner draft as %s without replaying it",
+    async (status) => {
+      await queueStorage.enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "recipient",
+          payloads: [{ text: "Uncertain volunteer send" }],
+          recoveryMode: "reconcile-only",
+        },
+        "uncertain-volunteer",
+        tmpDir(),
+      );
+      await queueStorage.markDeliveryPlatformSendAttemptStarted("uncertain-volunteer", tmpDir());
+      const reconcileUnknownSend = vi.fn().mockResolvedValue(
+        status === "sent"
+          ? {
+              status,
+              messageId: "already-sent",
+              receipt: {
+                primaryPlatformMessageId: "already-sent",
+                platformMessageIds: ["already-sent"],
+                parts: [{ platformMessageId: "already-sent", kind: "text", index: 0 }],
+                sentAt: 1,
+              },
+            }
+          : { status, ...(status === "unresolved" ? { retryable: true } : {}) },
+      );
+      resolveAdapter.mockReturnValue({
+        durableFinal: { capabilities: { reconcileUnknownSend: true }, reconcileUnknownSend },
+      });
+      closeOpenClawStateDatabaseForTest();
+      const deliver = vi.fn();
+      const summary = await recoverPendingDeliveries({
+        cfg: {},
+        log: createRecoveryLog(),
+        deliver,
+        stateDir: tmpDir(),
+      });
+      expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(summary.recovered).toBe(status === "sent" ? 1 : 0);
+      const pending = await queueStorage.loadPendingDelivery("uncertain-volunteer", tmpDir());
+      if (status === "unresolved") {
+        expect(pending?.recoveryState).toBe("send_attempt_started");
+      } else {
+        expect(pending).toBeNull();
+      }
+    },
+  );
+
   function setProducerExpiry(id: string, availableAt: number) {
     updateDeliveryQueueEntryInDatabase(database(), OUTBOUND_DELIVERY_QUEUE_NAME, id, (entry) => ({
       ...entry,
