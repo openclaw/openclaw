@@ -11,7 +11,8 @@ function* stripSchemaArray(
   unsupportedKeywords: ReadonlySet<string>,
   ancestors: Set<object>,
 ): SchemaWalk {
-  const result = new Array<unknown>(schemas.length);
+  const result: unknown[] = [];
+  result.length = schemas.length;
   for (let index = 0; index < result.length; index += 1) {
     if (index in schemas) {
       result[index] = yield stripSchemaKeywords(schemas[index], unsupportedKeywords, ancestors);
