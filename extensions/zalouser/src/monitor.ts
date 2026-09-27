@@ -189,17 +189,8 @@ async function sendZalouserDeliveryAcks(params: {
   isGroup: boolean;
   message: NonNullable<ZaloInboundMessage["eventMessage"]>;
 }): Promise<void> {
-  await sendDeliveredZalouser({
-    profile: params.profile,
-    isGroup: params.isGroup,
-    message: params.message,
-    isSeen: true,
-  });
-  await sendSeenZalouser({
-    profile: params.profile,
-    isGroup: params.isGroup,
-    message: params.message,
-  });
+  await sendDeliveredZalouser({ ...params, isSeen: true });
+  await sendSeenZalouser(params);
 }
 
 async function processMessage(
@@ -810,38 +801,22 @@ export async function monitorZalouserProvider(
     if (allowNameMatching && (allowFromEntries.length > 0 || groupAllowFromEntries.length > 0)) {
       const friends = await listZaloFriends(profile);
       const byName = buildZaloNameIndex(friends, (friend) => friend.displayName);
-      if (allowFromEntries.length > 0) {
-        const { additions, mapping, unresolved } = resolveUserAllowlistEntries(
-          allowFromEntries,
-          byName,
-        );
-        const allowFrom = mergeAllowlist({ existing: account.config.allowFrom, additions });
+      for (const [key, entries, label] of [
+        ["allowFrom", allowFromEntries, "zalouser users"],
+        ["groupAllowFrom", groupAllowFromEntries, "zalouser group users"],
+      ] as const) {
+        if (entries.length === 0) {
+          continue;
+        }
+        const { additions, mapping, unresolved } = resolveUserAllowlistEntries(entries, byName);
         account = {
           ...account,
           config: {
             ...account.config,
-            allowFrom,
+            [key]: mergeAllowlist({ existing: account.config[key], additions }),
           },
         };
-        summarizeMapping("zalouser users", mapping, unresolved, runtime);
-      }
-      if (groupAllowFromEntries.length > 0) {
-        const { additions, mapping, unresolved } = resolveUserAllowlistEntries(
-          groupAllowFromEntries,
-          byName,
-        );
-        const groupAllowFrom = mergeAllowlist({
-          existing: account.config.groupAllowFrom,
-          additions,
-        });
-        account = {
-          ...account,
-          config: {
-            ...account.config,
-            groupAllowFrom,
-          },
-        };
-        summarizeMapping("zalouser group users", mapping, unresolved, runtime);
+        summarizeMapping(label, mapping, unresolved, runtime);
       }
     }
 

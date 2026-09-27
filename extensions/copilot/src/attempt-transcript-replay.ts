@@ -79,3 +79,36 @@ export function isCompleteToolGroup(
     )
   );
 }
+
+export function isSameUserTurn(
+  candidate: AgentMessage | undefined,
+  current: Extract<AgentMessage, { role: "user" }> | undefined,
+  currentRunUserKey: string,
+): boolean {
+  if (candidate?.role !== "user" || !current) {
+    return false;
+  }
+  if (candidate === current) {
+    return true;
+  }
+  const candidateKey = (candidate as { idempotencyKey?: unknown }).idempotencyKey;
+  const currentKey = (current as { idempotencyKey?: unknown }).idempotencyKey;
+  if (typeof candidateKey === "string" || typeof currentKey === "string") {
+    if (typeof candidateKey === "string" && typeof currentKey === "string") {
+      return candidateKey === currentKey;
+    }
+    if (
+      typeof candidateKey !== "string" ||
+      typeof currentKey === "string" ||
+      (!candidateKey.startsWith("copilot:") && candidateKey !== currentRunUserKey)
+    ) {
+      return false;
+    }
+  }
+  // The embedded-runner boundary identifies the active user as the last user
+  // and stamps it with this recorder timestamp; historical turns are ineligible.
+  return (
+    candidate.timestamp === current.timestamp &&
+    userText(candidate.content) === userText(current.content)
+  );
+}
