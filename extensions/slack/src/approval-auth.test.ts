@@ -1,13 +1,21 @@
 import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Slack tests cover approval auth plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   getSlackApprovalApprovers,
   getSlackApprovalApproversForTeam,
   isSlackPluginApprovalAuthorizedSender,
 } from "./approval-auth.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
+
+const installations: Array<ReturnType<typeof registerSlackInstallationState>> = [];
+
+afterEach(() => {
+  for (const installation of installations.splice(0)) {
+    installation.release();
+  }
+});
 
 function pluginRequest(
   policySubject?: PluginApprovalRequest["request"]["policySubject"],
@@ -194,6 +202,7 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
   });
 
   it("applies exact tool, plugin, then Agent reviewer lists within the bot workspace", () => {
+    installations.push(registerSlackInstallationState("default", "workspace", "T11111111"));
     const cfg: OpenClawConfig = {
       approvals: {
         plugin: {
@@ -234,6 +243,7 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
   });
 
   it("distinguishes an omitted default from an explicit empty default", () => {
+    installations.push(registerSlackInstallationState("default", "workspace", "T11111111"));
     const cfg: OpenClawConfig = {
       approvals: { plugin: { slack: { plugins: { calendar: { approvers: [pluginReviewer] } } } } },
       channels: { slack: { allowFrom: [legacyReviewer] } },
@@ -249,6 +259,7 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
   });
 
   it("uses the registered native tool owner and raw name without trusting the approval hook owner", () => {
+    installations.push(registerSlackInstallationState("default", "workspace", "T11111111"));
     const cfg: OpenClawConfig = {
       approvals: {
         plugin: {

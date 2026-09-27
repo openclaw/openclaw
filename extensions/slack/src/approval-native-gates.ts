@@ -70,8 +70,17 @@ export function isSlackPluginApprovalPolicyRouteEligible(params: {
   request: PluginApprovalRequest;
 }): boolean {
   const configured = resolvePluginApprovalSlackApprovers(params.cfg, params.request);
+  if (configured === undefined) {
+    return true;
+  }
+  const accountId = resolveSlackAccount(params).accountId;
+  // The request origin cannot stand in for a stopped or degraded bot's identity.
+  const hasAuthenticatedInstallation =
+    Boolean(getSlackInstallationTeamId(accountId)) ||
+    (getSlackInstallationKind(accountId) === "enterprise" &&
+      Boolean(resolveSlackApprovalOriginTeamId(params.request)));
   return (
-    configured === undefined ||
+    hasAuthenticatedInstallation &&
     getSlackApprovalApproversForTeam({
       ...params,
       teamId: resolveSlackApprovalTeamId(params),
@@ -343,14 +352,30 @@ function isSlackNativeApprovalAccountEligible(params: {
   );
 }
 
+function isSlackApprovalAccountInRequestWorkspace(
+  accountId: string,
+  request: SlackNativeApprovalRequest,
+): boolean {
+  const originTeamId = resolveSlackApprovalOriginTeamId(request);
+  const installedTeamId = getSlackInstallationTeamId(accountId);
+  return (
+    (!installedTeamId ||
+      !originTeamId ||
+      installedTeamId.toLowerCase() === originTeamId.toLowerCase()) &&
+    (getSlackInstallationKind(accountId) !== "enterprise" || Boolean(originTeamId))
+  );
+}
+
 function listSlackNativeApprovalEligibleAccountIds(
   params: Parameters<typeof isSlackNativeApprovalAccountEligible>[0],
 ): string[] {
   if (params.approvalKind === "plugin") {
     // Match Gateway custody's full account set so an unbound request cannot
     // send reviewer cards from multiple accounts that neither can resolve.
-    return listSlackAccountIds(params.cfg).filter((accountId) =>
-      isSlackNativeApprovalAccountEligible({ ...params, accountId }),
+    return listSlackAccountIds(params.cfg).filter(
+      (accountId) =>
+        isSlackApprovalAccountInRequestWorkspace(accountId, params.request) &&
+        isSlackNativeApprovalAccountEligible({ ...params, accountId }),
     );
   }
   const accountId = params.accountId ?? resolveDefaultSlackAccountId(params.cfg);
@@ -389,16 +414,7 @@ export function shouldHandleSlackNativeApprovalRequest(params: {
   request: SlackNativeApprovalRequest;
 }): boolean {
   const account = resolveSlackAccount(params);
-  const originTeamId = resolveSlackApprovalOriginTeamId(params.request);
-  const installedTeamId = getSlackInstallationTeamId(account.accountId);
-  if (
-    installedTeamId &&
-    originTeamId &&
-    installedTeamId.toLowerCase() !== originTeamId.toLowerCase()
-  ) {
-    return false;
-  }
-  if (getSlackInstallationKind(account.accountId) === "enterprise" && !originTeamId) {
+  if (!isSlackApprovalAccountInRequestWorkspace(account.accountId, params.request)) {
     return false;
   }
   const approvalKind = resolveApprovalKind(params.request, params.approvalKind);

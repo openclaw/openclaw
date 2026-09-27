@@ -203,6 +203,91 @@ describe("slack native approval adapter", () => {
     expect(await targets("ops", bound)).toEqual([{ to: "team:T11111111:user:U11111111" }]);
   });
 
+  it("routes a policy-only plugin approval to its selected reviewer", async () => {
+    installationStates.push(registerSlackInstallationState("default", "workspace", "T11111111"));
+    const cfg = {
+      channels: { slack: { botToken: "xoxb-default", appToken: "xapp-default" } },
+      approvals: {
+        plugin: {
+          slack: {
+            plugins: {
+              diffs: {
+                tools: { view: { approvers: ["team:T11111111:user:U11111111"] } },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = buildPluginRequest({
+      turnSourceChannel: "slack",
+      turnSourceTo: "team:T11111111:channel:C11111111",
+      policySubject: { pluginKey: "diffs", tool: "view" },
+    });
+
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toEqual([{ to: "team:T11111111:user:U11111111" }]);
+  });
+
+  it("does not count another workspace's Slack account as an unbound route candidate", async () => {
+    installationStates.push(registerSlackInstallationState("default", "workspace", "T11111111"));
+    installationStates.push(registerSlackInstallationState("ops", "workspace", "T22222222"));
+    const cfg = {
+      channels: {
+        slack: {
+          accounts: {
+            default: { botToken: "xoxb-default", appToken: "xapp-default" },
+            ops: { botToken: "xoxb-ops", appToken: "xapp-ops" },
+          },
+        },
+      },
+      approvals: {
+        plugin: {
+          slack: {
+            approvers: ["team:T11111111:user:U11111111", "team:T22222222:user:U22222222"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = buildPluginRequest({
+      turnSourceChannel: "slack",
+      turnSourceTo: "team:T11111111:channel:C11111111",
+      policySubject: { pluginKey: "diffs", tool: "view" },
+    });
+    const canHandle = (accountId: string) =>
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId,
+        approvalKind: "plugin",
+        request,
+      });
+
+    expect(canHandle("default")).toBe(true);
+    expect(canHandle("ops")).toBe(false);
+    expect(
+      await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toEqual([{ to: "team:T11111111:user:U11111111" }]);
+  });
+
   it("keeps custody aligned with delivery when another Slack account is disabled", () => {
     installationStates.push(registerSlackInstallationState("default", "workspace", "T11111111"));
     const cfg = {
@@ -244,6 +329,50 @@ describe("slack native approval adapter", () => {
     expect(canHandle("dormant")).toBe(false);
     expect(canApprove("default")).toBe(true);
     expect(canApprove("dormant")).toBe(false);
+  });
+
+  it("routes scoped reviewers only while their Slack installation has authenticated identity", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "xoxb-default", appToken: "xapp-default" } },
+      approvals: {
+        plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } },
+      },
+    } as OpenClawConfig;
+    const request = buildPluginRequest({
+      turnSourceChannel: "slack",
+      turnSourceTo: "team:T11111111:channel:C11111111",
+      policySubject: { pluginKey: "diffs", tool: "view" },
+    });
+    const params = { cfg, accountId: "default", approvalKind: "plugin" as const, request };
+    const state = async () => ({
+      route: slackApprovalCapability.nativeRuntime?.availability.shouldHandle(params),
+      delivery: slackApprovalCapability.native?.describeDeliveryCapabilities(params).enabled,
+      targets: await slackApprovalCapability.native?.resolveApproverDmTargets?.(params),
+      authorized: slackApprovalCapability.authorizeActorAction?.({
+        ...params,
+        senderId: "team:T11111111:user:U11111111",
+        action: "approve",
+      }).authorized,
+    });
+    const unavailable = { route: false, delivery: false, targets: [], authorized: false };
+
+    expect(await state()).toEqual(unavailable);
+    const degraded = registerSlackInstallationState("default", "degraded");
+    installationStates.push(degraded);
+    expect(await state()).toEqual(unavailable);
+    degraded.release();
+    const installation = registerSlackInstallationState("default", "workspace", "T11111111");
+    installationStates.push(installation);
+    expect(await state()).toEqual({
+      route: true,
+      delivery: true,
+      targets: [{ to: "team:T11111111:user:U11111111" }],
+      authorized: true,
+    });
+    installation.release();
+    expect(await state()).toEqual(unavailable);
+    installationStates.push(registerSlackInstallationState("default", "workspace", "T22222222"));
+    expect(await state()).toEqual(unavailable);
   });
 
   it("subscribes the native runtime to all approval events", () => {
@@ -495,6 +624,7 @@ describe("slack native approval adapter", () => {
   });
 
   it("delivers only to the request's configured workspace-qualified tool reviewers", async () => {
+    installationStates.push(registerSlackInstallationState("default", "workspace", "T11111111"));
     const cfg: OpenClawConfig = {
       ...buildConfig({ allowFrom: ["U999LEGACY"] }),
       approvals: {

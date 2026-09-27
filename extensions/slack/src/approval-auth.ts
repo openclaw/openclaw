@@ -106,11 +106,15 @@ export function isSlackPluginApprovalAuthorizedSender(
   const accountId = resolveSlackAccount(params).accountId;
   const installedTeamId = getSlackInstallationTeamId(accountId);
   const originTeamId = resolveSlackApprovalOriginTeamId(params.request);
+  const installationKind = getSlackInstallationKind(accountId);
+  // A scoped decision needs a live bot identity; the request's origin alone
+  // cannot authorize a queued click after that installation stops.
   if (
     (installedTeamId &&
       originTeamId &&
       installedTeamId.toLowerCase() !== originTeamId.toLowerCase()) ||
-    (getSlackInstallationKind(accountId) === "enterprise" && !originTeamId)
+    (installationKind === "enterprise" && !originTeamId) ||
+    (configured !== undefined && !installedTeamId && installationKind !== "enterprise")
   ) {
     return false;
   }
