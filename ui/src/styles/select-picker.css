@@ -295,12 +295,12 @@ openclaw-select-picker {
   flex: 1 0 auto;
 }
 
-.picker-select--submenu .picker-select__copy {
+.picker-select--submenu .picker-select__trigger .picker-select__copy {
   margin-inline-start: auto;
   color: var(--muted);
 }
 
-.picker-select--submenu .picker-select__label {
+.picker-select--submenu .picker-select__trigger .picker-select__label {
   font-weight: var(--wa-font-weight-normal);
 }
 

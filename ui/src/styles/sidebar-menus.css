@@ -229,12 +229,10 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   outline-offset: var(--wa-focus-ring-offset);
 }
 
-/* Pickers show focus rings only after keyboard use: a pointer-opened owner
-   list keeps the trigger, search field, and hovered row unringed. */
-.sidebar-session-filter-panel
-  .picker-select
-  > :not([data-keyboard])
-  :is(.picker-select__trigger[aria-expanded="true"]:not(:focus-visible), .picker-select__search) {
+/* Accent rings are reserved for keyboard focus: an open trigger keeps its
+   resting border, and a pointer-opened search field and active row stay plain. */
+.sidebar-session-filter-panel .picker-select__trigger[aria-expanded="true"]:not(:focus-visible),
+.sidebar-session-filter-panel .picker-select > :not([data-keyboard]) .picker-select__search {
   outline: none;
   border-color: color-mix(in srgb, var(--border) 70%, transparent);
   box-shadow: none;
@@ -247,11 +245,41 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   outline: none;
 }
 
+/* Choice lists read like the session menus: plain left-aligned rows, the
+   neutral hover background, and a trailing accent check for the selection. */
+.sidebar-session-filter-panel .picker-select__menu {
+  padding: var(--menu-padding);
+}
+
+.sidebar-session-filter-panel .picker-select__option {
+  min-height: var(--menu-item-height);
+  padding: 0 8px;
+  border-radius: var(--menu-item-radius);
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.sidebar-session-filter-panel .picker-select__option[aria-selected="true"] {
+  background: transparent;
+  box-shadow: none;
+}
+
 .sidebar-session-filter-panel
-  .picker-select
-  > :not([data-keyboard])
-  .picker-select__option[data-active]:not([aria-selected="true"]) {
+  :is(.picker-select__option:hover, [data-keyboard] .picker-select__option[data-active]) {
   background: var(--bg-hover);
+}
+
+.sidebar-session-filter-panel .picker-select__option .picker-select__copy {
+  flex: 1 1 auto;
+}
+
+.sidebar-session-filter-panel .picker-select__option .picker-select__label {
+  font-weight: var(--wa-font-weight-normal);
+}
+
+.sidebar-session-filter-panel .picker-select__check {
+  flex-basis: 14px;
+  width: 14px;
+  color: var(--accent);
 }
 
 .sidebar-session-menu-switch > span:first-child {
