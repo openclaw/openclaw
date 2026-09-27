@@ -1750,7 +1750,6 @@ src/auto-reply/reply/agent-runner-execution.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
 src/auto-reply/reply/agent-runner-memory.ts	5
 src/auto-reply/reply/agent-runner-run.ts	1
-src/auto-reply/reply/agent-runner-trace.ts	1
 src/auto-reply/reply/agent-runner-utils.ts	1
 src/auto-reply/reply/block-streaming.ts	3
 src/auto-reply/reply/command-context-rewrite.ts	1
@@ -1760,7 +1759,7 @@ src/auto-reply/reply/commands-allowlist.ts	6
 src/auto-reply/reply/commands-config.ts	1
 src/auto-reply/reply/commands-context-report.ts	1
 src/auto-reply/reply/commands-context.ts	1
-src/auto-reply/reply/commands-export-session.ts	2
+src/auto-reply/reply/commands-export-session.ts	1
 src/auto-reply/reply/commands-login.ts	1
 src/auto-reply/reply/commands-mcp.ts	2
 src/auto-reply/reply/commands-plugin.ts	1
@@ -1769,7 +1768,6 @@ src/auto-reply/reply/commands-private-route.ts	1
 src/auto-reply/reply/commands-reset-hooks.ts	3
 src/auto-reply/reply/commands-reset.ts	1
 src/auto-reply/reply/commands-subagents/action-log.ts	1
-src/auto-reply/reply/commands-system-prompt.ts	2
 src/auto-reply/reply/config-mutations.ts	1
 src/auto-reply/reply/conversation-turn-capture.ts	2
 src/auto-reply/reply/directive-handling.impl.ts	2
@@ -1795,7 +1793,6 @@ src/auto-reply/reply/queue/enqueue.ts	1
 src/auto-reply/reply/queue/settings.ts	1
 src/auto-reply/reply/reply-config-runtime-mode.ts	2
 src/auto-reply/reply/reply-operation-run-state.ts	1
-src/auto-reply/reply/reply-payload-sending-hook.ts	1
 src/auto-reply/reply/reply-run-registry.registry.ts	1
 src/auto-reply/reply/reply-threading.ts	2
 src/auto-reply/reply/reply-timing-tracker.ts	2
@@ -1804,10 +1801,8 @@ src/auto-reply/reply/session-delivery.ts	1
 src/auto-reply/reply/session.ts	2
 src/auto-reply/reply/source-reply-delivery-runtime.ts	2
 src/auto-reply/reply/source-turn-id.ts	4
-src/auto-reply/reply/strip-inbound-meta.ts	4
 src/auto-reply/templating.ts	1
 src/auto-reply/thinking.ts	1
-src/auto-reply/tokens.ts	1
 src/auto-reply/usage-bar/template.ts	1
 src/auto-reply/usage-bar/translator.ts	4
 src/boards/board-store.ts	1
