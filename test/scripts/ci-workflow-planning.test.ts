@@ -2632,7 +2632,13 @@ describe("ci workflow guards", () => {
       expect(Number(enabled.outputs.hybrid_hosted_total_with_shadow_rows)).toBe(actual.length);
       expect(actual.filter((name) => name === "codex-test-selection")).toHaveLength(1);
       const context = JSON.parse(enabled.outputs.codex_selection_context_json!);
-      expect(context.changedPaths).toEqual(options.changedPaths);
+      expect(context).not.toHaveProperty("changedPaths");
+      expect(Object.keys(context).toSorted()).toEqual(["fallbackReason", "options"]);
+      expect(JSON.parse(enabled.outputs.codex_selection_check_names_json!)).toEqual(
+        JSON.parse(enabled.outputs.checks_node_core_nondist_matrix!)
+          .include.map((row: { check_name: string }) => row.check_name)
+          .toSorted(),
+      );
       expect(context.options).not.toHaveProperty("onFallback");
       const consumedOptions = enabled.output
         .split("\n")
@@ -2640,6 +2646,26 @@ describe("ci workflow guards", () => {
       expect(context.options).toEqual(
         JSON.parse(consumedOptions!.slice("changed-node-plan-options:".length)),
       );
+    });
+
+    it("replaces oversized selection context with a small skip marker", () => {
+      const manifest = manifestWithHostedNodeRows(2, {
+        eventName: "pull_request",
+        changedPaths: ["src/runtime.ts"],
+        changedPlannerSource: `
+          export const createChangedNodeTestShards = (_paths, options) => {
+            options.onFallback("é".repeat(17_000));
+            return null;
+          };
+          export const createChangedExtensionFallbackShards = () => [];
+        `,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.codex_selection_context_json).toBe('{"oversized":true}');
+      expect(JSON.parse(manifest.outputs.codex_selection_check_names_json!)).toEqual([
+        "hosted-node-0",
+        "hosted-node-1",
+      ]);
     });
 
     it("runs the hosted health step from the current checkout without a sparse harness helper", () => {

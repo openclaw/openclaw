@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   classifyFailures,
   extractFailingTestFiles,
@@ -7,6 +10,9 @@ import {
 } from "../../scripts/ci-codex-test-selection.mts";
 import { classifyChangedNodeTestCandidates } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { summarizeTestSelections } from "../../scripts/lib/ci-codex-test-selection-summary.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const candidates = [
   "src/direct.test.ts",
@@ -28,7 +34,7 @@ const prepared = {
 };
 const proposal = (keep: string[], confidence = "high") =>
   JSON.stringify({
-    keep: keep.map((path) => ({ path, reason: "May exercise changed behavior" })),
+    keep: keep.map((file) => ({ path: file, reason: "May exercise changed behavior" })),
     confidence,
     summary: "Keep related coverage",
   });
@@ -249,5 +255,106 @@ describe("shadow Codex test selection", () => {
       runsWithTimingEstimates: 0,
       misses: [],
     });
+  });
+});
+
+describe("selection prepare command", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    vi.doUnmock("node:child_process");
+    vi.doUnmock("../../scripts/lib/ci-changed-node-test-plan.mts");
+    vi.resetModules();
+  });
+
+  it.each([
+    {
+      context: { options: { runnerBackend: "hybrid" } },
+      names: ["second", "first"],
+      status: "ready",
+    },
+    {
+      context: { options: { runnerBackend: "hybrid" } },
+      names: ["first", "missing"],
+      status: "fallback:plan-mismatch",
+    },
+    {
+      context: { oversized: true },
+      names: ["first", "second"],
+      status: "skipped:context-too-large",
+    },
+  ])("records $status without transporting a matrix", async ({ context, names, status }) => {
+    const dir = tempDirs.make("openclaw-selector-prepare-");
+    const output = path.join(dir, "github-output");
+    vi.stubEnv("OPENCLAW_CI_SELECTION_CONTEXT", JSON.stringify(context));
+    vi.stubEnv("OPENCLAW_CI_SELECTION_CHECK_NAMES", JSON.stringify(names));
+    vi.stubEnv("OPENCLAW_CI_SELECTION_MATRIX", undefined);
+    vi.stubEnv("GITHUB_OUTPUT", output);
+    vi.stubEnv("GITHUB_STEP_SUMMARY", undefined);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.doMock("node:child_process", async () => ({
+      ...(await vi.importActual<typeof import("node:child_process")>("node:child_process")),
+      execFileSync: (_command: string, args: string[]) =>
+        args[0] === "rev-parse"
+          ? args[2] === "base^{commit}"
+            ? "base"
+            : "head"
+          : args.includes("--name-only")
+            ? "src/direct.ts\0"
+            : "one changed file",
+      spawnSync: () => ({ status: 0, stdout: "small diff" }),
+    }));
+    vi.doMock("../../scripts/lib/ci-changed-node-test-plan.mts", () => ({
+      createChangedNodeTestShards: (
+        changedPaths: string[],
+        options: { onSelectionEvidence: (evidence: unknown) => void },
+      ) => {
+        expect(changedPaths).toEqual(["src/direct.ts"]);
+        expect(options).toMatchObject({ runnerBackend: "hybrid" });
+        options.onSelectionEvidence({
+          importDepths: new Map(candidates.map((file) => [file, 2])),
+          nonImportTargets: new Set(),
+          nonImportRows: [],
+        });
+        return [
+          { checkName: "first", targets: candidates.slice(0, 2) },
+          { checkName: "second", targets: candidates.slice(2) },
+          { checkName: "dist", targets: ["src/dist.test.ts"], requiresDist: true },
+        ];
+      },
+      createChangedExtensionFallbackShards: () => [],
+      classifyChangedNodeTestCandidates,
+    }));
+    const argv = process.argv;
+    try {
+      process.argv = [
+        process.execPath,
+        fileURLToPath(new URL("../../scripts/ci-codex-test-selection.mts", import.meta.url)),
+        "prepare",
+        "--base",
+        "base",
+        "--head",
+        "head",
+        "--output-dir",
+        dir,
+      ];
+      vi.resetModules();
+      await import("../../scripts/ci-codex-test-selection.mts");
+    } finally {
+      process.argv = argv;
+    }
+    const result = JSON.parse(readFileSync(path.join(dir, "prepared.json"), "utf8"));
+    expect(result.status).toBe(status);
+    expect(readFileSync(output, "utf8")).toBe(`eligible=${status === "ready"}\n`);
+    const oversized = status === "skipped:context-too-large";
+    expect(result.candidates).toEqual(oversized ? [] : candidates);
+    expect(result.floor).toEqual(oversized ? [] : prepared.floor);
+    expect(result.nodeJobs).toEqual(names.toSorted());
+    if (status !== "ready") {
+      const selection = finalizeSelection(result, proposal([]));
+      expect(selection.status).toBe(status);
+      expect(selection.selected).toEqual(result.candidates);
+      expect(selection.pruned).toEqual([]);
+    }
   });
 });

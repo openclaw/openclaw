@@ -255,7 +255,7 @@ function git(args: string[], cwd = process.cwd()) {
   }).trimEnd();
 }
 
-/** Exact targets come from preflight; Vitest owns file discovery for whole-config rows. */
+/** The planner owns exact targets; Vitest owns file discovery for whole-config rows. */
 async function candidateFiles(rows: z.infer<typeof rowSchema>[]) {
   const files = new Set<string>();
   const { writeVitestIncludeFile } = await import("./test-projects.test-support.mts");
@@ -312,7 +312,7 @@ async function candidateFiles(rows: z.infer<typeof rowSchema>[]) {
 }
 
 const contextSchema = z.object({
-  changedPaths: strings,
+  oversized: z.literal(true).optional(),
   fallbackReason: z.string().nullish(),
   options: z
     .object({
@@ -336,19 +336,41 @@ const contextSchema = z.object({
     .nullish(),
 });
 
+function unavailablePrepared(base: string, head: string, status: string): Prepared {
+  return {
+    schemaVersion: 1,
+    status,
+    base,
+    head,
+    candidates: [],
+    floor: [],
+    floorReasons: {},
+    prefixes: [],
+    nodeJobs: strings.parse(JSON.parse(process.env.OPENCLAW_CI_SELECTION_CHECK_NAMES ?? "[]")),
+    preparedAtMs: Date.now(),
+  };
+}
+
+function publishPrepared(dir: string, prepared: Prepared) {
+  writeJson(path.join(dir, "prepared.json"), prepared);
+  // A usable all-candidate artifact exists even if the model step is interrupted.
+  writeSelection(dir, finalizeSelection(prepared));
+  if (process.env.GITHUB_OUTPUT) {
+    appendFileSync(process.env.GITHUB_OUTPUT, `eligible=${prepared.status === "ready"}\n`);
+  }
+  return prepared;
+}
+
 async function prepare(base: string, head: string, dir: string) {
-  const changedPaths = git(["diff", "--name-only", "-z", "--no-renames", base, head, "--"])
-    .split("\0")
-    .filter(Boolean);
   const context = process.env.OPENCLAW_CI_SELECTION_CONTEXT
     ? contextSchema.parse(JSON.parse(process.env.OPENCLAW_CI_SELECTION_CONTEXT))
     : undefined;
-  if (
-    context &&
-    JSON.stringify(sorted(context.changedPaths)) !== JSON.stringify(sorted(changedPaths))
-  ) {
-    throw new Error("changed-paths-mismatch");
+  if (context?.oversized) {
+    return publishPrepared(dir, unavailablePrepared(base, head, "skipped:context-too-large"));
   }
+  const changedPaths = git(["diff", "--name-only", "-z", "--no-renames", base, head, "--"])
+    .split("\0")
+    .filter(Boolean);
   const {
     createChangedNodeTestShards,
     createChangedExtensionFallbackShards,
@@ -380,29 +402,32 @@ async function prepare(base: string, head: string, dir: string) {
       selectionEvidence = evidence;
     },
   });
-  const rows = process.env.OPENCLAW_CI_SELECTION_MATRIX
-    ? z
-        .object({ include: z.array(rowSchema) })
-        .parse(JSON.parse(process.env.OPENCLAW_CI_SELECTION_MATRIX)).include
-    : (
-        changed ?? [
-          ...createNodeTestShardBundles({
-            changedPaths,
-            compactMode: "pull-request",
-            runnerBackend: options.runnerBackend,
-            includeReleaseOnlyPluginShards: false,
-            includeReleaseOnlyToolingShards: false,
-            includeReleaseOnlyRuntimeTests: false,
-            includePrExemptRuntimeTests: false,
-            includeProofTests: false,
-          }),
-          ...createChangedExtensionFallbackShards(changedPaths, {
-            includePrExemptRuntimeTests: false,
-          }),
-        ]
-      )
-        .filter((row) => !row.requiresDist)
-        .map((row) => rowSchema.parse({ ...row, check_name: row.checkName }));
+  const rows = (
+    changed ?? [
+      ...createNodeTestShardBundles({
+        changedPaths,
+        compactMode: "pull-request",
+        runnerBackend: options.runnerBackend,
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: false,
+        includeProofTests: false,
+      }),
+      ...createChangedExtensionFallbackShards(changedPaths, {
+        includePrExemptRuntimeTests: false,
+      }),
+    ]
+  )
+    .filter((row) => !row.requiresDist)
+    .map((row) => rowSchema.parse({ ...row, check_name: row.checkName }));
+  const expectedNames =
+    process.env.OPENCLAW_CI_SELECTION_CHECK_NAMES === undefined
+      ? undefined
+      : sorted(strings.parse(JSON.parse(process.env.OPENCLAW_CI_SELECTION_CHECK_NAMES)));
+  const planMismatch =
+    expectedNames !== undefined &&
+    JSON.stringify(sorted(rows.map((row) => row.check_name))) !== JSON.stringify(expectedNames);
   const candidates = await candidateFiles(rows);
   const nonImportRowFiles = await candidateFiles(
     selectionEvidence.nonImportRows.map((row) =>
@@ -429,8 +454,9 @@ async function prepare(base: string, head: string, dir: string) {
   const grouped = groupCandidates(prunable);
   const prepared: Prepared = {
     schemaVersion: 1,
-    status:
-      changed === null || fallbackReason
+    status: planMismatch
+      ? "fallback:plan-mismatch"
+      : changed === null || fallbackReason
         ? "skipped:broad-fallback"
         : oversized || diff.length > DIFF_LIMIT_CHARS
           ? "skipped:diff-too-large"
@@ -443,13 +469,13 @@ async function prepare(base: string, head: string, dir: string) {
     floor,
     floorReasons,
     prefixes: grouped.prefixes,
-    nodeJobs: rows.map((row) => row.check_name),
+    nodeJobs: expectedNames ?? rows.map((row) => row.check_name),
     preparedAtMs: Date.now(),
     fileSeconds: {
       ...readToolingFileTimings(options.runnerBackend === "github" ? "github" : "blacksmith"),
     },
   };
-  writeJson(path.join(dir, "prepared.json"), prepared);
+  publishPrepared(dir, prepared);
   const prompt = readFileSync(
     new URL("../.github/codex/prompts/ci-test-selection.md", import.meta.url),
     "utf8",
@@ -458,39 +484,22 @@ async function prepare(base: string, head: string, dir: string) {
     path.join(dir, "prompt.md"),
     `${prompt}\n${JSON.stringify({ base, head, stat: git(["diff", "--stat", base, head, "--"]), changedPaths, floorCount: floor.length, prunableCandidates: grouped.lines, diff: diff.slice(0, DIFF_PROMPT_CHARS), truncated: diff.length > DIFF_PROMPT_CHARS }, null, 2)}\n`,
   );
-  // A usable all-candidate artifact exists even if the model step is interrupted.
-  writeSelection(dir, finalizeSelection(prepared));
-  if (process.env.GITHUB_OUTPUT) {
-    appendFileSync(process.env.GITHUB_OUTPUT, `eligible=${prepared.status === "ready"}\n`);
-  }
   return prepared;
 }
 
-async function finalize(dir: string, outcome = process.env.OPENCLAW_CI_CODEX_OUTCOME ?? "success") {
+function finalize(dir: string, outcome = process.env.OPENCLAW_CI_CODEX_OUTCOME ?? "success") {
   let prepared: Prepared;
   try {
     prepared = preparedSchema.parse(
       JSON.parse(readFileSync(path.join(dir, "prepared.json"), "utf8")),
     );
   } catch {
-    // Preflight's immutable matrix can recover the all-test artifact even when
-    // preparation failed before publishing its provenance or prompt.
-    const rows = z
-      .object({ include: z.array(rowSchema) })
-      .parse(JSON.parse(process.env.OPENCLAW_CI_SELECTION_MATRIX ?? "null")).include;
-    const candidates = await candidateFiles(rows);
-    prepared = {
-      schemaVersion: 1,
-      status: "fallback:prepare-error",
-      base: process.env.CHECKOUT_BASE_SHA ?? "",
-      head: git(["rev-parse", "HEAD"]),
-      candidates,
-      floor: candidates,
-      floorReasons: Object.fromEntries(candidates.map((file) => [file, 5 as const])),
-      prefixes: [],
-      nodeJobs: rows.map((row) => row.check_name),
-      preparedAtMs: Date.now(),
-    };
+    // Keep job reporting available when preparation could not publish an inventory.
+    prepared = unavailablePrepared(
+      process.env.CHECKOUT_BASE_SHA ?? "",
+      git(["rev-parse", "HEAD"]),
+      "fallback:prepare-error",
+    );
     writeJson(path.join(dir, "prepared.json"), prepared);
   }
   if (process.env.OPENCLAW_CI_PREPARE_OUTCOME === "failure") {
@@ -530,6 +539,9 @@ async function report(dir: string) {
     const prepared = preparedSchema.parse(
       JSON.parse(readFileSync(path.join(dir, "prepared.json"), "utf8")),
     );
+    if (prepared.status === "fallback:prepare-error") {
+      errors.push("candidate-inventory-unavailable");
+    }
     const selection = z
       .object({ candidates: strings, floor: strings, selected: strings })
       .parse(JSON.parse(readFileSync(path.join(dir, "selection.json"), "utf8")));
@@ -669,7 +681,7 @@ async function main() {
   }
   mkdirSync(dir, { recursive: true });
   if (command === "finalize") {
-    await finalize(dir);
+    finalize(dir);
     return;
   }
   if (command !== "prepare") {

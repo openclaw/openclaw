@@ -3851,6 +3851,9 @@ setImmediate(() => {
     expect(workflow.jobs["ci-gate"].needs).not.toContain("codex-test-selection");
     expect(workflow.jobs["pr-fail-fast"].needs).not.toContain("codex-test-selection");
     const steps: WorkflowStep[] = selection.steps;
+    expect(JSON.stringify([selection.env, ...steps.map((step) => step.env)])).not.toContain(
+      "checks_node_core_nondist_matrix",
+    );
     expect(steps.map((step) => step.name)).toEqual([
       "Checkout",
       "Setup Node environment",

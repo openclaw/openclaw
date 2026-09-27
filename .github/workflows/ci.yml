@@ -144,6 +144,7 @@ jobs:
       codex_selection_hosted_rows: ${{ steps.manifest.outputs.codex_selection_hosted_rows }}
       hybrid_hosted_total_with_shadow_rows: ${{ steps.manifest.outputs.hybrid_hosted_total_with_shadow_rows }}
       codex_selection_context_json: ${{ steps.manifest.outputs.codex_selection_context_json }}
+      codex_selection_check_names_json: ${{ steps.manifest.outputs.codex_selection_check_names_json }}
       diff_base_revision: ${{ steps.diff_base.outputs.sha }}
       diff_head_revision: ${{ steps.diff_base.outputs.head_sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
@@ -2570,12 +2571,13 @@ jobs:
             codex_selection_hosted_rows: codexSelectionHostedRows,
             hybrid_hosted_total_with_shadow_rows: hybridHostedRowsWithChecks +
               (hybridHostedMainChecks ? hybridHostedMainCheckRows : 0) + codexSelectionHostedRows,
-            codex_selection_context_json: JSON.stringify({
-              changedPaths,
-              options: changedNodeTestOptions,
-              fallbackReason: changedNodeTestFallbackReason ?? null,
-            }),
+            codex_selection_check_names_json: JSON.stringify(
+              manifest.checks_node_core_nondist_matrix.include.map((row) => row.check_name).sort()),
           });
+          const selectionContext = JSON.stringify({ options: changedNodeTestOptions,
+            fallbackReason: changedNodeTestFallbackReason ?? null });
+          manifest.codex_selection_context_json = Buffer.byteLength(selectionContext) > 32 * 1024
+            ? '{"oversized":true}' : selectionContext;
           if (runCheckPlan) {
             console.log("Hosted admission reserves full lint/type template bounds plus the check-plan job; late selection cannot expand that inventory.");
           }
@@ -4627,7 +4629,7 @@ jobs:
     env:
       CHECKOUT_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
       OPENCLAW_CI_SELECTION_CONTEXT: ${{ needs.preflight.outputs.codex_selection_context_json }}
-      OPENCLAW_CI_SELECTION_MATRIX: ${{ needs.preflight.outputs.checks_node_core_nondist_matrix }}
+      OPENCLAW_CI_SELECTION_CHECK_NAMES: ${{ needs.preflight.outputs.codex_selection_check_names_json }}
     steps:
       - name: Checkout
         id: checkout

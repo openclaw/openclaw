@@ -111,7 +111,7 @@ resolves SDK and workspace-package aliases and supplies depth and provenance;
 Vitest supplies whole-config file inventories. Parser uncertainty preserves
 conservative import reachability without inventing a non-import selection reason.
 Broad fallbacks, diffs exceeding
-320,000 characters, and plans without prunable files skip Codex. Prompt diffs
+320,000 characters, planner contexts exceeding 32 KiB, and plans without prunable files skip Codex. Prompt diffs
 are limited to 80,000 characters and explicitly marked when truncated.
 
 Missing or invalid output, a failed or timed-out proposal, and low confidence
@@ -133,8 +133,13 @@ not passed to Codex. These observations inform a later decision about enforcemen
 
 `node scripts/ci-codex-test-selection.mjs prepare --base <base> --head <head>` produces the prompt and an all-candidate selection without calling Codex.
 The head must match the current checkout. `--output-dir` chooses the artifact
-directory. CI replays preflight's exact planner options and uses its emitted
-matrix as the candidate source.
+directory. CI passes only preflight's planner options and fallback reason, capped
+at 32 KiB, plus its sorted nondist Node check names. Prepare derives changed paths
+from the Git diff and recomputes candidates with those options. A check-name set
+mismatch records `fallback:plan-mismatch`, retains the recomputed candidates and
+floor for reporting, and skips Codex. An oversized context records
+`skipped:context-too-large`. If preparation fails before writing an inventory,
+finalization preserves check names for reporting and marks the inventory unavailable.
 
 `node scripts/ci-codex-test-selection.mjs summarize --limit 200` summarizes the
 latest 200 `pull_request` CI runs by default. `--repo owner/name` selects another
