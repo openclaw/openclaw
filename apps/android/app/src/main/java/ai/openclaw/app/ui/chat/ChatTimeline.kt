@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatQuestionStatus
 import ai.openclaw.app.chat.ChatSubagentActivity
 import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
@@ -108,10 +109,13 @@ internal fun buildChatTimeline(
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
   val visibleSubagents = visibleSubagentActivities(subagentActivities.values)
+  val nowMs = System.currentTimeMillis()
+  val (activeQuestions, completedQuestions) =
+    questions.partition { it.status(nowMs) in setOf(ChatQuestionStatus.Pending, ChatQuestionStatus.Submitting) }
   val items =
     buildList {
       // reverseLayout: index 0 renders bottom-most; queued commands are the newest user input.
-      questions.asReversed().forEach { prompt -> add(ChatTimelineItem.QuestionPrompt(prompt)) }
+      activeQuestions.asReversed().forEach { prompt -> add(ChatTimelineItem.QuestionPrompt(prompt)) }
       outboxItems.asReversed().forEach { item -> add(ChatTimelineItem.OutboxCommand(item)) }
       recoveryOutboxItems.asReversed().forEach { item -> add(ChatTimelineItem.RecoveryOutboxCommand(item)) }
       if (recoveryOutboxItems.isNotEmpty()) add(ChatTimelineItem.OutboxRecoveryHeader(recoveryOutboxItems.size))
@@ -126,7 +130,7 @@ internal fun buildChatTimeline(
         )
       }
       if (pendingRunCount > 0) add(ChatTimelineItem.Thinking)
-      addAll(buildTranscriptTimeline(messages).asReversed())
+      addAll(buildTranscriptTimeline(messages, completedQuestions).asReversed())
     }
   if (items.isEmpty()) {
     return ChatTimeline(
@@ -180,8 +184,13 @@ internal fun ChatMessage.isForwardedBoundary(): Boolean =
     provenance?.kind == "inter_session" && provenance.sourceTool == "sessions_send"
 
 /** Build transcript rows in source order so hidden turn boundaries fence tool groups. */
-private fun buildTranscriptTimeline(messages: List<ChatMessage>): List<ChatTimelineItem> {
+private fun buildTranscriptTimeline(
+  messages: List<ChatMessage>,
+  questions: List<ChatQuestionPrompt>,
+): List<ChatTimelineItem> {
   val toolsByMessage = projectTranscriptToolActivity(messages)
+  val historicalQuestions = questions.sortedBy { it.record.createdAtMs }
+  var questionIndex = 0
   return buildList {
     val completedTools = mutableListOf<ChatToolActivity>()
     var completedToolsKey: String? = null
@@ -197,6 +206,15 @@ private fun buildTranscriptTimeline(messages: List<ChatMessage>): List<ChatTimel
     }
 
     messages.forEachIndexed { index, message ->
+      // Insert completed questions before projection loses source timestamps.
+      // A question also separates tool groups on opposite sides of its creation.
+      val timestamp = message.timestampMs
+      if (timestamp != null) {
+        while (questionIndex < historicalQuestions.size && historicalQuestions[questionIndex].record.createdAtMs <= timestamp) {
+          flushCompletedTools()
+          add(ChatTimelineItem.QuestionPrompt(historicalQuestions[questionIndex++]))
+        }
+      }
       if (message.turnBoundary || message.isForwardedBoundary()) {
         flushCompletedTools()
         pendingTurnBoundary = true
@@ -229,6 +247,8 @@ private fun buildTranscriptTimeline(messages: List<ChatMessage>): List<ChatTimel
       }
     }
     flushCompletedTools()
+    // Retain cards even when their corresponding messages are not loaded.
+    historicalQuestions.drop(questionIndex).forEach { add(ChatTimelineItem.QuestionPrompt(it)) }
   }
 }
 
