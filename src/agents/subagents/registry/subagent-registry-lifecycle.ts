@@ -1,10 +1,14 @@
 import pLimit from "p-limit";
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
-import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  getCanonicalGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   runWithGatewayDetachedWorkContinuation,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import {
   ensureCompletionState,
@@ -89,10 +93,7 @@ export class SubagentLifecycleController {
 
   async acquireTerminalCompletionLock(runId: string): Promise<() => void> {
     const previous = this.terminalCompletionLocks.get(runId) ?? Promise.resolve();
-    let releaseLock = () => {};
-    const current = new Promise<void>((resolve) => {
-      releaseLock = resolve;
-    });
+    const { promise: current, resolve: releaseLock } = createDeferredCore();
     this.terminalCompletionLocks.set(runId, current);
     await previous;
     return () => {
@@ -212,7 +213,7 @@ export class SubagentLifecycleController {
       const resolve = getGatewayContextResolver(entry);
       // Native caller wrappers share the instance resolver. Standalone bindings
       // retain their captured resolver; wholly unbound calls belong to this controller.
-      const owner = resolve?.()?.resolveGatewayContext ?? resolve ?? this;
+      const owner = (resolve && getCanonicalGatewayContextResolver(resolve)) ?? resolve ?? this;
       // Retired callbacks keep their queue and roots, but cannot consume the
       // replacement Gateway's capacity while their old async work unwinds.
       let limit = this.restoredRequesterSettleWakeLimits.get(owner);

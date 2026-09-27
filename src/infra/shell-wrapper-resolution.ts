@@ -157,7 +157,7 @@ function resolveShellWrapperCandidate<TState>(params: {
 function resolveShellWrapperSpecAndArgvInternal(
   argv: string[],
   depth: number,
-): { argv: string[]; wrapper: ShellWrapperSpec; payload: string } | null {
+): { argv: string[]; wrapper: ShellWrapperSpec; payload: string; baseExecutable: string } | null {
   const candidate = resolveShellWrapperCandidate({ argv, depth, state: null });
   if (!candidate) {
     return null;
@@ -174,7 +174,7 @@ function resolveShellWrapperSpecAndArgvInternal(
     return null;
   }
 
-  return { argv: candidate.argv, wrapper, payload };
+  return { argv: candidate.argv, wrapper, payload, baseExecutable };
 }
 
 /** Return true when an executable token names a supported shell wrapper. */
@@ -205,12 +205,7 @@ function normalizeRawCommand(rawCommand?: string | null): string | null {
 }
 
 function findShellWrapperSpec(baseExecutable: string): ShellWrapperSpec | null {
-  for (const spec of SHELL_WRAPPER_SPECS) {
-    if (spec.names.has(baseExecutable)) {
-      return spec;
-    }
-  }
-  return null;
+  return SHELL_WRAPPER_SPECS.find((spec) => spec.names.has(baseExecutable)) ?? null;
 }
 
 type ShellMultiplexerUnwrapResult =
@@ -255,11 +250,12 @@ function extractPosixShellInlineCommand(argv: string[], baseExecutable: string):
     if (attached !== null) {
       return attached.trim() || null;
     }
-    return extractInlineCommandByFlags(argv, NUSHELL_INLINE_COMMAND_FLAGS, {
+    return resolveInlineCommandMatch(argv, NUSHELL_INLINE_COMMAND_FLAGS, {
       allowCombinedC: true,
-    });
+    }).command;
   }
-  return extractInlineCommandByFlags(argv, POSIX_INLINE_COMMAND_FLAGS, { allowCombinedC: true });
+  return resolveInlineCommandMatch(argv, POSIX_INLINE_COMMAND_FLAGS, { allowCombinedC: true })
+    .command;
 }
 
 function hasNushellStartupOptionBeforeInlineCommand(argv: string[]): boolean {
@@ -319,11 +315,10 @@ function extractCmdInlineCommand(argv: string[]): string | null {
   if (idx === -1) {
     return null;
   }
-  const tail = argv.slice(idx + 1);
-  if (tail.length === 0) {
-    return null;
-  }
-  const cmd = tail.join(" ").trim();
+  const cmd = argv
+    .slice(idx + 1)
+    .join(" ")
+    .trim();
   return cmd.length > 0 ? cmd : null;
 }
 
@@ -362,14 +357,6 @@ function hasCmdUnreviewedStartupBeforeInlineCommand(argv: string[]): boolean {
     return true;
   }
   return true;
-}
-
-function extractInlineCommandByFlags(
-  argv: string[],
-  flags: ReadonlySet<string>,
-  options: { allowCombinedC?: boolean; valueOptions?: ReadonlySet<string> } = {},
-): string | null {
-  return resolveInlineCommandMatch(argv, flags, options).command;
 }
 
 function extractShellWrapperPayload(
@@ -509,20 +496,11 @@ function extractShellWrapperCommandInternal(
   rawCommand: string | null,
   depth: number,
 ): ShellWrapperCommand {
-  const candidate = resolveShellWrapperCandidate({ argv, depth, state: null });
+  const candidate = resolveShellWrapperSpecAndArgvInternal(argv, depth);
   if (!candidate) {
     return { isWrapper: false, command: null };
   }
-
-  const baseExecutable = normalizeExecutableToken(candidate.token0);
-  const wrapper = findShellWrapperSpec(baseExecutable);
-  if (!wrapper) {
-    return { isWrapper: false, command: null };
-  }
-  const payload = extractShellWrapperPayload(candidate.argv, wrapper, baseExecutable);
-  if (!payload) {
-    return { isWrapper: false, command: null };
-  }
+  const { baseExecutable, wrapper, payload } = candidate;
   if (
     wrapper.kind === "posix" &&
     baseExecutable === "fish" &&

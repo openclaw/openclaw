@@ -63,22 +63,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/tasks/task-registry.store.sqlite.ts",
-    { priority: 5, evidence: "Mixed native mutations and worker-backed read facade" },
-  ],
-  [
-    "src/tasks/task-registry.store.kernel.ts",
-    { priority: 5, evidence: "Kernel shared by native and worker callers" },
-  ],
-  [
-    "src/tasks/task-flow-registry.store.sqlite.ts",
-    { priority: 5, evidence: "Mixed native mutations and worker-backed read facade" },
-  ],
-  [
-    "src/tasks/task-flow-registry.store.kernel.ts",
-    { priority: 5, evidence: "Kernel shared by native and worker callers" },
-  ],
-  [
     "src/agents/plugin-model-catalog.ts",
     {
       priority: 6,

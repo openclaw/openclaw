@@ -91,7 +91,6 @@ import type * as curator from "../skills/workshop/curator.kernel.js";
 import type { listStoredSkillProposalEventsInDatabase } from "../skills/workshop/store-sqlite-event.js";
 import type { SkillWorkshopExecutionOperations } from "../skills/workshop/store.worker-contract.js";
 import type { SkillProposalEvent, SkillProposalRecord } from "../skills/workshop/types.js";
-import type { TaskRegistryWorkerOperations } from "../tasks/task-registry.worker-contract.js";
 import type {
   TranscriptReadOperations,
   TranscriptWriteOperations,
@@ -146,7 +145,6 @@ export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
   TranscriptReadOperations &
   TranscriptWriteOperations &
   NodeWorkerJournalWorkerOperations &
-  TaskRegistryWorkerOperations &
   SkillUploadWorkerOperations &
   OpenClawStateLeaseLifecycleOperations &
   ManagedImageRecordWorkerOperations & {

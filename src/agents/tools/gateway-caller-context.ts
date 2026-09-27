@@ -13,7 +13,10 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import {
   getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
@@ -110,13 +113,15 @@ function bindGatewayToolContextResolver(
   if (!admittedContext) {
     return () => undefined;
   }
-  return () => {
+  const resolveAdmittedContext = () => {
     try {
       return resolveGatewayContext() === admittedContext ? admittedContext : undefined;
     } catch {
       return undefined;
     }
   };
+  bindGatewayContextResolver(resolveAdmittedContext, admittedContext.resolveGatewayContext);
+  return resolveAdmittedContext;
 }
 
 type AdmittedGatewayToolCallerParams = {

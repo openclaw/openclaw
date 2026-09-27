@@ -5,6 +5,8 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { formatAgentDatabaseOwnershipRepairHint } from "../infra/state-migrations.agent-owner-guidance.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -31,6 +33,9 @@ export type AgentDatabaseAdmissionRefusal = {
 
 type AdmissionOptions = { env?: NodeJS.ProcessEnv };
 
+// Refusals are public protocol objects. Keep inspection causes private to the admission owner.
+const refusalCauses = new WeakMap<AgentDatabaseAdmissionRefusal, unknown>();
+
 const refusalsByState = new Map<
   string,
   {
@@ -51,8 +56,9 @@ export function createAgentDatabaseInspectionRefusal(params: {
   paths: string[];
   reason: string;
   pending?: boolean;
+  cause?: unknown;
 }): AgentDatabaseAdmissionRefusal {
-  return {
+  const refusal: AgentDatabaseAdmissionRefusal = {
     agentId: params.agentId,
     paths: params.paths,
     code: params.pending ? "agent-database-inspection-pending" : "agent-database-inspection-failed",
@@ -61,6 +67,8 @@ export function createAgentDatabaseInspectionRefusal(params: {
       ? 'Sessions remain unavailable until background inspection and preparation finish. If they cannot complete, stop the Gateway, run "openclaw doctor --fix", and restart.'
       : 'Sessions remain unavailable. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.',
   };
+  refusalCauses.set(refusal, params.cause);
+  return refusal;
 }
 
 function stateKey(options: AdmissionOptions): string {
@@ -194,17 +202,24 @@ export function recordAgentDatabaseAdmissions(
     if (previous === refusal) {
       continue;
     }
-    byAgent.set(
-      refusal.agentId,
-      previous
-        ? {
-            ...previous,
-            paths: [...new Set([...previous.paths, ...refusal.paths])],
-            reason: `${previous.reason}\n${refusal.reason}`,
-            repairHint: `${previous.repairHint}\n${refusal.repairHint}`,
-          }
-        : refusal,
-    );
+    const merged = previous
+      ? {
+          ...previous,
+          paths: [...new Set([...previous.paths, ...refusal.paths])],
+          reason: `${previous.reason}\n${refusal.reason}`,
+          repairHint: `${previous.repairHint}\n${refusal.repairHint}`,
+        }
+      : refusal;
+    if (previous) {
+      refusalCauses.set(
+        merged,
+        new AggregateError([
+          new AgentDatabaseAdmissionError(previous),
+          new AgentDatabaseAdmissionError(refusal),
+        ]),
+      );
+    }
+    byAgent.set(refusal.agentId, merged);
   }
   refusalsByState.set(key, { source, refusals: byAgent });
 }
@@ -307,7 +322,7 @@ export async function withAgentDatabasePreparationGuard<T>(
 
 export function failPendingAgentDatabase(
   refusal: AgentDatabaseAdmissionRefusal,
-  reason: string,
+  cause: unknown,
   options: AdmissionOptions,
 ): void {
   const key = stateKey(options);
@@ -316,7 +331,10 @@ export function failPendingAgentDatabase(
     return;
   }
   const refusals = new Map(current.refusals);
-  refusals.set(refusal.agentId, createAgentDatabaseInspectionRefusal({ ...refusal, reason }));
+  refusals.set(
+    refusal.agentId,
+    createAgentDatabaseInspectionRefusal({ ...refusal, reason: formatErrorMessage(cause), cause }),
+  );
   current.refusals = refusals;
 }
 
@@ -328,9 +346,21 @@ export function listAgentDatabaseAdmissionRefusals(
 
 export class AgentDatabaseAdmissionError extends Error {
   constructor(readonly refusal: AgentDatabaseAdmissionRefusal) {
-    super(`${refusal.reason}\n${refusal.repairHint}`);
+    super(
+      `Agent ${refusal.agentId} (${refusal.paths.join(", ")}): ${refusal.reason}\n${refusal.repairHint}`,
+      { cause: refusalCauses.get(refusal) },
+    );
     this.name = "AgentDatabaseAdmissionError";
   }
+}
+
+/** A proven owner mismatch needs operator action; unavailable inspections prove no mismatch. */
+export function isAgentDatabaseOwnershipMismatchError(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some(
+    (candidate) =>
+      candidate instanceof AgentDatabaseAdmissionError &&
+      candidate.refusal.code === "agent-database-ownership-mismatch",
+  );
 }
 
 export function assertAgentDatabaseAdmitted(agentId: string, options: AdmissionOptions = {}): void {

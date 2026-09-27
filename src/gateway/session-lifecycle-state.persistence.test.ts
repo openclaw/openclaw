@@ -355,7 +355,6 @@ it.each(["success", "failed-write"])(
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
         chatAbortControllers: context.chatAbortControllers,
         restartRecoveryCandidates,
-        terminalSessions: { closeTaskSessions: vi.fn() },
         refreshConnectedUserProfiles: vi.fn(),
       });
       const persistLifecycleEvent = lifecycleState.persistGatewaySessionLifecycleEvent;
@@ -492,7 +491,6 @@ it.each(["success", "failed-write"])(
       subscriptions?.heartbeatUnsub();
       subscriptions?.transcriptUnsub();
       subscriptions?.lifecycleUnsub();
-      await subscriptions?.taskUnsub();
       getSessionRowProjection(context)?.dispose();
       registration.cleanup();
       persistenceSpy?.mockRestore();
@@ -592,7 +590,6 @@ it.for([
           sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
           chatAbortControllers: new Map(),
           restartRecoveryCandidates: new Map(),
-          terminalSessions: { closeTaskSessions: vi.fn() },
           refreshConnectedUserProfiles: vi.fn(),
         });
 
@@ -648,7 +645,6 @@ it.for([
         subscriptions?.heartbeatUnsub();
         subscriptions?.transcriptUnsub();
         subscriptions?.lifecycleUnsub();
-        await subscriptions?.taskUnsub();
         releaseAgentRunContext(runId, claimId);
         routing.loadSessionEntry.mockReset();
         closeOpenClawAgentDatabasesForTest();

@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawChatUI
 import OpenClawKit
 import OSLog
 

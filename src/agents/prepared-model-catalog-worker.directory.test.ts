@@ -26,23 +26,28 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 
 const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
+function createFixture() {
+  const fixture = createCatalogFixture(makeTempDir, 0);
+  for (const name of [
+    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_WORKER_CATALOG_MARKER",
+    EXTERNAL_AUTH_PATH_ENV,
+    REF_ONLY_API_ENV,
+    REF_ONLY_TOKEN_ENV,
+  ] as const) {
+    vi.stubEnv(name, fixture.env[name]);
+  }
+  return fixture;
+}
+
 describe("catalog request existing directory ownership", () => {
   beforeEach(() => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-directory-request-empty-codex-"));
   });
 
   it("serves repeated catalog requests from prepared provenance without copying shared state", async () => {
-    const fixture = createCatalogFixture(makeTempDir, 0);
-    for (const name of [
-      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_WORKER_CATALOG_MARKER",
-      EXTERNAL_AUTH_PATH_ENV,
-      REF_ONLY_API_ENV,
-      REF_ONLY_TOKEN_ENV,
-    ] as const) {
-      vi.stubEnv(name, fixture.env[name]);
-    }
+    const fixture = createFixture();
     const prepared = await prepareWorkspaceBuildGroup(
       [{ agentId: "main", agentDir: fixture.agentDir, config: fixture.config, env: fixture.env }],
       "static",
@@ -91,17 +96,7 @@ describe("catalog request existing directory ownership", () => {
     { label: "foreign owner", existing: ["foreign"], conflict: true },
     { label: "ambiguous owners", existing: ["main", "foreign"], conflict: true },
   ])("preserves $label across the request", async ({ existing, conflict }) => {
-    const fixture = createCatalogFixture(makeTempDir, 0);
-    for (const name of [
-      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_WORKER_CATALOG_MARKER",
-      EXTERNAL_AUTH_PATH_ENV,
-      REF_ONLY_API_ENV,
-      REF_ONLY_TOKEN_ENV,
-    ] as const) {
-      vi.stubEnv(name, fixture.env[name]);
-    }
+    const fixture = createFixture();
     const config = {
       ...fixture.config,
       agents: {

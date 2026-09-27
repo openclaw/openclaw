@@ -10,7 +10,6 @@ import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-i
 import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { setMinimalAcpCommandRegistryForTests } from "./commands-acp.channels.test-support.js";
 import {
@@ -156,21 +155,6 @@ const { buildCommandTestParams } = await import("./commands-spawn.test-harness.j
 const { AcpSessionManager, testing: acpManagerTesting } =
   await import("../../acp/control-plane/manager.js");
 const { resolveEffectiveResetTargetSessionKey } = await import("./acp-reset-target.js");
-const { createTaskRecord } = await import("../../tasks/task-registry.js");
-const { resetTaskRegistryForTests } = await import("../../tasks/task-runtime.test-helpers.js");
-const { configureTaskRegistryRuntime } = await import("../../tasks/task-registry.store.js");
-const { failTaskRunByRunIdCore } = await import("../../tasks/task-executor.js");
-
-function configureInMemoryTaskRegistryStoreForTests(): void {
-  configureTaskRegistryRuntime({
-    store: {
-      ...createInMemoryTaskRegistryStore(),
-      upsertTaskWithDeliveryState: () => {},
-      upsertDeliveryState: () => {},
-      close: () => {},
-    },
-  });
-}
 
 const baseCfg = {
   acp: {
@@ -536,8 +520,6 @@ describe("/acp command", () => {
   beforeEach(() => {
     setMinimalAcpCommandRegistryForTests();
     acpManagerTesting.resetAcpSessionManagerForTests();
-    resetTaskRegistryForTests({ persist: false });
-    configureInMemoryTaskRegistryStoreForTests();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.callGatewayMock.mockReset().mockResolvedValue({ ok: true });
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
@@ -768,9 +750,7 @@ describe("/acp command", () => {
     });
   });
 
-  afterEach(() => {
-    resetTaskRegistryForTests({ persist: false });
-  });
+  afterEach(() => {});
 
   it("returns null when the message is not /acp", async () => {
     const result = await runDiscordAcpCommand("/status");
@@ -1704,24 +1684,12 @@ describe("/acp command", () => {
         lastUpdatedAt: Date.now(),
       },
     });
-    createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: defaultAcpSessionKey,
-      runId: "acp-run-1",
-      task: "Inspect ACP backlog",
-      status: "running",
-      progressSummary: "Fetching the latest runtime state",
-    });
     const result = await runThreadAcpCommand("/acp status", baseCfg);
 
     expect(result?.reply?.text).toContain("ACP status:");
     expect(result?.reply?.text).toContain(`session: ${defaultAcpSessionKey}`);
     expect(result?.reply?.text).toContain("agent session id: codex-sid-1");
     expect(result?.reply?.text).toContain("acpx session id: acpx-sid-1");
-    expect(result?.reply?.text).toContain("taskStatus: running");
-    expect(result?.reply?.text).toContain("taskProgress: Fetching the latest runtime state");
     expect(result?.reply?.text).toContain("capabilities:");
     expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
   });
@@ -1734,16 +1702,6 @@ describe("/acp command", () => {
         ...createAcpSessionEntry().acp,
         lastActivityAt: 8_700_000_000_000_000,
       },
-    });
-    createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: defaultAcpSessionKey,
-      runId: "acp-run-1",
-      task: "Inspect ACP backlog",
-      status: "running",
-      lastEventAt: 8_700_000_000_000_000,
     });
 
     const result = await runThreadAcpCommand("/acp status", baseCfg);
@@ -1809,32 +1767,10 @@ describe("/acp command", () => {
         ].join("\n"),
       },
     });
-    createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: defaultAcpSessionKey,
-      runId: "acp-run-1",
-      task: "Inspect ACP backlog",
-      status: "running",
-    });
-    failTaskRunByRunIdCore({
-      runId: "acp-run-1",
-      endedAt: Date.now(),
-      error: [
-        "OpenClaw runtime context (internal):",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        "[Internal task completion event]",
-        "source: subagent",
-      ].join("\n"),
-      terminalSummary: "Needs approval to continue.",
-    });
 
     const result = await runThreadAcpCommand("/acp status", baseCfg);
 
     expect(result?.reply?.text).toContain("ACP status:");
-    expect(result?.reply?.text).toContain("taskSummary: Needs approval to continue.");
     expect(result?.reply?.text).not.toContain("OpenClaw runtime context (internal):");
     expect(result?.reply?.text).not.toContain("Internal task completion event");
   });

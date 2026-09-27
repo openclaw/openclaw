@@ -18,13 +18,14 @@ import { CronService, type CronEvent } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { loadedCronStoreFromRows, loadCronRows } from "../store/row-codec.js";
+import { loadCronRows, loadedCronStoreFromRows } from "../store/row-codec.js";
 import {
   claimCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 
@@ -224,7 +225,12 @@ describe("cron run receipt settlement", () => {
         startedAtMs,
       });
       const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabase({ database: db, prepared, resolveAgentId: () => "alpha" }),
+        claimCronRunReceiptInDatabase({
+          database: db,
+          receiptSchema: prepareCronRunReceiptWriteSchema(db),
+          prepared,
+          resolveAgentId: () => "alpha",
+        }),
       );
       job.state.runningReceiptId = receipt.receiptId;
       await saveCronStore(storePath, { version: 1, jobs: [job] });
@@ -304,7 +310,12 @@ describe("cron run receipt settlement", () => {
       startedAtMs,
     });
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({ database: db, prepared, resolveAgentId: () => "alpha" }),
+      claimCronRunReceiptInDatabase({
+        database: db,
+        receiptSchema: prepareCronRunReceiptWriteSchema(db),
+        prepared,
+        resolveAgentId: () => "alpha",
+      }),
     );
     // Process exit drops the local liveness claim but leaves the durable receipt.
     releaseLocalCronRunReceiptOwnership(receipt);

@@ -10,10 +10,60 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatModelPickerTest {
+  @Test
+  fun searchRanksExactNamesThenLiteralTermsThenTyposDeterministically() {
+    val catalog =
+      listOf(
+        model(id = "atlas-plus", provider = "synthetic").copy(name = "Atlas Chat Plus"),
+        model(id = "atals", provider = "synthetic").copy(name = "Atals Chat"),
+        model(id = "atlas", provider = "synthetic").copy(name = "Atlas Chat"),
+        model(id = "atlas", provider = "other").copy(name = "Atlas Chat"),
+      )
+    val cases =
+      mapOf(
+        "Atlas Chat" to listOf("other/atlas", "synthetic/atlas", "synthetic/atlas-plus", "synthetic/atals"),
+        "synthetic/atlas" to listOf("synthetic/atlas", "synthetic/atlas-plus", "synthetic/atals"),
+        "atals" to listOf("synthetic/atals", "other/atlas", "synthetic/atlas", "synthetic/atlas-plus"),
+        "  SYNTHETIC   chat  " to listOf("synthetic/atals", "synthetic/atlas", "synthetic/atlas-plus"),
+      )
+    for ((query, expected) in cases) {
+      assertEquals(query, expected, ChatModelSearch(catalog).search(query).map { it.providerQualifiedRef() })
+      assertEquals(query, expected, ChatModelSearch(catalog.reversed()).search(query).map { it.providerQualifiedRef() })
+    }
+    assertSame(catalog, ChatModelSearch(catalog).search("  "))
+  }
+
+  @Test
+  fun searchToleratesOneWordEditButRequiresEveryTermAndLiteralVersions() {
+    val atlas = model(id = "atlas-chat-4.5", provider = "synthetic").copy(name = "Atlas Chat")
+    val search = ChatModelSearch(listOf(atlas))
+    for (query in listOf("atals", "atls", "atllas", "atlos", "synthtic atlas", "chat atlas", "atlas chta", "synthetic atlas 4.5")) {
+      assertEquals(query, listOf(atlas), search.search(query))
+    }
+    for (query in listOf("unrelated", "atlas unrelated", "atlas 4.6", "atlas 4.55", "atlas cht", "xxlas", "///")) {
+      assertTrue(query, search.search(query).isEmpty())
+    }
+    val local = atlas.copy(provider = "ollama")
+    assertEquals(listOf(local), ChatModelSearch(listOf(local)).search("local atlas"))
+  }
+
+  @Test
+  fun searchProjectsExistingChoicesWithoutChangingAvailability() {
+    val ready = model(id = "atlas-ready", provider = "synthetic")
+    val unavailable = model(id = "atlas-cooling", provider = "synthetic", available = false, reason = GatewayModelUnavailableReason.Cooldown)
+    val restricted = model(id = "atlas-restricted", provider = "synthetic").copy(manualSelectionAllowed = false)
+    val choices = chatModelPickerChoices(listOf(ready, unavailable, restricted), emptyList(), emptyList())
+    val matches = ChatModelSearch(choices).search("atals")
+    assertEquals(listOf(unavailable, ready), matches)
+    assertSame(unavailable, matches.first())
+    assertSame(ready, matches.last())
+  }
+
   @Test
   fun fastModeUsesPublishedModelCapabilityInsteadOfProviderName() {
     val catalog =

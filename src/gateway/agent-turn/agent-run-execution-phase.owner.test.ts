@@ -5,17 +5,13 @@ import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import * as taskRuntime from "../../tasks/runtime-internal.js";
-import { readTaskRegistryRevision } from "../../tasks/task-registry-state.js";
-import {
-  createTaskFixture,
-  withTaskRegistryTempDir,
-} from "../../tasks/task-registry.test-support.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import * as sessionChange from "../server-methods/session-change-event.js";
-import { identifiedClient, runTaskHandler } from "../server-methods/tasks.test-helpers.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
@@ -57,7 +53,6 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
           controller,
           registered: false,
         },
-        dispatchTaskTrackingMode: "none",
         effectiveAllowModelOverride: false,
         lifecycleStorePath: "",
         operationalRunInstance: {},
@@ -128,6 +123,54 @@ function createVisibleExecution() {
   return execution;
 }
 
+function bindFollowupCompletion(execution: ReturnType<typeof createExecution>) {
+  const { params } = execution;
+  const sessionKey = "agent:main:followup-owner";
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const entry: ChatAbortControllerEntry = {
+    controller: params.prepared.activeRunAbort.controller,
+    sessionId: "followup-session",
+    sessionKey,
+    operationalRunInstance: params.prepared.operationalRunInstance,
+    lifecycleGeneration,
+    startedAtMs: 1,
+    expiresAtMs: Number.MAX_SAFE_INTEGER,
+  };
+  params.resolvedSessionKey = sessionKey;
+  params.resolvedSessionId = entry.sessionId;
+  params.lifecycleGeneration = lifecycleGeneration;
+  params.context.chatAbortControllers = new Map([[params.runId, entry]]);
+  params.prepared.activeRunAbort = {
+    ...params.prepared.activeRunAbort,
+    registered: true,
+    entry,
+  };
+  params.prepared.activeGatewayWorkAdmission.isActive = () => true;
+  execution.abortCleanup.mockImplementation(() => {
+    if (params.context.chatAbortControllers.get(params.runId) === entry) {
+      params.context.chatAbortControllers.delete(params.runId);
+    }
+  });
+  const custody = new AbortController();
+  const owner = SessionFollowupCompletion.bind({
+    runId: params.runId,
+    requesterSessionKey: "agent:main:requester",
+    requesterSessionId: "requester-session",
+    requesterAgentId: "main",
+    targetAgentId: "main",
+    targetSessionKey: sessionKey,
+    custody: {
+      signal: custody.signal,
+      assertCurrent: () => custody.signal.throwIfAborted(),
+      run: (work) => work(),
+      release: () => custody.abort(),
+    },
+  });
+  owner.markAccepted(params.runId);
+  params.prepared.followupCompletion = owner;
+  return owner;
+}
+
 describe("startAgentRunExecution Gateway ownership", () => {
   beforeEach(() => {
     dispatchAgentRunFromGateway.mockReset();
@@ -173,55 +216,6 @@ describe("startAgentRunExecution Gateway ownership", () => {
       }
     },
   );
-
-  it("serves a held Tasks page despite ordinary agent progress before the final response", async () => {
-    await withTaskRegistryTempDir(async () => {
-      const task = createTaskFixture("cli", {
-        requesterSessionKey: "agent:main:task-access-liveness",
-        task: "Stable task",
-        notifyPolicy: "silent",
-      });
-      dispatchAgentRunFromGateway.mockImplementation(async (dispatch) => {
-        dispatch.ingressOpts.onExecutionStarted();
-        dispatch.cleanupAbortController();
-      });
-      const select = taskRuntime.listTaskRecordPage;
-      const selection = vi
-        .spyOn(taskRuntime, "listTaskRecordPage")
-        .mockImplementation(async (params) => {
-          const page = await select(params);
-          if (page.ok) {
-            const revision = readTaskRegistryRevision();
-            // Every old-code retry sees only liveness, never a task creation or row update.
-            await startAgentRunExecution(createVisibleExecution().params);
-            expect(readTaskRegistryRevision()).toBe(revision);
-          }
-          return page;
-        });
-      try {
-        const result = await runTaskHandler(
-          "tasks.list",
-          {},
-          {},
-          identifiedClient(["operator.admin"]),
-        );
-        expect({
-          selections: selection.mock.calls.length,
-          ok: result.calls[0]?.[0],
-          error: result.calls[0]?.[2],
-        }).toEqual({
-          selections: 1,
-          ok: true,
-          error: undefined,
-        });
-        expect(result.payload?.tasks).toMatchObject([{ id: task.taskId }]);
-        expect(selection).toHaveBeenCalledOnce();
-        expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
-      } finally {
-        selection.mockRestore();
-      }
-    });
-  });
 
   it.each<{
     name: string;
@@ -385,31 +379,123 @@ describe("startAgentRunExecution Gateway ownership", () => {
     expect(execution.callerRelease).toHaveBeenCalledOnce();
   });
 
-  it("releases the admitted runtime once when aborted before dispatch", async () => {
-    const execution = createExecution({ aborted: true });
-
-    await startAgentRunExecution(execution.params);
-    expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
-    expect(execution.abortCleanup).toHaveBeenCalledOnce();
-    expect(execution.gatewayRelease).toHaveBeenCalledOnce();
-    expect(execution.runtimeRelease).toHaveBeenCalledOnce();
-    expect(execution.callerRelease).toHaveBeenCalledOnce();
-  });
-
-  it("joins asynchronous runtime disposal before execution finishes", async () => {
-    const execution = createExecution({ aborted: true });
-    const { promise: disposal, resolve: finishDisposal } = createDeferred();
-    execution.runtimeRelease.mockImplementation(() => disposal);
-    const finished = vi.fn();
-    const completion = startAgentRunExecution(execution.params).then(finished);
-    await vi.waitFor(() => expect(execution.runtimeRelease).toHaveBeenCalledOnce());
-    expect(execution.callerRelease).not.toHaveBeenCalled();
-    expect(finished).not.toHaveBeenCalled();
-    finishDisposal();
-    await completion;
-    expect(finished).toHaveBeenCalledOnce();
-    expect(execution.callerRelease).toHaveBeenCalledOnce();
-  });
+  it.each([
+    { ending: "aborted", registration: "current" },
+    { ending: "failed", registration: "current" },
+    { ending: "aborted", registration: "foreign" },
+    { ending: "aborted", registration: "absent" },
+    { ending: "aborted", registration: "replacement" },
+    { ending: "aborted", registration: "controller" },
+    { ending: "aborted", registration: "session" },
+    { ending: "aborted", registration: "instance" },
+    { ending: "aborted", registration: "lifecycle" },
+  ] as const)(
+    "settles an undispatched $ending followup only after cleanup (registration: $registration)",
+    async ({ ending, registration }) => {
+      const execution = createExecution({
+        aborted: ending === "aborted",
+        ...(ending === "failed"
+          ? {
+              assertContextCurrent: () => {
+                throw new Error("Gateway owner retired");
+              },
+            }
+          : {}),
+      });
+      const owner = bindFollowupCompletion(execution);
+      const entry = execution.params.prepared.activeRunAbort.entry!;
+      const successor =
+        registration === "foreign" || registration === "replacement"
+          ? {
+              ...entry,
+              controller: new AbortController(),
+              sessionKey: registration === "foreign" ? "agent:main:unrelated" : entry.sessionKey,
+              operationalRunInstance: { runId: execution.params.runId, instanceId: "successor" },
+            }
+          : undefined;
+      if (successor) {
+        execution.params.context.chatAbortControllers.set(execution.params.runId, successor);
+      }
+      const lostRegistration = !["current", "foreign", "absent"].includes(registration);
+      execution.params.prepared.activeGatewayWorkAdmission.run = async (run) => {
+        if (registration === "absent") {
+          execution.params.context.chatAbortControllers.delete(execution.params.runId);
+        } else if (registration === "controller") {
+          entry.controller = new AbortController();
+        } else if (registration === "session") {
+          entry.sessionKey = "agent:main:unrelated";
+        } else if (registration === "instance") {
+          entry.operationalRunInstance = { runId: execution.params.runId, instanceId: "successor" };
+        } else if (registration === "lifecycle") {
+          entry.lifecycleGeneration = "successor-lifecycle";
+        }
+        return await run();
+      };
+      const recoveryEntered = createDeferred();
+      const releaseRecovery = createDeferred();
+      const disposalEntered = createDeferred();
+      const finishDisposal = createDeferred();
+      execution.params.releaseCronContinuationClaimWithRecovery = async () => {
+        recoveryEntered.resolve();
+        await releaseRecovery.promise;
+        return true;
+      };
+      execution.runtimeRelease.mockImplementation(async () => {
+        disposalEntered.resolve();
+        await finishDisposal.promise;
+      });
+      const finishExecution = vi.spyOn(owner, "finishExecution");
+      const replyObserved = vi.fn();
+      const reply = owner.take().then((result) => {
+        replyObserved(result);
+        return result;
+      });
+      void reply.catch(() => {});
+      const finished = vi.fn();
+      const completion = startAgentRunExecution(execution.params).then(finished);
+      try {
+        await Promise.race([recoveryEntered.promise, completion]);
+        expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
+        expect(execution.params.io.emitFinal).toHaveBeenCalledOnce();
+        expect(finishExecution).not.toHaveBeenCalled();
+        expect(replyObserved).not.toHaveBeenCalled();
+        expect(execution.abortCleanup).not.toHaveBeenCalled();
+        releaseRecovery.resolve();
+        await Promise.race([disposalEntered.promise, completion]);
+        expect(execution.abortCleanup).toHaveBeenCalledOnce();
+        expect(execution.gatewayRelease).toHaveBeenCalledOnce();
+        expect(execution.runtimeRelease).toHaveBeenCalledOnce();
+        expect(execution.callerRelease).not.toHaveBeenCalled();
+        expect(finishExecution).not.toHaveBeenCalled();
+        expect(replyObserved).not.toHaveBeenCalled();
+        expect(finished).not.toHaveBeenCalled();
+        finishDisposal.resolve();
+        await completion;
+        expect(finished).toHaveBeenCalledOnce();
+        expect(execution.callerRelease).toHaveBeenCalledOnce();
+        expect(finishExecution).toHaveBeenCalledExactlyOnceWith(execution.params.runId);
+        if (successor) {
+          expect(execution.params.context.chatAbortControllers.get(execution.params.runId)).toBe(
+            successor,
+          );
+        }
+        if (lostRegistration) {
+          await expect(reply).rejects.toThrow("Follow-up admission was replaced before cleanup.");
+        } else {
+          await expect(reply).resolves.toMatchObject(
+            ending === "aborted"
+              ? { status: "error", stopReason: "rpc" }
+              : { status: "error", error: "Gateway owner retired" },
+          );
+        }
+      } finally {
+        releaseRecovery.resolve();
+        finishDisposal.resolve();
+        await completion.catch(() => {});
+        owner.close();
+      }
+    },
+  );
 
   it.each([false, true])(
     "releases the admitted runtime and preserves private failure replay before dispatch (Incognito: %s)",

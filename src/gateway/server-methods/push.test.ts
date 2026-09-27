@@ -648,7 +648,6 @@ describe("bound Web Push handlers", () => {
           agentFinished: false,
           agentQuestion: false,
           scheduledTaskFailed: false,
-          backgroundTaskFailed: false,
           ...(humanMentioned === undefined ? {} : { humanMentioned }),
         },
         detailLevel: "private",
@@ -717,7 +716,6 @@ describe("bound Web Push handlers", () => {
                 agentFinished: false,
                 agentQuestion: false,
                 scheduledTaskFailed: false,
-                backgroundTaskFailed: false,
               },
               detailLevel: "private",
               quietHours: {

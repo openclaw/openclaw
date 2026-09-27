@@ -1,6 +1,5 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.chat.BackgroundTask
 import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
@@ -691,8 +690,6 @@ class MainViewModel private constructor(
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chat.streamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.pendingToolCalls }
   val chatToolActivities: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.toolActivities }
-  val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> =
-    runtimeState(initial = emptyMap()) { it.chat.subagentActivities }
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chat.questions }
   val chatProgressCard: StateFlow<ChatProgressCard?> = runtimeState(initial = null) { it.chat.progressCard }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chat.sessions }
@@ -1432,6 +1429,11 @@ class MainViewModel private constructor(
     }
   }
 
+  suspend fun renameGateway(
+    stableId: String,
+    name: String,
+  ): Boolean = withContext(Dispatchers.IO) { prefs.gatewayRegistry.rename(stableId, name) }
+
   fun disconnect() {
     gatewayConfigOperationSeq.incrementAndGet()
     NodeForegroundService.stop(nodeApp)
@@ -1949,6 +1951,17 @@ class MainViewModel private constructor(
 
   internal fun captureChatShareOwner(): ChatComposerOwner = currentOrProvisionalChatComposerOwner()
 
+  internal fun chatComposerAgentName(owner: ChatComposerOwner): String? {
+    if (!isCurrentChatComposerOwner(owner)) return null
+    // Read the current catalog with its owner, not a separately collected Compose snapshot.
+    return owner.agentDisplayName(
+      runtimeRef.value
+        ?.gatewayAgents
+        ?.value
+        .orEmpty(),
+    )
+  }
+
   internal fun isCurrentChatComposerOwner(expected: ChatComposerOwner): Boolean =
     runtimeRef.value
       ?.gatewayConnectionHandoff
@@ -2109,10 +2122,6 @@ class MainViewModel private constructor(
   fun skipChatQuestion(prompt: ChatQuestionPrompt) {
     ensureRuntime().chat.skipQuestion(prompt)
   }
-
-  suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = ensureRuntime().chat.listBackgroundTasks(agentId)
-
-  suspend fun getBackgroundTask(taskId: String): BackgroundTask = ensureRuntime().chat.getBackgroundTask(taskId)
 
   internal suspend fun sendChatForOwnerAwaitAcceptance(
     owner: ChatComposerOwner,

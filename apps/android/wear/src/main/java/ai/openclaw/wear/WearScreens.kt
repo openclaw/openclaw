@@ -1292,7 +1292,6 @@ private fun AgentPulsePage(
       }
 
       else -> {
-        item { AgentPulseTasksPanel(pulse.tasks) }
         item { AgentPulseSwarmPanel(pulse.swarm) }
         item { AgentPulseApprovalsPanel(pulse.approvals) }
         snapshot.agentPulseFailure?.let { pulseFailure ->
@@ -1306,47 +1305,6 @@ private fun AgentPulsePage(
         enabled = !snapshot.agentPulseLoading,
         onClick = onRefresh,
       )
-    }
-  }
-}
-
-@Composable
-private fun AgentPulseTasksPanel(tasks: WearAgentPulseTasks) {
-  val ready = tasks.state == WearAgentPulseTaskState.Ready
-  Panel {
-    AgentPulsePanelHeader(
-      title = stringResource(R.string.pulse_tasks),
-      status =
-        if (ready) {
-          stringResource(R.string.pulse_ready)
-        } else {
-          stringResource(R.string.pulse_unavailable)
-        },
-      statusColor =
-        if (ready) {
-          OpenClawWearTheme.colors.success
-        } else {
-          OpenClawWearTheme.colors.danger
-        },
-    )
-    if (ready) {
-      AgentPulseMetricRow(stringResource(R.string.pulse_queued), tasks.queued)
-      AgentPulseMetricRow(stringResource(R.string.pulse_running), tasks.running)
-      AgentPulseMetricRow(stringResource(R.string.pulse_completed), tasks.completed)
-      AgentPulseMetricRow(stringResource(R.string.pulse_failed), tasks.failed)
-      AgentPulseDetail(text = stringResource(R.string.pulse_task_snapshot_bounded))
-      if (tasks.activeAtLimit == true) {
-        AgentPulseDetail(
-          text = stringResource(R.string.pulse_active_at_limit),
-          color = OpenClawWearTheme.colors.warning,
-        )
-      }
-      if (tasks.recentAtLimit == true) {
-        AgentPulseDetail(
-          text = stringResource(R.string.pulse_recent_at_limit),
-          color = OpenClawWearTheme.colors.warning,
-        )
-      }
     }
   }
 }

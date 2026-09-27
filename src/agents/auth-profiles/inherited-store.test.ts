@@ -27,6 +27,14 @@ import { createAuthProfileStoreRuntime } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function createStore(profileId: string, key: string): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: { [profileId]: { type: "api_key", provider: "custom", key } },
+  };
+}
+
 afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
   closeAuthProfileReadPool();
@@ -41,20 +49,9 @@ it.each(["shared-only", "local-and-shared"] as const)(
     const ambientRoot = tempDirs.make("openclaw-auth-ambient-");
     const scopedRoot = tempDirs.make("openclaw-auth-scoped-");
     const env = { OPENCLAW_STATE_DIR: scopedRoot };
-    const ambient: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "custom:shared": { type: "api_key", provider: "custom", key: "ambient-fixture" },
-      },
-    };
-    const scoped: AuthProfileStore = {
-      version: 1,
-      profiles: { "custom:shared": { type: "api_key", provider: "custom", key: "scoped-fixture" } },
-    };
-    const local: AuthProfileStore = {
-      version: 1,
-      profiles: { "custom:local": { type: "api_key", provider: "custom", key: "local-fixture" } },
-    };
+    const ambient = createStore("custom:shared", "ambient-fixture");
+    const scoped = createStore("custom:shared", "scoped-fixture");
+    const local = createStore("custom:local", "local-fixture");
     vi.stubEnv("OPENCLAW_STATE_DIR", ambientRoot);
     noteCommittedSharedAuthStoreOwnership(
       { location: "state-db" },
@@ -82,90 +79,75 @@ it.each(["shared-only", "local-and-shared"] as const)(
   },
 );
 
-it.each([
-  "runtime",
-  "secrets-runtime",
-  "without-external",
-  "ensure",
-  "prepared-snapshot",
-  "local-update",
-] as const)("keeps local credentials through a refused inherited store via %s", (mode) => {
-  const root = tempDirs.make("openclaw-inherited-admission-");
-  const env = { OPENCLAW_STATE_DIR: root };
-  const mainDir = path.join(root, "agents/main/agent");
-  const workerDir = path.join(root, "agents/worker/agent");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  vi.stubEnv("OPENCLAW_AGENT_DIR", mainDir);
-  const local: AuthProfileStore = {
-    version: 1,
-    profiles: { "custom:local": { type: "api_key", provider: "custom", key: "local-fixture" } },
-  };
-  const inherited: AuthProfileStore = {
-    version: 1,
-    profiles: {
-      "custom:shared": { type: "api_key", provider: "custom", key: "inherited-fixture" },
-    },
-  };
-  const main = openOpenClawAgentDatabase({ agentId: "main", env });
-  writePersistedAuthProfileStoreRaw(inherited, mainDir, main);
-  const worker = openOpenClawAgentDatabase({ agentId: "worker", env });
-  writePersistedAuthProfileStoreRaw(local, workerDir, worker);
-  const mainPath = main.path;
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  const original = fs.readFileSync(mainPath);
-  const runtime = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
-  const options = {
-    inheritedAuthDir: mainDir,
-    allowKeychainPrompt: false,
-    readOnly: true,
-    syncExternalCli: false,
-    externalCli: { mode: "none" as const },
-  };
-  const read = () => {
-    if (mode === "runtime") {
-      return runtime.loadAuthProfileStoreForRuntime(workerDir, options);
-    }
-    if (mode === "secrets-runtime") {
-      return runtime.loadAuthProfileStoreForSecretsRuntime(workerDir, options);
-    }
-    if (mode === "without-external") {
-      return runtime.loadAuthProfileStoreWithoutExternalProfiles(workerDir, options);
-    }
-    if (mode === "local-update") {
-      return runtime.ensureAuthProfileStoreForLocalUpdate(workerDir);
-    }
-    if (mode === "prepared-snapshot") {
-      setRuntimeAuthProfileStoreSnapshot(local, workerDir);
-    }
-    return runtime.ensureAuthProfileStoreWithoutExternalProfiles(workerDir, options);
-  };
-  expect(read().profiles).toMatchObject({ ...inherited.profiles, ...local.profiles });
-  closeAuthProfileReadPool();
-  fs.writeFileSync(mainPath, "not a SQLite database");
-  expect(read).toThrow(AuthProfileStoreUnreadableError);
-  recordAgentDatabaseAdmissions(
-    [
-      createAgentDatabaseInspectionRefusal({
-        agentId: "main",
-        paths: [mainPath],
-        reason: "The inherited database is unreadable.",
-      }),
-    ],
-    { env, source: "startup" },
-  );
-  expect(read().profiles).toEqual(local.profiles);
-  const unrelatedError = new AuthProfileStoreUnreadableError(path.join(root, "unrelated.sqlite"));
-  expect(() =>
-    loadInheritedAuthProfileStore(
-      () => {
-        throw unrelatedError;
-      },
-      mainDir,
-      env,
-    ),
-  ).toThrow(unrelatedError);
-  closeAuthProfileReadPool();
-  fs.writeFileSync(mainPath, original);
-  expect(read().profiles).toMatchObject({ ...inherited.profiles, ...local.profiles });
-});
+it.each(["runtime", "without-external", "ensure", "prepared-snapshot", "local-update"] as const)(
+  "keeps local credentials through a refused inherited store via %s",
+  (mode) => {
+    const root = tempDirs.make("openclaw-inherited-admission-");
+    const env = { OPENCLAW_STATE_DIR: root };
+    const mainDir = path.join(root, "agents/main/agent");
+    const workerDir = path.join(root, "agents/worker/agent");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", mainDir);
+    const local = createStore("custom:local", "local-fixture");
+    const inherited = createStore("custom:shared", "inherited-fixture");
+    const main = openOpenClawAgentDatabase({ agentId: "main", env });
+    writePersistedAuthProfileStoreRaw(inherited, mainDir, main);
+    const worker = openOpenClawAgentDatabase({ agentId: "worker", env });
+    writePersistedAuthProfileStoreRaw(local, workerDir, worker);
+    const mainPath = main.path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const original = fs.readFileSync(mainPath);
+    const runtime = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
+    const options = {
+      inheritedAuthDir: mainDir,
+      allowKeychainPrompt: false,
+      readOnly: true,
+      syncExternalCli: false,
+      externalCli: { mode: "none" as const },
+    };
+    const read = () => {
+      if (mode === "runtime") {
+        return runtime.loadAuthProfileStoreForRuntime(workerDir, options);
+      }
+      if (mode === "without-external") {
+        return runtime.loadAuthProfileStoreWithoutExternalProfiles(workerDir, options);
+      }
+      if (mode === "local-update") {
+        return runtime.ensureAuthProfileStoreForLocalUpdate(workerDir);
+      }
+      if (mode === "prepared-snapshot") {
+        setRuntimeAuthProfileStoreSnapshot(local, workerDir);
+      }
+      return runtime.ensureAuthProfileStoreWithoutExternalProfiles(workerDir, options);
+    };
+    expect(read().profiles).toMatchObject({ ...inherited.profiles, ...local.profiles });
+    closeAuthProfileReadPool();
+    fs.writeFileSync(mainPath, "not a SQLite database");
+    expect(read).toThrow(AuthProfileStoreUnreadableError);
+    recordAgentDatabaseAdmissions(
+      [
+        createAgentDatabaseInspectionRefusal({
+          agentId: "main",
+          paths: [mainPath],
+          reason: "The inherited database is unreadable.",
+        }),
+      ],
+      { env, source: "startup" },
+    );
+    expect(read().profiles).toEqual(local.profiles);
+    const unrelatedError = new AuthProfileStoreUnreadableError(path.join(root, "unrelated.sqlite"));
+    expect(() =>
+      loadInheritedAuthProfileStore(
+        () => {
+          throw unrelatedError;
+        },
+        mainDir,
+        env,
+      ),
+    ).toThrow(unrelatedError);
+    closeAuthProfileReadPool();
+    fs.writeFileSync(mainPath, original);
+    expect(read().profiles).toMatchObject({ ...inherited.profiles, ...local.profiles });
+  },
+);

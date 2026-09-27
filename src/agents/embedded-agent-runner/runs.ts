@@ -52,6 +52,7 @@ import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runt
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
@@ -1358,20 +1359,14 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   ) {
     return { aborted: false, drained: false, forceCleared: false };
   }
-  let releaseStaleExpiryBarrier: (() => void) | undefined;
-  const staleExpiryBarrier =
-    params.reason === "stuck_recovery"
-      ? new Promise<void>((resolve) => {
-          releaseStaleExpiryBarrier = resolve;
-        })
-      : undefined;
+  const staleExpiryBarrier = params.reason === "stuck_recovery" ? createDeferredCore() : undefined;
   // Recovery is a staleness expiry: stamp run_stalled on the reply operation
   // BEFORE any handle abort, or the run loop's abort handler re-enters
   // abortByUser and misattributes the watchdog kill to the user.
   const expiredReplyRun =
     params.reason === "stuck_recovery" &&
     expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery", {
-      afterClearBarrier: staleExpiryBarrier,
+      afterClearBarrier: staleExpiryBarrier?.promise,
       followupAdmissionBarrierTimeout: settleMs + 1_000,
     });
   const stampedStaleReplyRun =
@@ -1437,7 +1432,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   } finally {
     // Queue drains registered on the stale owner must not start while its
     // backend can still claim the same session and requeue the adopted turn.
-    releaseStaleExpiryBarrier?.();
+    staleExpiryBarrier?.resolve();
   }
 }
 
