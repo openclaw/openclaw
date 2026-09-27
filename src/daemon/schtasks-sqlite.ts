@@ -11,8 +11,7 @@ export function isScheduledTaskSqliteSharingError(error: unknown): boolean {
 }
 
 export async function retryScheduledTaskLeaseRead<T>(read: () => T): Promise<T> {
-  const deadline = Date.now() + 15_000;
-  for (;;) {
+  for (const deadline = Date.now() + 15_000; ;) {
     try {
       return read();
     } catch (error) {

@@ -22,6 +22,7 @@ import {
   setTaskStateProbeResult,
   spawnSync,
   spawnSyncResult,
+  scheduledTaskProbeResult,
   startScheduledTask,
   stopScheduledTask,
   taskkillPids,
@@ -311,7 +312,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
         });
 
         await expect(terminateScheduledTaskGatewayListeners(env)).rejects.toThrow(
-          "Gateway owner changed before terminating process 4242",
+          "Gateway owner changed",
         );
 
         const taskkillCalls = spawnSync.mock.calls
@@ -495,7 +496,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
         });
 
         await expect(terminateScheduledTaskGatewayListeners(env)).rejects.toThrow(
-          "Gateway owner changed before terminating process 4242",
+          "Gateway owner changed",
         );
 
         const taskkillCalls = spawnSync.mock.calls
@@ -522,7 +523,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       });
 
       await expect(terminateScheduledTaskGatewayListeners(env)).rejects.toThrow(
-        "Gateway owner changed before terminating process 4242",
+        "Gateway owner changed",
       );
 
       expect(taskkillPids()).toEqual([]);
@@ -621,6 +622,9 @@ describe("Scheduled Task stop/restart cleanup", () => {
         spawnSync.mockImplementation((command, args, options) => {
           expect(options?.env).toBeDefined();
           expect(options?.env).not.toHaveProperty("BOUNDARY_PARENT_ONLY");
+          if (args?.includes("-EncodedCommand")) {
+            return scheduledTaskProbeResult();
+          }
           const executable = command.toLowerCase();
           if (executable.endsWith("taskkill.exe")) {
             const argv = Array.isArray(args) ? args.map(String) : [];

@@ -43,9 +43,7 @@ import {
   terminateInstalledStartupRuntime,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
-import { endScheduledTaskGateway } from "./schtasks-shutdown.js";
-import { isScheduledTaskSqliteSharingError } from "./schtasks-sqlite.js";
-import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { probeScheduledTaskExists, type ScheduledTaskSettlement } from "./schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "./schtasks-update-recovery.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
@@ -55,6 +53,10 @@ import type {
   GatewayServiceRestartResult,
 } from "./service-types.js";
 
+type ScheduledTaskRestartResult = GatewayServiceRestartResult & {
+  taskSettlement?: ScheduledTaskSettlement;
+  restartRecovery?: "sqlite-owner-read";
+};
 export type ScheduledTaskActivation = "scheduled-task" | "direct-fallback";
 
 function runtimeSignature(runtime: Awaited<ReturnType<typeof readScheduledTaskRuntime>> | null) {
@@ -381,72 +383,83 @@ async function shouldControlStartupEntry(env: GatewayServiceEnv): Promise<boolea
   return !(await isRegisteredScheduledTask(env)) && (await isStartupEntryInstalled(env));
 }
 
-export async function stopScheduledTask({
-  stdout,
-  env,
-  onMutation,
-  assertCurrent,
-  warn,
-}: GatewayServiceControlArgs): Promise<void> {
-  const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
-  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
-  if (await shouldControlStartupEntry(effectiveEnv)) {
+export async function stopScheduledTask(params: GatewayServiceControlArgs): Promise<void> {
+  const env = params.env ?? (process.env as GatewayServiceEnv);
+  const reportMutation = createGatewayLifecycleMutationReporter(params.onMutation);
+  if (await shouldControlStartupEntry(env)) {
     await stopStartupEntry(
-      effectiveEnv,
-      stdout,
+      env,
+      params.stdout,
       () => reportMutation("startup-entry-stop"),
-      assertCurrent,
+      params.assertCurrent,
     );
     return;
   }
-  const taskName = resolveTaskName(effectiveEnv);
-  const manageGatewayPort = shouldManageGatewayListenerPort(effectiveEnv);
-  const stopContext = manageGatewayPort
-    ? await resolveScheduledTaskGatewayContext(effectiveEnv)
-    : null;
-  const stopPort = stopContext?.port ?? null;
-  await endScheduledTaskGateway({
-    env: effectiveEnv,
-    context: stopContext,
-    assertCurrent,
-    onGracefulStop: () => reportMutation("schtasks-stop"),
-    end: async () => {
-      assertCurrent?.();
-      const res = await execSchtasks(["/End", "/TN", taskName]);
-      if (res.code !== 0 && !isScheduledTaskDefinitelyNotRunning(taskName)) {
-        throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
-      }
-      reportMutation("schtasks-stop");
-    },
+  const replaced = await stopRegisteredScheduledTask({
+    ...params,
+    env,
+    onEndMutation: () => reportMutation("schtasks-stop"),
   });
-  if (manageGatewayPort) {
-    await terminateScheduledTaskGatewayListeners(
-      effectiveEnv,
-      stopContext ?? undefined,
-      assertCurrent,
-    ).catch((error: unknown) => {
-      if (!isScheduledTaskSqliteSharingError(error)) {
-        throw error;
-      }
-      (warn ?? ((message) => stdout.write(`Warning: ${message}\n`)))(
-        "SQLite owner inspection is temporarily unavailable after stop; checking the Gateway port before continuing.",
-      );
-    });
-  } else {
-    await terminateScheduledTaskNodeHost(effectiveEnv, assertCurrent);
+  params.stdout.write(
+    `${formatLine(replaced ? "Preserved replacement Gateway" : "Stopped Scheduled Task", resolveTaskName(env))}\n`,
+  );
+}
+
+async function stopRegisteredScheduledTask({
+  env,
+  stdout,
+  assertCurrent,
+  warn,
+  onEndMutation,
+  restart = false,
+  onSettled,
+  onRecovery,
+}: GatewayServiceControlArgs & {
+  env: GatewayServiceEnv;
+  onEndMutation?: () => void;
+  restart?: boolean;
+  onSettled?: (fact: ScheduledTaskSettlement) => void;
+  onRecovery?: () => void;
+}): Promise<boolean> {
+  const taskName = resolveTaskName(env);
+  const manageGatewayPort = shouldManageGatewayListenerPort(env);
+  const stopContext = manageGatewayPort ? await resolveScheduledTaskGatewayContext(env) : null;
+  const stopPort = stopContext?.port ?? null;
+  const terminated = await terminateScheduledTaskGatewayListeners(
+    env,
+    stopContext ?? undefined,
+    assertCurrent,
+    {
+      warn: warn ?? ((message) => stdout.write(`Warning: ${message}\n`)),
+      onStopped: onEndMutation,
+      onSettled,
+      onRecovery,
+      end: async () => {
+        assertCurrent?.();
+        const res = await execSchtasks(["/End", "/TN", taskName]);
+        if (!restart && res.code !== 0 && !isScheduledTaskDefinitelyNotRunning(taskName)) {
+          throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
+        }
+        if (!restart || res.code === 0) {
+          onEndMutation?.();
+        }
+      },
+    },
+  );
+  if (!manageGatewayPort) {
+    await terminateScheduledTaskNodeHost(env, assertCurrent);
+    await terminateInstalledStartupRuntime(env, assertCurrent);
   }
-  await terminateInstalledStartupRuntime(effectiveEnv, assertCurrent);
-  if (stopPort) {
+  if (terminated !== null && stopPort) {
     const probeHosts = stopContext?.probeHosts ?? [];
-    const released = await waitForGatewayPortRelease(stopPort, 5_000, { probeHosts });
-    if (!released) {
+    if (!(await waitForGatewayPortRelease(stopPort, 5_000, { probeHosts }))) {
       const listenerDetails = await describeUnverifiedPortListeners(stopPort, probeHosts);
       throw new Error(
-        `gateway port ${stopPort} is still busy after stop; remaining listener ownership could not be verified.${listenerDetails}`,
+        `gateway port ${stopPort} is still busy ${restart ? "before restart" : "after stop"}; remaining listener ownership could not be verified.${listenerDetails}`,
       );
     }
   }
-  stdout.write(`${formatLine("Stopped Scheduled Task", taskName)}\n`);
+  return terminated === null;
 }
 
 export async function startScheduledTask({
@@ -493,45 +506,29 @@ export async function restartRegisteredScheduledTask(params: {
   onRunMutation?: () => void;
   assertCurrent?: () => void;
   warn?: (message: string) => void;
-}): Promise<GatewayServiceRestartResult> {
+}): Promise<ScheduledTaskRestartResult> {
+  const facts: Pick<ScheduledTaskRestartResult, "taskSettlement" | "restartRecovery"> = {};
   const taskName = resolveTaskName(params.env);
-  const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
-  const restartContext = manageGatewayPort
-    ? await resolveScheduledTaskGatewayContext(params.env)
-    : null;
-  const restartPort = restartContext?.port ?? null;
-  await endScheduledTaskGateway({
-    env: params.env,
-    context: params.mode.kind === "standard" ? restartContext : null,
-    assertCurrent: params.assertCurrent,
-    onGracefulStop: () => params.onEndMutation?.(),
-    end: async () => {
-      params.assertCurrent?.();
-      const end = await execSchtasks(["/End", "/TN", taskName]);
-      if (end.code === 0) {
-        params.onEndMutation?.();
-      }
-    },
-  });
   if (params.mode.kind === "standard") {
-    if (manageGatewayPort) {
-      await terminateScheduledTaskGatewayListeners(
-        params.env,
-        restartContext ?? undefined,
-        params.assertCurrent,
-      ).catch((error: unknown) => {
-        if (!isScheduledTaskSqliteSharingError(error)) {
-          throw error;
-        }
-        (params.warn ?? ((message) => params.stdout.write(`Warning: ${message}\n`)))(
-          "SQLite owner inspection is temporarily unavailable after stop; checking the Gateway port before restarting.",
-        );
-      });
-    } else {
-      await terminateScheduledTaskNodeHost(params.env, params.assertCurrent);
+    if (
+      await stopRegisteredScheduledTask({
+        ...params,
+        restart: true,
+        onSettled: (fact) => (facts.taskSettlement = fact),
+        onRecovery: () => (facts.restartRecovery = "sqlite-owner-read"),
+      })
+    ) {
+      return { outcome: "completed", ...facts };
     }
-    await terminateInstalledStartupRuntime(params.env, params.assertCurrent);
   } else {
+    const { port, probeHosts } = shouldManageGatewayListenerPort(params.env)
+      ? await resolveScheduledTaskGatewayContext(params.env)
+      : { port: null, probeHosts: [] };
+    params.assertCurrent?.();
+    const end = await execSchtasks(["/End", "/TN", taskName]);
+    if (end.code === 0) {
+      params.onEndMutation?.();
+    }
     const replacementRuntime = await resolveFallbackRuntime(params.env, undefined, "control");
     if (replacementRuntime.status === "unknown") {
       throw new Error(
@@ -542,20 +539,8 @@ export async function restartRegisteredScheduledTask(params: {
     if (replacementRuntime.status === "running" && replacementRuntime.pid) {
       await terminateGatewayProcessTree(replacementRuntime.pid, 300, params.assertCurrent);
     }
-  }
-  if (restartPort) {
-    const probeHosts = restartContext?.probeHosts ?? [];
-    const released = await waitForGatewayPortRelease(restartPort, 5_000, { probeHosts });
-    if (!released) {
-      if (params.mode.kind === "fallback-takeover") {
-        throw new Error(
-          `replacement gateway port ${restartPort} is occupied by an unverified process`,
-        );
-      }
-      const listenerDetails = await describeUnverifiedPortListeners(restartPort, probeHosts);
-      throw new Error(
-        `gateway port ${restartPort} is still busy before restart; remaining listener ownership could not be verified.${listenerDetails}`,
-      );
+    if (port && !(await waitForGatewayPortRelease(port, 5_000, { probeHosts }))) {
+      throw new Error(`replacement gateway port ${port} is occupied by an unverified process`);
     }
   }
   const activation = await runScheduledTaskOrThrow({
@@ -592,7 +577,7 @@ export async function restartRegisteredScheduledTask(params: {
     }
   }
   params.stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
-  return { outcome: "completed" };
+  return { outcome: "completed", ...facts };
 }
 
 export async function restartScheduledTask({
@@ -602,7 +587,7 @@ export async function restartScheduledTask({
   onMutation,
   assertCurrent,
   warn,
-}: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
+}: GatewayServiceControlArgs): Promise<ScheduledTaskRestartResult> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   if (await shouldControlStartupEntry(effectiveEnv)) {

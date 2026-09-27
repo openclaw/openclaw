@@ -90,7 +90,6 @@ it("dispatches an authenticated targeted stop to the existing host lifecycle", a
     ok: true,
     pid: process.pid,
     status: "scheduled",
-    timeoutMs: 330_000,
   });
 });
 

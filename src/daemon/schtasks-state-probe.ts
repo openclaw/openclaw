@@ -4,8 +4,10 @@ import fs from "node:fs/promises";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode, isErrno } from "../infra/errno.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
+import { sleep } from "../utils.js";
 import { awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import {
   ServiceInspectionError,
@@ -278,3 +280,43 @@ export function probeScheduledTaskExists(taskName: string, timeoutMs?: number): 
   const probe = probeScheduledTaskState(taskName, timeoutMs);
   return probe.status === "found" ? true : probe.status === "missing" ? false : null;
 }
+
+/** Freeze the task run before stop; activation requires an inactive task and a recorded result. */
+export function prepareScheduledTaskSettlement(taskName: string) {
+  const initial = probeScheduledTaskState(taskName);
+  const runTime = initial.status === "found" ? initial.lastRunTime : undefined;
+  if (!runTime) {
+    throw new Error(`Task ${taskName} identity unavailable; Gateway preserved.`);
+  }
+  return async (assertCurrent: () => void, end: () => Promise<void>) => {
+    let ended = false;
+    const deadline = Date.now() + GATEWAY_SERVICE_STOP_TIMEOUT_MS;
+    for (;;) {
+      const remaining = Math.max(1, deadline - Date.now());
+      const task = probeScheduledTaskState(
+        taskName,
+        Math.min(WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS, remaining),
+      );
+      assertCurrent();
+      if (task.status !== "found" || task.lastRunTime !== runTime) {
+        return null;
+      }
+      const { state, lastRunResult } = task;
+      if ((state === 1 || state === 3) && lastRunResult !== undefined) {
+        return { taskName, lastRunResult, ended };
+      }
+      // Reserve 60s for the cold query, 15s for /End, and 60s to confirm settlement.
+      if (Date.now() >= deadline - (ended ? 0 : 135_000)) {
+        if (ended) {
+          throw new Error(`Task ${taskName} did not settle after /End; /Run refused.`);
+        }
+        await end();
+        ended = true;
+      } else {
+        await sleep(Math.min(100, deadline - Date.now()));
+      }
+    }
+  };
+}
+
+export type ScheduledTaskSettlement = { taskName: string; lastRunResult: string; ended: boolean };
