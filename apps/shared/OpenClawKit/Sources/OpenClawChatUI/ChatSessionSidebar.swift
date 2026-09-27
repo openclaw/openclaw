@@ -415,18 +415,18 @@ struct ChatSessionSidebar: View {
         let session = node.session
         let attention = self.attentionSummary(sessions: node.previewSessions, now: now)
         let targetID = "session:\(session.key)"
-        let subtitle = self.rowSubtitle(for: session, now: now, previewRequest: previewRequest)
-        let timestamp = ChatSessionSidebarModel.activityTimestamp(for: session).map {
-            Date(timeIntervalSince1970: $0 / 1000).formatted(.relative(
-                presentation: .named, unitsStyle: .abbreviated))
-        }
+        let presentation = ChatSessionRowPresentation(
+            session: session,
+            isConnected: self.viewModel.healthOK,
+            preview: self.rowPreview(for: session, previewRequest: previewRequest),
+            now: now)
         return HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(ChatSessionSidebarModel.displayName(for: session))
                     .font(OpenClawChatTypography.body(
                         size: 13, weight: session.unread == true ? .medium : .regular, relativeTo: .body))
                     .lineLimit(1)
-                if let subtitle {
+                if let subtitle = presentation.subtitle {
                     Text(subtitle)
                         .font(OpenClawChatTypography.caption)
                         .foregroundStyle(.secondary)
@@ -435,7 +435,7 @@ struct ChatSessionSidebar: View {
             }
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 6) {
-                if let timestamp {
+                if let timestamp = presentation.timestamp {
                     Text(verbatim: timestamp)
                         .font(OpenClawChatTypography.body(size: 10, weight: .regular, relativeTo: .caption))
                         .foregroundStyle(.tertiary)
@@ -463,7 +463,7 @@ struct ChatSessionSidebar: View {
             title: ChatSessionSidebarModel.displayName(for: session),
             targetID: targetID,
             summary: attention,
-            metadata: [subtitle, timestamp].compactMap(\.self),
+            metadata: [presentation.subtitle, presentation.timestamp].compactMap(\.self),
             presentation: self.$presentedAttention,
             isOutlineHeading: !node.children.isEmpty))
     }
@@ -584,28 +584,15 @@ struct ChatSessionSidebar: View {
             .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
     }
 
-    private func rowSubtitle(
+    private func rowPreview(
         for session: OpenClawChatSessionEntry,
-        now: Date,
         previewRequest: ChatSessionSidebarPreviews.Request) -> String?
     {
-        let activity = ChatSessionSidebarModel.activity(for: session, now: now.timeIntervalSince1970 * 1000)
-        if let activity, activity.kind == .attention { return activity.text }
-        if self.viewModel.healthOK, let activity, [.running, .queued].contains(activity.kind) { return activity.text }
-        if let activity, activity.kind == .failed,
-           session.unread == true || (session.lastReadAt ?? 0) < (session.endedAt ?? session.updatedAt ?? 0)
-        { return activity.text }
         if self.viewModel.matchesCurrentSessionKey(
             incoming: session.key, agentId: session.agentId, current: self.viewModel.sessionKey),
             let current = ChatSessionSidebarModel.messagePreview(from: self.viewModel.messages)
         { return current }
-        if let preview = self.previews.text(for: session, in: previewRequest) { return preview }
-        let workSubtitle = ChatSessionSidebarModel.workSubtitle(for: session)
-        if !self.viewModel.healthOK, let activity, [.running, .queued].contains(activity.kind) { return workSubtitle }
-        return ChatSessionSidebarModel.subtitle(
-            for: session,
-            workSubtitle: workSubtitle,
-            now: now.timeIntervalSince1970 * 1000)
+        return self.previews.text(for: session, in: previewRequest)
     }
 
     private var connectionFooter: some View {
@@ -632,6 +619,47 @@ struct ChatSessionSidebar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 12)
         .background(.bar)
+    }
+}
+
+/// Sidebar and palette render the same preformatted timestamp and subtitle.
+/// SwiftUI's date-formatted Text uses different relative-time rounding.
+struct ChatSessionRowPresentation {
+    let timestamp: String?
+    let subtitle: String?
+
+    init(
+        session: OpenClawChatSessionEntry,
+        isConnected: Bool,
+        preview: @autoclosure () -> String?,
+        now: Date)
+    {
+        self.timestamp = ChatSessionSidebarModel.activityTimestamp(for: session).map {
+            Date(timeIntervalSince1970: $0 / 1000).formatted(.relative(
+                presentation: .named, unitsStyle: .abbreviated))
+        }
+        let activity = ChatSessionSidebarModel.activity(for: session, now: now.timeIntervalSince1970 * 1000)
+        if let activity, activity.kind == .attention {
+            self.subtitle = activity.text
+        } else if isConnected, let activity, [.running, .queued].contains(activity.kind) {
+            self.subtitle = activity.text
+        } else if let activity, activity.kind == .failed,
+                  session.unread == true || (session.lastReadAt ?? 0) < (session.endedAt ?? session.updatedAt ?? 0)
+        {
+            self.subtitle = activity.text
+        } else if let preview = preview() {
+            self.subtitle = preview
+        } else {
+            let workSubtitle = ChatSessionSidebarModel.workSubtitle(for: session)
+            self.subtitle = if !isConnected, let activity, [.running, .queued].contains(activity.kind) {
+                workSubtitle
+            } else {
+                ChatSessionSidebarModel.subtitle(
+                    for: session,
+                    workSubtitle: workSubtitle,
+                    now: now.timeIntervalSince1970 * 1000)
+            }
+        }
     }
 }
 

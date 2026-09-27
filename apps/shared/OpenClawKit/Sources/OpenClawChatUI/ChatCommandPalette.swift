@@ -32,6 +32,12 @@ struct ChatCommandPalette: View {
     }
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            self.palette(now: context.date)
+        }
+    }
+
+    private func palette(now: Date) -> some View {
         let items = self.items
         let selectableIDs = items.filter(self.isEnabled).map(\.id)
         let selectedID = ChatCommandPaletteModel.selection(in: selectableIDs, current: self.selection)
@@ -77,7 +83,7 @@ struct ChatCommandPalette: View {
                                     .padding(.top, 12)
                                     .padding(.bottom, 4)
                             }
-                            self.row(item, isSelected: item.id == selectedID)
+                            self.row(item, isSelected: item.id == selectedID, now: now)
                                 .id(item.id)
                         }
                         if items.isEmpty {
@@ -128,10 +134,10 @@ struct ChatCommandPalette: View {
         self.dismiss()
     }
 
-    private func row(_ item: ChatCommandPaletteItem, isSelected: Bool) -> some View {
+    private func row(_ item: ChatCommandPaletteItem, isSelected: Bool, now: Date) -> some View {
         HStack(spacing: 6) {
             Button { self.activate(item) } label: {
-                self.rowContent(item)
+                self.rowContent(item, now: now)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
             }
@@ -140,7 +146,7 @@ struct ChatCommandPalette: View {
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(isSelected ? [.isSelected] : [])
             .accessibilityIdentifier("chat-palette-\(item.id)")
-            if let summary = self.attentionSummary(item) {
+            if let summary = self.attentionSummary(item, now: now) {
                 OpenClawChatAttentionBadge(
                     summary: summary, targetID: item.id, presentation: self.$presentedAttention)
             }
@@ -153,15 +159,16 @@ struct ChatCommandPalette: View {
     }
 
     @ViewBuilder
-    private func rowContent(_ item: ChatCommandPaletteItem) -> some View {
+    private func rowContent(_ item: ChatCommandPaletteItem, now: Date) -> some View {
         switch item {
         case let .agent(agent):
             HStack(spacing: 10) {
                 ChatSidebarAgentAvatar(agent: agent, size: 28)
                 Text(verbatim: agent.displayName)
                 Spacer(minLength: 0)
-                if let summary = ChatSessionSidebarModel.agentSummary(for: agent.id, sessions: self.viewModel.sessions),
-                   self.viewModel.healthOK, let activity = summary.activity
+                if let summary = ChatSessionSidebarModel.agentSummary(
+                    for: agent.id, sessions: self.viewModel.sessions, now: now.timeIntervalSince1970 * 1000),
+                    self.viewModel.healthOK, let activity = summary.activity
                 {
                     Label(activity.text, systemImage: activity.symbol)
                         .font(OpenClawChatTypography.caption)
@@ -170,7 +177,7 @@ struct ChatCommandPalette: View {
                 }
             }
         case let .thread(node):
-            self.threadContent(node)
+            self.threadContent(node, now: now)
         case let .action(action):
             HStack(spacing: 10) {
                 Image(systemName: action.symbol).frame(width: 28)
@@ -181,11 +188,16 @@ struct ChatCommandPalette: View {
         }
     }
 
-    private func threadContent(_ node: ChatSessionSidebarModel.Node) -> some View {
+    private func threadContent(_ node: ChatSessionSidebarModel.Node, now: Date) -> some View {
         let session = node.session
         let agentID = session.agentId ?? OpenClawChatSessionKey.agentID(from: session.key) ??
             self.viewModel.selectedAgentID ?? ""
         let agent = self.viewModel.agentChoices.first { $0.id == agentID } ?? .init(id: agentID)
+        let presentation = ChatSessionRowPresentation(
+            session: session,
+            isConnected: self.viewModel.healthOK,
+            preview: self.preview(session),
+            now: now)
         return HStack(spacing: 10) {
             ChatSidebarAgentAvatar(agent: agent, size: 28)
             VStack(alignment: .leading, spacing: 3) {
@@ -193,18 +205,18 @@ struct ChatCommandPalette: View {
                     Text(ChatSessionSidebarModel.displayName(for: session))
                         .fontWeight(session.unread == true ? .medium : .regular)
                     Spacer(minLength: 4)
-                    if let updatedAt = ChatSessionSidebarModel.activityTimestamp(for: session) {
-                        Text(Date(timeIntervalSince1970: updatedAt / 1000), format: .relative(
-                            presentation: .named, unitsStyle: .abbreviated))
+                    if let timestamp = presentation.timestamp {
+                        Text(verbatim: timestamp)
                             .font(OpenClawChatTypography.caption)
                             .foregroundStyle(.tertiary)
                     }
                 }
                 HStack {
-                    Text(verbatim: agent.displayName).foregroundStyle(.secondary)
-                    if let activity = ChatSessionSidebarModel.activity(for: session), activity.kind == .attention {
-                        Label(activity.text, systemImage: activity.symbol)
-                            .foregroundStyle(OpenClawChatTheme.warning)
+                    if agent.id.caseInsensitiveCompare(self.viewModel.selectedAgentID ?? "") != .orderedSame {
+                        Text(verbatim: agent.displayName).foregroundStyle(.secondary)
+                    }
+                    if let subtitle = presentation.subtitle {
+                        Text(verbatim: subtitle).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 4)
                     ChatSidebarSessionBadges(
@@ -219,7 +231,7 @@ struct ChatCommandPalette: View {
         }
     }
 
-    private func attentionSummary(_ item: ChatCommandPaletteItem) -> OpenClawChatAttentionSummary? {
+    private func attentionSummary(_ item: ChatCommandPaletteItem, now: Date) -> OpenClawChatAttentionSummary? {
         let sessions: [OpenClawChatSessionEntry]
         let agentID: String?
         switch item {
@@ -241,7 +253,7 @@ struct ChatCommandPalette: View {
             activeAgentID: agentID,
             sessionRoutingContract: self.viewModel.agentCatalog?.sessionRoutingContract ??
                 self.viewModel.sessionRoutingContract,
-            now: .now)
+            now: now)
     }
 
     private func searchThreads() async {

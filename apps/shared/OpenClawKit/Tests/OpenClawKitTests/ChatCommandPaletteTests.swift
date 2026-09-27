@@ -1,4 +1,5 @@
 #if os(macOS)
+import Foundation
 import Testing
 @testable import OpenClawChatUI
 
@@ -123,6 +124,32 @@ struct ChatCommandPaletteTests {
         _ = search.begin(empty)
         #expect(!search.isLoading)
         #expect(search.rows(for: empty).isEmpty)
+    }
+
+    @Test func `thread secondary text preserves attention activity and cached preview priority`() {
+        let now = Date(timeIntervalSince1970: 1)
+        var row = self.entry("thread", title: "Thread")
+        row.status = "running"
+        row.agentStatus = .init(note: "Collecting sources", expiresAt: 2000, attention: nil)
+        #expect(ChatSessionRowPresentation(
+            session: row, isConnected: true, preview: "Previous answer", now: now).subtitle == "Collecting sources")
+        #expect(ChatSessionRowPresentation(
+            session: row, isConnected: false, preview: "Previous answer", now: now).subtitle == "Previous answer")
+        row.agentStatus = .init(note: "Choose a source", expiresAt: 2000, attention: "hand")
+        #expect(ChatSessionRowPresentation(
+            session: row, isConnected: false, preview: "Previous answer", now: now).subtitle == "Choose a source")
+        row.agentStatus = nil
+        row.status = "failed"
+        row.lastRunError = "Source unavailable"
+        row.endedAt = 1000
+        #expect(ChatSessionRowPresentation(
+            session: row, isConnected: true, preview: "Previous answer", now: now).subtitle == "Source unavailable")
+        row.lastReadAt = 1000
+        #expect(ChatSessionRowPresentation(
+            session: row, isConnected: true, preview: "Previous answer", now: now).subtitle == "Previous answer")
+        row.status = "idle"
+        #expect(ChatSessionRowPresentation(
+            session: row, isConnected: true, preview: nil, now: now).subtitle == nil)
     }
 
     @Test func `keyboard selection wraps and keeps the chosen identity as results arrive`() {
