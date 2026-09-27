@@ -159,6 +159,31 @@ const CLAWNSTANTINE_REGALIA = svg`
   </g>
 `;
 
+const CLAWDIA_SKY = svg`
+  <g class="lob-clawdia">
+    <g class="lob-clawdia__sun" stroke="#ffd166" stroke-width="2.5" stroke-linecap="round">
+      <path d="M79 42 V38 M90 47 L93 44 M94 57 H98 M68 47 L65 44" fill="none" />
+      <circle cx="79" cy="56" r="9" fill="#ffd166" stroke="none" />
+    </g>
+    <path class="lob-clawdia__cloud" d="M30 76 C25 67 32 60 40 63 C43 50 60 50 66 63 C76 57 88 64 84 74 C94 76 92 87 82 87 H38 C28 87 24 81 30 76 Z" fill="#f5fbff" />
+    <path d="M37 76 Q43 70 49 76 M58 82 Q65 75 73 80" fill="none" stroke="#b8dcf3" stroke-width="2" stroke-linecap="round" />
+  </g>
+`;
+
+const CLAWDETTE_DOTS = svg`
+  <g class="lob-clawdette">
+    <g class="lob-clawdette__dots" fill="#fff0da">
+      <circle cx="35" cy="55" r="5" /><circle cx="59" cy="65" r="6" /><circle cx="84" cy="54" r="5" />
+      <circle cx="40" cy="78" r="5" /><circle cx="78" cy="78" r="5" /><circle cx="59" cy="88" r="3.5" />
+    </g>
+    <g class="lob-clawdette__ribbon" fill="#b49cdb" stroke="#775aa9" stroke-width="1.2" stroke-linejoin="round">
+      <path d="M59 46 Q41 36 43 48 Q44 57 59 50 Z M61 46 Q79 36 77 48 Q76 57 61 50 Z" />
+      <path d="M57 50 L51 61 L58 58 L62 62 L64 50 Z" />
+      <circle cx="60" cy="48" r="4" fill="#ffe1a3" />
+    </g>
+  </g>
+`;
+
 const MECHA_PLATES = svg`
   <g class="lob-mecha">
     <g fill="none" stroke="#5f6a75" stroke-width="1.5">
@@ -239,6 +264,8 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "heisenbug",
   "blueprint",
   "clawnstantine",
+  "clawdia",
+  "clawdette",
   "clawtron",
   "selene",
   "pixel",
@@ -354,6 +381,8 @@ export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResul
   phosphor: PHOSPHOR_SCANLINES,
   blueprint: BLUEPRINT_MARKS,
   clawnstantine: CLAWNSTANTINE_REGALIA,
+  clawdia: CLAWDIA_SKY,
+  clawdette: CLAWDETTE_DOTS,
   clawtron: MECHA_PLATES,
   banana: BANANA_MARKS,
   bee: BEE_PARTS,

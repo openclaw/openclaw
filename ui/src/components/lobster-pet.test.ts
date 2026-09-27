@@ -954,6 +954,31 @@ describe("lobster plans", () => {
 });
 
 describe("rare lobster loads", () => {
+  it.each([
+    ["clawnstantine", "Clawnstantine"],
+    ["clawdia", "Clawdia"],
+    ["clawdette", "Clawdette"],
+  ] as const)("records a genuine %s arrival with its signature identity", async (id, name) => {
+    vi.useFakeTimers();
+    const now = new Date("2026-07-09T12:00:00");
+    vi.setSystemTime(now);
+    vi.stubGlobal("localStorage", window.localStorage);
+    let seed = 0;
+    while (seed < 20_000 && createLobsterPetLook(seed, now).palette.id !== id) {
+      seed++;
+    }
+    expect(seed).toBeLessThan(20_000);
+    const element = createPet(seed, "offline");
+    await arrive(element);
+    expect(spriteClasses(element)).toContain(`lobster-pet--palette-${id}`);
+    expect(element.querySelector(`.lob-${id}`)).not.toBeNull();
+    expect(getLobsterdexEntries().get(id)?.name).toBe(name);
+    poke(element);
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
+    expect(element.querySelector(`.lob-${id}`)).not.toBeNull();
+  });
+
   // Probe seeds (deterministic per stream): 644 hosts the Elder; 636 rolls
   // an old-friend return plus a balloon entrance; 4689 hatches a shiny variant;
   // 104 is a shy load that beaches a bottle at ~194s; 37 is a shy load with

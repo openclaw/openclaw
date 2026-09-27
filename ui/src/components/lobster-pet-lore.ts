@@ -20,6 +20,8 @@ const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
   rubberduck: "Debuggy",
   watermelon: "Pips",
   clawnstantine: "Clawnstantine",
+  clawdia: "Clawdia",
+  clawdette: "Clawdette",
   clawtron: "Clawtron",
   selene: "Selene",
   geode: "Amethyst",
@@ -51,6 +53,8 @@ const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
   goldenretro: "24K",
 };
 
+// Keep legacy random-name slots stable. Dedicated Clawdia and Clawdette
+// discoveries are keyed by palette id, not these older visitor names.
 const PET_NAMES = [
   "Pinchy",
   "Barnaby",
@@ -120,6 +124,14 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
   clawnstantine: {
     flavor: "Built an empire. Still rules from the ledge.",
     hint: "All tides lead here.",
+  },
+  clawdia: {
+    flavor: "Carries sunshine through cloudy builds.",
+    hint: "Forecast: a chance of claws.",
+  },
+  clawdette: {
+    flavor: "Connects the dots. Then adds a few more.",
+    hint: "A very well-spotted visitor.",
   },
   clawtron: { flavor: "60% rivets, 40% love.", hint: "Beep boop snip." },
   selene: { flavor: "Carries the current moon on its belly.", hint: "Waxes and wanes." },

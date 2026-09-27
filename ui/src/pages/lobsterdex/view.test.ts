@@ -26,7 +26,7 @@ describe("renderLobsterdex", () => {
     const container = document.createElement("div");
     render(renderLobsterdex(entries), container);
 
-    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/43 visited");
+    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/45 visited");
 
     const seen = container.querySelector(".lobster-pet--palette-crimson")?.closest("article");
     expect(seen?.id).toBe("lobsterdex-crimson");
@@ -50,22 +50,48 @@ describe("renderLobsterdex", () => {
     expect(unseen?.querySelector(".lobsterdex-page__date")).toBeNull();
   });
 
-  it("reveals Clawnstantine after a recorded visit and preserves the first shiny sighting", () => {
-    const container = document.createElement("div");
-    const renderDex = () => render(renderLobsterdex(getLobsterdexEntries()), container);
-    renderDex();
-    const card = () => container.querySelector("#lobsterdex-clawnstantine");
-    expect(card()?.querySelector("h3")?.textContent).toBe("?");
-    expect(card()?.textContent).toContain("All tides lead here.");
+  it.each([
+    [
+      "clawnstantine",
+      "Clawnstantine",
+      "All tides lead here.",
+      "Built an empire. Still rules from the ledge.",
+    ],
+    [
+      "clawdia",
+      "Clawdia",
+      "Forecast: a chance of claws.",
+      "Carries sunshine through cloudy builds.",
+    ],
+    [
+      "clawdette",
+      "Clawdette",
+      "A very well-spotted visitor.",
+      "Connects the dots. Then adds a few more.",
+    ],
+  ] as const)(
+    "discovers %s by palette, not an existing visitor name, and retains shiny sightings",
+    (id, name, hint, flavor) => {
+      const container = document.createElement("div");
+      const renderDex = () => render(renderLobsterdex(getLobsterdexEntries()), container);
+      // Crimson visitors could already be called Clawdia or Clawdette. Those
+      // memories must neither reveal the new palette nor be renamed by it.
+      recordLobsterVisit("crimson", { name });
+      renderDex();
+      const card = () => container.querySelector(`#lobsterdex-${id}`);
+      expect(card()?.querySelector("h3")?.textContent).toBe("?");
+      expect(card()?.textContent).toContain(hint);
 
-    recordLobsterVisit("clawnstantine", { name: "Clawnstantine", shiny: true });
-    recordLobsterVisit("clawnstantine", { name: "Impostor" });
-    renderDex();
-    expect(card()?.querySelector("h3")?.textContent).toBe("Clawnstantine");
-    expect(card()?.textContent).toContain("Built an empire. Still rules from the ledge.");
-    expect(card()?.querySelector(".lob-clawnstantine__laurel")).not.toBeNull();
-    expect(card()?.querySelector(".lobsterdex-page__star")).not.toBeNull();
-    expect(card()?.querySelectorAll("time")).toHaveLength(2);
-    expect(card()?.classList.contains("lobsterdex-page__card--unseen")).toBe(false);
-  });
+      recordLobsterVisit(id, { name, shiny: true });
+      recordLobsterVisit(id, { name: "Impostor" });
+      renderDex();
+      expect(card()?.querySelector("h3")?.textContent).toBe(name);
+      expect(getLobsterdexEntries().get("crimson")?.name).toBe(name);
+      expect(card()?.textContent).toContain(flavor);
+      expect(card()?.querySelector(`.lob-${id}`)).not.toBeNull();
+      expect(card()?.querySelector(".lobsterdex-page__star")).not.toBeNull();
+      expect(card()?.querySelectorAll("time")).toHaveLength(2);
+      expect(card()?.classList.contains("lobsterdex-page__card--unseen")).toBe(false);
+    },
+  );
 });
