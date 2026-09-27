@@ -48,7 +48,12 @@ const SESSIONS_SEARCH_INDEXING_WARNING =
   "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.";
 
 const SessionsSearchToolSchema = Type.Object({
-  query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
+  query: Type.String({
+    minLength: 1,
+    maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS,
+    description:
+      "Required non-empty search text. Exact-word full-text search: whitespace-separated words are ANDed as whole tokens, so pass a few distinctive keywords, not a natural-language question. For CJK text, a single keyword matches most reliably. For time-range recall (\"what did we talk about yesterday?\"), search a distinctive topic word from that period, then follow up with sessions_history on the returned sessionKey/sessionId/messageId.",
+  }),
   sessionKey: Type.Optional(Type.String()),
   limit: optionalPositiveIntegerSchema({
     maximum: SESSIONS_SEARCH_MAX_LIMIT,

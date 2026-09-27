@@ -58,7 +58,7 @@ const SESSION_DESCRIPTIONS = [
   {
     tool: "sessions_search",
     describe: describeSessionsSearchTool,
-    original: "Search visible past sessions for matching user and assistant text.",
+    original: "Search visible past sessions for matching user and assistant text. The query parameter is required and must be non-empty. Matching is exact-word full-text search: whitespace-separated words are ANDed as whole tokens, so pass a few distinctive keywords rather than a natural-language question; for CJK text, a single keyword matches most reliably. For time-range recall, search a distinctive topic word, then follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
   },
 ] as const;
 
