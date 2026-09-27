@@ -22,7 +22,6 @@ import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-
 import {
   emitAgentEvent as emitRuntimeAgentEvent,
   emitAgentEventForOwner,
-  emitAgentEventForRunContext,
   getAgentEventLifecycleGeneration,
   onAgentRuntimeEvent,
   resetAgentEventsForTest,
@@ -97,7 +96,6 @@ import {
 } from "./server-chat.js";
 import { broadcastChatError, broadcastChatFinal } from "./server-methods/chat-broadcast.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import * as sessionEventRows from "./session-event-prepared-row.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -3030,174 +3028,6 @@ describe("agent event handler", () => {
       toolCallId: "tool-node-1",
       args: { command: "echo hi" },
     });
-  });
-
-  it("publishes candidate changes and clearing without persisting session selection", ({
-    onTestFinished,
-  }) => {
-    const runId = "run-live-model";
-    registerAgentRunContext(runId, {
-      agentId: "main",
-      sessionKey: "session-1",
-      sessionId: "session-id",
-      projectSessionActive: true,
-    });
-    vi.mocked(loadGatewaySessionRow).mockImplementation(() => ({
-      key: "session-1",
-      kind: "direct",
-      updatedAt: 1,
-      status: "running",
-      modelProvider: "selected",
-      model: "configured",
-      activeModelProvider: getAgentRunContext(runId)?.activeModel?.provider,
-      activeModel: getAgentRunContext(runId)?.activeModel?.model,
-    }));
-    const { broadcast, broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-1",
-      resolveSessionActiveRunState: () => ({ active: true, runIds: [runId] }),
-    });
-    sessionEventSubscribers.subscribe("conn-model");
-    onTestFinished(onAgentRuntimeEvent(handler));
-    const runContext = getAgentRunContext(runId)!;
-    const candidates = [
-      { provider: "provider", model: "primary" },
-      { provider: "other-provider", model: "primary" },
-      { provider: "other-provider", model: "fallback" },
-      { provider: null, model: null },
-    ];
-    for (const candidate of candidates) {
-      for (let observation = 0; observation < 2; observation++) {
-        emitAgentEventForRunContext(
-          { runId, stream: "lifecycle", data: { phase: "model", ...candidate } },
-          runContext,
-        );
-      }
-    }
-    expect(broadcast.mock.calls.filter(([event]) => event === "agent")).toHaveLength(8);
-    const changes = broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed");
-    expect(changes).toHaveLength(4);
-    for (const [index, { provider, model }] of candidates.entries()) {
-      expectPayloadFields(changes[index]?.[1], {
-        phase: "model",
-        modelProvider: "selected",
-        model: "configured",
-        activeModelProvider: provider,
-        activeModel: model,
-        hasActiveRun: true,
-        activeRunIds: [runId],
-      });
-      expect(changes[index]?.[1]).not.toHaveProperty("catalogChanged");
-    }
-    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
-  });
-
-  it("publishes unchanged candidates after visibility, receiver, or target changes", ({
-    onTestFinished,
-  }) => {
-    const runId = "run-model-target";
-    registerAgentRunContext(runId, {
-      agentId: "main",
-      sessionKey: "session-1",
-      sessionId: "original",
-      isControlUiVisible: true,
-    });
-    const owner = getAgentRunContext(runId)!;
-    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness();
-    onTestFinished(onAgentRuntimeEvent(handler));
-    const observe = (sessionKey?: string) =>
-      emitAgentEventForRunContext(
-        {
-          runId,
-          sessionKey,
-          stream: "lifecycle",
-          data: { phase: "model", provider: "provider", model: "primary" },
-        },
-        owner,
-      );
-    const changes = () =>
-      broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed");
-    observe();
-    registerAgentRunContext(runId, { isControlUiVisible: false });
-    sessionEventSubscribers.subscribe("conn-model");
-    observe();
-    expect(changes()).toHaveLength(0);
-    registerAgentRunContext(runId, { isControlUiVisible: true });
-    observe();
-    observe();
-    expect(changes()).toHaveLength(1);
-    registerAgentRunContext(runId, { sessionId: "replacement" });
-    observe();
-    observe();
-    expect(changes()).toHaveLength(2);
-    observe("session-2");
-    observe("session-2");
-    expect(changes()).toHaveLength(3);
-    expect(changes()[2]?.[1]).toMatchObject({ sessionKey: "session-2" });
-  });
-
-  it("remembers the committed model after deferred row preparation", async ({ onTestFinished }) => {
-    const runId = "run-model-deferred";
-    registerAgentRunContext(runId, { agentId: "main", sessionKey: "session-1" });
-    const owner = getAgentRunContext(runId)!;
-    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness();
-    sessionEventSubscribers.subscribe("conn-model");
-    onTestFinished(onAgentRuntimeEvent(handler));
-    const observe = (model: string) =>
-      emitAgentEventForRunContext(
-        { runId, stream: "lifecycle", data: { phase: "model", provider: "provider", model } },
-        owner,
-      );
-    const changes = () =>
-      broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed");
-    observe("primary");
-    const ready = Promise.withResolvers<void>();
-    const preparation = vi
-      .spyOn(sessionEventRows, "withPreparedSessionEventRow")
-      .mockImplementationOnce(async (_projection, _key, _agentId, publish) => {
-        await ready.promise;
-        publish();
-      });
-    onTestFinished(() => preparation.mockRestore());
-    observe("fallback");
-    const pending = preparation.mock.results[0]?.value;
-    observe("primary");
-    ready.resolve();
-    await pending;
-    expect(changes()).toHaveLength(1);
-    observe("fallback");
-    observe("fallback");
-    expect(changes()).toHaveLength(2);
-  });
-
-  it("retries an unchanged model snapshot after publication fails", async ({ onTestFinished }) => {
-    const runId = "run-model-publication";
-    registerAgentRunContext(runId, { agentId: "main", sessionKey: "session-1" });
-    const owner = getAgentRunContext(runId)!;
-    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness();
-    sessionEventSubscribers.subscribe("conn-model");
-    onTestFinished(onAgentRuntimeEvent(handler));
-    const observe = () =>
-      emitAgentEventForRunContext(
-        {
-          runId,
-          stream: "lifecycle",
-          data: { phase: "model", provider: "provider", model: "primary" },
-        },
-        owner,
-      );
-    broadcastToConnIds.mockImplementationOnce(() => {
-      throw new Error("publication failed");
-    });
-    observe();
-    await Promise.resolve();
-    expect(logErrorMock).toHaveBeenCalledWith(
-      expect.stringContaining("session snapshot publication failed"),
-    );
-    observe();
-    observe();
-    expect(
-      broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
-    ).toHaveLength(2);
   });
 
   it("broadcasts terminal session status to session subscribers on lifecycle end", async () => {

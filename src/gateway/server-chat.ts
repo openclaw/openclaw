@@ -24,9 +24,7 @@ import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
-import { projectedAgentRunInputKey } from "../infra/agent-run-projection.js";
 import { getAgentRunContext, getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
-import type { AgentRunContext } from "../infra/agent-run-registry.types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { logError, logWarn } from "../logger.js";
@@ -58,6 +56,7 @@ import {
   resolveHeartbeatFlag,
   shouldHideHeartbeatChatOutput,
 } from "./server-chat-heartbeat.js";
+import { createSessionLifecyclePublisher } from "./server-chat-lifecycle-publication.js";
 import { mergeAgentTextPayload, mergeChatTextPayload } from "./server-chat-live-text.js";
 import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
 import type {
@@ -417,7 +416,6 @@ export function createAgentEventHandler({
   };
 
   const pendingTerminalLifecycleErrors = new Map<string, PendingTerminalLifecycleError>();
-  const publishedModelInputs = new WeakMap<AgentRunContext, string>();
 
   const liveTextDelivery = (
     runId: string,
@@ -519,6 +517,15 @@ export function createAgentEventHandler({
       activeRunState,
     });
   };
+
+  const publishSessionLifecycle = createSessionLifecyclePublisher({
+    broadcastToConnIds,
+    sessionEventSubscribers,
+    getSessionRowProjection,
+    persistGatewaySessionLifecycleEventForEvent,
+    buildSnapshot: (sessionKey, event, agentId, phase) =>
+      buildSessionEventSnapshot(sessionKey, event, agentId, true, phase === "start"),
+  });
 
   const resolveSessionDeliveryKeys = (sessionKey: string, agentId?: string) => {
     if (sessionKey.trim().toLowerCase() !== "global") {
@@ -1776,69 +1783,14 @@ export function createAgentEventHandler({
       (lifecyclePhase === "start" ||
         (lifecyclePhase === "model" && runContext && isControlUiVisible))
     ) {
-      if (lifecyclePhase === "start") {
-        void persistGatewaySessionLifecycleEventForEvent({
-          sessionKey,
-          agentId: sessionAgentId,
-          event: {
-            ...evt,
-            ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
-          },
-        }).catch((err: unknown) => {
-          // Surface the swallowed start-phase persistence failure: a silent write
-          // failure drops the run's start marker from restart-recovery accounting
-          // with no operator trace, matching the terminal-phase log below.
-          logError(
-            `gateway: start session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(evt.runId)} error=${formatForLog(err)}`,
-          );
-        });
-      }
-      const sessionEventConnIds = sessionEventSubscribers.getAll();
-      if (hasSessionChangeReceivers(sessionEventConnIds)) {
-        const readModelInput = () =>
-          lifecyclePhase === "model" && runContext
-            ? JSON.stringify([sessionKey, sessionAgentId, projectedAgentRunInputKey(runContext)])
-            : undefined;
-        const modelInput = readModelInput();
-        if (runContext && modelInput && publishedModelInputs.get(runContext) === modelInput) {
-          return;
-        }
-        const publish = () => {
-          const modelInput = readModelInput();
-          if (runContext && modelInput && publishedModelInputs.get(runContext) === modelInput) {
-            return;
-          }
-          broadcastToConnIds(
-            "sessions.changed",
-            {
-              sessionKey,
-              ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-              phase: lifecyclePhase,
-              runId: evt.runId,
-              ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
-              ts: evt.ts,
-              ...buildSessionEventSnapshot(
-                sessionKey,
-                evt,
-                sessionAgentId,
-                true,
-                lifecyclePhase === "start",
-              ),
-            },
-            sessionEventConnIds,
-            { dropIfSlow: true },
-          );
-          // Failed preparation/publication must leave the next observation publishable.
-          if (runContext && modelInput) {
-            publishedModelInputs.set(runContext, modelInput);
-          }
-        };
-        const projection = getSessionRowProjection?.();
-        void withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, publish).catch(
-          (error: unknown) =>
-            logError(`gateway: session snapshot publication failed: ${formatErrorMessage(error)}`),
-        );
-      }
+      publishSessionLifecycle({
+        event: evt,
+        phase: lifecyclePhase,
+        sessionKey,
+        agentId: sessionAgentId,
+        clientRunId: eventRunId,
+        runContext,
+      });
     }
   };
 
