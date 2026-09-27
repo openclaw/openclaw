@@ -11,20 +11,6 @@ import {
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
-// These methods observe another owner's result. Login and lifecycle waits also
-// mutate state and must retain their existing execution lifetime.
-const OBSERVATION_METHODS = new Set([
-  "agent.wait",
-  "exec.approval.waitDecision",
-  "plugin.approval.waitDecision",
-  "question.waitAnswer",
-  "device.scopes.waitUpgrade",
-]);
-
-export function isGatewayObservationMethod(method: string): boolean {
-  return OBSERVATION_METHODS.has(method);
-}
-
 export function workAdmissionUnavailableError(method: string) {
   const restartDraining = isGatewayRestartDraining();
   return errorShape(

@@ -66,9 +66,13 @@ describe("gateway method registry", () => {
       };
       const policy = {
         startup: "unavailable-until-sidecars",
+        lifetime: "observation",
         controlPlaneWrite: true,
         advertise: false,
-      } satisfies Pick<GatewayMethodDescriptorInput, "startup" | "controlPlaneWrite" | "advertise">;
+      } satisfies Pick<
+        GatewayMethodDescriptorInput,
+        "startup" | "lifetime" | "controlPlaneWrite" | "advertise"
+      >;
       if (properties === "inherited") {
         Object.setPrototypeOf(writeDescriptor, policy);
       } else {
@@ -97,6 +101,8 @@ describe("gateway method registry", () => {
       expect(registry.getHandler("example.read")).toBe(handler);
       expect(registry.getScope("example.write")).toBe(WRITE_SCOPE);
       expect(registry.isStartupUnavailable("example.write")).toBe(true);
+      expect(registry.isObservation("example.write")).toBe(true);
+      expect(registry.isObservation("example.read")).toBe(false);
       expect(registry.isControlPlaneWrite("example.write")).toBe(true);
     },
   );

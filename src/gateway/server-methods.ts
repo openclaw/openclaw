@@ -63,7 +63,6 @@ import type {
 } from "./server-methods/types.js";
 import type { GatewayRequestEntry } from "./server-request-entry.js";
 import {
-  isGatewayObservationMethod,
   runWithGatewayObservationScope,
   workAdmissionUnavailableError,
 } from "./server-request-lifecycle.js";
@@ -516,7 +515,7 @@ export async function runWithGatewayRequestEnvelope<T>(
           },
           fn,
         );
-      return await (isGatewayObservationMethod(method)
+      return await (options.methodRegistry.isObservation(method)
         ? runWithGatewayObservationScope(invoke, [options.signal, client?.connectionSignal], () =>
             options.reject(
               getGatewayRestartDrainSignal().aborted
@@ -653,7 +652,7 @@ export async function handleGatewayRequest(
             respond(...response);
           }
         : respond;
-    const observation = isGatewayObservationMethod(req.method);
+    const observation = methodRegistry.isObservation(req.method);
     let observationResponded = false;
     const respondToHandler: GatewayRequestOptions["respond"] = observation
       ? (...response) => {
