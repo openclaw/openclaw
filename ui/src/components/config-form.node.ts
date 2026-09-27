@@ -124,8 +124,8 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
 
     const normalizedTypes = new Set(
       nonNull.flatMap((variant) => {
-        const type = schemaType(variant);
-        return type ? [type === "integer" ? "number" : type] : [];
+        const variantType = schemaType(variant);
+        return variantType ? [variantType === "integer" ? "number" : variantType] : [];
       }),
     );
 

@@ -18,8 +18,8 @@ function projectSchemaTier(params: {
   }
   const properties: Record<string, JsonSchema> = {};
   let hasSchemaChildren = false;
-  const projectChild = (schema: JsonSchema, key: string) =>
-    projectSchemaTier({ schema, path: [...path, key], advanced, hints });
+  const projectChild = (childSchema: JsonSchema, key: string) =>
+    projectSchemaTier({ schema: childSchema, path: [...path, key], advanced, hints });
 
   for (const [key, child] of Object.entries(schema.properties ?? {})) {
     hasSchemaChildren = true;

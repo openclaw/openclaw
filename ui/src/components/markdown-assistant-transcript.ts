@@ -5,7 +5,6 @@ import {
   type AssistantTranscriptRoleImageMeta,
 } from "../../../packages/markdown-core/src/assistant-transcript.js";
 import { t } from "../i18n/index.ts";
-import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 function renderAssistantTranscriptRoleMarker(text: string): string {
@@ -63,12 +62,7 @@ export function installAssistantTranscriptRoleMarkdown(md: MarkdownIt): void {
     const token = tokens[index];
     return token ? renderAssistantTranscriptRoleMarker(token.content) : "";
   };
-  md.renderer.rules.image = (
-    tokens,
-    index,
-    _rendererOptions,
-    renderEnv: Partial<MarkdownRenderEnv> | undefined,
-  ) => {
+  md.renderer.rules.image = (tokens, index, _rendererOptions, env) => {
     const token = tokens[index];
     if (!token) {
       return "";
@@ -79,7 +73,7 @@ export function installAssistantTranscriptRoleMarkdown(md: MarkdownIt): void {
     const roleMeta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
       ?.assistantTranscriptRoleImage;
     const linkedImage = linkedImageIndices(tokens).has(index);
-    if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(src) && renderEnv?.remoteImages !== true) {
+    if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(src) && env?.remoteImages !== true) {
       const renderedLabel = roleMeta
         ? renderAssistantTranscriptRoleImageLabel(roleMeta.text, roleMeta.spans)
         : escapeMarkdownHtml(alt);
@@ -95,7 +89,7 @@ export function installAssistantTranscriptRoleMarkdown(md: MarkdownIt): void {
     }
     const image = `<img class="markdown-inline-image" src="${escapeMarkdownHtml(src)}" alt="${escapeMarkdownHtml(alt)}">`;
     const interactiveImage =
-      linkedImage || renderEnv?.interactiveImages !== true
+      linkedImage || env?.interactiveImages !== true
         ? image
         : `<button class="markdown-inline-image-button" type="button" aria-label="${escapeMarkdownHtml(t("chat.imageLightbox.open", { title: token.content.trim() ? alt : t("chat.imageLightbox.untitled") }))}">${image}</button>`;
     return roleMeta

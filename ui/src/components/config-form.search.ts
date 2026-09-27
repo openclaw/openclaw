@@ -135,8 +135,13 @@ export function matchesNodeSearch(params: {
   if (matchesNodeSelf({ schema, path, hints, criteria, textMatcher })) {
     return true;
   }
-  const matchesChild = (schema: JsonSchema, value: unknown, segment: string | number) =>
-    matchesNodeSearch({ ...params, schema, value, path: [...path, segment] });
+  const matchesChild = (childSchema: JsonSchema, childValue: unknown, segment: string | number) =>
+    matchesNodeSearch({
+      ...params,
+      schema: childSchema,
+      value: childValue,
+      path: [...path, segment],
+    });
 
   const type = schemaType(schema);
   if (type === "object") {

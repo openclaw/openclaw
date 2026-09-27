@@ -233,7 +233,7 @@ export function createMarkdownParser(): MarkdownItParser {
       for (const token of children) {
         if (
           token.type === "link_open" &&
-          DISALLOWED_LINK_SCHEME_RE.test(token.attrGet("href") ?? "")
+          DISALLOWED_LINK_SCHEME_RE.test(String(token.attrGet("href") ?? ""))
         ) {
           token.hidden = true;
           hideClose = true;
@@ -279,7 +279,7 @@ export function createMarkdownParser(): MarkdownItParser {
         const cjkTail = displayText.slice(cjkIndex);
         // Rebuild href by preserving the scheme prefix that linkify added but
         // display text omits (e.g. "mailto:" for emails, "http://" for www links).
-        const href = token.attrGet("href") ?? "";
+        const href = String(token.attrGet("href") ?? "");
         const prefixLength = href.indexOf(displayText);
         const hrefPrefix = prefixLength > 0 ? href.slice(0, prefixLength) : "";
         token.attrSet("href", hrefPrefix + trimmedDisplay);
@@ -314,7 +314,7 @@ export function createMarkdownParser(): MarkdownItParser {
           continue;
         }
         if (token.type === "link_open") {
-          const href = token.attrGet("href") ?? "";
+          const href = String(token.attrGet("href") ?? "");
           if (href && !token.attrGet("data-session-href")) {
             let decodedHref = href;
             try {
@@ -471,7 +471,7 @@ export function createMarkdownParser(): MarkdownItParser {
           continue;
         }
         linkDepth += 1;
-        const href = open.attrGet("href") ?? "";
+        const href = String(open.attrGet("href") ?? "");
         const url = href ? parseWebLinkHref(href) : null;
         if (!url) {
           continue;
