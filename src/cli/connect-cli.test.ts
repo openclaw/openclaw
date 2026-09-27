@@ -173,6 +173,7 @@ describe("connect cli", () => {
   it.each([
     {
       name: "foreground session host",
+      platform: "linux",
       args: ["--session-host", "--display-name", "Build Node"],
       profile: undefined,
       reconnect: "openclaw node run --session-host --display-name 'Build Node'",
@@ -180,15 +181,26 @@ describe("connect cli", () => {
     },
     {
       name: "session-host service under a named profile",
+      platform: "linux",
       args: ["--service", "--session-host", "--display-name", "Build --profile test"],
       profile: "work",
       reconnect:
         "openclaw --profile work config set nodeHost.workerRuns.enabled true, then openclaw --profile work node install --force --display-name 'Build --profile test'",
       pair: "openclaw --profile work connect <join-url> --service --session-host --display-name 'Build --profile test'",
     },
-  ])(
+    {
+      name: "Windows session host",
+      platform: "win32",
+      args: ["--session-host", "--display-name", "O'Brien"],
+      profile: undefined,
+      reconnect: "openclaw node run --session-host --display-name 'O''Brien'",
+      pair: "openclaw connect <join-url> --session-host --display-name 'O''Brien'",
+    },
+  ] as const)(
     "points a paired $name without a target at its saved pairing",
-    async ({ args, profile, reconnect, pair }) => {
+    async ({ platform, args, profile, reconnect, pair }) => {
+      const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { configurable: true, value: platform });
       vi.stubEnv("OPENCLAW_PROFILE", profile);
       mocks.loadResumableNodeHostGateway.mockResolvedValueOnce({
         host: "gateway.example",
@@ -196,13 +208,19 @@ describe("connect cli", () => {
         tls: true,
       });
 
-      await runConnect(args);
+      try {
+        await runConnect([...args]);
+      } finally {
+        if (platformDescriptor) {
+          Object.defineProperty(process, "platform", platformDescriptor);
+        }
+      }
 
       expect(mocks.runtime.error).toHaveBeenCalledWith(
         [
-          "Connect target is required. This machine is already paired with wss://gateway.example:443; join URLs and setup codes are single-use.",
-          `To reconnect with the saved pairing, run: ${reconnect}`,
-          `To pair again, mint a join URL on the Gateway host with ${profile ? `openclaw --profile ${profile}` : "openclaw"} devices join-code, then run: ${pair}`,
+          "Connect target is required. Join URLs and setup codes are single-use.",
+          `If this machine is still paired with wss://gateway.example:443, reconnect with the saved pairing: ${reconnect}`,
+          `Otherwise, mint a join URL on the Gateway host with ${profile ? `openclaw --profile ${profile}` : "openclaw"} devices join-code, then run: ${pair}`,
         ].join("\n"),
       );
       expect(mocks.runtime.exit).toHaveBeenCalledWith(1);

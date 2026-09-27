@@ -32,7 +32,7 @@ import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 import { addNodeCommandOptions } from "./node-cli/command-options.js";
 import { runNodeDaemonInstall } from "./node-cli/daemon.js";
 import { resolveNodePairGatewayPayload } from "./node-cli/gateway-options.js";
-import { quoteCliArg } from "./quote-cli-arg.js";
+import { quoteCliArg, quotePowerShellArg } from "./quote-cli-arg.js";
 
 type ConnectCommandOptions = {
   service?: boolean;
@@ -157,10 +157,11 @@ function formatMissingTargetError(
   // Only the fixed prefix is formatted: quoted user values may contain --profile text.
   const command = (fixed: string, ...args: string[]) =>
     [formatCliCommand(fixed), ...args].join(" ");
+  const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
   const sessionHostFlags = opts.sessionHost ? ["--session-host"] : [];
   const hostFlags = [
-    ...(opts.displayName !== undefined ? ["--display-name", quoteCliArg(opts.displayName)] : []),
-    ...(opts.commands ? ["--commands", quoteCliArg(opts.commands.join(","))] : []),
+    ...(opts.displayName !== undefined ? ["--display-name", quote(opts.displayName)] : []),
+    ...(opts.commands ? ["--commands", quote(opts.commands.join(","))] : []),
     ...(opts.allCommands ? ["--all-commands"] : []),
   ];
   const pair = `mint a join URL on the Gateway host with ${command("openclaw devices join-code")}, then run: ${command("openclaw connect <join-url>", ...(opts.service ? ["--service"] : []), ...sessionHostFlags, ...hostFlags)}`;
@@ -176,10 +177,12 @@ function formatMissingTargetError(
         command("openclaw node install --force", ...hostFlags),
       ].join(", then ")
     : command("openclaw node run", ...sessionHostFlags, ...hostFlags);
+  // Device tokens are not bound to an endpoint, so a failed switch to another Gateway can
+  // leave the old token beside the new endpoint; the reconnect hint stays conditional.
   return [
-    `${missing} This machine is already paired with ${formatGatewayCandidateUrl(savedGateway)}; join URLs and setup codes are single-use.`,
-    `To reconnect with the saved pairing, run: ${reconnect}`,
-    `To pair again, ${pair}`,
+    `${missing} Join URLs and setup codes are single-use.`,
+    `If this machine is still paired with ${formatGatewayCandidateUrl(savedGateway)}, reconnect with the saved pairing: ${reconnect}`,
+    `Otherwise, ${pair}`,
   ].join("\n");
 }
 

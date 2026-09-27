@@ -169,7 +169,10 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
   return nextConfig;
 }
 
-/** The saved Gateway endpoint, only when its paired node credential can reconnect without a setup code. */
+/**
+ * The saved Gateway endpoint when a node credential exists to reconnect without a setup code.
+ * Node tokens are not bound to an endpoint, so callers must present the reconnect as conditional.
+ */
 export async function loadResumableNodeHostGateway(): Promise<NodeHostGatewayConfig | undefined> {
   // A failed first enrollment saves the endpoint before any device token exists.
   const gateway = (await loadNodeHostConfig())?.gateway;
