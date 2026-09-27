@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -304,6 +305,17 @@ esac
       commandLabel: "openclaw config validate",
       shell: false,
     });
+  });
+
+  it("keeps every recipe file in the prepared test layout", () => {
+    // Prepared tooling workers copy only listed assets, but the recipe reads any section file by name.
+    const buildEntries = readFileSync("scripts/lib/vitest-worker-build-entries.mts", "utf8");
+    const recipeDirectory = "scripts/e2e/lib/upgrade-survivor/config-recipe";
+    const missing = readdirSync(recipeDirectory)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => `${recipeDirectory}/${name}`)
+      .filter((file) => !buildEntries.includes(JSON.stringify(file)));
+    expect(missing).toEqual([]);
   });
 
   it("adds the Codex allowlist survival scenario", () => {
