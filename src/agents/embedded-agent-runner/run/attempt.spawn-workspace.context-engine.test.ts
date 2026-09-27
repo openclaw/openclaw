@@ -29,6 +29,18 @@ import {
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
+const questionPromptMocks = vi.hoisted(() => {
+  const delivery = { messageChannel: "slack", send: vi.fn(async () => undefined) };
+  return {
+    create: vi.fn(() => delivery),
+    delivery,
+  };
+});
+
+vi.mock("../../tools/question-prompt-send.js", () => ({
+  createChannelQuestionPromptDelivery: questionPromptMocks.create,
+}));
+
 const hoisted = getHoisted();
 const embeddedSessionId = "embedded-session";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
@@ -157,6 +169,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
     clearMemoryPluginState();
+    questionPromptMocks.create.mockClear().mockReturnValue(questionPromptMocks.delivery);
+    questionPromptMocks.delivery.send.mockClear();
     hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
     hoisted.detectAndLoadPromptImagesMock.mockClear();
   });
@@ -187,6 +201,71 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       mockParams(hoisted.createOpenClawCodingToolsMock, 0, "tool construction params")
         .modelContextWindowTokens,
     ).toBe(1_000_000);
+  });
+
+  it("keeps requester-settle questions on the originating Slack thread", async () => {
+    const requesterSessionKey = "agent:main:slack:direct:user:thread:test";
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: requesterSessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        runId: "announce:requester-settle:main:yield-1",
+        messageChannel: "slack",
+        messageProvider: "discord-voice",
+        messageTo: "D123",
+        currentMessagingTarget: "C456",
+        currentChannelId: "C789",
+        agentAccountId: "default",
+        messageThreadId: "123.456",
+        currentThreadTs: "789.012",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    const subscriptionParams = requireRecord(
+      hoisted.subscribeEmbeddedAgentSessionMock.mock.calls[0]?.[0],
+      "subscription params",
+    );
+    expect(subscriptionParams.onToolResult).toBeUndefined();
+    expect(questionPromptMocks.create).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({ session: expect.any(Object) }),
+      channel: "slack",
+      to: "D123",
+      accountId: "default",
+      threadId: "123.456",
+    });
+    expect(
+      mockParams(hoisted.createOpenClawCodingToolsMock, 0, "tool construction params")
+        .questionPrompt,
+    ).toBe(questionPromptMocks.delivery);
+  });
+
+  it("keeps regular channel questions on the embedded lifecycle callback", async () => {
+    const onToolResult = vi.fn(async () => undefined);
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:slack:direct:user",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        messageProvider: "slack",
+        messageTo: "D123",
+        onToolResult,
+      },
+    });
+
+    const subscriptionParams = requireRecord(
+      hoisted.subscribeEmbeddedAgentSessionMock.mock.calls[0]?.[0],
+      "subscription params",
+    );
+    expect(subscriptionParams.onToolResult).toBeTypeOf("function");
+    expect(questionPromptMocks.create).not.toHaveBeenCalled();
+    expect(
+      mockParams(hoisted.createOpenClawCodingToolsMock, 0, "tool construction params")
+        .questionPrompt,
+    ).toBeUndefined();
   });
 
   it("keeps client tool names out of context engine capability guidance", async () => {

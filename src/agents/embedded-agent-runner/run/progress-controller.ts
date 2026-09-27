@@ -108,9 +108,11 @@ export function createEmbeddedRunProgressController(params: {
     fastModeAutoProgressState.offAnnounced = true;
     await emitFastModeAutoProgress(next);
   };
-  const notifyToolResult = async (payload: ReplyPayload) => {
-    await params.attempt.onToolResult?.(payload);
-  };
+  const notifyToolResult = params.attempt.onToolResult
+    ? async (payload: ReplyPayload) => {
+        await params.attempt.onToolResult?.(payload);
+      }
+    : undefined;
   const notifyAgentEvent = async (
     event: Parameters<NonNullable<RunEmbeddedAgentParams["onAgentEvent"]>>[0],
   ) => {
