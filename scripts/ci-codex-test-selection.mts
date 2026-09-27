@@ -16,6 +16,7 @@ import { parseArgs, stripVTControlCharacters } from "node:util";
 import { z } from "zod";
 import outputSchema from "../.github/codex/prompts/ci-test-selection.schema.json" with { type: "json" };
 import { isTestFileTarget } from "./lib/changed-path-facts.mjs";
+import type { ChangedNodeTestSelectionEvidence } from "./lib/ci-changed-node-test-plan.mts";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
@@ -42,6 +43,10 @@ const preparedSchema = z.object({
   head: z.string(),
   candidates: strings,
   floor: strings,
+  floorReasons: z.record(
+    z.string(),
+    z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
+  ),
   prefixes: strings,
   nodeJobs: strings,
   preparedAtMs: z.number(),
@@ -347,12 +352,19 @@ async function prepare(base: string, head: string, dir: string) {
   ) {
     throw new Error("changed-paths-mismatch");
   }
-  const { createChangedNodeTestShards, createChangedExtensionFallbackShards } =
-    await import("./lib/ci-changed-node-test-plan.mts");
+  const {
+    createChangedNodeTestShards,
+    createChangedExtensionFallbackShards,
+    classifyChangedNodeTestCandidates,
+  } = await import("./lib/ci-changed-node-test-plan.mts");
   const { createNodeTestShardBundles } = await import("./lib/ci-node-test-plan.mts");
   const { readToolingFileTimings } = await import("./lib/ci-test-timings.mts");
   let fallbackReason = context?.fallbackReason;
-  let prunableTargets: string[] = [];
+  let selectionEvidence: ChangedNodeTestSelectionEvidence = {
+    importDepths: new Map(),
+    nonImportTargets: new Set(),
+    nonImportRows: [],
+  };
   const options = context?.options ?? {
     baseRef: base,
     runnerBackend: "hybrid",
@@ -368,7 +380,7 @@ async function prepare(base: string, head: string, dir: string) {
       fallbackReason = reason;
     },
     onSelectionEvidence: (evidence) => {
-      prunableTargets = evidence.prunableTargets;
+      selectionEvidence = evidence;
     },
   });
   const rows = process.env.OPENCLAW_CI_SELECTION_MATRIX
@@ -395,9 +407,17 @@ async function prepare(base: string, head: string, dir: string) {
         .filter((row) => !row.requiresDist)
         .map((row) => rowSchema.parse({ ...row, check_name: row.checkName }));
   const candidates = await candidateFiles(rows);
-  const prunableSet = new Set(prunableTargets);
-  const floor = candidates.filter((file) => !prunableSet.has(file));
-  const prunable = candidates.filter((file) => prunableSet.has(file));
+  const nonImportRowFiles = await candidateFiles(
+    selectionEvidence.nonImportRows.map((row) =>
+      rowSchema.parse({ ...row, check_name: row.checkName }),
+    ),
+  );
+  const { floor, prunable, floorReasons } = classifyChangedNodeTestCandidates(
+    changedPaths,
+    candidates,
+    selectionEvidence,
+    new Set(nonImportRowFiles),
+  );
   const diffResult = spawnSync(
     "git",
     ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", base, head, "--"],
@@ -424,6 +444,7 @@ async function prepare(base: string, head: string, dir: string) {
     head,
     candidates,
     floor,
+    floorReasons,
     prefixes: grouped.prefixes,
     nodeJobs: rows.map((row) => row.check_name),
     preparedAtMs: Date.now(),
@@ -468,6 +489,7 @@ async function finalize(dir: string, outcome = process.env.OPENCLAW_CI_CODEX_OUT
       head: git(["rev-parse", "HEAD"]),
       candidates,
       floor: candidates,
+      floorReasons: Object.fromEntries(candidates.map((file) => [file, 5 as const])),
       prefixes: [],
       nodeJobs: rows.map((row) => row.check_name),
       preparedAtMs: Date.now(),

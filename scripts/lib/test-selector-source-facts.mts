@@ -353,9 +353,16 @@ function importFacts(
       const specifier = match[1] ?? match[2] ?? match[3]?.replace(/[?#].*$/u, "");
       if (specifier) {
         imports.add(specifier);
+        if (match[3] || /^(?:require\.resolve|import\.meta\.resolve)\s*\(/u.test(match[0])) {
+          nonImportSpecifiers.add(specifier);
+        }
       }
     }
-    return { imports: [...imports], typeOnlyImports: [], nonImportSpecifiers: [...imports] };
+    return {
+      imports: [...imports],
+      typeOnlyImports: [],
+      nonImportSpecifiers: [...nonImportSpecifiers],
+    };
   }
   if (!classifyTypes || (!needsTypeStrip && runtimeSource === undefined)) {
     return {
@@ -370,7 +377,11 @@ function importFacts(
     runtimeSource ??= nodeModule.stripTypeScriptTypes(source, { mode: "strip" });
   } catch {
     // JSX and transform-required syntax remain conservatively connected.
-    return { imports: [...imports], typeOnlyImports: [], nonImportSpecifiers: [...imports] };
+    return {
+      imports: [...imports],
+      typeOnlyImports: [],
+      nonImportSpecifiers: [...nonImportSpecifiers],
+    };
   }
   const runtime = new Set(importFacts(runtimeSource, false).imports);
   return {

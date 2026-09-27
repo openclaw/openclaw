@@ -99,18 +99,24 @@ variable enables shadow collection.
 
 The deterministic floor includes changed tests, direct importers, tests in the
 changed source's directory, and every non-import owner: policy watches,
-filesystem scanners, manifest and file readers, and whole-suite inventories.
-Only tests selected solely through imports at depth two or greater can be
-proposed for pruning. The existing import graph supplies depth and provenance;
-Vitest supplies whole-config file inventories. Broad fallbacks, diffs exceeding
+filesystem scanners, manifest and file readers, and boundary proofs. Rows selected
+for configuration, dependency, packing-policy, or unresolved ownership reasons
+also stay in the floor. Compact and plugin bundles selected through import
+reachability remain eligible: every candidate at depth two or greater without a
+floor reason can be proposed for pruning. The existing runtime import graph
+resolves SDK and workspace-package aliases and supplies depth and provenance;
+Vitest supplies whole-config file inventories. Parser uncertainty preserves
+conservative import reachability without inventing a non-import selection reason.
+Broad fallbacks, diffs exceeding
 320,000 characters, and plans without prunable files skip Codex. Prompt diffs
 are limited to 80,000 characters and explicitly marked when truncated.
 
 Missing or invalid output, a failed or timed-out proposal, and low confidence
 keep every candidate. Unknown keep entries are counted and ignored; directory
 prefixes expand only when they appeared in the prompt. Selection artifacts
-contain `selection.json`, the prepared inventory, prompt, output, and a short
-summary. Report artifacts contain `report.json`, failing test classifications,
+contain `selection.json`, the prepared inventory with each floor file's first
+matching reason (changed test, direct import, same directory, non-import file,
+or non-import row), prompt, output, and a short summary. Report artifacts contain `report.json`, failing test classifications,
 and a summary. Both are retained for 14 days. Per-file timing estimates appear
 only when the existing timing source covers every pruned file; these are test
 seconds, not expected workflow wall-time savings.

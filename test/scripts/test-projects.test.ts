@@ -5245,6 +5245,31 @@ describe("test selector native source facts", () => {
     });
   });
 
+  it.each([
+    'import "./runtime.js"; const view = <div />;',
+    'import type { Value } from "./runtime.js"; enum Mode { Active };',
+  ])(
+    "retains uncertain import reachability without inventing file-reader provenance: %s",
+    (source) => {
+      withTinyFileTree(
+        {
+          "consumer.tsx": `${source}\nnew URL("./fixture.ts", import.meta.url);\nrequire.resolve("./resolved.ts");`,
+        },
+        (cwd) => {
+          const [facts] = readTestSelectorSourceFacts(
+            cwd,
+            [{ file: "consumer.tsx", parseImports: true }],
+            [],
+            1024 * 1024,
+          );
+          expect(facts?.imports).toEqual(["./runtime.js", "./fixture.ts", "./resolved.ts"]);
+          expect(facts?.typeOnlyImports).toEqual([]);
+          expect(facts?.nonImportSpecifiers).toEqual(["./fixture.ts", "./resolved.ts"]);
+        },
+      );
+    },
+  );
+
   it("reads complete files without installed packages, inherited hooks, or reparsing cached imports", () => {
     withTinyFileTree(
       {
