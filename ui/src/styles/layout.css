@@ -4461,7 +4461,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 .content > * + * {
-  margin-top: 20px;
+  margin-top: var(--content-stack-gap, 20px);
 }
 
 .shell--settings .content:has(> .connection-action-block) {
@@ -4574,10 +4574,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   overflow: hidden;
   padding: 0;
   gap: 0;
-}
-
-.content:has(.plugin-tab-embed) > * + * {
-  margin-top: 0;
+  --content-stack-gap: 0px;
 }
 
 .content:has(.plugin-tab-embed) > openclaw-router-outlet {
