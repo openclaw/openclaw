@@ -301,6 +301,28 @@ function testRegexFromStart(regex: RegExp, value: string): boolean {
   return regex.test(value);
 }
 
+// Fixed budget for bounded matching: head + tail + at most this many middle
+// windows, so oversize inputs cannot cause unbounded synchronous work.
+const SAFE_REGEX_MAX_MIDDLE_WINDOWS = 6;
+
+function hasStartAnchor(source: string): boolean {
+  return source.startsWith("^");
+}
+
+function hasEndAnchor(source: string): boolean {
+  let i = source.length - 1;
+  if (i < 0 || source[i] !== "$") {
+    return false;
+  }
+  let backslashes = 0;
+  i -= 1;
+  while (i >= 0 && source[i] === "\\") {
+    backslashes += 1;
+    i -= 1;
+  }
+  return backslashes % 2 === 0;
+}
+
 export function testRegexWithBoundedInput(
   regex: RegExp,
   input: string,
@@ -312,19 +334,35 @@ export function testRegexWithBoundedInput(
   if (input.length <= maxWindow) {
     return testRegexFromStart(regex, input);
   }
+  // Anchored patterns keep full-key anchor meaning: a leading ^ can only
+  // match at the start of the key (head), a trailing $ only at its end
+  // (tail). Testing them against middle slices would treat a slice boundary
+  // as input start/end and forward excluded sessions.
+  if (hasStartAnchor(regex.source)) {
+    return testRegexFromStart(regex, input.slice(0, maxWindow));
+  }
+  const tailStart = input.length - maxWindow;
+  if (hasEndAnchor(regex.source)) {
+    return testRegexFromStart(regex, input.slice(tailStart));
+  }
   const head = input.slice(0, maxWindow);
   if (testRegexFromStart(regex, head)) {
     return true;
   }
-  const tailStart = input.length - maxWindow;
-  // Slide middle windows with 50% overlap so any match up to half a window
-  // long is fully contained in at least one tested window. Head and tail
-  // stay as fast paths for anchored (^ / $) patterns.
+  // Unanchored patterns: slide middle windows with 50% overlap so any match
+  // up to half a window long is fully contained in at least one tested
+  // window. Window count is capped; longer keys fail closed past the budget.
   const stride = Math.max(1, Math.floor(maxWindow / 2));
-  for (let start = stride; start < tailStart; start += stride) {
+  let middleWindows = 0;
+  for (
+    let start = stride;
+    start < tailStart && middleWindows < SAFE_REGEX_MAX_MIDDLE_WINDOWS;
+    start += stride
+  ) {
     if (testRegexFromStart(regex, input.slice(start, start + maxWindow))) {
       return true;
     }
+    middleWindows += 1;
   }
   return testRegexFromStart(regex, input.slice(tailStart));
 }
