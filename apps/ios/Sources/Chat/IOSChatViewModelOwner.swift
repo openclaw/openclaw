@@ -7,6 +7,7 @@ import OpenClawProtocol
 @Observable
 final class IOSChatViewModelOwner {
     private(set) var viewModel: OpenClawChatViewModel?
+    private(set) var presentationID = UUID()
     private(set) var ownerID = ""
     private(set) var presentationAgentID = "main"
     private(set) var presentationAgentName = "Main"
@@ -15,6 +16,7 @@ final class IOSChatViewModelOwner {
     private var transportAgentID = ""
     private var routingContract = ""
     private var wasConnected = false
+    @ObservationIgnored private var hydratedComposerModel: (@MainActor () -> OpenClawChatViewModel?)?
     @ObservationIgnored private var controlUIInputs: GatewayConnectConfig.ControlUIInputs?
 
     func sync(appModel: NodeAppModel) {
@@ -59,6 +61,8 @@ final class IOSChatViewModelOwner {
         } else {
             nil
         }
+        // Initial route hydration changes transport, but the same draft keeps its native editor.
+        if draft == nil { self.presentationID = UUID() }
         self.viewModel?.detachTransport()
         self.ownerID = ownerID
         self.transportAgentID = agentID
@@ -97,7 +101,21 @@ final class IOSChatViewModelOwner {
             diagnosticsLog: { message in GatewayDiagnostics.log(message) })
         self.viewModel = viewModel
         if let draft { viewModel.input = draft }
+        self.hydratedComposerModel = draft != nil ? viewModel.composerModelResolver() : nil
         viewModel.load()
+    }
+
+    func composerModelResolver() -> @MainActor () -> OpenClawChatViewModel? {
+        guard let viewModel else { return { nil } }
+        let presentationID = self.presentationID
+        let modelID = ObjectIdentifier(viewModel)
+        let capturedModel = viewModel.composerModelResolver()
+        return { [weak self] in
+            guard let self, self.presentationID == presentationID else { return nil }
+            if self.viewModel.map(ObjectIdentifier.init) == modelID { return capturedModel() }
+            // A keystroke can arrive after hydration replaces the model but before SwiftUI updates its binding.
+            return self.hydratedComposerModel?()
+        }
     }
 
     func isCurrent(appModel: NodeAppModel) -> Bool {

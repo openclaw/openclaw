@@ -382,7 +382,6 @@ vi.mock("../infra/exec-auto-review.js", async (importOriginal) => ({
 }));
 
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
-  buildExecApprovalRequesterContext: vi.fn(() => ({})),
   buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
   registerExecApprovalRequestForHostOrThrow: vi.fn(async () => undefined),
   isExecApprovalRunAbortedError: (error: unknown) => error === runAbortedApprovalError,

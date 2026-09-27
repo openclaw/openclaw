@@ -330,6 +330,15 @@ describe("Codex app-server config", () => {
     });
   });
 
+  it.each([true, false, undefined])("resolves the optional Ultrafast setting %s", (enabled) => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: { appServer: { serviceTier: "priority", enableUltrafast: enabled } },
+      env: {},
+    });
+    expect(runtime.enableUltrafast).toBe(enabled === true);
+    expect(runtime.serviceTier).toBe("priority");
+  });
+
   it("passes through non-empty Codex app-server service tiers for forward compatibility", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {

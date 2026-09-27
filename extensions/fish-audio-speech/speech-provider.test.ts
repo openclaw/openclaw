@@ -1,4 +1,3 @@
-// Fish Audio tests cover config, request mapping, streaming, discovery, and target formats.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildFishAudioSpeechProvider } from "./speech-provider.js";
 
@@ -24,6 +23,13 @@ function requestBody(init?: RequestInit): Record<string, unknown> {
 
 describe("Fish Audio speech provider", () => {
   const originalFetch = globalThis.fetch;
+  const provider = buildFishAudioSpeechProvider();
+  const request = {
+    text: "hello",
+    cfg: {},
+    providerConfig: { apiKey: "fish-test" },
+    timeoutMs: 1_000,
+  };
 
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
@@ -37,16 +43,14 @@ describe("Fish Audio speech provider", () => {
     vi.restoreAllMocks();
   });
 
-  it("exposes S2.1 free as the default without requiring a voice id", () => {
+  it("defaults to S2.1 Pro and accepts an environment key without a voice id", () => {
     vi.stubEnv("FISH_API_KEY", "fish-test");
-    const provider = buildFishAudioSpeechProvider();
     expect(provider.defaultModel).toBe("s2.1-pro");
     expect(provider.models).toEqual(["s2.1-pro-free", "s2.1-pro", "s2-pro", "s1"]);
     expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 1_000 })).toBe(true);
   });
 
   it("preserves Talk setting precedence and explicit blank-key clearing", () => {
-    const provider = buildFishAudioSpeechProvider();
     const params = {
       modelId: " ",
       model: "s1",
@@ -85,10 +89,9 @@ describe("Fish Audio speech provider", () => {
         headers: { "content-type": "audio/mpeg" },
       });
     }) as unknown as typeof fetch;
-    const provider = buildFishAudioSpeechProvider();
     const result = await provider.synthesize({
+      ...request,
       text: "[whisper] Keep this quiet. [excited] Now celebrate!",
-      cfg: {} as never,
       providerConfig: {
         apiKey: "fish-test",
         model: "s2.1-pro",
@@ -120,13 +123,9 @@ describe("Fish Audio speech provider", () => {
         headers: { "content-type": "audio/opus" },
       });
     }) as unknown as typeof fetch;
-    const provider = buildFishAudioSpeechProvider();
     const result = await provider.streamSynthesize?.({
-      text: "hello",
-      cfg: {} as never,
-      providerConfig: { apiKey: "fish-test" },
+      ...request,
       target: "voice-note",
-      timeoutMs: 1_000,
     });
     expect(result).toMatchObject({
       outputFormat: "opus",
@@ -143,13 +142,7 @@ describe("Fish Audio speech provider", () => {
       expect(requestBody(init)).toMatchObject({ format: "pcm", sample_rate: 8000 });
       return new Response(new Uint8Array([7, 8]));
     }) as unknown as typeof fetch;
-    const provider = buildFishAudioSpeechProvider();
-    const result = await provider.synthesizeTelephony?.({
-      text: "hello",
-      cfg: {} as never,
-      providerConfig: { apiKey: "fish-test" },
-      timeoutMs: 1_000,
-    });
+    const result = await provider.synthesizeTelephony?.(request);
     expect(result).toEqual({
       audioBuffer: Buffer.from([7, 8]),
       outputFormat: "pcm",
@@ -186,7 +179,6 @@ describe("Fish Audio speech provider", () => {
         ],
       });
     }) as unknown as typeof fetch;
-    const provider = buildFishAudioSpeechProvider();
     const voices = await provider.listVoices?.({
       providerConfig: { apiKey: "fish-test" },
       timeoutMs: 9_000,
@@ -203,16 +195,13 @@ describe("Fish Audio speech provider", () => {
   it("fails closed on blank credentials before network access", async () => {
     vi.stubEnv("FISH_API_KEY", "   ");
     vi.stubEnv("FISH_AUDIO_API_KEY", "   ");
-    const provider = buildFishAudioSpeechProvider();
     const providerConfig = { apiKey: "   " };
     expect(provider.isConfigured({ providerConfig, timeoutMs: 1_000 })).toBe(false);
     await expect(
       provider.synthesize({
-        text: "hello",
-        cfg: {} as never,
+        ...request,
         providerConfig,
         target: "audio-file",
-        timeoutMs: 1_000,
       }),
     ).rejects.toThrow("Fish Audio API key missing");
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
@@ -226,7 +215,6 @@ describe("Fish Audio speech provider", () => {
     { key: "speed", value: "0.5", overrides: { speed: 0.5 } },
     { key: "fish_speed", value: "2", overrides: { speed: 2 } },
   ])("accepts the $key=$value directive boundary", ({ key, value, overrides }) => {
-    const provider = buildFishAudioSpeechProvider();
     expect(
       provider.parseDirectiveToken?.({
         key,

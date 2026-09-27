@@ -90,7 +90,7 @@ Source: https://github.com/tokio-rs/bytes
 Declared license: MIT
 LICENSE: L016
 
-cc 1.4.5
+cc 1.4.7
 Source: https://github.com/rust-lang/cc-rs
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
@@ -260,7 +260,7 @@ Declared license: MIT/Apache-2.0
 LICENSE-APACHE: L005
 LICENSE-MIT: L044
 
-find-msvc-tools 0.1.12
+find-msvc-tools 0.1.13
 Source: https://github.com/rust-lang/cc-rs
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005

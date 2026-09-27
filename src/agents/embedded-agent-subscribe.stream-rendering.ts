@@ -17,6 +17,7 @@ import {
   trimTextFilter,
   trimTextPreservingCode,
 } from "../shared/text/text-projection.js";
+import type { BlockChunkMetadata } from "./embedded-agent-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -352,19 +353,7 @@ export function createStreamRendering({
     output += text.slice(lastIndex);
     return output;
   };
-  const emitBlockChunk = (
-    text: string,
-    options?: {
-      sourceText?: string;
-      sourceGeneration?: number;
-      reconciledSourceBreak?: true;
-      sourceStart?: number;
-      sourceEnd?: number;
-      assistantMessageIndex?: number;
-      final?: boolean;
-      finalReply?: ReplyDirectiveParseResult;
-    },
-  ) => {
+  const emitBlockChunk: EmbeddedAgentSubscribeContext["emitBlockChunk"] = (text, options) => {
     if (
       state.suppressBlockChunks ||
       params.silentExpected ||
@@ -595,16 +584,7 @@ export function createStreamRendering({
     if (!params.onBlockReply) {
       return undefined;
     }
-    let pendingChunk:
-      | {
-          text: string;
-          sourceText?: string;
-          sourceGeneration?: number;
-          reconciledSourceBreak?: true;
-          sourceStart?: number;
-          sourceEnd?: number;
-        }
-      | undefined;
+    let pendingChunk: ({ text: string } & Partial<BlockChunkMetadata>) | undefined;
     if (blockChunker.hasBuffered()) {
       blockChunker.drain({
         force: true,

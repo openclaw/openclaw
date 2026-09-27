@@ -1,4 +1,5 @@
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -34,6 +35,12 @@ export type {
   ChannelIngressQueueRecord,
   CreateChannelIngressQueueOptions,
 } from "./ingress-queue.types.js";
+
+class ChannelIngressClaimPolicyConflict extends Error {
+  constructor(readonly settled: Promise<SqliteWorkerOperationSettlement>) {
+    super("Channel ingress lane policy changed before claim commit");
+  }
+}
 
 function normalizePart(value: string | undefined, fallback: string): string {
   return value?.trim() || fallback;
@@ -112,6 +119,7 @@ export function createChannelIngressQueue<
     input: ChannelIngressWorkerOperations[Key]["input"],
     context = capture(),
     signal?: AbortSignal,
+    isClaimSelectionCurrent?: () => boolean,
   ) => {
     const assertActive = () => {
       assertQueueCurrent(context);
@@ -125,32 +133,37 @@ export function createChannelIngressQueue<
       {
         assertCurrent: assertActive,
         requireStateLifecycle: true,
-        createAdmission: claimClock
-          ? () => {
-              const transitionClock = new Float64Array(
-                new SharedArrayBuffer(Float64Array.BYTES_PER_ELEMENT),
-              );
-              let stage: "transaction" | "commit" | "settled" = "transaction";
-              return {
-                nativeLocations: [context.admission.databasePath],
-                admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                  if (request.stage !== stage) {
-                    throw new Error("Channel ingress claim authority requested out of order");
-                  }
-                  assertActive();
-                  if (stage === "transaction") {
-                    // The grant publishes this sample after the command's FIFO wait.
-                    transitionClock[0] = claimClock();
+        createAdmission:
+          claimClock || isClaimSelectionCurrent
+            ? (operation) => {
+                const transitionClock = claimClock
+                  ? new Float64Array(new SharedArrayBuffer(Float64Array.BYTES_PER_ELEMENT))
+                  : undefined;
+                let stage: "transaction" | "commit" | "settled" = "transaction";
+                return {
+                  nativeLocations: [context.admission.databasePath],
+                  admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                    if (request.stage !== stage) {
+                      throw new Error("Channel ingress claim authority requested out of order");
+                    }
                     assertActive();
-                  }
-                  if (!grant()) {
-                    throw new Error("Channel ingress claim authority expired");
-                  }
-                  stage = stage === "transaction" ? "commit" : "settled";
-                }, transitionClock),
-              };
-            }
-          : createSqliteWorkerWriteAdmission(assertActive, [context.admission.databasePath]),
+                    if (stage === "transaction" && claimClock && transitionClock) {
+                      // The grant publishes this sample after the command's FIFO wait.
+                      transitionClock[0] = claimClock();
+                    }
+                    const selectionCurrent = isClaimSelectionCurrent?.() ?? true;
+                    assertActive();
+                    if (!selectionCurrent) {
+                      throw new ChannelIngressClaimPolicyConflict(operation.settled);
+                    }
+                    if (!grant()) {
+                      throw new Error("Channel ingress claim authority expired");
+                    }
+                    stage = stage === "transaction" ? "commit" : "settled";
+                  }, transitionClock),
+                };
+              }
+            : createSqliteWorkerWriteAdmission(assertActive, [context.admission.databasePath]),
       },
     );
     // Mutations settle under their commit grant; prepared facts still need a live reader.
@@ -276,22 +289,49 @@ export function createChannelIngressQueue<
     };
     while (true) {
       const snapshot = await execute("channelIngress.claimSnapshot", request, context);
-      const selection = selectChannelIngressClaim(snapshot, request, resolveLane);
-      const result = await execute(
-        "channelIngress.claimNext",
-        {
-          request,
-          snapshot,
-          selection,
-          ownerId,
-          customClock: clock ? true : undefined,
-        },
-        context,
+      // Native fingerprinting owns row freshness; retain only the lane observations to recheck.
+      const preparedLanes: Array<{ row: ChannelIngressRow; laneKey: string | undefined }> = [];
+      const selection = selectChannelIngressClaim(
+        snapshot,
+        request,
+        deriveLaneKey
+          ? (row) => {
+              const laneKey = resolveLane(row);
+              preparedLanes.push({ row, laneKey });
+              return laneKey;
+            }
+          : resolveLane,
       );
-      if (result.kind === "conflict") {
-        continue;
+      try {
+        const result = await execute(
+          "channelIngress.claimNext",
+          {
+            request,
+            snapshot,
+            selection,
+            ownerId,
+            customClock: clock ? true : undefined,
+          },
+          context,
+          undefined,
+          deriveLaneKey
+            ? () => preparedLanes.every(({ row, laneKey }) => resolveLane(row) === laneKey)
+            : undefined,
+        );
+        if (result.kind === "conflict") {
+          continue;
+        }
+        return result.row ? claimedRecord<TPayload, TMetadata>(result.row) : null;
+      } catch (error) {
+        // Only our refused grant plus native rollback settlement permits another claim.
+        if (
+          error instanceof ChannelIngressClaimPolicyConflict &&
+          (await error.settled).kind === "completed"
+        ) {
+          continue;
+        }
+        throw error;
       }
-      return result.row ? claimedRecord<TPayload, TMetadata>(result.row) : null;
     }
   };
 

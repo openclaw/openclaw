@@ -599,7 +599,7 @@ export function createModelAuthAvailabilityResolver(
       }).eligible
     );
   };
-  const credentialAvailability = (
+  const resolvedProfileAvailability = (
     provider: string,
     profileId: string,
     credential: AuthProfileCredential,
@@ -615,6 +615,11 @@ export function createModelAuthAvailabilityResolver(
     ) {
       return false;
     }
+    if (hydratedProfileIds.has(profileId)) {
+      return (
+        credential.type !== "token" || credential.expires === undefined || credential.expires > now
+      );
+    }
     return resolveStoredCredentialReadOnlyAvailability({
       credential,
       cfg: params.cfg,
@@ -623,29 +628,6 @@ export function createModelAuthAvailabilityResolver(
       canRefreshOAuth:
         provider === OPENAI_PROVIDER_ID || externalCliRefreshProfileIds.has(profileId),
     });
-  };
-  const resolvedProfileAvailability = (
-    provider: string,
-    profileId: string,
-    credential: AuthProfileCredential,
-    target: AuthTarget,
-  ) => {
-    if (!hydratedProfileIds.has(profileId)) {
-      return credentialAvailability(provider, profileId, credential, target);
-    }
-    if (
-      !modeAllowed(
-        provider,
-        target,
-        credential.type,
-        credential.type === "oauth" ? credential.authFlow : undefined,
-      )
-    ) {
-      return false;
-    }
-    return (
-      credential.type !== "token" || credential.expires === undefined || credential.expires > now
-    );
   };
   const profileInCooldown = (profileId: string, target: AuthTarget) => {
     const cooldownModel = target.modelId
@@ -1012,31 +994,21 @@ export function createModelAuthAvailabilityResolver(
     } = {},
   ) => {
     const { profileLock, boundProfileId } = options;
-    const ownership = profileLock
+    const ownedProfileId = profileLock || boundProfileId;
+    const ownership = ownedProfileId
       ? {
-          reason: "runtime-binding" as const,
+          reason: profileLock ? ("runtime-binding" as const) : ("provider-binding" as const),
           source: profileSource(
             provider,
-            profileLock,
-            targetForProfile(profileLock),
-            true,
+            ownedProfileId,
+            targetForProfile(ownedProfileId),
+            Boolean(profileLock),
             "clear",
           ),
         }
-      : boundProfileId
-        ? {
-            reason: "provider-binding" as const,
-            source: profileSource(
-              provider,
-              boundProfileId,
-              targetForProfile(boundProfileId),
-              false,
-              "clear",
-            ),
-          }
-        : policy.required
-          ? { reason: "configured-auth" as const, source: policy.direct }
-          : undefined;
+      : policy.required
+        ? { reason: "configured-auth" as const, source: policy.direct }
+        : undefined;
     return buildProviderModelAuthSourcePlan({
       ...(ownership ? { ownership } : {}),
       profiles: (options.profileIds ?? order.profileIds).map((profileId) =>

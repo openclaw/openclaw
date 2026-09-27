@@ -606,6 +606,53 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     });
   });
 
+  it.each([
+    {
+      phase: "setup",
+      message:
+        'No API key found for provider "openai". Configure an API key (openclaw models auth paste-api-key --provider openai).',
+      status: 401,
+      type: "authentication_error",
+    },
+    {
+      phase: "embedding",
+      message: "Unknown model: openai/missing-embedding-model",
+      status: 404,
+      type: "invalid_request_error",
+    },
+    {
+      phase: "embedding",
+      message: "503 service unavailable",
+      status: 503,
+      type: "api_error",
+      publicMessage: "upstream provider overloaded",
+    },
+  ])(
+    "maps $phase failure to $status $type",
+    async ({ phase, message, status, type, publicMessage }) => {
+      const failingOperation = phase === "setup" ? createEmbeddingProviderMock : embedBatchMock;
+      failingOperation.mockRejectedValueOnce(new Error(message));
+
+      const res = await postEmbeddings({ model: "openclaw/default", input: "hello" });
+
+      expect(res.status).toBe(status);
+      expect(await res.json()).toEqual({ error: { type, message: publicMessage ?? message } });
+    },
+  );
+
+  it("redacts credentials in actionable provider errors", async () => {
+    const credential = "sk-test-embedding-error-fixture-1234567890";
+    embedBatchMock.mockRejectedValueOnce(new Error(`Incorrect API key provided: ${credential}`));
+
+    const res = await postEmbeddings({ model: "openclaw/default", input: "hello" });
+
+    expect(res.status).toBe(401);
+    const json = (await res.json()) as { error: { type: string; message: string } };
+    expect(json.error.type).toBe("authentication_error");
+    expect(json.error.message).toContain("Incorrect API key provided:");
+    expect(json.error.message).not.toContain(credential);
+  });
+
   it("closes the provider when embedding fails", async () => {
     const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
     embedBatchMock.mockRejectedValueOnce(new Error("embedding failed"));
