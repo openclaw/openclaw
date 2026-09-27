@@ -174,10 +174,8 @@ type RootMemoryMigrationResult = {
   changed: boolean;
   canonicalPath: string;
   legacyPath: string;
-  removedLegacy: boolean;
   mergedLegacy: boolean;
   archivedLegacyPath?: string;
-  copiedBytes?: number;
   /** True when the repair was skipped because a file exceeded the safe read limit. */
   readLimitExceeded?: boolean;
   /** True when the repair was skipped because a file could not be read. */
@@ -225,14 +223,14 @@ async function migrateLegacyRootMemoryFile(
   workspaceDir: string,
 ): Promise<RootMemoryMigrationResult> {
   const detection = await detectRootMemoryFiles(workspaceDir);
+  const unchanged: RootMemoryMigrationResult = {
+    changed: false,
+    canonicalPath: detection.canonicalPath,
+    legacyPath: detection.legacyPath,
+    mergedLegacy: false,
+  };
   if (!detection.canonicalExists || !detection.legacyExists) {
-    return {
-      changed: false,
-      canonicalPath: detection.canonicalPath,
-      legacyPath: detection.legacyPath,
-      removedLegacy: false,
-      mergedLegacy: false,
-    };
+    return unchanged;
   }
   const skippedForReadFailure = (err: unknown): RootMemoryMigrationResult => {
     const isTooLarge =
@@ -242,11 +240,7 @@ async function migrateLegacyRootMemoryFile(
       typeof (err as Error).message === "string" &&
       (err as Error).message.startsWith("File exceeds");
     return {
-      changed: false,
-      canonicalPath: detection.canonicalPath,
-      legacyPath: detection.legacyPath,
-      removedLegacy: false,
-      mergedLegacy: false,
+      ...unchanged,
       readLimitExceeded: isTooLarge,
       readError: !isTooLarge,
     };
@@ -274,14 +268,7 @@ async function migrateLegacyRootMemoryFile(
       legacyPath: detection.legacyPath,
     });
   } catch {
-    return {
-      changed: false,
-      canonicalPath: detection.canonicalPath,
-      legacyPath: detection.legacyPath,
-      removedLegacy: false,
-      mergedLegacy: false,
-      archiveError: true,
-    };
+    return { ...unchanged, archiveError: true };
   }
   let canonicalText: string;
   let legacyText: string;
@@ -305,7 +292,6 @@ async function migrateLegacyRootMemoryFile(
     return {
       ...skipped,
       changed: true,
-      removedLegacy: true,
       archivedLegacyPath,
     };
   }
@@ -320,10 +306,8 @@ async function migrateLegacyRootMemoryFile(
     changed: true,
     canonicalPath: detection.canonicalPath,
     legacyPath: detection.legacyPath,
-    removedLegacy: true,
     mergedLegacy: canonicalText !== legacyText,
     archivedLegacyPath,
-    ...(typeof detection.legacyBytes === "number" ? { copiedBytes: detection.legacyBytes } : {}),
   };
 }
 
@@ -426,9 +410,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       `- canonical: ${migration.canonicalPath}`,
       migration.archivedLegacyPath ? `- backup: ${migration.archivedLegacyPath}` : null,
       migration.mergedLegacy ? `- merged legacy content from: ${migration.legacyPath}` : null,
-      migration.removedLegacy
-        ? `- removed legacy file: ${migration.legacyPath}`
-        : `- legacy file still present: ${migration.legacyPath}`,
+      `- removed legacy file: ${migration.legacyPath}`,
     ].filter(Boolean);
     note(lines.join("\n"), "Doctor changes");
   } catch (err) {

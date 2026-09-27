@@ -98,18 +98,16 @@ function collectResolvedSkillPaths(value: unknown): string[] {
     if (!isRecord(skill)) {
       continue;
     }
-    if (typeof skill.filePath === "string" && skill.filePath.trim()) {
-      paths.push(skill.filePath.trim());
-    }
-    if (typeof skill.baseDir === "string" && skill.baseDir.trim()) {
-      paths.push(path.join(skill.baseDir.trim(), "SKILL.md"));
-    }
-    if (isRecord(skill.sourceInfo)) {
-      if (typeof skill.sourceInfo.path === "string" && skill.sourceInfo.path.trim()) {
-        paths.push(skill.sourceInfo.path.trim());
+    const sourceInfo = isRecord(skill.sourceInfo) ? skill.sourceInfo : undefined;
+    for (const [filePath, baseDir] of [
+      [skill.filePath, skill.baseDir],
+      [sourceInfo?.path, sourceInfo?.baseDir],
+    ]) {
+      if (typeof filePath === "string" && filePath.trim()) {
+        paths.push(filePath.trim());
       }
-      if (typeof skill.sourceInfo.baseDir === "string" && skill.sourceInfo.baseDir.trim()) {
-        paths.push(path.join(skill.sourceInfo.baseDir.trim(), "SKILL.md"));
+      if (typeof baseDir === "string" && baseDir.trim()) {
+        paths.push(path.join(baseDir.trim(), "SKILL.md"));
       }
     }
   }
@@ -198,10 +196,7 @@ function isInsidePath(baseDir: string, candidatePath: string): boolean {
   }
   const pathApi = baseIsWindows ? path.win32 : path;
   const relative = pathApi.relative(pathApi.resolve(baseDir), pathApi.resolve(candidatePath));
-  return (
-    relative === "" ||
-    (relative !== "" && !relative.startsWith("..") && !pathApi.isAbsolute(relative))
-  );
+  return relative === "" || (!relative.startsWith("..") && !pathApi.isAbsolute(relative));
 }
 function joinPathForRoot(root: string, ...segments: string[]): string {
   return isWindowsAbsolutePath(root)

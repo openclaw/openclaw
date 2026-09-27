@@ -260,22 +260,14 @@ function shouldSkipCodexApplyAfterInteractiveSelection(plan: MigrationPlan): boo
   return plan.providerId === "codex" && !hasSelectedCodexMigrationWork(plan);
 }
 
-function hasCodexSubscriptionRequiredPlugin(plan: MigrationPlan): boolean {
-  if (plan.providerId !== "codex") {
-    return false;
-  }
-  return plan.items.some((item) => item.reason === "codex_subscription_required");
-}
-
-function readCodexSubscriptionWarning(plan: MigrationPlan): string | undefined {
-  return plan.warnings?.find((warning) =>
-    warning.includes("Codex app-backed plugin migration requires"),
-  );
-}
-
 function logNoCodexSelection(runtime: RuntimeEnv, plan: MigrationPlan): void {
-  if (hasCodexSubscriptionRequiredPlugin(plan)) {
-    const warning = readCodexSubscriptionWarning(plan);
+  if (
+    plan.providerId === "codex" &&
+    plan.items.some((item) => item.reason === "codex_subscription_required")
+  ) {
+    const warning = plan.warnings?.find((entry) =>
+      entry.includes("Codex app-backed plugin migration requires"),
+    );
     if (warning) {
       runtime.log(warning);
     }
