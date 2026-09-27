@@ -804,6 +804,28 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+extension OpenClawChatMessage.OpenClawMetadata {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.kind = try container.decodeIfPresent(String.self, forKey: .kind)
+        self.id = try container.decodeIfPresent(String.self, forKey: .id)
+        self.runId = try container.decodeIfPresent(String.self, forKey: .runId)
+        self.turnBoundary = try container.decodeIfPresent(Bool.self, forKey: .turnBoundary)
+        self.steerTargetRunId = try container.decodeIfPresent(String.self, forKey: .steerTargetRunId)
+        self.idempotencyKey = try container.decodeIfPresent(String.self, forKey: .idempotencyKey)
+        self.truncated = try container.decodeIfPresent(Bool.self, forKey: .truncated)
+        self.tokensBefore = try container.decodeIfPresent(Double.self, forKey: .tokensBefore)
+        self.tokensAfter = try container.decodeIfPresent(Double.self, forKey: .tokensAfter)
+        self.senderIdentity = try container.decodeIfPresent(AnyCodable.self, forKey: .senderIdentity)
+        // Optional attribution must not make an otherwise readable history or cache row fail decoding.
+        self.senderId = try? container.decode(String.self, forKey: .senderId)
+        self.senderName = try? container.decode(String.self, forKey: .senderName)
+        self.senderUsername = try? container.decode(String.self, forKey: .senderUsername)
+        self.senderProfileAvatarUrl = try? container.decode(String.self, forKey: .senderProfileAvatarUrl)
+        self.transport = try container.decodeIfPresent(AnyCodable.self, forKey: .transport)
+    }
+}
+
 public struct OpenClawChatInFlightRun: Codable, Sendable {
     public let runId: String
     public let text: String

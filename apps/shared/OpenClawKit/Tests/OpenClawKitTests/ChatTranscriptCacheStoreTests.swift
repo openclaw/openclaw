@@ -301,12 +301,21 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #expect(!messageRows[0].payloadJSON.hasPrefix("["))
     }
 
-    @Test func `pre metadata transcript rows survive reopening and retain their partition`() async throws {
+    @Test(arguments: [
+        "",
+        #","senderId":42"#,
+        #","senderName":[]"#,
+        #","senderUsername":false"#,
+        #","senderProfileAvatarUrl":{}"#,
+    ])
+    func `legacy transcript rows survive reopening and retain their partition`(senderFields: String) async throws {
         await store.storeTestTranscript(
             sessionKey: "main",
             messages: [cacheMessage(role: "assistant", text: "cached reply", timestamp: 1000)])
-        // Pre-change encoder shape: no model or sender fields, including inside __openclaw.
-        let legacyPayload = #"{"role":"assistant","content":[{"type":"text","text":"cached reply"}],"timestamp":1000,"__openclaw":{"runId":"old-run"}}"#
+        // Older readers ignored sender fields. Invalid optional attribution must not invalidate the row.
+        let legacyPayload = """
+        {"role":"assistant","content":[{"type":"text","text":"cached reply"}],"timestamp":1000,"__openclaw":{"runId":"old-run"\(senderFields)}}
+        """
         try await databases.cacheQueue.write { db in
             try db.execute(
                 sql: "UPDATE cached_messages SET payload_json = ? WHERE gateway_id = 'gw-a'",
