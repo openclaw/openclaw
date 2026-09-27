@@ -19,7 +19,10 @@ import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { SessionAncestorReferences } from "./session-ancestor-references.js";
+import {
+  prepareSessionAncestor,
+  SessionAncestorReferences,
+} from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
@@ -162,6 +165,7 @@ export function createGatewayConnectionState(params: {
       }
       const presentRecipient = prepareSessionRowPublication(projection, Date.now());
       const encodedRows = new WeakMap<object, string>();
+      const preparedAncestors = new WeakMap<object, ReturnType<typeof prepareSessionAncestor>>();
       const ancestors = projection.ancestorRows(record);
       let projectedAgentRuns = projection.state.rowContext.projectedAgentRuns;
       let registrations: (readonly [string, ChatAbortControllerEntry])[] = [];
@@ -215,7 +219,15 @@ export function createGatewayConnectionState(params: {
                 return [];
               }
               const presented = presentation.present(ancestor, enrichment);
-              return presented ? [presented] : [];
+              if (!presented) {
+                return [];
+              }
+              let prepared = preparedAncestors.get(presented);
+              if (!prepared) {
+                prepared = prepareSessionAncestor(presented);
+                preparedAncestors.set(presented, prepared);
+              }
+              return [prepared];
             })
           : undefined;
         const ancestorDelivery = ancestorRows && references.prepare(ancestorRows);
