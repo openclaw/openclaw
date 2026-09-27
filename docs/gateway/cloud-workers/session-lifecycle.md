@@ -20,7 +20,9 @@ If a submitted turn encounters the old build before execution starts, OpenClaw r
 
 If the node is still reconnecting after a Gateway restart or update, that same submission waits for its current node connection before retrying admission. A current worker build reconnects without a runtime refresh. The wait uses the existing two-minute worker admission window, capped by the turn's configured timeout. Stop, a replaced session or placement, and another Gateway restart cancel the wait. An incompatible node runtime still reports that it needs an update.
 
-For node-backed sessions interrupted by a restart, recovery settles pending workspace results and retires the interrupted turn while retaining the machine. The resumed turn receives fresh authority; it does not replay the interrupted tool call automatically. Explicit Stop, Move, and failed-provider cleanup retain their normal teardown behavior.
+Graceful Gateway stop and restart interrupt OpenClaw worker turns as soon as draining begins, because worker protocol admission is closed during shutdown. The Gateway retains each interrupted turn's claim and pending workspace results for startup recovery instead of waiting for worker admission retries or failing the placement. Local embedded turns keep their normal drain behavior.
+
+For node-backed sessions interrupted by a restart, recovery confirms the old worker has stopped, settles pending workspace results, and retires the interrupted turn while retaining the machine. The next message receives fresh authority; it does not replay the interrupted tool call automatically. Explicit Stop, Move, and failed-provider cleanup retain their normal teardown behavior.
 
 Workspace manifest downloads use gzip when the node supports it and remain compatible with uncompressed transfers. Both the compressed response and its decoded manifest stay within the 64 MiB safety limit; the node verifies the decoded manifest before changing the workspace.
 
