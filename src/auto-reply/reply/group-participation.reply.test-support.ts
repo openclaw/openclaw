@@ -104,7 +104,13 @@ export async function createGroupReplyFixture() {
   const partials: string[] = [];
   const sent: string[] = [];
   let typing = 0;
-  const context = (body: string, messageId: string, groupId: string, mentioned = false) =>
+  const context = (
+    body: string,
+    messageId: string,
+    groupId: string,
+    mentioned = false,
+    commandSource?: "native" | "text",
+  ) =>
     finalizeInboundContext({
       Body: body,
       BodyForAgent: body,
@@ -121,6 +127,7 @@ export async function createGroupReplyFixture() {
       SenderName: "Alice",
       MessageSid: messageId,
       WasMentioned: mentioned,
+      ...(commandSource ? { CommandSource: commandSource, CommandAuthorized: true } : {}),
     });
   return {
     config,
@@ -141,9 +148,10 @@ export async function createGroupReplyFixture() {
       groupId = "-10001",
       options?: GetReplyOptions,
       mentioned = false,
+      commandSource?: "native" | "text",
     ) =>
       getReplyFromConfig(
-        context(body, messageId, groupId, mentioned),
+        context(body, messageId, groupId, mentioned, commandSource),
         {
           onPartialReply: (payload) => {
             if (payload.text) {

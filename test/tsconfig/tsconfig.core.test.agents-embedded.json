@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.core.test.shard.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-agents-embedded.tsbuildinfo"
+  },
+  "include": [
+    "../../src/agents/embedded-agent-runner/**/*.test.ts",
+    "../../src/agents/embedded-agent-runner/**/*.test.tsx"
+  ]
+}

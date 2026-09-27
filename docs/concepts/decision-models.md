@@ -43,6 +43,9 @@ distinguish invitations from opportunities to contribute in groups and channels
 with mention gating disabled.
 This behavior uses embedded harnesses, including the Codex harness. Generic CLI
 backends keep their existing reply behavior.
+These rules also apply after an upgrade when Decision assistance is already
+enabled: eligible groups can stay silent instead of replying to every admitted
+message.
 
 Invited requests use the existing permissions, tools, streaming, and delivery
 policy. For an unsolicited contribution, the agent investigates privately with

@@ -93,6 +93,9 @@ describe("Codex continuation admission", () => {
       if (scenario === "refresh" || scenario === "continuation") {
         expect(getRequestInputText(harness)).toContain("Work completed before refresh.");
       }
+      if (scenario === "continuation") {
+        expect(getRequestInputText(harness)).toContain(params.prompt);
+      }
       expect(beforePromptBuild).toHaveBeenCalled();
       for (const [event] of beforePromptBuild.mock.calls) {
         expect(event).toMatchObject({

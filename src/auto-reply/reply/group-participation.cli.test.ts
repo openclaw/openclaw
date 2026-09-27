@@ -145,6 +145,28 @@ it.each(["opt-out", "model-removal"])(
   },
 );
 
+it("keeps explicit native group commands on the ordinary reply path", async () => {
+  fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
+  models.decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
+  models.embedded.mockResolvedValue({
+    payloads: [{ text: "The requested summary." }],
+    meta: { durationMs: 1 },
+  });
+  const reply = await fixture.reply(
+    "Summarize the deployment port.",
+    "native-command-source",
+    "-10110",
+    undefined,
+    false,
+    "native",
+  );
+  expect(Array.isArray(reply) ? reply : [reply]).toEqual(
+    expect.arrayContaining([expect.objectContaining({ text: "The requested summary." })]),
+  );
+  expect(models.decision).not.toHaveBeenCalled();
+  expect(models.embedded).toHaveBeenCalledTimes(1);
+});
+
 it("keeps a selected generic CLI turn ordinary without a participation decision", async () => {
   fixture.config.agents!.defaults!.model = { primary: "fixture-cli/test-model" };
   models.cli.mockResolvedValue({
