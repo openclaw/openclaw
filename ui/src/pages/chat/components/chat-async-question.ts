@@ -14,6 +14,7 @@ import {
 import { persistedSteerTargetRunId } from "../stream-causal-boundary.ts";
 import {
   readLiveTerminalDisposition,
+  readLiveTerminalRevision,
   readLiveTerminalRunId,
 } from "../terminal-message-identity.ts";
 import {
@@ -214,11 +215,20 @@ function readQuestionHistory(messages: readonly unknown[]) {
   return { history, resolved };
 }
 
-// History arrays are replaced, never mutated; scan each once, not per scroll render.
-const questionHistories = new WeakMap<readonly unknown[], ReturnType<typeof readQuestionHistory>>();
+// History arrays are replaced, never mutated, but live terminal outcomes land
+// beside them. Rescan only for a new array or terminal outcome, not per render.
+const questionHistories = new WeakMap<
+  readonly unknown[],
+  { revision: number; history: ReturnType<typeof readQuestionHistory> }
+>();
 function questionHistory(messages: readonly unknown[]) {
-  const history = questionHistories.get(messages) ?? readQuestionHistory(messages);
-  questionHistories.set(messages, history);
+  const revision = readLiveTerminalRevision();
+  const cached = questionHistories.get(messages);
+  if (cached?.revision === revision) {
+    return cached.history;
+  }
+  const history = readQuestionHistory(messages);
+  questionHistories.set(messages, { revision, history });
   return history;
 }
 

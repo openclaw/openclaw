@@ -368,6 +368,15 @@ it("does not retire reminders on an aborted live terminal projection", () => {
   expect(present([question("old", "run-1"), terminal("run-1"), aborted]).pending).toHaveLength(1);
 });
 
+it("reconsiders reminders when a message-less terminal settles a published partial", () => {
+  const partial = { role: "assistant", runId: "run-1", content: "Partial work" };
+  const messages = [question("old", "run-1"), partial, terminal("run-2")];
+  expect(present(messages).pending).toHaveLength(1);
+  // The outcome is recorded beside the already published history array.
+  rememberLiveTerminalRun(partial, "run-1", undefined, "error");
+  expect(present(messages).pending).toHaveLength(0);
+});
+
 const historicalQuestion = (itemId = "old-question") => ({
   role: "assistant",
   openclawAsyncDelivery: {
