@@ -1,4 +1,3 @@
-// Node list parsing helpers normalize node inventory records from CLI output.
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./node-list-types.js";
