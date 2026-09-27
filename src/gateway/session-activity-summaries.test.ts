@@ -493,10 +493,16 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     },
   );
 
-  it.each(["initialization", "lifecycle", "utility-model"] as const)(
+  it.each(["initialization", "lifecycle", "utility-model", "visibility"] as const)(
     "rejects a recap when %s changes while its write is queued",
     async (change) => {
       await messages(2);
+      if (change === "visibility") {
+        await patchSessionEntryCore(scope, () => ({
+          spawnedBy: "agent:main:main",
+          category: "Work",
+        }));
+      }
       const completion = createDeferred<ReturnType<typeof result>>();
       complete.mockImplementationOnce(() => completion.promise);
       service.ensure(target);
@@ -518,7 +524,9 @@ describe("Activity recap lifecycle with the canonical session store", () => {
                 ...before,
                 ...(change === "initialization"
                   ? { initializationPending: true }
-                  : { lifecycleRevision: "lifecycle-2" }),
+                  : change === "visibility"
+                    ? { category: undefined }
+                    : { lifecycleRevision: "lifecycle-2" }),
               });
             }, writerScope);
           }
@@ -728,26 +736,22 @@ describe("Activity recap lifecycle with the canonical session store", () => {
 
   it("enqueues visible conversations through the registered RPC handler and rejects an invalid batch before model work", async () => {
     const conversations = [
-      { target, scope, entry: {} },
+      { key: target.key, sessionId: scope.sessionId, entry: {} },
       {
-        target: { key: "agent:main:dashboard:spawned", agentId: "main" },
-        scope: {
-          sessionKey: "agent:main:dashboard:spawned",
-          agentId: "main",
-          sessionId: "spawned-dashboard",
-        },
+        key: "agent:main:dashboard:spawned",
+        sessionId: "spawned-dashboard",
         entry: { spawnedBy: "agent:main:main" },
       },
       {
-        target: { key: "agent:main:grouped-child", agentId: "main" },
-        scope: {
-          sessionKey: "agent:main:grouped-child",
-          agentId: "main",
-          sessionId: "spawned-grouped",
-        },
+        key: "agent:main:grouped-child",
+        sessionId: "spawned-grouped",
         entry: { spawnedBy: "agent:main:main", category: "Work" },
       },
-    ];
+    ].map(({ key, sessionId, entry }) => ({
+      target: { key, agentId: "main" },
+      scope: { sessionKey: key, agentId: "main", sessionId },
+      entry,
+    }));
     for (const conversation of conversations) {
       await upsertSessionEntryCore(conversation.scope, {
         sessionId: conversation.scope.sessionId,
@@ -762,14 +766,10 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const published = createDeferred();
     changed.mockImplementation(() => {
       if (
-        conversations.every(
-          (conversation) =>
-            projectSessionActivitySummary({
-              ...conversation.target,
-              cfg,
-              entry: loadSessionEntryReadOnly(conversation.scope),
-            })?.state === "current",
-        )
+        conversations.every(({ target: row, scope: session }) => {
+          const entry = loadSessionEntryReadOnly(session);
+          return projectSessionActivitySummary({ ...row, cfg, entry })?.state === "current";
+        })
       ) {
         published.resolve();
       }

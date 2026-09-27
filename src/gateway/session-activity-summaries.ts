@@ -258,6 +258,7 @@ export function createSessionActivitySummaries(deps: {
     if (
       !entry ||
       entry.initializationPending ||
+      readSessionListSelectionFacts(state.key, entry).isSubagent ||
       entry.sessionId !== state.sessionId ||
       entry.lifecycleRevision !== state.lifecycleRevision
     ) {
