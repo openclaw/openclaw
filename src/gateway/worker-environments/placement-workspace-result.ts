@@ -12,6 +12,7 @@ import {
 } from "./placement-record.js";
 import { fromRow, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { publishPlacementWorkspaceResultState } from "./placement-turn-authority.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 
 type WorkspaceResultDatabase = Pick<
@@ -155,6 +156,7 @@ export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: s
     db,
     query(db).deleteFrom("worker_workspace_pending_results").where("session_id", "=", sessionId),
   );
+  publishPlacementWorkspaceResultState(db, sessionId);
 }
 
 export function readWorkerWorkspaceReconciliationFacts(
@@ -266,6 +268,7 @@ export function insertWorkerWorkspacePendingResult(
       .onConflict((conflict) => conflict.column("session_id").doNothing()),
   );
   if (result.numAffectedRows === 1n) {
+    publishPlacementWorkspaceResultState(db, placement.sessionId);
     sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
     return;
   }
@@ -331,6 +334,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
     if (!row || !matchesWorkspaceResultClaim(placement, pendingResultFromRow(row), claim)) {
       throw new Error(`Cannot update stale worker workspace result for ${claim.sessionId}`);
     }
+    publishPlacementWorkspaceResultState(db, placement.sessionId);
     sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
     return row;
   };
@@ -471,6 +475,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker workspace result changed for ${pending.sessionId}`);
         }
+        publishPlacementWorkspaceResultState(db, pending.sessionId);
         sessionChanges.emit({ all: true, scope: "worker-placements" }, db);
       });
     },

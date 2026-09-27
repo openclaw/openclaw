@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { supportsCurrentWorkerLaunch } from "./admission.js";
@@ -16,6 +17,7 @@ import {
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
+  placementTurnOwner,
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
 } from "./placement-record.js";
@@ -271,6 +273,30 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
 
   const reconcile = async (mode?: "startup"): Promise<void> => {
     if (mode === "startup") {
+      // Older Gateways can commit draining before claiming a result, or release
+      // an unstaged failed claim. The draining placement still owes a final save.
+      for (const { sessionId } of await placements.readRecoveryCandidates()) {
+        const facts = await placements.readProjection([sessionId], { current: true });
+        const placement = facts.placements.get(sessionId);
+        if (
+          placement?.state !== "draining" ||
+          placement.turnClaim ||
+          facts.pendingResults.has(sessionId) ||
+          facts.moves.has(sessionId)
+        ) {
+          continue;
+        }
+        const claimId = `reclaim-${randomUUID()}`;
+        const claim = placements.claimReclaimWorkspaceResult({
+          sessionId: placement.sessionId,
+          sessionKey: placement.sessionKey,
+          agentId: placement.agentId,
+          claimId,
+          runId: claimId,
+          owner: placementTurnOwner(placement),
+        });
+        placements.handoffWorkspaceResultRecovery(claim);
+      }
       // Drain the bounded environment pass before recovering placement authority or results.
       // Unowned teardown remains in the service-owned sweep.
       const reconciled = await runTasksWithConcurrency({

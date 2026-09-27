@@ -6,7 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
-import { createRecoveryService } from "./placement-dispatch-test-harness.js";
+import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
@@ -139,6 +139,7 @@ describe("worker environment runtime upgrades", () => {
       destroy,
       ensureNodeWorkerBundle,
       service,
+      tunnelManager,
     };
   }
 
@@ -262,6 +263,69 @@ describe("worker environment runtime upgrades", () => {
       lastError: null,
     });
   });
+
+  it.each(["version", "same-version build"] as const)(
+    "refreshes an unstaged Stop result after a %s change before reconciling and releasing its machine",
+    async (change) => {
+      const h = await setupUpgrade("ssh", "attached", {
+        ...support.BOOTSTRAP_RECEIPT,
+        ...(change === "same-version build"
+          ? { openclawVersion: currentReceipt.openclawVersion }
+          : {}),
+      });
+      h.placements.startDrain({
+        sessionId: REQUEST.sessionId,
+        environmentId: h.environment.environmentId,
+        ownerEpoch: h.environment.ownerEpoch,
+        expectedGeneration: h.placement!.generation,
+      });
+      const claim = h.placements.claimReclaimWorkspaceResult({
+        ...REQUEST,
+        claimId: "reclaim-runtime-upgrade",
+        runId: "reclaim-runtime-upgrade",
+        owner: {
+          kind: "local",
+          environmentId: h.environment.environmentId,
+          ownerEpoch: h.environment.ownerEpoch,
+        },
+      });
+      h.placements.handoffWorkspaceResultRecovery(claim);
+      h.placements.clearLocalTurnClaimsAfterRestart();
+      const fixture = createHarness(support.testState.stateDb, h.placements, {
+        workspacePath: support.testState.root,
+      });
+      fixture.markEnvironmentOwnerEpoch(h.environment.ownerEpoch);
+      vi.spyOn(h.tunnelManager, "start").mockImplementation(async () => {
+        expect(h.events).toEqual(["stopped", "installed"]);
+        const tunnel = await fixture.environments.startTunnel({
+          environmentId: h.environment.environmentId,
+          ownerEpoch: h.environment.ownerEpoch,
+        });
+        return { ...tunnel, environmentId: h.environment.environmentId };
+      });
+      h.destroy.mockImplementation(async () => {
+        expect(fixture.log).toContain("workspace:reconcile");
+        expect(h.placements.listPendingWorkspaceResults()).toMatchObject([
+          { workspaceAcceptedAtMs: expect.any(Number) },
+        ]);
+      });
+      const recovery = createHarness(support.testState.stateDb, h.placements, {
+        workspacePath: support.testState.root,
+        environmentService: h.service,
+      });
+
+      await recovery.service.reconcile("startup");
+
+      expect(h.install).toHaveBeenCalledOnce();
+      expect(h.destroy).toHaveBeenCalledOnce();
+      expect(h.provision).not.toHaveBeenCalled();
+      expect(h.placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "reclaimed",
+        turnClaim: null,
+      });
+      expect(h.placements.listPendingWorkspaceResults()).toEqual([]);
+    },
+  );
 
   it.each(["shutdown", "destroy", "move", "live turn"] as const)(
     "rejects a finished installation after %s closes its authority",

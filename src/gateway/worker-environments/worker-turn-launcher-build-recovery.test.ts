@@ -236,11 +236,15 @@ async function createBuildRecoveryHarness(
     reconcileActivePlacement: async (environmentId) => {
       if (!options.pendingResult) {
         if (options.refreshInPlace) {
-          createWorkerSessionPlacementGate(placements).assertWorkerRuntimeRefresh({
+          const refresh = await createWorkerSessionPlacementGate(
+            placements,
+          ).prepareWorkerRuntimeRefresh({
             sessionId: SESSION_ID,
             environmentId,
             ownerEpoch: OWNER_EPOCH,
           });
+          refresh.assertCurrent();
+          refresh.release();
           const bundleHash = "b".repeat(64);
           environment = {
             ...environment,

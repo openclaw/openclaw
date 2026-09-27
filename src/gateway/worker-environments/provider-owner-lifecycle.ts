@@ -90,11 +90,13 @@ export function createWorkerProviderOwnerLifecycle(
   const stopOwner = async (
     record: WorkerEnvironmentRecord,
     reason?: WorkerTunnelStopReason,
+    runtimeRefresh?: { assertCurrent: () => void },
   ): Promise<WorkerEnvironmentRecord> => {
     requireCurrentOwner(record);
+    runtimeRefresh?.assertCurrent();
     options.onOwnerStopped?.(record.environmentId);
     const sessionId = record.attachedSessionIds.length === 1 ? record.attachedSessionIds[0] : null;
-    if (sessionId) {
+    if (sessionId && !runtimeRefresh) {
       // Transfer an exact pending-result owner before credential revocation makes its
       // same-lifecycle worker permanently unreachable to recovery.
       options.placementStore?.prepareWorkspaceResultOwnerRevocation(
@@ -111,9 +113,11 @@ export function createWorkerProviderOwnerLifecycle(
       expectedOwnerEpoch: record.ownerEpoch,
       assertCurrent: () => {
         requireCurrentOwner(record);
+        runtimeRefresh?.assertCurrent();
       },
     });
     requireCurrentOwner(record);
+    runtimeRefresh?.assertCurrent();
     // Only a dedicated node lease makes provider teardown proof of worker termination.
     // Shared or unknown host isolation still requires the exact worker's stop acknowledgement.
     await tunnels?.stop(

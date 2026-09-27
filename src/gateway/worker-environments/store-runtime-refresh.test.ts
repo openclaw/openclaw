@@ -343,23 +343,16 @@ describe("worker environment runtime refresh", () => {
       ownerEpoch: environment.ownerEpoch,
     };
     const liveGate = createWorkerSessionPlacementGate(placements);
-    await expect(
-      store.refreshBootstrapReceipt({
-        ...input,
-        assertCurrent: () => {
-          liveGate.assertWorkerRuntimeRefresh(binding);
-        },
-      }),
-    ).rejects.toThrow("current turn");
+    await expect(liveGate.prepareWorkerRuntimeRefresh(binding)).rejects.toThrow("current turn");
     const recoveryGate = createWorkerSessionPlacementGate(placements, {
       rejectExistingWorkerClaims: true,
     });
-    await store.refreshBootstrapReceipt({
-      ...input,
-      assertCurrent: () => {
-        recoveryGate.assertWorkerRuntimeRefresh(binding);
-      },
-    });
+    const refresh = await recoveryGate.prepareWorkerRuntimeRefresh(binding);
+    try {
+      await store.refreshBootstrapReceipt({ ...input, assertCurrent: refresh.assertCurrent });
+    } finally {
+      refresh.release();
+    }
     expect(placements.get(placement!.sessionId)).toEqual({
       ...beforePlacement,
       workerBundleHash: replacement.bundleHash,

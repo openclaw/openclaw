@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -95,6 +97,103 @@ describe("worker session placement gate", () => {
   function bindingFor(claim: Awaited<ReturnType<typeof preclaim>>) {
     return claim;
   }
+
+  it.each(["missing result", "live reclaim", "live turn", "move"] as const)(
+    "rejects draining runtime refresh with %s",
+    async (state) => {
+      const active = await activate();
+      const binding = {
+        sessionId: active.sessionId,
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+      };
+      const turn =
+        state === "live turn"
+          ? await store.claimTurn({
+              ...SESSION,
+              claimId: "claim:live-turn",
+              runId: "live-turn",
+              owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+            })
+          : undefined;
+      if (state === "move") {
+        store.beginPlacementMove({
+          sessionId: active.sessionId,
+          source: { ...binding, generation: active.generation },
+          target: { kind: "gateway" },
+        });
+      } else {
+        store.startDrain({ ...binding, expectedGeneration: active.generation });
+      }
+      if (turn) {
+        store.markWorkspaceResultPending(turn);
+        store.handoffWorkspaceResultRecovery(turn);
+      } else if (state !== "missing result") {
+        const claim = store.claimReclaimWorkspaceResult({
+          ...SESSION,
+          claimId: "reclaim-gate",
+          runId: "reclaim-gate",
+          owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+        });
+        if (state === "move") {
+          store.handoffWorkspaceResultRecovery(claim);
+        }
+      }
+
+      await expect(
+        createWorkerSessionPlacementGate(store).prepareWorkerRuntimeRefresh(binding),
+      ).rejects.toThrow("placement recovery owner");
+    },
+  );
+
+  it.each(["metadata", "rollback", "handoff", "removal"] as const)(
+    "retains exact Stop runtime refresh custody across %s changes",
+    async (change) => {
+      const active = await activate();
+      const binding = {
+        sessionId: active.sessionId,
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+      };
+      store.startDrain({ ...binding, expectedGeneration: active.generation });
+      const claim = store.claimReclaimWorkspaceResult({
+        ...SESSION,
+        claimId: "reclaim-refresh",
+        runId: "reclaim-refresh",
+        owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+      });
+      store.handoffWorkspaceResultRecovery(claim);
+      const gate = createWorkerSessionPlacementGate(store);
+      const refresh = await gate.prepareWorkerRuntimeRefresh(binding);
+      if (change === "metadata") {
+        sessionChanges.emit({ agentId: SESSION.agentId, sessionKey: SESSION.sessionKey });
+        expect(() => refresh.assertCurrent()).not.toThrow();
+      } else if (change === "rollback") {
+        expect(() =>
+          runOpenClawStateWriteTransaction(
+            () => {
+              store.handoffWorkspaceResultRecovery(claim);
+              expect(() => refresh.assertCurrent()).toThrow("placement authority changed");
+              throw new Error("rollback recovery handoff");
+            },
+            { path: database.path },
+          ),
+        ).toThrow("rollback recovery handoff");
+        expect(() => refresh.assertCurrent()).not.toThrow();
+      } else {
+        if (change === "handoff") {
+          store.handoffWorkspaceResultRecovery(claim);
+        } else {
+          store.abandonWorkspaceResult(store.listPendingWorkspaceResults()[0]!);
+        }
+        expect(() => refresh.assertCurrent()).toThrow("placement authority changed");
+      }
+      refresh.release();
+
+      expect(gate.validateWorkerTurn(claim)).toBe(false);
+      expect(store.validateWorkspaceResultClaim(claim)).toBe(change !== "removal");
+    },
+  );
 
   it("rejects restart-inherited claims while preserving workspace recovery authority", async () => {
     const claim = await preclaim("run-inherited-worker");
