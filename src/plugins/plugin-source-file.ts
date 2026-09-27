@@ -11,7 +11,7 @@ import { isGitRuntimeStagingName } from "../infra/update-runtime-staging.js";
 export const isPluginSourceEntry = (name: string): boolean =>
   name !== "node_modules" && name !== ".git" && !isGitRuntimeStagingName(name);
 
-export function shouldFallbackFromPluginDescriptorCopy(
+function shouldFallbackFromPluginDescriptorCopy(
   error: unknown,
   platform: NodeJS.Platform = process.platform,
   isBun = Object.hasOwn(process.versions, "bun"),
