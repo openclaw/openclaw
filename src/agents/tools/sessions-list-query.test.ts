@@ -442,6 +442,7 @@ describe("sessions-list inventory queries", () => {
 
   it.each([
     { name: "missing", nextOffset: undefined, empty: false },
+    { name: "skipped", nextOffset: 22, empty: false },
     { name: "fractional", nextOffset: 21.5, empty: false },
     { name: "empty stalled page", nextOffset: 20, empty: true },
   ])("fails visibly when Gateway pagination is $name", async ({ nextOffset, empty }) => {
