@@ -35,6 +35,7 @@ class SidebarShellLogicTest {
 
   @Test
   fun storedSidebarOrderAppendsMissingDestinationsInCanonicalOrder() {
+    val destinations = orderedSidebarDestinations(listOf("threads", "home", "threads", "unknown"))
     assertEquals(
       listOf(
         SidebarDestination.Threads,
@@ -43,20 +44,22 @@ class SidebarShellLogicTest {
         SidebarDestination.Work,
         SidebarDestination.Settings,
       ),
-      orderedSidebarDestinations(listOf("threads", "home", "threads", "unknown")),
+      destinations.take(5),
     )
+    assertTrue(SidebarDestination.SkillWorkshop in destinations.drop(5))
+    assertEquals(destinations.size, destinations.distinct().size)
   }
 
   @Test
   fun reorderMovesOnePositionAndKeepsCanonicalDestinations() {
-    val initial = listOf("settings", "work", "home", "skills", "threads")
+    val initial = orderedSidebarDestinations(listOf("settings", "work", "home", "skills", "threads")).map(SidebarDestination::stableId)
 
     assertEquals(
-      listOf("work", "settings", "home", "skills", "threads"),
+      listOf("work", "settings") + initial.drop(2),
       moveSidebarDestination(initial, destinationId = "work", direction = -1),
     )
     assertEquals(
-      listOf("settings", "home", "work", "skills", "threads"),
+      listOf("settings", "home", "work") + initial.drop(3),
       moveSidebarDestination(initial, destinationId = "work", direction = 1),
     )
     assertEquals(

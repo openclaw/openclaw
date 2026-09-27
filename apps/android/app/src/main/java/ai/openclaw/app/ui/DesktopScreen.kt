@@ -4,8 +4,6 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -25,7 +23,7 @@ internal fun DesktopScreen(
   val controlPage by viewModel.gatewayControlPage.collectAsState()
   ControlUiScreenFrame(
     title = nativeString("Desktop"),
-    icon = Icons.Outlined.DesktopWindows,
+    icon = SettingsRoute.Desktop.icon,
     onBack = onBack,
     // Keep the viewer's touch toolbar above the soft keyboard.
     modifier = Modifier.imePadding(),

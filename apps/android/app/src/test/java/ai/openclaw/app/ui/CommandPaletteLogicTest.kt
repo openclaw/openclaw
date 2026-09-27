@@ -86,6 +86,33 @@ class CommandPaletteLogicTest {
   fun appearanceSearchFromSettingsReturnsToSettingsHome() = verifyAppearanceSearch(HomeDestination.Settings)
 
   @Test
+  fun workspacePageRemainsReachableThroughMoreAndSearchWithBackToOrigin() {
+    val workshop = nativeString("Skill Workshop")
+    val workshopDescription = nativeString("Review generated skill proposals before they become live skills.")
+    withShell(HomeDestination.Connect) { backDispatcher, assertRuntimeUnchanged ->
+      composeRule.onNodeWithTag("sidebar-open-overview").performClick()
+      composeRule.onNodeWithText(nativeString("More")).performScrollTo().performClick()
+      composeRule.onNodeWithText(workshop).performScrollTo().performClick()
+      composeRule.onNodeWithText(workshopDescription).assertIsDisplayed()
+      assertRuntimeUnchanged()
+      composeRule.runOnIdle { backDispatcher.onBackPressed() }
+      composeRule.onNodeWithTag("sidebar-open-overview").assertIsDisplayed()
+
+      composeRule.onNodeWithContentDescription(nativeString("Search")).performClick()
+      composeRule.onNode(hasSetTextAction()).performTextReplacement(workshop)
+      val searchResults = hasScrollAction() and hasAnyDescendant(hasSetTextAction())
+      composeRule
+        .onNode(hasText(workshop) and hasClickAction() and hasSetTextAction().not() and hasAnyAncestor(searchResults))
+        .performScrollTo()
+        .performClick()
+      composeRule.onNodeWithText(workshopDescription).assertIsDisplayed()
+      composeRule.onNodeWithContentDescription(nativeString("Back")).performClick()
+      composeRule.onNodeWithTag("sidebar-open-overview").assertIsDisplayed()
+      assertRuntimeUnchanged()
+    }
+  }
+
+  @Test
   fun localizedCopyDrivesRenderingAndSearchWithoutChangingActionIdentity() {
     val item =
       CommandItem(
@@ -136,9 +163,12 @@ class CommandPaletteLogicTest {
     assertEquals("Empty search must keep the compact quick-action menu", 5, quickActions.size)
     assertEquals(providerSubtitle, quickActions.single { it.action == providerAction }.subtitle.resolveNativeText())
 
-    val categoryMatches = commandItems(query = nativeString("Agents & automation"), desktopObserveAvailable = false, providerSubtitle = providerSubtitle)
-    assertTrue(categoryMatches.any { it.action == CommandAction.Settings(SettingsRoute.CronJobs) })
+    val categoryMatches = commandItems(query = nativeString("Configuration"), desktopObserveAvailable = false, providerSubtitle = providerSubtitle)
     assertEquals(providerSubtitle, categoryMatches.single { it.action == providerAction }.subtitle.resolveNativeText())
+    val workspaceMatches = commandItems(query = nativeString("Workspace"), desktopObserveAvailable = false, providerSubtitle = providerSubtitle)
+    assertTrue(workspaceMatches.any { it.action == CommandAction.Settings(SettingsRoute.CronJobs) })
+    assertTrue(workspaceMatches.any { it.action == CommandAction.Settings(SettingsRoute.SkillWorkshop) })
+    assertFalse(workspaceMatches.any { it.action == providerAction })
 
     // These destinations are outside the main Settings row group but still own routes.
     listOf(nativeString("Profile") to SettingsRoute.Profile, nativeString("Licenses") to SettingsRoute.Licenses).forEach { (query, route) ->
@@ -164,7 +194,7 @@ class CommandPaletteLogicTest {
   fun settingsRowsKeepLocalizedTitlesAndStatusesReadable() {
     val fontScale = mutableStateOf(1f)
     val title = nativeString("Providers & Models")
-    val value = nativeString("Review readiness")
+    val value = nativeString("Connect to manage providers")
     assertTrue(title.startsWith("Fournisseurs"))
     withShell(HomeDestination.Settings, Modifier.width(320.dp), { fontScale.value }) { backDispatcher, assertRuntimeUnchanged ->
       for (scale in listOf(1f, 2f)) {
@@ -191,15 +221,15 @@ class CommandPaletteLogicTest {
       composeRule.onNodeWithText(nativeString("Theme family")).assertIsDisplayed()
       composeRule.runOnIdle { backDispatcher.onBackPressed() }
       composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasText(nativeString("Licenses")))
+      val licensesRow = composeRule.onNodeWithContentDescription(settingsRowDisclosureDescription(nativeString("Licenses"), opensRoute = true))
       assertEquals(
         listOf(nativeString("Licenses")),
-        composeRule
-          .onNodeWithText(nativeString("Licenses"))
+        licensesRow
           .fetchSemanticsNode()
           .config[SemanticsProperties.Text]
           .map { it.text },
       )
-      composeRule.onNodeWithText(nativeString("Licenses")).performClick()
+      licensesRow.performScrollTo().performClick()
       composeRule.onNodeWithText(nativeString("OpenClaw appreciates its partners in the open-source community.")).assertIsDisplayed()
       assertRuntimeUnchanged()
     }

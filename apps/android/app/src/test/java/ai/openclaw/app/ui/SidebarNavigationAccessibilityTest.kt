@@ -8,6 +8,7 @@ import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.bindNodeRuntimeTestFixture
 import ai.openclaw.app.closeNodeRuntimeTestFixture
+import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
@@ -42,6 +43,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.printToString
 import androidx.core.os.LocaleListCompat
@@ -149,12 +151,12 @@ class SidebarNavigationAccessibilityTest {
     showSidebar()
     assertActions("Home")
     composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
-    composeRule.onNodeWithText("Edit pinned items").performClick()
+    composeRule.onNodeWithText("Edit pinned items").performScrollTo().performClick()
     editing = true
     capture("editor", popup = true)
     assertActions("Settings", "Move down")
     assertActions("Overview", "Move up", "Move down")
-    assertActions("Threads", "Move up")
+    assertActions("Threads", "Move up", "Move down")
     invokeMove("Overview", "Move up")
     assertPersisted(listOf("work", "settings", "home", "skills", "threads"), listOf("home"))
     assertActions("Overview", "Move down")
@@ -218,8 +220,8 @@ class SidebarNavigationAccessibilityTest {
     assertPersisted(personalizedOrder, listOf("settings", "work", "home"))
     sidebarRow("Settings").assertIsDisplayed()
     composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
-    composeRule.onNodeWithText("Edit pinned items").performClick()
-    composeRule.onNodeWithText("Reset pinned items").performClick()
+    composeRule.onNodeWithText("Edit pinned items").performScrollTo().performClick()
+    composeRule.onNodeWithText("Reset pinned items").performScrollTo().performClick()
     composeRule.runOnIdle {
       val popup =
         WindowInspector.getGlobalWindowViews().single {
@@ -303,9 +305,10 @@ class SidebarNavigationAccessibilityTest {
   ) {
     composeRule.runOnIdle {
       val reloaded = newPrefs()
-      assertEquals(order, reloaded.sidebarPageOrder.value)
+      val expectedOrder = order + defaultSidebarPageOrder.filterNot(order::contains)
+      assertEquals(expectedOrder, reloaded.sidebarPageOrder.value)
       assertEquals(visible, reloaded.sidebarVisiblePages.value)
-      assertEquals(order, model.sidebarPageOrder.value)
+      assertEquals(expectedOrder, model.sidebarPageOrder.value)
       assertEquals(visible, model.sidebarVisiblePages.value)
     }
   }
