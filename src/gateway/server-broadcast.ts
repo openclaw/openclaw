@@ -61,10 +61,17 @@ function serializeFrameField(
   name: "payload" | "stateVersion",
   value: unknown,
   messageStrings?: MessageStringEncoding,
+  serializeSession?: () => string,
 ): string {
   // Keep the wrapper for toJSON's property key and reuse its serialized field.
   // Only splice wrappers that still start with that field after inherited toJSON.
-  const field = { [name]: value };
+  const shareSession =
+    serializeSession !== undefined &&
+    isRecord(value) &&
+    !("toJSON" in value) &&
+    !("toJSON" in Object.prototype);
+  const field = { [name]: shareSession ? { ...value, session: undefined } : value };
+  const sessionJSON = shareSession ? serializeSession() : undefined;
   let payload: unknown;
   const messageObjects = messageStrings ? new WeakSet<object>() : undefined;
   const fieldJSON = JSON.stringify(
@@ -91,6 +98,10 @@ function serializeFrameField(
         return current;
       },
   );
+  if (shareSession) {
+    const separator = fieldJSON.endsWith("{}}") ? "" : ",";
+    return `,${fieldJSON.slice(1, -2)}${separator}"session":${sessionJSON}}`;
+  }
   return fieldJSON.startsWith(`{"${name}":`) ? `,${fieldJSON.slice(1, -1)}` : "";
 }
 
@@ -171,6 +182,8 @@ type ClientDelivery = {
 
 export type SessionEventProjection = {
   payload: unknown;
+  /** The presentation owner certifies these row bytes for this recipient and publication. */
+  serializeSession?: () => string;
   delivered?: () => void;
 };
 
@@ -624,6 +637,7 @@ export function createGatewayBroadcaster(params: {
             "payload",
             projected.payload,
             messageStrings?.capture || messageStrings?.values.size ? messageStrings : undefined,
+            projected.serializeSession,
           );
           delivered = projected.delivered;
           if (messageStrings) {
