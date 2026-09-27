@@ -240,6 +240,15 @@ checks still run. Standalone Doctor lint and explicitly selected `--only` checks
 keep their normal scope. The candidate recognizes the private-copy markers already
 set by the published 2026.9.4 updater, so this reduces work on that first hop too.
 
+The rehearsal repair Doctor also defers pure advisory inspections, including
+security, provider catalog, and runtime tool-schema diagnostics, and records their
+IDs in its output and warnings. Contributions that also perform repairs stay in
+the rehearsal, including auth profiles, plugin health repairs, skills, memory
+recall, and session transcripts. The live post-swap Doctor and final readiness
+checks keep their existing scope. This saving applies to published 2026.9.3–2026.9.6
+updaters that supply the private-copy markers; older drivers keep their existing
+behavior.
+
 These checks do not run an agent turn or require a usable model-auth route.
 OAuth-only installations and installations without provider credentials can update.
 Auth diagnostics are advisory; optional inference repair runs through triage only

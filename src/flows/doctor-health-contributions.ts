@@ -8,6 +8,7 @@ import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
 } from "../infra/state-migrations.messages.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import {
   runAuthProfileMigration,
   runAuthProfileDiagnostics as runAuthProfileHealth,
@@ -513,6 +514,24 @@ async function runDoctorHealthContributionList(
     preparedAgentCount: ctx.preparedAgentCount,
   });
   const updateDoctorRun = isUpdateDoctorRun(env);
+  const rehearsalInspections = new Set(
+    resolveUpdateRehearsalRoot(env)
+      ? contributions.filter(
+          (entry) =>
+            !entry.required && entry.updateWork?.kind === "inspection" && !entry.updateWork.repairs,
+        )
+      : [],
+  );
+  if (rehearsalInspections.size > 0) {
+    const warnings = [...rehearsalInspections].map(
+      (entry) =>
+        `${entry.id}: advisory inspection deferred during copied-state rehearsal. The live post-swap Doctor retains this check.`,
+    );
+    recordDoctorHealthWarnings(ctx, [], warnings, { prepend: true });
+    for (const warning of warnings) {
+      ctx.runtime.log(warning);
+    }
+  }
   const deferred = updateDoctorRun
     ? contributions.filter((contribution) => contribution.updateWork?.kind === "standalone")
     : [];
@@ -539,7 +558,10 @@ async function runDoctorHealthContributionList(
     for (const contribution of ordered) {
       // Skip before opening a plugin snapshot; these diagnostics cannot establish
       // required migration readiness and have their own standalone invocation.
-      if (updateDoctorRun && contribution.updateWork?.kind === "standalone") {
+      if (
+        rehearsalInspections.has(contribution) ||
+        (updateDoctorRun && contribution.updateWork?.kind === "standalone")
+      ) {
         continue;
       }
       if (
