@@ -124,7 +124,9 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
+  /* One typography for every row label, value, and choice in the panel. */
   font-size: calc((var(--control-ui-text-sm) + var(--control-ui-text-md)) / 2);
+  line-height: 1.55;
 }
 
 .sidebar-session-menu-section {
@@ -144,8 +146,8 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   align-items: center;
   justify-content: space-between;
   box-sizing: border-box;
-  min-height: var(--space-6);
-  padding: var(--space-1) var(--sidebar-filter-row-inset) 0;
+  min-height: var(--sidebar-filter-row-height);
+  padding: 0 var(--sidebar-filter-row-inset);
 }
 
 .sidebar-session-menu-heading h3 {
@@ -181,7 +183,8 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
 }
 
 .sidebar-session-menu-row > :is(label, span) {
-  line-height: var(--settings-control-height);
+  color: var(--text);
+  padding-block: calc((var(--settings-control-height) - 1lh) / 2);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -221,6 +224,11 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
 
 .sidebar-session-menu-row .picker-select__label {
   font-weight: var(--wa-font-weight-normal);
+}
+
+.sidebar-session-filter-panel :is(.picker-select, .picker-select__trigger, .picker-select__option) {
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .sidebar-session-menu-switch,
@@ -275,7 +283,6 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   min-height: var(--menu-item-height);
   padding: 0 8px;
   border-radius: var(--menu-item-radius);
-  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .sidebar-session-filter-panel .picker-select__option[aria-selected="true"] {
@@ -316,17 +323,17 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   display: none;
 }
 
-/* Reset's text ends on the controls' edge; its hover surface extends past it. */
+/* Reset's text ends on the controls' edge; its padded hover surface extends past it. */
 .sidebar-session-menu-reset {
   width: auto;
-  min-height: var(--space-5);
-  margin-inline-end: calc(-1 * var(--space-1));
-  padding: 0 var(--space-1);
+  min-height: 0;
+  margin-inline-end: calc(-1.5 * var(--space-1));
+  padding: var(--space-1) calc(1.5 * var(--space-1));
   border-radius: var(--menu-item-radius);
   font-size: var(--control-ui-text-xs);
 }
 
-.sidebar-session-filter-footer {
+.sidebar-session-filter-footer > span {
   color: var(--muted);
 }
 
