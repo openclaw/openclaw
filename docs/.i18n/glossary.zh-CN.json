@@ -1,5 +1,17 @@
 [
   {
+    "source": "Databricks",
+    "target": "Databricks"
+  },
+  {
+    "source": "Databricks plugin reference",
+    "target": "Databricks 插件参考"
+  },
+  {
+    "source": "databricks",
+    "target": "databricks"
+  },
+  {
     "source": "Radius",
     "target": "Radius"
   },

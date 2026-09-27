@@ -2178,6 +2178,7 @@
                       "providers/cerebras",
                       "providers/chutes",
                       "providers/cohere",
+                      "providers/databricks",
                       "providers/deepinfra",
                       "providers/deepseek",
                       "providers/featherless",
