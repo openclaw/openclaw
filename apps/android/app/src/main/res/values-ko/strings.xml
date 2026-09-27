@@ -231,7 +231,6 @@
     <string name="native_1d91629837639a5c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"편집하는 동안 이 자동화가 변경되었습니다. 저장하기 전에 Gateway의 최신 버전으로 되돌리세요."</string>
     <string name="native_1e432ea5425e4a3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"호출 모드"</string>
     <string name="native_1e595a107c78b957" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"페어링된 기기를 제거하시겠습니까?"</string>
-    <string name="native_1e68e93d4a5d5790" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이 Gateway에서 오는 통화 수신"</string>
     <string name="native_1e955a58278623a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"시스템 이벤트 텍스트"</string>
     <string name="native_1ea44149be42d970" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"위젯 이미지를 복사하지 못했습니다"</string>
     <string name="native_1ea442a134b2a184" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"아니요"</string>
@@ -296,7 +295,6 @@
     <string name="native_26693173031b146c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"세션 권한을 변경하려면 Gateway를 업데이트하세요."</string>
     <string name="native_2682bd813a3bccbc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw qr에서 받은 설정 코드를 입력하세요."</string>
     <string name="native_268f14bbfe119c1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"진단"</string>
-    <string name="native_26afddbd5a578d0e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연결됨 · 마이크 켜짐"</string>
     <string name="native_26c923382436328a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"다른 앱은 변경되지 않습니다."</string>
     <string name="native_26cd8a19b9bb1ce9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"해결 중"</string>
     <string name="native_26d00d15c465cd73" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"스레드와 대화 기록이 영구적으로 삭제됩니다."</string>
@@ -344,7 +342,6 @@
     <string name="native_2c9cce8250d746e3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"기기 식별 정보 필요"</string>
     <string name="native_2cd62f7a670b2819" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 스레드"</string>
     <string name="native_2cee6c17e5e55571" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"동시 실행 슬롯 대기 중"</string>
-    <string name="native_2d1be6900bbed8f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"마이크 음소거"</string>
     <string name="native_2d4dfe885f84629e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"사진 라이브러리 접근을 허용하세요."</string>
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이전 응답에서 이미 이 승인 요청을 처리했습니다."</string>
     <string name="native_2d804b18101e1833" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"온라인 %1$s개 / 전체 %2$s개"</string>
@@ -363,7 +360,6 @@
     <string name="native_2f70159f10aa6bf9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"줄 번호 숨기기"</string>
     <string name="native_2f77668a9dfbf8d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"메시지"</string>
     <string name="native_2f9c977d4df31bfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연락처 읽기"</string>
-    <string name="native_2fe13d93a1f4b267" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"통화 종료"</string>
     <string name="native_300574ec69847390" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"오프라인 첨부 파일 저장 공간이 가득 찼습니다; 먼저 대기 중인 항목을 삭제하세요."</string>
     <string name="native_303fe4ffc89c2004" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 연결 시간이 초과되었습니다. 네트워크와 Gateway 실행 여부를 확인한 후 다시 시도하세요."</string>
     <string name="native_3043615848685c0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"한 번"</string>
@@ -469,7 +465,6 @@
     <string name="native_3d591e826d545919" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"녹화 중지"</string>
     <string name="native_3d5bb79e43953d9a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"빠른 모드를 업데이트하지 못했습니다."</string>
     <string name="native_3d61e9d54ffa2d93" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"에이전트 작업 공간에서 셸을 열려면 Gateway에 연결하세요."</string>
-    <string name="native_3de0d5472470d4ea" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tailscale을 포함한 비공개 연결을 사용합니다. 마이크는 전화를 받은 후에만 켜집니다."</string>
     <string name="native_3de3d401128d4395" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"승인 세부 정보를 불러오지 못했습니다. 새로고침한 후 다시 시도하세요."</string>
     <string name="native_3e258ff7801d9f13" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 상태 확인, 구성 복구, 모델 변경 또는 채널 연결을 도와드릴 수 있습니다."</string>
     <string name="native_3e398e6fb979557a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tool Call"</string>
@@ -770,7 +765,6 @@
     <string name="native_67a0d2e0dab41fca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"출처 열기"</string>
     <string name="native_67a926f7008e2b0e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"사용할 수 없음"</string>
     <string name="native_67b696468610b879" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"대시보드"</string>
-    <string name="native_67dd8031daaee846" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연결됨 · 마이크 음소거됨"</string>
     <string name="native_67fa416afa64d304" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"토큰 붙여넣기"</string>
     <string name="native_6827238fea72c88b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"제공업체 없음"</string>
     <string name="native_684889f0079cc145" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"SHA-256 지문"</string>
@@ -992,7 +986,6 @@
     <string name="native_85a39ab345d672ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"예"</string>
     <string name="native_85bb24ced460372b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"오디오 테스트"</string>
     <string name="native_85cd61f8c3c8a01e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"보류됨"</string>
-    <string name="native_85e8acc33613a7e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"실시간 음성 연결 중…"</string>
     <string name="native_862417b9e7c3720b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"events"</string>
     <string name="native_865e85c6fbf9d3b2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"작업 디렉터리"</string>
     <string name="native_867524581f012f0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"최신 항목으로 이동"</string>
@@ -1070,7 +1063,6 @@
     <string name="native_9046da16aea909ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"페이지"</string>
     <string name="native_906115657390f367" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"전달됨"</string>
     <string name="native_9071738f145962a6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"기한"</string>
-    <string name="native_9090f27183cc9c9d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 데이터 통화 수신"</string>
     <string name="native_90bc34e050ed2dcd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"사용 가능한 텍스트 패치가 없습니다"</string>
     <string name="native_90bf81305006e6ed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"현재 스킬 상태에서는 스킬 세부 정보를 확인할 수 없습니다."</string>
     <string name="native_90ca2dba8039f463" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이 휴대전화에서 공유할 수 있는 항목을 선택하세요."</string>
@@ -1176,7 +1168,6 @@
     <string name="native_9df78be02eef04b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"네이티브 Talk: Gateway가 GPT-Live 릴레이 지원 여부를 알리지 않았습니다. 기기의 음성 인식과 설정된 Talk 음성을 사용합니다."</string>
     <string name="native_9e37aa0704a3cf44" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 설치 완료."</string>
     <string name="native_9e4635769f0aaf0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 목록"</string>
-    <string name="native_9e5ecd205875204f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"전체 화면 통화 알림 허용"</string>
     <string name="native_9e7b2578a4302921" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"동작: %1$s"</string>
     <string name="native_9e9bef85bb320b81" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"전달 모드"</string>
     <string name="native_9effa0b7488496ee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"로그인 취소"</string>
@@ -1186,7 +1177,6 @@
     <string name="native_9f7f95fd7cde3c47" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"View Image"</string>
     <string name="native_9f8a98877696235e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 메시지 정보"</string>
     <string name="native_9fb7c4ebcbc3e558" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"TLS 엔드포인트 없음"</string>
-    <string name="native_9fd9e9be90d7c1e5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"데이터 통화 수신"</string>
     <string name="native_9fe101a0ec7ef416" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw Gateway"</string>
     <string name="native_9ffc843f501acdc5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"수동으로 설정"</string>
     <string name="native_a02f1cea3c1d6c6e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"생각 중…"</string>
@@ -1207,12 +1197,10 @@
     <string name="native_a1a5936d3b0f8a69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"최대"</string>
     <string name="native_a1bca979bc69befb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cron을 변경하려면 operator.admin 권한이 필요합니다."</string>
     <string name="native_a20d12c5e9c428c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"생각 중"</string>
-    <string name="native_a22cb32b07345be1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"마이크 음소거 해제"</string>
     <string name="native_a22ffaa738de25c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"받아쓰기에 실패했습니다. 마이크를 탭하여 다시 시도하세요."</string>
     <string name="native_a23967c129397864" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"screen snapshot"</string>
     <string name="native_a29d2779acbc81f2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"관찰된 노드: %1$s"</string>
     <string name="native_a2bbc7ffd69f9c49" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"작업을 찾을 수 없음"</string>
-    <string name="native_a2d285b352873457" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"거절"</string>
     <string name="native_a2f29836cda5ceb1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"저장 &amp; 연결"</string>
     <string name="native_a330395cc0a53ad1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"list"</string>
     <string name="native_a34f54e488b48e66" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway가 승인을 기록하고 선택 사항을 저장했습니다."</string>
@@ -1315,7 +1303,6 @@
     <string name="native_b2439bcb8dee14b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"출력"</string>
     <string name="native_b24d5be587b2d206" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"음성 대화 실패: 실시간 제공업체 연결이 예기치 않게 종료되었습니다."</string>
     <string name="native_b279302f400484ee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 시간 민감"</string>
-    <string name="native_b2a3aa602762a782" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"받기"</string>
     <string name="native_b2a96c3d3fc2b6ac" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ban"</string>
     <string name="native_b2b8db00243fa6ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"도구 활동"</string>
     <string name="native_b2d672f21eed539a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 토큰 필요"</string>
@@ -1377,20 +1364,16 @@
     <string name="native_bcb06651437caa15" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s %2$s"</string>
     <string name="native_bd08450d63406844" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"자동화가 활성화되었습니다."</string>
     <string name="native_bd38ed7732402b1a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"분홍색"</string>
-    <string name="native_bd4d522939a66f81" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OPENCLAW · 데이터 통화"</string>
     <string name="native_bd55fcb6169dfcca" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sM"</string>
     <string name="native_bd6719b455bcc898" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Memory Get"</string>
     <string name="native_bdb3e7b214dd3a8f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
     <string name="native_bdb86505f8062d15" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"보관됨"</string>
-    <string name="native_bdbdb91eb847c4af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"오디오 출력"</string>
     <string name="native_bdc090ec61e3fcfc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"새로고침"</string>
-    <string name="native_bdc55a0256127641" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"오디오 출력: %1$s"</string>
     <string name="native_bdff71b20b9cf392" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"자동화 검색"</string>
     <string name="native_be7e2f20129365c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이미지"</string>
     <string name="native_be969becb173e0c5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"페어링 후 연결된 휴대폰과 노드 호스트가 여기에 표시됩니다."</string>
     <string name="native_bea220e9d7ffdfaa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"시스템 도구"</string>
     <string name="native_bf1870ff5c6322fb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s: %2$s"</string>
-    <string name="native_bf26c9b2437a44d8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"비공개 Gateway 연결을 통한 수신 통화"</string>
     <string name="native_bf350e6a0ed60b7f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway에서 이 자동화가 변경되었습니다. 다시 저장하기 전에 최신 버전을 검토하세요."</string>
     <string name="native_bf399ffa03617a96" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"받아쓰기 중지"</string>
     <string name="native_bf69032f2b2b01a2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw에 메시지 보내기"</string>
@@ -1691,7 +1674,6 @@
     <string name="native_e52b3044724b9f4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"모델 고정 해제"</string>
     <string name="native_e5584bc5057284ae" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이 Gateway에 연결된 메시징 채널."</string>
     <string name="native_e56faa0fe752ff19" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"선택 영역 끝, 오른쪽"</string>
-    <string name="native_e572c8ccdb5c1b70" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw가 백그라운드에서 연결된 상태를 유지하고 Tailscale을 계속 실행하도록 하세요. 앱이 강제 종료되었거나 오프라인 상태이거나 연결이 끊긴 경우 통화를 수신할 수 없습니다. 백그라운드에서 수신 벨이 안정적으로 울리려면 Android에서 배터리 사용을 제한 없음으로 설정해야 할 수 있습니다."</string>
     <string name="native_e595f17fac1d8384" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"전송 중"</string>
     <string name="native_e5b87192a9e6321f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"보관된 스레드가 여기에 표시됩니다."</string>
     <string name="native_e5c02424e511e1ef" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"명령 복사됨"</string>
@@ -1724,7 +1706,6 @@
     <string name="native_ea14eb224e89a810" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"프롬프트를 사용할 수 없음"</string>
     <string name="native_ea2100dc89ae9fe2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"로그"</string>
     <string name="native_ea5cddf7a04d7b94" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skill Workshop 제안을 확인하려면 Gateway에 연결하세요."</string>
-    <string name="native_ea86d3a70f70f00f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android 통화 통합을 사용할 수 없음"</string>
     <string name="native_ea9ce70b6decb8f3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 전환"</string>
     <string name="native_eaa2090d6781a821" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"SMS 보내기"</string>
     <string name="native_eabec9fd718dea48" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw가 평소 사용하던 채팅에서 계속 진행할 준비가 되었습니다."</string>
@@ -1770,7 +1751,6 @@
     <string name="native_f14cc3ede97361fd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s개 대기 중"</string>
     <string name="native_f14cd8dd44162255" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s시간 전"</string>
     <string name="native_f15bf83677856dfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"통화 기록 읽기"</string>
-    <string name="native_f173cd962d365a92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"앱 알림 및 배터리 설정"</string>
     <string name="native_f19611c61ca5f369" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"전체 액세스"</string>
     <string name="native_f197b44d96f9315f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s개 대기 중 · Gateway 대기 중"</string>
     <string name="native_f1bc78797e5e728f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"진행 상황 메모 업데이트됨"</string>

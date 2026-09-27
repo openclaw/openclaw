@@ -231,7 +231,6 @@
     <string name="native_1d91629837639a5c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Den här automatiseringen ändrades medan du redigerade. Återställ till den senaste versionen i Gateway innan du sparar."</string>
     <string name="native_1e432ea5425e4a3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktiveringsläge"</string>
     <string name="native_1e595a107c78b957" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ta bort parkopplad enhet?"</string>
-    <string name="native_1e68e93d4a5d5790" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ta emot samtal från denna Gateway"</string>
     <string name="native_1e955a58278623a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Systemhändelsetext"</string>
     <string name="native_1ea44149be42d970" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kunde inte kopiera widgetbilden"</string>
     <string name="native_1ea442a134b2a184" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nej"</string>
@@ -296,7 +295,6 @@
     <string name="native_26693173031b146c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Uppdatera Gateway för att ändra sessionsbehörigheter."</string>
     <string name="native_2682bd813a3bccbc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ange konfigurationskoden från openclaw qr."</string>
     <string name="native_268f14bbfe119c1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Diagnostik"</string>
-    <string name="native_26afddbd5a578d0e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ansluten · mikrofonen på"</string>
     <string name="native_26c923382436328a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Andra appar förblir oförändrade."</string>
     <string name="native_26cd8a19b9bb1ce9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Knäcker"</string>
     <string name="native_26d00d15c465cd73" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Detta raderar tråden och dess konversationshistorik permanent."</string>
@@ -344,7 +342,6 @@
     <string name="native_2c9cce8250d746e3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Enhetsidentitet krävs"</string>
     <string name="native_2cd62f7a670b2819" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw-tråd"</string>
     <string name="native_2cee6c17e5e55571" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Väntar på en ledig plats för samtidig körning"</string>
-    <string name="native_2d1be6900bbed8f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Stäng av mikrofonen"</string>
     <string name="native_2d4dfe885f84629e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tillåt åtkomst till bildbiblioteket."</string>
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ett tidigare svar har redan avgjort den här begäran om godkännande."</string>
     <string name="native_2d804b18101e1833" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s av %2$s online"</string>
@@ -363,7 +360,6 @@
     <string name="native_2f70159f10aa6bf9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dölj radnummer"</string>
     <string name="native_2f77668a9dfbf8d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Meddelande"</string>
     <string name="native_2f9c977d4df31bfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Läs kontakter"</string>
-    <string name="native_2fe13d93a1f4b267" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Avsluta samtal"</string>
     <string name="native_300574ec69847390" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lagringen för offlinebilagor är full; ta bort köade objekt först."</string>
     <string name="native_303fe4ffc89c2004" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidsgränsen för anslutningen till Gateway överskreds. Kontrollera din nätverksanslutning och att Gateway körs, och försök sedan igen."</string>
     <string name="native_3043615848685c0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"En gång"</string>
@@ -469,7 +465,6 @@
     <string name="native_3d591e826d545919" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Stoppa inspelning"</string>
     <string name="native_3d5bb79e43953d9a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kunde inte uppdatera snabbläget."</string>
     <string name="native_3d61e9d54ffa2d93" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Anslut till din Gateway för att öppna ett skal i agentens arbetsyta."</string>
-    <string name="native_3de0d5472470d4ea" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Använder din privata anslutning, inklusive Tailscale. Mikrofonen aktiveras först när du svarar."</string>
     <string name="native_3de3d401128d4395" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kunde inte läsa in godkännandeinformationen. Uppdatera och försök igen."</string>
     <string name="native_3e258ff7801d9f13" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Jag kan kontrollera status för Gateway, reparera konfigurationen, byta modeller eller ansluta kanaler."</string>
     <string name="native_3e398e6fb979557a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tool Call"</string>
@@ -770,7 +765,6 @@
     <string name="native_67a0d2e0dab41fca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Öppna källan"</string>
     <string name="native_67a926f7008e2b0e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inte tillgängligt"</string>
     <string name="native_67b696468610b879" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Översikt"</string>
-    <string name="native_67dd8031daaee846" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ansluten · mikrofonen avstängd"</string>
     <string name="native_67fa416afa64d304" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Klistra in token"</string>
     <string name="native_6827238fea72c88b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inga leverantörer"</string>
     <string name="native_684889f0079cc145" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"SHA-256-fingeravtryck"</string>
@@ -992,7 +986,6 @@
     <string name="native_85a39ab345d672ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ja"</string>
     <string name="native_85bb24ced460372b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ljudtest"</string>
     <string name="native_85cd61f8c3c8a01e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pausad"</string>
-    <string name="native_85e8acc33613a7e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ansluter till röstsamtal i realtid…"</string>
     <string name="native_862417b9e7c3720b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"events"</string>
     <string name="native_865e85c6fbf9d3b2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Arbetskatalog"</string>
     <string name="native_867524581f012f0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gå till senaste"</string>
@@ -1070,7 +1063,6 @@
     <string name="native_9046da16aea909ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sidor"</string>
     <string name="native_906115657390f367" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Levererat"</string>
     <string name="native_9071738f145962a6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Förfaller"</string>
-    <string name="native_9090f27183cc9c9d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inkommande OpenClaw-datasamtal"</string>
     <string name="native_90bc34e050ed2dcd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ingen textpatch tillgänglig"</string>
     <string name="native_90bf81305006e6ed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Färdighetsdetaljer är inte tillgängliga i den aktuella färdighetsstatusen."</string>
     <string name="native_90ca2dba8039f463" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Välj vad den här telefonen kan dela."</string>
@@ -1176,7 +1168,6 @@
     <string name="native_9df78be02eef04b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inbyggt Talk-läge: Gateway meddelade inget stöd för GPT-Live-relä; använder enhetens taligenkänning och den konfigurerade Talk-rösten."</string>
     <string name="native_9e37aa0704a3cf44" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Installerade %1$s."</string>
     <string name="native_9e4635769f0aaf0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gatewayer"</string>
-    <string name="native_9e5ecd205875204f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tillåt samtalsaviseringar i helskärm"</string>
     <string name="native_9e7b2578a4302921" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"åtgärder: %1$s"</string>
     <string name="native_9e9bef85bb320b81" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Vidarebefordringsläge"</string>
     <string name="native_9effa0b7488496ee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Avbryt inloggning"</string>
@@ -1186,7 +1177,6 @@
     <string name="native_9f7f95fd7cde3c47" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"View Image"</string>
     <string name="native_9f8a98877696235e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Meddelandeinformation för %1$s"</string>
     <string name="native_9fb7c4ebcbc3e558" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ingen TLS-slutpunkt"</string>
-    <string name="native_9fd9e9be90d7c1e5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inkommande datasamtal"</string>
     <string name="native_9fe101a0ec7ef416" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw Gateway"</string>
     <string name="native_9ffc843f501acdc5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konfigurera manuellt"</string>
     <string name="native_a02f1cea3c1d6c6e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tänker…"</string>
@@ -1207,12 +1197,10 @@
     <string name="native_a1a5936d3b0f8a69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Max"</string>
     <string name="native_a1bca979bc69befb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cron-ändringar kräver operator.admin-behörighet."</string>
     <string name="native_a20d12c5e9c428c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tänker"</string>
-    <string name="native_a22cb32b07345be1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Slå på mikrofonen"</string>
     <string name="native_a22ffaa738de25c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dikteringen misslyckades. Tryck på mikrofonen för att försöka igen."</string>
     <string name="native_a23967c129397864" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"screen snapshot"</string>
     <string name="native_a29d2779acbc81f2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Observerade noder: %1$s"</string>
     <string name="native_a2bbc7ffd69f9c49" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inga åtgärder hittades"</string>
-    <string name="native_a2d285b352873457" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Avvisa"</string>
     <string name="native_a2f29836cda5ceb1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Spara &amp; anslut"</string>
     <string name="native_a330395cc0a53ad1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"list"</string>
     <string name="native_a34f54e488b48e66" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway registrerade godkännandet och sparade valet."</string>
@@ -1315,7 +1303,6 @@
     <string name="native_b2439bcb8dee14b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Utdata"</string>
     <string name="native_b24d5be587b2d206" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tal misslyckades: Realtidsleverantören stängdes oväntat."</string>
     <string name="native_b279302f400484ee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw Tidskänslig"</string>
-    <string name="native_b2a3aa602762a782" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Svara"</string>
     <string name="native_b2a96c3d3fc2b6ac" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ban"</string>
     <string name="native_b2b8db00243fa6ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verktygsaktivitet"</string>
     <string name="native_b2d672f21eed539a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Token för Gateway behövs"</string>
@@ -1377,20 +1364,16 @@
     <string name="native_bcb06651437caa15" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s %2$s"</string>
     <string name="native_bd08450d63406844" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Automatiseringen har aktiverats."</string>
     <string name="native_bd38ed7732402b1a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Rosa"</string>
-    <string name="native_bd4d522939a66f81" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OPENCLAW · DATASAMTAL"</string>
     <string name="native_bd55fcb6169dfcca" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sM"</string>
     <string name="native_bd6719b455bcc898" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Memory Get"</string>
     <string name="native_bdb3e7b214dd3a8f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
     <string name="native_bdb86505f8062d15" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Arkiverad"</string>
-    <string name="native_bdbdb91eb847c4af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ljudutgång"</string>
     <string name="native_bdc090ec61e3fcfc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ladda om"</string>
-    <string name="native_bdc55a0256127641" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ljudutgång: %1$s"</string>
     <string name="native_bdff71b20b9cf392" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sök automatiseringar"</string>
     <string name="native_be7e2f20129365c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bilder"</string>
     <string name="native_be969becb173e0c5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Länkade telefoner och nodvärdar visas här efter parkoppling."</string>
     <string name="native_bea220e9d7ffdfaa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Systemverktyg"</string>
     <string name="native_bf1870ff5c6322fb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s: %2$s"</string>
-    <string name="native_bf26c9b2437a44d8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inkommande samtal via din privata Gateway-anslutning"</string>
     <string name="native_bf350e6a0ed60b7f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Den här automatiseringen har ändrats i Gateway. Granska den senaste versionen innan du sparar igen."</string>
     <string name="native_bf399ffa03617a96" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Stoppa diktering"</string>
     <string name="native_bf69032f2b2b01a2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skriv till OpenClaw"</string>
@@ -1691,7 +1674,6 @@
     <string name="native_e52b3044724b9f4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lossa modell"</string>
     <string name="native_e5584bc5057284ae" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Meddelandegränssnitt anslutna till denna Gateway."</string>
     <string name="native_e56faa0fe752ff19" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Markeringens slut, höger"</string>
-    <string name="native_e572c8ccdb5c1b70" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Håll OpenClaw anslutet i bakgrunden och låt Tailscale vara igång. Samtal kan inte komma fram om appen har tvångsstoppats, är offline eller frånkopplad. Android kan kräva obegränsad batterianvändning för att inkommande samtal ska ringa tillförlitligt i bakgrunden."</string>
     <string name="native_e595f17fac1d8384" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skickar"</string>
     <string name="native_e5b87192a9e6321f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Arkiverade trådar visas här."</string>
     <string name="native_e5c02424e511e1ef" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kommandot kopierat"</string>
@@ -1724,7 +1706,6 @@
     <string name="native_ea14eb224e89a810" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Prompten är inte tillgänglig"</string>
     <string name="native_ea2100dc89ae9fe2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Loggar"</string>
     <string name="native_ea5cddf7a04d7b94" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Anslut Gateway för att granska förslag från Skill Workshop."</string>
-    <string name="native_ea86d3a70f70f00f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Androids samtalsintegration är inte tillgänglig"</string>
     <string name="native_ea9ce70b6decb8f3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Byte av Gateway"</string>
     <string name="native_eaa2090d6781a821" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skicka SMS"</string>
     <string name="native_eabec9fd718dea48" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw är redo att fortsätta i din vanliga chatt."</string>
@@ -1770,7 +1751,6 @@
     <string name="native_f14cc3ede97361fd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s väntande"</string>
     <string name="native_f14cd8dd44162255" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"för %1$sh sedan"</string>
     <string name="native_f15bf83677856dfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Läs samtalslogg"</string>
-    <string name="native_f173cd962d365a92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Appnotiser och batteriinställningar"</string>
     <string name="native_f19611c61ca5f369" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fullständig åtkomst"</string>
     <string name="native_f197b44d96f9315f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s i kö · väntar på Gateway"</string>
     <string name="native_f1bc78797e5e728f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Förloppsanteckningen har uppdaterats"</string>
