@@ -167,9 +167,9 @@ vi.mock("./gateway-install-token.js", () => ({
   resolveGatewayInstallToken: vi.fn(),
 }));
 
-vi.mock("./health-format.js", () => ({
+vi.mock("./health-format.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./health-format.js")>()),
   formatGatewayClosedDiagnostic,
-  formatHealthCheckFailure: vi.fn(() => "health failed"),
 }));
 
 vi.mock("./health.js", () => ({

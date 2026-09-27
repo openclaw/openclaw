@@ -1,10 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
+import { GatewayTransportError } from "../gateway/transport-error.js";
+import { applyLoggingConfig } from "../logging/logger.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { loggingState } from "../logging/state.js";
 import {
   formatDeliveryQueueHealthLine,
   formatGatewayClosedDiagnostic,
   formatHealthChannelLines,
+  formatHealthCheckFailure,
 } from "./health-format.js";
+
+afterEach(resetSecretRedactionRegistryForTest);
 
 describe("formatGatewayClosedDiagnostic", () => {
   it("formats a coded gateway transport close", () => {
@@ -28,6 +37,82 @@ describe("formatGatewayClosedDiagnostic", () => {
     });
 
     expect(formatGatewayClosedDiagnostic(error)).toBeUndefined();
+  });
+
+  it("does not classify a timeout or ordinary error as a coded close", () => {
+    const timeout = new GatewayTransportError({
+      kind: "timeout",
+      timeoutMs: 1000,
+      message: "gateway timeout after 1000ms",
+      connectionDetails: { url: "ws://127.0.0.1:19001", urlSource: "test", message: "test" },
+    });
+    expect(formatGatewayClosedDiagnostic(timeout)).toBeUndefined();
+    expect(
+      formatGatewayClosedDiagnostic(new Error("gateway closed (1011): ordinary")),
+    ).toBeUndefined();
+  });
+});
+
+describe("health failure diagnostic redaction", () => {
+  it.each([false, true])("keeps built-in masking with custom patterns with rich=%s", (rich) => {
+    const previousLogging = { ...loggingState };
+    try {
+      applyLoggingConfig({ redactPatterns: ["deploymentMask9X"] });
+      const output = stripAnsi(
+        formatHealthCheckFailure(new Error("remote password=mockPass7X deploymentMask9X visible"), {
+          rich,
+        }),
+      );
+      expect(output).toContain("Health check failed:");
+      expect(output).toContain("remote");
+      expect(output).toContain("visible");
+      expect(output).not.toContain("deploymentMask9X");
+      expect(output).toContain("***");
+      expect(output).not.toContain("mockPass7X");
+    } finally {
+      Object.assign(loggingState, previousLogging);
+    }
+  });
+
+  it.each([false, true])("masks a registered error value with rich=%s", (rich) => {
+    registerSecretValueForRedaction("proofSecr9X");
+    const output = stripAnsi(
+      formatHealthCheckFailure(new Error("remote proofSecr9X visible"), { rich }),
+    );
+    expect(output).toContain("Health check failed:");
+    expect(output).toContain("remote");
+    expect(output).toContain("visible");
+    expect(output).not.toContain("proofSecr9X");
+    expect(output).toContain("***");
+  });
+
+  it.each([false, true])("masks a registered value split by ANSI with rich=%s", (rich) => {
+    registerSecretValueForRedaction("proofSecr9X");
+    const displayed = stripAnsi(
+      formatHealthCheckFailure(new Error("remote proofSe\u001b[31mcr9X visible"), { rich }),
+    );
+    expect(displayed).toContain("remote");
+    expect(displayed).toContain("visible");
+    expect(displayed).not.toContain("proofSecr9X");
+    expect(displayed).toContain("***");
+  });
+
+  it.each([false, true])("masks a registered multiline string with rich=%s", (rich) => {
+    registerSecretValueForRedaction("lineA9\nlineB7");
+    const output = stripAnsi(formatHealthCheckFailure("remote lineA9\nlineB7 visible", { rich }));
+    expect(output).toContain("remote");
+    expect(output).toContain("visible");
+    expect(output).not.toContain("lineA9");
+    expect(output).not.toContain("lineB7");
+    expect(output).toContain("***");
+  });
+
+  it("masks a registered value reconstructed by rich summary layout", () => {
+    registerSecretValueForRedaction("joined secret");
+    const output = stripAnsi(formatHealthCheckFailure(new Error("joined\nsecret"), { rich: true }));
+    expect(output).toContain("Health check failed:");
+    expect(output).not.toContain("joined secret");
+    expect(output).toContain("***");
   });
 });
 
