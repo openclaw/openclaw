@@ -474,9 +474,9 @@ async function writeMainSessionTranscript(
   return sessionsDir;
 }
 
-async function writeCompletedToolTranscript(sessionsDir: string): Promise<void> {
+async function writeCompletedToolTranscript(sessionsDir: string, human = false): Promise<void> {
   await writeTranscript(sessionsDir, "main-session", [
-    makeUserMessage("run the tool"),
+    makeUserMessage("run the tool", human ? { provenance: { kind: "external_user" } } : {}),
     { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
     makeToolResultMessage(),
   ]);
@@ -2091,7 +2091,7 @@ describe("main-session-restart-recovery", () => {
         accountId: "old",
       },
     });
-    await writeCompletedToolTranscript(sessionsDir);
+    await writeCompletedToolTranscript(sessionsDir, true);
     let claimAtDispatch: string | undefined;
     let sourceClaimAtDispatch: string | undefined;
     vi.mocked(callGateway).mockImplementationOnce(async ({ params }) => {
