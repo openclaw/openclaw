@@ -411,16 +411,14 @@ it("reclaims only unreferenced native roots under maintenance while preserving l
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1_000);
   try {
-    inspectProcesses.mockReturnValue({ pids: [4242] });
-    expect(await duringMaintenance()).toContain("PIDs: 4242");
-    expect(fs.existsSync(orphan.directory)).toBe(true);
-    inspectProcesses.mockReturnValue({ pids: [] });
+    inspectProcesses.mockReturnValue({ error: "fixture unreadable host argv" });
     const output = await duringMaintenance();
     expect(output).toContain("Removed 1 unreferenced native plugin capture root(s).");
     expect(fs.existsSync(orphan.directory)).toBe(false);
     expect(fs.readFileSync(captured, "utf8")).toBe("published native bytes");
     expect(fs.readFileSync(warmFile, "utf8")).toBe("warm generation bytes");
     expect(fs.readFileSync(liveFile, "utf8")).toBe("currently in use");
+    expect(inspectProcesses).not.toHaveBeenCalled();
     releaseWarm();
     await duringMaintenance();
     expect(fs.existsSync(warm.directory)).toBe(false);

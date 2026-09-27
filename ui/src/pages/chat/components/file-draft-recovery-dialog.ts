@@ -4,6 +4,7 @@ import { t } from "../../../i18n/index.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { downloadTextFile } from "../../../lib/download.ts";
+import type { FileSidebarContent } from "./chat-sidebar-content-types.ts";
 
 registerFilePreviewEnglish();
 
@@ -11,6 +12,7 @@ export function reviewFileDrafts(
   drafts: readonly {
     name: string;
     path: string;
+    context: FileSidebarContent["draftContext"];
     content: string;
     isCurrent: () => boolean;
     discard: () => boolean;
@@ -49,7 +51,20 @@ export function reviewFileDrafts(
           </div>
           ${remaining.map(
             (draft) => html`
-              <section>
+              <section
+                role="group"
+                style="overflow-wrap: anywhere"
+                aria-label=${[draft.path, draft.context?.sessionTitle, draft.context?.paneLabel, draft.context?.sessionKey].filter(Boolean).join(" — ")}
+              >
+                ${
+                  draft.context
+                    ? html`
+                        <div class="exec-approval-title">${draft.context.sessionTitle}</div>
+                        <div class="exec-approval-sub">${draft.context.paneLabel}</div>
+                        <div class="exec-approval-sub">${draft.context.sessionKey}</div>
+                      `
+                    : nothing
+                }
                 <label class="field">
                   <span>${draft.path}</span>
                   <textarea readonly rows="6" .value=${draft.content}></textarea>

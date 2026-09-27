@@ -14,7 +14,12 @@ type RetainedFileDraft = {
 
 const retainedFileDrafts = new Map<
   string,
-  { draft: RetainedFileDraft; name: string; path: string }
+  {
+    draft: RetainedFileDraft;
+    name: string;
+    path: string;
+    context: FileSidebarContent["draftContext"];
+  }
 >();
 let stopReloadGuard: (() => void) | undefined;
 let reviewingDrafts = false;
@@ -29,6 +34,7 @@ async function reviewRetainedFileDrafts() {
       [...retainedFileDrafts].map(([key, record]) => ({
         name: record.name,
         path: record.path,
+        context: record.context,
         content: record.draft.content,
         isCurrent: () => retainedFileDrafts.get(key) === record,
         discard: () => {
@@ -72,7 +78,12 @@ export function setFileDraft(content: FileSidebarContent, draft: RetainedFileDra
   const key = retainedFileDraftKey(content);
   retainedFileDrafts.delete(key);
   if (draft) {
-    retainedFileDrafts.set(key, { draft, name: content.name, path: content.path });
+    retainedFileDrafts.set(key, {
+      draft,
+      name: content.name,
+      path: content.path,
+      context: content.draftContext,
+    });
   }
   syncReloadGuard();
 }

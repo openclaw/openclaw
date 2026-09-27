@@ -114,14 +114,19 @@ describe.runIf(browserMode)("file draft document reload protection", () => {
     expect(file.edit?.fetchLatest).not.toHaveBeenCalled();
   });
 
-  it("does not discard newer or newly retained drafts from an older recovery dialog", async () => {
+  it("distinguishes same-path drafts by session and pane without discarding newer edits", async () => {
     document.body.append(document.createElement("openclaw-toast-host"));
-    const createFile = (name: string): FileContent => {
+    const createFile = (
+      sessionKey: string,
+      sessionTitle: string,
+      paneLabel: string,
+    ): FileContent => {
       const file: FileContent = {
         kind: "file",
-        name,
-        path: name,
+        name: "notes.txt",
+        path: "notes.txt",
         draftKey: crypto.randomUUID(),
+        draftContext: { sessionKey, sessionTitle, paneLabel },
         content: "Saved",
         edit: {
           hash: "disk-hash",
@@ -132,24 +137,35 @@ describe.runIf(browserMode)("file draft document reload protection", () => {
       files.push(file);
       return file;
     };
-    const first = createFile("first.txt");
-    const second = createFile("second.txt");
-    const later = createFile("later.txt");
+    const first = createFile("agent:main:alpha", "Research", "Column 1, row 1");
+    const second = createFile("agent:main:alpha", "Research", "Column 2, row 1");
+    const later = createFile("agent:main:beta", "Research", "Column 1, row 1");
+    const group = (file: FileContent) =>
+      page.getByRole("group", {
+        name: `${file.path} — ${file.draftContext?.sessionTitle} — ${file.draftContext?.paneLabel} — ${file.draftContext?.sessionKey}`,
+        exact: true,
+      });
     setFileDraft(first, { content: "Original draft", expectedHash: "first-hash" });
     setFileDraft(second, { content: "Second draft", expectedHash: "second-hash" });
     expect(canReloadControlUiDocument(true)).toBe(false);
     await page.getByRole("button", { name: "Review file drafts", exact: true }).click();
     await expect
-      .element(page.getByRole("textbox", { name: first.path, exact: true }))
+      .element(group(first).getByRole("textbox", { name: first.path, exact: true }))
       .toHaveValue("Original draft");
+    await expect.element(group(second).getByRole("textbox")).toHaveValue("Second draft");
     setFileDraft(first, { content: "Newer draft", expectedHash: "newer-hash" });
     setFileDraft(later, { content: "Later draft", expectedHash: "later-hash" });
-    await page.getByRole("button", { name: "Discard first.txt", exact: true }).click();
+    await group(first).getByRole("button", { name: "Discard notes.txt", exact: true }).click();
     await expect
       .element(page.getByRole("alert"))
       .toHaveTextContent("These edits changed. Close this dialog and review the drafts again.");
-    await page.getByRole("button", { name: "Discard second.txt", exact: true }).click();
+    await group(second).getByRole("button", { name: "Discard notes.txt", exact: true }).click();
     expect(canReloadControlUiDocument()).toBe(false);
+    await page.getByRole("button", { name: "Keep drafts", exact: true }).click();
+    expect(canReloadControlUiDocument(true)).toBe(false);
+    await page.getByRole("button", { name: "Review file drafts", exact: true }).click();
+    await expect.element(group(first).getByRole("textbox")).toHaveValue("Newer draft");
+    await expect.element(group(later).getByRole("textbox")).toHaveValue("Later draft");
     await page.getByRole("button", { name: "Keep drafts", exact: true }).click();
     for (const [file, text, hash] of [
       [first, "Newer draft", "newer-hash"],

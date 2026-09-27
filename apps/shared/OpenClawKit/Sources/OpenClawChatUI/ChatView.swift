@@ -565,33 +565,103 @@ extension OpenClawChatView {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        ForEach(self.transcriptRows) { row in
-            switch row {
-            case let .message(message):
-                self.messageRow(for: message, contextWindowTokens: contextWindowTokens)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.08 : 0)))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(
-                                OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.55 : 0),
-                                lineWidth: 1))
-            case let .systemNotice(notice):
-                ChatSystemNoticeRow(notice: notice)
-                    .frame(maxWidth: .infinity)
-            case let .historyDivider(divider):
-                ChatHistoryDividerRow(divider: divider)
-                    .frame(maxWidth: .infinity)
-            case let .completedWork(work):
-                ChatCompletedWorkDisclosure(work: work) { message in
-                    self.messageRow(for: message, contextWindowTokens: contextWindowTokens)
+        let liveRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
+        let groups = ChatAssistantRunGroup.build(
+            self.transcriptRows,
+            tools: self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : [],
+            liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
+            hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText ||
+                (self.displayOptions.contains(.toolActivity) &&
+                    !self.viewModel.subagentActivities.isEmpty),
+            searchActive: self.isSearchPresented)
+        ForEach(groups) { group in
+            if group.runID != nil {
+                ChatAssistantRunFrame(
+                    assistantName: self.assistantName,
+                    assistantAvatarText: self.assistantAvatarText,
+                    assistantAvatarTint: self.assistantAvatarTint,
+                    showsAssistantAvatar: self.showsAssistantAvatars,
+                    isClean: self.composerChrome == .clean)
+                {
+                    ForEach(group.parts) { part in
+                        self.runPart(
+                            part,
+                            contextWindowTokens: contextWindowTokens,
+                            isGrouped: true,
+                            answerID: group.answerID)
+                    }
+                    if group.includesLive { self.liveAssistantContent }
                 }
+            } else {
+                ForEach(group.parts) { part in
+                    self.runPart(
+                        part,
+                        contextWindowTokens: contextWindowTokens,
+                        isGrouped: false,
+                        answerID: nil)
+                }
+                if group.includesLive { self.liveAssistantContent }
             }
         }
-
         OpenClawQuestionCards(viewModel: self.viewModel)
+    }
 
+    @ViewBuilder
+    private func runPart(
+        _ part: ChatAssistantRunGroup.Part,
+        contextWindowTokens: Int?,
+        isGrouped: Bool,
+        answerID: UUID?) -> some View
+    {
+        switch part {
+        case let .row(row):
+            self.transcriptRow(
+                row,
+                contextWindowTokens: contextWindowTokens,
+                isGrouped: isGrouped,
+                answerID: answerID)
+                .id(row.id)
+        case let .tool(tool):
+            ChatPendingToolsBubble(toolCalls: [tool])
+        }
+    }
+
+    @ViewBuilder
+    private func transcriptRow(
+        _ row: ChatTranscriptRow,
+        contextWindowTokens: Int?,
+        isGrouped: Bool,
+        answerID: UUID?) -> some View
+    {
+        switch row {
+        case let .message(message):
+            self.messageRow(
+                for: message,
+                contextWindowTokens: contextWindowTokens,
+                showsActions: !isGrouped || message.id == answerID)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.08 : 0)))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(
+                            OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.55 : 0),
+                            lineWidth: 1))
+        case let .systemNotice(notice):
+            ChatSystemNoticeRow(notice: notice)
+                .frame(maxWidth: .infinity)
+        case let .historyDivider(divider):
+            ChatHistoryDividerRow(divider: divider)
+                .frame(maxWidth: .infinity)
+        case let .completedWork(work):
+            ChatCompletedWorkDisclosure(work: work) { message in
+                self.messageRow(for: message, contextWindowTokens: contextWindowTokens, showsActions: !isGrouped)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var liveAssistantContent: some View {
         if self.showsWorkingIndicator {
             ChatTypingIndicatorBubble(
                 style: self.style,
@@ -609,12 +679,6 @@ extension OpenClawChatView {
             ChatSubagentActivityList(
                 activities: self.viewModel.subagentActivities,
                 hiddenWorkingCount: self.viewModel.hiddenWorkingSubagentCount)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
-        if self.displayOptions.contains(.toolActivity), !self.viewModel.toolActivities.isEmpty {
-            ChatPendingToolsBubble(toolCalls: self.viewModel.toolActivities)
-                .equatable()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
@@ -640,10 +704,14 @@ extension OpenClawChatView {
     @ViewBuilder
     private func messageRow(
         for msg: OpenClawChatMessage,
-        contextWindowTokens: Int?) -> some View
+        contextWindowTokens: Int?,
+        showsActions: Bool = true) -> some View
     {
         let bubble = ChatMessageBubble(
             message: msg,
+            liveToolCalls: self.viewModel.toolActivities.filter {
+                $0.runID != nil && $0.runID == msg.workRunID
+            },
             sourcePreviews: self.viewModel.sourcePreviews(for: msg),
             sourceContextRevision: self.viewModel.sourcePreviewState.revision,
             sourceFaviconsEnabled: self.viewModel.sourcePreviewState.context?.automaticallyFetchFavicons == true,
@@ -699,7 +767,7 @@ extension OpenClawChatView {
                     .padding(.leading, 8)
             }
             #if os(iOS)
-            if !isUser {
+            if !isUser, showsActions {
                 self.messageActionsMenu(for: msg)
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
@@ -714,7 +782,7 @@ extension OpenClawChatView {
             }
             #endif
             #if os(macOS)
-            if self.isDesktopLayout, isUser || self.isListenable(msg) {
+            if self.isDesktopLayout, showsActions, isUser || self.isListenable(msg) {
                 HStack(spacing: 12) {
                     self.copyMessageButton(for: msg)
                         .help("Copy message")
@@ -747,7 +815,7 @@ extension OpenClawChatView {
             }
         }
         #if os(iOS)
-        if isUser {
+        if isUser || !showsActions {
             row.contextMenu { self.messageMenuActions(for: msg) }
         } else {
             row
@@ -832,15 +900,15 @@ extension OpenClawChatView {
     }
 
     private var transcriptRows: [ChatTranscriptRow] {
+        let messages = self.viewModel.transcriptMessages
         let base: [OpenClawChatMessage]
         if self.style == .onboarding {
-            guard let first = viewModel.messages.first else { return [] }
-            base = first.role.lowercased() == "user" ? Array(self.viewModel.messages.dropFirst()) : self.viewModel
-                .messages
+            guard let first = messages.first else { return [] }
+            base = first.role.lowercased() == "user" ? Array(messages.dropFirst()) : messages
         } else {
-            base = self.viewModel.messages
+            base = messages
         }
-        var rows = ChatTranscriptRow.build(from: self.mergeToolResults(in: base))
+        var rows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: base))
         if self.collapsesCompletedWork {
             rows = ChatTranscriptRow.collapseCompletedWork(
                 rows,
@@ -1203,79 +1271,6 @@ extension OpenClawChatView {
         #endif
     }
 
-    private func mergeToolResults(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
-        var result: [OpenClawChatMessage] = []
-        result.reserveCapacity(messages.count)
-
-        for message in messages {
-            guard self.isToolResultMessage(message) else {
-                result.append(message)
-                continue
-            }
-
-            guard let toolCallId = message.toolCallId,
-                  let last = result.last,
-                  message.turnBoundary != true,
-                  !message.isForwardedTurnBoundary,
-                  !last.isForwardedTurnBoundary,
-                  message.transcriptRunID == nil || last.transcriptRunID == nil ||
-                  message.transcriptRunID == last.transcriptRunID,
-                  toolCallIds(in: last).contains(toolCallId)
-            else {
-                result.append(message)
-                continue
-            }
-
-            let toolText = self.primaryText(in: message)
-            var content = last.content
-            // Preserve empty results too: receiving a result owns the outcome,
-            // independently of whether it contains display text.
-            content.append(
-                OpenClawChatMessageContent(
-                    type: "tool_result",
-                    text: toolText,
-                    thinking: nil,
-                    thinkingSignature: nil,
-                    mimeType: nil,
-                    fileName: nil,
-                    content: nil,
-                    id: toolCallId,
-                    name: message.toolName,
-                    arguments: nil,
-                    details: message.details,
-                    isError: message.isError))
-
-            let merged = OpenClawChatMessage(
-                id: last.id,
-                role: last.role,
-                content: content,
-                timestamp: last.timestamp,
-                transcriptMessageID: last.transcriptMessageID,
-                transcriptRunID: last.transcriptRunID,
-                isTruncated: last.isTruncated,
-                idempotencyKey: last.idempotencyKey,
-                toolCallId: last.toolCallId,
-                toolName: last.toolName,
-                usage: last.usage,
-                stopReason: last.stopReason,
-                errorMessage: last.errorMessage,
-                details: last.details,
-                isError: last.isError,
-                provenance: last.provenance,
-                historyMarker: last.historyMarker,
-                phase: last.phase,
-                turnBoundary: last.turnBoundary,
-                steerTargetRunID: last.steerTargetRunID,
-                streamFallback: last.streamFallback,
-                activity: message.activity.map { terminal in
-                    (last.activity ?? []).filter { $0.toolCallId != toolCallId } + terminal
-                } ?? last.activity)
-            result[result.count - 1] = merged
-        }
-
-        return result
-    }
-
     private func isToolResultMessage(_ message: OpenClawChatMessage) -> Bool {
         let role = message.role.lowercased()
         return role == "toolresult" || role == "tool_result"
@@ -1311,14 +1306,6 @@ extension OpenClawChatView {
         ChatMessageVisibleText.displayText(
             in: message,
             includeThinking: self.displayOptions.contains(.reasoning))
-    }
-
-    private func toolCallIds(in message: OpenClawChatMessage) -> Set<String> {
-        var ids = Set(message.content.filter(\.isToolCall).compactMap(\.id))
-        if let toolCallId = message.toolCallId {
-            ids.insert(toolCallId)
-        }
-        return ids
     }
 
     @ViewBuilder

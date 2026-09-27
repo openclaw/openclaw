@@ -204,6 +204,8 @@ export class ChatPane extends ChatPaneLayoutRender {
         state,
         sidebarLayout,
         presentationId: this.presentationId,
+        sessionTitle: this.resolveHeaderSessionTitle(selectedSession),
+        paneLabel: this.paneLabel,
         presented: this.presented,
         gatewaySnapshot,
         setObserverVisibility: this.setSessionObserverVisibility,

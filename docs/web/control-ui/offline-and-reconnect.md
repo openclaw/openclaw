@@ -52,7 +52,9 @@ changes, then retry the reload. If a server update makes the editor unavailable,
 choose **Review file drafts** in the reload notification. You can copy or download
 each retained draft without connecting to the Gateway, explicitly discard resolved
 drafts, then try **Refresh** again. **Keep drafts** leaves them protected in this tab.
-Newer edits remain protected if they change while you review an older draft.
+Each draft shows the session title, session key, and pane position captured when
+the file was opened, so matching filenames remain distinguishable. Newer edits
+remain protected if they change while you review an older draft.
 File edits stay in memory in the current page;
 an explicit browser reload or closing the browser tab discards them.
 

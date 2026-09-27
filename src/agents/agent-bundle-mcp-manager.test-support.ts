@@ -3,6 +3,24 @@ import { acquireSessionMcpRuntime } from "./agent-bundle-mcp-manager-api.js";
 import { createSessionMcpRuntimeManager as createManager } from "./agent-bundle-mcp-manager.js";
 import type { SessionMcpRuntimeManager as RuntimeManager } from "./agent-bundle-mcp-types.js";
 
+type RuntimeParams = Parameters<typeof acquireSessionMcpRuntime>[0];
+
+export function makeRequesterParams(
+  sessionId: string,
+  cfg: RuntimeParams["cfg"],
+  requesterSenderId: string,
+  overrides: Partial<RuntimeParams> = {},
+): RuntimeParams {
+  return {
+    sessionId,
+    workspaceDir: "/workspace",
+    cfg,
+    requesterSenderId,
+    messageChannel: "telegram",
+    ...overrides,
+  };
+}
+
 export const unopenedMcpConfig = {
   plugins: { enabled: false },
   mcp: { servers: { fixture: { command: process.execPath } } },

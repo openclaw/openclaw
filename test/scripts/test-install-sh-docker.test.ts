@@ -510,7 +510,7 @@ function expectInstallDockerfileContract(
 ): string {
   const dockerfile = readFileSync(dockerfilePath, "utf8");
 
-  expect(dockerfile).toContain("# syntax=docker/dockerfile:1.7");
+  expect(dockerfile).toContain("# syntax=docker/dockerfile:1.27.0");
   expect(dockerfile).toMatch(/^FROM \S+@sha256:[a-f0-9]{64}$/m);
   expect(dockerfile).toContain("apt-get");
   expect(dockerfile).toContain("bash");

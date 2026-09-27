@@ -58,6 +58,8 @@ export function createChatPaneRails(params: {
   state: ChatPageHost;
   sidebarLayout: ChatPaneSidebarLayout;
   presentationId: string;
+  sessionTitle?: string;
+  paneLabel?: string;
   presented: boolean;
   gatewaySnapshot: ChatPaneGatewaySnapshot;
   setObserverVisibility: (visible: boolean) => void;
@@ -82,6 +84,10 @@ export function createChatPaneRails(params: {
     isPanelVisible(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
   const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
     draftScope: params.presentationId,
+    draftContext: {
+      sessionTitle: params.sessionTitle,
+      paneLabel: params.paneLabel,
+    },
     expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
     narrowLayout: false,
     presented: params.presented,
