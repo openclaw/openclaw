@@ -15,7 +15,10 @@ import {
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  createOpenClawAgentDatabasePathMatcher,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.js";
@@ -374,11 +377,16 @@ export async function readSessionHistoryPageInWorker(
               registryPath: stateContext.admission.databasePath,
             })
           : undefined;
+      const primaryPath = sourceReads ? undefined : createOpenClawAgentDatabasePathMatcher();
+      primaryPath?.(currentSource.path, currentSource.path);
       const assertStateCurrent = () => {
         signal?.throwIfAborted();
         stateContext.maintenanceScope?.assertAdmission();
         stateContext.admission.assertCurrent();
         sourceReads?.assertSourceCurrent();
+        if (primaryPath && !primaryPath.isCurrent()) {
+          throw new Error("Session store changed while preparing its metadata. Retry the request.");
+        }
       };
       assertStateCurrent();
       const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
