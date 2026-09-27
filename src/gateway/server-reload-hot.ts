@@ -146,6 +146,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       const { buildGatewayCronService } = await import("./server-cron.js");
       assertCronReloadCurrent();
       nextState.cronState = buildGatewayCronService({
+        scheduler: params.scheduler,
         cfg: nextConfig,
         deps: params.deps,
         broadcast: params.broadcast,

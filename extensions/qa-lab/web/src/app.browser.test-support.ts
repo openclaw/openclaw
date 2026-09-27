@@ -16,7 +16,6 @@ const httpMock = vi.hoisted(() => {
   }
   return {
     getJson: vi.fn(),
-    getJsonNoStore: vi.fn(),
     postJson: vi.fn(),
     QaLabHttpError,
   };
@@ -120,6 +119,9 @@ export async function mountRunner(
 ) {
   let bootstrap = createBootstrap(selection, controlUiUrl);
   httpMock.getJson.mockImplementation(async (url: string) => {
+    if (url === "/api/ui-version") {
+      return { version: "test" };
+    }
     if (url.startsWith("/api/evidence?")) {
       return { evidence };
     }
@@ -149,7 +151,6 @@ export async function mountRunner(
     }
     throw new Error(`unexpected GET ${url}`);
   });
-  httpMock.getJsonNoStore.mockResolvedValue({ version: "test" });
   httpMock.postJson.mockImplementation(async (url: string, body: unknown) => {
     if (url !== "/api/scenario/suite") {
       throw new Error(`unexpected POST ${url}`);
@@ -175,7 +176,6 @@ export function setupAppBrowserTests() {
     );
     document.head.append(styles);
     httpMock.getJson.mockReset();
-    httpMock.getJsonNoStore.mockReset();
     httpMock.postJson.mockReset();
     const storage = new Map<string, string>();
     vi.stubGlobal("localStorage", {

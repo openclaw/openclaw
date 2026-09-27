@@ -115,7 +115,7 @@ it.each(["direct", "automatic", "post-session"] as const)(
       plugins: { allow: ["external-owner", "inside-owner", "undeclared-owner"], load: { paths } },
     };
     await prepareOpenClawStateDatabaseSchema({ env }, "doctor");
-    recordDeferredPluginMigrations({
+    await recordDeferredPluginMigrations({
       env,
       pending: [
         {

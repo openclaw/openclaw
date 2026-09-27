@@ -4,6 +4,7 @@ import { SKILL_LIBRARY_MAX_SELECTIONS } from "../../packages/gateway-protocol/sr
 import { UserChannelIdentitySchema } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { isPluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
+import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
 
 function isTaskSnapshotScope(input: unknown): boolean {
@@ -67,6 +68,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         input.command.type === "mcpOAuth.pending" ||
         input.command.type === "mcpOAuth.countPrincipals") &&
         typeof input.command.input === "string") ||
+      (input.command.type === "capture.readOnlyEvents" &&
+        typeof input.command.sessionId === "string" &&
+        (input.command.limit === undefined || typeof input.command.limit === "number")) ||
+      (input.command.type === "capture.readOnlyBlob" && typeof input.command.blobId === "string") ||
       isPluginBlobReadCommand(input.command) ||
       isChannelIngressReadCommand(input.command) ||
       (input.command.type === "conversationBindings.inspect" &&
@@ -222,6 +227,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.input.includeRunId === "string")) ||
       input.command.type === "fleet.list" ||
       (input.command.type === "operatorApprovals.history" && isRecord(input.command.input)) ||
+      isTuiLastSessionReadCommand(input.command) ||
       input.command.type === "nodeHost.config" ||
       input.command.type === "operator.channelPolicy" ||
       (input.command.type === "onboardingRecommendations.read" &&

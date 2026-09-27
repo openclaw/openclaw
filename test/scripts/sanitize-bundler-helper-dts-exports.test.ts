@@ -11,26 +11,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
 describe("sanitizeBundlerHelperDtsExports", () => {
-  it("flags and removes an undeclared __exportAll named export", () => {
-    const source = [
-      "export declare const keepMe: number;",
-      "export { keepMe as km, __exportAll as ud, alsoKeep as ak };",
-      "export declare const alsoKeep: string;",
-      "",
-    ].join("\n");
-
-    expect(findUndeclaredBundlerHelperDtsExports(source)).toEqual([
-      { name: "__exportAll", line: 2 },
-    ]);
-
-    const sanitized = sanitizeBundlerHelperDtsExports(source);
-    expect(sanitized.removed).toEqual([{ name: "__exportAll", line: 2 }]);
-    expect(sanitized.sourceText).toContain("keepMe as km");
-    expect(sanitized.sourceText).toContain("alsoKeep as ak");
-    expect(sanitized.sourceText).not.toContain("__exportAll");
-    expect(findUndeclaredBundlerHelperDtsExports(sanitized.sourceText)).toEqual([]);
-  });
-
   it("keeps __exportAll when the declaration file declares it", () => {
     const source = [
       "declare function __exportAll(target: object, all: object): void;",

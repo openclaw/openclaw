@@ -378,8 +378,7 @@ class GatewayDiscovery(
 
       // Wide-area DNS-SD may put TXT in additional records; fall back to a direct TXT query.
       val txtFromPtr =
-        recordsByName(ptrMsg, Section.ADDITIONAL)[keyName(instanceFqdn)]
-          .orEmpty()
+        recordsForName(ptrMsg, Section.ADDITIONAL, instanceFqdn)
           .mapNotNull { it as? TXTRecord }
       val txt =
         if (txtFromPtr.isNotEmpty()) {
@@ -473,39 +472,28 @@ class GatewayDiscovery(
 
   private fun keyName(raw: String): String = raw.trim().lowercase()
 
-  private fun recordsByName(
-    msg: Message,
+  private fun recordsForName(
+    msg: Message?,
     section: Int,
-  ): Map<String, List<Record>> {
-    val next = LinkedHashMap<String, MutableList<Record>>()
-    for (r in records(msg, section)) {
-      val name = r.name?.toString() ?: continue
-      next.getOrPut(keyName(name)) { mutableListOf() }.add(r)
-    }
-    return next
+    fqdn: String,
+  ): List<Record> {
+    val key = keyName(fqdn)
+    return records(msg, section).filter { it.name?.toString()?.let(::keyName) == key }
   }
 
   private fun recordByName(
     msg: Message,
     fqdn: String,
     type: Int,
-  ): Record? {
-    val key = keyName(fqdn)
-    val byNameAnswer = recordsByName(msg, Section.ANSWER)
-    val fromAnswer = byNameAnswer[key].orEmpty().firstOrNull { it.type == type }
-    if (fromAnswer != null) return fromAnswer
-
-    val byNameAdditional = recordsByName(msg, Section.ADDITIONAL)
-    return byNameAdditional[key].orEmpty().firstOrNull { it.type == type }
-  }
+  ): Record? =
+    recordsForName(msg, Section.ANSWER, fqdn).firstOrNull { it.type == type }
+      ?: recordsForName(msg, Section.ADDITIONAL, fqdn).firstOrNull { it.type == type }
 
   private fun resolveHostFromMessage(
     msg: Message?,
     hostname: String,
   ): String? {
-    val m = msg ?: return null
-    val key = keyName(hostname)
-    val additional = recordsByName(m, Section.ADDITIONAL)[key].orEmpty()
+    val additional = recordsForName(msg, Section.ADDITIONAL, hostname)
     val a = additional.mapNotNull { it as? ARecord }.mapNotNull { it.address?.hostAddress }
     val aaaa = additional.mapNotNull { it as? AAAARecord }.mapNotNull { it.address?.hostAddress }
     return a.firstOrNull() ?: aaaa.firstOrNull()

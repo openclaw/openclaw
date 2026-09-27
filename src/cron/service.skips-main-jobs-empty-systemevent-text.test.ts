@@ -1,6 +1,10 @@
 // Empty system event tests cover skipping main jobs with no message content.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CronService } from "./service.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import type { CronService } from "./service.js";
 import {
   createCronStoreHarness,
   createNoopLogger,
@@ -12,22 +16,7 @@ import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
-
-async function waitForFirstJob(
-  cron: CronService,
-  predicate: (job: CronJob | undefined) => boolean,
-) {
-  let latest: CronJob | undefined;
-  for (let i = 0; i < 30; i++) {
-    const jobs = await cron.list({ includeDisabled: true });
-    latest = jobs[0];
-    if (predicate(latest)) {
-      return latest;
-    }
-    await vi.runOnlyPendingTimersAsync();
-  }
-  return latest;
-}
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
 
 async function withCronService(
   cronEnabled: boolean,
@@ -39,6 +28,7 @@ async function withCronService(
 ) {
   await withCronServiceForTest(
     {
+      scheduler: createTestGatewayScheduler(clock.clock),
       makeStorePath,
       logger: noopLogger,
       cronEnabled,
@@ -50,26 +40,21 @@ async function withCronService(
 
 describe("CronService", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-12-13T00:00:00.000Z"));
+    clock = createGatewaySchedulerClock(Date.parse("2025-12-13T00:00:00.000Z"));
     noopLogger.debug.mockClear();
     noopLogger.info.mockClear();
     noopLogger.warn.mockClear();
     noopLogger.error.mockClear();
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("skips main jobs with empty systemEvent text", async () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(clock.clock),
       cronEnabled: true,
       storePath: "cron-empty-systemevent-test.json",
       log: noopLogger,
-      nowMs: () => Date.now(),
       enqueueSystemEvent,
       requestHeartbeat,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
@@ -82,8 +67,8 @@ describe("CronService", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "   " },
-      createdAtMs: Date.now(),
-      updatedAtMs: Date.now(),
+      createdAtMs: clock.clock.now(),
+      updatedAtMs: clock.clock.now(),
       state: {},
     };
 
@@ -107,13 +92,12 @@ describe("CronService", () => {
         payload: { kind: "systemEvent", text: "   " },
       });
 
-      vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-      await vi.runOnlyPendingTimersAsync();
+      await clock.advanceTo(atMs);
 
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
       expect(requestHeartbeat).not.toHaveBeenCalled();
 
-      const job = await waitForFirstJob(cron, (current) => current?.state.lastStatus === "skipped");
+      const [job] = await cron.list({ includeDisabled: true });
       expect(job?.enabled).toBe(false);
       expect(job?.state.lastStatus).toBe("skipped");
       expect(job?.state.lastError).toMatch(/non-empty/i);
@@ -137,8 +121,7 @@ describe("CronService", () => {
       expect(status.enabled).toBe(false);
       expect(status.nextWakeAtMs).toBeNull();
 
-      vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-      await vi.runOnlyPendingTimersAsync();
+      await clock.advanceTo(atMs);
 
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
       expect(requestHeartbeat).not.toHaveBeenCalled();

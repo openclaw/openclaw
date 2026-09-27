@@ -164,7 +164,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
               );
             }
             opts.abortSignal?.throwIfAborted();
-            await queue.purge();
+            await queue.purge({ signal: opts.abortSignal });
           }
           // An abort keeps the old identity so the next start re-detects and repeats the purge.
           opts.abortSignal?.throwIfAborted();

@@ -179,6 +179,7 @@ describe("device worker placement dispatch", () => {
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
       ownerEpoch: expect.any(Number),
+      authorize: expect.any(Function),
     });
     expect(harness.environments.attachSession).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,

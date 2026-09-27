@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import {
+  createServer,
   request,
   type IncomingHttpHeaders,
   type IncomingMessage,
@@ -637,29 +638,39 @@ describe("legacy channel webhook ports", () => {
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
-  it("reports an occupied port and retries it after the conflicting route is removed", async () => {
-    const removeBlocker = register({
-      path: "/occupying-webhook",
-      legacyListener: { port: claim.port + 1, host: "0.0.0.0" },
-    });
-    await listening();
-    const blocker = httpServers[1]!;
-    register({ legacyListener: endpoint(1) });
-    await Promise.resolve();
-    const listener = httpServers[2]!;
-    await once(listener, "error");
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(`Legacy webhook listener 127.0.0.1:${claim.port + 1} failed`),
-    );
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("update the external callback or reverse proxy to the Gateway port"),
-    );
-    expect(await (await fetch(url(0))).text()).toBe("accepted");
+  it("reports an occupied port and retries on a route change after it is freed", async () => {
+    const blocker = createServer();
+    // A wildcard bind can coexist with the loopback listener on macOS.
+    blocker.listen(endpoint(1));
+    await once(blocker, "listening");
+    try {
+      const removeTrigger = register({ path: "/route-change-trigger" });
+      register({ legacyListener: endpoint(1) });
+      await Promise.resolve();
+      const listener = httpServers[1]!;
+      await once(listener, "error");
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(`Legacy webhook listener 127.0.0.1:${claim.port + 1} failed`),
+      );
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "update the external callback or reverse proxy to the Gateway port",
+        ),
+      );
+      expect(await send(0, "/webhook")).toMatchObject({ status: 200, body: "accepted" });
 
-    const closed = once(blocker, "close");
-    removeBlocker();
-    await closed;
-    expect(await (await fetch(url(1))).text()).toBe("accepted");
+      await new Promise<void>((resolve) => {
+        blocker.close(() => resolve());
+      });
+      removeTrigger();
+      await listening();
+      expect(await send(1, "/webhook")).toMatchObject({ status: 200, body: "accepted" });
+    } finally {
+      blocker.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        blocker.close(() => resolve());
+      });
+    }
   });
 
   it("drains retired listeners until callbacks finish and closes pending retired sockets on owner stop", async () => {

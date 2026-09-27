@@ -1,4 +1,3 @@
-// Web media helpers load local and remote media for web-facing surfaces.
 import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
@@ -1001,13 +1000,7 @@ async function loadWebMediaInternal(
     mediaUrl;
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
 
-  const clampAndFinalize = async (params: {
-    buffer: Buffer;
-    contentType?: string;
-    kind: MediaKind | undefined;
-    fileName?: string;
-    trustedGeneratedHtmlSource?: boolean;
-  }): Promise<WebMediaResult> => {
+  const clampAndFinalize = async (params: WebMediaResult): Promise<WebMediaResult> => {
     // If caller explicitly provides maxBytes, trust it (for channels that handle large files).
     // Otherwise fall back to per-kind defaults.
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");

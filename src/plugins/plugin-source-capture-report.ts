@@ -197,6 +197,7 @@ export async function pruneUnreferencedPluginNativeCaptures(
   stateDir: string,
   assertCurrent: () => void,
   env?: NodeJS.ProcessEnv,
+  options: { startup?: boolean } = {},
 ) {
   try {
     assertCurrent();
@@ -232,7 +233,12 @@ export async function pruneUnreferencedPluginNativeCaptures(
         }
       }
     }
-    return await prunePluginNativeCaptureDirectories(stateDir, retainedPaths, assertCurrent);
+    return await prunePluginNativeCaptureDirectories(
+      stateDir,
+      retainedPaths,
+      assertCurrent,
+      options,
+    );
   } catch (error) {
     return { removed: [], warnings: [`Native capture cleanup skipped: ${String(error)}`] };
   }

@@ -1,5 +1,5 @@
 // Scheduled work must use free shared-admission slots across timer ticks (#119083).
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -16,6 +16,10 @@ import {
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import * as notificationMutation from "../tasks/task-notification-mutation.async.js";
 import { captureTaskDeliveryWork } from "../tasks/task-registry-delivery.test-support.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { stop } from "./service/ops-lifecycle.js";
 import { observeCronTimerAdmissions } from "./service/run-recovery.test-support.js";
 import { onTimer } from "./service/timer.test-support.js";
@@ -476,6 +480,8 @@ describe("cron service cross-tick bounded admission", () => {
     const releaseNotification = createDeferred();
     const store = fixtures.makeStorePath();
     const t0 = Date.now();
+    const clock = createGatewaySchedulerClock(t0);
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const jobA = createDueIsolatedJob({
       id: "timer-a",
       nowMs: t0,
@@ -510,16 +516,21 @@ describe("cron service cross-tick bounded admission", () => {
       }
     });
     const state = createCronRegressionState({
+      scheduler,
       storePath: store.storePath,
-      nowMs: () => Date.now(),
+      nowMs: clock.clock.now,
       runIsolatedAgentJob,
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
 
     const tickA = onTimer(state);
+    let tickB: ReturnType<typeof clock.advanceTo> = undefined;
     try {
       await aStarted.promise;
-      await vi.advanceTimersToNextTimerAsync();
+      const nextWakeAtMs = scheduler.nextWakeAtMs;
+      assert.isNotNull(nextWakeAtMs);
+      expect(nextWakeAtMs).toBeGreaterThanOrEqual(t0 + 500);
+      tickB = clock.advanceTo(nextWakeAtMs);
       await bStarted.promise;
 
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
@@ -558,7 +569,7 @@ describe("cron service cross-tick bounded admission", () => {
         JSON.stringify(getActiveGatewayRootWorkHolders()),
       ).toBe(1);
       releaseB.resolve({ status: "ok", summary: "b done" });
-      await vi.waitFor(() => expect(state.activeTimerTicks).toBe(0));
+      await tickB;
       await deliveries.settle();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(state.activeTimerTicks).toBe(0);
@@ -566,11 +577,12 @@ describe("cron service cross-tick bounded admission", () => {
       releaseNotification.resolve();
       releaseA.resolve({ status: "ok", summary: "a cleanup" });
       releaseB.resolve({ status: "ok", summary: "b cleanup" });
-      await tickA;
+      await Promise.all([tickA, tickB]);
       try {
         await deliveries.settle();
       } finally {
         stop(state);
+        await scheduler.stop();
       }
     }
   });

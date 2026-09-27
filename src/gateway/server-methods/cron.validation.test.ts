@@ -36,6 +36,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
@@ -849,10 +850,10 @@ describe("cron method validation", () => {
         }
         expect(context.logGateway.warn).toHaveBeenCalledExactlyOnceWith("cron: slow list request", {
           operation: "cron.list",
-          elapsedMs: 1301,
+          elapsedMs: fails ? 1301 : 1302,
           phaseDurationsMs: fails
             ? { setup: 0, listing: 1301 }
-            : { setup: 0, listing: 1301, projection: 0, response: 0, handlerExit: 0 },
+            : { setup: 0, listing: 1302, projection: 0, response: 0, handlerExit: 0 },
           sourcePageMs: 1301,
           sourcePageCount: 1,
           scopeAttemptCount: 1,
@@ -862,7 +863,7 @@ describe("cron method validation", () => {
           previewsRequested: false,
           scopeApplied: true,
           ...(!fails ? { returnedCount: 1 } : {}),
-          scopeProcessingMs: 0,
+          scopeProcessingMs: fails ? 0 : 1,
         });
       },
     );
@@ -1830,6 +1831,8 @@ describe("cron method validation", () => {
     const { storePath } = await makeStorePath();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -2774,6 +2777,8 @@ describe("cron method validation", () => {
     );
     const repair = await applyLegacyCronStoreRepair({ cfg, state });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: false,
       defaultAgentId: "ops",

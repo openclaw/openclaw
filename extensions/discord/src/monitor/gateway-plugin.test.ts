@@ -63,8 +63,8 @@ vi.mock("../internal/gateway.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  captureHttpExchange: vi.fn(),
-  captureWsEvent: vi.fn(),
+  captureHttpExchangeAsync: vi.fn().mockResolvedValue(undefined),
+  captureWsEventAsync: vi.fn().mockResolvedValue(undefined),
   resolveEffectiveDebugProxyUrl: () => undefined,
   resolveDebugProxySettings: () => ({ enabled: false }),
 }));

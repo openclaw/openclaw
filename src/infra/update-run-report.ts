@@ -47,7 +47,8 @@ type ReportInput = Pick<
   | "verification"
   | "repair"
   | "downtimeMs"
->;
+> &
+  Partial<Pick<UpdateRunRecord, "target">>;
 const PHASES = new Set<string>(UPDATE_RUN_PHASES);
 
 type UpdateRunIdentity =
@@ -178,6 +179,9 @@ function bounded(text: string, limit: number): string {
 }
 
 function recoveryHints(run: ReportInput, nextAction?: string): string[] {
+  if (run.target?.installationMethod === "ocm") {
+    return nextAction ? [] : run.origin.nextAction ? [run.origin.nextAction] : [];
+  }
   if (run.status === "running") {
     return ["Check progress with openclaw update status."];
   }
@@ -234,7 +238,10 @@ export function renderUpdateRunReport(
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
   const currentHealth: UpdateRunReportHealth | undefined =
     opts.currentHealth ??
-    (run.status !== "running" && opts.nextAction === undefined && run.origin.nextAction
+    (run.target?.installationMethod !== "ocm" &&
+    run.status !== "running" &&
+    opts.nextAction === undefined &&
+    run.origin.nextAction
       ? { kind: "unavailable" }
       : undefined);
   // Git updates can change commits without changing the package version.
@@ -277,7 +284,7 @@ export function renderUpdateRunReport(
       headline = `↩️ OpenClaw update rolled back to ${after ?? running ?? before ?? "the previous version"}: ${reason}.`;
       break;
     case "running":
-      headline = `${IN_PROGRESS_REPORT_PREFIX}${run.phase}.`;
+      headline = `${IN_PROGRESS_REPORT_PREFIX}${run.target?.installationMethod === "ocm" ? "managed by OCM" : run.phase}.`;
       break;
   }
   headline = bounded(headline, 500);

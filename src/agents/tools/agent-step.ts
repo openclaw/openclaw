@@ -1,8 +1,3 @@
-/**
- * Nested agent-step executor.
- *
- * Sends annotated inter-session messages through in-process or Gateway execution and reads the assistant reply.
- */
 import crypto from "node:crypto";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -40,7 +35,6 @@ function extractAgentCommandReply(
   return texts?.length ? texts.join("\n\n") : undefined;
 }
 
-/** Sends one annotated message to a target session and returns the resulting assistant text. */
 export async function runAgentStep(
   params: {
     agentId?: string;
@@ -74,26 +68,25 @@ export async function runAgentStep(
     sourceTool: params.sourceTool ?? "sessions_send",
     ...(params.sourceRole ? { sourceRole: params.sourceRole } : {}),
   };
-  // Mark inter-session prompts so downstream transcripts can distinguish tool-routed text.
-  const message = annotateInterSessionPromptText(params.message, inputProvenance);
-  const lane = params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey);
-  const channel = params.deliveryContext?.channel ?? params.channel ?? INTERNAL_MESSAGE_CHANNEL;
+  const agentParams = {
+    message: annotateInterSessionPromptText(params.message, inputProvenance),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionKey: params.sessionKey,
+    deliver: false,
+    sourceReplyDeliveryMode: "message_tool_only",
+    channel: params.deliveryContext?.channel ?? params.channel ?? INTERNAL_MESSAGE_CHANNEL,
+    lane: params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey),
+    extraSystemPrompt: params.extraSystemPrompt,
+    inputProvenance,
+  } as const;
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   if (params.transcriptMessage !== undefined) {
     // Intentional direct in-process exception: the public agent schema rejects transcriptMessage.
     // Keep announce bookkeeping off the wire without expanding the model-authored RPC surface.
     const ingress: Parameters<AgentCommandRunner>[0] = {
-      message,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...agentParams,
       transcriptMessage: params.transcriptMessage,
-      sessionKey: params.sessionKey,
-      deliver: false,
-      sourceReplyDeliveryMode: "message_tool_only",
-      channel,
-      lane,
       runId: stepIdem,
-      extraSystemPrompt: params.extraSystemPrompt,
-      inputProvenance,
       allowModelOverride: false,
     };
     const { agentCommandFromIngress } = await import("../../commands/agent.js");
@@ -103,9 +96,7 @@ export async function runAgentStep(
   const response = await gatewayCall({
     method: "agent",
     params: {
-      message,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      sessionKey: params.sessionKey,
+      ...agentParams,
       idempotencyKey: stepIdem,
       expectedExistingSessionId: params.expectedSession?.sessionId,
       expectedExistingSessionLifecycleRevision: params.expectedSession
@@ -114,12 +105,6 @@ export async function runAgentStep(
       accountId: params.deliveryContext?.accountId,
       to: params.deliveryContext?.to,
       threadId: stringifyRouteThreadId(params.deliveryContext?.threadId),
-      deliver: false,
-      sourceReplyDeliveryMode: "message_tool_only",
-      channel,
-      lane,
-      extraSystemPrompt: params.extraSystemPrompt,
-      inputProvenance,
     },
     timeoutMs: 10_000,
   });
@@ -136,16 +121,13 @@ export async function runAgentStep(
     });
   }
 
-  const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
-  const resolvedRunId = stepRunId || stepIdem;
+  const resolvedRunId =
+    typeof response?.runId === "string" && response.runId ? response.runId : stepIdem;
   const result = await waitForAgentRunReply({
     runId: resolvedRunId,
     timeoutMs: Math.min(params.timeoutMs, 60_000),
     callGateway: gatewayCall,
     untilTerminal: true,
   });
-  if (result.status !== "ok") {
-    return undefined;
-  }
-  return result.replyText;
+  return result.status === "ok" ? result.replyText : undefined;
 }

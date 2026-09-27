@@ -17,6 +17,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sweepExpiredPluginStateEntries } from "../plugin-state/plugin-state-store.js";
@@ -117,7 +118,7 @@ const maintenanceScheduler = createTaskMaintenanceScheduler(
   async () => {
     // Flow retention reads linked task activity, so reconcile the task owner first.
     // Reversing this order can preserve phantom active work for another sweep.
-    await sweepTaskRegistry();
+    await runTaskRegistryMaintenance();
     await runTaskFlowRegistryMaintenance();
   },
   (error) => log.warn("Task registry maintenance failed", { error }),
@@ -778,7 +779,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
         getTaskRegistryMaintenanceSnapshot,
         getTaskRegistryMaintenanceTask,
       },
-      async (selected, now, cronHistoryOverflowTaskIds, assertOwnerCurrent) => {
+      async (selected, now, cronHistoryOverflowSelections, assertOwnerCurrent) => {
         let current = selected;
         const cronOptions = (markLost: boolean) => ({
           markLost,
@@ -875,13 +876,13 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
           assertOwnerCurrent();
         }
         if (
-          shouldPruneTerminalTask(current, now, cronHistoryOverflowTaskIds) ||
+          shouldPruneTerminalTask(current, now, cronHistoryOverflowSelections) ||
           shouldStampCleanupAfter(current)
         ) {
           const result = await applyTaskRegistryMaintenanceRetention(
             current,
             now,
-            cronHistoryOverflowTaskIds,
+            cronHistoryOverflowSelections,
             assertOwnerCurrent,
           );
           if (result === "pruned") {
@@ -916,13 +917,9 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   }
 }
 
-export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummary> {
-  return runTaskRegistryMaintenance();
-}
-
-export function startTaskRegistryMaintenance() {
+export function startTaskRegistryMaintenance(scheduler: GatewayScheduler) {
   ensureTaskRegistryReady();
-  maintenanceScheduler.start();
+  maintenanceScheduler.start(scheduler);
 }
 
 export async function stopTaskRegistryMaintenance(): Promise<void> {

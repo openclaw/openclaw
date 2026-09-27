@@ -33,6 +33,7 @@ import {
   isPluginPackageFile as inPackage,
   findPluginCapturedPackage,
 } from "./plugin-package-metadata-capture.js";
+import { isPluginSourceEntry } from "./plugin-source-file.js";
 import {
   capturedPluginModuleUrl,
   visitPluginSourceReferences,
@@ -246,7 +247,7 @@ export function capturePluginGenerationArtifact(
           }
           scannedDirectories.add(real);
           for (const name of fs.readdirSync(real).toSorted()) {
-            if (name !== "node_modules" && name !== ".git") {
+            if (isPluginSourceEntry(name)) {
               captureFile(path.join(source, name), options);
             }
           }

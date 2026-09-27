@@ -247,6 +247,7 @@ const runtimeConsumers = [
   ...[
     "src/commands/doctor-agent-database-order.process.test.ts",
     "src/commands/doctor-config-flow.legacy-composition.test.ts",
+    "src/commands/doctor-config-preflight.test.ts",
     "src/commands/doctor-config-preflight.process.test.ts",
     "src/commands/doctor-config-preflight.refusal.process.test.ts",
     "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",

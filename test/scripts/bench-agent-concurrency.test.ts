@@ -7,6 +7,7 @@ import {
   type WorkerResult,
   type WorkerScenario,
 } from "../../scripts/bench-agent-concurrency.ts";
+import { createGatewayActiveWorkSnapshot } from "../../src/infra/gateway-active-work.js";
 import {
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -120,6 +121,7 @@ describe("agent concurrency benchmark", () => {
     const deferred = createDeferred();
     const rootWork = runWithGatewayIndependentRootWorkAdmission(() => deferred.promise);
     try {
+      expect(createGatewayActiveWorkSnapshot().counts.rootRequests).toBe(1);
       const drain = workerTesting.drainSpawnSampleActiveWork();
       await expect(
         Promise.race([

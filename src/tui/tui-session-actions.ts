@@ -7,7 +7,6 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import type { AgentHistoryActivity } from "../infra/agent-activity-events.js";
 import {
-  agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -22,7 +21,12 @@ import {
   isCommandMarkedMessage,
 } from "./tui-formatters.js";
 import { extractTuiImageSources } from "./tui-images.js";
-import { readTuiSessionUserMessage } from "./tui-session-events.js";
+import {
+  matchesTuiSessionMetadata,
+  matchesTuiSessionSelection,
+  readTuiSessionUserMessage,
+} from "./tui-session-events.js";
+import { readTuiSessionHistory } from "./tui-session-history.js";
 import {
   sessionInfoUiEquals,
   type SessionInfoDefaults,
@@ -55,6 +59,7 @@ type SessionActionContext = {
   invalidateRunOwnership?: () => void;
   clearLocalRunIds?: () => void;
   rememberSessionKey?: (sessionKey: string) => void | Promise<void>;
+  onSessionSelection?: () => void;
 };
 
 export function createSessionActions(context: SessionActionContext) {
@@ -76,6 +81,7 @@ export function createSessionActions(context: SessionActionContext) {
     invalidateRunOwnership,
     clearLocalRunIds,
     rememberSessionKey,
+    onSessionSelection,
   } = context;
   let historyLoadGeneration = 0;
   let lastSessionDefaults: SessionInfoDefaults | null = null;
@@ -85,11 +91,12 @@ export function createSessionActions(context: SessionActionContext) {
     agentId: state.currentAgentId,
   });
 
+  const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
+    matchesTuiSessionSelection(state, selection);
+
   const applySessionSelection = (nextSelection: { key: string; agentId: string }) => {
-    const previousSelection = captureSessionSelection();
     if (
-      nextSelection.agentId === previousSelection.agentId &&
-      agentSessionKeysMatchByRequestKey(nextSelection.key, previousSelection.sessionKey)
+      isCurrentSessionSelection({ sessionKey: nextSelection.key, agentId: nextSelection.agentId })
     ) {
       return false;
     }
@@ -117,21 +124,6 @@ export function createSessionActions(context: SessionActionContext) {
     updateHeader();
     updateFooter();
     return true;
-  };
-
-  const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
-    state.currentAgentId === selection.agentId &&
-    agentSessionKeysMatchByRequestKey(state.currentSessionKey, selection.sessionKey);
-
-  const isCurrentSessionMutation = (result: { key?: string }): boolean => {
-    if (!result.key) {
-      return true;
-    }
-    const parsed = parseAgentSessionKey(result.key);
-    return isCurrentSessionSelection({
-      sessionKey: result.key,
-      agentId: parsed ? normalizeAgentId(parsed.agentId) : state.currentAgentId,
-    });
   };
 
   const applyAgentsResult = (result: TuiAgentsList) => {
@@ -359,7 +351,7 @@ export function createSessionActions(context: SessionActionContext) {
         return;
       }
       const entry = result.session;
-      if (entry && (!entry.key || !isCurrentSessionMutation(entry))) {
+      if (entry && (!entry.key || !matchesTuiSessionMetadata(state, entry))) {
         return;
       }
       if (entry?.key && entry.key !== state.currentSessionKey) {
@@ -388,7 +380,7 @@ export function createSessionActions(context: SessionActionContext) {
   const applySessionInfoFromPatch = (
     result?: SessionsPatchResult | TuiSessionMutationResult | null,
   ) => {
-    if (!result?.entry || !isCurrentSessionMutation(result)) {
+    if (!result?.entry || !matchesTuiSessionMetadata(state, result)) {
       return;
     }
     if (result.key && result.key !== state.currentSessionKey) {
@@ -454,15 +446,18 @@ export function createSessionActions(context: SessionActionContext) {
       (state.sessionGeneration ?? 0) === sessionGeneration &&
       isCurrentSessionSelection(selection);
     try {
-      const history = await client.loadHistory({
+      const read = await readTuiSessionHistory({
+        client,
         sessionKey: selection.sessionKey,
-        ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
+        agentId: selection.agentId,
+        homeSessionKey: resolveSessionSelection(undefined, selection.agentId).key,
         limit: opts.historyLimit ?? 200,
+        isCurrent: isCurrentLoad,
       });
-      if (!isCurrentLoad()) {
+      if (!read || !isCurrentLoad()) {
         return { loaded: false };
       }
-      const record = history as {
+      const record = read.history as {
         messages?: unknown[];
         activity?: AgentHistoryActivity[];
         sessionId?: string;
@@ -479,9 +474,10 @@ export function createSessionActions(context: SessionActionContext) {
         runtimePluginsPrewarm?: { status?: string; error?: string };
       };
       const sessionInfo = record.sessionInfo;
-      if (sessionInfo?.key && sessionInfo.key !== state.currentSessionKey) {
-        updateAgentFromSessionKey(sessionInfo.key);
-        state.currentSessionKey = sessionInfo.key;
+      const historyKey = sessionInfo?.key ?? read.legacyHistoryKey;
+      if (historyKey && historyKey !== state.currentSessionKey) {
+        updateAgentFromSessionKey(historyKey);
+        state.currentSessionKey = historyKey;
         selection.sessionKey = state.currentSessionKey;
         selection.agentId = state.currentAgentId;
         updateHeader();
@@ -646,12 +642,20 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const setSession = async (rawKey: string, agentId?: string) => {
-    if (applySessionSelection(resolveSessionSelection(rawKey, agentId)) || !state.historyLoaded) {
+    const changed = applySessionSelection(resolveSessionSelection(rawKey, agentId));
+    onSessionSelection?.();
+    if (changed || !state.historyLoaded) {
       await loadHistory();
     }
   };
 
   const abortActive = async (params?: { preferActive?: boolean }) => {
+    const admission = submit.resolveTuiSessionActionAdmission(state);
+    if (admission.status === "blocked") {
+      chatLog.addSystem(submit.tuiSessionActionBlockedMessage(admission, opts.local === true));
+      tui.requestRender();
+      return;
+    }
     if (
       opts.local === true &&
       state.activityStatus === "finishing context" &&

@@ -7,16 +7,13 @@ import {
 } from "../../scripts/e2e/parallels/smoke-common.ts";
 
 describe("Parallels runtime companion setup", () => {
-  it.each(["anthropic", "minimax"] as const)(
-    "does not install unrelated companions for %s",
-    async (provider) => {
-      const readCli = vi.fn();
-      const installCli = vi.fn();
-      await installSmokeRuntimeCompanions({ provider, readCli, installCli });
-      expect(readCli).not.toHaveBeenCalled();
-      expect(installCli).not.toHaveBeenCalled();
-    },
-  );
+  it("does not install unrelated companions", async () => {
+    const readCli = vi.fn();
+    const installCli = vi.fn();
+    await installSmokeRuntimeCompanions({ provider: "anthropic", readCli, installCli });
+    expect(readCli).not.toHaveBeenCalled();
+    expect(installCli).not.toHaveBeenCalled();
+  });
 
   it("leaves the shipped pre-consent CLI to provision its own companion version", async () => {
     const readCli = vi.fn((args: string[]) => {

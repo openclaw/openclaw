@@ -311,26 +311,15 @@ export async function tryReuseCodexLiveThread(
     );
     const resumeParams = lifecycleTiming.measureSync("warm-thread-resume-params", () =>
       buildThreadResumeParams(params.params, {
+        ...params,
         threadId: binding.threadId,
-        cwd: params.cwd,
         authProfileId: resumeAuthProfileId,
         model: startModelSelection.model,
         modelProvider: startModelProvider,
         preserveNativeModel: binding.preserveNativeModel === true,
-        appServer: params.appServer,
-        dynamicTools: params.dynamicTools,
-        developerInstructions: params.developerInstructions,
-        skillsInstructions: params.skillsInstructions,
         config: applyCodexNativeSkillIsolation(resumeConfig, nativeSkillIsolation),
-        nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-        nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
-        nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-        webSearchAllowed: params.webSearchAllowed,
         hostSystemAgentActive,
         restrictedToolSurfaceInheritedMcpServerNames,
-        shellEnvironment: params.shellEnvironment,
-        shellPathPrepend: params.shellPathPrepend,
-        disableLoginShell: params.disableLoginShell,
       }),
     );
     assertCodexInferenceRouteConfig(

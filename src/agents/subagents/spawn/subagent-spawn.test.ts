@@ -1735,18 +1735,17 @@ describe("spawnSubagentDirect seam flow", () => {
 
   it("uses requester agent thinkingDefault after a failed preference read", async () => {
     // Import after the spawn helper installs the mocked session runtime.
-    const { readRequesterThinkingLevel } = await import("./subagent-spawn-requester-prefs.js");
+    const { readRequesterPreferences } = await import("./subagent-spawn-requester-prefs.js");
     hoisted.loadSessionStoreMock.mockImplementation(() => {
       throw new Error("preference read unavailable");
     });
 
-    expect(
-      readRequesterThinkingLevel({
-        cfg: { agents: { list: [{ id: "main", thinkingDefault: "high" }] } },
-        requesterInternalKey: "agent:main:main",
-        requesterAgentId: "main",
-      }),
-    ).toBe("high");
+    const preferences = await readRequesterPreferences({
+      cfg: { agents: { list: [{ id: "main", thinkingDefault: "high" }] } },
+      requesterInternalKey: "agent:main:main",
+      requesterAgentId: "main",
+    });
+    expect(preferences.thinkingLevel).toBe("high");
   });
 
   it.each<{

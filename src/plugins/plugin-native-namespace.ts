@@ -13,6 +13,7 @@ import type { PluginNativeNamespaceFact } from "./plugin-source-admission.types.
 import {
   copyPluginSourceFile,
   hashPluginSourceFile,
+  isPluginSourceEntry,
   linkPluginSourceFile,
   pluginSourceIdentityChangedOnlyByCtime,
   pluginSourceStatIdentity,
@@ -134,7 +135,7 @@ function inspectDirectory(
       directories.set(source, relative);
       ancestors.add(source);
       for (const name of fs.readdirSync(source).toSorted()) {
-        if (name !== ".git" && name !== "node_modules") {
+        if (isPluginSourceEntry(name)) {
           visit(path.join(source, name), path.join(relative, name), packageBoundary);
         }
       }

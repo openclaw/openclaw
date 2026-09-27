@@ -2558,6 +2558,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/commands/doctor-config-flow.legacy-composition.test.ts",
       "src/commands/doctor-config-preflight.process.test.ts",
       "src/commands/doctor-config-preflight.refusal.process.test.ts",
+      "src/commands/doctor-config-preflight.test.ts",
       "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",
       "src/commands/doctor-plugin-install-config.process.test.ts",
     ]);
@@ -4247,6 +4248,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/commands/doctor-config-flow.legacy-composition.test.ts",
       "src/commands/doctor-config-preflight.process.test.ts",
       "src/commands/doctor-config-preflight.refusal.process.test.ts",
+      "src/commands/doctor-config-preflight.test.ts",
       "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",
     ];
     const runtimeTargets = [

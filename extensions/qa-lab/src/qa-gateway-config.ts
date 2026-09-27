@@ -1,4 +1,3 @@
-// Qa Lab helper module supports qa gateway config behavior.
 import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";

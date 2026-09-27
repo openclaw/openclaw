@@ -37,8 +37,9 @@ compatibility listener forwards only its registered webhook
 routes through the same Gateway request pipeline, preserving signatures and retry
 responses during channel restarts.
 
-The exported Telegram and Feishu config types retain deprecated `webhookPort` and
-`webhookHost` input properties until the next Plugin SDK major. TypeScript config
+The exported Telegram, Feishu, and Microsoft Teams config types retain deprecated
+listener input properties (`webhookPort`, `webhookHost`, or `webhook.port`) until
+the next Plugin SDK major. TypeScript config
 producers remain source-compatible, but parsed runtime config uses only
 `legacyWebhook`; run Doctor before using legacy inputs. This type compatibility
 window does not schedule removal of the default listener.
@@ -63,6 +64,13 @@ Telegram re-registers its configured public `webhookUrl` at startup. It preserve
 that URL because its reverse-proxy upstream cannot be inferred safely. Accounts
 that shared a path and secret on different explicit ports keep their old-port
 routing; assign distinct secrets or paths before moving them to one Gateway port.
+
+Microsoft Teams uses the same owner: Doctor moves explicit
+`channels.msteams.webhook.port` to `channels.msteams.legacyWebhook.port`, preserving
+`webhook.path`. Omitted listener settings retain port `3978` with its previous
+wildcard bind. After verifying the Azure Bot endpoint through the Gateway port,
+set `channels.msteams.legacyWebhook: false` to close the compatibility listener.
+Teams keeps its Express body parser and SDK authentication on both listeners.
 
 ## ACP agents' model precedence
 

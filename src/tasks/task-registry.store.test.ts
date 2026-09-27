@@ -876,7 +876,7 @@ describe("task-registry store runtime", () => {
     });
     expect(store.loadSnapshot().tasks.get(created.taskId)?.detail).toEqual(detail);
     expect(
-      await applyTaskRegistryMaintenanceRetention(completed, Date.now(), new Set(), () => {}),
+      await applyTaskRegistryMaintenanceRetention(completed, Date.now(), new Map(), () => {}),
     ).toBe("pruned");
     expect(getTaskById(created.taskId)).toBeUndefined();
     expect(store.loadSnapshot().tasks.has(created.taskId)).toBe(false);
@@ -1569,7 +1569,7 @@ describe("task-registry store runtime", () => {
                   taskId: existing.taskId,
                   notifyPolicy: "state_changes",
                 })
-              : applyTaskRegistryMaintenanceRetention(existing, Date.now(), new Set(), () => {});
+              : applyTaskRegistryMaintenanceRetention(existing, Date.now(), new Map(), () => {});
           };
           const { db } = openOpenClawStateDatabase();
           const failingStatement =

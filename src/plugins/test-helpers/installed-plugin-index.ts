@@ -13,7 +13,7 @@ export async function seedInstalledPluginIndex(
     "reason" | "installRecords" | "lease"
   > = {},
 ): Promise<void> {
-  refreshPersistedInstalledPluginIndex({
+  await refreshPersistedInstalledPluginIndex({
     ...options,
     reason: "source-changed",
     installRecords: records,

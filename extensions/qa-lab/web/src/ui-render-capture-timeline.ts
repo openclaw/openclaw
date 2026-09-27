@@ -20,7 +20,6 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
     renderTimelineWindow,
     timelineAxisTicks,
     renderLaneSparkline,
-    describeLaneSeverity,
     timelineLanes,
     previousLanePosition,
     collapsedLaneIds,
@@ -66,9 +65,7 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                         ? '<div class="empty-state" style="padding:20px">No timeline lanes match the current lane search.</div>'
                         : visibleTimelineLanes
                             .map((lane) => {
-                              const laneErrorCount = lane.events.filter(
-                                (event) => Boolean(event.errorText) || (event.status ?? 0) >= 400,
-                              ).length;
+                              const laneErrorCount = lane.errorCount;
                               const laneRequestCount = lane.events.filter(
                                 (event) => event.kind === "request",
                               ).length;
@@ -139,7 +136,6 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                   ? Math.round((laneFocusedEventCount / lane.events.length) * 100)
                                   : 0;
                               const laneSelected = selectedLaneEvent != null;
-                              const laneSeverity = describeLaneSeverity(lane.events);
                               const laneMeetsThreshold = focusSelectedFlow
                                 ? laneMeetsFocusedThreshold(
                                     laneFocusedEventCount,
@@ -155,9 +151,7 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                   ? `${laneFocusedPercent}% focus${laneBackgroundEventCount > 0 ? ` · ${laneBackgroundEventCount} bg` : ""}`
                                   : null,
                                 laneErrorCount > 0 ? `${laneErrorCount} err` : null,
-                                state.captureTimelineLaneSort === "severity"
-                                  ? laneSeverity.summary
-                                  : null,
+                                state.captureTimelineLaneSort === "severity" ? lane.summary : null,
                                 autoCollapsed ? "auto-collapsed" : null,
                               ].filter((value): value is string => Boolean(value));
                               const previousIndex = previousLanePosition.get(lane.id);
@@ -406,7 +400,7 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                 }
                                 ${
                                   state.captureTimelineLaneSort === "severity"
-                                    ? `<span class="capture-chip capture-chip-severity capture-timeline-inline-chip">severity ${laneSeverity.score.toFixed(1)}</span>`
+                                    ? `<span class="capture-chip capture-chip-severity capture-timeline-inline-chip">severity ${lane.score.toFixed(1)}</span>`
                                     : ""
                                 }
                                 ${
@@ -452,7 +446,7 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                           }`
                                     }${
                                       state.captureTimelineLaneSort === "severity"
-                                        ? esc(laneSeverity.summary)
+                                        ? esc(lane.summary)
                                         : ""
                                     }</div>`
                                   : ""

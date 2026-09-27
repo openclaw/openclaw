@@ -1,4 +1,3 @@
-// Control UI view renders usage screen content.
 import { html, nothing } from "lit";
 import {
   addCostUsageTotals,
@@ -737,7 +736,7 @@ export function renderUsage(props: UsageProps) {
                         displayActions.onSessionSortChange,
                         displayActions.onSessionSortDirChange,
                         displayActions.onSessionsTabChange,
-                        display.visibleColumns,
+                        undefined,
                         totalSessions,
                         filterActions.onClearSessions,
                       )}

@@ -2,11 +2,7 @@
 // sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  ErrorCodes,
-  errorShape,
-  validateUpdateRunParams,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
@@ -81,6 +77,7 @@ import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import {
+  admitGatewayUpdateRequest,
   retainUpdateRequesterAuthority,
   createUnexpectedUpdateFailureResult,
   recordHandoffFailure,
@@ -88,15 +85,16 @@ import {
 } from "./update-admission.js";
 import { updateReportHandler } from "./update-report.js";
 import { updateStatusHandlers } from "./update-status.js";
-import { assertValidParams } from "./validation.js";
 
 const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-running";
 
 export const updateHandlers: GatewayRequestHandlers = {
   ...updateStatusHandlers,
   "update.report": updateReportHandler,
-  "update.run": async ({ params, respond, client, context, sessionMutationCommitGuard }) => {
-    if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
+  "update.run": async (request) => {
+    const { respond, client, context, sessionMutationCommitGuard } = request;
+    const params = await admitGatewayUpdateRequest(request);
+    if (!params) {
       return;
     }
     const actor = resolveControlPlaneActor(client);

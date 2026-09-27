@@ -264,6 +264,7 @@ write_summary() {
     SUMMARY_INSTALLED_VERSION="$installed_version" \
     SUMMARY_CANDIDATE_INSTALL_MODE="$candidate_install_mode" \
     SUMMARY_SCENARIO="$SCENARIO" \
+    SUMMARY_MISSING_LOAD_PATH_APPLICABILITY="${missing_load_path_applicability:-}" \
     SUMMARY_UPDATE_RESTART_MODE="$UPDATE_RESTART_MODE" \
     SUMMARY_UPDATE_OUTCOME="${update_outcome:-unknown}" \
     SUMMARY_UPDATE_REPAIR_REQUIRED="$update_repair_required" \
@@ -322,6 +323,13 @@ const summary = {
     version: process.env.SUMMARY_BASELINE_VERSION || null,
   },
   scenario: process.env.SUMMARY_SCENARIO || "base",
+  missingLoadPath: process.env.SUMMARY_MISSING_LOAD_PATH_APPLICABILITY
+    ? {
+        applicability: process.env.SUMMARY_MISSING_LOAD_PATH_APPLICABILITY,
+        reason: process.env.SUMMARY_MISSING_LOAD_PATH_APPLICABILITY === "unsupported-driver"
+          ? "published-cli-rejects-invalid-config-before-staging" : null,
+      }
+    : null,
   candidate: {
     kind: process.env.OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND || null,
     spec: process.env.OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC || process.env.OPENCLAW_CURRENT_PACKAGE_TGZ || null,

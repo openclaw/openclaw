@@ -190,14 +190,20 @@ describe("Discord admission through Gateway policy publication", () => {
     const send = (id: string) => handler(createRawMessage(id), client);
     const startChannel = vi.fn(async () => new Map());
     const stopChannel = vi.fn(async () => {});
+    const scheduler = createTestGatewayScheduler();
     let state: ReturnType<GatewayReloadHandlerParams["getState"]> = {
       hooksConfig: null,
       hookClientIpConfig: { allowRealIpFallback: false },
       heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
-      cronState: createLazyGatewayCronState({ cfg, deps: {}, broadcast: vi.fn() }),
+      cronState: createLazyGatewayCronState({
+        scheduler,
+        cfg,
+        deps: {},
+        broadcast: vi.fn(),
+      }),
     };
     const { applyHotReload } = createGatewayReloadHandlers({
-      scheduler: createTestGatewayScheduler(),
+      scheduler,
       deps: {},
       broadcast: vi.fn(),
       getPluginRegistry: () => registry,

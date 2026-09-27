@@ -911,7 +911,6 @@
     <string name="native_79b1916f9fedb270" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Natywny model Codex"</string>
     <string name="native_79d3a1f108e8d9c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dołączone"</string>
     <string name="native_79d3d8a05bab3172" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s dostępnych"</string>
-    <string name="native_79e675583adc1ab5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Oczekiwanie na zatwierdzenie węzła"</string>
     <string name="native_7a1058bb81879dbd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway oczekuje"</string>
     <string name="native_7a13d46682b4c94b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Połącz się z Gateway, aby otworzyć tę sesję."</string>
     <string name="native_7a211017043ea5cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wymagane uwierzytelnienie"</string>
@@ -1473,7 +1472,6 @@
     <string name="native_cae7d57bc067a514" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zatrzymaj"</string>
     <string name="native_cae98462b30650eb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nie ma jeszcze pasujących wątków."</string>
     <string name="native_caf85b0888d78f1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Źródła"</string>
-    <string name="native_cba62d81f910c7f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Parowanie Gateway powiodło się.\nZatwierdź możliwości węzła tego telefonu w interfejsie operatora."</string>
     <string name="native_cbb96d163f80c1f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nie udało się odczytać wybranego obrazu."</string>
     <string name="native_cc4b66e7e22230c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ta umiejętność jest zainstalowana, ale obecnie nie spełnia warunków uruchomienia. Zmiany konfiguracji wprowadzaj w aplikacji na komputerze lub przez CLI."</string>
     <string name="native_cc5f45fb30a26e07" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mechanizm rozpoznawania jest zajęty"</string>

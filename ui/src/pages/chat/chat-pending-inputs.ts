@@ -53,17 +53,16 @@ const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
 function reconcileQueuedInputs(
   queued: ChatPendingInputsPage["items"],
   page: ChatPendingInputsPage,
-  receipts: ChatInputReceipts = [],
+  receipts?: ChatInputReceipts,
+  queriedRunIds: readonly string[] = [],
 ): ChatPendingInputsPage["items"] {
-  const observed = new Map(receipts.map((receipt) => [receipt.runId, receipt]));
-  const current = new Map(
-    queued
-      .filter((input) => {
-        const receipt = input.runId ? observed.get(input.runId) : undefined;
-        return !receipt || (receipt.state === "pending" && receipt.queued);
-      })
-      .map((input) => [input.id, input]),
-  );
+  if (page.queuedCount === 0) {
+    return [];
+  }
+  const completePage = page.nextBefore === undefined && page.items.length === page.total;
+  const observed = new Map(receipts?.map((receipt) => [receipt.runId, receipt]));
+  const queried = new Set(receipts === undefined ? [] : queriedRunIds);
+  const current = new Map((completePage ? [] : queued).map((input) => [input.id, input]));
   for (const input of page.items) {
     if (input.queued) {
       current.set(input.id, input);
@@ -71,7 +70,14 @@ function reconcileQueuedInputs(
       current.delete(input.id);
     }
   }
-  return [...current.values()];
+  // Ordinary consumption deletes custody. An exact queried absence retires its
+  // queue projection even when the transcript has advanced beyond that message.
+  return [...current.values()].filter((input) => {
+    const receipt = input.runId ? observed.get(input.runId) : undefined;
+    return receipt
+      ? receipt.state === "pending" && receipt.queued
+      : !input.runId || !queried.has(input.runId);
+  });
 }
 
 export function buildPendingInputQueueItems(
@@ -281,6 +287,7 @@ export function applyChatPendingInputs(
     view?.queuedInputs ?? [],
     displayPage,
     options.receipts,
+    options.queriedRunIds,
   );
   if (!view) {
     view = {
@@ -373,7 +380,12 @@ async function requestPendingInputPage(
         continue;
       }
       const page = reconcilePendingInputPage(state, result.pendingInputs, result.inputReceipts);
-      view.queuedInputs = reconcileQueuedInputs(view.queuedInputs, page, result.inputReceipts);
+      view.queuedInputs = reconcileQueuedInputs(
+        view.queuedInputs,
+        page,
+        result.inputReceipts,
+        inputRunIds,
+      );
       view.queuedCount = page.queuedCount ?? view.queuedCount;
       rotateInputReceipts(state, view, inputRunIds);
       if (request.kind !== "discovery") {

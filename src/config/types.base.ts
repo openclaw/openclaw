@@ -15,6 +15,7 @@ import type {
   DmPolicySchema,
   GroupPolicySchema,
   HumanDelaySchema,
+  IdentitySchema,
   MarkdownConfigSchema,
   ReplyToModeSchema,
   TextChunkModeSchema,
@@ -111,13 +112,7 @@ export type SessionMaintenanceMode = NonNullable<SessionMaintenanceConfig["mode"
 // Provider docking: allowlists keyed by provider id (and internal "webchat").
 export type AgentElevatedAllowFromConfig = Partial<Record<string, Array<string | number>>>;
 
-export type IdentityConfig = {
-  name?: string;
-  theme?: string;
-  emoji?: string;
-  /** Avatar image: workspace-relative path, http(s) URL, or data URI. */
-  avatar?: string;
-};
+export type IdentityConfig = NonNullable<z.input<typeof IdentitySchema>>;
 
 export type LoggingConfig = NonNullable<z.input<typeof LoggingConfigSchema>>;
 

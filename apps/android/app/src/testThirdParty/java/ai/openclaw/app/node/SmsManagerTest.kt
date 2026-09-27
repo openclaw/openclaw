@@ -444,12 +444,12 @@ class SmsManagerTest {
 
   @Test
   fun escapeSqlLikeLiteralEscapesPercentUnderscoreAndBackslash() {
-    assertEquals("\\%a\\_b\\\\c", SmsManager.escapeSqlLikeLiteral("%a_b\\c"))
+    assertEquals("\\%a\\_b\\\\c", escapeSqlLikeLiteral("%a_b\\c"))
   }
 
   @Test
   fun escapeSqlLikeLiteralLeavesOrdinaryTextUnchanged() {
-    assertEquals("Leah", SmsManager.escapeSqlLikeLiteral("Leah"))
+    assertEquals("Leah", escapeSqlLikeLiteral("Leah"))
   }
 
   @Test

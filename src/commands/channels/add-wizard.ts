@@ -180,7 +180,6 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     if (committed.movedInstallRecords) {
       await refreshPluginRegistryAfterConfigMutation({
         reason: "source-changed",
-        installRecords: committed.installRecords,
         logger: { warn: (message) => runtime.log(message) },
       });
     }

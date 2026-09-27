@@ -317,7 +317,7 @@ export function createSessionRowProvenance() {
       }
     }
     const nextMetadata = fields ? { ...baseMetadata, fields } : baseMetadata;
-    if (isShallowEqualSessionRow(next, current)) {
+    if (next === current || isShallowEqualSessionRow(next, current)) {
       observationsByRow.set(current, nextMetadata);
       return current;
     }
@@ -350,6 +350,9 @@ export function createSessionRowProvenance() {
     mergeRow,
     observeReadRow,
     observeFields,
+    fieldNames: (row: GatewaySessionRow): string[] => [
+      ...new Set([...Object.keys(row), ...metadata(row).fields.keys()]),
+    ],
     fieldObservation: (row: GatewaySessionRow, field: string): FieldObservation => {
       const observed = metadata(row);
       return observed.fields.get(field) ?? observed.read;

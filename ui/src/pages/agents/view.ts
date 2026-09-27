@@ -1,4 +1,3 @@
-// Control UI view renders agents screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";

@@ -40,7 +40,7 @@ describe("retained session source verification", () => {
     "rebuilds a missing receipt index and protects changed sources without their owner index (changed: %s)",
     async (changed) => {
       await withOpenClawTestState({ label: "deferred-missing-index" }, async (state) => {
-        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
           state,
           "default",
           "brave",
@@ -92,7 +92,7 @@ describe("retained session source verification", () => {
           archiveTranscript: false,
           deleteTranscriptWithoutArchive: true,
         });
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["brave"],
@@ -119,7 +119,7 @@ describe("retained session source verification", () => {
 
   it("preserves and names a changed index archive while verifying the other receipt sources", async () => {
     await withOpenClawTestState({ label: "deferred-changed-index-archive" }, async (state) => {
-      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default");
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
       const run = () =>
         runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
       await run();
@@ -214,7 +214,7 @@ describe("retained session source verification", () => {
               .join("\n") + "\n",
           );
         }
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [
             {
@@ -455,7 +455,7 @@ describe("retained session source verification", () => {
             entries: { [pluginId]: { enabled: true, config: { fixture: true } } },
           };
           await state.writeConfig(cfg);
-          recordDeferredPluginMigrations({
+          await recordDeferredPluginMigrations({
             env: state.env,
             pending: [
               {
@@ -536,7 +536,7 @@ describe("retained session source verification", () => {
     "reads each archive manifest once per verification of %s retained transcripts",
     async (transcriptCount) => {
       await withOpenClawTestState({ label: "deferred-plugin-manifest-reads" }, async (state) => {
-        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state);
+        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state);
         const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
         for (let index = 2; index < transcriptCount; index++) {
           const sessionId = `legacy-volume-${index}`;
@@ -551,7 +551,7 @@ describe("retained session source verification", () => {
         const run = () =>
           runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
         expect((await run()).totals.importedEntries).toBe(transcriptCount);
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["fixture-plugin"],
@@ -675,7 +675,7 @@ describe("retained session source verification", () => {
   );
   it("reverifies a changed retained index without replaying current canonical metadata", async () => {
     await withOpenClawTestState({ label: "deferred-plugin-source-conflict" }, async (state) => {
-      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state);
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state);
       await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
       await upsertSessionEntryCore(
         { ...scope, sessionKey: "agent:main:kept" },

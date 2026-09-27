@@ -8,6 +8,7 @@ import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrati
 import { readBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { readPersistedInstalledPluginIndexRowSync } from "../plugins/installed-plugin-index-record-state.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -134,7 +135,7 @@ it.each([false, true])(
       });
       expect(initial.valid).toBe(false);
 
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         env: process.env,
         pending: [
           {
@@ -151,7 +152,7 @@ it.each([false, true])(
         resolvedPluginIds: [],
       });
       expect((await readConfigFileSnapshot({ observe: false })).valid).toBe(true);
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       const identityPath = path.join(stateDir, "identity", "device.json");
       const identityRaw = '{"retiredIdentity":"leave for Doctor"}\n';
       if (legacyIdentity) {

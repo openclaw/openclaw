@@ -396,8 +396,10 @@ async function waitForGatewayWorkAdmissionChange(signal?: AbortSignal): Promise<
 /** Waits through a prepared lease, then joins the root-work set atomically. */
 export async function beginGatewayRootWorkAdmissionWhenOpen(
   origin = "gateway",
+  signal?: AbortSignal,
 ): Promise<GatewayRootWorkAdmissionLease> {
   while (true) {
+    signal?.throwIfAborted();
     if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
       throw new GatewayDrainingError();
     }
@@ -405,7 +407,7 @@ export async function beginGatewayRootWorkAdmissionWhenOpen(
     if (admission) {
       return admission;
     }
-    await waitForGatewayWorkAdmissionChange();
+    await waitForGatewayWorkAdmissionChange(signal);
   }
 }
 

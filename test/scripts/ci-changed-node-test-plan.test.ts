@@ -2856,23 +2856,32 @@ describe("CI changed Node test plan", () => {
     expect(targets.toSorted()).toEqual(
       listExecutableExtensionFiles(["extensions/telegram"]).toSorted(),
     );
-    const workerCount = targets.filter((file) =>
-      databaseWorkerExtensionTestFiles.includes(file),
-    ).length;
-    const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
-    const runtimeFiles = listVitestRuntimeConsumerFiles([telegramConfig]).filter((file) =>
-      targets.includes(file),
+    const runtimeFiles = new Set(
+      listVitestRuntimeConsumerFiles([
+        "test/vitest/vitest.extension-telegram.config.ts",
+        "test/vitest/vitest.extension-database-workers.config.ts",
+      ]),
     );
-    expect(
-      shards
-        .filter((shard) => shard.pretestBuildMode && shard.configs.includes(telegramConfig))
-        .flatMap((shard) => shard.includePatterns ?? [])
-        .toSorted(),
-    ).toEqual(runtimeFiles.toSorted());
-    expect(groups).toHaveLength(
-      Math.ceil(workerCount / 10) +
-        Math.ceil(runtimeFiles.length / 10) +
-        Math.ceil((targets.length - workerCount - runtimeFiles.length) / 10),
+    const preparedConsumers: string[] = [];
+    for (const shard of shards) {
+      const consumers = fallbackGroups([shard])
+        .flatMap((group) => group.includePatterns ?? [])
+        .filter((file) => runtimeFiles.has(file));
+      expect(Boolean(shard.pretestBuildMode)).toBe(consumers.length > 0);
+      if (consumers.length > 0) {
+        expect(shard.groups).toBeUndefined();
+        expect(shard.pretestBuildMode).toBe("runtime");
+        preparedConsumers.push(...consumers);
+      }
+    }
+    expect(preparedConsumers.toSorted()).toEqual(
+      targets.filter((file) => runtimeFiles.has(file)).toSorted(),
+    );
+    expect(preparedConsumers).toEqual(
+      expect.arrayContaining([
+        "extensions/telegram/src/polling-session.test.ts",
+        "extensions/telegram/src/sticker-cache.selection.test.ts",
+      ]),
     );
   });
 

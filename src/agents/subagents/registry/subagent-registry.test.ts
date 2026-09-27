@@ -132,13 +132,9 @@ vi.mock("../../../config/sessions.js", () => ({
   resolveSessionStorePathCore: mocks.resolveStorePath,
 }));
 
-vi.mock("../../../config/sessions/session-accessor.js", () => ({
-  findTranscriptEvent: vi.fn(async () => undefined),
-  listSessionEntriesCore: mocks.listSessionEntriesCore,
-  listSessionEntriesReadOnly: mocks.listSessionEntriesCore,
-  loadSessionEntry: mocks.loadSessionEntry,
-  loadSessionEntryReadOnly: mocks.loadSessionEntry,
-  patchSessionEntryCore: mocks.patchSessionEntryCore,
+vi.mock("../../../config/sessions/session-accessor.js", () => mocks.sessionAccessors);
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => ({
+  withSessionEntryReadOnlyInWorker: mocks.withSessionEntryReadOnlyInWorker,
 }));
 
 vi.mock("../../../sessions/session-lifecycle-events.js", () => ({

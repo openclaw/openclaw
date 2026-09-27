@@ -505,7 +505,10 @@ export default definePluginEntry({
       { name: "memory_forget" },
     );
 
-    registerMemoryCli(api, db, embeddings, resolveCliAgentId, resolveCurrentHookConfig);
+    registerMemoryCli(api, db, embeddings, resolveCliAgentId, resolveCurrentHookConfig, {
+      dbPath: resolvedDbPath,
+      storageOptions: cfg.storageOptions,
+    });
 
     api.on(
       "before_prompt_build",

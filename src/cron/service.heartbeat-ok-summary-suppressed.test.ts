@@ -1,5 +1,9 @@
 // Heartbeat summary tests cover suppression of successful heartbeat summaries.
 import { describe, expect, it, vi } from "vitest";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import type { CronJob } from "./types.js";
@@ -30,12 +34,14 @@ function createDueIsolatedAnnounceJob(params: {
 }
 
 function createCronServiceForSummary(params: {
+  scheduler: CronServiceParams["scheduler"];
   storePath: string;
   summary: string;
   enqueueSystemEvent: CronServiceParams["enqueueSystemEvent"];
   requestHeartbeat: CronServiceParams["requestHeartbeat"];
 }) {
   return new CronService({
+    scheduler: params.scheduler,
     storePath: params.storePath,
     cronEnabled: true,
     log: logger,
@@ -50,17 +56,11 @@ function createCronServiceForSummary(params: {
   });
 }
 
-async function runScheduledCron(cron: CronService): Promise<void> {
-  await cron.start();
-  await vi.advanceTimersByTimeAsync(2_000);
-  await vi.advanceTimersByTimeAsync(1_000);
-  cron.stop();
-}
-
 describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
   it("does not enqueue HEARTBEAT_OK as a system event to the main session", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.now();
+    const schedulerClock = createGatewaySchedulerClock(now);
 
     const job = createDueIsolatedAnnounceJob({
       id: "heartbeat-only-job",
@@ -73,13 +73,16 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const cron = createCronServiceForSummary({
+      scheduler: createTestGatewayScheduler(schedulerClock.clock),
       storePath,
       summary: "HEARTBEAT_OK",
       enqueueSystemEvent,
       requestHeartbeat,
     });
 
-    await runScheduledCron(cron);
+    await cron.start();
+    await schedulerClock.advanceBy(3_000);
+    cron.stop();
 
     // HEARTBEAT_OK should NOT leak into the main session as a system event.
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -89,6 +92,7 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
   it("does not revive legacy main-session relay for real cron summaries", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.now();
+    const schedulerClock = createGatewaySchedulerClock(now);
 
     const job = createDueIsolatedAnnounceJob({
       id: "real-summary-job",
@@ -101,13 +105,16 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const cron = createCronServiceForSummary({
+      scheduler: createTestGatewayScheduler(schedulerClock.clock),
       storePath,
       summary: "Weather update: sunny, 72°F",
       enqueueSystemEvent,
       requestHeartbeat,
     });
 
-    await runScheduledCron(cron);
+    await cron.start();
+    await schedulerClock.advanceBy(3_000);
+    cron.stop();
 
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();

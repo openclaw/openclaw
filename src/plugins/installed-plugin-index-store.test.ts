@@ -201,7 +201,7 @@ describe("installed plugin index persistence", () => {
       fs.mkdirSync(pluginDir);
       const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
       const config = {};
-      const index = refreshPersistedInstalledPluginIndex({
+      const index = await refreshPersistedInstalledPluginIndex({
         reason: "manual",
         stateDir,
         candidates: [createCandidate(pluginDir)],
@@ -452,7 +452,7 @@ describe("installed plugin index persistence", () => {
     };
     fs.writeFileSync(contractPath, "export const legacyConfigRules = [];\n", "utf8");
 
-    const first = refreshPersistedInstalledPluginIndex({
+    const first = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -481,7 +481,7 @@ describe("installed plugin index persistence", () => {
       "export const legacyConfigRules = [{ path: ['demo'], message: 'changed' }];\n",
       "utf8",
     );
-    const second = refreshPersistedInstalledPluginIndex({
+    const second = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -655,7 +655,7 @@ describe("installed plugin index persistence", () => {
       VITEST: "true",
     };
     const candidate = createCandidate(pluginDir, { configPaths: ["browser"] });
-    const current = refreshPersistedInstalledPluginIndex({
+    const current = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -674,7 +674,7 @@ describe("installed plugin index persistence", () => {
     });
     expect(inspection.source).toBe("derived");
 
-    const refreshed = refreshPersistedInstalledPluginIndex({
+    const refreshed = await refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
       candidates: [candidate],
@@ -765,7 +765,7 @@ describe("installed plugin index persistence", () => {
       { stateDir },
     );
 
-    const index = refreshPersistedInstalledPluginIndex({
+    const index = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [],
@@ -828,7 +828,7 @@ describe("installed plugin index persistence", () => {
       { stateDir },
     );
 
-    const index = refreshPersistedInstalledPluginIndex({
+    const index = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [],

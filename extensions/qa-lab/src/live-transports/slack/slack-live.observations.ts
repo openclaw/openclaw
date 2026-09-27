@@ -1,5 +1,5 @@
-// QA Lab Slack Web API and stored-message observations.
 import { isDeepStrictEqual } from "node:util";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { countSlackNativeDataBlocks, instrumentSlackPostMessage } from "./slack-live.config.js";
 import {
@@ -283,9 +283,7 @@ export async function waitForSlackStoredMessage(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.min(1_000, remainingMs));
-    });
+    await sleep(Math.min(1_000, remainingMs));
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
 }
@@ -318,9 +316,7 @@ async function waitForSlackStoredMessages(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.min(1_000, remainingMs));
-    });
+    await sleep(Math.min(1_000, remainingMs));
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
 }

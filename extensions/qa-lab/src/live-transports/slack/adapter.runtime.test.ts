@@ -20,8 +20,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  acquireDebugProxyCaptureStore: mocks.acquireCaptureStore,
-  createDebugProxyCaptureReader: mocks.createCaptureReader,
+  acquireDebugProxyCaptureStoreAsync: mocks.acquireCaptureStore,
+  createDebugProxyCaptureReaderAsync: mocks.createCaptureReader,
 }));
 
 vi.mock("../shared/credential-lease.runtime.js", () => ({
@@ -87,16 +87,16 @@ beforeEach(() => {
     "fetch",
     vi.fn(() => Promise.reject(new Error("Unexpected Slack request"))),
   );
-  mocks.acquireCaptureStore.mockReturnValue({
+  mocks.acquireCaptureStore.mockResolvedValue({
     store: {
-      getSessionEvents: vi.fn(() => []),
-      readBlob: vi.fn(() => null),
+      getSessionEvents: vi.fn(async () => []),
+      readBlob: vi.fn(async () => null),
     },
     release: mocks.captureRelease,
   });
   mocks.createCaptureReader.mockReturnValue({
-    getSessionEvents: vi.fn(() => []),
-    readBlob: vi.fn(() => null),
+    getSessionEvents: vi.fn(async () => []),
+    readBlob: vi.fn(async () => null),
   });
   mocks.acquireCredentialLease.mockResolvedValue({
     payload: {
@@ -191,8 +191,8 @@ async function nativeAdapterFixture(
   };
   vi.stubGlobal("fetch", fetchImpl);
   mocks.createCaptureReader.mockReturnValue({
-    getSessionEvents: () => capturedEvents.toReversed(),
-    readBlob: () => null,
+    getSessionEvents: async () => capturedEvents.toReversed(),
+    readBlob: async () => null,
   });
   const outputDir = tempDirs.make("slack-adapter-settlement-");
   const controller = new AbortController();

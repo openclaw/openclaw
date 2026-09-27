@@ -89,7 +89,12 @@ export async function compileNativeProject({
     const virtualFiles = new Map([
       [config, JSON.stringify({ extends: admittedConfig, compilerOptions })],
     ]);
-    view = createDeclarationFileSystem(root, assertInput ? admit : undefined, virtualFiles);
+    view = createDeclarationFileSystem(
+      root,
+      assertInput ? admit : undefined,
+      virtualFiles,
+      before.readText,
+    );
     const manifestFile = admit(path.join(root, "package.json"));
     const manifestText = view.filesystem.readFile(manifestFile);
     view.assertValid();
@@ -136,9 +141,9 @@ export async function compileNativeProject({
           declaration: true,
           emitDeclarationOnly: emit,
           noEmit: !emit,
-          // Declaration-only callers already validate the structural diagnostic
-          // set below; emission must not add a second semantic check.
-          noEmitOnError: diagnostics === "all",
+          // Validate the requested diagnostics below, then use the in-memory
+          // emit result for declaration errors without a second preflight.
+          noEmitOnError: false,
           noCheck: false,
         },
       }),
@@ -154,7 +159,6 @@ export async function compileNativeProject({
     }
     const errors = await collectNativeTypeScriptDiagnosticsAsync(project, {
       includeSemantic: diagnostics === "all",
-      includeDeclaration: emit,
     });
     view.assertValid();
     if (errors.length) {

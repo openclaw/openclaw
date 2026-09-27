@@ -3,17 +3,28 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runClawPluginBatch } from "../claws/plugin-runtime.js";
+import {
+  readDeferredPluginMigrations,
+  recordDeferredPluginMigrations,
+} from "../infra/deferred-plugin-migrations.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import { PluginInstallRuntimeBatch } from "./install-runtime-batch.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
+import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-record-state.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
-import { hasPluginLifecycleLease, withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import {
+  hasPluginLifecycleLease,
+  runOutsidePluginLifecycleLease,
+  withPluginLifecycleLease,
+} from "./plugin-lifecycle-lease.js";
 import * as metadataWorker from "./plugin-metadata-state-worker.js";
 import { createInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
@@ -310,3 +321,145 @@ it("holds the original batch lease until preparation settles before calling the 
   await expect(operation).resolves.toBe("installed");
   expect(reload).toHaveBeenCalledOnce();
 });
+
+it.each(["index", "deferred obligation"] as const)(
+  "keeps the %s producer outside the cleanup lease until source deletion settles",
+  async (producerKind) => {
+    const root = dirs.make("plugin-batch-cleanup-custody-");
+    const source = path.join(root, "current");
+    const retired = path.join(root, "retired");
+    const env = {
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+    };
+    await fs.mkdir(source);
+    await fs.mkdir(retired);
+    await fs.writeFile(path.join(source, "index.ts"), "export const value = 1;");
+    await fs.writeFile(path.join(source, "package.json"), "{}");
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+
+    await withEnvAsync(env, async () => {
+      const enteredCleanup = createDeferredCore();
+      const releaseCleanup = createDeferredCore();
+      const producerHeld = createDeferredCore();
+      const order: string[] = [];
+      const batch = new PluginInstallRuntimeBatch({ env }, async () => ({
+        operationId: "cleanup-custody",
+        generation: 2,
+        pluginIds: ["fixture"],
+      }));
+      const deferred = batch.install();
+      await withPluginLifecycleLease({ env }, async (lease) => {
+        const captured = inspectPluginGenerationSources([{ pluginId: "fixture", rootDir: source }]);
+        const write = await commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: {},
+          nextInstallRecords: {
+            fixture: { source: "path", installPath: source, version: "1" },
+          },
+          nextConfig: {},
+          writeOptions: { afterWrite: { mode: "none", reason: "cleanup custody fixture" } },
+        });
+        deferred.record(
+          {
+            operation: "install",
+            pluginId: "fixture",
+            sourceDigests: captured.sourceDigests,
+            write,
+          },
+          captured.assertSourceCurrent,
+        );
+        deferred.deferCleanup(async (assertOwned) => {
+          assertOwned();
+          enteredCleanup.resolve();
+          await releaseCleanup.promise;
+          assertOwned();
+          await fs.rm(retired, { recursive: true });
+          order.push("deleted");
+        }, retired);
+        await batch.prepare(lease);
+      });
+      const index = await readPersistedInstalledPluginIndex({ env });
+      if (!index) {
+        throw new Error("Cleanup fixture has no installed index");
+      }
+      const readRows = () => ({
+        index: readPersistedInstalledPluginIndexRowSync({ env })?.value_json,
+        pending: readDeferredPluginMigrations({ env, artifactPreservingReadOnly: false }),
+      });
+      const before = readRows();
+      const acquire = leaseAcquisition.acquireOpenClawStateLease;
+      vi.spyOn(leaseAcquisition, "acquireOpenClawStateLease").mockImplementation((params) =>
+        acquire({
+          ...params,
+          acquire: async (...args) => {
+            const outcome = await params.acquire(...args);
+            if (params.label.includes("plugin lifecycle lease") && outcome.kind === "held") {
+              producerHeld.resolve();
+            }
+            return outcome;
+          },
+        }),
+      );
+      const finishing = batch.finish(() => {});
+      let producer: Promise<void> | undefined;
+      try {
+        await Promise.race([
+          enteredCleanup.promise,
+          finishing.then(() => {
+            throw new Error("Batch finished without entering its source cleanup");
+          }),
+        ]);
+        producer = runOutsidePluginLifecycleLease(async () => {
+          expect(hasPluginLifecycleLease()).toBe(false);
+          if (producerKind === "index") {
+            await writePersistedInstalledPluginIndex(
+              {
+                ...index,
+                diagnostics: [{ level: "warn", message: "queued index producer" }],
+              },
+              { env },
+            );
+          } else {
+            await recordDeferredPluginMigrations({
+              env,
+              pending: [
+                {
+                  pluginId: "queued-owner",
+                  reason: "queued obligation producer",
+                  command: "openclaw doctor --fix",
+                  requiresStateMigration: true,
+                },
+              ],
+            });
+          }
+          order.push("committed");
+        });
+        expect(
+          await Promise.race([
+            producerHeld.promise.then(() => "held"),
+            producer.then(() => "committed"),
+          ]),
+        ).toBe("held");
+        expect(readRows()).toEqual(before);
+        await expect(fs.stat(retired)).resolves.toBeDefined();
+        expect(order).toEqual([]);
+      } finally {
+        releaseCleanup.resolve();
+        await Promise.allSettled([finishing, ...(producer ? [producer] : [])]);
+      }
+      await expect(finishing).resolves.toMatchObject({ generation: 2 });
+      await producer;
+      expect(order).toEqual(["deleted", "committed"]);
+      await expect(fs.stat(retired)).rejects.toMatchObject({ code: "ENOENT" });
+      if (producerKind === "index") {
+        expect(readRows().index).not.toBe(before.index);
+        expect(readRows().pending).toEqual(before.pending);
+      } else {
+        expect(readRows().index).toBe(before.index);
+        expect(readRows().pending).toEqual([
+          expect.objectContaining({ pluginId: "queued-owner", requiresStateMigration: true }),
+        ]);
+      }
+    });
+  },
+);

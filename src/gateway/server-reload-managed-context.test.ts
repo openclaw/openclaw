@@ -132,7 +132,7 @@ function startManagedGatewayConfigReloader(
     cronState: createTestCronState(),
   };
   return startManagedGatewayConfigReloaderImpl({
-    scheduler: createTestGatewayScheduler(),
+    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     getPluginRegistry: requireActivePluginChannelRegistry,
     minimalTestGateway: false,
     initialPluginInstallRecords: {},

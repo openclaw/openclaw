@@ -380,6 +380,7 @@ export async function uninstallPluginWithPolicy(
         await refreshPluginRegistryAfterConfigMutation({
           configPath: committed.configWrite.path,
           env,
+          lease,
           reason: "source-changed",
           installRecords: nextInstallRecords,
           invalidateRuntimeCache: cli ? params.invalidateRuntimeCache : false,

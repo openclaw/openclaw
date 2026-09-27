@@ -911,7 +911,6 @@
     <string name="native_79b1916f9fedb270" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"네이티브 Codex 모델"</string>
     <string name="native_79d3a1f108e8d9c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"번들 포함"</string>
     <string name="native_79d3d8a05bab3172" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s개 사용 가능"</string>
-    <string name="native_79e675583adc1ab5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"노드 승인 대기 중"</string>
     <string name="native_7a1058bb81879dbd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 대기 중"</string>
     <string name="native_7a13d46682b4c94b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이 세션을 열려면 Gateway에 연결하세요."</string>
     <string name="native_7a211017043ea5cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"인증 필요"</string>
@@ -1473,7 +1472,6 @@
     <string name="native_cae7d57bc067a514" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"중지"</string>
     <string name="native_cae98462b30650eb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"아직 일치하는 스레드가 없습니다."</string>
     <string name="native_caf85b0888d78f1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"출처"</string>
-    <string name="native_cba62d81f910c7f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 페어링에 성공했습니다.\n운영자 UI에서 이 휴대전화의 노드 기능을 승인하세요."</string>
     <string name="native_cbb96d163f80c1f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"선택한 이미지를 읽을 수 없습니다."</string>
     <string name="native_cc4b66e7e22230c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이 스킬은 설치되어 있지만 현재 실행 조건을 충족하지 않습니다. 설정을 변경하려면 데스크톱이나 CLI를 사용하세요."</string>
     <string name="native_cc5f45fb30a26e07" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"인식기가 사용 중입니다"</string>

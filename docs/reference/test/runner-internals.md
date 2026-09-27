@@ -69,6 +69,9 @@ emission. Its filesystem callbacks make candidates outside the checkout appear
 missing before native resolution can read them. Source and package-manifest reads
 are captured directly; admission does not depend on parsing resolution traces.
 The compiler version is pinned in `package.json` because this API is unstable.
+Configuration and requested semantic checks run before emission. Declaration
+errors come from the in-memory emit result, avoiding a separate declaration
+transform solely for diagnostics. Any error prevents artifact publication.
 
 Nested physical worktrees are supported with their own
 `pnpm install --frozen-lockfile`, even when ancestor directories contain

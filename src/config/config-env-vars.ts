@@ -3,7 +3,6 @@ import {
   normalizeZaiEnv,
   resolveEnvNormalizationKeys,
 } from "../infra/env.js";
-// Defines environment-variable config metadata and preservation rules.
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -272,17 +271,24 @@ let publishedConfigRuntimeEnvEpoch = 0;
 // cannot retain superseded rollback state, while overlapping failures can still unwind in order.
 let pendingConfigRuntimeEnvPublication: PendingConfigRuntimeEnvPublication | null = null;
 
-function applyPublishedConfigRuntimeEnvRollback(
-  publication: PendingConfigRuntimeEnvPublication,
+function rollbackConfigRuntimeEnvChanges(
+  env: NodeJS.ProcessEnv,
+  changes: ReadonlyMap<string, PublishedConfigRuntimeEnvChange>,
 ): void {
   let current: ReadonlyMap<string, EnvSnapshotEntry> | undefined;
-  for (const [key, change] of publication.changes) {
-    const currentEntry = (current ??= snapshotEnvByPlatformKey(process.env)).get(key);
+  for (const [key, change] of changes) {
+    const currentEntry = (current ??= snapshotEnvByPlatformKey(env)).get(key);
     if (!envSnapshotEntriesEqual(currentEntry, change.after)) {
       continue;
     }
-    replaceEnvSnapshotEntry(process.env, currentEntry, change.before);
+    replaceEnvSnapshotEntry(env, currentEntry, change.before);
   }
+}
+
+function applyPublishedConfigRuntimeEnvRollback(
+  publication: PendingConfigRuntimeEnvPublication,
+): void {
+  rollbackConfigRuntimeEnvChanges(process.env, publication.changes);
   publishedConfigRuntimeEnvState = {
     generation: publishedConfigRuntimeEnvState.generation + 1,
     ownedEnv: publication.previousState.ownedEnv,
@@ -352,19 +358,24 @@ export function collectConfigRuntimeEnvOwnership(
   return ownedEnv;
 }
 
-function filterConfigRuntimeEnvOwnership(
-  sourceConfig: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-  ownedEnv: Readonly<Record<string, string>>,
-): Record<string, string> {
+function indexConfigRuntimeEnvValues(entries: Record<string, string>): Map<string, Set<string>> {
   const allowedValues = new Map<string, Set<string>>();
-  for (const [key, value] of Object.entries(collectConfigRuntimeEnvVars(sourceConfig))) {
+  for (const [key, value] of Object.entries(entries)) {
     for (const normalizedKey of resolveEnvNormalizationKeys(key)) {
       const values = allowedValues.get(normalizedKey) ?? new Set<string>();
       values.add(value);
       allowedValues.set(normalizedKey, values);
     }
   }
+  return allowedValues;
+}
+
+function filterConfigRuntimeEnvOwnership(
+  sourceConfig: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  ownedEnv: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const allowedValues = indexConfigRuntimeEnvValues(collectConfigRuntimeEnvVars(sourceConfig));
   const filtered: Record<string, string> = {};
   for (const [key, value] of Object.entries(ownedEnv)) {
     const normalizedKey = resolveEnvNormalizationKeys(key)[0] ?? key;
@@ -647,14 +658,7 @@ function prepareConfigRuntimeEnvPublication(params: {
           unwindRequestedConfigRuntimeEnvPublications();
           return;
         }
-        let rollbackEnv: ReadonlyMap<string, EnvSnapshotEntry> | undefined;
-        for (const [key, publication] of published) {
-          const currentEntry = (rollbackEnv ??= snapshotEnvByPlatformKey(targetEnv)).get(key);
-          if (!envSnapshotEntriesEqual(currentEntry, publication.after)) {
-            continue;
-          }
-          replaceEnvSnapshotEntry(targetEnv, currentEntry, publication.before);
-        }
+        rollbackConfigRuntimeEnvChanges(targetEnv, published);
       }) as ConfigRuntimeEnvPublication;
       rollback.commit = () => {
         if (!active) {
@@ -693,14 +697,7 @@ export function applyConfigEnvVars(
     lowerPrecedenceEntries.map(([key, value]) => [envSnapshotKey(key), value]),
   );
   const configEnvKeys = expandEnvNormalizationKeys(Object.keys(entries));
-  const configValuesByKey = new Map<string, Set<string>>();
-  for (const [key, value] of Object.entries(entries)) {
-    for (const normalizedKey of resolveEnvNormalizationKeys(key)) {
-      const values = configValuesByKey.get(normalizedKey) ?? new Set<string>();
-      values.add(value);
-      configValuesByKey.set(normalizedKey, values);
-    }
-  }
+  const configValuesByKey = indexConfigRuntimeEnvValues(entries);
   const higherPrecedenceValues = new Map<string, string>();
   for (const key of Object.keys(entries)) {
     const normalizedKeys = resolveEnvNormalizationKeys(key);

@@ -10,6 +10,7 @@ import type { CronJob } from "../../cron/types.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { compactCronListJob } from "../../gateway/server-methods/cron-list-projection.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import {
   createCodeModeHarness,
@@ -180,6 +181,8 @@ describe("automations output contract", () => {
       onTestFinished(resetCodeModeTestState);
       const { storePath } = await makeStorePath();
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: true,
         defaultAgentId: "main",

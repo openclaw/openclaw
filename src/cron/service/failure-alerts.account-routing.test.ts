@@ -4,6 +4,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { resolveFailureAlert } from "./failure-alerts.js";
 import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
@@ -313,6 +314,7 @@ describe("cron failure alert account routing", () => {
   ])("$name", (testCase) => {
     const { globalAlert, jobAlert, expected } = testCase;
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: "/tmp/openclaw-cron-failure-alert-account-routing.json",
       cronEnabled: true,
       defaultAgentId: "main",
@@ -388,6 +390,7 @@ describe("cron failure alert account routing", () => {
     const { result, expectedText, expectAlert } = testCase;
     const sendCronFailureAlert = vi.fn(async () => undefined);
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: "/tmp/openclaw-cron-unthreaded-failure-destination.json",
       cronEnabled: true,
       cronConfig: { failureAlert: { enabled: true, after: 1 } },
@@ -450,6 +453,7 @@ describe("cron failure alert account routing", () => {
     ({ deliveryStatus, implicit }) => {
       const sendCronFailureAlert = vi.fn(async () => undefined);
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath: "/tmp/openclaw-cron-recorded-delivery-alert.json",
         cronEnabled: true,
         log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -548,6 +552,7 @@ describe("cron failure alert account routing", () => {
     const sendCronFailureAlert = vi.fn(async () => undefined);
     const recipient = `${"targetPrefix" in testCase ? testCase.targetPrefix : testCase.channel}:alerts`;
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: "/tmp/openclaw-cron-failure-alert-aliased-routing.json",
       cronEnabled: true,
       cronConfig: {
@@ -608,6 +613,7 @@ describe("cron failure alert account routing", () => {
     const endedAt = runAtMs + 5 * 60_000;
     const sendCronFailureAlert = vi.fn(async () => undefined);
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: "/tmp/openclaw-cron-failure-alert-run-time.json",
       cronEnabled: true,
       cronConfig: { failureAlert: { enabled: true, after: 1, cooldownMs: 60_000 } },
@@ -668,6 +674,7 @@ describe("cron failure alert account routing", () => {
     const { failureAlert } = testCase;
     const sendCronFailureAlert = vi.fn(async () => undefined);
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: "/tmp/openclaw-cron-failure-alert-thread-routing.json",
       cronEnabled: true,
       cronConfig: { failureAlert: { enabled: true, after: 1 } },

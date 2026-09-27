@@ -19,6 +19,10 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -201,6 +205,10 @@ async function createDirectCronState(params?: {
   ]);
   return {
     ...buildGatewayCronService({
+      scheduler: createTestGatewayScheduler({
+        ...createGatewaySchedulerClock().clock,
+        now: () => Date.now(),
+      }),
       cfg: getRuntimeConfig(),
       deps: {} as never,
       broadcast: params?.broadcast ?? vi.fn(),

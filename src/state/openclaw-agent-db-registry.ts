@@ -130,7 +130,10 @@ export function registerOpenClawAgentDatabase(
           );
         }
       }
-      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+      sessionChanges.emit(
+        { all: true, scope: { agentId: params.agentId, topology: true } },
+        database.db,
+      );
     },
     { env: params.env },
   );
@@ -155,7 +158,10 @@ export function unregisterOpenClawAgentDatabase(params: {
           .where("path", "in", matchingPaths),
       );
       invalidateRegisteredAgentDatabasesMemo({ env: params.env });
-      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+      sessionChanges.emit(
+        { all: true, scope: { agentId: params.agentId, topology: true } },
+        database.db,
+      );
     },
     { env: params.env, initializationAgentPaths: [params.path] },
   );
@@ -179,7 +185,10 @@ export function unregisterOpenClawAgentDatabases(params: {
       db.deleteFrom("agent_databases").where("agent_id", "=", params.agentId).returning("path"),
     );
     invalidateRegisteredAgentDatabasesMemo(options);
-    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+    sessionChanges.emit(
+      { all: true, scope: { agentId: params.agentId, topology: true } },
+      database.db,
+    );
     return removed.rows.map((row) =>
       resolveOpenClawRegisteredAgentDatabasePath(database.path, row.path),
     );

@@ -220,7 +220,7 @@ describe("cron service ops regressions", () => {
     await expect(start(state)).resolves.toBeUndefined();
     expect(state.store.jobs[0]?.state.nextRunAtMs).toBe(scheduledAt);
     if (state.timer) {
-      clearTimeout(state.timer);
+      state.timer.cancel();
       state.timer = null;
     }
   });

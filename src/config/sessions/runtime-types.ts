@@ -17,25 +17,17 @@ export type RecordInboundSessionMetaParams = {
   storePath: string;
 };
 
-export type UpdateSessionLastRouteParams = {
+export type UpdateSessionLastRouteParams = Omit<RecordInboundSessionMetaParams, "ctx"> & {
   /** Account owning the delivery route when the channel is multi-account. */
   accountId?: string;
   /** Delivery channel id persisted as the last route channel. */
   channel?: string;
-  /** Set false to only patch existing entries; missing sessions stay absent. */
-  createIfMissing?: boolean;
   /** Optional inbound context whose session metadata is derived alongside the route. */
   ctx?: MsgContext;
   /** Explicit delivery context merged over the persisted session fallback. */
   deliveryContext?: DeliveryContext;
-  /** Group routing resolution for group-owned session keys. */
-  groupResolution?: GroupKeyResolution | null;
   /** Canonical channel route persisted as the session route slot. */
   route?: ChannelRouteRef;
-  /** Canonical or alias session key for the routed conversation. */
-  sessionKey: string;
-  /** Explicit store target for file-backed stores and SQLite migration adapters. */
-  storePath: string;
   /** Thread/topic id for the delivery route, when the transport has one. */
   threadId?: string | number;
   /** Delivery target persisted as the last route recipient. */

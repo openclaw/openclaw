@@ -60,6 +60,7 @@ type CiLintSelection = {
 };
 
 type ChangedCheckPlanOptions = {
+  typecheckResult?: ChangedLaneResult;
   lintOnly?: boolean;
   lintSelection?: CiLintSelection;
   lintThreads?: 1 | 8;
@@ -830,6 +831,15 @@ export function createChangedCheckPlan(
   addTestTempCreationReport();
 
   const lanes = result.lanes;
+  const typecheckResult = options.typecheckResult ?? result;
+  // Release metadata is exempt only with its validating guard, selected by the
+  // full diff. Filtering trivia must not grant that exemption to package changes.
+  const typeLanes =
+    typecheckResult.lanes.releaseMetadata &&
+    !lanes.releaseMetadata &&
+    !typecheckResult.paths.every((file) => getChangedPathFacts(file).surface === "docs")
+      ? lanes
+      : typecheckResult.lanes;
   const runAll =
     lanes.all ||
     (options.lintOnly &&
@@ -842,8 +852,20 @@ export function createChangedCheckPlan(
 
   // Typechecking alone accepts extension imports; the graph guard also covers
   // shared test/tooling dependencies that core tests can pull into their graph.
-  const narrowCoreTests = getChangedCoreTestPaths(result) !== undefined;
-  if (runAll || lanes.core || lanes.coreTests || lanes.ui || lanes.tooling) {
+  const narrowCoreTests = getChangedCoreTestPaths(typecheckResult) !== undefined;
+  const liveDockerTypes =
+    typeLanes.liveDockerTooling &&
+    typecheckResult.paths.some(
+      (changedPath) => getChangedPathFacts(changedPath).surface === "source",
+    );
+  if (
+    typeLanes.all ||
+    typeLanes.core ||
+    typeLanes.coreTests ||
+    typeLanes.ui ||
+    typeLanes.tooling ||
+    liveDockerTypes
+  ) {
     add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
     if (narrowCoreTests) {
       commands.at(-1)!.coreTestCheck = "checkBoundary";
@@ -877,38 +899,43 @@ export function createChangedCheckPlan(
     add("database-first legacy-store guard", ["check:database-first-legacy-stores"]);
     add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
+  } else if (shouldRunControlUiI18nVerify(result.paths)) {
+    addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
+  }
+
+  if (typeLanes.all) {
     addTypecheck("typecheck all", ["tsgo:all"]);
+  } else {
+    if (typeLanes.core) {
+      addTypecheck("typecheck core", ["tsgo:core"]);
+    }
+    if (typeLanes.coreTests || liveDockerTypes) {
+      addTypecheck("typecheck core tests", ["tsgo:core:test"]);
+      if (narrowCoreTests) {
+        commands.at(-1)!.coreTestCheck = "checkTypes";
+      }
+    }
+    if (typeLanes.ui) {
+      addTypecheck("typecheck UI", ["tsgo:ui"]);
+    }
+    if (typeLanes.extensions) {
+      addTypecheck("typecheck extensions", ["tsgo:extensions"]);
+    }
+    if (typeLanes.extensionTests) {
+      addTypecheck("typecheck extension tests", ["tsgo:extensions:test"]);
+    }
+    if (typeLanes.scripts) {
+      addTypecheck("typecheck scripts", ["tsgo:scripts"]);
+    }
+    if (typeLanes.testRoot) {
+      addTypecheck("typecheck test root", ["tsgo:test:root"]);
+    }
+  }
+
+  if (runAll) {
     addLint("lint", ["lint"]);
     add("runtime import cycles", ["check:import-cycles"]);
     return finishPlan("all");
-  }
-
-  if (shouldRunControlUiI18nVerify(result.paths)) {
-    addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
-  }
-  if (lanes.core) {
-    addTypecheck("typecheck core", ["tsgo:core"]);
-  }
-  if (lanes.coreTests) {
-    addTypecheck("typecheck core tests", ["tsgo:core:test"]);
-    if (narrowCoreTests) {
-      commands.at(-1)!.coreTestCheck = "checkTypes";
-    }
-  }
-  if (lanes.ui) {
-    addTypecheck("typecheck UI", ["tsgo:ui"]);
-  }
-  if (lanes.extensions) {
-    addTypecheck("typecheck extensions", ["tsgo:extensions"]);
-  }
-  if (lanes.extensionTests) {
-    addTypecheck("typecheck extension tests", ["tsgo:extensions:test"]);
-  }
-  if (lanes.scripts) {
-    addTypecheck("typecheck scripts", ["tsgo:scripts"]);
-  }
-  if (lanes.testRoot) {
-    addTypecheck("typecheck test root", ["tsgo:test:root"]);
   }
 
   if (lanes.core || lanes.coreTests || lanes.ui) {
@@ -953,8 +980,6 @@ export function createChangedCheckPlan(
     lanes.liveDockerTooling &&
     result.paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "source")
   ) {
-    add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
-    addTypecheck("typecheck core tests", ["tsgo:core:test"]);
     addLint("lint core", ["lint:core"]);
   }
   if (lanes.extensions || lanes.extensionTests) {
@@ -1396,7 +1421,7 @@ export async function runChangedCheck(
 
   const coreTestCheck = plan.commands.some((command) => command.coreTestCheck)
     ? (await import("./run-tsgo-core-test-shards.mts")).createChangedCoreTestCheck(
-        getChangedCoreTestPaths(result)!,
+        getChangedCoreTestPaths(options.typecheckResult ?? result)!,
         createSparseTsgoSkipEnv(childEnv),
       )
     : undefined;
@@ -1424,7 +1449,16 @@ function printPlan(
 ) {
   const prefix = options.dryRun ? "[check:changed:dry-run]" : "[check:changed]";
   console.error(`${prefix} lanes=${plan.summary || "none"}`);
-  if (result.extensionImpactFromCore) {
+  if (options.typecheckResult) {
+    const retained = new Set(options.typecheckResult.paths);
+    const inert = result.paths.filter((file) => !retained.has(file));
+    if (inert.length) {
+      console.error(
+        `${prefix} comment/whitespace-only TypeScript changes; typecheck lanes skip: ${inert.slice(0, 8).join(", ")}${inert.length > 8 ? ` (+${inert.length - 8} more)` : ""}`,
+      );
+    }
+  }
+  if ((options.typecheckResult ?? result).extensionImpactFromCore) {
     console.error(`${prefix} extension-impacting surface; extension typecheck included`);
   }
   for (const reason of result.reasons) {
@@ -1675,6 +1709,24 @@ async function main() {
         head: args.head,
         staged: args.staged,
       });
+      let typecheckResult: ChangedLaneResult | undefined;
+      if (
+        !args.staged &&
+        !args.noChanges &&
+        args.paths.length === 0 &&
+        !argv.includes("--") &&
+        args.head === "HEAD"
+      ) {
+        const { findTypecheckInertPaths } = await import("./lib/typecheck-inert.mts");
+        const inert = new Set(findTypecheckInertPaths({ paths, base: args.base ?? "origin/main" }));
+        if (inert.size) {
+          typecheckResult = detectChangedLanesForPaths({
+            paths: paths.filter((file) => !inert.has(file)),
+            base: args.base ?? "origin/main",
+            head: args.head,
+          });
+        }
+      }
       if (
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {
           result,
@@ -1698,12 +1750,14 @@ async function main() {
         process.exitCode = delegated.backendUnavailable
           ? await runChangedCheck(result, {
               ...args,
+              typecheckResult,
               explicitPaths: args.paths.length > 0,
             })
           : delegated.exitCode;
       } else {
         process.exitCode = await runChangedCheck(result, {
           ...args,
+          typecheckResult,
           explicitPaths: args.paths.length > 0,
         });
       }

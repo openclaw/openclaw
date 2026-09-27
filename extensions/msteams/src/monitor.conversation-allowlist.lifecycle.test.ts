@@ -1,5 +1,4 @@
 // Provider startup must preserve Teams thread identities in group-only allowlists.
-import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
@@ -7,74 +6,24 @@ import type { createMSTeamsActivityHandler as CreateMSTeamsActivityHandler } fro
 import { getMSTeamsIngressMockState } from "./monitor-ingress-mock.test-support.js";
 import type { MSTeamsPollStore } from "./polls.js";
 
-type FakeServer = EventEmitter & {
-  close: (callback?: (err?: Error | null) => void) => void;
-  setTimeout: (msecs: number) => FakeServer;
-  requestTimeout: number;
-  headersTimeout: number;
-};
-
 type MSTeamsUserResolution = { input: string; resolved: boolean; id?: string };
 type ResolveMSTeamsUserAllowlistMock = (params: {
   cfg: unknown;
   entries: string[];
 }) => Promise<MSTeamsUserResolution[]>;
 
-type MockExpressFn = ReturnType<typeof vi.fn>;
-type MockExpressApp = MockExpressFn & {
-  use: MockExpressFn;
-  post: MockExpressFn;
-  listen: MockExpressFn;
-};
-
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
-const keepHttpServerTaskAliveMock = vi.hoisted(() =>
-  vi.fn(async (params: { abortSignal?: AbortSignal; onAbort?: () => Promise<void> | void }) => {
-    await new Promise<void>((resolve) => {
-      if (params.abortSignal?.aborted) {
-        resolve();
-        return;
-      }
-      params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
-    });
-    await params.onAbort?.();
-  }),
-);
-
-vi.mock("../runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../runtime-api.js")>();
-  return {
-    ...actual,
-    isDangerousNameMatchingEnabled,
-    keepHttpServerTaskAlive: keepHttpServerTaskAliveMock,
-    summarizeMapping: vi.fn(),
-  };
-});
-
-vi.mock("express", () => ({
-  default: () => {
-    const app = vi.fn() as MockExpressApp;
-    app.use = vi.fn();
-    app.post = vi.fn();
-    app.listen = vi.fn((_port: number, callback?: (error?: Error) => void) => {
-      const server = new EventEmitter() as FakeServer;
-      server.setTimeout = vi.fn((_msecs: number) => server);
-      server.requestTimeout = 0;
-      server.headersTimeout = 0;
-      server.close = (closeCallback?: (err?: Error | null) => void) => {
-        queueMicrotask(() => {
-          server.emit("close");
-          closeCallback?.(null);
-        });
-      };
-      queueMicrotask(() => callback?.());
-      return server;
-    });
-    return app;
+const monitorReady = vi.hoisted(() => ({ current: Promise.withResolvers<void>() }));
+vi.mock("../runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime-api.js")>()),
+  isDangerousNameMatchingEnabled,
+  summarizeMapping: vi.fn(),
+}));
+vi.mock("openclaw/plugin-sdk/webhook-targets", () => ({
+  registerPluginHttpRoute: () => {
+    monitorReady.current.resolve();
+    return () => {};
   },
-  json: vi.fn(
-    () => (_request: unknown, _response: unknown, next?: (error?: unknown) => void) => next?.(),
-  ),
 }));
 
 const createMSTeamsActivityHandler = vi.hoisted(() =>
@@ -161,7 +110,8 @@ function createConfig(patch: Record<string, unknown>): OpenClawConfig {
         appId: "app-id",
         appPassword: "app-password", // pragma: allowlist secret
         tenantId: "tenant-id",
-        webhook: { port: 0, path: "/api/messages" },
+        legacyWebhook: false,
+        webhook: { path: "/api/messages" },
         ...patch,
       },
     },
@@ -199,9 +149,8 @@ async function withStartedProvider(
     pollStore: {} as MSTeamsPollStore,
   });
   try {
-    await vi.waitFor(() => expect(createMSTeamsActivityHandler).toHaveBeenCalled(), {
-      interval: 1,
-    });
+    await monitorReady.current.promise;
+    expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     verify(requireRegisteredMSTeamsConfig());
   } finally {
     abort.abort();
@@ -212,6 +161,7 @@ async function withStartedProvider(
 describe("monitorMSTeamsProvider group conversation allowlist lifecycle", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    monitorReady.current = Promise.withResolvers<void>();
     isDangerousNameMatchingEnabled.mockReset().mockReturnValue(false);
     resolveMSTeamsUserAllowlist.mockReset().mockResolvedValue([]);
     getMSTeamsIngressMockState().instances.length = 0;

@@ -6,6 +6,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -45,6 +46,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 function createStoreTestState(storePath: string, onEvent = vi.fn()) {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     log: logger,

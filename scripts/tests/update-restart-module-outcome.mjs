@@ -72,6 +72,7 @@ async function fixture({
     },
   };
   const opts = { json: true, yes: true, run };
+  const reportingRow = { status: "running", origin: {} };
   const assertCurrent = () => run.executorFence.assertCurrent();
   const restartContext = {
     refreshGatewayServiceEnv: false,
@@ -156,6 +157,14 @@ async function fixture({
     DEFINITION_DENIAL: /fixture-definition-denial/,
     resolveGatewayService: () => service,
     getUpdateRun: () => undefined,
+    isContainerEnvironment: () => false,
+    resolveStateDir: () => "/fixture/state",
+    mutateRun: (runId, update, options) => {
+      assert.equal(runId, run.runId);
+      assert.equal(options.env, run.env);
+      update(reportingRow);
+      return reportingRow;
+    },
     recordUpdateRunPhase: (_id, phase) => phases.push(phase),
     recordUpdateRunVerification: (_id, record) => records.push(record),
     recordUpdateRunDiagnostics: (_id, readResult) => {

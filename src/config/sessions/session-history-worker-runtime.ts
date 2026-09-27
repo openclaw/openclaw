@@ -7,7 +7,7 @@ import type {
   ReadSessionMessagesAroundIdResult,
   ReadSessionMessagesResult,
 } from "../../gateway/session-transcript-read-kernel.js";
-import { prepareGatewaySessionStoreReadSources } from "../../gateway/session-utils-store-sources.js";
+import { prepareGatewaySessionStoreReadSourcesAsync } from "../../gateway/session-utils-store-sources.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -23,7 +23,6 @@ import {
   prepareSqliteTranscriptReadScope,
   resolveSqliteScope,
   toDatabaseOptions,
-  type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.transcript-read-target.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
@@ -38,7 +37,10 @@ import type {
 import { SessionHistoryDeltaPreparationError } from "./session-history-worker-errors.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import {
+  startSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "./session-transcript-reconcile.js";
 import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
@@ -329,7 +331,6 @@ export async function readSessionHistoryPageInWorker(
     sessionId: scope.sessionId,
   });
   const admission = receipt ? { ...receipt } : undefined;
-  let resolved: ResolvedTranscriptReadScope | undefined;
   let inputBytes = JSON.stringify(capturedRequest).length * 2;
   // Retain caller admission across asynchronous target discovery as well as the page read.
   if (
@@ -341,7 +342,7 @@ export async function readSessionHistoryPageInWorker(
   pendingHistoryReaders++;
   pendingHistoryBytes += inputBytes;
   try {
-    resolved = await prepareSqliteTranscriptReadScope(capturedScope, signal);
+    const resolved = await prepareSqliteTranscriptReadScope(capturedScope, signal);
     signal?.throwIfAborted();
     stateContext.maintenanceScope?.assertAdmission();
     stateContext.admission.assertCurrent();
@@ -359,61 +360,63 @@ export async function readSessionHistoryPageInWorker(
       agentId: databaseOptions.agentId,
       path: resolveOpenClawAgentSqlitePath(databaseOptions),
     };
-    const sourceReads = prepareGatewaySessionStoreReadSources({
-      cfg,
-      currentSource,
-      env,
-      registryPath: stateContext.admission.databasePath,
-    });
-    const assertStateCurrent = () => {
-      signal?.throwIfAborted();
-      stateContext.maintenanceScope?.assertAdmission();
-      stateContext.admission.assertCurrent();
-      sourceReads.assertCurrent();
-    };
-    assertStateCurrent();
-    const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
-      transcript: {
-        agentId: resolved.agentId,
-        sessionId: resolved.sessionId,
-        ...(normalizedSessionKey ? { sessionKey: normalizedSessionKey } : {}),
-        storePath: capturedScope.storePath,
-        sessionFile: sessionKey ?? resolved.sessionId,
-      },
-      stateDatabase: {
-        path: stateContext.admission.databasePath,
-        environment: stateContext.environment,
-        coordinatorRuntime: stateContext.coordinatorRuntime,
-      },
-      sourceDatabases: sourceReads.sources,
-      ...(entryValidationKey ? { entryValidationKey } : {}),
-    };
-    const input: SessionTranscriptHistoryWorkerInput = {
-      kind: "history-page",
-      database: currentSource,
-      request: capturedRequest,
-      target,
-      ...(admission ? { admission } : {}),
-    };
-    const key = JSON.stringify(input);
-    const metadataInput: SessionColdMetadataWorkerInput = {
-      kind: "cold-metadata",
-      database: currentSource,
-      sessionId: resolved.sessionId,
-      env,
-    };
-    const metadataKey = JSON.stringify(metadataInput);
-    const additionalBytes = (key.length + metadataKey.length) * 2 - inputBytes;
-    if (pendingHistoryBytes + additionalBytes > DEFAULT_WORKER_PENDING_BYTES) {
-      throw new WorkerTaskError("worker task capacity reached", "overloaded");
-    }
-    pendingHistoryBytes += additionalBytes;
-    inputBytes += additionalBytes;
     const preparedTarget = resolved;
     const acquired = await withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
+      const sourceReads = await prepareGatewaySessionStoreReadSourcesAsync({
+        cfg,
+        currentSource,
+        env,
+        registryPath: stateContext.admission.databasePath,
+      });
+      const assertStateCurrent = () => {
+        signal?.throwIfAborted();
+        stateContext.maintenanceScope?.assertAdmission();
+        stateContext.admission.assertCurrent();
+        sourceReads.assertSourceCurrent();
+      };
+      assertStateCurrent();
+      const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
+        transcript: {
+          agentId: preparedTarget.agentId,
+          sessionId: preparedTarget.sessionId,
+          ...(normalizedSessionKey ? { sessionKey: normalizedSessionKey } : {}),
+          storePath: capturedScope.storePath,
+          sessionFile: sessionKey ?? preparedTarget.sessionId,
+        },
+        stateDatabase: {
+          path: stateContext.admission.databasePath,
+          environment: stateContext.environment,
+          coordinatorRuntime: stateContext.coordinatorRuntime,
+        },
+        ...(sourceReads.request
+          ? { sourceDiscovery: sourceReads.request }
+          : { sourceDatabases: {} }),
+        ...(entryValidationKey ? { entryValidationKey } : {}),
+      };
+      const input: SessionTranscriptHistoryWorkerInput = {
+        kind: "history-page",
+        database: currentSource,
+        request: capturedRequest,
+        target,
+        ...(admission ? { admission } : {}),
+      };
+      const key = JSON.stringify(input);
+      const metadataInput: SessionColdMetadataWorkerInput = {
+        kind: "cold-metadata",
+        database: currentSource,
+        sessionId: preparedTarget.sessionId,
+        env,
+      };
+      const metadataKey = JSON.stringify(metadataInput);
+      const additionalBytes = (key.length + metadataKey.length) * 2 - inputBytes;
+      if (pendingHistoryBytes + additionalBytes > DEFAULT_WORKER_PENDING_BYTES) {
+        throw new WorkerTaskError("worker task capacity reached", "overloaded");
+      }
+      pendingHistoryBytes += additionalBytes;
+      inputBytes += additionalBytes;
       const assertCurrent = () => {
-        assertStateCurrent();
         owner.assertCurrent();
+        assertStateCurrent();
       };
       let result: SessionHistoryWorkerResult;
       const readOnly =
@@ -425,17 +428,56 @@ export async function readSessionHistoryPageInWorker(
               capturedRequest.kind === "recent-page"
             ? capturedRequest.params.options.readOnly
             : false;
+      let retriedProjection = false;
+      const readPage = () => readQueuedHistory(input, `${owner.generation}:${key}`, owner, signal);
       try {
         result = await readRestoredSessionTranscript(
           capturedScope,
           async () => {
             assertCurrent();
-            const page = await readQueuedHistory(
-              input,
-              `${owner.generation}:${key}`,
-              owner,
-              signal,
-            );
+            let page: ForegroundHistoryResult;
+            try {
+              page = await readPage();
+            } catch (error) {
+              if (
+                readOnly ||
+                retriedProjection ||
+                !isSessionTranscriptProjectionUnavailableError(error) ||
+                error.reason !== "rebuilding"
+              ) {
+                throw error;
+              }
+              assertCurrent();
+              retriedProjection = true;
+              startSessionTranscriptIndexReconcile({
+                ...databaseOptions,
+                preferredSessionId: preparedTarget.sessionId,
+              });
+              const deadline = new AbortController();
+              const timer = setTimeout(() => deadline.abort(error), 3_000);
+              timer.unref();
+              try {
+                await waitForSessionTranscriptProjection(
+                  capturedScope,
+                  signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal,
+                );
+              } catch (waitError) {
+                assertCurrent();
+                if (
+                  waitError === error ||
+                  (waitError instanceof Error &&
+                    waitError.name === "AbortError" &&
+                    waitError.cause === error)
+                ) {
+                  throw error;
+                }
+                throw waitError;
+              } finally {
+                clearTimeout(timer);
+              }
+              assertCurrent();
+              page = await readPage();
+            }
             if (page.kind === "cold-metadata") {
               throw new Error("Session history worker returned cold metadata instead of history");
             }
@@ -481,12 +523,20 @@ export async function readSessionHistoryPageInWorker(
           throw error;
         }
       }
-      return { result, assertCurrent: owner.assertCurrent };
+      await sourceReads.revalidate(() => {
+        owner.assertCurrent();
+        assertStateCurrent();
+      });
+      return {
+        result,
+        assertCurrent: () => {
+          owner.assertCurrent();
+          assertStateCurrent();
+          sourceReads.assertCurrent();
+        },
+      };
     });
-    const assertCurrent = () => {
-      acquired.assertCurrent();
-      assertStateCurrent();
-    };
+    const assertCurrent = () => acquired.assertCurrent();
     assertCurrent();
     const result = acquired.result;
     if (result.kind !== capturedRequest.kind) {
@@ -509,14 +559,6 @@ export async function readSessionHistoryPageInWorker(
         : result.kind === "message-count"
           ? result.count
           : result.messages;
-  } catch (error) {
-    if (resolved && isSessionTranscriptProjectionUnavailableError(error)) {
-      startSessionTranscriptIndexReconcile({
-        ...toDatabaseOptions(resolved),
-        preferredSessionId: resolved.sessionId,
-      });
-    }
-    throw error;
   } finally {
     pendingHistoryReaders--;
     pendingHistoryBytes -= inputBytes;

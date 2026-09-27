@@ -73,6 +73,7 @@ import type {
   TaskRegistryMutationScope,
   TaskRegistryStoreSnapshot,
 } from "../tasks/task-registry.store.types.js";
+import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
   AgentDatabaseDeletionSnapshot,
   AgentDeletionJournalPurpose,
@@ -121,7 +122,10 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
+  | { type: "capture.readOnlyEvents"; sessionId: string; limit?: number }
+  | { type: "capture.readOnlyBlob"; blobId: string }
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
   | { type: "acpSessions.list" }
@@ -224,6 +228,13 @@ export type OpenClawStateReadRequest = {
   command: OpenClawStateReadCommand | { type: "admit" };
 };
 export type OpenClawStateReadReply = (
+  | {
+      ok: true;
+      type: "tui.lastSession.read";
+      sourceAdmitted: true;
+      row: Pick<Selectable<ConfigMachineState>, "value_json" | "updated_at_ms"> | undefined;
+    }
+  | { ok: true; type: "tui.lastSession.retiredPointers"; sourceAdmitted: true; stateKeys: string[] }
   | ChannelIngressReadReply
   | {
       ok: true;
@@ -277,6 +288,18 @@ export type OpenClawStateReadReply = (
       history: ListTerminalOperatorApprovalsResult;
     }
   | PluginBlobReadReply
+  | {
+      ok: true;
+      type: "capture.readOnlyEvents";
+      sourceAdmitted: true;
+      events: Array<Record<string, unknown>>;
+    }
+  | {
+      ok: true;
+      type: "capture.readOnlyBlob";
+      sourceAdmitted: true;
+      blob: string | null;
+    }
   | { ok: true; type: "subagents.forChildSession"; sourceAdmitted: true; runs: SubagentRunRecord[] }
   | {
       ok: true;
