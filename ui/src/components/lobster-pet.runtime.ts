@@ -1,9 +1,3 @@
-// Decorative critter visitor that perches on the new-session composer and mirrors
-// gateway status: it idles (naps, waves, wanders) when nothing is running,
-// scurries while runs are active, and paces worriedly while disconnected.
-// Drawn in the smooth OpenClaw lobster style (see the dreams scene and
-// icons.lobster). Look and personality are seeded per session + page load so
-// every new session hatches a slightly different lobster.
 import { LitElement, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { ThemeArtwork } from "../../../packages/gateway-protocol/src/theme.ts";
@@ -156,7 +150,6 @@ class LobsterPet extends LitElement {
     this.scheduledVisiting = false;
     this.presence = "out";
     this.act = null;
-    this.travel = null;
     if (this.shellTimer !== null) {
       window.clearTimeout(this.shellTimer);
       this.shellTimer = null;
@@ -229,12 +222,6 @@ class LobsterPet extends LitElement {
       const presenceOwner = finished && this.vigil ? "vigil" : null;
       this.trackVigil();
       if (this.presence === "in" && !plans.prefersReducedMotion()) {
-        // Status flips get an immediate reaction. A finished run (busy ->
-        // idle) earns a cheer when it succeeded and a sympathetic droop when
-        // it failed; everything else startles. The act-end timer then
-        // reschedules from the new mode's pool.
-        // Success cheers, failure droops, a user abort is nothing to
-        // celebrate or mourn - just acknowledge the change.
         const finishAct = plans.resolveLobsterFinishAct(this.runOutcome);
         this.performAct(finished ? finishAct : "startle", presenceOwner);
       }
@@ -286,7 +273,6 @@ class LobsterPet extends LitElement {
     ) {
       this.clearActTimers();
       this.act = null;
-      this.travel = null;
       this.anchor = "top";
       this.restartPending = this.presence === "in";
     }
@@ -465,8 +451,6 @@ class LobsterPet extends LitElement {
     this.restartPending = false;
   }
 
-  // ---- Visit schedule ----
-
   private scheduleVisits() {
     this.clearVisitTimers();
     this.scheduledVisiting = false;
@@ -514,8 +498,6 @@ class LobsterPet extends LitElement {
       );
     }, stayMs);
   }
-
-  // ---- Ledge traffic (scheduling lives in LobsterLedgeTraffic) ----
 
   // The resident notices traffic: it turns toward a passer's entry side,
   // then follows it out with a mid-crossing flip. Scuttle owns facing while
@@ -631,8 +613,6 @@ class LobsterPet extends LitElement {
     );
   }
 
-  // Shedding: the old shell stays behind and slowly fades while the pet
-  // steps aside one size bigger. Once per load.
   private completeMolt() {
     this.molted = true;
     if (this.look) {

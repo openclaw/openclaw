@@ -8,7 +8,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SubagentExecutionMetrics = Pick<
   SubagentRunRecord["execution"],
-  "status" | "startedAt" | "endedAt" | "outcome"
+  "status" | "startedAt" | "endedAt" | "outcome" | "interruptionReason"
 >;
 type SubagentSessionStartRecord = Pick<SubagentRunRecord, "sessionStartedAt"> & {
   execution: Pick<SubagentExecutionMetrics, "startedAt">;
@@ -17,7 +17,11 @@ type SubagentSessionRuntimeRecord = Pick<SubagentRunRecord, "accumulatedRuntimeM
   execution: Pick<SubagentExecutionMetrics, "startedAt" | "endedAt">;
 };
 type SubagentSessionStatusRecord = Pick<SubagentRunRecord, "endedReason" | "pauseReason"> & {
-  execution: Pick<SubagentExecutionMetrics, "status" | "endedAt" | "outcome">;
+  delivery?: Pick<NonNullable<SubagentRunRecord["delivery"]>, "status" | "disposition">;
+  execution: Pick<
+    SubagentExecutionMetrics,
+    "status" | "endedAt" | "outcome" | "interruptionReason"
+  >;
 };
 
 /** Returns a recorded execution start, never the earlier admission time. */
@@ -64,17 +68,30 @@ export function getSubagentSessionRuntimeMs(
 /** Maps persisted run outcome fields to the compact session status shown in tools/UI. */
 export function resolveSubagentSessionStatus(
   entry: SubagentSessionStatusRecord | null | undefined,
-): "queued" | "running" | "killed" | "failed" | "timeout" | "done" | undefined {
+): "queued" | "running" | "interrupted" | "killed" | "failed" | "timeout" | "done" | undefined {
   if (!entry) {
     return undefined;
   }
   if (!entry.execution.endedAt) {
+    if (entry.execution.status === "interrupted") {
+      return "interrupted";
+    }
     return entry.execution.status === "queued" ? "queued" : "running";
   }
   if (entry.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
     return "killed";
   }
   const status = entry.execution.outcome?.status;
+  if (status === "error" && entry.execution.interruptionReason === "gateway-restart") {
+    const delivery = entry.delivery;
+    return delivery &&
+      delivery.disposition !== "intentional_non_delivery" &&
+      (delivery.status === "failed" ||
+        delivery.status === "suspended" ||
+        delivery.status === "discarded")
+      ? "failed"
+      : "interrupted";
+  }
   if (status === "error") {
     return "failed";
   }

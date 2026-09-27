@@ -112,9 +112,7 @@ extension GatewayConnectOptions {
         if let computerUse = self.computerUse {
             params["computerUse"] = computerUse
         }
-        if let pathEnv = self.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !pathEnv.isEmpty
-        {
+        if let pathEnv = self.pathEnv?.trimmedNonEmpty {
             params["pathEnv"] = OpenClawProtocol.AnyCodable(pathEnv)
         }
         if !self.permissions.isEmpty {

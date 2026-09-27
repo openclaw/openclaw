@@ -537,7 +537,7 @@ class MainViewModel private constructor(
     runtimeState(initial = GatewayConnectionDisplay(false, "Offline", null)) { it.gatewayConnectionDisplay }
   val operatorAdminScopeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.operatorAdminScopeAvailable }
   internal val systemAgentChatState: StateFlow<SystemAgentChatState> =
-    runtimeState(initial = SystemAgentChatState()) { it.systemAgentChatState }
+    runtimeState(initial = SystemAgentChatState()) { it.systemAgentChatController.state }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
   val remoteAddress: StateFlow<String?> = runtimeState(initial = null) { it.remoteAddress }
   val gatewayVersion: StateFlow<String?> = runtimeState(initial = null) { it.gatewayVersion }
@@ -1949,6 +1949,17 @@ class MainViewModel private constructor(
 
   internal fun captureChatShareOwner(): ChatComposerOwner = currentOrProvisionalChatComposerOwner()
 
+  internal fun chatComposerAgentName(owner: ChatComposerOwner): String? {
+    if (!isCurrentChatComposerOwner(owner)) return null
+    // Read the current catalog with its owner, not a separately collected Compose snapshot.
+    return owner.agentDisplayName(
+      runtimeRef.value
+        ?.gatewayAgents
+        ?.value
+        .orEmpty(),
+    )
+  }
+
   internal fun isCurrentChatComposerOwner(expected: ChatComposerOwner): Boolean =
     runtimeRef.value
       ?.gatewayConnectionHandoff
@@ -2026,38 +2037,38 @@ class MainViewModel private constructor(
   }
 
   internal fun refreshSystemAgentChat() {
-    ensureRuntime().refreshSystemAgentChat()
+    ensureRuntime().systemAgentChatController.refresh()
   }
 
   internal fun clearSystemAgentChatInput() {
-    ensureRuntime().clearSystemAgentChatInput()
+    ensureRuntime().systemAgentChatController.clearInputForBackground()
   }
 
   internal fun setSystemAgentChatInput(value: String) {
-    ensureRuntime().setSystemAgentChatInput(value)
+    ensureRuntime().systemAgentChatController.setInput(value)
   }
 
   internal fun sendSystemAgentChatInput() {
-    ensureRuntime().sendSystemAgentChatInput()
+    ensureRuntime().systemAgentChatController.sendInput()
   }
 
   internal fun answerSystemAgentQuestion(
     messageId: String,
     optionLabel: String,
   ) {
-    ensureRuntime().answerSystemAgentQuestion(messageId, optionLabel)
+    ensureRuntime().systemAgentChatController.answerQuestion(messageId, optionLabel)
   }
 
   internal fun skipSystemAgentQuestion(messageId: String) {
-    ensureRuntime().skipSystemAgentQuestion(messageId)
+    ensureRuntime().systemAgentChatController.skipQuestion(messageId)
   }
 
   internal fun restartSystemAgentChat() {
-    ensureRuntime().restartSystemAgentChat()
+    ensureRuntime().systemAgentChatController.restart()
   }
 
   internal fun openSystemAgentChatHandoff() {
-    val handoff = ensureRuntime().consumeSystemAgentChatHandoff() ?: return
+    val handoff = ensureRuntime().systemAgentChatController.openHandoff() ?: return
     handoff.agentId
       ?.trim()
       ?.takeIf { it.isNotEmpty() }

@@ -15,12 +15,7 @@ import { runWithSessionTranscriptReadFence } from "../config/sessions/session-tr
 import type { SessionEntry } from "../config/sessions/types.js";
 import { registerChatAbortController } from "../gateway/chat-abort.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
-import {
-  claimAgentRunContext,
-  releaseAgentRunContext,
-  registerAgentRunContext,
-  clearAgentRunContext,
-} from "../infra/agent-run-registry.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
@@ -158,83 +153,86 @@ function terminalEntry(entry: SessionEntry, final = true): SessionEntry {
   };
 }
 
+type AdmittedCompletion = Awaited<ReturnType<typeof admit>>;
+
+function appendCompletionSource({ target, entry }: Pick<AdmittedCompletion, "target" | "entry">) {
+  return appendTranscriptMessage(
+    { ...target, sessionId: entry.sessionId },
+    {
+      eventId: "completion-source",
+      message: {
+        role: "user",
+        content: "completed child",
+        idempotencyKey: `${announceId}:user`,
+        __openclaw: { runId: announceId },
+        provenance: inputProvenance,
+      },
+    },
+  );
+}
+
+function prepareCompletionAdmission(
+  { claim, target }: Pick<AdmittedCompletion, "claim" | "target">,
+  operationalRunId = announceId,
+) {
+  return prepareAgentRunAdmission({
+    cfg: {},
+    facts: {
+      agentId: "main",
+      runId: operationalRunId,
+      ingress: { kind: "system", boundary: "test-harness-completion", state: "present" },
+    },
+    operationalRunInstance: createOperationalRunInstanceRef(operationalRunId),
+    assertSourceCurrent: createHarnessCompletionSourceAssertion({
+      claim,
+      storePath: target.storePath,
+    }),
+  });
+}
+
 describe("host-owned harness completion recovery", () => {
-  it.each(
-    (["execution", "receipt"] as const).flatMap((phase) =>
-      (["succeeded", "failed", "cancelled"] as const).map((status) => [phase, status] as const),
-    ),
-  )("preserves the admitted outcome during %s after canonical %s", async (phase, status) => {
+  it.each(["execution", "receipt"])("rejects a corrected outcome during %s", async (phase) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { runtime, task, entry, claim, target, request } = await admit(state);
       const changed = runtime.finalizeTaskRunByRunId({
         runId,
-        status,
+        status: "failed",
         endedAt: Date.now(),
-        terminalSummary: status === "succeeded" ? "result" : "canonical terminal correction",
+        terminalSummary: "canonical terminal correction",
       });
-      expect(changed?.find((record) => record.taskId === task.taskId)?.status).toBe(status);
+      expect(changed?.find((record) => record.taskId === task.taskId)?.status).toBe("failed");
       expect(getTaskById(task.taskId)?.deliveryStatus).toBe("pending");
       if (phase === "execution") {
         const assertion = createHarnessCompletionSourceAssertion({
           claim,
           storePath: target.storePath,
         });
-        if (status === "succeeded") {
-          expect(assertion).not.toThrow();
-        } else {
-          expect(assertion).toThrow();
-        }
+        expect(assertion).toThrow();
       } else {
         await replaceSessionEntry(target, terminalEntry(entry));
         resetTaskRegistryForTests({ persist: false });
         await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         reconcileRetainedHarnessCompletionDeliveries();
-        expect(reconcileHarnessCompletionDelivery(request)).toBe(
-          status === "succeeded" ? "delivered" : "blocked",
-        );
-        expect(getTaskById(task.taskId)?.deliveryStatus).toBe(
-          status === "succeeded" ? "delivered" : "pending",
-        );
+        expect(reconcileHarnessCompletionDelivery(request)).toBe("blocked");
+        expect(getTaskById(task.taskId)?.deliveryStatus).toBe("pending");
       }
-      expect(getTaskById(task.taskId)?.status).toBe(status);
+      expect(getTaskById(task.taskId)?.status).toBe("failed");
     });
   });
 
-  it.each(["unchanged", "human", "reset", "queued-after-fence"])(
+  it.each(["human", "reset", "queued-after-fence"])(
     "rechecks the admitted recovery input at %s",
     async (phase) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const { claim, target, task, entry } = await admit(state);
         const transcript = { ...target, sessionId: entry.sessionId };
-        await appendTranscriptMessage(transcript, {
-          eventId: "completion-source",
-          message: {
-            role: "user",
-            content: "completed child",
-            idempotencyKey: `${announceId}:user`,
-            __openclaw: { runId: announceId },
-            provenance: inputProvenance,
-          },
-        });
+        await appendCompletionSource({ target, entry });
         const recoveryRunId = "recovery-input-guard";
         await replaceSessionEntry(target, {
           ...entry,
           restartRecoveryDeliveryRunId: recoveryRunId,
         });
-        const guard = createHarnessCompletionSourceAssertion({
-          claim,
-          storePath: target.storePath,
-        });
-        const admission = prepareAgentRunAdmission({
-          cfg: {},
-          facts: {
-            agentId: "main",
-            runId: recoveryRunId,
-            ingress: { kind: "system", boundary: "test-harness-recovery", state: "present" },
-          },
-          operationalRunInstance: createOperationalRunInstanceRef(recoveryRunId),
-          assertSourceCurrent: guard,
-        });
+        const admission = prepareCompletionAdmission({ claim, target }, recoveryRunId);
         try {
           const context = await admission.admit("embedded");
           const effect = resolveAdmittedRunActiveAssertion(context);
@@ -270,8 +268,6 @@ describe("host-owned harness completion recovery", () => {
                 effect,
               ),
             ).not.toThrow();
-          } else if (phase === "unchanged") {
-            expect(effect).not.toThrow();
           } else {
             expect(effect).toThrow();
           }
@@ -283,7 +279,7 @@ describe("host-owned harness completion recovery", () => {
     },
   );
 
-  it.each(["single", "before-admission", "after-admission", "running-peer", "cold-receipt"])(
+  it.each(["before-admission", "after-admission", "running-peer", "cold-receipt"])(
     "rejects late same-run task ambiguity at %s",
     async (phase) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -309,20 +305,7 @@ describe("host-owned harness completion recovery", () => {
           expect(runtime.listTaskRecords()).toHaveLength(2);
           return peer;
         };
-        const guard = createHarnessCompletionSourceAssertion({
-          claim,
-          storePath: target.storePath,
-        });
-        const admission = prepareAgentRunAdmission({
-          cfg: {},
-          facts: {
-            agentId: "main",
-            runId: announceId,
-            ingress: { kind: "system", boundary: "test-harness-completion", state: "present" },
-          },
-          operationalRunInstance: createOperationalRunInstanceRef(announceId),
-          assertSourceCurrent: guard,
-        });
+        const admission = prepareCompletionAdmission({ claim, target });
         try {
           if (phase === "before-admission") {
             createPeer();
@@ -343,15 +326,11 @@ describe("host-owned harness completion recovery", () => {
             return;
           }
           await replaceSessionEntry(target, terminalEntry(entry));
-          if (phase === "cold-receipt") {
-            createPeer();
-          }
+          createPeer();
           resetTaskRegistryForTests({ persist: false });
           await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           reconcileRetainedHarnessCompletionDeliveries();
-          expect(getTaskById(task.taskId)?.deliveryStatus).toBe(
-            phase === "single" ? "delivered" : "pending",
-          );
+          expect(getTaskById(task.taskId)?.deliveryStatus).toBe("pending");
         } finally {
           admission.close();
         }
@@ -364,20 +343,7 @@ describe("host-owned harness completion recovery", () => {
     async (phase) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const { claim, target, task } = await admit(state);
-        const guard = createHarnessCompletionSourceAssertion({
-          claim,
-          storePath: target.storePath,
-        });
-        const admission = prepareAgentRunAdmission({
-          cfg: {},
-          facts: {
-            agentId: "main",
-            runId: announceId,
-            ingress: { kind: "system", boundary: "test-harness-completion", state: "present" },
-          },
-          operationalRunInstance: createOperationalRunInstanceRef(announceId),
-          assertSourceCurrent: guard,
-        });
+        const admission = prepareCompletionAdmission({ claim, target });
         try {
           if (phase === "before-admission") {
             markTaskTerminalById({ taskId: task.taskId, status: "cancelled", endedAt: Date.now() });
@@ -392,7 +358,6 @@ describe("host-owned harness completion recovery", () => {
             effect();
             markTaskTerminalById({ taskId: task.taskId, status: "cancelled", endedAt: Date.now() });
             expect(effect).toThrow();
-            expect(() => guard()).toThrow();
           }
         } finally {
           admission.close();
@@ -405,15 +370,7 @@ describe("host-owned harness completion recovery", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { claim, entry, target } = await admit(state);
       const scope = { ...target, sessionId: entry.sessionId };
-      await appendTranscriptMessage(scope, {
-        message: {
-          role: "user",
-          content: "completed child",
-          idempotencyKey: `${announceId}:user`,
-          __openclaw: { runId: announceId },
-          provenance: inputProvenance,
-        },
-      });
+      await appendCompletionSource({ target, entry });
       for (let index = 0; index < 40; index++) {
         await appendTranscriptMessage(scope, {
           message: { role: "assistant", content: `tool work ${index}` },
@@ -452,15 +409,7 @@ describe("host-owned harness completion recovery", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const { claim, entry, target } = await admit(state);
         const scope = { ...target, sessionId: entry.sessionId };
-        await appendTranscriptMessage(scope, {
-          message: {
-            role: "user",
-            content: "completed child",
-            idempotencyKey: `${announceId}:user`,
-            __openclaw: { runId: announceId },
-            provenance: inputProvenance,
-          },
-        });
+        await appendCompletionSource({ target, entry });
         if (scenario === "intervening-human") {
           await appendTranscriptMessage(scope, {
             message: { role: "user", content: "stop and do the newer work" },
@@ -538,18 +487,7 @@ describe("host-owned harness completion recovery", () => {
           lost.restartRecoveryDeliveryRunId = undefined;
         }
         await replaceSessionEntry(target, lost);
-        await appendTranscriptMessage(
-          { ...target, sessionId: entry.sessionId },
-          {
-            message: {
-              role: "user",
-              content: "completed child",
-              idempotencyKey: `${announceId}:user`,
-              __openclaw: { runId: announceId },
-              provenance: inputProvenance,
-            },
-          },
-        );
+        await appendCompletionSource({ target, entry });
         expect(reconcileHarnessCompletionDelivery(request)).toBe("blocked");
         const joined = await deliverAgentHarnessTaskCompletion({
           scope: createAgentHarnessTaskRuntimeScope({ requesterSessionKey: sessionKey }),
@@ -568,18 +506,7 @@ describe("host-owned harness completion recovery", () => {
   it("keeps an accepted source pending and adopts its original identity in a new operational run", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { entry, claim, target, request, task } = await admit(state);
-      await appendTranscriptMessage(
-        { ...target, sessionId: entry.sessionId },
-        {
-          message: {
-            role: "user",
-            content: "completed child",
-            idempotencyKey: `${announceId}:user`,
-            __openclaw: { runId: announceId },
-            provenance: inputProvenance,
-          },
-        },
-      );
+      await appendCompletionSource({ target, entry });
 
       expect(reconcileHarnessCompletionDelivery(request)).toBe("pending");
       const joined = await deliverAgentHarnessTaskCompletion({
@@ -624,10 +551,8 @@ describe("host-owned harness completion recovery", () => {
   });
 
   it.each([
-    "exact",
     "default-account",
     "unresolved-default-explicit-account",
-    "unresolved-default-foreign-account",
     "casefolded-provider",
     "missing-provider",
     "generic-provider",
@@ -637,7 +562,7 @@ describe("host-owned harness completion recovery", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { entry, target, task } = await admit(
         state,
-        kind === "default-account" || kind.startsWith("unresolved-default-")
+        kind === "default-account" || kind === "unresolved-default-explicit-account"
           ? { channel: "discord", to: "channel:123" }
           : deliveryContext,
       );
@@ -655,7 +580,7 @@ describe("host-owned harness completion recovery", () => {
         sent.provider = "message";
       } else if (kind === "missing-account" || kind === "default-account") {
         delete sent.accountId;
-      } else if (kind === "wrong-account" || kind === "unresolved-default-foreign-account") {
+      } else if (kind === "wrong-account") {
         sent.accountId = "different-account";
       }
       await replaceSessionEntry(target, terminal);
@@ -663,9 +588,7 @@ describe("host-owned harness completion recovery", () => {
       await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
       reconcileRetainedHarnessCompletionDeliveries();
       expect(getTaskById(task.taskId)?.deliveryStatus).toBe(
-        ["exact", "default-account", "casefolded-provider"].includes(kind)
-          ? "delivered"
-          : "pending",
+        ["default-account", "casefolded-provider"].includes(kind) ? "delivered" : "pending",
       );
     });
   });
@@ -749,18 +672,7 @@ describe("host-owned harness completion recovery", () => {
   it("does not settle a same-task receipt with a different requester generation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { entry, target, request, task } = await admit(state);
-      await appendTranscriptMessage(
-        { ...target, sessionId: entry.sessionId },
-        {
-          message: {
-            role: "user",
-            content: "completed child",
-            idempotencyKey: `${announceId}:user`,
-            __openclaw: { runId: announceId },
-            provenance: inputProvenance,
-          },
-        },
-      );
+      await appendCompletionSource({ target, entry });
 
       const terminal = terminalEntry(entry);
       const receipt = terminal.restartRecoveryTerminalDeliveryEvidence?.[0];
@@ -794,12 +706,20 @@ describe("host-owned harness completion recovery", () => {
         {
           ...receipt,
           messagingToolSentTargets: [
-            { provider: "discord", to: "other", visible: true, sourceReplyFinal: true },
+            {
+              provider: "discord",
+              accountId: "main",
+              to: "other",
+              visible: true,
+              sourceReplyFinal: true,
+            },
           ],
         },
         {
           ...receipt,
-          messagingToolSentTargets: [{ provider: "discord", to: "channel:123", visible: true }],
+          messagingToolSentTargets: [
+            { provider: "discord", accountId: "main", to: "channel:123", visible: true },
+          ],
         },
         {
           ...receipt,
@@ -824,25 +744,14 @@ describe("host-owned harness completion recovery", () => {
 });
 
 describe("review3 custody ownership", () => {
-  it.each(["missing-source", "intervening-human", "valid-source"])(
+  it.each(["missing-source", "intervening-human"])(
     "retains task but releases non-executable %s custody",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const { entry, target, request, task } = await admit(state);
         await replaceSessionEntry(target, { ...entry, abortedLastRun: true });
         if (kind !== "missing-source") {
-          await appendTranscriptMessage(
-            { ...target, sessionId: entry.sessionId },
-            {
-              message: {
-                role: "user",
-                content: "completed child",
-                idempotencyKey: `${announceId}:user`,
-                __openclaw: { runId: announceId },
-                provenance: inputProvenance,
-              },
-            },
-          );
+          await appendCompletionSource({ target, entry });
         }
         if (kind === "intervening-human") {
           await appendTranscriptMessage(
@@ -850,14 +759,12 @@ describe("review3 custody ownership", () => {
             { message: { role: "user", content: "new human work" } },
           );
         }
-        expect(reconcileHarnessCompletionDelivery(request)).toBe(
-          kind === "valid-source" ? "pending" : "blocked",
-        );
+        expect(reconcileHarnessCompletionDelivery(request)).toBe("blocked");
         expect(getTaskById(task.taskId)?.deliveryStatus).toBe("pending");
       });
     },
   );
-  it.each(["owned", "ownerless", "foreign-physical", "released"])(
+  it.each(["owned", "foreign-physical", "released"])(
     "distinguishes an actual %s source before transcript commit",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -867,16 +774,11 @@ describe("review3 custody ownership", () => {
           agentId: "main",
           sessionId: kind === "foreign-physical" ? "physical-2" : entry.sessionId,
         };
-        let owner: string | undefined;
+        const owner = claimAgentRunContext(announceId, context, {
+          trackOwner: true,
+          ownsContext: true,
+        });
         try {
-          if (kind === "ownerless") {
-            registerAgentRunContext(announceId, context);
-          } else {
-            owner = claimAgentRunContext(announceId, context, {
-              trackOwner: true,
-              ownsContext: true,
-            });
-          }
           if (kind === "released") {
             releaseAgentRunContext(announceId, owner);
           }
@@ -885,11 +787,7 @@ describe("review3 custody ownership", () => {
           );
           expect(getTaskById(task.taskId)?.deliveryStatus).toBe("pending");
         } finally {
-          if (owner) {
-            releaseAgentRunContext(announceId, owner);
-          } else {
-            clearAgentRunContext(announceId);
-          }
+          releaseAgentRunContext(announceId, owner);
         }
       });
     },

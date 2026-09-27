@@ -8,6 +8,7 @@ import {
   parseAt,
   parseCronStaggerMs,
   parseCronStreamCommandArgv,
+  parseCronTimezoneOption,
   parsePositiveCronDurationMs,
 } from "./shared.js";
 
@@ -122,7 +123,7 @@ export function resolveCronEditScheduleRequest(
   if (normalized.requestedStaggerMs !== undefined || normalized.tz !== undefined) {
     return {
       kind: "patch-existing-cron",
-      tz: normalized.tz,
+      tz: parseCronTimezoneOption(normalized.tz),
       staggerMs: normalized.requestedStaggerMs,
     };
   }
@@ -305,7 +306,7 @@ function resolveDirectSchedule(
     return {
       kind: "cron",
       expr: options.cronExpr,
-      tz: options.tz,
+      tz: parseCronTimezoneOption(options.tz),
       staggerMs: options.requestedStaggerMs,
     };
   }

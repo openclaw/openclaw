@@ -5,6 +5,7 @@ import {
   resolveNonNegativeIntegerOption,
 } from "../../packages/normalization-core/src/number-coercion.js";
 import { computeBackoffSchedule } from "../../packages/retry/src/index.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { sleep } from "../utils/sleep.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
 import {
@@ -240,11 +241,9 @@ function createRecoveryReplayPacer(): {
 
   return {
     async wait(deadlineMs) {
-      let releaseWaiter: () => void = () => {};
       const previousWaiter = waitQueue;
-      waitQueue = new Promise<void>((resolve) => {
-        releaseWaiter = resolve;
-      });
+      const completion = createDeferredCore();
+      waitQueue = completion.promise;
       await previousWaiter;
 
       try {
@@ -267,7 +266,7 @@ function createRecoveryReplayPacer(): {
         lastReplayStartedAt = Date.now();
         return "ready";
       } finally {
-        releaseWaiter();
+        completion.resolve();
       }
     },
   };

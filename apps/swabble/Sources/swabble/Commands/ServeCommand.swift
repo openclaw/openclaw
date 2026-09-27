@@ -38,31 +38,41 @@ struct ServeCommand: CLICommand {
         let logger = Logger(level: LogLevel(configValue: cfg.logging.level) ?? .info)
         logger.info("swabble serve starting (wake: \(cfg.wake.enabled ? cfg.wake.word : "disabled"))")
         let pipeline = SpeechPipeline()
-        let triggers = [cfg.wake.word] + cfg.wake.aliases
         do {
             let stream = try await pipeline.start(
                 localeIdentifier: cfg.speech.localeIdentifier,
                 etiquette: cfg.speech.etiquetteReplacements)
-            for await seg in stream {
-                if cfg.wake.enabled {
-                    guard WakeWordGate.matchesTextOnly(text: seg.text, triggers: triggers) else { continue }
-                }
-                let stripped = WakeWordGate.stripWake(text: seg.text, triggers: triggers)
-                let job = HookJob(text: stripped, timestamp: Date())
-                let executor = HookExecutor(config: cfg)
-                try await executor.run(job: job)
-                if cfg.transcripts.enabled {
-                    await TranscriptsStore.shared.append(text: stripped)
-                }
-                if seg.isFinal {
-                    logger.info("final: \(stripped)")
-                } else {
-                    logger.debug("partial: \(stripped)")
-                }
-            }
+            try await Self.consumeTranscripts(stream, config: cfg, logger: logger)
         } catch {
             logger.error("serve error: \(error)")
             throw error
+        }
+    }
+
+    static func consumeTranscripts(
+        _ stream: AsyncStream<SpeechSegment>,
+        config cfg: SwabbleConfig,
+        logger: Logger) async throws
+    {
+        let executor = HookExecutor(config: cfg)
+        let triggers = [cfg.wake.word] + cfg.wake.aliases
+        for await seg in stream {
+            if cfg.wake.enabled {
+                guard WakeWordGate.matchesTextOnly(text: seg.text, triggers: triggers) else { continue }
+            }
+            let stripped = WakeWordGate.stripWake(text: seg.text, triggers: triggers)
+            if stripped.count >= cfg.hook.minCharacters {
+                let job = HookJob(text: stripped, timestamp: Date())
+                try await executor.run(job: job)
+            }
+            if cfg.transcripts.enabled {
+                await TranscriptsStore.shared.append(text: stripped)
+            }
+            if seg.isFinal {
+                logger.info("final: \(stripped)")
+            } else {
+                logger.debug("partial: \(stripped)")
+            }
         }
     }
 

@@ -517,7 +517,8 @@ export function logMessageDispatchCompleted(
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  if (diag.isEnabled(params.outcome === "error" ? "error" : "debug")) {
+  const level = params.outcome === "error" ? "error" : "debug";
+  if (diag.isEnabled(level)) {
     const payload = `message dispatch completed: channel=${params.channel ?? "unknown"} sessionId=${
       params.sessionId ?? "unknown"
     } sessionKey=${params.sessionKey ?? "unknown"} source=${params.source} outcome=${
@@ -525,11 +526,7 @@ export function logMessageDispatchCompleted(
     } duration=${params.durationMs}ms${params.reason ? ` reason=${params.reason}` : ""}${
       params.error ? ` error="${params.error}"` : ""
     }`;
-    if (params.outcome === "error") {
-      diag.error(payload);
-    } else {
-      diag.debug(payload);
-    }
+    diag[level](payload);
   }
   emitDiagnosticEvent({
     type: "message.dispatch.completed",
@@ -549,8 +546,8 @@ export function logMessageProcessed(params: DiagnosticLogParams<"message.process
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  const wantsLog = params.outcome === "error" ? diag.isEnabled("error") : diag.isEnabled("debug");
-  if (wantsLog) {
+  const level = params.outcome === "error" ? "error" : "debug";
+  if (diag.isEnabled(level)) {
     const payload = `message processed: channel=${params.channel} chatId=${
       params.chatId ?? "unknown"
     } messageId=${params.messageId ?? "unknown"} sessionId=${
@@ -560,11 +557,7 @@ export function logMessageProcessed(params: DiagnosticLogParams<"message.process
     }ms${params.reason ? ` reason=${params.reason}` : ""}${
       params.error ? ` error="${params.error}"` : ""
     }`;
-    if (params.outcome === "error") {
-      diag.error(payload);
-    } else {
-      diag.debug(payload);
-    }
+    diag[level](payload);
   }
   emitDiagnosticEvent({
     type: "message.processed",

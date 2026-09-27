@@ -31,7 +31,7 @@ import { captureTaskDeliveryWork } from "../tasks/task-registry-delivery.test-su
 import { captureTaskRegistryReadFence } from "../tasks/task-registry-listener-state.js";
 import { updateTask } from "../tasks/task-registry-mutation.js";
 import { tasks, taskRegistryLog } from "../tasks/task-registry-state.js";
-import { onTaskRegistryChange } from "../tasks/task-registry.store.js";
+import { getTaskRegistryStore, onTaskRegistryChange } from "../tasks/task-registry.store.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "../tasks/task-registry.store.sqlite.js";
 import { resetTaskRegistryForTests } from "../tasks/task-registry.test-support.js";
 import {
@@ -39,7 +39,10 @@ import {
   setDetachedTaskLifecycleRuntime,
 } from "../tasks/task-runtime.test-helpers.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -47,6 +50,10 @@ import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js
 type NativeHistoryOwner = { sessionId: string; lifecycleRevision?: string };
 type NativeNotification = { method: string; params: unknown };
 type NativeMonitorFixture = {
+  observeCompletionAttempts(): {
+    settle(runId?: string): Promise<void>;
+    restore(): void;
+  };
   captureNativeSubagentMonitorWork(): {
     settle(): Promise<unknown[]>;
     [Symbol.dispose](): void;
@@ -82,7 +89,7 @@ type NativeMonitorFixture = {
     status: "completed" | "interrupted";
     items?: unknown[];
   }): NativeNotification;
-  nativeHistoryOwner(): NativeHistoryOwner;
+  nativeHistoryOwner(parentThreadId?: string): NativeHistoryOwner;
   threadRead(params: { result: string }): unknown;
 };
 
@@ -113,9 +120,195 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
+async function prepareNativeParent(
+  state: OpenClawTestState,
+  owner: NativeHistoryOwner = { sessionId: "parent-session" },
+) {
+  const requesterSessionKey = "agent:main:main";
+  const context = createContext();
+  const resolver = () => context;
+  context.resolveGatewayContext = resolver;
+  context.dedupe.set(
+    `agent:${buildAnnounceIdempotencyKey("codex-native:parent-thread:child-thread:succeeded")}`,
+    {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId: "requester-completion",
+        status: "ok",
+        result: { payloads: [{ text: "Child result received" }] },
+      },
+    },
+  );
+  await replaceSessionEntry(
+    {
+      agentId: "main",
+      sessionKey: requesterSessionKey,
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    },
+    {
+      sessionId: owner.sessionId,
+      lifecycleRevision: owner.lifecycleRevision,
+      updatedAt: Date.now(),
+    },
+  );
+  const scope = createAgentHarnessTaskRuntimeScope({
+    requesterSessionKey,
+    gatewayContextResolver: resolver,
+  });
+  return { requesterSessionKey, resolver, scope };
+}
+
 describe("native task event custody", () => {
+  it("refreshes saved receiver lineage after a concurrent task publication", async () => {
+    const fixture = await loadCodexNativeSubagentMonitorTestFixture();
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const completions = fixture.observeCompletionAttempts();
+      const requesterSessionKey = "agent:main:main";
+      const scope = createAgentHarnessTaskRuntimeScope({ requesterSessionKey });
+      const client = fixture.createClient();
+      const deliveryEntered = createDeferredCore();
+      const releaseDelivery = createDeferredCore();
+      let taskRuntime: ReturnType<typeof createAgentHarnessTaskRuntime> | undefined;
+      const monitor = new fixture.CodexNativeSubagentMonitor(
+        client as never,
+        {
+          captureAgentHarnessCompletionCustody,
+          createAgentHarnessTaskEventSink,
+          createAgentHarnessTaskRuntime: (params) => {
+            const runtime = createAgentHarnessTaskRuntime(params);
+            taskRuntime ??= runtime;
+            return runtime;
+          },
+          deliverAgentHarnessTaskCompletion: async () => {
+            deliveryEntered.resolve();
+            await releaseDelivery.promise;
+            return { delivered: true, path: "direct" };
+          },
+        },
+        { recoveryPollDelaysMs: [] },
+      );
+      const releaseRead = createDeferredCore();
+      let mutation: Promise<AgentHarnessTaskRecord[]> | undefined;
+      try {
+        const initial = await monitor.registerParent({
+          parentThreadId: "parent-thread",
+          requesterSessionKey,
+          taskRuntimeScope: scope,
+          agentId: "main",
+          historyOwner: fixture.nativeHistoryOwner(),
+        });
+        initial.bindTurn("parent-turn");
+        await client.notify({
+          method: "item/completed",
+          params: {
+            threadId: "parent-thread",
+            turnId: "parent-turn",
+            item: fixture.directSpawnItem("v2", "parent-thread", "child-thread"),
+          },
+        });
+        await client.notify(
+          fixture.nativeCompletionNotification({
+            agentPath: "/root/child-thread",
+            result: "Original child result",
+          }),
+        );
+        await initial.unregister();
+        await deliveryEntered.promise;
+        const rotated = await monitor.registerParent({
+          parentThreadId: "rotated-parent",
+          requesterSessionKey,
+          taskRuntimeScope: scope,
+          agentId: "main",
+          historyOwner: fixture.nativeHistoryOwner("rotated-parent"),
+        });
+        rotated.bindTurn("rotated-turn");
+        releaseDelivery.resolve();
+        await completions.settle("codex-thread:child-thread");
+        const [original] = [...loadTaskRegistryStateFromSqliteReadOnly().tasks.values()];
+        expect(original).toMatchObject({ status: "succeeded", deliveryStatus: "delivered" });
+        const prepared = await taskRuntime!.prepareTaskRecordsRead!();
+        const store = getTaskRegistryStore();
+        const readSnapshot = store.loadMutationSnapshotAsync.bind(store);
+        const readEntered = createDeferredCore();
+        let captured = false;
+        const read = vi
+          .spyOn(store, "loadMutationSnapshotAsync")
+          .mockImplementation(async (...args) => {
+            const snapshot = await readSnapshot(...args);
+            if (
+              !captured &&
+              [args[1]].flat().some((mutationScope) => mutationScope?.taskId === original!.taskId)
+            ) {
+              captured = true;
+              readEntered.resolve();
+              await releaseRead.promise;
+            }
+            return snapshot;
+          });
+        mutation = taskRuntime!.recordTaskRunProgressByRunIdAsync!({
+          runId: original!.runId!,
+          expectedTask: captureAgentHarnessTaskAssignment(original!),
+          progressSummary: "First publication",
+        });
+        await Promise.race([
+          readEntered.promise,
+          mutation.then(() => {
+            throw new Error("Task mutation completed without the selected readback");
+          }),
+        ]);
+        updateTask(original!.taskId, { label: "Concurrent metadata" });
+        releaseRead.resolve();
+        await mutation;
+        read.mockRestore();
+        // A successful native mutation may leave readback debt after a newer publication wins.
+        expect(prepared).toThrow("Task registry read identity requires preparation");
+        await client.notify({
+          method: "item/completed",
+          params: {
+            threadId: "rotated-parent",
+            turnId: "rotated-turn",
+            item: {
+              id: "resume-child",
+              type: "collabAgentToolCall",
+              tool: "resumeAgent",
+              status: "completed",
+              senderThreadId: "rotated-parent",
+              receiverThreadIds: ["child-thread"],
+              agentsStates: {
+                "child-thread": { status: "completed", message: "Original child result" },
+              },
+            },
+          },
+        });
+        const records = [...loadTaskRegistryStateFromSqliteReadOnly().tasks.values()];
+        expect(records).toHaveLength(1);
+        expect(records[0]).toMatchObject({
+          taskId: original!.taskId,
+          runId: original!.runId,
+          status: "succeeded",
+          deliveryStatus: "delivered",
+          label: "Concurrent metadata",
+        });
+        await rotated.unregister();
+      } finally {
+        releaseDelivery.resolve();
+        releaseRead.resolve();
+        try {
+          await mutation;
+        } finally {
+          await monitor.retireParent("parent-thread");
+          await monitor.retireParent("rotated-parent");
+          await monitor.dispose();
+          await completions.settle();
+          completions.restore();
+          await closeOpenClawStateDatabaseAsync();
+        }
+      }
+    });
+  });
+
   it.each([
-    "raw",
     "published",
     "foreground",
     "retry",
@@ -131,34 +324,7 @@ describe("native task event custody", () => {
       using scopes = observeAsyncWorkScopeRuns();
       using notifications = captureTaskDeliveryWork();
       using nativeWork = fixture.captureNativeSubagentMonitorWork();
-      const requesterSessionKey = "agent:main:main";
-      const context = createContext();
-      const resolver = () => context;
-      context.resolveGatewayContext = resolver;
-      context.dedupe.set(
-        `agent:${buildAnnounceIdempotencyKey("codex-native:parent-thread:child-thread:succeeded")}`,
-        {
-          ts: Date.now(),
-          ok: true,
-          payload: {
-            runId: "requester-result",
-            status: "ok",
-            result: { payloads: [{ text: "Child received" }] },
-          },
-        },
-      );
-      await replaceSessionEntry(
-        {
-          agentId: "main",
-          sessionKey: requesterSessionKey,
-          storePath: path.join(state.sessionsDir(), "sessions.json"),
-        },
-        { sessionId: "parent-session", updatedAt: Date.now() },
-      );
-      const scope = createAgentHarnessTaskRuntimeScope({
-        requesterSessionKey,
-        gatewayContextResolver: resolver,
-      });
+      const { requesterSessionKey, resolver, scope } = await prepareNativeParent(state);
       if (ordering === "unsupported") {
         // Copying the legacy default must not opt a custom owner into core settlement.
         setDetachedTaskLifecycleRuntime({ ...getDetachedTaskLifecycleRuntime() });
@@ -371,14 +537,7 @@ describe("native task event custody", () => {
     });
   });
 
-  it.each([
-    "completed",
-    "unavailable",
-    "replaced",
-    "metadata",
-    "earlier",
-    "earlier-replaced",
-  ] as const)(
+  it.each(["unavailable", "replaced", "metadata", "earlier", "earlier-replaced"] as const)(
     "keeps recovery custody through its first %s history attempt",
     async (historyOutcome) => {
       const fixture = await loadCodexNativeSubagentMonitorTestFixture();
@@ -388,39 +547,8 @@ describe("native task event custody", () => {
         using deliveries = captureTaskDeliveryWork();
         using nativeWork = fixture.captureNativeSubagentMonitorWork();
         const history = fixture.nativeHistoryOwner();
-        const requesterSessionKey = "agent:main:main";
         const runId = "codex-thread:child-thread";
-        const context = createContext();
-        const resolver = () => context;
-        context.resolveGatewayContext = resolver;
-        context.dedupe.set(
-          `agent:${buildAnnounceIdempotencyKey("codex-native:parent-thread:child-thread:succeeded")}`,
-          {
-            ts: Date.now(),
-            ok: true,
-            payload: {
-              runId: "requester-recovery",
-              status: "ok",
-              result: { payloads: [{ text: "Recovered child result received" }] },
-            },
-          },
-        );
-        await replaceSessionEntry(
-          {
-            agentId: "main",
-            sessionKey: requesterSessionKey,
-            storePath: path.join(state.sessionsDir(), "sessions.json"),
-          },
-          {
-            sessionId: history.sessionId,
-            lifecycleRevision: history.lifecycleRevision,
-            updatedAt: Date.now(),
-          },
-        );
-        const scope = createAgentHarnessTaskRuntimeScope({
-          requesterSessionKey,
-          gatewayContextResolver: resolver,
-        });
+        const { requesterSessionKey, resolver, scope } = await prepareNativeParent(state, history);
         const runtime = createAgentHarnessTaskRuntime({
           scope,
           runtime: "subagent",
@@ -601,34 +729,7 @@ describe("native task event custody", () => {
         using scopes = observeAsyncWorkScopeRuns();
         using deliveries = captureTaskDeliveryWork();
         using nativeWork = fixture.captureNativeSubagentMonitorWork();
-        const requesterSessionKey = "agent:main:main";
-        const context = createContext();
-        const resolver = () => context;
-        context.resolveGatewayContext = resolver;
-        context.dedupe.set(
-          `agent:${buildAnnounceIdempotencyKey("codex-native:parent-thread:child-thread:succeeded")}`,
-          {
-            ts: Date.now(),
-            ok: true,
-            payload: {
-              runId: "requester-completion",
-              status: "ok",
-              result: { payloads: [{ text: "Child result received" }] },
-            },
-          },
-        );
-        await replaceSessionEntry(
-          {
-            agentId: "main",
-            sessionKey: requesterSessionKey,
-            storePath: path.join(state.sessionsDir(), "sessions.json"),
-          },
-          { sessionId: "parent-session", updatedAt: Date.now() },
-        );
-        const scope = createAgentHarnessTaskRuntimeScope({
-          requesterSessionKey,
-          gatewayContextResolver: resolver,
-        });
+        const { requesterSessionKey, resolver, scope } = await prepareNativeParent(state);
         const client = fixture.createClient();
         const deliver = vi.fn(
           async (

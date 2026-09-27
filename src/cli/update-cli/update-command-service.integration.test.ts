@@ -172,11 +172,7 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => {
     ...actual,
     runUpdatedInstallGatewayCommand: (
       ...[params, action]: Parameters<typeof actual.runUpdatedInstallGatewayCommand>
-    ) =>
-      actual.runUpdatedInstallGatewayCommand(
-        { ...params, opts: { json: params.opts.json } },
-        action,
-      ),
+    ) => actual.runUpdatedInstallGatewayCommand({ ...params, opts: {} }, action),
   };
 });
 vi.mock("../../process/exec.js", async (importOriginal) => {

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
@@ -21,7 +22,6 @@ import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
-import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
@@ -185,8 +185,8 @@ export function prepareChatSendUserTurn(params: {
       CommandBody: text,
     };
   };
-  const queuedFollowupOwnerDeviceId = normalizeOptionalChatText(client?.connect?.device?.id);
-  const queuedFollowupOwnerConnId = normalizeOptionalChatText(client?.connId);
+  const queuedFollowupOwnerDeviceId = normalizeOptionalString(client?.connect?.device?.id);
+  const queuedFollowupOwnerConnId = normalizeOptionalString(client?.connId);
   const gatewayUiCommandTarget = captureGatewayUiCommandTarget(client);
   const queuedFollowupOwnerKey = queuedFollowupOwnerDeviceId
     ? `device:${queuedFollowupOwnerDeviceId}`

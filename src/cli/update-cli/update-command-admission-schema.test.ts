@@ -4,12 +4,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "../../infra/sqlite-coordinator.js";
+import { acquireFileLockSync } from "../../infra/file-lock-manager.js";
+import { parseGatewayLockPayload } from "../../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import {
-  acquireGatewayLifecycleCoordinator,
   StateSchemaMutationConflictError,
-  withStateSchemaFence,
-} from "../../infra/state-database-coordinator.js";
+  withStateDatabaseSchemaMaintenance,
+} from "../../infra/state-database-maintenance.js";
 import {
   createUpdateRun,
   finishInterruptedUpdateBeforeActivation,
@@ -50,8 +51,8 @@ function previousVersionState(ledger: boolean, legacyMetadata = false) {
   const filename = resolveOpenClawStateSqlitePath(env);
   fs.mkdirSync(path.dirname(filename), { recursive: true });
   const db = new DatabaseSync(filename);
-  // Exact stable table subset from fac4b318 (2026.9.2). This models its
-  // live SQLite lease, not a running Gateway or physical installation.
+  // Exact stable table subset from fac4b318 (2026.9.2), kept unchanged while
+  // a serving process prevents the candidate's runtime migrations.
   const fixture = fs.readFileSync(
     new URL("./fixtures/admission-state-fac4.sql", import.meta.url),
     "utf8",
@@ -64,14 +65,21 @@ function previousVersionState(ledger: boolean, legacyMetadata = false) {
   if (!ledger) {
     db.exec("DROP TABLE update_runs");
   }
-  const anchor = acquireGatewayLifecycleCoordinator({ databasePath: filename });
+  const anchor = acquireGatewayStateOwner({ databasePath: filename });
   anchor.release();
-  // Independent connection avoids same-process reentrant ownership. The real
-  // schema fence must contend on the same SQLite lock as a live old Gateway.
-  const owner = tryAcquireExclusiveSqliteCoordinator(anchor.path);
-  if (!owner) {
-    throw new Error("Fixture Gateway lifecycle lease unavailable");
-  }
+  // An unregistered sidecar permits diagnostic access but cannot lend schema authority.
+  const owner = acquireFileLockSync(anchor.path, {
+    lockPath: anchor.path,
+    retry: { retries: 0 },
+    payload: () => ({
+      pid: process.pid,
+      ownerId: randomUUID(),
+      createdAt: new Date().toISOString(),
+      configPath: path.join(root, "openclaw.json"),
+      role: "gateway",
+    }),
+    parsePayload: parseGatewayLockPayload,
+  });
   const snapshot = () => ({
     meta: db.prepare("SELECT * FROM schema_meta").all(),
     version: db.prepare("PRAGMA user_version").get(),
@@ -103,9 +111,9 @@ it.each([true, false].flatMap((dryRun) => [true, false].map((ledger) => ({ dryRu
       completeUpdateCommandRun({ status: "ok", mode: "npm", durationMs: 1, steps: [] }, run);
       expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("succeeded");
       expect(f.snapshot()).toEqual(before);
-      expect(() => withStateSchemaFence({ databasePath: f.filename }, () => "migrated")).toThrow(
-        StateSchemaMutationConflictError,
-      );
+      expect(() =>
+        withStateDatabaseSchemaMaintenance({ databasePath: f.filename }, () => "migrated"),
+      ).toThrow(StateSchemaMutationConflictError);
       expect(() => openOpenClawStateDatabase({ env: f.env })).toThrow(
         StateSchemaMutationConflictError,
       );
@@ -132,9 +140,9 @@ it("records only the exact preview interruption without opening the candidate sc
       reason: "interrupted",
     });
     expect(f.snapshot()).toEqual(before);
-    expect(() => withStateSchemaFence({ databasePath: f.filename }, () => "migrated")).toThrow(
-      StateSchemaMutationConflictError,
-    );
+    expect(() =>
+      withStateDatabaseSchemaMaintenance({ databasePath: f.filename }, () => "migrated"),
+    ).toThrow(StateSchemaMutationConflictError);
   } finally {
     f.owner.release();
     f.db.close();

@@ -102,7 +102,6 @@ function mutateManagedImageRecords(
             (scope) => scope.execute(command),
             {
               assertCurrent: check,
-              requireStateLifecycle: true,
               createAdmission: () => {
                 admission = createSqliteWorkerOperationAdmission((_request, grant) => {
                   check();

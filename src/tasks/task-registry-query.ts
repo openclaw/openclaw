@@ -7,7 +7,6 @@ import {
   getTaskMirroredFlowIds,
   prepareTaskFlowRegistryRead,
 } from "./task-flow-runtime-internal.js";
-import { isActiveTaskStatus } from "./task-registry-common.js";
 import { clearTaskFlowSyncRetries } from "./task-registry-flow-sync.js";
 import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
 import {
@@ -311,38 +310,6 @@ export function listTaskRecords(filter?: (task: Readonly<TaskRecord>) => boolean
     .map((task, insertionIndex) => Object.assign({}, cloneTaskRecord(task), { insertionIndex }))
     .toSorted(compareTasksNewestFirst)
     .map(({ insertionIndex: _insertionIndex, ...task }) => task);
-}
-
-export function hasActiveTaskForChildSessionKey(params: {
-  sessionKey: string;
-  agentId?: string;
-  excludeTaskId?: string;
-}): boolean {
-  ensureTaskRegistryReady();
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  if (!sessionKey) {
-    return false;
-  }
-  const ids = taskIdsByRelatedSessionKey.get(sessionKey);
-  if (!ids) {
-    return false;
-  }
-  for (const taskId of ids) {
-    if (taskId === params.excludeTaskId) {
-      continue;
-    }
-    const task = tasks.get(taskId);
-    if (
-      task &&
-      isActiveTaskStatus(task.status) &&
-      normalizeOptionalString(task.childSessionKey) === sessionKey &&
-      (!params.agentId ||
-        resolveTaskSessionAgentId(task.childSessionKey, task.agentId) === params.agentId)
-    ) {
-      return true;
-    }
-  }
-  return false;
 }
 
 export function getTaskById(taskId: string): TaskRecord | undefined {

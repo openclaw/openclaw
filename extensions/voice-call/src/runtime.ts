@@ -224,7 +224,7 @@ function listRealtimeAgentIds(config: VoiceCallConfig, coreConfig: OpenClawConfi
 async function createRealtimeInstructionsResolver(params: {
   config: VoiceCallConfig & { agentId: string };
   coreConfig: OpenClawConfig;
-  agentRuntime: OpenClawPluginApi["runtime"]["agent"];
+  warn: (message: string) => void;
 }): Promise<(call: CallRecord) => string> {
   const genericConfig: VoiceCallConfig = {
     ...params.config,
@@ -237,7 +237,7 @@ async function createRealtimeInstructionsResolver(params: {
     baseInstructions: params.config.realtime.instructions,
     config: genericConfig,
     coreConfig: params.coreConfig,
-    agentRuntime: params.agentRuntime,
+    warn: params.warn,
     agentId: params.config.agentId,
   });
   const entries = await Promise.all(
@@ -246,7 +246,7 @@ async function createRealtimeInstructionsResolver(params: {
         baseInstructions: params.config.realtime.instructions,
         config: { ...params.config, agentId },
         coreConfig: params.coreConfig,
-        agentRuntime: params.agentRuntime,
+        warn: params.warn,
         agentId,
       });
       return [agentId, instructions] as const;
@@ -326,7 +326,7 @@ export async function createVoiceCallRuntime(params: {
     const resolveRealtimeInstructions = await createRealtimeInstructionsResolver({
       config,
       coreConfig: cfg,
-      agentRuntime,
+      warn: (message) => log.warn(`[voice-call] ${message}`),
     });
     const realtimeConfig = {
       ...config.realtime,

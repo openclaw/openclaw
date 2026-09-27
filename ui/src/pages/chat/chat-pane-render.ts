@@ -75,6 +75,12 @@ export class ChatPane extends ChatPaneLayoutRender {
   private presentationUserId: string | null = null;
   // Stable absent inputs let catalog renders reuse the transcript cache.
   private readonly emptyTranscriptItems: [] = [];
+  private readonly retrySessionPlacementStartup = () => {
+    const sessionKey = this.state?.sessionKey;
+    if (sessionKey) {
+      this.context.placementStartup.retry(sessionKey);
+    }
+  };
 
   override render() {
     const state = this.state;
@@ -391,7 +397,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         this.sessionSuggestionAddOperation !== undefined,
       placementStartup: placementStartup ?? placementComposer.startup,
       onRetrySessionPlacementStartup: placementStartup?.retryable
-        ? () => this.context.placementStartup.retry(state.sessionKey)
+        ? this.retrySessionPlacementStartup
         : undefined,
       canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
       runActive,

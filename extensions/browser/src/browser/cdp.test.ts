@@ -200,7 +200,7 @@ describe("cdp", () => {
         nativeTargetId: "OWNED",
         expectedProfileFingerprint: resolvedOwnership.profileFingerprint,
         expectedBrowserInstanceFingerprint: resolvedOwnership.browserInstanceFingerprint,
-        shouldClose: () => false,
+        closeIfCurrent: async () => ({ status: "cancelled" }),
       }),
     ).resolves.toEqual({ status: "cancelled" });
     expect(methods).toEqual(["Target.getTargets"]);

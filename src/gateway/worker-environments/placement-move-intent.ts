@@ -231,22 +231,12 @@ function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
   if (row.target_kind === "gateway" && row.target_id === null) {
     target = { kind: "gateway" };
   } else if (row.target_kind === "profile" && row.target_id !== null) {
-    target = {
+    target = normalizeWorkerPlacementMoveTarget({
       kind: "profile",
-      profileId: boundedIdentifier(row.target_id, "move profile id"),
-      ...(row.target_os === null
-        ? {}
-        : { os: boundedIdentifier(row.target_os, "move operating system", MOVE_OS_MAX_LENGTH) }),
-      ...(row.target_machine_class === null
-        ? {}
-        : {
-            machineClass: boundedIdentifier(
-              row.target_machine_class,
-              "move machine class",
-              MOVE_MACHINE_CLASS_MAX_LENGTH,
-            ),
-          }),
-    };
+      profileId: row.target_id,
+      ...(row.target_os === null ? {} : { os: row.target_os }),
+      ...(row.target_machine_class === null ? {} : { machineClass: row.target_machine_class }),
+    });
   } else if (row.target_kind === "device" && row.target_id !== null) {
     target = { kind: "device", deviceId: boundedIdentifier(row.target_id, "move device id") };
   } else {
@@ -345,18 +335,14 @@ function requireExactMove(
 }
 
 function exactMoveValues(intent: WorkerPlacementMoveIntent) {
-  const values = targetValues(intent.target);
   return {
     operation_id: intent.operationId,
     session_id: intent.sessionId,
     source_generation: intent.source.generation,
     source_environment_id: intent.source.environmentId,
     source_owner_epoch: intent.source.ownerEpoch,
-    target_kind: values.target_kind,
+    ...targetValues(intent.target),
     abandon_source: abandonSourceValue(intent.abandonSource),
-    target_id: values.target_id,
-    target_machine_class: values.target_machine_class,
-    target_os: values.target_os,
   };
 }
 

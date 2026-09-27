@@ -3,7 +3,10 @@ import { lstatSync } from "node:fs";
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { hasErrnoCode } from "../infra/errno.js";
-import { SqliteCoordinatorError, throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
+import {
+  SqliteCoordinatorError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
 import {
   retainSnapshotTempDirectory,
   retainSnapshotWork,
@@ -20,11 +23,6 @@ import {
   prepareSqliteReadOnlyLocationSync,
 } from "../infra/sqlite-snapshot-source.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
-import {
-  acquireStateDatabaseHandleLease,
-  hasStateDatabaseSourceExclusion,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -117,10 +115,10 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
   const controller = new AbortController();
   let closeSnapshotWork: ((reason: unknown) => void) | undefined;
   const run = async () => {
-    openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
     let admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission>;
     let prepared: PreparedSqliteReadOnlyLocation;
     try {
+      openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
       admission = captureOpenClawStateDatabaseReadAdmission(pathname);
       prepared = await prepareSqliteReadOnlyLocation(pathname, {
         preserveSourceArtifacts: isArtifactPreservingStateRead(),
@@ -391,11 +389,7 @@ export function executeExistingOpenClawStateRead(
     const execute = () =>
       executeRetainedOpenClawStateRead(options, command, receipt, context, signal);
     const read = current ? () => stateSnapshotReads.exit(execute) : execute;
-    const run = () =>
-      context
-        ? withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, read)
-        : read();
-    return context?.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(run) : run();
+    return context?.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(read) : read();
   });
 }
 
@@ -424,7 +418,6 @@ function executeRetainedOpenClawStateRead(
     context.maintenanceScope?.assertAdmission();
     context.admission.assertCurrent();
   }
-  const excluded = hasStateDatabaseSourceExclusion(pathname);
   const preserveArtifacts = requiresArtifactPreservingSnapshot(pathname);
   const controller = new AbortController();
   const readSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
@@ -437,7 +430,6 @@ function executeRetainedOpenClawStateRead(
     let validated = false;
     const acceptanceErrors: unknown[] = [];
     let borrowed: ReturnType<typeof retainOpenClawStateDatabaseForIndependentRead>;
-    let sourcePin: ReturnType<typeof acquireStateDatabaseHandleLease> | undefined;
     let prepared: AsyncPreparedSqliteReadOnlyLocation | undefined;
     let expectedIdentity: string | undefined;
     let releasePreparedSource: (() => void) | undefined;
@@ -447,9 +439,6 @@ function executeRetainedOpenClawStateRead(
         readSignal.throwIfAborted();
         context.maintenanceScope?.assertAdmission();
         context.admission.assertCurrent();
-        if (excluded && !hasStateDatabaseSourceExclusion(pathname)) {
-          throw new Error("Shared-state source read scope is closed");
-        }
         borrowed?.assertCurrent();
         if (expectedIdentity !== undefined) {
           assertExistingDatabaseIdentity(pathname, expectedIdentity);
@@ -488,20 +477,8 @@ function executeRetainedOpenClawStateRead(
             acceptanceErrors.push(error);
           }
         }
-        const errors: unknown[] = [];
-        try {
-          sourcePin?.release();
-          sourcePin = undefined;
-        } catch (error) {
-          errors.push(error);
-        }
-        try {
-          borrowed?.release();
-          borrowed = undefined;
-        } catch (error) {
-          errors.push(error);
-        }
-        throwSqliteLifecycleErrors(errors, "Shared-state read source release failed");
+        borrowed?.release();
+        borrowed = undefined;
         cleaned = true;
         unregister();
         for (const scope of scopes) {
@@ -536,7 +513,7 @@ function executeRetainedOpenClawStateRead(
       authority.assertCurrent();
       let nativeSource: OpenClawStateDatabase | undefined;
       if (!snapshot) {
-        if (preserveArtifacts || excluded) {
+        if (preserveArtifacts) {
           const native = borrowOpenClawStateDatabaseForAsyncRead(pathname);
           borrowed = native;
           nativeSource = native?.database;
@@ -547,29 +524,19 @@ function executeRetainedOpenClawStateRead(
       if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
         return undefined;
       }
-      if (excluded) {
-        sourcePin = acquireStateDatabaseHandleLease({ databasePath: pathname });
-      }
       let location = snapshot?.location ?? pathname;
       if (nativeSource) {
-        prepared = excluded
-          ? await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-              nativeSource.db,
-              authority.assertCurrent,
-            )
-          : await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-              nativeSource.db,
-              authority.assertCurrent,
-              authority.signal,
-              "async",
-            );
+        prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
+          nativeSource.db,
+          authority.assertCurrent,
+          authority.signal,
+          "async",
+        );
         location = prepared.location;
-      } else if (!snapshot && (preserveArtifacts || excluded)) {
+      } else if (!snapshot && preserveArtifacts) {
         await transport.validateFresh(context, authority);
         authority.assertCurrent();
-        prepared = await (
-          excluded ? prepareSqliteReadOnlyLocation : prepareSqliteReadOnlyLocationAsync
-        )(pathname, {
+        prepared = await prepareSqliteReadOnlyLocationAsync(pathname, {
           preserveSourceArtifacts: preserveArtifacts,
           signal: authority.signal,
         });

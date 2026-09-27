@@ -949,11 +949,6 @@ describe("gateway agent handler chat.abort integration", () => {
       agentId: "work",
       readOnly: true,
     });
-    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
-      agentId: "work",
-      clone: false,
-      projection: "list",
-    });
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();

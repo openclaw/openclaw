@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { waitForPidFile } from "../../../test/helpers/process-wait.js";
+import { waitForFixtureFile } from "../../../test/helpers/process-wait.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import * as commandRunner from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -153,7 +153,13 @@ describe("ManagedWorktreeService repository code isolation", () => {
       (error: unknown) => error,
     );
     try {
-      const pid = await waitForPidFile(pidFile, SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
+      await withTimeout(
+        waitForFixtureFile(pidFile, creation),
+        SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+        "setup process readiness",
+      );
+      const pid = Number.parseInt(await fs.readFile(pidFile, "utf8"), 10);
+      expect(Number.isInteger(pid) && pid > 0).toBe(true);
       controller.abort(new Error("setup cancelled"));
       expect(
         await withTimeout(
@@ -196,7 +202,7 @@ describe("ManagedWorktreeService repository code isolation", () => {
     expect(await service.list()).toEqual([]);
   });
 
-  it.each(["complete", "unwind"] as const)(
+  it.each(["complete", "unwind", "creation-refused"] as const)(
     "releases setup source before process settlement (%s)",
     async (mode) => {
       const script = path.join(repo, ".openclaw", "worktree-setup.sh");
@@ -218,6 +224,7 @@ describe("ManagedWorktreeService repository code isolation", () => {
       const aborted = createDeferredCore();
       const completion = createDeferredCore<SpawnResult>();
       const unwindFailure = new Error("source scope unwind failed");
+      const creationFailure = new Error("worktree creation refused before setup");
       const completionFailure = new Error("accepted completion failed after cancellation");
       const events: string[] = [];
       let currentSource: SourceScope | undefined;
@@ -290,7 +297,17 @@ describe("ManagedWorktreeService repository code isolation", () => {
           });
         });
       const creation = callerContext.run("setup-caller", () =>
-        service.create({ repoRoot: repo, name: `handoff-${mode}`, baseRef: "HEAD", withSource }),
+        service.create({
+          repoRoot: repo,
+          name: `handoff-${mode}`,
+          baseRef: "HEAD",
+          withSource,
+          commitGuard: () => {
+            if (mode === "creation-refused") {
+              throw creationFailure;
+            }
+          },
+        }),
       );
       const outcome = creation.then(
         (value) => {
@@ -302,26 +319,32 @@ describe("ManagedWorktreeService repository code isolation", () => {
           return { error };
         },
       );
+      const waitForSetupSignal = (ready: Promise<void>, label: string) =>
+        withTimeout(
+          Promise.race([
+            ready,
+            creation.then(() => {
+              throw new Error(`Worktree creation completed before ${label}`);
+            }),
+          ]),
+          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          label,
+        );
       try {
-        await withTimeout(
-          dispatched.promise,
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-          "setup dispatch",
-        );
-        await withTimeout(
-          released.promise,
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-          "setup source release",
-        );
+        if (mode === "creation-refused") {
+          await expect(waitForSetupSignal(dispatched.promise, "setup dispatch")).rejects.toBe(
+            creationFailure,
+          );
+          expect(events).toEqual([]);
+          return;
+        }
+        await waitForSetupSignal(dispatched.promise, "setup dispatch");
+        await waitForSetupSignal(released.promise, "setup source release");
         expect(creationSettled).toBe(false);
         expect(events).not.toContain("completion");
         expect(events).not.toContain("checkout-cleanup");
         if (mode === "unwind") {
-          await withTimeout(
-            aborted.promise,
-            SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-            "setup cancellation",
-          );
+          await waitForSetupSignal(aborted.promise, "setup cancellation");
           expect(acceptedSignal?.reason).toBe(unwindFailure);
           expect(creationSettled).toBe(false);
           expect(events).not.toContain("checkout-cleanup");

@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-// Durable user profiles plus typed login identities in the shared state DB.
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -40,6 +39,7 @@ import {
   requireResolvedUserProfileMetadataById,
   selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
+  selectUserProfileEmails,
   setUserProfileEmailBinding,
   toUserProfile,
   userProfileAvatarPresence,
@@ -113,17 +113,9 @@ function selectUserProfileListItemById(db: DatabaseSync, profileId: string): Use
   if (!profile) {
     throw new UserProfileNotFoundError(profileId);
   }
-  const emails = executeSqliteQuerySync(
-    db,
-    kysely
-      .selectFrom("user_profile_emails")
-      .select("email")
-      .where("profile_id", "=", profileId)
-      .orderBy("email", "asc"),
-  ).rows;
   return {
     ...toUserProfile(profile),
-    emails: emails.map((alias) => alias.email),
+    emails: selectUserProfileEmails(db, profileId),
     githubIdentity: selectUserProfileGitHubIdentities(db, [profileId]).get(profileId) ?? null,
     hasAvatar: profile.has_avatar === 1,
   };
@@ -422,50 +414,42 @@ export function linkEmail(
       if (existingAlias?.profile_id === GATEWAY_OWNER_PROFILE_ID) {
         throw new UserProfileOwnerError("merge");
       }
-      if (!existingAlias) {
-        options.mutation?.before(db, target.id);
-        setUserProfileEmailBinding(db, normalizedEmail, target.id, now);
-        executeSqliteQuerySync(
-          db,
-          kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", target.id),
-        );
-        options.mutation?.authority(target.id);
-        publishUserProfileAuthorityChange(db, target.id);
-        options.mutation?.publish(target.id);
-        publishUserProfilesChange(db, target.id);
+      if (existingAlias?.profile_id === target.id) {
         return selectUserProfileListItemById(db, target.id);
       }
-      if (existingAlias.profile_id === target.id) {
-        return selectUserProfileListItemById(db, target.id);
-      }
-      options.mutation?.before(db, target.id, existingAlias.profile_id);
+      const changedIds = [target.id, ...(existingAlias ? [existingAlias.profile_id] : [])];
+      options.mutation?.before(db, ...changedIds);
       setUserProfileEmailBinding(db, normalizedEmail, target.id, now);
-      const remainingAliases = executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("user_profile_emails")
-          .select("email")
-          .where("profile_id", "=", existingAlias.profile_id),
-      ).rows;
+      const remainingAliases = existingAlias
+        ? executeSqliteQuerySync(
+            db,
+            kysely
+              .selectFrom("user_profile_emails")
+              .select("email")
+              .where("profile_id", "=", existingAlias.profile_id),
+          ).rows
+        : [];
       executeSqliteQuerySync(
         db,
         kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", target.id),
       );
-      if (remainingAliases.length === 0) {
-        mergeUserProfiles(db, existingAlias.profile_id, target.id, now, options.mutation);
-      } else {
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .updateTable("user_profiles")
-            .set({ updated_at: now })
-            .where("id", "=", existingAlias.profile_id),
-        );
+      if (existingAlias) {
+        if (remainingAliases.length === 0) {
+          mergeUserProfiles(db, existingAlias.profile_id, target.id, now, options.mutation);
+        } else {
+          executeSqliteQuerySync(
+            db,
+            kysely
+              .updateTable("user_profiles")
+              .set({ updated_at: now })
+              .where("id", "=", existingAlias.profile_id),
+          );
+        }
       }
-      options.mutation?.authority(target.id, existingAlias.profile_id);
-      publishUserProfileAuthorityChange(db, target.id, existingAlias.profile_id);
-      options.mutation?.publish(target.id, existingAlias.profile_id);
-      publishUserProfilesChange(db, target.id, existingAlias.profile_id);
+      options.mutation?.authority(...changedIds);
+      publishUserProfileAuthorityChange(db, ...changedIds);
+      options.mutation?.publish(...changedIds);
+      publishUserProfilesChange(db, ...changedIds);
       return selectUserProfileListItemById(db, target.id);
     },
     options,

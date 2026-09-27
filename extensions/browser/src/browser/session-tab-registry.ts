@@ -1,8 +1,14 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 /**
  * Session-owned browser tabs. Host-local durable ownership is canonical in
  * plugin SQLite; all other tabs remain process-local.
  */
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  getOptionalBrowserStateRuntime,
+  isBrowserStateRuntimeCurrent,
+  readCurrentBrowserState,
+} from "../browser-runtime-state.js";
 import {
   type CleanupKind,
   type CloseParams,
@@ -20,7 +26,9 @@ import {
 } from "./session-tab-process-state.js";
 import {
   readBrowserDashboardStopIntents,
+  withBrowserSessionTabOperation,
   type BrowserSessionTabRecord,
+  type BrowserSessionTabAuthority,
 } from "./session-tab-store.js";
 import {
   selectStaleTrackedTabs,
@@ -35,6 +43,18 @@ export {
 } from "./session-tab-tracking.js";
 
 type TrackedTab = VolatileTab | DurableTab;
+
+function readVolatileTabs(sessionKeys?: ReadonlySet<string>): Map<string, VolatileTab[]> {
+  const current = volatileTabsBySession();
+  const volatile = new Map<string, VolatileTab[]>();
+  for (const sessionKey of sessionKeys ?? current.keys()) {
+    const tabs = current.get(sessionKey);
+    if (tabs) {
+      volatile.set(sessionKey, Array.from(tabs.values()));
+    }
+  }
+  return volatile;
+}
 
 async function performVolatileCleanup(
   candidate: VolatileTab,
@@ -153,40 +173,103 @@ async function closeTrackedTabs(
   return closed;
 }
 
+async function withTrackedTabCleanup<T>(
+  authority: BrowserSessionTabAuthority,
+  cleanup: () => Promise<T>,
+): Promise<T> {
+  // Whole cleanup lifetimes remain drainable without becoming dependencies of
+  // their nested per-tab or dashboard admissions.
+  return authority.runtime
+    ? await withBrowserSessionTabOperation(Symbol("cleanup"), authority, cleanup)
+    : await cleanup();
+}
+
+function isCleanupCurrent(params: CloseParams): boolean {
+  return isBrowserStateRuntimeCurrent(params.authority?.runtime, params.isCurrent);
+}
+
+async function prepareTrackedTabCleanup(
+  params: CloseParams & { sessionKeys?: Array<string | undefined> },
+) {
+  let dashboardClosed = 0;
+  let durable = await readCurrentBrowserState(
+    params.authority?.runtime,
+    () => readDurableTabs(params.onWarn, params.authority),
+    params.isCurrent,
+  );
+  if (!durable) {
+    return { dashboardClosed, durable };
+  }
+  const hasDashboard =
+    durable.some((tab) => tab.dashboard) ||
+    (
+      await readCurrentBrowserState(
+        params.authority?.runtime,
+        () => readBrowserDashboardStopIntents(params.authority),
+        params.isCurrent,
+      )
+    )?.length;
+  if (hasDashboard) {
+    const { reconcileBrowserDashboards } = await import("../browser-dashboard.js");
+    if (!isCleanupCurrent(params)) {
+      return { dashboardClosed, durable: undefined };
+    }
+    dashboardClosed = await reconcileBrowserDashboards(params);
+    durable = await readCurrentBrowserState(
+      params.authority?.runtime,
+      () => readDurableTabs(params.onWarn, params.authority),
+      params.isCurrent,
+    );
+  }
+  return { dashboardClosed, durable: isCleanupCurrent(params) ? durable : undefined };
+}
+
 /** Closes and untracks tabs for the supplied session keys. */
 export async function closeTrackedBrowserTabsForSessions(
-  params: CloseParams & { sessionKeys: Array<string | undefined>; now?: number },
+  input: CloseParams & { sessionKeys: Array<string | undefined>; now?: number },
 ): Promise<number> {
-  if (params.isCurrent?.() === false) {
-    return 0;
-  }
-  let dashboardClosed = 0;
-  if (
-    readDurableTabs(params.onWarn).some((tab) => tab.dashboard) ||
-    readBrowserDashboardStopIntents().length > 0
-  ) {
-    const { reconcileBrowserDashboards } = await import("../browser-dashboard.js");
-    dashboardClosed = await reconcileBrowserDashboards(params);
-  }
-  if (params.isCurrent?.() === false) {
-    return dashboardClosed;
-  }
-  const tabs = selectTrackedTabsForSessions({
-    durable: readDurableTabs(params.onWarn),
-    sessionKeys: params.sessionKeys,
-  });
-  return (
-    dashboardClosed +
-    (await closeTrackedTabs(tabs, {
-      ...params,
-      cleanupKind: "lifecycle",
-    }))
+  const params = {
+    ...input,
+    authority: {
+      ...input.authority,
+      runtime: input.authority?.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
+    },
+  };
+  const sessionKeys = new Set(
+    params.sessionKeys
+      .map((key) => normalizeOptionalLowercaseString(key))
+      .filter((key) => key !== undefined),
   );
+  const volatile = readVolatileTabs(sessionKeys);
+  return await withTrackedTabCleanup(params.authority, async () => {
+    if (params.isCurrent?.() === false) {
+      return 0;
+    }
+    // Without durable state, preserve immediate dispatch of the captured registration.
+    const { dashboardClosed, durable } = params.authority.runtime
+      ? await prepareTrackedTabCleanup(params)
+      : { dashboardClosed: 0, durable: [] };
+    if (!durable || !isCleanupCurrent(params)) {
+      return dashboardClosed;
+    }
+    const tabs = selectTrackedTabsForSessions({
+      durable,
+      volatile,
+      sessionKeys,
+    });
+    return (
+      dashboardClosed +
+      (await closeTrackedTabs(tabs, {
+        ...params,
+        cleanupKind: "lifecycle",
+      }))
+    );
+  });
 }
 
 /** Closes and untracks stale, pending, or excess browser tabs. */
 export async function sweepTrackedBrowserTabs(
-  params: CloseParams & {
+  input: CloseParams & {
     now?: number;
     idleMs?: number;
     maxTabsPerSession?: number;
@@ -194,43 +277,46 @@ export async function sweepTrackedBrowserTabs(
     sessionFilter?: (sessionKey: string) => boolean;
   },
 ): Promise<number> {
-  const now = params.now ?? Date.now();
-  let dashboardClosed = 0;
-  if (
-    readDurableTabs(params.onWarn).some((tab) => tab.dashboard) ||
-    readBrowserDashboardStopIntents().length > 0
-  ) {
-    const { reconcileBrowserDashboards } = await import("../browser-dashboard.js");
-    dashboardClosed = await reconcileBrowserDashboards(params);
-  }
-  if (params.ordinaryCleanup === false) {
+  const params = {
+    ...input,
+    authority: {
+      ...input.authority,
+      runtime: input.authority?.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
+    },
+  };
+  const volatile =
+    params.ordinaryCleanup === false ? [] : Array.from(readVolatileTabs().values()).flat();
+  return await withTrackedTabCleanup(params.authority, async () => {
+    const now = params.now ?? Date.now();
+    const { dashboardClosed, durable } = params.authority.runtime
+      ? await prepareTrackedTabCleanup(params)
+      : { dashboardClosed: 0, durable: [] };
+    if (!durable || !isCleanupCurrent(params)) {
+      return dashboardClosed;
+    }
+    if (params.ordinaryCleanup === false) {
+      return (
+        dashboardClosed +
+        (await closeTrackedTabs(
+          durable.filter((tab) => !tab.dashboard && tab.cleanupKind === "lifecycle"),
+          { ...params, now, cleanupKind: "lifecycle" },
+        ))
+      );
+    }
     return (
       dashboardClosed +
       (await closeTrackedTabs(
-        readDurableTabs(params.onWarn).filter(
-          (tab) => !tab.dashboard && tab.cleanupKind === "lifecycle",
-        ),
-        { ...params, now, cleanupKind: "lifecycle" },
+        selectStaleTrackedTabs({
+          tabs: [...durable, ...volatile],
+          now,
+          idleMs: params.idleMs,
+          maxTabsPerSession: params.maxTabsPerSession,
+          sessionFilter: params.sessionFilter,
+        }),
+        { ...params, now, cleanupKind: "sweep" },
       ))
     );
-  }
-  const volatile: VolatileTab[] = [];
-  for (const tabs of volatileTabsBySession().values()) {
-    volatile.push(...tabs.values());
-  }
-  return (
-    dashboardClosed +
-    (await closeTrackedTabs(
-      selectStaleTrackedTabs({
-        tabs: [...readDurableTabs(params.onWarn), ...volatile],
-        now,
-        idleMs: params.idleMs,
-        maxTabsPerSession: params.maxTabsPerSession,
-        sessionFilter: params.sessionFilter,
-      }),
-      { ...params, now, cleanupKind: "sweep" },
-    ))
-  );
+  });
 }
 
 /** Browser dashboard lifetime changes reuse fingerprinted cleanup and its claim owner. */

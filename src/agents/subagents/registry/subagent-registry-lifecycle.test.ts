@@ -1492,9 +1492,9 @@ describe("subagent registry lifecycle hardening", () => {
           expect(subagentRuns.has(intermediate.runId)).toBe(true);
           expect(ancestor.cleanupCompletedAt).toBeUndefined();
           failRetirement = false;
-          const deadline = controller.getRequesterSettleWakeTimer(intermediate.runId)!.deadline;
+          const wake = controller.scheduledRequesterSettleWakeTimers.get(intermediate.runId)!;
           controller.resumeRequesterSettleWake(intermediate.runId, intermediate);
-          await vi.advanceTimersByTimeAsync(deadline - Date.now() - 1);
+          await vi.advanceTimersByTimeAsync(wake.deadline - Date.now() - 1);
           expect(subagentRuns.has(intermediate.runId)).toBe(true);
           expect(ancestor.cleanupCompletedAt).toBeUndefined();
           await vi.advanceTimersByTimeAsync(1);

@@ -1127,6 +1127,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Preparing audio…" to R.string.native_ce8bdd01ba43136f,
     "Preparing playback…" to R.string.native_69700b7204137c08,
     "Preparing voice note…" to R.string.native_62bacf1d615ada7e,
+    "Presence" to R.string.native_d6b3e8c828d37420,
     "Preview unavailable" to R.string.native_b99fa6c061504f00,
     "Preview · \$domain" to R.string.native_394308b6934dd9c1,
     "Previous images" to R.string.native_fa96cc95351c426a,

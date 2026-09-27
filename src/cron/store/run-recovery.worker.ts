@@ -1,11 +1,12 @@
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import type { CronJobPolicyContext, Logger } from "../service/state.js";
+import type { CronJobPolicyContext } from "../service/state.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import { repairCronRunInDatabase } from "./run-recovery.kernel.js";
 import type { CronRunRecoveryOutcome } from "./run-recovery.types.js";
 import {
+  createCronMutationLogger,
   prepareCronRuntimeMutation,
   retainCronRuntimeMutationOutcome,
 } from "./runtime-mutation.worker.js";
@@ -25,20 +26,12 @@ export function repairCronRunInWorker(
         failureAlert: job?.failureAlert,
       });
       const logs: CronRunRecoveryOutcome["logs"] = [];
-      const record = (level: keyof Logger) => (fields: unknown, message?: string) => {
-        logs.push({ level, fields, message });
-      };
       const { nowMs, cronConfig, failureAlert } = preparation;
       const state: CronJobPolicyContext = {
         deps: {
           nowMs: () => nowMs,
           cronConfig,
-          log: {
-            debug: record("debug"),
-            info: record("info"),
-            warn: record("warn"),
-            error: record("error"),
-          },
+          log: createCronMutationLogger(logs),
         },
         preparedFailureAlert: { jobId: input.proposal.jobId, value: failureAlert },
       };

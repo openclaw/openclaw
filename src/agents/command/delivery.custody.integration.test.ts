@@ -67,7 +67,9 @@ describe("native completion final-send custody", () => {
             "owner-bound-unchanged",
             "owner-bound-source-interleaved",
           ] as const)
-        : (["unchanged", "cancelled", "failed"] as const);
+        : boundary.startsWith("queued")
+          ? (["unchanged", "failed"] as const)
+          : (["unchanged", "cancelled"] as const);
     it.each(authorizationOutcomes)(
       `enforces %s task authorization across ${boundary}`,
       async (outcome) => {

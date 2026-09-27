@@ -87,10 +87,6 @@ export type PendingAgentDatabaseOpen = {
   promise: Promise<OpenClawAgentDatabase>;
   assertHeld?: () => void;
   operations: number;
-  /** Shared physical preparation; caller cancellation never owns another waiter. */
-  lifecyclePrepared?: Promise<void>;
-  /** Latest admitted waiter deadline; each waiter still owns its own shorter timer. */
-  lifecycleDeadlineMs?: number;
   releaseBorrow?: () => void;
   validation?: OpenClawAgentDatabaseValidation;
 };
@@ -165,6 +161,17 @@ export function startAgentDatabaseOpenTiming(
     const completedMs = Math.floor(performance.now() - startedAt);
     phaseDurationsMs[phase] = completedMs - elapsedMs;
     elapsedMs = completedMs;
+    if (phase === "validation" && diagnostics.integrityGateReason) {
+      agentDbLog.info("agent database integrity gate", {
+        agentId,
+        path: pathname,
+        pid: process.pid,
+        threadId,
+        isMainThread,
+        admissionMode,
+        ...diagnostics,
+      });
+    }
     // Registration is the final checkpoint; intermediate phases never emit a partial summary.
     if (phase === "registration" && elapsedMs >= OPENCLAW_AGENT_DB_SLOW_OPEN_MS) {
       agentDbLog.warn("slow OpenClaw agent database open", {

@@ -83,7 +83,6 @@ const rawSqliteAllowPathGroups = {
     "src/transcripts/sqlite-schema.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
-  "cross-process SQLite coordination locks": ["src/infra/sqlite-coordinator.ts"],
   "schema-less ownership token: lock only, no data queries; Kysely has no lock primitive": [
     "src/infra/sqlite-snapshot-staging.ts",
   ],

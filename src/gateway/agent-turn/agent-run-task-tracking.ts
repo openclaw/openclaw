@@ -261,18 +261,20 @@ export async function prepareAgentRunTaskTracking(params: {
       ? await findTaskViewByRunIdAsync(params.runId, params.assertResumeAdmissionCurrent)
       : undefined;
   params.assertResumeAdmissionCurrent();
+  const confirmedAcpManualSpawn = await isConfirmedAcpManualSpawnTaskOwner({
+    acpTurnSource: params.request.acpTurnSource,
+    sessionKey: params.resolvedSessionKey,
+    client: params.client,
+    assertCurrent: params.assertResumeAdmissionCurrent,
+  });
+  params.assertResumeAdmissionCurrent();
   const taskTrackingMode = resolveGatewayAgentTaskTrackingMode({
     client: params.client,
     sessionKey: params.resolvedSessionKey,
     inputProvenance: params.inputProvenance,
     canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
     sessionEntry: params.sessionEntry,
-    confirmedAcpManualSpawn: isConfirmedAcpManualSpawnTaskOwner({
-      acpTurnSource: params.request.acpTurnSource,
-      sessionKey: params.resolvedSessionKey,
-      client: params.client,
-      logGateway: params.context.logGateway,
-    }),
+    confirmedAcpManualSpawn,
     modelRun: params.isOneShotModelRun,
     existingTask,
   });

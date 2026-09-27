@@ -619,28 +619,27 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let decodedRole = try container.decode(String.self, forKey: .role)
-        let decodedTimestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
+        self.role = try container.decode(String.self, forKey: .role)
+        self.timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
         let decodedOpenClaw = try container.decodeIfPresent(OpenClawMetadata.self, forKey: .openClaw)
-        let decodedIdempotencyKey = try decodedOpenClaw?.idempotencyKey ??
+        self.idempotencyKey = try decodedOpenClaw?.idempotencyKey ??
             container.decodeIfPresent(String.self, forKey: .idempotencyKey)
-        let decodedToolCallId =
+        self.toolCallId =
             try container.decodeIfPresent(String.self, forKey: .toolCallId) ??
             container.decodeIfPresent(String.self, forKey: .tool_call_id)
-        let decodedToolName =
+        self.toolName =
             try container.decodeIfPresent(String.self, forKey: .toolName) ??
             container.decodeIfPresent(String.self, forKey: .tool_name)
-        let decodedUsage = try container.decodeIfPresent(OpenClawChatUsage.self, forKey: .usage)
-        let decodedStopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
-        let decodedErrorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
-        let decodedDetails = try container.decodeIfPresent(AnyCodable.self, forKey: .details)
-        let decodedIsError = try container.decodeIfPresent(Bool.self, forKey: .isError) ??
+        self.usage = try container.decodeIfPresent(OpenClawChatUsage.self, forKey: .usage)
+        self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
+        self.errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+        self.details = try container.decodeIfPresent(AnyCodable.self, forKey: .details)
+        self.isError = try container.decodeIfPresent(Bool.self, forKey: .isError) ??
             container.decodeIfPresent(Bool.self, forKey: .is_error)
-        let decodedProvenance = try? container.decode(
+        self.provenance = try? container.decode(
             OpenClawChatInputProvenance.self,
             forKey: .provenance)
 
-        self.role = decodedRole
         self.model = try? container.decode(String.self, forKey: .model)
         self.senderLabel = try? container.decode(String.self, forKey: .senderLabel)
         self.senderSession = try? container.decode(AnyCodable.self, forKey: .senderSession)
@@ -651,16 +650,6 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.streamFallback = try? container.decode(OpenClawChatStreamFallback.self, forKey: .streamFallback)
         self.transcriptMessageID = decodedOpenClaw?.id
         self.transcriptRunID = decodedOpenClaw?.runId
-        self.timestamp = decodedTimestamp
-        self.idempotencyKey = decodedIdempotencyKey
-        self.toolCallId = decodedToolCallId
-        self.toolName = decodedToolName
-        self.usage = decodedUsage
-        self.stopReason = decodedStopReason
-        self.errorMessage = decodedErrorMessage
-        self.details = decodedDetails
-        self.isError = decodedIsError
-        self.provenance = decodedProvenance
         self.historyMarker = decodedOpenClaw?.kind.map {
             OpenClawChatHistoryMarker(
                 kind: $0,
@@ -680,14 +669,9 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
                 OpenClawChatMessageContent(
                     type: "text",
                     text: text,
-                    thinking: nil,
-                    thinkingSignature: nil,
                     mimeType: nil,
                     fileName: nil,
-                    content: nil,
-                    id: nil,
-                    name: nil,
-                    arguments: nil),
+                    content: nil),
             ]
         } else {
             []

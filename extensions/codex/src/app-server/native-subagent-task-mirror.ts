@@ -281,7 +281,10 @@ export class CodexNativeSubagentTaskMirror {
     return this.runIdsByThreadId.get(threadId) ?? codexNativeSubagentRunId(threadId);
   }
 
-  handleNotification(notification: CodexServerNotification): Promise<void> {
+  handleNotification(
+    notification: CodexServerNotification,
+    includeThread?: (threadId: string) => boolean,
+  ): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     const item = isJsonObject(params?.item) ? params.item : undefined;
     const thread = isJsonObject(params?.thread) ? params.thread : undefined;
@@ -301,7 +304,7 @@ export class CodexNativeSubagentTaskMirror {
     const selections = new Map<string, TaskRunSelection>();
     for (const value of threadIds) {
       const threadId = normalizeOptionalString(value);
-      if (threadId) {
+      if (threadId && (!includeThread || includeThread(threadId))) {
         const runId = this.runId(threadId);
         selections.set(threadId, { runId, assignment: this.assignments.get(runId) });
       }

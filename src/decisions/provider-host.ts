@@ -301,7 +301,9 @@ export class DecisionProviderHost {
         controller.signal.reason === "decision-deadline" ||
         performance.now() >= deadlineMonotonicMs
       ) {
-        return this.unavailable("deadline");
+        const outcome = this.unavailable("deadline");
+        this.fail(health, "transport");
+        return outcome;
       }
       const currentConfig = readConfig();
       const selection = resolveDecisionModelSetting(currentConfig, options.agentId);
@@ -344,18 +346,12 @@ export class DecisionProviderHost {
       } catch {
         const stopped = interrupted();
         if (stopped) {
-          if (stopped.status === "unavailable" && stopped.reason === "deadline") {
-            this.fail(health, "transport");
-          }
           return stopped;
         }
         throw new DecisionContractError();
       }
       const stopped = interrupted();
       if (stopped) {
-        if (stopped.status === "unavailable" && stopped.reason === "deadline") {
-          this.fail(health, "transport");
-        }
         return stopped;
       }
       if (outcome?.status === "ok") {

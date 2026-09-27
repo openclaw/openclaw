@@ -181,7 +181,7 @@ export class DiscordCommandDeployer {
 
 function groupGuildCommands(commands: BaseCommand[]): Map<string, SerializedCommand[]> {
   const guildCommands = new Map<string, SerializedCommand[]>();
-  for (const command of commands.filter((entry) => entry.guildIds)) {
+  for (const command of commands) {
     for (const guildId of command.guildIds ?? []) {
       const entries = guildCommands.get(guildId) ?? [];
       entries.push(command.serialize());

@@ -367,7 +367,10 @@ export function createHostedOutboundMediaStore(
       await close();
       return null;
     }
-    const meta = await readMetadataRecord(id, nowMs);
+    const meta = await readMetadataRecord(id, nowMs).catch(async (error: unknown) => {
+      await close();
+      throw error;
+    });
     if (!meta) {
       await close();
       return null;

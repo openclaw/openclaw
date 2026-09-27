@@ -44,26 +44,26 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserClean
   return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
 }
 
-function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
+function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
   if (
-    typeof params.entry.runTimeoutSeconds !== "number" ||
-    !Number.isFinite(params.entry.runTimeoutSeconds) ||
-    params.entry.runTimeoutSeconds <= 0 ||
-    params.entry.execution.outcome?.status !== "timeout" ||
-    typeof params.entry.execution.endedAt !== "number"
+    typeof entry.runTimeoutSeconds !== "number" ||
+    !Number.isFinite(entry.runTimeoutSeconds) ||
+    entry.runTimeoutSeconds <= 0 ||
+    entry.execution.outcome?.status !== "timeout" ||
+    typeof entry.execution.endedAt !== "number"
   ) {
     return false;
   }
-  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry);
-  if (deadlineMs === undefined || params.entry.execution.endedAt < deadlineMs) {
+  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
+  if (deadlineMs === undefined || entry.execution.endedAt < deadlineMs) {
     return false;
   }
   return (
-    params.entry.cleanupHandled === true ||
-    typeof params.entry.cleanupCompletedAt === "number" ||
-    typeof params.entry.endedHookEmittedAt === "number" ||
-    params.entry.delivery?.status === "delivered" ||
-    typeof params.entry.delivery?.announcedAt === "number"
+    entry.cleanupHandled === true ||
+    typeof entry.cleanupCompletedAt === "number" ||
+    typeof entry.endedHookEmittedAt === "number" ||
+    entry.delivery?.status === "delivered" ||
+    typeof entry.delivery?.announcedAt === "number"
   );
 }
 
@@ -95,10 +95,19 @@ function isOlderEquivalentTerminalCallback(params: {
   ) {
     return false;
   }
+  return current.status !== "error" || current.error === params.outcome.error;
+}
+
+function taskCancellationPreventsCompletion(
+  task: DetachedTaskFindResult["task"],
+  entry: SubagentRunRecord,
+  endedAt: number,
+): boolean {
+  const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(entry);
   return (
-    current.status !== "error" ||
-    params.outcome.status !== "error" ||
-    current.error === params.outcome.error
+    task?.status === "cancelled" &&
+    !isProvisionalSubagentKillTask(task) &&
+    !(typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt)
   );
 }
 
@@ -114,7 +123,6 @@ export async function completeSubagentRunAttempt(
   let completionReason = completeParams.reason;
   let sessionSuperseded = false;
   let suppressSessionEffects = completeParams.suppressSessionEffects === true;
-  let suppressTaskFinalization: boolean;
   let provisionalKillSnapshot: SubagentRunRecord | undefined;
   let postCaptureTaskResolution: DetachedTaskFindResult | undefined;
   let entrySnapshot: SubagentRunRecord | undefined;
@@ -242,7 +250,7 @@ export async function completeSubagentRunAttempt(
           endedAt,
           outcome,
           interruptedAt: undefined,
-          interruptionReason: undefined,
+          interruptionReason: "gateway-restart",
           suppressSessionEffects: suppressSessionEffects ? true : undefined,
         };
         entry.completion = {
@@ -286,11 +294,7 @@ export async function completeSubagentRunAttempt(
     }
     let requestedEndedAt =
       typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
-    if (
-      shouldPreservePublishedExplicitRunTimeout({
-        entry,
-      })
-    ) {
+    if (shouldPreservePublishedExplicitRunTimeout(entry)) {
       return;
     }
     const shouldDrainExistingTerminal =
@@ -389,7 +393,6 @@ export async function completeSubagentRunAttempt(
     const isSteerRestartKill =
       completeParams.reason === SUBAGENT_ENDED_REASON_KILLED &&
       entry.suppressAnnounceReason === "steer-restart";
-    suppressTaskFinalization = isSteerRestartKill;
     if (completionReason === SUBAGENT_ENDED_REASON_KILLED && !isSteerRestartKill) {
       entry.suppressAnnounceReason = "killed";
       entry.killReconciliation ??= {
@@ -408,14 +411,10 @@ export async function completeSubagentRunAttempt(
       if (!taskResolution) {
         return;
       }
-      const stableTaskCancellation =
+      if (
         taskResolution.lookup === "available" &&
-        taskResolution.task?.status === "cancelled" &&
-        !isProvisionalSubagentKillTask(taskResolution.task);
-      const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(entry);
-      const completionPredatesCancellation =
-        typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
-      if (stableTaskCancellation && !completionPredatesCancellation) {
+        taskCancellationPreventsCompletion(taskResolution.task, entry, endedAt)
+      ) {
         // tasks.cancel promotes the provisional marker to durable operator
         // intent. Only an already-durable earlier completion may reopen it.
         return;
@@ -499,10 +498,12 @@ export async function completeSubagentRunAttempt(
     const retainedRestartRecovery = suppressSessionEffects
       ? entry.execution.restartRecovery
       : undefined;
+    const interruptionReason = recoveryRequested ? "gateway-restart" : undefined;
     if (
       entry.execution.status !== "terminal" ||
       entry.execution.endedAt !== endedAt ||
       entry.execution.outcome !== executionOutcome ||
+      entry.execution.interruptionReason !== interruptionReason ||
       entry.execution.restartRecovery !== retainedRestartRecovery ||
       entry.execution.suppressSessionEffects !== (suppressSessionEffects ? true : undefined)
     ) {
@@ -512,7 +513,7 @@ export async function completeSubagentRunAttempt(
         endedAt,
         outcome: executionOutcome,
         interruptedAt: undefined,
-        interruptionReason: undefined,
+        interruptionReason,
         restartRecovery: retainedRestartRecovery,
         suppressSessionEffects: suppressSessionEffects ? true : undefined,
       };
@@ -614,14 +615,10 @@ export async function completeSubagentRunAttempt(
         return;
       }
       postCaptureTaskResolution = taskResolution;
-      const stableTaskCancellation =
+      if (
         taskResolution.lookup === "available" &&
-        taskResolution.task?.status === "cancelled" &&
-        !isProvisionalSubagentKillTask(taskResolution.task);
-      const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(provisionalKillSnapshot);
-      const completionPredatesCancellation =
-        typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
-      if (stableTaskCancellation && !completionPredatesCancellation) {
+        taskCancellationPreventsCompletion(taskResolution.task, provisionalKillSnapshot, endedAt)
+      ) {
         // Cancellation can become durable while completion capture yields.
         // The provider transition is staged, so the live tombstone is intact.
         return;
@@ -654,13 +651,13 @@ export async function completeSubagentRunAttempt(
         if (!latestTaskResolution) {
           return;
         }
-        const latestTask = latestTaskResolution.task;
-        const stableTaskCancellation =
-          latestTask?.status === "cancelled" && !isProvisionalSubagentKillTask(latestTask);
-        const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(provisionalKillSnapshot);
-        const completionPredatesCancellation =
-          typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
-        if (stableTaskCancellation && !completionPredatesCancellation) {
+        if (
+          taskCancellationPreventsCompletion(
+            latestTaskResolution.task,
+            provisionalKillSnapshot,
+            endedAt,
+          )
+        ) {
           return;
         }
         throw new Error("subagent task projection did not finalize");
@@ -694,7 +691,7 @@ export async function completeSubagentRunAttempt(
         restoreEntrySnapshot(entrySnapshot);
         throw error;
       }
-      if (!suppressTaskFinalization) {
+      if (!isSteerRestartKill) {
         await finalizeSubagentTaskRun(params, {
           entry,
           outcome: executionOutcome,
