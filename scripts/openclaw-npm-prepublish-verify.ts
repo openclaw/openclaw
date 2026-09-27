@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { type NpmVerifyCommandInvocation, runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
+import { readWorkerDeployTargetPaths } from "./lib/worker-deploy-target-contract.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import {
   collectInstalledPackageErrors,
@@ -131,6 +132,7 @@ function main(argv = process.argv.slice(2)): void {
     return;
   }
 
+  const workerDeployPaths = readWorkerDeployTargetPaths(process.cwd());
   const workingDir = mkdtempSync(join(tmpdir(), "openclaw-prepublish-"));
   const prefixDir = join(workingDir, "prefix");
   try {
@@ -201,6 +203,7 @@ function main(argv = process.argv.slice(2)): void {
       expectedVersion: resolvedExpectedVersion,
       installedVersion: pkg.version?.trim() ?? "",
       packageRoot,
+      workerDeployPaths,
     });
     const installedBinaryVersion = runNpmVerifyCommand(binaryInvocation, workingDir);
     if (normalizeInstalledBinaryVersion(installedBinaryVersion) !== resolvedExpectedVersion) {

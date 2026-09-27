@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const maxObjectBytes = 16 * 1024 * 1024;
@@ -129,6 +130,45 @@ export function createFrozenTargetSource(root, sha) {
     return null;
   };
   return {
+    assertCleanCheckout(contractPaths) {
+      const topLevel = textDecoder.decode(git("rev-parse", "--show-toplevel")).trim();
+      if (realpathSync(root) !== realpathSync(topLevel)) {
+        throw new Error("selected source must be the repository root");
+      }
+      if (
+        git(
+          "-c",
+          "core.fsmonitor=false",
+          "status",
+          "--porcelain=v1",
+          "-z",
+          "--untracked-files=no",
+          "--ignore-submodules=none",
+        ).length > 0
+      ) {
+        throw new Error("selected source has tracked or index changes");
+      }
+      // Untracked evidence is allowed, but it must not supply source contract inputs.
+      for (const path of contractPaths) {
+        if (
+          lookup(path, "blob") === null &&
+          lstatSync(join(root, path), { throwIfNoEntry: false })
+        ) {
+          throw new Error("selected source has untracked contract inputs");
+        }
+      }
+    },
+    assertTagResolvesToSelectedSource(tag) {
+      if (!/^v[0-9][0-9A-Za-z.-]*$/.test(tag)) {
+        throw new Error("invalid selected source release tag");
+      }
+      const tagSha = textDecoder
+        .decode(git("rev-parse", "--verify", `refs/tags/${tag}^{commit}`))
+        .trim();
+      if (tagSha !== sha) {
+        throw new Error(`release base tag ${tag} does not resolve to selected source ${sha}`);
+      }
+    },
     blobIdentities() {
       return [...blobs]
         .toSorted(([a], [b]) => a.localeCompare(b))

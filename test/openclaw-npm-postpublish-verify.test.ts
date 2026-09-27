@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { build } from "tsdown";
 import { describe, expect, it, vi } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
@@ -57,6 +57,7 @@ const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
 
 describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
+  const targetSha = "a".repeat(40);
   it("keeps trusted release verification independent from target app dependencies", () => {
     const source = readFileSync("scripts/openclaw-npm-postpublish-verify.ts", "utf8");
 
@@ -69,21 +70,31 @@ describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
       help: true,
       version: "",
     });
-    expect(parseOpenClawNpmPostpublishVerifyArgs(["--", "2026.3.23"])).toEqual({
+    expect(parseOpenClawNpmPostpublishVerifyArgs(["--", "2026.3.23", ".", targetSha])).toEqual({
       help: false,
+      targetRoot: process.cwd(),
+      targetSha,
+      version: "2026.3.23",
+    });
+    expect(
+      parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", "frozen-target", targetSha]),
+    ).toEqual({
+      help: false,
+      targetRoot: resolve("frozen-target"),
+      targetSha,
       version: "2026.3.23",
     });
   });
 
   it.each([
-    { argv: ["2026.3.23", "extra"] },
-    { argv: ["2026.3.23", ""] },
-    { argv: ["2026.3.23", " \t "] },
-    { argv: ["2026.3.23", "", "--unexpected"] },
-    { argv: ["--", "2026.3.23", ""] },
-  ])("rejects excess postpublish argv $argv before verification", ({ argv }) => {
+    { argv: ["2026.3.23"] },
+    { argv: ["2026.3.23", "target"] },
+    { argv: ["2026.3.23", "target", targetSha, "extra"] },
+    { argv: ["2026.3.23", "target", targetSha, ""] },
+    { argv: ["--", "2026.3.23", "target", targetSha, " \t "] },
+  ])("requires exactly version, target root and SHA: $argv", ({ argv }) => {
     expect(() => parseOpenClawNpmPostpublishVerifyArgs(argv)).toThrow(
-      "Unexpected openclaw npm postpublish verifier argument",
+      openClawNpmPostpublishVerifyUsage(),
     );
   });
 
@@ -93,6 +104,21 @@ describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
       version: "",
     });
   });
+
+  it.each(["", " \t ", "--target"])("rejects an invalid target root %j", (target) => {
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", target, targetSha])).toThrow(
+      "Target root must be a non-empty path, not an option.",
+    );
+  });
+
+  it.each(["", "HEAD", "a".repeat(39), "A".repeat(40), ` ${targetSha}`])(
+    "rejects a non-exact product SHA %j",
+    (sha) => {
+      expect(() => parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", ".", sha])).toThrow(
+        "Target SHA must be a full 40-character lowercase product Release SHA.",
+      );
+    },
+  );
 
   it("rejects missing and option-like arguments before verification", () => {
     expect(() => parseOpenClawNpmPostpublishVerifyArgs([])).toThrow(
@@ -495,6 +521,7 @@ describe("collectInstalledPackageErrors", () => {
       expectedVersion: "2026.3.23-2",
       installedVersion: "2026.3.23",
       packageRoot: "/tmp/empty-openclaw",
+      workerDeployPaths: [],
     });
 
     expect(errors[0]).toBe(
@@ -516,6 +543,7 @@ describe("collectInstalledPackageErrors", () => {
         expectedVersion: "2026.3.23",
         installedVersion: "2026.3.23",
         packageRoot,
+        workerDeployPaths: [`dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`],
       });
       const sizeError = `installed package root dist file 'worker/${WORKER_BUNDLE_ENTRY_PATH}' is invalid or exceeds 83886080 bytes.`;
 
@@ -535,7 +563,8 @@ describe("collectInstalledPackageErrors", () => {
       mkdirSync(dirname(workerPath), { recursive: true });
       writeFileSync(workerPath, "/* Failed to load legacy context engine runtime. */\n", "utf8");
 
-      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
+      const workers = new Set([`worker/${WORKER_BUNDLE_ENTRY_PATH}`]);
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot, workers)).toEqual([
         "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
       ]);
     } finally {
@@ -575,6 +604,7 @@ describe("collectInstalledPackageErrors", () => {
           expectedVersion: "2026.3.23",
           installedVersion: "2026.3.23",
           packageRoot,
+          workerDeployPaths: [],
         }),
       ).toContain(expectedError);
     } finally {
@@ -728,6 +758,7 @@ describe("collectInstalledPackageErrors", () => {
           expectedVersion: "2026.3.23",
           installedVersion: "2026.3.23",
           packageRoot,
+          workerDeployPaths: [],
         }),
       ).toContain(
         "installed package is missing required bundled runtime sidecar: dist/extensions/telegram/runtime-api.js",
@@ -767,6 +798,7 @@ describe("collectInstalledPackageErrors", () => {
           expectedVersion: "2026.3.23",
           installedVersion: "2026.3.23",
           packageRoot,
+          workerDeployPaths: [],
         }),
       ).toContain(manifestErrors[0]);
     } finally {
@@ -2046,7 +2078,13 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         writeFileSync(filePath, source ?? `/* ${"x".repeat(6 * 1024 * 1024)} */\n`, "utf8");
       }
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual(expected);
+      const workers = new Set([
+        `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+        `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+      ]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot, [], false, workers)).toEqual(
+        expected,
+      );
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

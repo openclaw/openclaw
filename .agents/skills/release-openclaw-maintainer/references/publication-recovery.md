@@ -53,13 +53,22 @@ limits count admitted product attempts, not infrastructure retries.
 
 Registry propagation may briefly return E404 after a successful npm child.
 Use bounded `--prefer-online` reads and preserve the verified tarball/integrity
-metadata. For an already-published version, run:
+metadata. For an already-published version, set `TARGET_ROOT` to the absolute
+path of the unchanged checkout and `TARGET_SHA` to its recorded full product
+Release SHA, not the tooling SHA. Set `TOOLING_ROOT` to the qualified trusted
+tooling checkout. Use the selected checkout as the working directory; the trusted
+beta verifier passes its validated root and captured HEAD to its trusted
+postpublish sibling, not a historical target script.
 
 ```bash
 OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
 OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
-node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
-pnpm release:verify-beta -- <published-version> ... --skip-github-release
+node --import "$TOOLING_ROOT/scripts/tsx.mjs" \
+  "$TOOLING_ROOT/scripts/openclaw-npm-postpublish-verify.ts" \
+  <published-version> "$TARGET_ROOT" "$TARGET_SHA"
+node --import "$TOOLING_ROOT/scripts/tsx.mjs" \
+  "$TOOLING_ROOT/scripts/release-verify-beta.ts" \
+  <published-version> --release-sha "$TARGET_SHA" ... --skip-github-release
 ```
 
 Run the verifier from a checkout of the Release SHA, not the tooling checkout,

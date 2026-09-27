@@ -71,6 +71,16 @@ install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwis
 varies by profile and selected operating systems. Check the release's recorded
 coverage: skipped or deferred checks are not passes.
 
+Package verification checks the worker artifacts declared by the exact frozen
+release source, before and after publication. The target root is the unchanged
+source checkout at the release's recorded immutable commit, not a newer tooling
+checkout. Postpublish verification binds the explicit root and product Release
+SHA to committed package identity before deciding which worker artifacts apply.
+Dirty tracked/index state and untracked contract inputs are rejected. Historical
+targets without a worker producer do not acquire newer worker requirements after
+that admission. The product Release SHA is distinct from the publishing workflow's
+tooling SHA; source admission does not replace publication provenance.
+
 See [Full release validation](/reference/full-release-validation) for coverage
 by profile and how to interpret the results.
 

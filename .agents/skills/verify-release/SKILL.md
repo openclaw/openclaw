@@ -107,8 +107,12 @@ the live tag, workflow, registry, provenance, and image state.
    `<VERSION>` for root, every preflight `corePackageTarballs` entry, and every
    `publishToNpm === true` official plugin derived from the tag. Compare the
    plugin plan, jobs, and complete readback; never infer inventory from diffs.
-4. **Provenance:** from trusted current tooling, run
-   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <VERSION>`.
+4. **Provenance:** set `TARGET_ROOT` to the absolute path of the unchanged,
+   validated checkout and `TARGET_SHA` to the recorded full product Release SHA,
+   not the workflow/tooling SHA. From trusted current tooling, run
+   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <VERSION> "$TARGET_ROOT" "$TARGET_SHA"`.
+   Worker requirements come from that target, including historical targets with
+   no worker producer; never substitute the tooling checkout's declarations.
    Require signatures, canonical-branch provenance, and publish/preflight
    digest binding to the release SHA. Preserve output and workflow URLs.
 5. **Docker:** verify exact default, slim, browser, and architecture images and

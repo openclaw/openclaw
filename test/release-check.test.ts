@@ -575,6 +575,7 @@ describe("packed install verification", () => {
           expectedVersion: "2026.5.14-beta.3",
           installedBinaryVersion: "openclaw 2026.5.14-beta.3",
           packageRoot,
+          workerDeployPaths: [],
         }),
       ).toEqual([
         "installed package root dist file 'typescript-compiler.js' is invalid or exceeds 6291456 bytes.",
