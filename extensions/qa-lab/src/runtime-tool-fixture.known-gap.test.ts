@@ -15,6 +15,10 @@ describe("runtime tool fixture known harness gaps", () => {
       requests: mockToolRequests({ omitHappyOutput: true }),
     },
     {
+      phase: "missing failure output",
+      requests: mockToolRequests({ omitFailureOutput: true }),
+    },
+    {
       phase: "successful failure output",
       requests: mockToolRequests({ failureOutput: "README contents" }),
     },
