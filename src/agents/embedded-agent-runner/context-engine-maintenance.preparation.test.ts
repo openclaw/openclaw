@@ -1,8 +1,15 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { markGatewayDraining } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import {
+  beginGatewayRestartSignalAdmission,
+  getActiveGatewayRootWorkCount,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../process/gateway-work-admission.js";
 import {
   AsyncWorkScope,
   getAsyncWorkSignal,
@@ -82,7 +89,7 @@ const sessionKey = "agent:main:maintenance-preparation";
 const unchanged = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
 type Failure = "lookup throws" | "creation throws" | "creation returns null" | "queue rejects";
 
-function fixture(fault?: Failure) {
+function fixture(fault?: Failure | "transfer throws") {
   const workRelease = createDeferred();
   const workEntered = createDeferred();
   const disposeRelease = createDeferred();
@@ -186,7 +193,12 @@ function fixture(fault?: Failure) {
       reason: "turn",
       disposeDeferredContextEngineAfterMaintenance: true,
       factoryResources,
-      onDeferredMaintenance: (work) => deferred.push(work),
+      onDeferredMaintenance: (work) => {
+        deferred.push(work);
+        if (fault === "transfer throws") {
+          throw new Error("Synthetic maintenance transfer failure");
+        }
+      },
       onDeferredMaintenanceFailure: failure,
     });
     foreground.push(pending);
@@ -233,6 +245,18 @@ function fixture(fault?: Failure) {
   };
 }
 
+async function scheduleAdmitted(schedule: () => Promise<unknown>, origin = "maintenance-turn") {
+  const parent = tryBeginGatewayRootWorkAdmission(origin);
+  if (!parent) {
+    throw new Error("Expected caller admission before scheduling maintenance");
+  }
+  try {
+    await parent.run(schedule);
+  } finally {
+    parent.release();
+  }
+}
+
 let sql: ReturnType<typeof observeMainThreadSql>;
 
 beforeEach(() => {
@@ -256,6 +280,74 @@ afterEach(() => {
 });
 
 describe("deferred maintenance synchronous preparation", () => {
+  it.each([undefined, "transfer throws"] as const)(
+    "retains released caller roots through coalesced maintenance and disposal with fault=%s",
+    async (fault) => {
+      const f = fixture(fault);
+      try {
+        for (let turn = 0; turn < 3; turn += 1) {
+          await scheduleAdmitted(f.schedule, `maintenance-turn-${turn}`);
+        }
+        f.workRelease.resolve();
+        await f.disposeEntered.promise;
+        expect(f.maintain).toHaveBeenCalledTimes(2);
+        expect(f.failure).not.toHaveBeenCalled();
+        expect(getActiveGatewayRootWorkCount()).toBe(3);
+        expect(f.deferred[0]).toBe(f.deferred[1]);
+        expect(f.deferred[1]).toBe(f.deferred[2]);
+        f.releaseAll();
+        await Promise.all(f.deferred);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        expect(f.dispose).toHaveBeenCalledOnce();
+        expect(f.release).toHaveBeenCalledOnce();
+      } finally {
+        await f.cleanup();
+      }
+    },
+  );
+
+  it.each([
+    { fence: "restart", close: markGatewayDraining },
+    { fence: "restart signal", close: beginGatewayRestartSignalAdmission },
+    { fence: "suspend", close: () => tryBeginGatewaySuspendAdmission(() => {}) },
+  ])("refuses new maintenance during $fence without leaking admission", async ({ close }) => {
+    const f = fixture();
+    try {
+      await scheduleAdmitted(async () => {
+        close();
+        await f.schedule();
+      });
+      expect(f.deferred).toHaveLength(0);
+      expect(f.failure).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ name: "GatewayDrainingError" }),
+      );
+      expect(f.maintain).not.toHaveBeenCalled();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it("does not readmit a caller whose captured root was already released", async () => {
+    const f = fixture();
+    let runInContext = AsyncLocalStorage.snapshot();
+    await scheduleAdmitted(async () => {
+      runInContext = AsyncLocalStorage.snapshot();
+    });
+    try {
+      await runInContext(f.schedule);
+      f.releaseAll();
+      await Promise.all(f.deferred);
+      expect(f.failure).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ name: "GatewayDrainingError" }),
+      );
+      expect(f.maintain).not.toHaveBeenCalled();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
   it.each(["start", "completion", "failure"] as const)(
     "retains maintenance ownership until task %s settles",
     async (terminal) => {
@@ -280,10 +372,11 @@ describe("deferred maintenance synchronous preparation", () => {
         f.maintain.mockRejectedValueOnce(new Error("Synthetic maintenance failure"));
       }
       try {
-        await f.schedule();
+        await scheduleAdmitted(f.schedule);
         f.workRelease.resolve();
         await Promise.race([terminalEntered.promise, f.disposeEntered.promise]);
         expect(entered).toBe(true);
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
         if (terminal === "start") {
           expect(f.maintain).not.toHaveBeenCalled();
         }
@@ -296,6 +389,7 @@ describe("deferred maintenance synchronous preparation", () => {
         terminalRelease.resolve();
         f.releaseAll();
         await Promise.all(f.deferred);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
         expect(isContextEngineMaintenanceTaskOwnerActive(taskId)).toBe(false);
         expect(f.dispose).toHaveBeenCalledOnce();
         expect(f.release).toHaveBeenCalledOnce();
@@ -417,13 +511,14 @@ describe("deferred maintenance synchronous preparation", () => {
     async (fault) => {
       const f = fixture(fault);
       try {
-        const foreground = f.schedule();
+        const foreground = scheduleAdmitted(f.schedule);
         if (fault !== "queue rejects") {
           expect(f.failure).toHaveBeenCalledOnce();
         }
         expect(f.deferred).toHaveLength(1);
         await foreground;
         await f.disposeEntered.promise;
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
         expect(f.failure).toHaveBeenCalledOnce();
         expect(f.maintain).not.toHaveBeenCalled();
         expect(mocks.start).not.toHaveBeenCalled();
@@ -441,6 +536,7 @@ describe("deferred maintenance synchronous preparation", () => {
         expect(f.release).not.toHaveBeenCalled();
         f.factoryRelease.resolve();
         await completion;
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
         expect(f.dispose).toHaveBeenCalledOnce();
         expect(f.release).toHaveBeenCalledOnce();
         if (fault === "queue rejects") {
