@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { logDebug } from "../logger.js";
 import {
   redactSupportDiagnosticLine,
   redactSupportString,
@@ -12,8 +13,36 @@ import {
   getActiveManagedProxyUrl,
 } from "./net/proxy/active-proxy-state.js";
 import { registerManagedProxyGatewayLoopbackBypass } from "./net/proxy/proxy-lifecycle.js";
-import type { UpdateCanaryStartupProgress } from "./update-candidate-canary-progress.js";
+import {
+  isUpdateCanaryStartupMilestone,
+  UPDATE_CANARY_PROGRESS_PREFIX,
+  type UpdateCanaryStartupMilestone,
+  type UpdateCanaryStartupProgress,
+} from "./update-candidate-canary-progress.js";
 import { createUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts.js";
+
+export function observeUpdateCandidateStartup(params: SupportRedactionContext) {
+  const milestones = new Map<UpdateCanaryStartupMilestone, number>();
+  return {
+    milestones,
+    onLine: (line: string) => {
+      if (!line.startsWith(UPDATE_CANARY_PROGRESS_PREFIX)) {
+        return;
+      }
+      const milestone = line.slice(UPDATE_CANARY_PROGRESS_PREFIX.length);
+      if (!isUpdateCanaryStartupMilestone(milestone)) {
+        logDebug(
+          redactSupportString(
+            `Ignoring unknown candidate startup milestone: ${JSON.stringify(milestone)}`,
+            params,
+          ),
+        );
+      } else if (!milestones.has(milestone)) {
+        milestones.set(milestone, Date.now());
+      }
+    },
+  };
+}
 
 /** Poll candidate control-plane endpoints under the existing managed loopback policy. */
 export async function waitForUpdateCandidateReadiness(
@@ -26,33 +55,38 @@ export async function waitForUpdateCandidateReadiness(
     assertCurrent?: () => void;
     hasExited: () => boolean;
     getExitReason: () => string | undefined;
-    getStartupProgress: () => UpdateCanaryStartupProgress | undefined;
+    startupProgress: UpdateCanaryStartupProgress;
     onWarning: (message: string) => void;
     onEndpoint: (endpoint: "startupz" | "readyz") => void;
     capture: (message: string) => void;
   },
 ): Promise<{ fact: UpdateFailureFact; message: string } | undefined> {
   const deadline = new AbortController();
-  const stallBudgetMs = Math.max(1, params.workDeadline - Date.now());
+  const waitStarted = Date.now();
+  const stallBudgetMs = Math.max(1, params.workDeadline - waitStarted);
+  // Progress buys time on slow hardware, but cannot keep a broken candidate alive forever.
+  const hardDeadline = waitStarted + 4 * stallBudgetMs;
   let workDeadline = params.workDeadline;
-  let observedProgress: UpdateCanaryStartupProgress | undefined;
-  let lastProgress: UpdateCanaryStartupProgress | undefined;
+  const milestones = new Set<string>();
+  let lastProgress: { milestone: string; completedAt: number } | undefined;
   let deadlineFailure: Error | undefined;
   let warned = false;
-  const recordProgress = (progress: UpdateCanaryStartupProgress) => {
-    if (!lastProgress || progress.completedAt >= lastProgress.completedAt) {
-      lastProgress = progress;
-      workDeadline = Math.max(workDeadline, progress.completedAt + stallBudgetMs);
+  const recordProgress = (milestone: string, completedAt: number) => {
+    if (milestones.has(milestone)) {
+      return;
+    }
+    milestones.add(milestone);
+    if (!lastProgress || completedAt >= lastProgress.completedAt) {
+      lastProgress = { milestone, completedAt };
+      workDeadline = Math.min(hardDeadline, Math.max(workDeadline, completedAt + stallBudgetMs));
     }
   };
   const refreshDeadline = () => {
     if (deadline.signal.aborted) {
       return;
     }
-    const progress = params.getStartupProgress();
-    if (progress && progress !== observedProgress) {
-      observedProgress = progress;
-      recordProgress(progress);
+    for (const [milestone, completedAt] of params.startupProgress) {
+      recordProgress(milestone, completedAt);
     }
     if (!warned && Date.now() >= params.workDeadline && Date.now() < workDeadline) {
       warned = true;
@@ -91,6 +125,11 @@ export async function waitForUpdateCandidateReadiness(
     params.assertCurrent?.();
     if (params.hasExited()) {
       throw new Error(params.getExitReason() ?? "The updated Gateway exited before it was ready");
+    }
+    if (Date.now() >= hardDeadline) {
+      throw new Error(
+        `Candidate still starting after ${(Date.now() - waitStarted) / 1_000} s; milestones reached: ${[...milestones].join(", ") || "none"}`,
+      );
     }
   };
   try {
@@ -148,7 +187,8 @@ export async function waitForUpdateCandidateReadiness(
             params.capture(
               `${endpoint}: ${endpoint === "startupz" ? "started" : "ready"} (${Date.now() - params.started}ms)`,
             );
-            recordProgress({ milestone: endpoint, completedAt: Date.now() });
+            // A probe proves startup, but only producer milestones renew its allowance.
+            lastProgress = { milestone: endpoint, completedAt: Date.now() };
             break;
           }
           // Keep the last observed cause when the common deadline aborts a later poll.

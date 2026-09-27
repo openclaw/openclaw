@@ -57,8 +57,10 @@ describe("gateway startup trace", () => {
         }),
       ).rejects.toThrow("plugin startup failed");
       trace.mark("http.bound");
+      trace.mark("tick.1");
+      await trace.measure("plugins.bootstrap.tick.2", async () => {});
       trace.close();
-      trace.mark("after.close");
+      trace.mark("ready");
 
       const progress = stderr.mock.calls
         .map(([line]) => String(line))

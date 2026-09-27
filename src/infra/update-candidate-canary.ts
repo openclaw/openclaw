@@ -16,10 +16,9 @@ import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 import { launchCanary, terminateCanary, waitBounded } from "./update-candidate-canary-process.js";
 import {
-  UPDATE_CANARY_PROGRESS_PREFIX,
-  type UpdateCanaryStartupProgress,
-} from "./update-candidate-canary-progress.js";
-import { waitForUpdateCandidateReadiness } from "./update-candidate-canary-readiness.js";
+  observeUpdateCandidateStartup,
+  waitForUpdateCandidateReadiness,
+} from "./update-candidate-canary-readiness.js";
 import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
@@ -567,20 +566,10 @@ export async function validateUpdateCandidateCanary(params: {
     startBudget();
     remaining();
     const args = ["gateway", "run", "--update-canary", "--bind", "loopback"];
-    const milestones = new Set<string>();
+    const startupProgress = observeUpdateCandidateStartup({ env, stateDir: params.stateDir });
     const processExit = new AbortController();
-    let startupProgress: UpdateCanaryStartupProgress | undefined;
     const running = launch(entry, [...args, "--port", String(port)], {
-      onLine: (line) => {
-        if (!line.startsWith(UPDATE_CANARY_PROGRESS_PREFIX)) {
-          return;
-        }
-        const milestone = line.slice(UPDATE_CANARY_PROGRESS_PREFIX.length);
-        if (/^[\w.:-]{1,160}$/u.test(milestone) && !milestones.has(milestone)) {
-          milestones.add(milestone);
-          startupProgress = { milestone, completedAt: Date.now() };
-        }
-      },
+      onLine: startupProgress.onLine,
     });
     const abortExited = () => processExit.abort();
     running.child.once("exit", abortExited);
@@ -595,7 +584,7 @@ export async function validateUpdateCandidateCanary(params: {
         assertCurrent: params.assertCurrent,
         hasExited: () => running.processExited() || running.hasExited(),
         getExitReason: running.firstStderrLine,
-        getStartupProgress: () => startupProgress,
+        startupProgress: startupProgress.milestones,
         onWarning: (message) => {
           startupWarnings.push(message);
           capture(message);

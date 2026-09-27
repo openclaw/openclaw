@@ -2,7 +2,10 @@
 import process from "node:process";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { UPDATE_CANARY_PROGRESS_PREFIX } from "../infra/update-candidate-canary-progress.js";
+import {
+  isUpdateCanaryStartupMilestone,
+  UPDATE_CANARY_PROGRESS_PREFIX,
+} from "../infra/update-candidate-canary-progress.js";
 
 type GatewayStartupTraceSource = "entry" | "cli.main";
 type GatewayStartupTraceLineFormatter = (message: string) => string;
@@ -242,8 +245,9 @@ export function createGatewayDispatchStartupTrace(
     process.stderr.write(`${lineFormatter(message)}\n`);
   };
   const emit = (name: string, durationMs: number, completedAt: number, completed = true) => {
-    if (updateCanary && completed) {
-      process.stderr.write(`${UPDATE_CANARY_PROGRESS_PREFIX}${source}.${name}\n`);
+    const milestone = `${source}.${name}`;
+    if (updateCanary && completed && isUpdateCanaryStartupMilestone(milestone)) {
+      process.stderr.write(`${UPDATE_CANARY_PROGRESS_PREFIX}${milestone}\n`);
     }
     if (!enabled) {
       return;

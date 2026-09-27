@@ -6,7 +6,10 @@ import {
   isDiagnosticsTimelineEnabled,
 } from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { UPDATE_CANARY_PROGRESS_PREFIX } from "../infra/update-candidate-canary-progress.js";
+import {
+  isUpdateCanaryStartupMilestone,
+  UPDATE_CANARY_PROGRESS_PREFIX,
+} from "../infra/update-candidate-canary-progress.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { recordGatewayRestartTraceDetail, recordGatewayRestartTraceSpan } from "./restart-trace.js";
@@ -63,7 +66,7 @@ export function createGatewayStartupTrace(
   let spanSequence = 0;
   let bootstrapSummary = "";
   const reportProgress = (name: string) => {
-    if (updateCanary && !closed) {
+    if (updateCanary && !closed && isUpdateCanaryStartupMilestone(name)) {
       process.stderr.write(`${UPDATE_CANARY_PROGRESS_PREFIX}${name}\n`);
     }
   };

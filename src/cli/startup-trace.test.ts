@@ -32,6 +32,8 @@ describe("CLI startup trace", () => {
         "cli.main",
       );
       trace.mark("argv");
+      trace.mark("tick.1");
+      await trace.measure("gateway-run-imports.tick.2", async () => {});
       await expect(trace.measure("gateway-run-imports", async () => "loaded")).resolves.toBe(
         "loaded",
       );
