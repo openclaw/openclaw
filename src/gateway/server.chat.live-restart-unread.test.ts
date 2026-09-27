@@ -117,6 +117,14 @@ it("LIVE: a terminal restart-safe admission marks the Control UI session unread"
     // restart-safe write advances no activity and the reply reads as seen.
     expect(row?.lastActivityAt).toBeGreaterThan(baselineAt);
     expect(deriveSessionUnread(row)).toBe(true);
+
+    // Read back the projection the Control UI actually consumes.
+    const listed = await client.request<{ sessions?: Array<{ key?: string; unread?: boolean }> }>(
+      "sessions.list",
+      { includeGlobal: true, limit: 200 },
+    );
+    const listedRow = listed.sessions?.find((entry) => entry.key === sessionKey);
+    expect(listedRow?.unread).toBe(true);
   } finally {
     if (gateway) {
       await disconnectGatewayClient(gateway.client).catch(() => undefined);
