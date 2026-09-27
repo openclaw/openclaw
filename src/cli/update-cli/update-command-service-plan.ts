@@ -171,10 +171,7 @@ function serviceInspectionWarningMessage(state: GatewayServiceState): string {
     return `${GATEWAY_SERVICE_INSPECTION_WARNING} ${formatServiceInspectionReason(state.inspectionReason)}`;
   }
   if (process.platform === "freebsd") {
-    return (
-      `${GATEWAY_SERVICE_INSPECTION_WARNING} ` +
-      "On FreeBSD, use the Gateway's rc.d or foreground process owner for service management."
-    );
+    return `${GATEWAY_SERVICE_INSPECTION_WARNING} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
   }
   const runtime = state.runtime;
   const tasksCurrent = runtime?.systemd?.tasksCurrent;
