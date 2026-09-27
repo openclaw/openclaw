@@ -283,9 +283,18 @@ describe("line-cap growth ratchet", () => {
     );
     git(root, "add", ".");
     git(root, "commit", "-m", "upstream update");
+    const preparedBase = git(root, "rev-parse", "upstream");
 
     git(root, "checkout", "release");
     git(root, "merge", "--no-ff", "upstream", "-m", "Merge branch 'main' into main");
+
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root, ["--base", preparedBase])).toBe(1);
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining("src/file.ts: 3 -> 6 counted lines (cap 3)"),
+    );
+
     git(root, "checkout", "--orphan", "unrelated");
     fs.rmSync(path.join(root, "src"), { recursive: true, force: true });
     fs.rmSync(path.join(root, ".oxlintrc.json"), { force: true });
@@ -295,12 +304,11 @@ describe("line-cap growth ratchet", () => {
     const disconnectedBase = git(root, "rev-parse", "HEAD");
     git(root, "checkout", "release");
 
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "log").mockImplementation(() => {});
+    errors.mockClear();
     expect(main(root, ["--base", disconnectedBase])).toBe(1);
     expect(errors).toHaveBeenCalledWith(
       expect.stringContaining(
-        "is disconnected from HEAD; no verified sync merge was found",
+        "is disconnected from HEAD; no verified CI or Git merge base was found",
       ),
     );
   });
