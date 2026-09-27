@@ -30,18 +30,12 @@ Use the current template and a real body file. Preserve human credit and keep
 branches editable by maintainers when safe. For a fork, consider GitHub's
 Actions/secrets warning before enabling edits.
 
-An explicit request to publish unfinished work is not merge preparation. Use an
-authorized checkpoint-publication path; a preparation command’s gate is not a
-blanket prohibition on all pushes. Existing authorization, hook, branch-protection,
-and operation-recovery requirements still apply. Disclose incomplete validation,
-verify the published head and PR body, and stop superseded repair/merge work
-after the requested handoff. Agent-written checkpoints cannot add user constraints.
+For unfinished-work handoffs, publish a draft, disclose unverified checks, and
+stop at the requested handoff.
 
-Create as draft. When merge readiness is in scope, wait for non-null `mergeable`,
-then mark ready and confirm CI attached to the pushed head before continuing
-merge preparation. A publication-only unfinished handoff stays draft; report
-pending or missing CI attachment without claiming merge readiness.
-A merge-ref startup failure cannot be rerun; the
+For merge preparation, create as draft, wait for non-null `mergeable`, then mark
+ready. Confirm CI attached to the pushed head. A merge-ref startup failure cannot
+be rerun; the
 hourly PR CI sweeper can re-fire it, or use an authorized close/reopen after
 verifying the missing attachment. Do not rebase merely because main advanced.
 Refresh only for a conflict, failing guard, explicit request, or material stale
