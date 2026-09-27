@@ -2,7 +2,11 @@
  * Lists and normalizes models exposed by the Codex app-server `model/list`
  * endpoint, including pagination and shared-client lease handling.
  */
-import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeUniqueTrimmedStringList,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerAuthRequirement } from "./auth-bridge.js";
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerStartOptions } from "./config.js";
@@ -19,6 +23,7 @@ export type CodexAppServerModel = {
   hidden?: boolean;
   isDefault?: boolean;
   inputModalities: string[];
+  serviceTiers?: string[];
   supportedReasoningEfforts: string[];
   defaultReasoningEffort?: string;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
@@ -165,6 +170,9 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     hidden: value.hidden,
     isDefault: value.isDefault,
     inputModalities: value.inputModalities,
+    serviceTiers: normalizeUniqueTrimmedStringList(
+      (value.serviceTiers ?? []).map((tier) => tier.id),
+    ),
     supportedReasoningEfforts: readReasoningEfforts(value.supportedReasoningEfforts),
     ...(normalizeOptionalString(value.defaultReasoningEffort)
       ? { defaultReasoningEffort: normalizeOptionalString(value.defaultReasoningEffort) }

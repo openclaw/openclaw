@@ -620,6 +620,7 @@ export type CodexModel = {
   hidden: boolean;
   isDefault: boolean;
   inputModalities: string[];
+  serviceTiers?: { id: string; name: string; description: string }[];
   supportedReasoningEfforts: CodexReasoningEffortOption[];
   defaultReasoningEffort?: string | null;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;

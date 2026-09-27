@@ -23,6 +23,7 @@ import {
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { resolveCodexUltrafastServiceTier } from "./service-tier.js";
 import { buildTurnStartParams } from "./thread-lifecycle.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
@@ -124,9 +125,31 @@ export async function prepareCodexAttemptTurnRequest(
       resourceState.thread,
       params.expectedSessionRuntimeOwnership,
     );
+    const selectedThread = resourceState.thread;
+    const { threadId, liveThreadOwnership, model, modelProvider } = selectedThread;
+    const turnClient = resourceState.client;
+    const assertTurnCurrent = () => {
+      connection.assertCurrent();
+      liveThreadOwnership?.assertCurrent();
+      if (
+        resourceState.client !== turnClient ||
+        resourceState.thread !== selectedThread ||
+        selectedThread.threadId !== threadId ||
+        selectedThread.liveThreadOwnership !== liveThreadOwnership ||
+        selectedThread.model !== model ||
+        selectedThread.modelProvider !== modelProvider
+      ) {
+        throw new Error("Codex native model or thread ownership changed during turn start.");
+      }
+    };
+    const fastMode =
+      typeof runtimeParams.fastMode === "function"
+        ? runtimeParams.fastMode()
+        : runtimeParams.fastMode;
     const turnAppServer = withCodexAppServerFastModeServiceTier(
       connection.mutable.pluginAppServer,
-      runtimeParams,
+      { fastMode },
+      connection.appServer,
     );
     connection.mutable.pluginAppServer = turnAppServer;
     const references = prepareWorkspaceReferences();
@@ -168,6 +191,20 @@ export async function prepareCodexAttemptTurnRequest(
         ),
       },
     );
+    const serviceTier = await resolveCodexUltrafastServiceTier({
+      enabled: turnAppServer.enableUltrafast === true && fastMode !== false,
+      serviceTier: turnStartParams.serviceTier,
+      model: turnStartParams.model ?? model,
+      modelProvider,
+      client: turnClient,
+      timeoutMs: Math.min(params.timeoutMs, 2500),
+      signal: runAbortController.signal,
+      assertCurrent: assertTurnCurrent,
+      config: params.config,
+    });
+    assertTurnCurrent();
+    turnStartParams.serviceTier = serviceTier;
+    connection.mutable.pluginAppServer = { ...turnAppServer, serviceTier };
     if (inferenceRoute) {
       prompt.setParentLocalEgress();
       resourceState.releaseInferenceContext?.();
@@ -246,10 +283,10 @@ export async function prepareCodexAttemptTurnRequest(
     let acceptedTurnId: string | undefined;
     try {
       const startedTurn = assertCodexTurnStartResponse(
-        await resourceState.client.request("turn/start", turnStartParams, {
+        await turnClient.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
           signal: runAbortController.signal,
-          assertCurrent: connection.assertCurrent,
+          assertCurrent: assertTurnCurrent,
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
