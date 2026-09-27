@@ -12,7 +12,9 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
   agentDir: string;
   workspaceDir?: string;
   config: OpenClawConfig;
+  /** Native observations retain preparation identity across model-neutral config publications. */
   observationConfig: OpenClawConfig;
+  /** Secret-free usable auth modes captured by this exact lifecycle generation. */
   authModes: PreparedAgentCredentialModes;
   authStore?: AuthProfileStore;
   metadataSnapshot: PluginMetadataSnapshot;
@@ -20,6 +22,7 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
   pluginRegistry?: PluginRegistry;
   /** Reports whether this exact lifecycle generation is still published. */
   isCurrent: () => boolean;
+  /** Configured turn facts; full inventory discovery stays outside startup publication. */
   modelCatalog: ModelCatalogSnapshot;
 }>;
 

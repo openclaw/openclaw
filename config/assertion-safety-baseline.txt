@@ -1322,7 +1322,7 @@ src/agents/agent-tools.before-tool-call.wrapper.ts	3
 src/agents/agent-tools.execution-preparer.ts	2
 src/agents/agent-tools.params.ts	5
 src/agents/agent-tools.policy.ts	1
-src/agents/agent-tools.read.ts	24
+src/agents/agent-tools.read.ts	8
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/agent-tools.schema.ts	3
 src/agents/ai-transport-runtime-host.ts	9
@@ -1353,7 +1353,7 @@ src/agents/bash-tools.process.ts	5
 src/agents/bootstrap-files.ts	1
 src/agents/bootstrap-hooks.ts	1
 src/agents/btw-transcript.ts	5
-src/agents/btw.ts	8
+src/agents/btw.ts	6
 src/agents/bundle-mcp-config.ts	5
 src/agents/cache-trace.ts	3
 src/agents/cli-auth-epoch.ts	1
@@ -1383,8 +1383,8 @@ src/agents/compaction-planning-projection.ts	6
 src/agents/compaction-planning-worker.ts	1
 src/agents/compaction-planning.ts	1
 src/agents/compaction-planning.worker.ts	1
-src/agents/compaction-real-conversation.ts	9
-src/agents/compaction-usage.ts	3
+src/agents/compaction-real-conversation.ts	2
+src/agents/compaction-usage.ts	1
 src/agents/compaction.ts	4
 src/agents/content-blocks.ts	1
 src/agents/context-cache.ts	1
@@ -1477,7 +1477,7 @@ src/agents/embedded-agent-runner/tool-result-truncation.ts	12
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	2
-src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	6
+src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	3
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	5
 src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	2
@@ -1512,7 +1512,7 @@ src/agents/live-cache-regression-policy.ts	2
 src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.ts	3
 src/agents/main-session-recovery/main-session-restart-recovery-resume-policy.ts	18
 src/agents/mcp-app-model-context.ts	1
-src/agents/mcp-auth-profile.ts	2
+src/agents/mcp-auth-profile.ts	1
 src/agents/mcp-codex-tool-approval.ts	4
 src/agents/mcp-http-fetch.ts	3
 src/agents/mcp-json-schema-validator.ts	4
@@ -1530,7 +1530,6 @@ src/agents/model-provider-auth.ts	1
 src/agents/model-scan.ts	2
 src/agents/model-selection-shared.ts	1
 src/agents/model-tool-support.ts	1
-src/agents/models-config-state.ts	1
 src/agents/models-config.merge.ts	2
 src/agents/models-config.plan.ts	3
 src/agents/models-config.providers.policy.lookup.ts	1
@@ -1539,7 +1538,7 @@ src/agents/node-plugin-tools.ts	1
 src/agents/openai-model-routes.ts	2
 src/agents/openclaw-tools.requester-yield.ts	2
 src/agents/plugin-model-catalog.ts	3
-src/agents/plugin-text-transforms.ts	5
+src/agents/plugin-text-transforms.ts	4
 src/agents/prepared-model-catalog.ts	1
 src/agents/prepared-model-catalog.worker.ts	1
 src/agents/prepared-model-runtime.configured.ts	1
@@ -1611,7 +1610,7 @@ src/agents/subagents/spawn/acp-spawn-parent-stream.ts	1
 src/agents/subagents/spawn/subagent-spawn.ts	1
 src/agents/subagents/swarm/swarm-output-schema.ts	1
 src/agents/subagents/swarm/swarm-scheduler.ts	1
-src/agents/system-prompt-report.ts	2
+src/agents/system-prompt-report.ts	1
 src/agents/system-prompt.ts	1
 src/agents/thinking-block.ts	1
 src/agents/thinking-signatures.ts	2
@@ -1687,7 +1686,6 @@ src/agents/utils/frontmatter.ts	2
 src/agents/workspace-legacy-state.ts	2
 src/agents/workspace-state-store.ts	1
 src/agents/workspace.ts	5
-src/agents/worktrees/git.ts	2
 src/agents/worktrees/run-lease.ts	1
 src/audit/execution-identity-admission.ts	3
 src/audit/execution-identity-context-build.ts	3

@@ -12,6 +12,7 @@ import {
 } from "../plugins/tool-metadata.js";
 import {
   buildSafeToolName,
+  compareMcpCatalogTools,
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
@@ -201,17 +202,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
     : sessionDeniedOnly
       ? (params.catalog.sessionDeniedTools ?? [])
       : params.catalog.tools;
-  const sortedCatalogTools = [...catalogTools].toSorted((a, b) => {
-    const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
-    if (serverOrder !== 0) {
-      return serverOrder;
-    }
-    const toolOrder = a.toolName.localeCompare(b.toolName);
-    if (toolOrder !== 0) {
-      return toolOrder;
-    }
-    return a.serverName.localeCompare(b.serverName);
-  });
+  const sortedCatalogTools = catalogTools.toSorted(compareMcpCatalogTools);
 
   for (const tool of sortedCatalogTools) {
     const appOnly = isAppOnlyTool(tool);

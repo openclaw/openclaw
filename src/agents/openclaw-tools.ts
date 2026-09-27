@@ -501,35 +501,28 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
         ]),
     ...collectPresentOpenClawTools([progressCardTool]),
     ...swarmToolGroups.structuredOutput,
-    ...(shouldIncludePrimarySessionToolForOpenClawTools("ask_user", {
-      config: resolvedConfig,
-      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-      pluginToolDenylist: options?.pluginToolDenylist,
-    })
-      ? [
-          createAskUserTool({
-            agentId: sessionAgentId,
-            sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-            runId: options?.runId,
-            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
-          }),
-        ]
-      : []),
-    ...(shouldIncludePrimarySessionToolForOpenClawTools("secrets", {
-      config: resolvedConfig,
-      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-      pluginToolDenylist: options?.pluginToolDenylist,
-    })
-      ? [
-          createSecretsTool({
-            config: resolvedConfig,
-            agentId: sessionAgentId,
-            sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-            runId: options?.runId,
-            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
-          }),
-        ]
-      : []),
+    ...(
+      [
+        ["ask_user", createAskUserTool],
+        ["secrets", createSecretsTool],
+      ] as const
+    ).flatMap(([name, createTool]) =>
+      shouldIncludePrimarySessionToolForOpenClawTools(name, {
+        config: resolvedConfig,
+        agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+        pluginToolDenylist: options?.pluginToolDenylist,
+      })
+        ? [
+            createTool({
+              ...(name === "secrets" ? { config: resolvedConfig } : {}),
+              agentId: sessionAgentId,
+              sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+              runId: options?.runId,
+              ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
+            }),
+          ]
+        : [],
+    ),
     createSessionsListTool({
       ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,

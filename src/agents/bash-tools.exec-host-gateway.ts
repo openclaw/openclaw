@@ -1126,13 +1126,7 @@ export async function processGatewayAllowlist(
       turnSourceAccountId: params.turnSourceAccountId,
       register: registerGatewayApproval,
       askFallback,
-      resolveTimedOut: (state) => {
-        const adjusted = applyTimedOutAllowlistFallback(state);
-        return {
-          approvedByAsk: adjusted.approvedByAsk,
-          deniedReason: adjusted.deniedReason,
-        };
-      },
+      resolveTimedOut: applyTimedOutAllowlistFallback,
       requiresExplicitApproval: requiresInlineEvalApproval,
       requiresAutoReviewHumanApproval:
         autoReviewRequiresHumanApproval ||
@@ -1225,13 +1219,7 @@ export async function processGatewayAllowlist(
         preResolvedDecision,
         signal: params.signal,
         askFallback,
-        resolveTimedOut: (state) => {
-          const adjusted = applyTimedOutAllowlistFallback(state);
-          return {
-            approvedByAsk: adjusted.approvedByAsk,
-            deniedReason: adjusted.deniedReason,
-          };
-        },
+        resolveTimedOut: applyTimedOutAllowlistFallback,
         requiresExplicitApproval: requiresInlineEvalApproval,
         requiresAutoReviewHumanApproval:
           autoReviewRequiresHumanApproval ||
