@@ -146,3 +146,7 @@ export function createCodexDynamicToolSpecsForPromptSnapshot(params: {
   }).specs;
 }
 export { createCanonicalForkFixture as createCanonicalForkFixtureForTest } from "./src/app-server/canonical-fork.test-support.js";
+
+/** Host integration proof keeps the native harness implementation behind its test boundary. */
+export const loadNativeYieldChannelProofFixture = () =>
+  import("./src/app-server/native-yield-channel-proof.test-support.js");

@@ -13,6 +13,7 @@ export type SessionRowFacts =
       kind: "entry";
       previousSessionId: string | undefined;
       sessionId: string;
+      lifecycleRevision?: string;
       category: string | null;
       clearMembers: boolean;
     }

@@ -56,6 +56,12 @@ type ParentDependencies = {
   clearAdmissions: () => void;
   prune: (state: ParentState) => void;
   interruptModelExecution?: (threadId: string, turnId: string) => void;
+  authorizeProgress: (
+    state: ParentState,
+    registration: NativeParentRegistration,
+    ownerKey: symbol,
+    isRegistered: () => boolean,
+  ) => void;
 };
 
 export function observeNativeParentTurn(
@@ -199,6 +205,9 @@ export async function registerNativeSubagentParent(
     state.agentId ??= params.agentId;
     dependencies.prepare(state);
     state.owners.set(ownerKey, owner);
+    // A new foreground admission supersedes the prior post-yield presentation.
+    state.progressOwner?.dispose();
+    state.progressOwner = undefined;
     state.preparing = undefined;
     for (const child of dependencies.children.values()) {
       if (child.parentThreadId === parentThreadId && child.pendingCompletion) {
@@ -230,6 +239,8 @@ export async function registerNativeSubagentParent(
   let registered = true;
   let settlement: Promise<void> | undefined;
   return {
+    authorizeProgressAfterSuccessfulYield: () =>
+      dependencies.authorizeProgress(registeredState, params, ownerKey, () => registered),
     bindTurn: (turnIdInput, mapping) => {
       const turnId = turnIdInput.trim();
       if (!turnId || dependencies.states.get(parentThreadId) !== registeredState) {
@@ -312,6 +323,7 @@ export async function registerNativeSubagentParent(
           current.completedModelTurnsBeforeBinding = undefined;
         }
         dependencies.clearAdmissions();
+        current.progressOwner?.notify();
         dependencies.deliverDetached(current);
       }
       owner.modelSource?.release();

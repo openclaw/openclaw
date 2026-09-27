@@ -678,7 +678,7 @@ export async function finalizeCodexAttempt(
       systemPromptReport,
     });
     if (turnSucceeded && toolState.yieldDetected && !runAbortController.signal.aborted) {
-      resourceState.nativeHookRelay?.authorizeRetentionAfterSuccessfulYield();
+      resources.authorizeRetentionAfterSuccessfulYield();
     }
     return finalizedResult;
   } finally {

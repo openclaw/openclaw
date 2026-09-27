@@ -108,6 +108,7 @@ export type ParentOwner = {
 export type ParentRegistrationHandle = {
   bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
   unregister: () => Promise<void>;
+  authorizeProgressAfterSuccessfulYield: () => void;
 };
 
 export type DirectSpawnEvidence = {
@@ -155,6 +156,7 @@ export type ParentState = {
   historyOwner?: CodexNativeSubagentHistoryOwner;
   agentId?: string;
   taskRuntime?: AgentHarnessTaskRuntime;
+  progressOwner?: { notify: () => void; dispose: () => void };
   mirror?: CodexNativeSubagentTaskMirror;
   submissionStore?: CodexNativeSubagentSubmissionStore;
 };

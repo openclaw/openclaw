@@ -63,6 +63,10 @@ import {
   matchesTaskPersistenceReceipt,
 } from "../tasks/task-registry-records.js";
 import type { TaskPersistenceReceipt, TaskRunTransition } from "../tasks/task-registry.types.js";
+import {
+  registerAgentHarnessTaskProgressOwner,
+  type AgentHarnessProgressOwnerRequest,
+} from "./agent-harness-task-progress-owner.js";
 
 export { createAgentHarnessCommandTask } from "../tasks/agent-harness-command-task.js";
 
@@ -101,7 +105,6 @@ export function captureAgentHarnessCompletionCustody(
     }
   });
 }
-
 export type { TaskRecord as AgentHarnessTaskRecord };
 export type { AgentHarnessTaskRuntimeScope };
 
@@ -171,6 +174,10 @@ export type AgentHarnessTaskRuntime = {
   setDetachedTaskDeliveryStatusByRunId(
     params: AgentHarnessScopedSetDeliveryStatusParams,
   ): TaskRecord[];
+  /** Live, explicit yield authority; does not alter task completion notification policy. */
+  registerProgressOwner?(
+    params: AgentHarnessProgressOwnerRequest,
+  ): { notify: () => void; dispose: () => void } | undefined;
   listTaskRecords(): TaskRecord[];
   /** Worker-backed creation on hosts that support asynchronous task persistence. */
   createRunningTaskRunAsync?(
@@ -261,12 +268,30 @@ export function createAgentHarnessTaskRuntime(
       executionOwner,
     });
   };
+  const scopedTasks = () =>
+    listTaskRecords(
+      (task) =>
+        task.runtime === runtime &&
+        (!taskKind || task.taskKind === taskKind) &&
+        task.scopeKind === "session" &&
+        task.ownerKey === requesterSessionKey &&
+        (!runIdPrefix || task.runId?.startsWith(runIdPrefix) === true),
+    );
   return {
     assertTaskAssignmentSupported() {
       runtimeOwner.assertCurrent();
       if (runtimeOwner.runtime && !runtimeOwner.runtime.transitionTaskAssignment) {
         throw new DetachedTaskAssignmentUnsupportedError();
       }
+    },
+    registerProgressOwner(progress) {
+      return registerAgentHarnessTaskProgressOwner({
+        scope,
+        requesterSessionKey,
+        scopedTasks,
+        assertRunId,
+        progress,
+      });
     },
     createRunningTaskRun(taskParams) {
       const task = tryCreateRunningTaskRun(taskParams);

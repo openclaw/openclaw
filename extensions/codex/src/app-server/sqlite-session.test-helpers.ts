@@ -10,6 +10,7 @@ export async function attachSqliteSessionTarget(
   params: EmbeddedRunAttemptParams,
   storePath: string,
   sessionId: string,
+  lifecycleRevision?: string,
 ): Promise<void> {
   params.sessionId = sessionId;
   params.sessionKey = `agent:main:${sessionId}`;
@@ -18,12 +19,18 @@ export async function attachSqliteSessionTarget(
     sessionId,
     sessionKey: params.sessionKey,
     storePath,
+    ...(lifecycleRevision ? { expectedLifecycleRevision: lifecycleRevision } : {}),
   };
   await upsertSessionEntry({
     agentId: "main",
     sessionKey: params.sessionKey,
     storePath,
-    entry: { sessionFile: params.sessionFile, sessionId, updatedAt: Date.now() },
+    entry: {
+      sessionFile: params.sessionFile,
+      sessionId,
+      updatedAt: Date.now(),
+      ...(lifecycleRevision ? { lifecycleRevision } : {}),
+    },
   });
 }
 export async function appendSqliteHistoryMessage(

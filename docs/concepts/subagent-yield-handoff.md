@@ -169,6 +169,23 @@ most 32 accepted children each. Missing or ambiguous receipts do not authorize
 a replacement message; activity remains available in Tasks. Presentation
 failure never takes ownership of the final result from completion delivery.
 
+### Native Codex child progress
+
+Native Codex children keep their existing completion owner and silent task-mirror
+policy. When a parent successfully yields, its retained native monitor can hand
+progress presentation to the existing task publisher. This requires the originating
+channel account to use `streaming.mode: "progress"` with tool progress explicitly
+enabled. The registered channel owns account inheritance; unset or disabled tool
+progress stays quiet. A normal parent exit does not authorize background progress.
+
+The publisher creates one bounded activity snapshot and updates the same message
+where the channel supports message editing. It shows task labels, observed tools
+or waits, and the last activity timestamp, never child prose or tool arguments and
+results. A failed or ambiguous initial send is not blindly repeated. Resuming the
+parent, replacing or retiring its monitor, resetting the session, and Gateway
+restart invalidate the old presentation owner. Updates are best effort; the
+existing completion path still owns the final reply.
+
 Cron observes the registry's descendant settlement boundary before starting
 its bounded synthesis grace period. A yielded task remains pending between the
 last worker ending and successor admission; the successor and its completion

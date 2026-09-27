@@ -102,6 +102,7 @@ import {
   readThreadSpawnSource,
   type NativeSubagentAssignment,
 } from "./native-subagent-task-ids.js";
+import { authorizeNativeSubagentProgress } from "./native-subagent-task-runtime.js";
 import { CodexNativeSubagentTurnObservation } from "./native-subagent-turn-observation.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
@@ -342,6 +343,8 @@ class Monitor {
         releaseCompletionCustody(owner);
       }
       releaseNativeParentModelSources(state, this.knownChildren.values());
+      state.progressOwner?.dispose();
+      state.progressOwner = undefined;
       state.owners.clear();
       state.turnIds.clear();
       notifyNativeModelSourceWaiters(state);
@@ -385,6 +388,21 @@ class Monitor {
       clearAdmissions: () => this.clearUnconsumablePendingChildAdmissionEvidence(),
       prune: (state) => this.pruneParentIfUnused(state),
       interruptModelExecution: this.interruptModelExecution,
+      authorizeProgress: (state, registration, owner, isRegistered) =>
+        authorizeNativeSubagentProgress({
+          parent: state,
+          registration,
+          owner,
+          children: this.childStates,
+          runtime: this.runtime,
+          executionPid: this.client.getTransportPid(),
+          isRegistered,
+          isCurrentParent: () =>
+            !this.disposed &&
+            !this.retiredParentStates.has(state) &&
+            this.parentStates.get(state.parentThreadId) === state,
+          prune: () => this.pruneParentIfUnused(state),
+        }),
     });
   }
 
@@ -475,6 +493,8 @@ class Monitor {
     }
     for (const state of states) {
       const parentThreadId = state.parentThreadId;
+      state.progressOwner?.dispose();
+      state.progressOwner = undefined;
       this.submissions.retire(state);
       this.recovery.retireParent(state);
       for (const owner of state.owners.values()) {
@@ -668,6 +688,7 @@ class Monitor {
       }
     }
     await this.handleCompletionNotification(notification);
+    mirrorState?.progressOwner?.notify();
   }
 
   private resumeChild(childState: ChildState, options: { scheduleRecovery?: boolean } = {}): void {
@@ -1990,7 +2011,7 @@ class Monitor {
     if (this.submissions.hasCustody(state)) {
       return;
     }
-    if (state.owners.size > 0) {
+    if (state.owners.size > 0 || state.progressOwner) {
       return;
     }
     if (this.childCloses.hasPending(state)) {

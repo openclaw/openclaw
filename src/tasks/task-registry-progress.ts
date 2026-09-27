@@ -24,6 +24,12 @@ import {
   resolveYieldedTaskProgress,
   type ProgressRead,
 } from "./task-progress-batch.js";
+import {
+  notifyHarnessTaskProgress,
+  prepareHarnessProgressBatch,
+  publishHarnessTaskProgressBatch,
+  scheduleHarnessTaskProgressBatch,
+} from "./task-registry-harness-progress.js";
 import { loadTaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
 import {
   getTasksByRunId,
@@ -73,6 +79,7 @@ export function scheduleYieldedSubagentRunProgress(entry: SubagentRunRecord) {
 }
 
 function enqueueYieldedTaskProgress(task: TaskRecord, runId: string, prepared?: AgentActivityItem) {
+  notifyHarnessTaskProgress(task);
   // Capture records without draining persistence; adoption and delivery recheck authority.
   const progress = resolveYieldedTaskProgress(
     task,
@@ -309,6 +316,24 @@ export function reconcileTaskProgressBatches(event?: TaskRegistryObserverEvent):
     if (taskId && !batch.members.has(taskId)) {
       continue;
     }
+    if (batch.harness) {
+      const current = prepareHarnessProgressBatch(key, batch);
+      if (!current) {
+        continue;
+      }
+      if (event || current.terminal) {
+        if (event) {
+          batch.revision += 1;
+        }
+        scheduleHarnessTaskProgressBatch(
+          key,
+          batch,
+          current.terminal ||
+            (event?.kind === "upserted" && isTerminalTaskStatus(event.task.status)),
+        );
+      }
+      continue;
+    }
     const current = prepareProgressBatch(key, batch, residentProgressRead);
     if (!current) {
       retireProgressBatch(key, batch);
@@ -350,7 +375,11 @@ export function retireTaskProgressForSession(mutation: SessionIdentityMutation):
       (mutation.kind !== "delete" &&
         mutation.current.sessionKeys.includes(batch.requesterSessionKey))
     ) {
-      retireProgressBatch(key, batch);
+      if (batch.harness) {
+        batch.harness.stop();
+      } else {
+        retireProgressBatch(key, batch);
+      }
     }
   }
 }
@@ -421,6 +450,9 @@ async function ensureProgressTyping(key: string, batch: TaskProgressBatch): Prom
 }
 
 function publishProgressBatch(key: string, batch: TaskProgressBatch): Promise<void> {
+  if (batch.harness) {
+    return publishHarnessTaskProgressBatch(key, batch);
+  }
   if (batch.finalReplyDelivered) {
     return batch.publication ?? Promise.resolve();
   }
