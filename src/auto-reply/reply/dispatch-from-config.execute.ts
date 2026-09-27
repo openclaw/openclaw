@@ -1,6 +1,7 @@
 import {
   hasOutboundReplyContent,
   isFastModeAutoProgressPayload,
+  isHostProgressSupervisorPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
@@ -29,6 +30,10 @@ import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.
 import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import {
+  createProgressSupervisor,
+  resolveProgressSupervisorConfig,
+} from "./progress-supervisor.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
@@ -82,11 +87,43 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     await settlement?.settle(false);
   };
   let didDeliverVisiblePartialReply = false;
+  const supervisorConfig = resolveProgressSupervisorConfig({ cfg, agentId: sessionAgentId });
+  const progressSupervisor = createProgressSupervisor({
+    ...supervisorConfig,
+    abortSignal: getDispatchAbortSignal(),
+    emit: async (payload) => {
+      if (
+        isDispatchOperationAborted() ||
+        state.shouldSuppressProgressDelivery() ||
+        !progressSupervisor.isCurrentPayload(payload)
+      ) {
+        return;
+      }
+      markInboundDedupeReplayUnsafe();
+      if (shouldRouteToOriginating) {
+        await sendPayloadAsync(payload, undefined, false);
+      } else {
+        const delivery = state.turnLedger.sendQueued("tool", payload);
+        await delivery.outcome;
+      }
+    },
+  });
+  const removeVisibleDeliveryListener = state.turnLedger.onVisibleDelivery(
+    progressSupervisor.noteVisibleReply,
+  );
   const {
     onBlockReply,
     onPreparedBlockReply,
     flush: flushBlockTtsText,
   } = createDispatchBlockReplyHandler(state);
+  dispatcher.appendBeforeDeliver?.((payload) => {
+    if (isHostProgressSupervisorPayload(payload) && !progressSupervisor.isCurrentPayload(payload)) {
+      return null;
+    }
+    return payload;
+  });
+  progressSupervisor.start();
+
   const flushDeferredFinalText = async () => {
     const delivered = await flushDispatchDeferredFinalText({
       deferFinalTtsText,
@@ -96,7 +133,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     didDeliverVisiblePartialReply ||= delivered;
     return delivered;
   };
-  const forwardToolProgress = async (forward: () => unknown) => {
+  const forwardToolProgress = async (forward: () => boolean | void | Promise<boolean | void>) => {
     if (isDispatchOperationAborted()) {
       return;
     }
@@ -112,7 +149,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         requiresToolSummaryVisibility: true,
       })
     ) {
-      await forward();
+      const result = await settleProgressVisibilityCallbackResult(forward());
+      if (result.visible) {
+        progressSupervisor.noteVisibleReply();
+      }
     }
   };
   const replyResult = await runWithDispatchLifecycleAdmission(
@@ -149,6 +189,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       onVisible: (payload) => {
                         if (hasOutboundReplyContent(payload, { trimText: true })) {
                           didDeliverVisiblePartialReply = true;
+                          progressSupervisor.noteVisibleReply();
                         }
                       },
                     }),
@@ -287,6 +328,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                           toolResultProgressCallback(payload),
                         )
                       ).visible;
+                      if (toolResultProgressVisible) {
+                        progressSupervisor.noteVisibleReply();
+                      }
                     }
                     if (isDispatchOperationAborted()) {
                       return;
@@ -414,7 +458,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       requiresToolSummaryVisibility: true,
                     })
                   ) {
-                    await state.onPlanUpdateFromReplyOptions?.(normalized);
+                    const result = await settleProgressVisibilityCallbackResult(
+                      state.onPlanUpdateFromReplyOptions?.(normalized),
+                    );
+                    if (result.visible) {
+                      progressSupervisor.noteVisibleReply();
+                    }
                   }
                   if (isDispatchOperationAborted()) {
                     return;
@@ -465,35 +514,40 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
           throw error;
         },
       ),
-  ).catch(async (error: unknown) => {
-    await releasePendingContinuation();
-    await flushDeferredFinalText();
-    const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
-    const adopted = state.turnAdoptionState?.adopted === true;
-    if (
-      params.replyOptions?.isHeartbeat === true ||
-      (!failedAgentRun && !didDeliverVisiblePartialReply && !adopted) ||
-      isDispatchOperationAborted()
-    ) {
-      throw error;
-    }
-    failDispatchReplyOperation(error, "failed");
-    if (!didDeliverVisiblePartialReply) {
-      // Adoption retires ingress replay before the model starts. A progress ACK
-      // cannot settle a later failure; use normal final delivery and its policy.
-      return adopted &&
-        state.replyOperationRunState.replyCompletion?.expectation === "required" &&
-        state.replyOperationRunState.replyCompletion.outcome !== "blocked" &&
-        !state.suppressDelivery &&
-        !state.getObservedReplyDelivery()
-        ? { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }
-        : undefined;
-    }
-    return buildTerminalAgentRunFailureReplyPayload({
-      replyExpectation: state.replyOperationRunState.replyCompletion?.expectation ?? "required",
-      visibleReplyDelivered: true,
+  )
+    .finally(async () => {
+      await progressSupervisor.stop();
+      removeVisibleDeliveryListener();
+    })
+    .catch(async (error: unknown) => {
+      await releasePendingContinuation();
+      await flushDeferredFinalText();
+      const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
+      const adopted = state.turnAdoptionState?.adopted === true;
+      if (
+        params.replyOptions?.isHeartbeat === true ||
+        (!failedAgentRun && !didDeliverVisiblePartialReply && !adopted) ||
+        isDispatchOperationAborted()
+      ) {
+        throw error;
+      }
+      failDispatchReplyOperation(error, "failed");
+      if (!didDeliverVisiblePartialReply) {
+        // Adoption retires ingress replay before the model starts. A progress ACK
+        // cannot settle a later failure; use normal final delivery and its policy.
+        return adopted &&
+          state.replyOperationRunState.replyCompletion?.expectation === "required" &&
+          state.replyOperationRunState.replyCompletion.outcome !== "blocked" &&
+          !state.suppressDelivery &&
+          !state.getObservedReplyDelivery()
+          ? { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }
+          : undefined;
+      }
+      return buildTerminalAgentRunFailureReplyPayload({
+        replyExpectation: state.replyOperationRunState.replyCompletion?.expectation ?? "required",
+        visibleReplyDelivered: true,
+      });
     });
-  });
   try {
     if (isDispatchOperationAborted()) {
       await flushDeferredFinalText();

@@ -88,6 +88,26 @@ Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for
 inherited credentials and `agents.defaults.sessionStore.agentId` for retired
 `main` session rows or unscoped rows in a fixed `session.store`.
 
+## `agents.defaults.progressSupervisor`
+
+Periodic progress supervision is disabled by default. Enable it for long-running turns with:
+
+```json5
+{
+  agents: {
+    defaults: {
+      progressSupervisor: {
+        enabled: true,
+        intervalSeconds: 55,
+        text: "Work is still in progress. Another update will follow if needed.",
+      },
+    },
+  },
+}
+```
+
+The host sends a generic status notice only after a full quiet interval. `intervalSeconds` accepts values from 5 through 2147483. Only a confirmed visible delivery restarts that interval. At most one notice is in flight, and supervision joins it before completion, failure, cancellation, or shutdown finishes. Notices use the normal `ReplyPayload` dispatch path and channel adapters; they are distinct from fast-mode auto progress and never include commands, logs, or error details. Set `text` globally or in `agents.entries.*.progressSupervisor`; per-agent fields inherit omitted values from the defaults.
+
 ## `agents.defaults.compaction`
 
 ```json5

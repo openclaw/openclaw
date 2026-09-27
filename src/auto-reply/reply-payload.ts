@@ -92,9 +92,17 @@ export function readPairingQrReplyChannelData(
 
 /** Metadata for fast-auto progress notices. */
 export const FAST_MODE_AUTO_PROGRESS_KIND = "fast-mode-auto";
+/** Metadata for host-owned periodic long-turn notices. */
+export const HOST_PROGRESS_SUPERVISOR_KIND = "host-progress-supervisor";
 
 export function isFastModeAutoProgressPayload(payload: Pick<ReplyPayload, "channelData">): boolean {
   return payload.channelData?.openclawProgressKind === FAST_MODE_AUTO_PROGRESS_KIND;
+}
+
+export function isHostProgressSupervisorPayload(
+  payload: Pick<ReplyPayload, "channelData">,
+): boolean {
+  return payload.channelData?.openclawProgressKind === HOST_PROGRESS_SUPERVISOR_KIND;
 }
 
 /** Reply policy facts that provider adapters use to resolve the final transport route. */

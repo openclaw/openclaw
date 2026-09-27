@@ -86,6 +86,7 @@ export type ResolvedAgentConfig = {
   toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
+  progressSupervisor?: AgentDefaultsConfig["progressSupervisor"];
   contextInjection?: AgentEntry["contextInjection"];
   bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
@@ -425,6 +426,10 @@ export function resolveAgentConfig(
     toolProgressDetail: entry.toolProgressDetail ?? agentDefaults?.toolProgressDetail,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault ?? agentDefaults?.fastModeDefault,
+    progressSupervisor:
+      typeof entry.progressSupervisor === "object" && entry.progressSupervisor
+        ? { ...agentDefaults?.progressSupervisor, ...entry.progressSupervisor }
+        : agentDefaults?.progressSupervisor,
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
     bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,

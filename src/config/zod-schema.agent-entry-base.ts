@@ -97,6 +97,17 @@ const AgentEntryEmbeddedAgentConfigSchema = z
   .strict()
   .optional();
 
+export const ProgressSupervisorSchema = z
+  .object({
+    /** Opt in to host-owned periodic progress notices for long-running turns. */
+    enabled: z.boolean().optional(),
+    /** Quiet interval before each notice. Default: 55 seconds. */
+    intervalSeconds: z.number().int().min(5).max(2_147_483).optional(),
+    /** Text sent for each periodic notice. */
+    text: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
 export const AgentEntryBaseSchema = z
   .object({
     id: z.string(),
@@ -117,6 +128,7 @@ export const AgentEntryBaseSchema = z
     toolProgressDetail: z.enum(["explain", "raw"]).optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.union([z.boolean(), z.literal("auto")]).optional(),
+    progressSupervisor: ProgressSupervisorSchema.optional(),
     contextInjection: z
       .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
       .optional(),

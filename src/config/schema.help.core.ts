@@ -348,6 +348,22 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Optional per-agent default for fast mode ("auto", true, or false). Applies when no per-message or session fast-mode override is set.',
   "agents.defaults.fastModeDefault":
     'Default fast-mode policy for the agent loop ("auto", true, or false). Individual agent entries override it.',
+  "agents.defaults.progressSupervisor":
+    "Opt-in host-owned periodic notices for long-running turns. Disabled unless enabled is true.",
+  "agents.defaults.progressSupervisor.enabled":
+    "Send a generic progress notice after each quiet interval while an agent turn is running. Default: false.",
+  "agents.defaults.progressSupervisor.intervalSeconds":
+    "Quiet interval between host-owned progress notices. Default: 55 seconds; allowed range: 5 to 2147483.",
+  "agents.defaults.progressSupervisor.text":
+    "Text for periodic progress notices. Defaults to a generic English status message.",
+  "agents.entries.*.progressSupervisor":
+    "Optional per-agent progress supervisor override merged over agents.defaults.progressSupervisor.",
+  "agents.entries.*.progressSupervisor.enabled":
+    "Enable or disable host-owned periodic progress notices for this agent.",
+  "agents.entries.*.progressSupervisor.intervalSeconds":
+    "Per-agent quiet interval between host-owned progress notices (5 to 2147483 seconds).",
+  "agents.entries.*.progressSupervisor.text":
+    "Per-agent progress notice text, inherited from agents.defaults.progressSupervisor when omitted.",
   "agents.entries.*.runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.entries.*.runtime.type":
