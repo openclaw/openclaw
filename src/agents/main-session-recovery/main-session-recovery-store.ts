@@ -107,7 +107,7 @@ export async function commitMainSessionRecovery(params: {
         // Canonical session-key migration may happen between reservation and
         // Gateway admission; the reservation identity remains authoritative.
         candidate = entries.find(({ entry }) => {
-          const reservation = (entry as SessionEntry).mainRestartRecovery?.reservation;
+          const reservation = entry.mainRestartRecovery?.reservation;
           return (
             entry.sessionId === recoveryAdmission.sessionId &&
             reservation?.runId === recoveryAdmission.runId &&
@@ -116,7 +116,7 @@ export async function commitMainSessionRecovery(params: {
         });
       } else if (exactOwnerClaim) {
         candidate = entries.find(({ entry }) => {
-          const state = (entry as SessionEntry).mainRestartRecovery;
+          const state = entry.mainRestartRecovery;
           return (
             state?.cycleId === exactOwnerClaim.cycleId &&
             state.foregroundClaims?.lifecycleGeneration === exactOwnerClaim.lifecycleGeneration &&
@@ -152,7 +152,7 @@ export async function commitMainSessionRecovery(params: {
           },
         };
       }
-      const entry = candidate.entry as SessionEntry;
+      const entry = candidate.entry;
       const previousRecoveryState = entry.mainRestartRecovery;
       const command =
         (params.command.kind === "claim_foreground" ||

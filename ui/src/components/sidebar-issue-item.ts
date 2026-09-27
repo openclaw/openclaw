@@ -325,9 +325,7 @@ export function renderSidebarIssueItem(
   if (item.action.kind === "navigate") {
     return renderNavigationItem(item, handlers);
   }
-  const facts = item.action.kind === "askCustodian" ? item.action.alert.facts : [];
-  const visibleFacts = facts.filter((fact) => fact !== item.label);
-  const actionLabel = item.action.kind === "askCustodian" ? t("nav.askOpenClaw") : item.label;
+  const visibleFacts = item.action.alert.facts.filter((fact) => fact !== item.label);
   const inlineAction = item.inlineAction;
   return html`<details
     class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
@@ -375,7 +373,7 @@ export function renderSidebarIssueItem(
           }"
           @click=${() => handlers.onOpen(item)}
         >
-          ${actionLabel}
+          ${t("nav.askOpenClaw")}
         </button>
       </div>
     </div>

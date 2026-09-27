@@ -168,6 +168,60 @@ it("keeps the live launcher intact when its replacement copy is interrupted", as
   expect(await fs.readFile(destination, "utf8")).toBe("previous launcher\n");
 });
 
+it("keeps the live launcher intact when an ordinary copy cannot sync its staged file", async () => {
+  const root = await fs.realpath(dirs.make("package-launcher-copy-sync-"));
+  const source = path.join(root, "source");
+  const destination = path.join(root, "destination");
+  await fs.writeFile(source, "replacement launcher\n");
+  await fs.writeFile(destination, "live launcher\n");
+  const failure = Object.assign(new Error("staged launcher sync failed"), { code: "EIO" });
+  let refused = 0;
+  const refuseStagedFileSync = (fd: number) => {
+    const identity = fsSync.fstatSync(fd, { bigint: true });
+    if (!identity.isFile()) {
+      return;
+    }
+    const staged = fsSync
+      .readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(".openclaw-shim-stage-"))
+      .some((directory) =>
+        fsSync.readdirSync(path.join(root, directory.name)).some((entry) => {
+          const current = fsSync.lstatSync(path.join(root, directory.name, entry), {
+            bigint: true,
+          });
+          return current.isFile() && current.dev === identity.dev && current.ino === identity.ino;
+        }),
+      );
+    if (staged) {
+      refused++;
+      throw failure;
+    }
+  };
+  const open = fs.open;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    const sync = handle.sync.bind(handle);
+    vi.spyOn(handle, "sync").mockImplementation(async () => {
+      refuseStagedFileSync(handle.fd);
+      await sync();
+    });
+    return handle;
+  });
+  // Native fs-safe copies flush raw descriptors; the fallback uses FileHandle.sync.
+  const fsync = fsSync.fsyncSync;
+  vi.spyOn(fsSync, "fsyncSync").mockImplementation((fd) => {
+    refuseStagedFileSync(fd);
+    fsync(fd);
+  });
+
+  await expect(copyPackagePathEntry(source, destination)).rejects.toHaveProperty("cause", failure);
+
+  expect(refused).toBe(1);
+  expect(await fs.readFile(source, "utf8")).toBe("replacement launcher\n");
+  expect(await fs.readFile(destination, "utf8")).toBe("live launcher\n");
+  expect((await fs.readdir(root)).toSorted()).toEqual(["destination", "source"]);
+});
+
 it("stages a complete directory with independent hardlinked files and preserved modes", async () => {
   const root = dirs.make("package-launcher-tree-");
   const source = path.join(root, "source");

@@ -299,13 +299,7 @@ public struct OpenClawChatWindowShell: View {
         let activity = self.activeSessionEntry.flatMap {
             ChatSessionSidebarModel.activity(for: $0, now: date.timeIntervalSince1970 * 1000)
         }
-        if activity?.kind == .attention {
-            return (String(localized: "Needs you"), "exclamationmark.bubble", OpenClawChatTheme.warning)
-        }
-        if activity?.kind == .queued {
-            return (String(localized: "Queued"), "hourglass", .secondary)
-        }
-        if self.viewModel.hasBlockingRunActivity {
+        if self.viewModel.hasBlockingRunActivity, activity?.kind != .attention, activity?.kind != .queued {
             return (String(localized: "Working"), "circle.dotted", .secondary)
         }
         guard let activity else { return nil }

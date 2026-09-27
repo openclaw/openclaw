@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => {
     database,
     open: vi.fn(() => database),
     write: vi.fn((operation: (store: typeof database) => unknown) => operation(database)),
-    coordinator: vi.fn((_options: unknown, operation: () => unknown) => operation()),
     existingRead: vi.fn(),
     preservingRead: vi.fn((operation: () => unknown) => operation()),
     readFlow: vi.fn(),
@@ -39,9 +38,6 @@ vi.mock("./openclaw-state-db-readonly.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-state-db-readonly.js")>()),
   withExistingOpenClawStateDatabaseReadOnly: mocks.existingRead,
   withArtifactPreservingStateReads: mocks.preservingRead,
-}));
-vi.mock("./openclaw-state-db-write-coordination.js", () => ({
-  withSharedStateWriteCoordinator: mocks.coordinator,
 }));
 vi.mock("../infra/sqlite-post-commit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-post-commit.js")>()),
@@ -74,7 +70,6 @@ beforeEach(async () => {
   vi.clearAllMocks();
   mocks.open.mockImplementation(() => mocks.database);
   mocks.write.mockImplementation((operation) => operation(mocks.database));
-  mocks.coordinator.mockImplementation((_options, operation) => operation());
   mocks.existingRead.mockReturnValue(undefined);
   mocks.readFlow.mockReturnValue(flow);
   mocks.updateFlow.mockReturnValue({ applied: true, flow });
@@ -130,15 +125,15 @@ it.each(["create", "update"] as const)(
   },
 );
 
-it("retains a completed run-task result after modeled coordinator cleanup rejection", () => {
+it("retains a completed run-task result after modeled transaction cleanup rejection", () => {
   const result = { found: false, created: false, reason: "Flow not found." };
   mocks.runTask.mockImplementation((_db, _input, _write, committed) => {
     committed(result);
     return result;
   });
-  mocks.coordinator.mockImplementation((_options, operation) => {
-    operation();
-    throw new Error("Modeled cleanup rejection; no native coordinator is used");
+  mocks.write.mockImplementation((operation) => {
+    operation(mocks.database);
+    throw new Error("Modeled cleanup rejection; no native handle is used");
   });
   expect(
     backend().execute({

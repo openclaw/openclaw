@@ -330,7 +330,6 @@ export function registerRequiredQueuedSubagent(params: {
     };
     const { endedAt, message, error: cause } = failureFact;
     if (createdTaskId && !finalizedTaskFailure) {
-      let taskFailure: { error: unknown } | undefined;
       let finalizationInvoked = false;
       try {
         if (!(await clearDurableLaunchDescriptor())) {
@@ -358,19 +357,16 @@ export function registerRequiredQueuedSubagent(params: {
         }
         finalizedTaskFailure = { endedAt: finalized.endedAt, error: finalized.error };
       } catch (taskError) {
-        taskFailure = { error: taskError };
-      }
-      if (taskFailure) {
         const failure = new AggregateError(
-          [cause, taskFailure.error],
+          [cause, taskError],
           "Queued task finalization requires recovery",
           { cause },
         );
         recoveryPending = {
           kind:
             !finalizationInvoked &&
-            taskFailure.error instanceof SubagentRegistryWriteError &&
-            taskFailure.error.outcome === "not-committed"
+            taskError instanceof SubagentRegistryWriteError &&
+            taskError.outcome === "not-committed"
               ? "retry-terminal"
               : "restore",
           error: failure,
@@ -380,7 +376,6 @@ export function registerRequiredQueuedSubagent(params: {
     }
     const terminalEndedAt = finalizedTaskFailure ? finalizedTaskFailure.endedAt : endedAt;
     const terminalError = finalizedTaskFailure ? finalizedTaskFailure.error : message;
-    let failedSettlement: { error: unknown } | undefined;
     try {
       const published = await settlement.publish("terminal", (ownedSession) => {
         const terminal = structuredClone(entry);
@@ -410,11 +405,8 @@ export function registerRequiredQueuedSubagent(params: {
         settlementError instanceof SubagentRegistryWriteError &&
         settlementError.outcome === "not-committed"
       );
-      failedSettlement = { error: settlementError };
-    }
-    if (failedSettlement) {
       const failure = new AggregateError(
-        [cause, failedSettlement.error],
+        [cause, settlementError],
         "Queued registration failure could not be persisted",
         { cause },
       );
@@ -518,7 +510,6 @@ export function registerRequiredQueuedSubagent(params: {
             throw new Error("Queued registration rollback lost its original owner");
           }
         };
-        let failedRollback: { error: unknown } | undefined;
         try {
           await manager.persistAsyncOrThrow(
             context,
@@ -531,11 +522,8 @@ export function registerRequiredQueuedSubagent(params: {
           persistenceUncertain = !(
             error instanceof SubagentRegistryWriteError && error.outcome === "not-committed"
           );
-          failedRollback = { error };
-        }
-        if (failedRollback) {
           const failure = new AggregateError(
-            [absent, failedRollback.error],
+            [absent, error],
             "Queued registration rollback failed",
             { cause: absent },
           );

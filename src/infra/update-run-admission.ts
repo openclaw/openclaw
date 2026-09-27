@@ -54,19 +54,19 @@ export function runUpdateRunAdmission<T>(
         },
       );
     } catch (error) {
+      if (inspection.repairable) {
+        throw new Error(
+          `${inspection.repairable.message} Update admission could not complete recovery: ${formatErrorMessage(error)}`,
+          { cause: error },
+        );
+      }
       if (isOpenClawStateWriteContentionError(error)) {
         throw new UpdateRunAdmissionBusyError(
           "Update history is busy. Admission was deferred; previous history is unchanged. Retry `openclaw update` after the current database writer finishes.",
           { cause: error },
         );
       }
-      if (!inspection.repairable) {
-        throw error;
-      }
-      throw new Error(
-        `${inspection.repairable.message} Update admission could not complete recovery: ${formatErrorMessage(error)}`,
-        { cause: error },
-      );
+      throw error;
     }
   }
   return runOpenClawStateWriteTransaction(

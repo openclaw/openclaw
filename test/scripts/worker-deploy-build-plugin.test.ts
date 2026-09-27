@@ -129,7 +129,6 @@ export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
 export { saveExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-export { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 export { projectComputerActResult } from "../agents/tools/computer-tool-result.js";
@@ -205,9 +204,7 @@ const {
   saveExecApprovals,
   readExecApprovalsSnapshot,
   closeOpenClawStateDatabaseAsync,
-  withStateDatabaseCoordinatorRuntimeDirectory,
 } = await import(pathToFileURL(entry).href);
-await withStateDatabaseCoordinatorRuntimeDirectory(process.env.TMPDIR, async () => {
 const match = { id: "portable-exec", pattern: process.execPath };
 const command = "portable exec authorization";
 saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } });
@@ -225,7 +222,6 @@ try {
 } finally {
   await closeOpenClawStateDatabaseAsync();
 }
-});
 console.log("relocated exec authorization persisted");
 `,
               path.join(relocated, "worker.mjs"),

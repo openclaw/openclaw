@@ -167,7 +167,7 @@ internal fun parseGatewayCronJobDetail(job: JsonObject?): GatewayCronJobDetail? 
     enabled = value.boolean("enabled"),
     deleteAfterRun = value.boolean("deleteAfterRun"),
     scheduleKind = scheduleKind,
-    scheduleLabel = cronScheduleLabel(schedule),
+    scheduleLabel = cronScheduleLabel(scheduleKind, schedule),
     scheduleDetail = cronScheduleDetail(schedule),
     scheduleAt = schedule.nonBlankString("at"),
     scheduleEveryMs = schedule.long("everyMs"),
@@ -219,8 +219,11 @@ internal fun formatCronInterval(everyMs: Long): NativeText {
   }
 }
 
-private fun cronScheduleLabel(schedule: JsonObject): NativeText =
-  when (schedule.nonBlankString("kind")) {
+internal fun cronScheduleLabel(
+  kind: String?,
+  schedule: JsonObject?,
+): NativeText =
+  when (kind) {
     "at" -> nativeText("One time")
     "every" -> schedule.long("everyMs")?.let(::formatCronInterval) ?: nativeText("Repeating")
     "cron" -> schedule.nonBlankString("expr")?.let(::verbatimText) ?: nativeText("Cron")

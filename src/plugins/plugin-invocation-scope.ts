@@ -151,6 +151,7 @@ export function collectRegistryInvocationInstances(
     }
   }
   const values = [
+    ...registry.tools.map(({ factory }) => factory),
     ...registry.channels.map(({ plugin }) => plugin),
     ...[...registry.contextEngines.values()].map(({ factory }) => factory),
     ...registry.widgetPresenters.map(({ presenter }) => presenter),

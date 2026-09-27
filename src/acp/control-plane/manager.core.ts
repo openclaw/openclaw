@@ -4,7 +4,6 @@ import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { toErrorObject } from "../../infra/errors.js";
-import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { runAcceptedManagerTurn, type AcceptedTurns } from "./manager.accepted-turns.js";
 import { recordQueuedBackgroundTaskCancellation } from "./manager.background-task.js";
@@ -56,7 +55,7 @@ import {
   resolveAcpSessionTarget,
   normalizeAcpErrorCode,
   acpSessionActorKey,
-  resolveMissingMetaError,
+  resolveStoredAcpSession,
 } from "./manager.utils.js";
 import {
   normalizeText,
@@ -117,6 +116,7 @@ export class AcpSessionManager {
     });
   }
 
+  /** @deprecated Use resolveSessionAsync; retained for the v2026.9.4 Plugin SDK contract. */
   resolveSession(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
@@ -126,32 +126,31 @@ export class AcpSessionManager {
       return { kind: "none", sessionKey: "" };
     }
     const target = resolveAcpSessionTarget(params);
-    const { sessionKey } = target;
-    const stored = this.deps.loadSessionEntry({
+    return resolveStoredAcpSession(
+      target,
+      this.deps.loadSessionEntry({ cfg: params.cfg, ...target, clone: false }),
+    );
+  }
+
+  async resolveSessionAsync(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    agentId?: string;
+    assertCurrent?: () => void;
+  }): Promise<AcpSessionResolution> {
+    params.assertCurrent?.();
+    if (!params.sessionKey.trim()) {
+      return { kind: "none", sessionKey: "" };
+    }
+    const target = resolveAcpSessionTarget(params);
+    const stored = await this.deps.loadSessionEntryAsync({
       cfg: params.cfg,
       ...target,
       clone: false,
+      ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     });
-    const acp = stored?.acp;
-    if (acp) {
-      return {
-        kind: "ready",
-        ...target,
-        meta: acp,
-        entry: stored.entry,
-      };
-    }
-    if (isAcpSessionKey(sessionKey)) {
-      return {
-        kind: "stale",
-        ...target,
-        error: resolveMissingMetaError(sessionKey),
-      };
-    }
-    return {
-      kind: "none",
-      ...target,
-    };
+    params.assertCurrent?.();
+    return resolveStoredAcpSession(target, stored);
   }
 
   getObservabilitySnapshot(): AcpManagerObservabilitySnapshot {
@@ -181,7 +180,7 @@ export class AcpSessionManager {
       cfg: params.cfg,
       deps: this.deps,
       withSessionActor: this.withSessionActor.bind(this),
-      resolveSession: this.resolveSession.bind(this),
+      resolveSession: this.resolveSessionAsync.bind(this),
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
       reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
     });
@@ -237,7 +236,7 @@ export class AcpSessionManager {
           ...target,
           signal: params.signal,
           throwIfAborted: this.throwIfAborted.bind(this),
-          resolveSession: this.resolveSession.bind(this),
+          resolveSession: this.resolveSessionAsync.bind(this),
           ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
           reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
           isCurrentActor,
@@ -357,7 +356,7 @@ export class AcpSessionManager {
           deps: this.deps,
           runtimeHandles: this.runtimeHandles,
           activeTurnBySession: this.activeTurnBySession,
-          resolveSession: this.resolveSession.bind(this),
+          resolveSession: this.resolveSessionAsync.bind(this),
           ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
           setSessionState: this.setSessionState.bind(this),
           recordTurnCompletion: this.recordTurnCompletion.bind(this),
@@ -455,16 +454,22 @@ export class AcpSessionManager {
   }
 
   async closeSession(input: AcpCloseSessionInput): Promise<AcpCloseSessionResult> {
-    const target = resolveAcpSessionTarget(input);
+    const capturedInput = {
+      ...input,
+      expectedControlBinding: input.expectedControlBinding
+        ? { ...input.expectedControlBinding }
+        : undefined,
+    };
+    const target = resolveAcpSessionTarget(capturedInput);
     return await this.withSessionActor(
       target,
       async (isCurrentActor) =>
         await runManagerCloseSession({
-          input,
+          input: capturedInput,
           ...target,
           deps: this.deps,
           runtimeHandles: this.runtimeHandles,
-          resolveSession: this.resolveSession.bind(this),
+          resolveSession: this.resolveSessionAsync.bind(this),
           ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
           writeSessionMeta: this.writeSessionMeta.bind(this),
           isCurrentActor,
@@ -488,7 +493,7 @@ export class AcpSessionManager {
   ): RuntimeOptionCommandServices {
     return {
       runtimeHandles: this.runtimeHandles,
-      resolveSession: this.resolveSession.bind(this),
+      resolveSession: this.resolveSessionAsync.bind(this),
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
       writeSessionMeta: this.writeSessionMeta.bind(this),
       isCurrentActor,
@@ -569,6 +574,9 @@ export class AcpSessionManager {
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         mutate: params.mutate,
+        ...(params.expectedControlBinding
+          ? { expectedControlBinding: params.expectedControlBinding }
+          : {}),
         assertCommitAllowed: () => {
           params.assertCommitAllowed?.();
           if (params.isCurrentActor && !params.isCurrentActor()) {

@@ -133,11 +133,7 @@ struct JPEGTranscoder: Sendable {
             targetMaxPixelSize = nextPixelSize
         }
 
-        if best.data.count > maxBytes {
-            throw JPEGTranscodeError.sizeLimitExceeded(maxBytes: maxBytes, actualBytes: best.data.count)
-        }
-
-        return best
+        throw JPEGTranscodeError.sizeLimitExceeded(maxBytes: maxBytes, actualBytes: best.data.count)
     }
 
     /// JPEG cannot store alpha. Flatten transparent sources over white before encoding so ImageIO does not composite

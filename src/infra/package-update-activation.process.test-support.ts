@@ -108,24 +108,20 @@ fs.renameSync = (from, to) => {
 };
 
 const { withUpdateCommandExecutor } = await import("../cli/update-cli/update-command-executor.js");
-const { withStateDatabaseCoordinatorRuntimeDirectory } =
-  await import("./state-database-coordinator.js");
 if (cut.startsWith("transition-")) {
   assert(expectedRecord);
   const { openPackageActivationJournal, resolvePackageActivationAnchor } =
     await import("./package-update-activation-journal.js");
-  await withStateDatabaseCoordinatorRuntimeDirectory(path.dirname(authority.databasePath), () =>
-    withUpdateCommandExecutor(
-      randomUUID(),
-      async (executor) => {
-        const fence = await executor.enter(authority.installKey);
-        const journal = openPackageActivationJournal(
-          resolvePackageActivationAnchor(authority.installKey),
-        );
-        journal.transition(expectedRecord, "publishing", { kind: "displace" }, fence.assertCurrent);
-      },
-      { existingAuthority: authority },
-    ),
+  await withUpdateCommandExecutor(
+    randomUUID(),
+    async (executor) => {
+      const fence = await executor.enter(authority.installKey);
+      const journal = openPackageActivationJournal(
+        resolvePackageActivationAnchor(authority.installKey),
+      );
+      journal.transition(expectedRecord, "publishing", { kind: "displace" }, fence.assertCurrent);
+    },
+    { existingAuthority: authority },
   );
   throw new Error(`Package activation crash cut was not reached: ${cut}`);
 }
@@ -139,29 +135,27 @@ const liveRoot = replacement ? authority.installKey : fixture.packageRoot;
 const launcher = replacement
   ? path.join(expectedRecord!.descriptor.binDir, "openclaw")
   : fixture.launcher;
-await withStateDatabaseCoordinatorRuntimeDirectory(path.dirname(authority.databasePath), () =>
-  withUpdateCommandExecutor(
-    randomUUID(),
-    async (executor) => {
-      const fence = await executor.enter(liveRoot);
-      await preparePackageActivationJournal({
-        options: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
-        liveRoot,
-        stageRoot: fixture.params.stage.packageRoot,
-        launcherRoot: fixture.params.stage.layout.binDir,
-        binDir: path.dirname(launcher),
-        previous: await createPackageIntegrityReader().tree(liveRoot),
-        launchers: [
-          {
-            name: "openclaw",
-            previous: encodePackageActivationLauncher(
-              await createPackageIntegrityReader().launcher(launcher),
-            ),
-          },
-        ],
-      });
-    },
-    { existingAuthority: authority },
-  ),
+await withUpdateCommandExecutor(
+  randomUUID(),
+  async (executor) => {
+    const fence = await executor.enter(liveRoot);
+    await preparePackageActivationJournal({
+      options: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+      liveRoot,
+      stageRoot: fixture.params.stage.packageRoot,
+      launcherRoot: fixture.params.stage.layout.binDir,
+      binDir: path.dirname(launcher),
+      previous: await createPackageIntegrityReader().tree(liveRoot),
+      launchers: [
+        {
+          name: "openclaw",
+          previous: encodePackageActivationLauncher(
+            await createPackageIntegrityReader().launcher(launcher),
+          ),
+        },
+      ],
+    });
+  },
+  { existingAuthority: authority },
 );
 throw new Error(`Package activation crash cut was not reached: ${cut}`);

@@ -30,7 +30,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { resolveEnvironmentValue } from "./process-env.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   adoptCandidateManagedServiceStop,
   stopSupervisedPredecessorGateway,

@@ -25,7 +25,6 @@ it.each(
   let retired = false;
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: "/synthetic/restore" },
-    coordinatorRuntime: { directory: "/synthetic/restore/coordinator", keepAlive: false },
     admission: {
       coordinationKey: "fixture",
       databasePath: "/synthetic/restore/state.sqlite",
@@ -146,7 +145,6 @@ it.each(["retirement", "database replacement", "failed state"] as const)(
     };
     const context: OpenClawStateWorkerContext = {
       environment: { OPENCLAW_STATE_DIR: "/synthetic/receipt-exit" },
-      coordinatorRuntime: { directory: "/synthetic/receipt-exit", keepAlive: false },
       admission: {
         coordinationKey: "fixture",
         databasePath: "/synthetic/receipt-exit/state.sqlite",

@@ -58,7 +58,7 @@ it.each(["warm", "cold"] as const)(
         if (temperature === "cold") {
           await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
         }
-        const observation = observeHostDataSql(state.env);
+        const observation = observeHostDataSql();
         try {
           const calibration = openNodeSqliteDatabase(":memory:");
           try {

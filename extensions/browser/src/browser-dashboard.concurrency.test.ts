@@ -1,13 +1,26 @@
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import { useBrowserDashboardTestHarness } from "./browser-dashboard.test-harness.js";
+import {
+  interceptStoreActions,
+  useBrowserDashboardTestHarness,
+} from "./browser-dashboard.test-harness.js";
+import { getBrowserStateRuntime } from "./browser-runtime-state.js";
+import { closePageByTargetIdViaPlaywright } from "./browser/pw-session-actions.js";
+import { closePageViaPlaywright } from "./browser/pw-tools-core.snapshot.js";
+import {
+  closeTrackedBrowserTabsForSessions,
+  sweepTrackedBrowserTabs,
+  trackSessionBrowserTab,
+} from "./browser/session-tab-registry.js";
+import { durableOwnership } from "./browser/session-tab-registry.sqlite.test-helpers.js";
 
 const browser = vi.hoisted(() => ({
   open: vi.fn(),
   tabs: vi.fn(),
   ownership: vi.fn(),
   closeOwned: vi.fn(),
+  page: vi.fn(),
 }));
 vi.mock("./browser/client.js", () => ({
   browserOpenTab: browser.open,
@@ -17,15 +30,274 @@ vi.mock("./browser/cdp.helpers.js", () => ({
   resolveCdpTabOwnership: browser.ownership,
   closeTrackedCdpTarget: browser.closeOwned,
 }));
+vi.mock("./browser/pw-session-page-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/pw-session-page-target.js")>()),
+  isConnectionScopedPage: () => false,
+}));
+vi.mock("./browser/pw-session-connection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/pw-session-connection.js")>()),
+  getPageForTargetId: browser.page,
+}));
 
-import { requestBrowserDashboard, stopBrowserDashboard } from "./browser-dashboard.js";
-import { readBrowserDashboardTabs } from "./browser/session-tab-store.js";
+import {
+  reconcileBrowserDashboards,
+  requestBrowserDashboard,
+  stopBrowserDashboard,
+} from "./browser-dashboard.js";
+import {
+  getBrowserSessionTabStore,
+  readBrowserDashboardTabs,
+} from "./browser/session-tab-store.js";
 
 const sessionKey = "agent:main:browser-dashboard-proof";
 const request = { sessionKey, agentId: "main", name: "service" };
 
 describe("Browser dashboard operation ordering", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
+
+  it.each([
+    { identity: "known", order: "close-first" },
+    { identity: "unidentified", order: "close-first" },
+    { identity: "known", order: "registration-first" },
+    { identity: "unidentified", order: "registration-first" },
+    { identity: "known", order: "preparation-first" },
+    { identity: "unidentified", order: "preparation-first" },
+  ] as const)(
+    "orders $identity Playwright close and dashboard retention when $order",
+    async ({ identity, order }) => {
+      const readCompleted = createDeferred<void>();
+      const releaseRead = createDeferred<void>();
+      const mutationPrepared = createDeferred<void>();
+      const releaseMutation = createDeferred<void>();
+      const closeRequested = createDeferred<void>();
+      const preparingRegistration = createDeferred<void>();
+      const finishPreparation = createDeferred<void>();
+      const targetOpened = createDeferred<void>();
+      const finishOpen = createDeferred<void>();
+      const dispatched = createDeferred<void>();
+      const finishClose = createDeferred<void>();
+      const runtime = getBrowserStateRuntime();
+      const bind = runtime.sessionTabs.withCurrent;
+      if (!bind) {
+        throw new Error("Expected the real worker comparison store");
+      }
+      let remainingReads = identity === "known" ? 1 : 2;
+      let closeStarted = false;
+      let holdMutation = order === "registration-first";
+      const observer = vi
+        .spyOn(runtime.sessionTabs, "withCurrent")
+        .mockImplementation((authority) => {
+          const store = bind(authority);
+          return {
+            ...store,
+            entries: async () => {
+              const entries = await store.entries();
+              if (order === "close-first" && closeStarted && --remainingReads === 0) {
+                readCompleted.resolve();
+                await releaseRead.promise;
+              }
+              return entries;
+            },
+            observe: async (key) => {
+              const result = await store.observe(key);
+              mutationPrepared.resolve();
+              if (holdMutation) {
+                holdMutation = false;
+                await releaseMutation.promise;
+              }
+              return result;
+            },
+          };
+        });
+      const close = vi.fn(async () => {
+        dispatched.resolve();
+        await finishClose.promise;
+        fixture.tabs = fixture.tabs.filter((tab) => tab.targetId !== "target-1");
+      });
+      browser.page.mockImplementation(async () => {
+        expect(fixture.tabs.map((tab) => tab.targetId)).toContain("target-1");
+        closeRequested.resolve();
+        return { close };
+      });
+      if (order !== "registration-first") {
+        browser.open.mockImplementationOnce(async () => {
+          const tab = fixture.openedTab();
+          if (order === "close-first") {
+            targetOpened.resolve();
+            await finishOpen.promise;
+          } else {
+            fixture.readBoard.mockImplementationOnce(async () => {
+              preparingRegistration.resolve();
+              await finishPreparation.promise;
+              return structuredClone({ sessionKey, widgets: fixture.widgets });
+            });
+          }
+          return tab;
+        });
+      }
+      const cdpUrl = "http://127.0.0.1:9222";
+      const closePage = () =>
+        identity === "known"
+          ? closePageByTargetIdViaPlaywright({ cdpUrl, targetId: "target-1" })
+          : closePageViaPlaywright({ cdpUrl });
+      let closing: Promise<void> | undefined;
+      let opening: ReturnType<typeof requestBrowserDashboard> | undefined;
+      let opened = false;
+      try {
+        opening = requestBrowserDashboard(request).then((result) => {
+          opened = true;
+          return result;
+        });
+        if (order === "close-first") {
+          await targetOpened.promise;
+          expect(fixture.tabs.map((tab) => tab.targetId)).toEqual(["target-1"]);
+          closeStarted = true;
+          closing = closePage();
+          await readCompleted.promise;
+          finishOpen.resolve();
+        }
+        if (order === "preparation-first") {
+          await preparingRegistration.promise;
+          closing = closePage();
+          await closeRequested.promise;
+        } else {
+          await mutationPrepared.promise;
+        }
+        if (order === "registration-first") {
+          closing = closePage();
+          await closeRequested.promise;
+        }
+        await trackSessionBrowserTab({
+          sessionKey,
+          targetId: "ordinary-tab",
+          profile: "openclaw",
+          ownership: durableOwnership("ordinary-tab"),
+        });
+        expect(opened).toBe(false);
+        expect(await readBrowserDashboardTabs()).toEqual([]);
+        if (order === "close-first") {
+          releaseRead.resolve();
+          await dispatched.promise;
+          await expect(opening).rejects.toThrow("close was dispatched during registration");
+          expect(opened).toBe(false);
+          expect(close).toHaveBeenCalledOnce();
+          finishClose.resolve();
+          await closing;
+          expect(fixture.tabs).toEqual([]);
+          expect(await readBrowserDashboardTabs()).toEqual([]);
+        } else {
+          expect(close).not.toHaveBeenCalled();
+          finishPreparation.resolve();
+          releaseMutation.resolve();
+          await opening;
+          finishClose.resolve();
+          await expect(closing).rejects.toThrow(/dashboard|retained/);
+          expect(close).not.toHaveBeenCalled();
+          expect(opened).toBe(true);
+          expect(fixture.tabs.map((tab) => tab.targetId)).toEqual(["target-1"]);
+          expect((await readBrowserDashboardTabs())[0]?.nativeTargetId).toBe("target-1");
+        }
+      } finally {
+        releaseRead.resolve();
+        finishPreparation.resolve();
+        finishOpen.resolve();
+        releaseMutation.resolve();
+        finishClose.resolve();
+        await Promise.allSettled([...(closing ? [closing] : []), ...(opening ? [opening] : [])]);
+        observer.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { state: "active tab", changed: "caller", cleanupKind: "lifecycle", phase: "board" },
+    { state: "Stop intent", changed: "caller", cleanupKind: "lifecycle", phase: "board" },
+    { state: "active tab", changed: "runtime", cleanupKind: "lifecycle", phase: "board" },
+    { state: "Stop intent", changed: "runtime", cleanupKind: "sweep", phase: "board" },
+    { state: "active tab", changed: "runtime", cleanupKind: "lifecycle", phase: "store" },
+    { state: "active tab", changed: "runtime", cleanupKind: "reconcile", phase: "store" },
+    { state: "Stop intent", changed: "runtime", cleanupKind: "reconcile", phase: "intents" },
+  ] as const)(
+    "preserves a dashboard $state and successor tabs when $changed changes during $cleanupKind $phase read",
+    async ({ state, changed, cleanupKind, phase }) => {
+      if (state === "active tab") {
+        await requestBrowserDashboard(request);
+      } else {
+        await stopBrowserDashboard(request);
+      }
+      fixture.widgets = [];
+      const reading = createDeferred<void>();
+      const finish = createDeferred<void>();
+      const pauseRead = async () => {
+        reading.resolve();
+        await finish.promise;
+      };
+      let remainingReads = phase === "intents" ? 2 : 1;
+      const storeRead =
+        phase !== "board"
+          ? interceptStoreActions((store) => ({
+              ...store,
+              entries: async () => {
+                if (--remainingReads === 0) {
+                  await pauseRead();
+                }
+                return await store.entries();
+              },
+            }))
+          : undefined;
+      if (phase === "board") {
+        fixture.readBoard.mockImplementationOnce(async () => {
+          await pauseRead();
+          return { sessionKey, widgets: [] };
+        });
+      }
+      let current = true;
+      const closeTab = vi.fn(async () => {});
+      const cleanup =
+        cleanupKind === "lifecycle"
+          ? closeTrackedBrowserTabsForSessions({
+              sessionKeys: [sessionKey],
+              isCurrent: () => current,
+              closeTab,
+            })
+          : cleanupKind === "sweep"
+            ? sweepTrackedBrowserTabs({
+                ordinaryCleanup: false,
+                isCurrent: () => current,
+                closeTab,
+              })
+            : reconcileBrowserDashboards({ isCurrent: () => current });
+      try {
+        await reading.promise;
+        if (changed === "runtime") {
+          await fixture.installRuntime();
+        } else {
+          current = false;
+        }
+        await trackSessionBrowserTab({
+          sessionKey,
+          targetId: "successor-tab",
+          profile: "openclaw",
+          ownership: durableOwnership("successor-tab"),
+        });
+        const retained = await getBrowserSessionTabStore().entries();
+        finish.resolve();
+        await expect(cleanup).resolves.toBe(0);
+        expect(await getBrowserSessionTabStore().entries()).toEqual(retained);
+        expect(closeTab).not.toHaveBeenCalled();
+        expect(browser.closeOwned).not.toHaveBeenCalled();
+
+        await expect(
+          closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey], closeTab }),
+        ).resolves.toBe(state === "active tab" ? 2 : 1);
+        expect(await getBrowserSessionTabStore().entries()).toEqual([]);
+      } finally {
+        finish.resolve();
+        storeRead?.mockRestore();
+        await cleanup;
+      }
+    },
+  );
 
   it.each([
     "initiator cancelled",
@@ -100,9 +372,9 @@ describe("Browser dashboard operation ordering", () => {
       expect(results[0].status).toBe(cancelInitiator ? "rejected" : "fulfilled");
       expect(results[1].status).toBe(cancelFollower ? "rejected" : "fulfilled");
       expect(fixture.tabs).toEqual([]);
-      expect(readBrowserDashboardTabs().some((tab) => tab.dashboard?.state === "active")).toBe(
-        false,
-      );
+      expect(
+        (await readBrowserDashboardTabs()).some((tab) => tab.dashboard?.state === "active"),
+      ).toBe(false);
       expect((await requestBrowserDashboard({ ...request, resume: true })).paused).toBe(false);
       expect(fixture.tabs).toHaveLength(1);
       return;
@@ -181,7 +453,7 @@ describe("Browser dashboard operation ordering", () => {
         middle.abort(new Error("queued caller cancelled"));
       } else {
         fixture.readBoard.mockImplementation(async () => {
-          if (readBrowserDashboardTabs().some((tab) => tab.dashboard?.url === updatedUrl)) {
+          if ((await readBrowserDashboardTabs()).some((tab) => tab.dashboard?.url === updatedUrl)) {
             fixture.widgets[0]!.props.url = originalUrl;
           }
           return structuredClone({ sessionKey, widgets: fixture.widgets });

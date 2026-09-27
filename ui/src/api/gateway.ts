@@ -32,7 +32,6 @@ import type {
   GatewayScopeUpgrade,
   ScopeUpgradeBinding,
 } from "@openclaw/gateway-client/scope-upgrade";
-// Control UI module implements gateway behavior.
 import {
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
   type ControlUiBootstrapProfileHint,

@@ -4,11 +4,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { publishDiagnostics } from "../../scripts/e2e/lib/upgrade-survivor/diagnostics.mjs";
 import { redactSensitiveText } from "../../src/logging/redact.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const node = resolveTestNodeExecPath();
@@ -79,6 +84,92 @@ function capture(f: ReturnType<typeof fixture>, outcome: "failed" | "passed" = "
   return JSON.parse(text);
 }
 
+it("returns only redacted failure coordinates after safe publication", () => {
+  const f = fixture();
+  vi.stubEnv("GITHUB_ACTIONS", "true");
+  const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  const raw = {
+    phase: "update-candidate",
+    exitStatus: 143,
+    signal: "SIGTERM",
+    logs: { "update.err": `${secret} ${privateBody} ::error::private-log` },
+    command: privateBody,
+    environment: { TOKEN: secret },
+  };
+  write(path.join(f.artifacts, "diagnostics/raw.json"), raw);
+  const output = path.join(f.root, "public");
+  const redact = (text: string) =>
+    text === raw.phase ? "safe%phase\r\n::error::not-another-command" : redactSensitiveText(text);
+  const failure = publishDiagnostics(f.artifacts, output, redact);
+  expect(failure).toEqual({
+    phase: "safe%phase\r\n::error::not-another-command",
+    exitStatus: 143,
+    signal: "SIGTERM",
+  });
+  expect(JSON.stringify(failure)).not.toContain(secret);
+  expect(JSON.stringify(failure)).not.toContain(privateBody);
+  expect(stderr.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
+  expect(JSON.parse(fs.readFileSync(path.join(output, "failure.json"), "utf8"))).toMatchObject({
+    phase: raw.phase,
+    exitStatus: 143,
+    signal: "SIGTERM",
+  });
+});
+
+it("does not annotate local runs, invalid snapshots, or failed publication", () => {
+  const f = fixture();
+  const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  const rawPath = path.join(f.artifacts, "diagnostics/raw.json");
+  const raw = { phase: "update-candidate", exitStatus: 1, signal: null };
+  write(rawPath, raw);
+  vi.stubEnv("GITHUB_ACTIONS", "false");
+  publishDiagnostics(f.artifacts, path.join(f.root, "local"), redactSensitiveText);
+  vi.stubEnv("GITHUB_ACTIONS", "true");
+  write(rawPath, { ...raw, phase: "update\n::error::injected" });
+  expect(() =>
+    publishDiagnostics(f.artifacts, path.join(f.root, "invalid"), redactSensitiveText),
+  ).toThrow();
+  write(rawPath, raw);
+  const blocked = path.join(f.root, "blocked");
+  fs.writeFileSync(blocked, "not a directory");
+  expect(() => publishDiagnostics(f.artifacts, blocked, redactSensitiveText)).toThrow();
+  expect(stderr.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
+});
+
+it("emits the published failure metadata through the host CLI without changing its exit status", () => {
+  const f = fixture();
+  write(path.join(f.artifacts, "diagnostics/raw.json"), {
+    phase: "recovery-update-restart",
+    exitStatus: 1,
+    signal: null,
+    logs: { "update.err": `${secret} ${privateBody}` },
+  });
+  const destination = path.join(f.root, "public");
+  const result = spawnSync(
+    node,
+    [
+      "--import",
+      path.resolve("scripts/tsx.mjs"),
+      path.resolve("scripts/upgrade-survivor-diagnostics.mjs"),
+      "publish",
+      f.artifacts,
+      destination,
+    ],
+    { env: { ...f.env, GITHUB_ACTIONS: "true" }, encoding: "utf8", timeout: 10_000 },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr.split("\n").filter((line) => line.startsWith("::error"))).toEqual([
+    "::error title=Upgrade survivor failure::phase=recovery-update-restart; exitStatus=1; signal=none",
+  ]);
+  expect(result.stderr).not.toContain(secret);
+  expect(result.stderr).not.toContain(privateBody);
+  const control = path.join(f.root, "unannotated-publication");
+  publishDiagnostics(f.artifacts, control, redactSensitiveText);
+  expect(fs.readFileSync(path.join(destination, "failure.json"), "utf8")).toBe(
+    fs.readFileSync(path.join(control, "failure.json"), "utf8"),
+  );
+});
+
 function pluginPolicyReceipt() {
   return {
     baselineVersion: "2026.9.2",
@@ -113,11 +204,14 @@ function policySuccessSummary(pluginPolicy: unknown) {
 
 it("preserves historical success receipts without adopting policy sidecars", () => {
   const f = fixture();
+  vi.stubEnv("GITHUB_ACTIONS", "true");
+  const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   write(path.join(f.artifacts, "summary.json"), policySuccessSummary(undefined));
   write(path.join(f.artifacts, "webhooks-only-policy/result.json"), { privateBody });
   const report = capture(f, "passed");
   expect(report).not.toHaveProperty("pluginPolicy");
   expect(report.logs).not.toHaveProperty("webhooks-only-policy/result.json");
+  expect(stderr.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
 });
 
 it("requires policy evidence when a successful receipt records the completed probe", () => {

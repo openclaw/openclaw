@@ -15,7 +15,6 @@ import {
   writePrivateUpdateHandoffChildGuard,
 } from "../../test/helpers/private-update-handoff-store.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "./state-database-coordinator.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 
 const roots: string[] = [];
@@ -40,7 +39,6 @@ function fixture() {
   fs.symlinkSync(install, slot, process.platform === "win32" ? "junction" : "dir");
   const privateTmp = make("private-tmp");
   const state = make("state");
-  const coordinator = make("coordinator");
   const { databasePath: handoff } = installPrivateUpdateHandoffStore(privateTmp);
   const binding = createManagedHandoffTestBinding(privateTmp);
   const childEnv = writePrivateUpdateHandoffChildGuard(handoff, privateTmp);
@@ -58,7 +56,6 @@ function fixture() {
   const store = createManagedHandoffLeaseStore({ databasePath: handoff, serviceManagerEnv: env });
   const child = path.join(root, "original-owner.mts");
   const executorUrl = new URL("../cli/update-cli/update-command-executor.ts", import.meta.url).href;
-  const coordinatorUrl = new URL("./state-database-coordinator.ts", import.meta.url).href;
   const leaseUrl = new URL("./update-managed-service-handoff-lease.ts", import.meta.url).href;
   const crash = (mode: "ordinary" | "cancelled" = "ordinary", holderPid?: number) => {
     fs.writeFileSync(
@@ -67,20 +64,18 @@ function fixture() {
 import { createRequire } from "node:module";
 createRequire(import.meta.url)(${JSON.stringify(path.join(privateTmp, "private-handoff-guard.cjs"))});
 const { withUpdateCommandExecutor, requestUpdateCommandExecutorCancellation } = await import(${JSON.stringify(executorUrl)});
-const { withStateDatabaseCoordinatorRuntimeDirectory } = await import(${JSON.stringify(coordinatorUrl)});
 const { createManagedHandoffLeaseStore } = await import(${JSON.stringify(leaseUrl)});
 const runId = ${JSON.stringify(randomUUID())};
-await withStateDatabaseCoordinatorRuntimeDirectory({directory:${JSON.stringify(coordinator)},keepAlive:false}, () =>
-  withUpdateCommandExecutor(runId, async (executor) => {
-    const fence = await executor.enter(${JSON.stringify(slot)});
-    if (${JSON.stringify(holderPid ?? null)} !== null) {
-      const store = createManagedHandoffLeaseStore({databasePath:${JSON.stringify(handoff)},serviceManagerEnv:process.env});
-      const current = store.read(${JSON.stringify(slot)});
-      if (current.kind !== "current" || !store.bind(current.lease, ${JSON.stringify(holderPid ?? 0)})) { throw new Error("Fixture slot binding failed"); }
-    }
-    if (${JSON.stringify(mode)} === "cancelled") requestUpdateCommandExecutorCancellation(fence, runId, new Error("original cancellation"));
-    process.kill(process.pid, "SIGKILL");
-  }));
+await withUpdateCommandExecutor(runId, async (executor) => {
+  const fence = await executor.enter(${JSON.stringify(slot)});
+  if (${JSON.stringify(holderPid ?? null)} !== null) {
+    const store = createManagedHandoffLeaseStore({databasePath:${JSON.stringify(handoff)},serviceManagerEnv:process.env});
+    const current = store.read(${JSON.stringify(slot)});
+    if (current.kind !== "current" || !store.bind(current.lease, ${JSON.stringify(holderPid ?? 0)})) { throw new Error("Fixture slot binding failed"); }
+  }
+  if (${JSON.stringify(mode)} === "cancelled") requestUpdateCommandExecutorCancellation(fence, runId, new Error("original cancellation"));
+  process.kill(process.pid, "SIGKILL");
+});
 `,
     );
     const result = spawnSync(process.execPath, ["--import", "tsx", binding.nodeOption, child], {
@@ -108,23 +103,21 @@ await withStateDatabaseCoordinatorRuntimeDirectory({directory:${JSON.stringify(c
     return { original, occupied };
   };
   const retry = () =>
-    withStateDatabaseCoordinatorRuntimeDirectory({ directory: coordinator, keepAlive: false }, () =>
-      withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(slot);
-        fence.assertCurrent();
-        const original = store.read(install),
-          occupied = store.read(slot);
-        expect(original.kind).toBe("current");
-        expect(occupied.kind).toBe("current");
-        if (original.kind !== "current" || occupied.kind !== "current") {
-          throw new Error("Missing new pair");
-        }
-        expect(original.lease.helper.pid).toBe(process.pid);
-        expect(occupied.lease.owner).toBe(original.lease.owner);
-        expect(store.current(original.lease)).toBe(true);
-        expect(store.current(occupied.lease)).toBe(true);
-      }),
-    );
+    withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(slot);
+      fence.assertCurrent();
+      const original = store.read(install),
+        occupied = store.read(slot);
+      expect(original.kind).toBe("current");
+      expect(occupied.kind).toBe("current");
+      if (original.kind !== "current" || occupied.kind !== "current") {
+        throw new Error("Missing new pair");
+      }
+      expect(original.lease.helper.pid).toBe(process.pid);
+      expect(occupied.lease.owner).toBe(original.lease.owner);
+      expect(store.current(original.lease)).toBe(true);
+      expect(store.current(occupied.lease)).toBe(true);
+    });
   return { root, install, slot, handoff, store, env, crash, retry };
 }
 

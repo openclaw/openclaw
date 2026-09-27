@@ -130,7 +130,7 @@ async function arrangeAuthorityProof(name: string) {
   const send = (caller = parent, approvalSignal?: AbortSignal, mode?: "resume") => {
     const tool = createSessionsSendTool({
       agentSessionKey: caller,
-      config: { tools: { sessions: { visibility: "all" } } },
+      config: { ...getRuntimeConfig(), tools: { sessions: { visibility: "all" } } },
       idempotencyKey: runId,
     });
     return withGatewayToolCallerIdentity(
@@ -461,7 +461,7 @@ it.each(["explicit", "automatic"] as const)(
       });
       const tool = createSessionsSendTool({
         agentSessionKey: parent,
-        config: { tools: { sessions: { visibility: "all" } } },
+        config: { ...getRuntimeConfig(), tools: { sessions: { visibility: "all" } } },
       });
       const result = await withPluginRuntimeGatewayRequestScope(
         {

@@ -6,8 +6,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
-import { Program } from "typescript/unstable/async";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as nativeDeclarations from "../../scripts/lib/native-declaration-subprocess.mts";
 import * as nativeTypeScript from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeclarationClosureRenderer } from "./api-baseline-declaration-closure.js";
@@ -577,6 +577,38 @@ describe("Plugin SDK API baseline", () => {
     expect(fixtureError).not.toContain("return this.status");
   });
 
+  it.skipIf(process.platform === "win32")(
+    "joins the native declaration compiler before opening semantic overlays",
+    async () => {
+      const createProject = nativeTypeScript.createNativeTypeScriptProject;
+      let observedOverlay = false;
+      const create = vi
+        .spyOn(nativeTypeScript, "createNativeTypeScriptProject")
+        .mockImplementation((options) => {
+          if (Object.keys(options.files ?? {}).some((file) => file.endsWith("fixture.ts"))) {
+            observedOverlay = true;
+            const processes = spawnSync("ps", ["-axo", "pid=,ppid=,command="], {
+              encoding: "utf8",
+            });
+            expect(processes.status).toBe(0);
+            expect(
+              processes.stdout
+                .split("\n")
+                .filter((line) => line.includes("--api --async") && line.includes(options.cwd)),
+            ).toEqual([]);
+          }
+          return createProject(options);
+        });
+      try {
+        const rendered = await renderSourceFixture({ "fixture.ts": "export const value = 1;" });
+        expect(observedOverlay).toBe(true);
+        expect(rendered.modules[0]?.exports[0]?.declaration).toBe("export const value: 1;");
+      } finally {
+        create.mockRestore();
+      }
+    },
+  );
+
   it.each(
     ["source project creation", "declaration emission"].flatMap((timing) =>
       [0, 60_000].map((clockSkewMs) => ({ timing, clockSkewMs })),
@@ -644,7 +676,8 @@ describe("Plugin SDK API baseline", () => {
       const createProject = nativeTypeScript.createNativeTypeScriptProject;
       const create = vi.spyOn(nativeTypeScript, "createNativeTypeScriptProject");
       // Declaration errors come from the emit result, the last compiler stage before publication.
-      const emit = vi.spyOn(Program.prototype, "emitToString");
+      const emitDeclarations = nativeDeclarations.emitNativeDeclarationsInSubprocess;
+      const emit = vi.spyOn(nativeDeclarations, "emitNativeDeclarationsInSubprocess");
       if (timing === "source project creation") {
         create.mockImplementationOnce(function intercept(options) {
           const native = createProject(options);
@@ -657,14 +690,11 @@ describe("Plugin SDK API baseline", () => {
           return native;
         });
       } else {
-        emit.mockImplementationOnce(async function (this: Program, ...args) {
+        emit.mockImplementationOnce(async function (options) {
           emit.mockRestore();
-          const result = await this.emitToString(...args);
-          expect(
-            (await this.getSourceFileNames()).some((file) => path.resolve(file) === entry),
-          ).toBe(true);
-          expect(result.emitSkipped).toBe(false);
-          expect(result.diagnostics).toEqual([]);
+          const result = await emitDeclarations(options);
+          expect(result.inputs).toContain(entry);
+          expect(result.declarations.get(entry)?.code).toContain('"checked"');
           changeSource();
           return result;
         });

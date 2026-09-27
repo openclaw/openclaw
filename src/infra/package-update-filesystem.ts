@@ -261,9 +261,9 @@ export async function copyPackagePathEntry(
           sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
           preserveSourceMode: true,
           mkdir: false,
-          // Journal publication performs a strict sync below: fs-safe's ordinary
-          // durable copy is best effort for EPERM, which cannot authorize an ack.
-          durable: false,
+          // Journal publication performs its own strict sync below; ordinary
+          // copies retain fs-safe's best-effort durability.
+          durable: !beforePublish,
         });
       } else {
         throw new Error(`Unsupported package entry: ${from}`);

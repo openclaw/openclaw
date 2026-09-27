@@ -320,16 +320,10 @@ export async function recoverStore(params: {
       continue;
     }
     const recordResumeResult = (resumeResult: Awaited<ReturnType<typeof resumeMainSession>>) => {
-      if (resumeResult === "started") {
+      result[resumeResult]++;
+      if (resumeResult === "started" || resumeResult === "settled") {
         params.handledSessionKeys.add(resumeDedupeKey);
-        result.started++;
-      } else if (resumeResult === "settled") {
-        params.handledSessionKeys.add(resumeDedupeKey);
-        result.settled++;
-      } else if (resumeResult === "skipped") {
-        result.skipped++;
-      } else {
-        result.failed++;
+      } else if (resumeResult === "failed") {
         const current = loadExpectedRestartRecoveryTarget({
           expected: { agentId, sessionId: entry.sessionId, sessionKey },
           storePath: params.storePath,
@@ -398,11 +392,9 @@ export async function recoverStore(params: {
         pendingFinalDeliveryIntentId: entry.pendingFinalDelivery?.intentId,
         reason: "delivered-terminal-receipt",
       });
+      result[completion.outcome === "completed" ? "settled" : "skipped"]++;
       if (completion.outcome === "completed") {
         params.handledSessionKeys.add(resumeDedupeKey);
-        result.settled++;
-      } else {
-        result.skipped++;
       }
       continue;
     }

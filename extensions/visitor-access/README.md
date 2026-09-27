@@ -38,7 +38,8 @@ account. Enable the plugin in the source-built Gateway configuration:
 }
 ```
 
-Restart the Gateway after enabling the plugin or changing its configuration.
+Enabling the plugin or changing its configuration applies through plugin hot reload;
+no Gateway restart is required.
 Do not retarget `accountId`, `appId`, or `policyName` while grants exist: the
 durable records belong to that policy, and changing targets could leave the old
 policy granting access without expiry sweeps. Revoke grants before retargeting.

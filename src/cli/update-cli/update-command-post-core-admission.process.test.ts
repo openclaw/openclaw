@@ -85,15 +85,14 @@ await import("./entry.js");
       workerPath,
       path.join(path.dirname(workerPath), "update-migrated-finalize.implementation.js"),
     );
-    // Native children need the same isolated lifecycle-coordinator location as
-    // the parent. The receiver and all authority/result owners remain real.
+    // Keep native children inside the fixture's private temp root. The receiver
+    // and all authority/result owners remain real.
     await fs.promises.writeFile(
       workerPath,
       `import { appendFileSync, existsSync } from "node:fs";
 import fsp from "node:fs/promises";
 import * as json5 from "json5";
 import { registerSealedRuntime } from "./sealed-runtime-registry.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "./state-database-coordinator.js";
 registerSealedRuntime({ json5, resolveSecureTempRoot: () => ${JSON.stringify(state.path("control"))} });
 const resultPath = process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
 if (process.argv[2] === "--post-core" && resultPath && existsSync(${JSON.stringify(state.path("fail-response-publication"))})) {
@@ -106,8 +105,7 @@ if (process.argv[2] === "--post-core" && resultPath && existsSync(${JSON.stringi
     return rename(from, to);
   };
 }
-await withStateDatabaseCoordinatorRuntimeDirectory(${JSON.stringify(state.path("control"))}, () =>
-  import("./update-migrated-finalize.implementation.js"));
+await import("./update-migrated-finalize.implementation.js");
 `,
     );
     const readOnlyWorker = path.join(
@@ -122,22 +120,10 @@ await withStateDatabaseCoordinatorRuntimeDirectory(${JSON.stringify(state.path("
     );
     await fs.promises.writeFile(
       readOnlyWorker,
-      `import { AsyncLocalStorage } from "node:async_hooks";
-import * as json5 from "json5";
+      `import * as json5 from "json5";
 import { registerSealedRuntime } from "./sealed-runtime-registry.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "./state-database-coordinator.js";
 registerSealedRuntime({ json5, resolveSecureTempRoot: () => ${JSON.stringify(state.path("control"))} });
-const on = process.on;
-try {
-  await withStateDatabaseCoordinatorRuntimeDirectory(${JSON.stringify(state.path("control"))}, async () => {
-    process.on = function(event, listener) {
-      return on.call(this, event, event === "message" ? AsyncLocalStorage.bind(listener) : listener);
-    };
-    await import("./sqlite-readonly-location.implementation.js");
-  });
-} finally {
-  process.on = on;
-}
+await import("./sqlite-readonly-location.implementation.js");
 `,
     );
     await writePackageRoot(packageRoot, "2026.8.1");

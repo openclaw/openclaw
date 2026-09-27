@@ -1,23 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { aroundEach, vi } from "vitest";
+import { vi } from "vitest";
 import { resolveServiceManagerEnv } from "../../src/daemon/service-process-env.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../../src/infra/state-database-coordinator.js";
 import * as temporaryRoot from "../../src/infra/tmp-openclaw-dir.js";
 import * as managedHandoff from "../../src/infra/update-managed-service-handoff-lease.js";
-
-// The handoff store and the lifecycle coordinator are distinct SQLite stores.
-// Keep the entire test lifetime (including hooks) in its owned coordinator scope.
-aroundEach(async (runTest) => {
-  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "update-coordinator-")));
-  try {
-    await withStateDatabaseCoordinatorRuntimeDirectory(directory, runTest);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
 
 export function installPrivateUpdateHandoffStore(directory: string) {
   const privateDirectory = fs.realpathSync(directory);

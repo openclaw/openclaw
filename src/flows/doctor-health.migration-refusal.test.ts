@@ -5,9 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
+import * as gatewayLock from "../infra/gateway-lock.js";
+import {
+  acquireGatewayStateOwner,
+  acquireStateDatabaseSchemaLease,
+} from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
-import * as coordinators from "../infra/state-database-coordinator.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import {
@@ -368,7 +372,7 @@ describe("Doctor maintenance admission", () => {
   );
 
   it.each(
-    (["gateway", "state", "agent"] as const).flatMap((owner) =>
+    (["gateway", "schema", "agent"] as const).flatMap((owner) =>
       [false, true].map((updating) => ({ owner, updating })),
     ),
   )(
@@ -394,70 +398,71 @@ describe("Doctor maintenance admission", () => {
         const before = fs.existsSync(state.configPath)
           ? fs.readFileSync(state.configPath, "utf8")
           : undefined;
-        const gatewayAcquisitions = vi.spyOn(coordinators, "acquireGatewayMaintenanceCoordinator");
-        const stateAcquisitions = vi.spyOn(coordinators, "acquireStateDatabaseCoordinator");
-        if (owner !== "agent") {
-          (owner === "gateway" ? gatewayAcquisitions : stateAcquisitions).mockImplementation(() => {
-            throw new coordinators.StateDatabaseCoordinatorContentionError(
-              owner === "gateway" ? "gateway-lifecycle" : "state-lifecycle",
-            );
-          });
-        }
-        await import("../commands/doctor-maintenance.js");
-        snapshotProcesses.execFile.mockClear();
-        mocks.runContributions.mockClear();
-        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        const failure = await runDoctorHealthFlow(
-          runtime,
-          {
-            repair: true,
-            nonInteractive: true,
-          },
-          undefined,
-          { incompatible: [], indeterminate: [] },
-        ).catch((error: unknown) => error);
-        const result = resultPath
-          ? await consumeUpdatePostInstallDoctorResult(resultPath)
-          : undefined;
-        expect(
-          snapshotProcesses.execFile.mock.calls.filter(
-            (call) => Array.isArray(call[1]) && call[1].includes(SQLITE_READONLY_CHILD_ARG),
-          ),
-        ).toEqual([]);
-        if (updating) {
-          expect(failure).toBeUndefined();
-          expect(mocks.runContributions).not.toHaveBeenCalled();
-          expect(result).toMatchObject({
-            status: "ok",
-            configHash: "unchanged",
-            maintenanceRefusal: {
-              kind: "deferred",
-              reason: owner === "agent" ? "agent-database-in-use" : "coordinator-contention",
-            },
-            warnings: [expect.stringContaining("Doctor could not enter maintenance")],
-          });
-          expect(runtime.exit).toHaveBeenCalledWith(0);
-        } else if (owner === "agent") {
-          expect(failure).toBeInstanceOf(Error);
-          expect(failure).toBeInstanceOf(UpdateDoctorError);
-          expect(collectUpdateDoctorFailureFacts(failure)).toEqual([
+        const stateOwner =
+          owner === "gateway"
+            ? acquireGatewayStateOwner({ databasePath: database.path })
+            : owner === "schema"
+              ? acquireStateDatabaseSchemaLease(database.path)
+              : undefined;
+        try {
+          const gatewayAcquisitions = vi.spyOn(gatewayLock, "acquireGatewayLock");
+          await import("../commands/doctor-maintenance.js");
+          snapshotProcesses.execFile.mockClear();
+          mocks.runContributions.mockClear();
+          const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          const failure = await runDoctorHealthFlow(
+            runtime,
             {
-              check: "doctor",
-              code: "agent-database-lease-active",
-              message:
-                "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
+              repair: true,
+              nonInteractive: true,
             },
-          ]);
-        } else {
-          expect(failure).toBeInstanceOf(Error);
-          expect(String(failure)).toMatch(/Stop.*service|stop.*process/);
+            undefined,
+            { incompatible: [], indeterminate: [] },
+          ).catch((error: unknown) => error);
+          const result = resultPath
+            ? await consumeUpdatePostInstallDoctorResult(resultPath)
+            : undefined;
+          expect(
+            snapshotProcesses.execFile.mock.calls.filter(
+              (call) => Array.isArray(call[1]) && call[1].includes(SQLITE_READONLY_CHILD_ARG),
+            ),
+          ).toEqual([]);
+          if (updating) {
+            expect(failure).toBeUndefined();
+            expect(mocks.runContributions).not.toHaveBeenCalled();
+            expect(result).toMatchObject({
+              status: "ok",
+              configHash: "unchanged",
+              maintenanceRefusal: {
+                kind: "deferred",
+                reason: owner === "agent" ? "agent-database-in-use" : "coordinator-contention",
+              },
+              warnings: [expect.stringContaining("Doctor could not enter maintenance")],
+            });
+            expect(runtime.exit).toHaveBeenCalledWith(0);
+          } else if (owner === "agent") {
+            expect(failure).toBeInstanceOf(Error);
+            expect(failure).toBeInstanceOf(UpdateDoctorError);
+            expect(collectUpdateDoctorFailureFacts(failure)).toEqual([
+              {
+                check: "doctor",
+                code: "agent-database-lease-active",
+                message:
+                  "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
+              },
+            ]);
+          } else {
+            expect(failure).toBeInstanceOf(Error);
+            expect(String(failure)).toMatch(/Stop.*service|stop.*process/);
+          }
+          // Refuse without retrying ownership; snapshot/read startup cost depends on the host.
+          expect(gatewayAcquisitions).toHaveBeenCalledOnce();
+          expect(
+            fs.existsSync(state.configPath) ? fs.readFileSync(state.configPath, "utf8") : undefined,
+          ).toBe(before);
+        } finally {
+          stateOwner?.release();
         }
-        // Refuse without retrying ownership; snapshot/read startup cost depends on the host.
-        expect(gatewayAcquisitions).toHaveBeenCalledOnce();
-        expect(stateAcquisitions).toHaveBeenCalledTimes(owner === "gateway" ? 0 : 1);
-        expect(
-          fs.existsSync(state.configPath) ? fs.readFileSync(state.configPath, "utf8") : undefined,
-        ).toBe(before);
       });
     },
   );

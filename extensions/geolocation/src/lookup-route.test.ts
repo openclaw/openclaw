@@ -1,12 +1,22 @@
 import type { ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGeolocationSettings } from "./config.js";
 import { createGeolocationLookupHandler } from "./lookup-route.js";
+import { createGeolocationLookup } from "./lookup.js";
+
+const { revalidate } = vi.hoisted(() => ({ revalidate: vi.fn<() => Promise<void>>() }));
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: () => ({ revalidate }),
+}));
+
+beforeEach(() => {
+  revalidate.mockReset();
+});
 
 const settings = resolveGeolocationSettings(undefined);
 
 async function lookup(
-  deps: Omit<Parameters<typeof createGeolocationLookupHandler>[0], "settings">,
+  deps: Omit<Parameters<typeof createGeolocationLookup>[0], "settings">,
   ip = "8.8.8.8",
 ) {
   const chunks: string[] = [];
@@ -22,7 +32,7 @@ async function lookup(
       }
     },
   };
-  await createGeolocationLookupHandler({ settings, ...deps })(
+  await createGeolocationLookupHandler(createGeolocationLookup({ settings, ...deps }))(
     { url: `/plugins/geolocation/lookup?ip=${ip}` } as never,
     res as unknown as ServerResponse,
   );
@@ -30,6 +40,35 @@ async function lookup(
 }
 
 describe("geolocation lookup route", () => {
+  it("withholds results if HTTP authority expires during the database load", async () => {
+    const expired = new Error("HTTP grant revoked");
+    let current = true;
+    revalidate.mockImplementation(async () => {
+      if (!current) {
+        throw expired;
+      }
+    });
+    const handler = createGeolocationLookupHandler(
+      createGeolocationLookup({
+        settings,
+        loadDatabase: async () => {
+          current = false;
+          return { lookup: () => null };
+        },
+      }),
+    );
+    const respond = vi.fn();
+    const response = { writeHead: respond, end: respond };
+    respond.mockReturnValue(response);
+    await expect(
+      handler(
+        { url: "/plugins/geolocation/lookup?ip=8.8.8.8" } as never,
+        response as unknown as ServerResponse,
+      ),
+    ).rejects.toBe(expired);
+    expect(respond).not.toHaveBeenCalled();
+  });
+
   it("answers with the placement and the credit its license requires", async () => {
     const out = await lookup({
       loadDatabase: async () => ({

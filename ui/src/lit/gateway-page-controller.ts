@@ -45,6 +45,7 @@ export class GatewayPageController implements ReactiveController {
   private readonly subscriptions: SubscriptionsController;
   private currentGateway: ApplicationContext["gateway"] | null = null;
   private currentSnapshot: ApplicationGatewaySnapshot | null = null;
+  // Snapshots can be mutated in place; retain the previous transport facts.
   private currentClient: GatewayBrowserClient | null = null;
   private currentConnected = false;
   private hasBoundGateway = false;
@@ -63,12 +64,11 @@ export class GatewayPageController implements ReactiveController {
       this.hasBoundGateway = true;
       this.currentGateway = gateway;
       this.applySnapshot(gateway.snapshot, { initial, sourceChanged });
-      const unsubscribe = gateway.subscribe((snapshot) => {
+      return gateway.subscribe((snapshot) => {
         if (this.currentGateway === gateway && this.options.getGateway() === gateway) {
           this.applySnapshot(snapshot, { initial: false, sourceChanged: false });
         }
       });
-      return () => unsubscribe();
     });
     // Register after subscriptions so source cleanup happens before the
     // synthetic stopped transition on disconnect.
