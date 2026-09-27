@@ -18,8 +18,9 @@ import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.t
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
 const observed = vi.hoisted(() => ({
   run: vi.fn<(input: unknown, options: WorkerTaskOptions<unknown>) => Promise<unknown>>(),
-  rotate: vi.fn<() => Promise<void>>(),
-  closeResources: vi.fn<(key?: string) => Promise<void>>(),
+  // Import-time pools are drained even when a name filter skips every test.
+  rotate: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  closeResources: vi.fn<(key?: string) => Promise<void>>().mockResolvedValue(undefined),
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
 }));
