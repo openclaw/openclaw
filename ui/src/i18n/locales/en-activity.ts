@@ -6,9 +6,17 @@ import { en } from "./en.ts";
 const enActivity = {
   activity: {
     images: {
-      failed: "Image previews are unavailable. Open the session or retry.",
-      older: "Search older images",
-      incomplete: "Some images are too large to preview here. Open the session to see them.",
+      failed: "Couldn't load images",
+      older: "Older images",
+      incomplete: "Images too large to preview here",
+    },
+    pulse: {
+      sessions: "sessions",
+      started: "started",
+      people: "people",
+      running: "running now",
+      hour: "{hour} · {count} sessions",
+      description: "{count} sessions today; peak hour {hour}",
     },
     git: {
       pullRequest: "{repository} pull request #{number}: {title} ({state})",

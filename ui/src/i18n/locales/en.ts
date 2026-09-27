@@ -234,6 +234,9 @@ export const en: TranslationMap & {
     recommended: "Recommended",
     skip: "Skip for now",
   },
+  nativeConversation: {
+    openDashboardFailed: "Couldn't open that page in the Dashboard",
+  },
   nativeLinkMenu: {
     label: "Link actions",
     openInline: "Open in Browser Panel",
@@ -2444,7 +2447,6 @@ export const en: TranslationMap & {
     lastActive: "· {time}",
     unresolvedIdentities: "Unresolved identities",
     clearPersonFilter: "Clear person filter",
-    sessions: "Sessions",
     showing: "Showing {shown} of {total}",
     today: "Today",
     yesterday: "Yesterday",

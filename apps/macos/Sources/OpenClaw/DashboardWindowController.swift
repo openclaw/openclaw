@@ -88,7 +88,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     var hasCurrentBrowserSession: Bool {
-        // Renewals revoke the lease before awaited WebKit cleanup replaces the document.
+        // Account changes revoke the lease before awaited WebKit cleanup replaces the document.
         guard self.browserSessionLease?.isCurrent != false else { return false }
         do {
             try self.browserSession?.validate(for: self.currentURL)
@@ -369,10 +369,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     func invalidateBrowserSession(error: GatewayBrowserSessionError? = nil) {
         self.invalidateGatewayHealth()
-        if let route = self.browserSignInRoute, let url = self.webView.url,
-           Self.isTrustedLinkSource(url, dashboardURL: route.baseURL)
-        {
-            self.browserSignInRoute = (route.baseURL, url)
+        if let url = self.webView.url, Self.isTrustedLinkSource(url, dashboardURL: self.currentURL) {
+            self.browserSignInRoute = (self.currentURL, url)
         }
         if self.signedOut != nil {
             self.signedOutNeedsRefresh = true

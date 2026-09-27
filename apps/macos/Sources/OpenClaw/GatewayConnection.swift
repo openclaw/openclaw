@@ -240,6 +240,11 @@ actor GatewayConnection: Observable {
         return connection.lease.endpointRevision
     }
 
+    nonisolated var hasConnectedServer: Bool {
+        guard case let .connected(connection) = self.connectionPublication.value else { return false }
+        return self.serverLeaseMatchesCurrentState(connection.lease)
+    }
+
     private func publishConnectedServerLease() {
         // Retirement clears authority before changing any other actor state.
         // Only a fully admitted handshake may replace that terminal publication.
