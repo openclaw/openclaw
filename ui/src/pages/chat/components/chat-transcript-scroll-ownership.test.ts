@@ -201,7 +201,8 @@ describe("chat transcript scroll ownership", () => {
   it.each(["resize clamp", "native return"] as const)(
     "distinguishes a %s after same-range reader scrolling before composer layout",
     async (movement) => {
-      vi.useFakeTimers();
+      // The frame fixture must restore native rAF after the fake clock is uninstalled.
+      vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
       const flushFrames = stubAnimationFrames();
       transcriptDomState.measuredRowHeight = 1000;
       const container = document.body.appendChild(document.createElement("div"));
