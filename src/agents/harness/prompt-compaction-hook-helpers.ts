@@ -82,9 +82,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     ...(typeof currentUserMessageText === "string"
       ? { currentUserMessage: currentUserMessageText }
       : {}),
-    ...(typeof currentUserMessageId === "string"
-      ? { currentUserMessageId }
-      : {}),
+    ...(typeof currentUserMessageId === "string" ? { currentUserMessageId } : {}),
     messages: params.messages,
   };
 

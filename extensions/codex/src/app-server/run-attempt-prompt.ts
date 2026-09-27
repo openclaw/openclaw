@@ -286,7 +286,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   // Refresh changes the transport prompt, but retains the admitted request's recorder.
   const buildPromptFromCurrentInputs = () =>
     resolveAgentHarnessBeforePromptBuildResult({
-      currentUserMessage: admittedMessage ?? (params.pluginRuntimeRefreshMessages ? "" : params.prompt),
+      currentUserMessage:
+        admittedMessage ?? (params.pluginRuntimeRefreshMessages ? "" : params.prompt),
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
       developerInstructions: {
         build: ({ hasToolRestrictions }) => {

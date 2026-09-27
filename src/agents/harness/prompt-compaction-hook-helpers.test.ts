@@ -4,9 +4,9 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
 
 afterEach(() => {
@@ -240,37 +240,40 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     { toolsAllow: ["read*"], hasToolRestrictions: true },
     { toolsAllow: ["*"], hasToolRestrictions: false },
     { toolsAllow: ["read", " * "], hasToolRestrictions: false },
-  ])("classifies $toolsAllow before building system instructions", async ({ toolsAllow, hasToolRestrictions }) => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: () => ({
-            appendSystemContext: "after replacement",
-            prependSystemContext: "before replacement",
-            systemPrompt: "hook replacement",
-            toolsAllow,
-          }),
-        },
-      ]),
-    );
-    const build = vi.fn(() => "policy-filtered base");
+  ])(
+    "classifies $toolsAllow before building system instructions",
+    async ({ toolsAllow, hasToolRestrictions }) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            handler: () => ({
+              appendSystemContext: "after replacement",
+              prependSystemContext: "before replacement",
+              systemPrompt: "hook replacement",
+              toolsAllow,
+            }),
+          },
+        ]),
+      );
+      const build = vi.fn(() => "policy-filtered base");
 
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "answer directly",
-      developerInstructions: { build },
-      messages: [],
-      ctx: {},
-    });
+      const result = await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "answer directly",
+        developerInstructions: { build },
+        messages: [],
+        ctx: {},
+      });
 
-    expect(build).toHaveBeenCalledWith({ toolsAllow, hasToolRestrictions });
-    expect(result).toMatchObject({
-      ...(toolsAllow !== undefined ? { toolsAllow } : {}),
-      developerInstructions:
-        "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\nhook replacement\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
-    });
-    expect(result.developerInstructions).not.toContain("policy-filtered base");
-  });
+      expect(build).toHaveBeenCalledWith({ toolsAllow, hasToolRestrictions });
+      expect(result).toMatchObject({
+        ...(toolsAllow !== undefined ? { toolsAllow } : {}),
+        developerInstructions:
+          "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\nhook replacement\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
+      });
+      expect(result.developerInstructions).not.toContain("policy-filtered base");
+    },
+  );
 
   it("retains an empty prompt range without hooks", async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
