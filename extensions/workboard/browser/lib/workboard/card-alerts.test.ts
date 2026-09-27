@@ -6,7 +6,7 @@ import {
   type CardAlert,
 } from "./card-alerts.ts";
 import { getCardSessionState, type CardSessionState } from "./session-state.ts";
-import type { WorkboardCard, WorkboardLifecycle } from "./types.ts";
+import type { WorkboardCard } from "./types.ts";
 
 function diagnosticCard(
   metadata: WorkboardCard["metadata"],

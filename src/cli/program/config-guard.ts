@@ -4,6 +4,7 @@ import type { StartupConfigPreflightResult } from "../../commands/startup-config
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   configFailureHeading,
+  createConfigReadError,
   createInvalidConfigError,
   isConfigReadFailure,
 } from "../../config/io.invalid-config.js";
@@ -149,7 +150,8 @@ export async function ensureConfigReady(
                   mode: snapshot.config.gateway?.mode,
                 });
                 if (errors.length > 0) {
-                  throw new Error(errors.join("\n"));
+                  params.runtime.error(errors.join("\n"));
+                  throw new ExitError(78);
                 }
               },
             }
@@ -318,7 +320,10 @@ export async function ensureConfigReady(
           : await getConfigSnapshot(configSnapshotOptions, params.measure);
         if (retrySnapshot.exists && !retrySnapshot.valid) {
           const retryIssues = renderConfigValidationIssueLines(retrySnapshot);
-          throw createInvalidConfigError(
+          const createError = isConfigReadFailure(retrySnapshot)
+            ? createConfigReadError
+            : createInvalidConfigError;
+          throw createError(
             retrySnapshot.path,
             retryIssues.join("\n") || "Unknown validation issue.",
           );
@@ -336,7 +341,8 @@ export async function ensureConfigReady(
     return;
   }
   if (mustBlockInvalid) {
-    params.runtime.exit(isGatewayStartup ? 78 : 1);
+    // EX_CONFIG parks supervised Gateways; a failed read has not proven config invalid.
+    params.runtime.exit(isGatewayStartup && !readFailure ? 78 : 1);
   }
 }
 

@@ -177,6 +177,7 @@ const APPLE_VIEW_FUNCTION =
 const APPLE_ALERT_FUNCTION = /\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)[^{]*\{[^{}]{0,600}\bNSAlert\s*\(/gu;
 const APPLE_BUILTIN_UI_CALLS = new Set([
   "Alert",
+  "AuthProblemDefaults",
   "Button",
   "ControlGroup",
   "DatePicker",

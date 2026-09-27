@@ -10,6 +10,10 @@ html.openclaw-native-embed .shell--embed {
   padding: var(--safe-area-top) var(--safe-area-right) var(--safe-area-bottom) var(--safe-area-left);
 }
 
+.shell--embed.shell--chat openclaw-chat-page[data-native-conversation] {
+  --shell-titlebar-inset: 12px;
+}
+
 .shell--embed-settings > .content {
   --content-inline-padding: var(--space-4);
   --settings-header-inline-padding: 0px;
