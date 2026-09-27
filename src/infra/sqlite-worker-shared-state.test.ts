@@ -34,6 +34,7 @@ import { OpenClawStateOwnershipError } from "./sqlite-lifecycle-errors.js";
 import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
 import { registerSharedStateWorkerAdmissionTests } from "./sqlite-worker-shared-state-admission.test-support.js";
+import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -405,17 +406,26 @@ describe("canonical shared-state worker admission", () => {
           expect(existsSync(originalPath)).toBe(false);
           return relocated;
         };
-        const flow = buildFlowRecord({
-          ownerKey: "agent:main:relocated-state",
-          syncMode: "managed",
-          controllerId: "tests/relocated-state",
-          goal: "Write only to the current database",
-        });
+        const entryKey = {
+          pluginId: "fixture-plugin",
+          namespace: "relocated-state",
+          key: "destination",
+        };
+        const valueJson = JSON.stringify({ generation: "written-after-relocation" });
         const write = (relocated: ReturnType<typeof captureOpenClawStateWorkerContext>) =>
-          executeOpenClawStateWorker(relocated, {
-            type: "flows.createManaged",
-            input: { flow },
-          });
+          runOpenClawStateWorkerOperation(
+            relocated,
+            (scope) =>
+              scope.execute({
+                type: "pluginState.register",
+                input: { ...entryKey, valueJson, maxEntries: 1, overflowPolicy: "reject-new" },
+              }),
+            {
+              createAdmission: createSqliteWorkerWriteAdmission(relocated.admission.assertCurrent, [
+                relocated.admission.databasePath,
+              ]),
+            },
+          );
         const relocatedDuringCallback = await runOpenClawStateWorkerOperation(
           original,
           async (scope) => {
@@ -439,7 +449,7 @@ describe("canonical shared-state worker admission", () => {
           { existingOnly: true },
         );
         const relocated = relocatedDuringCallback ?? relocate();
-        await write(relocated);
+        await expect(write(relocated)).resolves.toEqual({ ok: true, value: undefined });
 
         expect(existsSync(originalPath)).toBe(false);
         const database = openOpenClawStateDatabase({
@@ -447,8 +457,12 @@ describe("canonical shared-state worker admission", () => {
           env: relocated.environment,
         });
         expect(
-          database.db.prepare("SELECT goal FROM flow_runs WHERE flow_id = ?").get(flow.flowId),
-        ).toEqual({ goal: "Write only to the current database" });
+          database.db
+            .prepare(
+              "SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+            )
+            .get(entryKey.pluginId, entryKey.namespace, entryKey.key),
+        ).toEqual({ value_json: valueJson });
         expect(
           database.db
             .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
