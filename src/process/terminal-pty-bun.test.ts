@@ -4,8 +4,11 @@ import { constants } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
+import * as bunAdapter from "./terminal-pty-bun.js";
+import * as nodeAdapter from "./terminal-pty-node.js";
 import {
   spawnTerminalPty,
   type TerminalPtyHandle,
@@ -16,9 +19,17 @@ const handles: TerminalPtyHandle[] = [];
 const descendants: number[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const deadline = { timeout: 2_000, interval: 10 };
+type TerminalCallbacks = {
+  data(terminal: unknown, data: Uint8Array): void;
+  exit(terminal: unknown): void;
+};
+
 const bun = (
   globalThis as typeof globalThis & {
-    Bun?: { Terminal?: { prototype: { pause?: () => void } } };
+    Bun?: {
+      Terminal?: { prototype: { pause?: () => void } };
+      spawn(argv: string[], options: { terminal: TerminalCallbacks }): unknown;
+    };
   }
 ).Bun;
 const hasFlowControl = typeof bun?.Terminal?.prototype.pause === "function";
@@ -31,6 +42,8 @@ afterEach(() => {
     killPidIfAlive(pid);
   }
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 async function start(args: string[], overrides: Partial<TerminalPtySpawnParams> = {}) {
@@ -53,8 +66,9 @@ async function start(args: string[], overrides: Partial<TerminalPtySpawnParams> 
   return { handle, observed };
 }
 
-describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32")(
-  "Bun native terminal PTY",
+// Stock Bun and the current CI pin lack the capability required by the native route.
+describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && hasFlowControl)(
+  "Bun native terminal PTY (requires Bun on POSIX with Terminal.pause/resume)",
   () => {
     it("preserves cwd, env, terminal input, resize, Unicode, and final output", async () => {
       const cwd = fs.realpathSync(tempDirs.make("openclaw-bun-pty-"));
@@ -143,126 +157,229 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32")(
       await vi.waitFor(() => expect(isPidAlive(childPid)).toBe(false), deadline);
     });
 
-    it("replays output emitted before the first data subscription in order, honoring pause", async () => {
-      const handle = await spawnTerminalPty({
-        file: "/bin/sh",
-        // Separate writes arrive as separate PTY reads, so the replay holds several chunks.
-        args: [
-          "-c",
-          "printf 'early 🦞\\n'; sleep 0.1; printf 'two\\n'; sleep 0.1; printf 'three\\n'",
-        ],
-        cols: 80,
-        rows: 24,
+    describe("flow control", () => {
+      it("stalls child progress while paused and delivers every byte after resume", async () => {
+        const cwd = tempDirs.make("openclaw-bun-pty-flow-");
+        const payload = "x".repeat(4 * 1024 * 1024);
+        fs.writeFileSync(path.join(cwd, "payload"), payload);
+        const { handle, observed } = await start(
+          [
+            "-c",
+            'stty -echo; printf "READY\\n"; read input; printf started > progress; cat payload; printf finished > progress',
+          ],
+          { cwd },
+        );
+        await vi.waitFor(() => expect(observed.output).toBe("READY\r\n"), deadline);
+        handle.pause();
+        handle.write("go\r");
+        const progress = () => fs.readFileSync(path.join(cwd, "progress"), "utf8");
+        await vi.waitFor(() => expect(progress()).toBe("started"), deadline);
+        let samples = 0;
+        await vi.waitFor(
+          () => {
+            expect(progress()).toBe("started");
+            expect(observed.output).toBe("READY\r\n");
+            expect(++samples).toBeGreaterThanOrEqual(5);
+          },
+          { timeout: 1_000, interval: 20 },
+        );
+        expect(observed.exit).toBeUndefined();
+        handle.resume();
+        await vi.waitFor(() => expect(observed.exit?.exitCode).toBe(0), deadline);
+        expect(progress()).toBe("finished");
+        expect(observed.output).toBe(`READY\r\n${payload}`);
       });
-      handles.push(handle);
-      let exited = false;
-      handle.onExit(() => {
-        exited = true;
+
+      it("preserves the tail when the child finishes while output is paused", async () => {
+        const cwd = tempDirs.make("openclaw-bun-pty-tail-");
+        const { handle, observed } = await start(
+          [
+            "-c",
+            'stty -echo; printf "READY\\n"; read input; printf "tail 🦞\\n"; : > written; exit 9',
+          ],
+          { cwd },
+        );
+        await vi.waitFor(() => expect(observed.output).toBe("READY\r\n"), deadline);
+        handle.pause();
+        handle.write("go\r");
+        await vi.waitFor(
+          () => expect(fs.existsSync(path.join(cwd, "written"))).toBe(true),
+          deadline,
+        );
+        // macOS holds an exiting session leader until its PTY output drains.
+        expect(observed.output).toBe("READY\r\n");
+        expect(observed.exit).toBeUndefined();
+        handle.resume();
+        await vi.waitFor(() => expect(observed.exit?.exitCode).toBe(9), deadline);
+        expect(observed.output).toBe("READY\r\ntail 🦞\r\n");
       });
-      await vi.waitFor(() => expect(exited).toBe(true), deadline);
-      const chunks: string[] = [];
-      handle.onData((chunk) => {
-        chunks.push(chunk);
-        if (chunks.length === 1) {
-          handle.pause();
-        }
+
+      it("reports exit after kill while the consumer keeps re-pausing output", async () => {
+        const cwd = tempDirs.make("openclaw-bun-pty-kill-");
+        fs.writeFileSync(path.join(cwd, "payload"), "x".repeat(4 * 1024 * 1024));
+        const { handle, observed } = await start(
+          [
+            "-c",
+            'stty -echo; printf "READY\\n"; read input; printf started > progress; cat payload',
+          ],
+          { cwd },
+        );
+        await vi.waitFor(() => expect(observed.output).toBe("READY\r\n"), deadline);
+        handle.pause();
+        handle.write("go\r");
+        await vi.waitFor(
+          () => expect(fs.readFileSync(path.join(cwd, "progress"), "utf8")).toBe("started"),
+          deadline,
+        );
+        // A viewer whose backlog stays full pauses again on every chunk it receives.
+        handle.onData(() => handle.pause());
+        handle.kill();
+        await vi.waitFor(
+          () => expect(observed.exit).toEqual({ exitCode: 0, signal: constants.signals.SIGKILL }),
+          deadline,
+        );
+        // Teardown delivered the dying tree's output before exit; nothing trails it.
+        const atExit = observed.output.length;
+        expect(atExit).toBeGreaterThan("READY\r\n".length);
+        handle.resume();
+        expect(observed.output.length).toBe(atExit);
       });
-      expect(chunks).toEqual(["early 🦞\r\n"]);
-      handle.resume();
-      expect(chunks.join("")).toBe("early 🦞\r\ntwo\r\nthree\r\n");
     });
+  },
+);
 
-    // Upstream Bun and the current CI fork pin lack Terminal.pause/resume.
-    describe.skipIf(!hasFlowControl)(
-      "flow control (requires the OpenClaw Bun fork's Terminal.pause/resume)",
-      () => {
-        it("stalls child progress while paused and delivers every byte after resume", async () => {
-          const cwd = tempDirs.make("openclaw-bun-pty-flow-");
-          const payload = "x".repeat(4 * 1024 * 1024);
-          fs.writeFileSync(path.join(cwd, "payload"), payload);
-          const { handle, observed } = await start(
-            [
-              "-c",
-              'stty -echo; printf "READY\\n"; read input; printf started > progress; cat payload; printf finished > progress',
-            ],
-            { cwd },
-          );
-          await vi.waitFor(() => expect(observed.output).toBe("READY\r\n"), deadline);
-          handle.pause();
-          handle.write("go\r");
-          const progress = () => fs.readFileSync(path.join(cwd, "progress"), "utf8");
-          await vi.waitFor(() => expect(progress()).toBe("started"), deadline);
-          let samples = 0;
-          await vi.waitFor(
-            () => {
-              expect(progress()).toBe("started");
-              expect(observed.output).toBe("READY\r\n");
-              expect(++samples).toBeGreaterThanOrEqual(5);
-            },
-            { timeout: 1_000, interval: 20 },
-          );
-          expect(observed.exit).toBeUndefined();
-          handle.resume();
-          await vi.waitFor(() => expect(observed.exit?.exitCode).toBe(0), deadline);
-          expect(progress()).toBe("finished");
-          expect(observed.output).toBe(`READY\r\n${payload}`);
-        });
+it("replays queued chunks in order, honors a listener pause, and delivers exit last", async () => {
+  const runtime = bun ?? { spawn: vi.fn() };
+  if (!bun) {
+    vi.stubGlobal("Bun", runtime);
+  }
+  const terminal = {
+    write: vi.fn(),
+    resize: vi.fn(),
+    close: vi.fn(),
+    pause: vi.fn(),
+    resume: vi.fn(),
+  };
+  const done = createDeferredCore<number>();
+  let callbacks: TerminalCallbacks | undefined;
+  vi.spyOn(runtime, "spawn").mockImplementation(
+    (_argv: string[], options: { terminal: TerminalCallbacks }) => {
+      callbacks = options.terminal;
+      return {
+        pid: 1234,
+        terminal,
+        exited: done.promise,
+        exitCode: 7,
+        signalCode: null,
+        kill: vi.fn(),
+      };
+    },
+  );
+  const handle = bunAdapter.spawnBunTerminalPty({
+    file: "/bin/sh",
+    args: [],
+    env: {},
+    name: "xterm-256color",
+    cols: 80,
+    rows: 24,
+  });
+  if (!callbacks) {
+    throw new Error("Bun.spawn did not receive terminal callbacks");
+  }
+  const events: string[] = [];
+  handle.onExit(({ exitCode }) => events.push(`exit:${exitCode}`));
+  for (const chunk of ["early 🦞\r\n", "two\r\n", "three\r\n"]) {
+    callbacks.data(terminal, new TextEncoder().encode(chunk));
+  }
+  expect(events).toEqual([]);
+  handle.onData((chunk) => {
+    events.push(chunk);
+    if (events.length === 1) {
+      handle.pause();
+    }
+  });
+  expect(events).toEqual(["early 🦞\r\n"]);
+  callbacks.exit(terminal);
+  done.resolve(7);
+  await done.promise;
+  expect(events).toEqual(["early 🦞\r\n"]);
+  expect(terminal.close).not.toHaveBeenCalled();
+  handle.resume();
+  expect(events).toEqual(["early 🦞\r\n", "two\r\n", "three\r\n", "exit:7"]);
+  expect(terminal.close).toHaveBeenCalledOnce();
+  handle.resume();
+  expect(events).toEqual(["early 🦞\r\n", "two\r\n", "three\r\n", "exit:7"]);
+});
 
-        it("preserves the tail when the child finishes while output is paused", async () => {
-          const cwd = tempDirs.make("openclaw-bun-pty-tail-");
-          const { handle, observed } = await start(
-            [
-              "-c",
-              'stty -echo; printf "READY\\n"; read input; printf "tail 🦞\\n"; : > written; exit 9',
-            ],
-            { cwd },
-          );
-          await vi.waitFor(() => expect(observed.output).toBe("READY\r\n"), deadline);
-          handle.pause();
-          handle.write("go\r");
-          await vi.waitFor(
-            () => expect(fs.existsSync(path.join(cwd, "written"))).toBe(true),
-            deadline,
-          );
-          // macOS holds an exiting session leader until its PTY output drains.
-          expect(observed.output).toBe("READY\r\n");
-          expect(observed.exit).toBeUndefined();
-          handle.resume();
-          await vi.waitFor(() => expect(observed.exit?.exitCode).toBe(9), deadline);
-          expect(observed.output).toBe("READY\r\ntail 🦞\r\n");
-        });
+it.each([false, true])("routes Bun PTYs with Terminal.pause=%s", async (flowControl) => {
+  vi.spyOn(process, "versions", "get").mockReturnValue({ ...process.versions, bun: "1.4.2" });
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  const prototype = bun?.Terminal?.prototype ?? {};
+  const pause = Object.getOwnPropertyDescriptor(prototype, "pause");
+  if (!bun) {
+    vi.stubGlobal("Bun", { Terminal: { prototype } });
+  }
+  Object.defineProperty(prototype, "pause", {
+    ...(pause ?? { configurable: true, writable: true }),
+    value: flowControl ? () => {} : undefined,
+  });
+  try {
+    const handle: TerminalPtyHandle = {
+      pid: 1234,
+      write: vi.fn(),
+      resize: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      onData: vi.fn(),
+      onExit: vi.fn(),
+      kill: vi.fn(),
+    };
+    const native = vi.spyOn(bunAdapter, "spawnBunTerminalPty").mockReturnValue(handle);
+    const helper = vi.spyOn(nodeAdapter, "spawnNodeTerminalPty").mockResolvedValue(handle);
+    const assertCurrent = vi.fn();
+    const params = {
+      file: "/bin/sh",
+      args: [],
+      env: { TERM: "dumb", PWD: "/original" },
+      cwd: "/workspace",
+      cols: 80,
+      rows: 24,
+    };
+    expect(await spawnTerminalPty(params, { assertCurrent })).toBe(handle);
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    if (flowControl) {
+      expect(helper).not.toHaveBeenCalled();
+      expect(native).toHaveBeenCalledWith({
+        ...params,
+        name: "xterm-256color",
+        env: { TERM: "xterm-256color", PWD: "/workspace" },
+      });
+    } else {
+      expect(native).not.toHaveBeenCalled();
+      expect(helper).toHaveBeenCalledWith(params, expect.any(Function));
+      expect(helper.mock.calls[0]?.[0]).toBe(params);
+      helper.mock.calls[0]?.[1]?.();
+      expect(assertCurrent).toHaveBeenCalledTimes(2);
+    }
+    expect(params.env).toEqual({ TERM: "dumb", PWD: "/original" });
+  } finally {
+    if (pause) {
+      Object.defineProperty(prototype, "pause", pause);
+    } else {
+      delete prototype.pause;
+    }
+  }
+});
 
-        it("reports exit after kill while the consumer keeps re-pausing output", async () => {
-          const cwd = tempDirs.make("openclaw-bun-pty-kill-");
-          fs.writeFileSync(path.join(cwd, "payload"), "x".repeat(4 * 1024 * 1024));
-          const { handle, observed } = await start(
-            [
-              "-c",
-              'stty -echo; printf "READY\\n"; read input; printf started > progress; cat payload',
-            ],
-            { cwd },
-          );
-          await vi.waitFor(() => expect(observed.output).toBe("READY\r\n"), deadline);
-          handle.pause();
-          handle.write("go\r");
-          await vi.waitFor(
-            () => expect(fs.readFileSync(path.join(cwd, "progress"), "utf8")).toBe("started"),
-            deadline,
-          );
-          // A viewer whose backlog stays full pauses again on every chunk it receives.
-          handle.onData(() => handle.pause());
-          handle.kill();
-          await vi.waitFor(
-            () => expect(observed.exit).toEqual({ exitCode: 0, signal: constants.signals.SIGKILL }),
-            deadline,
-          );
-          // Teardown delivered the dying tree's output before exit; nothing trails it.
-          const atExit = observed.output.length;
-          expect(atExit).toBeGreaterThan("READY\r\n".length);
-          handle.resume();
-          expect(observed.output.length).toBe(atExit);
-        });
-      },
-    );
+it.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && !hasFlowControl)(
+  "runs stock Bun terminals through the real Node helper",
+  async () => {
+    const helper = vi.spyOn(nodeAdapter, "spawnNodeTerminalPty");
+    const done = createDeferredCore<number>();
+    const { handle, observed } = await start(["-c", 'printf "helper-output"; exit 7']);
+    handle.onExit(({ exitCode }) => done.resolve(exitCode));
+    expect(await done.promise).toBe(7);
+    expect(helper).toHaveBeenCalledOnce();
+    expect(observed.output).toBe("helper-output");
   },
 );

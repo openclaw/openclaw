@@ -13,9 +13,8 @@ type BunTerminal = {
   write(data: string | Uint8Array): number;
   resize(cols: number, rows: number): void;
   close(): void;
-  // Added by the OpenClaw Bun fork; upstream Bun reads the PTY without flow control.
-  pause?: () => void;
-  resume?: () => void;
+  pause(): void;
+  resume(): void;
 };
 
 type BunTerminalSubprocess = {
@@ -51,7 +50,7 @@ type TerminalPtyExit = { exitCode: number; signal?: number };
 export function spawnBunTerminalPty(
   params: TerminalPtySpawnParams & { env: Record<string, string>; name: string },
 ): TerminalPtyHandle {
-  // SAFETY: callers enter only when process.versions.bun is set; Bun is then the runtime global.
+  // SAFETY: the caller checks Bun and Terminal.pause before entering this native adapter.
   const bun = (globalThis as typeof globalThis & { Bun?: BunTerminalRuntime }).Bun;
   if (!bun) {
     throw new Error("Bun's native terminal is unavailable in this runtime");
@@ -60,7 +59,6 @@ export function spawnBunTerminalPty(
   const dataListeners = new Set<(chunk: string) => void>();
   const exitListeners = new Set<(event: TerminalPtyExit) => void>();
   // Output waits here, in order, while paused or until the first subscriber.
-  // Upstream Bun cannot stop reading the PTY, so its paused output queues here.
   let pending: string[] = [];
   let delivered = 0;
   let flushing = false;
@@ -127,13 +125,7 @@ export function spawnBunTerminalPty(
   };
   const armEofGrace = () => {
     // A paused fork terminal holds its tail output until resume; wait for it.
-    if (
-      !processExit ||
-      outputEnded ||
-      exited ||
-      eofGrace ||
-      (paused && terminal.pause && !tearingDown)
-    ) {
+    if (!processExit || outputEnded || exited || eofGrace || (paused && !tearingDown)) {
       return;
     }
     eofGrace = setTimeout(finish, OUTPUT_EOF_GRACE_MS);
@@ -172,7 +164,7 @@ export function spawnBunTerminalPty(
 
   const resume = () => {
     paused = false;
-    terminal.resume?.();
+    terminal.resume();
     flush();
     armEofGrace();
   };
@@ -182,7 +174,7 @@ export function spawnBunTerminalPty(
     resize: (cols, rows) => terminal.resize(cols, rows),
     pause: () => {
       paused = true;
-      if (terminal.pause && !tearingDown) {
+      if (!tearingDown) {
         terminal.pause();
         clearTimeout(eofGrace);
         eofGrace = undefined;
@@ -209,7 +201,7 @@ export function spawnBunTerminalPty(
       // Like node-pty's socket teardown, a slow consumer must not hold the dying
       // tree's output or exit: keep reading to EOF and stop gating exit on pause.
       tearingDown = true;
-      terminal.resume?.();
+      terminal.resume();
       flush();
       armEofGrace();
     },

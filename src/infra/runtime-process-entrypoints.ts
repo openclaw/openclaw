@@ -75,6 +75,7 @@ export const runtimeProcessEntrypoints = {
   ),
   tailscaleRouteOwner: runtimeProcessEntrypoint("infra/tailscale-route-owner.worker"),
   serviceChildRelay: runtimeProcessEntrypoint("process/supervisor/service-child-relay"),
+  terminalPty: runtimeProcessEntrypoint("process/terminal-pty-worker"),
   serviceChildGroupAnchor: runtimeProcessEntrypoint(
     "process/supervisor/service-child-group-anchor",
   ),

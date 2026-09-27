@@ -93,6 +93,14 @@ export type TerminalPtySpawnParams = {
   rows: number;
 };
 
+type BunTerminalCapability = { Terminal?: { prototype?: { pause?: unknown } } };
+
+function bunTerminalHasFlowControl(): boolean {
+  // SAFETY: Bun is an optional runtime global; only the pause capability is inspected.
+  const bun = (globalThis as typeof globalThis & { Bun?: BunTerminalCapability }).Bun;
+  return typeof bun?.Terminal?.prototype?.pause === "function";
+}
+
 export async function spawnTerminalPty(
   params: TerminalPtySpawnParams,
   lifecycle?: { abortSignal?: AbortSignal; assertCurrent?: () => void },
@@ -103,6 +111,12 @@ export async function spawnTerminalPty(
       throw new Error("PTY construction aborted");
     }
   };
+  if (process.versions.bun && process.platform !== "win32" && !bunTerminalHasFlowControl()) {
+    // Stock Bun lacks read backpressure; the fork shipping pause also fixes macOS wait4 deadlocks.
+    const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
+    assertCurrent();
+    return await spawnNodeTerminalPty(params, assertCurrent);
+  }
   const env = params.env ? { ...params.env } : undefined;
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
