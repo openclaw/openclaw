@@ -30,10 +30,6 @@ Use the current template and a real body file. Preserve human credit and keep
 branches editable by maintainers when safe. For a fork, consider GitHub's
 Actions/secrets warning before enabling edits.
 
-Apply requirements to the requested operation, not every step in a larger workflow.
-If one route fails, use another supported, authorized route rather than treating
-the failure as a task-wide blocker; retain the requirements of that operation.
-
 Create as draft; when merge readiness is requested, wait for non-null `mergeable`,
 then mark ready and confirm CI attached to the pushed head. A merge-ref startup
 failure cannot be rerun; the hourly PR CI sweeper can re-fire it, or use an
@@ -61,8 +57,8 @@ Do not disclose private desktop content, identifiers, model routes, or secrets.
 
 ## Review, prepare, merge
 
-For main-targeted merge preparation and merging, use the native sequence below.
-Do not require the whole sequence for an operation with its own supported path.
+For main-targeted PRs, prefer the native sequence; if blocked, use another
+authorized path.
 
 ```bash
 scripts/pr review-init <pr>
