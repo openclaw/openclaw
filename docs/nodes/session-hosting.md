@@ -237,9 +237,13 @@ its standard executable search path. If the image cannot be pulled, is
 inaccessible, or does not provide a suitable Node.js runtime, that session
 launch fails visibly; it never retries as a bare host process. Preload the
 image or configure registry access before hosting sessions on an offline or
-restricted node. Existing explicit image settings are preserved; replace older Node
-images with a supported release before upgrading OpenClaw. Worker startup requires
-a supported runtime; older releases may fail before the runtime diagnostic can run.
+restricted node. The default image can advance when OpenClaw updates its dependencies.
+Before upgrading an offline node, preload the new default image or set
+`nodeHost.workerRuns.containerImage` to a supported image already cached on that node.
+For example, a cached `node:24.19.0-slim` remains supported and can be selected explicitly.
+Existing explicit image settings are preserved; replace unsupported Node images before
+upgrading OpenClaw. Worker startup requires a supported runtime; older releases may
+fail before the runtime diagnostic can run.
 
 Each worker container receives only two host bind mounts: its verified worker
 bundle root is read-only, and its assigned session workspace is read-write.
