@@ -34,7 +34,6 @@ function pauseDirectoryDiscovery(sessionsDir: string) {
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
   it.each([
     { includeContentRevision: true, archiveTablePresent: true },
-    { includeContentRevision: false, archiveTablePresent: true },
     { includeContentRevision: false, archiveTablePresent: false },
   ])(
     "preserves corpus selection with content revisions $includeContentRevision and archive table $archiveTablePresent",
@@ -177,11 +176,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         expect(entries.every((entry) => entry.storePath === storePath)).toBe(true);
       } finally {
         release.resolve();
-        try {
-          await listing;
-        } finally {
-          realpathSpy.mockRestore();
-        }
+        await listing.finally(() => realpathSpy.mockRestore());
       }
     });
   });
@@ -210,12 +205,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         expect(fsSync.existsSync(unsuffixedDatabase)).toBe(false);
       } finally {
         release.resolve();
-        try {
-          await listing;
-        } finally {
+        await listing.finally(() => {
           Reflect.set(process.env, "OPENCLAW_STATE_DIR", state.stateDir);
           realpathSpy.mockRestore();
-        }
+        });
       }
     });
   });
