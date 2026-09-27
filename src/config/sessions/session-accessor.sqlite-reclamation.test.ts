@@ -845,7 +845,7 @@ test("a synchronous writer reports actual reclamation service time inside its BE
         (record) =>
           record.message === "slow SQLite transaction step" &&
           isRecord(record["1"]) &&
-          record["1"].operation === "agent.write",
+          record["1"].operation === "session-entry.replace",
       );
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject(writerTrace);

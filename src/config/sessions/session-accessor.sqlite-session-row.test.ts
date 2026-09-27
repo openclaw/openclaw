@@ -291,7 +291,7 @@ describe("SQLite session row persistence", () => {
                 isRecord(entry) &&
                 (entry.sessionId === "predecessor" || entry.sessionId === "successor"),
             ).length,
-          ).toBeLessThanOrEqual(4);
+          ).toBeLessThanOrEqual(3);
           const retainedSkills = facts[0]?.skillsSnapshot?.skills;
           expect(retainedSkills).toEqual(skillsSnapshot.skills);
           retainedSkills?.push({ name: "observer-only" });
@@ -306,6 +306,39 @@ describe("SQLite session row persistence", () => {
         clone.mockRestore();
         unsubscribe();
       }
+    },
+  );
+
+  it.each(["during", "after"] as const)(
+    "isolates the existing-entry context when first read %s the update",
+    async (readTiming) => {
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-context-copy-")),
+      };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:context-copy" };
+      const skillsSnapshot = { prompt: "Saved prompt", skills: [] };
+      replaceSessionEntrySync(scope, { sessionId: "existing", updatedAt: 1, skillsSnapshot });
+      let readContext: () => InternalSessionEntry | undefined = () => undefined;
+      const result = await patchSessionEntryCore(
+        scope,
+        (entry, context) => {
+          readContext = () => context.existingEntry;
+          entry.skillsSnapshot!.prompt = "Callback mutation";
+          if (readTiming === "during") {
+            expect(readContext()?.skillsSnapshot).toEqual(skillsSnapshot);
+          }
+          return null;
+        },
+        { skipMaintenance: true },
+      );
+      result!.skillsSnapshot!.prompt = "Result mutation";
+      const contextEntry = readContext()!;
+      expect(contextEntry.skillsSnapshot).toEqual(skillsSnapshot);
+      contextEntry.skillsSnapshot!.prompt = "Context mutation";
+      expect(readContext()).toBe(contextEntry);
+      expect(result?.skillsSnapshot?.prompt).toBe("Result mutation");
+      expect(loadSessionEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
     },
   );
 

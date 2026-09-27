@@ -316,14 +316,18 @@ export async function replaceSessionEntry(
 export function replaceSessionEntrySync(scope: SessionAccessScope, entry: SessionEntry): void {
   const resolved = resolveSqliteScope(scope);
   assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
-  const publish = runOpenClawAgentWriteTransaction((database) => {
-    const { previous, current } = replaceSessionEntryInDatabase(
-      database,
-      resolved.sessionKey,
-      entry,
-    );
-    return prepareSessionIdentityPublication(database, resolved.agentId, previous, current);
-  }, toDatabaseOptions(resolved));
+  const publish = runOpenClawAgentWriteTransaction(
+    (database) => {
+      const { previous, current } = replaceSessionEntryInDatabase(
+        database,
+        resolved.sessionKey,
+        entry,
+      );
+      return prepareSessionIdentityPublication(database, resolved.agentId, previous, current);
+    },
+    toDatabaseOptions(resolved),
+    { operationLabel: "session-entry.replace" },
+  );
   publish();
 }
 
@@ -466,8 +470,21 @@ async function patchSqliteSessionEntrySnapshot(
         if (!writeBase) {
           return null;
         }
+        let contextEntry = existing;
+        let contextEntryBorrowed = true;
         const patch = await params.update(cloneSessionEntry(writeBase), {
-          existingEntry: existing ? cloneSessionEntry(existing) : undefined,
+          // Most updaters ignore context; detach its snapshot only when they consume it.
+          get existingEntry() {
+            if (contextEntryBorrowed) {
+              contextEntry = contextEntry ? cloneSessionEntry(contextEntry) : undefined;
+              contextEntryBorrowed = false;
+            }
+            return contextEntry;
+          },
+          set existingEntry(entry) {
+            contextEntry = entry;
+            contextEntryBorrowed = false;
+          },
         });
         // A fallback supplies identity, not an existing node's immutable creation policy.
         const mergeBase = existing ? writeBase : undefined;
@@ -491,33 +508,37 @@ async function patchSqliteSessionEntrySnapshot(
         // The updater may dispose the prepared handle; re-admit before the synchronous commit.
         return withDatabase(() => {
           let result: SessionEntry | null = null;
-          const publish = runOpenClawAgentWriteTransaction((writeDatabase) => {
-            assertCapturedSource(writeDatabase);
-            if (options.shouldCommit?.() === false) {
-              return undefined;
-            }
-            const mutation = applySessionEntryPatchInDatabase(writeDatabase, {
-              operationLabel: params.operationLabel,
-              validateCanonicalKeys: params.validateCanonicalKeys,
-              readSnapshot: params.readSnapshot,
-              prepared,
-              sessionKey,
-              writeBase,
-              next,
-              options,
-            });
-            result = mutation.entry;
-            if (!mutation.identity) {
-              return undefined;
-            }
-            wrote = true;
-            return prepareSessionIdentityPublication(
-              writeDatabase,
-              resolved.agentId,
-              mutation.identity.previous,
-              mutation.identity.current,
-            );
-          }, databaseOptions);
+          const publish = runOpenClawAgentWriteTransaction(
+            (writeDatabase) => {
+              assertCapturedSource(writeDatabase);
+              if (options.shouldCommit?.() === false) {
+                return undefined;
+              }
+              const mutation = applySessionEntryPatchInDatabase(writeDatabase, {
+                operationLabel: params.operationLabel,
+                validateCanonicalKeys: params.validateCanonicalKeys,
+                readSnapshot: params.readSnapshot,
+                prepared,
+                sessionKey,
+                writeBase,
+                next,
+                options,
+              });
+              result = mutation.entry;
+              if (!mutation.identity) {
+                return undefined;
+              }
+              wrote = true;
+              return prepareSessionIdentityPublication(
+                writeDatabase,
+                resolved.agentId,
+                mutation.identity.previous,
+                mutation.identity.current,
+              );
+            },
+            databaseOptions,
+            { operationLabel: params.operationLabel },
+          );
           try {
             if (next && result) {
               options.onCommitted?.(cloneSessionEntry(result));

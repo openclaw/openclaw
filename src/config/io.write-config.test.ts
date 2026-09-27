@@ -49,6 +49,7 @@ import {
   defaultedDemoPluginRegistry,
 } from "./io.write-config.test-support.js";
 import { registerConfigWritePreflightTests } from "./io.write-preflight.test-support.js";
+import { registerConfigWritePublicationTests } from "./io.write-publication.test-support.js";
 import { replaceConfigFile, transformConfigFile, transformConfigFileWithRetry } from "./mutate.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
@@ -1694,51 +1695,14 @@ describe("config io write", () => {
     },
   );
 
-  itWithHome("rejects a stale base snapshot before overwriting the root config", async (home) => {
-    const { configPath } = await writeConfigFixture(home, {
-      gateway: { mode: "local", port: 18789 },
-    });
-    const io = createFastConfigIO(home);
-    const snapshot = await io.readConfigFileSnapshot();
-    const concurrentRaw = formatConfig({ gateway: { mode: "local", port: 19001 } });
-    await fs.writeFile(configPath, concurrentRaw, "utf-8");
-
-    await expect(
-      io.writeConfigFile({ gateway: { mode: "local", port: 19002 } }, { baseSnapshot: snapshot }),
-    ).rejects.toThrow("config changed since last load");
-
-    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(concurrentRaw);
+  registerConfigWritePublicationTests({
+    itWithHome,
+    writeConfigFixture,
+    createFastConfigIO,
+    createHomeConfigIO,
+    readPersistedConfig,
+    formatConfig,
   });
-
-  itWithHome(
-    "rejects a base snapshot from a different config path before overwriting the root config",
-    async (home) => {
-      const firstConfigPath = path.join(home, ".openclaw", "first.json");
-      const secondConfigPath = path.join(home, ".openclaw", "second.json");
-      await fs.mkdir(path.dirname(firstConfigPath), { recursive: true });
-      const originalRaw = formatConfig({ gateway: { mode: "local", port: 18789 } });
-      await fs.writeFile(firstConfigPath, originalRaw, "utf-8");
-      await fs.writeFile(secondConfigPath, originalRaw, "utf-8");
-      const firstIo = createHomeConfigIO(home, {
-        configPath: firstConfigPath,
-        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-      });
-      const secondIo = createHomeConfigIO(home, {
-        configPath: secondConfigPath,
-        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-      });
-      const firstSnapshot = await firstIo.readConfigFileSnapshot();
-
-      await expect(
-        secondIo.writeConfigFile(
-          { gateway: { mode: "local", port: 19002 } },
-          { baseSnapshot: firstSnapshot },
-        ),
-      ).rejects.toThrow("config path changed since last load");
-
-      await expect(fs.readFile(secondConfigPath, "utf-8")).resolves.toBe(originalRaw);
-    },
-  );
 
   itWithHome(
     "rolls back a root write when config path ownership changes during commit",

@@ -681,7 +681,27 @@ async function runShards({ concurrency, entries, env, extraArgs, runner }: Shard
       if (isParentTerminationRequested()) {
         return undefined;
       }
-      return await runShard({ env, extraArgs, runner, shard });
+      const targets = shard.args.slice(2);
+      const boundedTargets =
+        (shard.name.startsWith("core:") &&
+          (targets.length === 1 ||
+            targets.every((target) => !ISOLATED_CORE_TARGETS.has(target)))) ||
+        (shard.name.startsWith("extensions:") && targets.length <= DEFAULT_EXTENSION_CHUNK_SIZE);
+      const boundedArgs =
+        boundedTargets &&
+        extraArgs.every((arg) => /^--(?:threads=[12]|format=(?:json|stylish))$/u.test(arg));
+      return await runShard({
+        env: {
+          ...env,
+          OPENCLAW_OXLINT_BATCH_CONCURRENCY: String(concurrency),
+          OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS: boundedArgs
+            ? JSON.stringify([...shard.args, ...extraArgs])
+            : "",
+        },
+        extraArgs,
+        runner,
+        shard,
+      });
     },
     { concurrency, stopOnError: false },
   );
