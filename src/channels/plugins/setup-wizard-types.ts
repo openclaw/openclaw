@@ -322,10 +322,8 @@ type ChannelSetupConfigureContext = ChannelSetupStatusContext & {
 };
 
 /** Context passed after setup has written config to disk. */
-type ChannelOnboardingPostWriteContext = {
+type ChannelOnboardingPostWriteContext = ChannelSetupWizardAccountContext & {
   previousCfg: OpenClawConfig;
-  cfg: OpenClawConfig;
-  accountId: string;
   runtime: RuntimeEnv;
 };
 

@@ -1,4 +1,3 @@
-/** Session MCP config loading, filtering, and catalog fingerprints. */
 import crypto from "node:crypto";
 import { normalizeMcpToolDenials } from "../config/sessions/session-tool-overrides.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";

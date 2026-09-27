@@ -1,7 +1,3 @@
-/**
- * Model registry - manages configured/provider-owned models and API key resolution.
- */
-
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { normalizeResolvedPricing } from "@openclaw/llm-core";
@@ -442,7 +438,6 @@ export class ModelRegistry {
     }
     let combined = this.parseModels(providers);
 
-    // Let OAuth providers modify their models (e.g., update baseUrl)
     for (const oauthProvider of this.authStorage.getOAuthProviders()) {
       const cred = this.authStorage.get(oauthProvider.id);
       if (cred?.type === "oauth" && oauthProvider.modifyModels) {
@@ -546,7 +541,6 @@ export class ModelRegistry {
         return emptyCustomModelsResult();
       }
 
-      // Additional validation
       this.validateConfig(configForUse);
 
       const generated = options.requireGeneratedCatalog === true;
@@ -712,9 +706,6 @@ export class ModelRegistry {
     return models;
   }
 
-  /**
-   * Get all configured models.
-   */
   getAll(): Model[] {
     return this.models;
   }
@@ -727,16 +718,10 @@ export class ModelRegistry {
     return this.models.filter((m) => this.hasConfiguredAuth(m));
   }
 
-  /**
-   * Find a model by provider and ID.
-   */
   find(provider: string, modelId: string): Model | undefined {
     return this.models.find((m) => m.provider === provider && m.id === modelId);
   }
 
-  /**
-   * Get API key for a model.
-   */
   hasConfiguredAuth(model: Model): boolean {
     const providerConfig = this.getModelProviderRequestConfig(model);
     return (
@@ -804,9 +789,6 @@ export class ModelRegistry {
     this.modelRequestHeaders.set(key, headers);
   }
 
-  /**
-   * Get API key and request headers for a model.
-   */
   async getApiKeyAndHeaders(model: Model): Promise<ResolvedRequestAuth> {
     try {
       const providerConfig = this.getModelProviderRequestConfig(model);
@@ -891,9 +873,6 @@ export class ModelRegistry {
     return { configured: true, source: "models_json_key" };
   }
 
-  /**
-   * Get display name for a provider.
-   */
   getProviderDisplayName(provider: string): string {
     const registeredProvider = this.registeredProviders.get(provider);
     const oauthProvider = this.authStorage.getOAuthProviders().find((p) => p.id === provider);
@@ -907,9 +886,6 @@ export class ModelRegistry {
     );
   }
 
-  /**
-   * Get API key for a provider.
-   */
   async getApiKeyForProvider(provider: string): Promise<string | undefined> {
     const apiKey = await this.authStorage.getApiKey(provider, { includeFallback: false });
     if (apiKey !== undefined) {
@@ -998,7 +974,6 @@ export class ModelRegistry {
   }
 
   private applyProviderConfig(providerName: string, config: ProviderConfigInput): void {
-    // Register OAuth provider if provided
     if (config.oauth) {
       // Ensure the OAuth provider ID matches the provider name
       const oauthProvider: OAuthProviderInterface = {
@@ -1027,7 +1002,6 @@ export class ModelRegistry {
       // Full replacement: remove existing models for this provider
       this.models = this.models.filter((m) => m.provider !== providerName);
 
-      // Parse and add new models
       for (const modelDef of config.models) {
         const api = modelDef.api || config.api;
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
@@ -1053,7 +1027,6 @@ export class ModelRegistry {
         } as Model);
       }
 
-      // Apply OAuth modifyModels if credentials exist (e.g., to update baseUrl)
       if (config.oauth?.modifyModels) {
         const cred = this.authStorage.get(providerName);
         if (cred?.type === "oauth") {

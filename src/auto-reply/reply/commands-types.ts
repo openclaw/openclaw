@@ -1,6 +1,5 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-/** Shared command handler context and result contracts. */
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
@@ -48,7 +47,6 @@ export type CommandContext = {
   softResetTail?: string;
 };
 
-/** Full input object passed to each command handler. */
 export type HandleCommandsParams = {
   ctx: MsgContext;
   rootCtx?: MsgContext;
@@ -103,7 +101,6 @@ export type CommandDispatchParams = Omit<
   "resolvedThinkLevel" | "resolvedReasoningLevel"
 > & { resolveModelLevels: ReplyModelLevelResolver };
 
-/** Result returned by a command handler. */
 export type CommandHandlerResult = {
   reply?: ReplyPayload;
   /** Exact skill files deliberately selected by a continuing command. */
@@ -116,7 +113,6 @@ export type CommandHandlerResult = {
   shouldContinue: boolean;
 };
 
-/** Command handler function shape. */
 export type CommandHandler = (
   params: HandleCommandsParams,
   allowTextCommands: boolean,

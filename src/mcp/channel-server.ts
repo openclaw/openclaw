@@ -2,12 +2,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelMcpRuntime } from "./channel-server-runtime.js";
 
-/**
- * MCP stdio server assembly for OpenClaw channel conversations.
- *
- * This module wires config, the Gateway bridge, protocol notifications, and
- * registered tools into a lifecycle that callers can either embed or serve.
- */
 type OpenClawMcpServeOptions = NonNullable<Parameters<typeof createChannelMcpRuntime>[0]>;
 
 /** Serve the channel MCP server over stdio until transport or process shutdown. */

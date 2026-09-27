@@ -76,7 +76,7 @@ function isPersistedAttachment(value: unknown): value is PersistedWorkboardAttac
   const attachment = candidate.attachment;
   return (
     candidate.version === 1 &&
-    attachment !== undefined &&
+    attachment != null &&
     typeof attachment === "object" &&
     typeof attachment.id === "string" &&
     typeof attachment.cardId === "string" &&

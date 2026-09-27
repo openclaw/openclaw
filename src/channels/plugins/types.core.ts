@@ -255,17 +255,6 @@ export type ChannelGroupContext = {
   senderE164?: string | null;
 };
 
-/** TTS voice delivery behavior advertised by a channel plugin. */
-/**
- * Container tokens (file-extension shape, no leading dot) that the host
- * TTS pipeline knows how to pre-transcode synthesized audio into.
- * Channels that benefit from a specific container — currently only
- * iMessage, which needs Apple's native voice-memo CAF descriptor — name
- * one here. Adding a new entry requires extending the host transcoder
- * recipe table in lockstep so a typed declaration cannot silently no-op.
- */
-type PreferredAudioFileFormat = "caf";
-
 export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
@@ -273,14 +262,12 @@ export type ChannelTtsVoiceDeliveryCapabilities = {
   /** Voice notes can carry the final reply text as a visible caption. */
   captionedFinalText?: boolean;
   /**
-   * Optional preferred audio container the channel wants for voice-memo
-   * delivery. When set and the host can transcode (e.g. `afconvert` on
-   * macOS), the TTS pipeline pre-encodes synthesized audio to this format
-   * before handing it to the channel. Useful for channels (such as
-   * iMessage) whose downstream attempts its own container conversion
-   * that races against the upload write and fails.
+   * Preferred file-extension token, without a leading dot, for host pre-transcoding.
+   * Conversion requires an available transcoder (e.g. `afconvert` on macOS).
+   * iMessage uses CAF for native voice memos to avoid a downstream conversion/upload race.
+   * New formats require a matching host transcoder recipe.
    */
-  preferAudioFileFormat?: PreferredAudioFileFormat;
+  preferAudioFileFormat?: "caf";
 };
 
 /** Static capability flags advertised by a channel plugin. */
@@ -596,10 +583,9 @@ export type ChannelMessagingAdapter = {
    * `resolveSessionConversation(...)` does not return
    * `parentConversationCandidates`.
    */
-  resolveParentConversationCandidates?: (params: {
-    kind: "group" | "channel";
-    rawId: string;
-  }) => string[] | null;
+  resolveParentConversationCandidates?: (
+    params: Parameters<NonNullable<ChannelMessagingAdapter["resolveSessionConversation"]>>[0],
+  ) => string[] | null;
   resolveSessionTarget?: (params: {
     kind: "group" | "channel";
     id: string;
@@ -679,10 +665,9 @@ export type ChannelMessagingAdapter = {
 
 export type ChannelAgentPromptAdapter = {
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
-  messageToolCapabilities?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => string[] | undefined;
+  messageToolCapabilities?: (
+    params: Parameters<NonNullable<ChannelAgentPromptAdapter["messageToolHints"]>>[0],
+  ) => string[] | undefined;
   /** Per-account formatting contract for agent turns whose visible text reaches this channel. */
   inboundFormattingHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
@@ -690,10 +675,9 @@ export type ChannelAgentPromptAdapter = {
         rules: string[];
       }
     | undefined;
-  reactionGuidance?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
+  reactionGuidance?: (
+    params: Parameters<NonNullable<ChannelAgentPromptAdapter["messageToolHints"]>>[0],
+  ) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";

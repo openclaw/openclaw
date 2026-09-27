@@ -13,7 +13,6 @@ import {
 } from "@openclaw/ai/internal/runtime";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseWithLimit } from "../../infra/http-body.js";
-// Internal import for JSON parsing utility
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -35,7 +34,6 @@ type StreamingToolCall = ToolCall & {
   partialJson: string;
 };
 
-// Create stream class matching ProxyMessageEventStream
 class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
   constructor() {
     super(
@@ -255,7 +253,6 @@ export function streamProxy(
   const stream = new ProxyMessageEventStream();
 
   void (async () => {
-    // Initialize the partial message that we'll build up from events
     const partial: AssistantMessage = {
       role: "assistant",
       stopReason: "stop",
@@ -422,9 +419,6 @@ export function streamProxy(
   return stream;
 }
 
-/**
- * Process a proxy event and update the partial message.
- */
 function processProxyEvent(
   proxyEvent: ProxyAssistantMessageEvent,
   partial: AssistantMessage,

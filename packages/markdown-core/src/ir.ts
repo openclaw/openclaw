@@ -1174,7 +1174,6 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         appendText(state, token.content ?? "", token);
         break;
 
-      // Table handling
       case "table_open":
         if (state.tableMode !== "off") {
           state.table = initTableState();

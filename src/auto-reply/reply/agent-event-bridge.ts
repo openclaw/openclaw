@@ -21,7 +21,7 @@ export function createAgentEventDeliveryStartOrder(options?: {
     schedule: (deliver, deliveryOptions) => {
       const previousStart = startTail;
       const previousSettlement = settledTail;
-      const start = createDeferredCore<void>();
+      const start = createDeferredCore();
       startTail = start.promise;
       const scheduled = (async () => {
         await previousStart;

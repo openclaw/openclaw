@@ -3,7 +3,6 @@
  *
  * Compatibility wrappers for plugin command registration, matching, and execution.
  */
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginCommands, registerPluginCommand } from "./command-registration.js";
 import {
   listRegisteredPluginAgentPromptGuidance,
@@ -16,7 +15,7 @@ import {
 import { matchRegisteredPluginCommand } from "./plugin-command-matcher.js";
 import { listRegisteredPluginCommands } from "./plugin-command-registry.js";
 import { requireActivePluginRegistry } from "./runtime.js";
-import type { PluginCommandContext, PluginCommandResult } from "./types.js";
+import type { PluginCommandResult } from "./types.js";
 
 export { clearPluginCommands, listRegisteredPluginAgentPromptGuidance, registerPluginCommand };
 
@@ -35,34 +34,9 @@ export function matchPluginCommand(
 }
 
 export function executePluginCommand(params: {
-  command: RegisteredPluginCommand;
-  args?: string;
-  senderId?: string;
-  channel: string;
-  channelId?: PluginCommandContext["channelId"];
-  isAuthorizedSender: boolean;
-  senderIsOwner?: boolean;
-  assertOwnerCurrent?: () => void;
-  gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
-  /** Host-resolved agent authority for plugin-owned or non-agent-shaped session keys. */
-  agentId?: string;
-  sessionKey?: PluginCommandContext["sessionKey"];
-  sessionId?: PluginCommandContext["sessionId"];
-  sessionTarget?: PluginCommandContext["sessionTarget"];
-  sessionFile?: PluginCommandContext["sessionFile"];
-  authProfileId?: string;
-  commandBody: string;
-  config: OpenClawConfig;
-  from?: PluginCommandContext["from"];
-  to?: PluginCommandContext["to"];
-  originatingTo?: string;
-  accountId?: PluginCommandContext["accountId"];
-  messageThreadId?: PluginCommandContext["messageThreadId"];
-  threadParentId?: PluginCommandContext["threadParentId"];
-  diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
-  diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
-  diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
-  diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
+  -readonly [
+    Key in keyof PluginCommandExecutionParams as Exclude<Key, "runtimeContext">
+  ]: PluginCommandExecutionParams[Key];
 }): Promise<PluginCommandResult>;
 export async function executePluginCommand(
   params: PluginCommandExecutionParams,

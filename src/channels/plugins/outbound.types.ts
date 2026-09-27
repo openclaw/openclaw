@@ -110,9 +110,7 @@ type ChannelOutboundFormattedContext = ChannelOutboundContext & {
   abortSignal?: AbortSignal;
 };
 
-type ChannelOutboundChunkContext = {
-  formatting?: OutboundDeliveryFormattingOptions;
-};
+type ChannelOutboundChunkContext = Pick<ChannelOutboundContext, "formatting">;
 
 type ChannelOutboundNormalizePayloadParams = {
   payload: ReplyPayload;
@@ -120,10 +118,11 @@ type ChannelOutboundNormalizePayloadParams = {
   accountId?: string | null;
 };
 
-type ChannelOutboundNormalizePayloadBatchParams = {
+type ChannelOutboundNormalizePayloadBatchParams = Omit<
+  ChannelOutboundNormalizePayloadParams,
+  "payload"
+> & {
   payloads: readonly { index: number; payload: ReplyPayload }[];
-  cfg: OpenClawConfig;
-  accountId?: string | null;
 };
 
 export type ChannelOutboundAdapter = {
@@ -140,13 +139,9 @@ export type ChannelOutboundAdapter = {
    * Reserve the exact provider id used by the next single-message send.
    * Presence opts the channel into conversations_turn reply correlation.
    */
-  prepareConversationTurnMessageId?: (params: {
-    cfg: OpenClawConfig;
-    to: string;
-    text: string;
-    accountId?: string | null;
-    threadId?: string | number | null;
-  }) => string;
+  prepareConversationTurnMessageId?: (
+    params: Pick<ChannelOutboundContext, "cfg" | "to" | "text" | "accountId" | "threadId">,
+  ) => string;
   sanitizeText?: (params: {
     text: string;
     payload: ReplyPayload;
@@ -174,12 +169,9 @@ export type ChannelOutboundAdapter = {
     fallbackLimit?: number;
     formatting?: OutboundDeliveryFormattingOptions;
   }) => number | undefined;
-  shouldSuppressLocalPayloadPrompt?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    payload: ReplyPayload;
-    hint?: ChannelOutboundPayloadHint;
-  }) => boolean;
+  shouldSuppressLocalPayloadPrompt?: (
+    params: ChannelOutboundNormalizePayloadParams & { hint?: ChannelOutboundPayloadHint },
+  ) => boolean;
   beforeDeliverPayload?: (params: {
     cfg: OpenClawConfig;
     target: ChannelOutboundTargetRef;
@@ -206,11 +198,9 @@ export type ChannelOutboundAdapter = {
    * options, so capabilities that only apply to one text funnel (for example
    * rich tables on the markdown path) can turn off for HTML-mode sends.
    */
-  resolvePresentationCapabilities?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    formatting?: OutboundDeliveryFormattingOptions;
-  }) => ChannelPresentationCapabilities;
+  resolvePresentationCapabilities?: (
+    params: Pick<ChannelOutboundContext, "cfg" | "accountId" | "formatting">,
+  ) => ChannelPresentationCapabilities;
   deliveryCapabilities?: ChannelDeliveryCapabilities;
   /** Render an adapted portable presentation into channel-native payload data. */
   renderPresentation?: (params: {
@@ -232,10 +222,9 @@ export type ChannelOutboundAdapter = {
   /**
    * @deprecated Use shouldTreatDeliveredTextAsVisible instead.
    */
-  shouldTreatRoutedTextAsVisible?: (params: {
-    kind: "tool" | "block" | "final";
-    text?: string;
-  }) => boolean;
+  shouldTreatRoutedTextAsVisible?: NonNullable<
+    ChannelOutboundAdapter["shouldTreatDeliveredTextAsVisible"]
+  >;
   shouldTreatDeliveredTextAsVisible?: (params: {
     kind: "tool" | "block" | "final";
     text?: string;
