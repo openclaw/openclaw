@@ -282,9 +282,14 @@ export function recordPluginError(params: {
 
 /** Groups failed plugin ids by loader phase for compact startup summaries. */
 export function formatPluginFailureSummary(failedPlugins: PluginRecord[]): string {
-  return [...Map.groupBy(failedPlugins, (plugin) => plugin.failurePhase ?? "load")]
-    .map(([phase, plugins]) => `${phase}: ${plugins.map((plugin) => plugin.id).join(", ")}`)
-    .join("; ");
+  const grouped = new Map<NonNullable<PluginRecord["failurePhase"]>, string[]>();
+  for (const plugin of failedPlugins) {
+    const phase = plugin.failurePhase ?? "load";
+    const ids = grouped.get(phase) ?? [];
+    ids.push(plugin.id);
+    grouped.set(phase, ids);
+  }
+  return [...grouped.entries()].map(([phase, ids]) => `${phase}: ${ids.join(", ")}`).join("; ");
 }
 
 function describePluginModuleExportShape(

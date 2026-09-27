@@ -14,7 +14,7 @@ export type PluginInstallSourceWarning =
   | "npm-spec-package-name-mismatch";
 
 /** Pinning state for npm plugin install metadata. */
-export type PluginInstallNpmPinState =
+type PluginInstallNpmPinState =
   | "exact-with-integrity"
   | "exact-without-integrity"
   | "floating-with-integrity"
