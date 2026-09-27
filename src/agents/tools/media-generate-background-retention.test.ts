@@ -227,10 +227,10 @@ describe("media admission after requester lookup", () => {
         const read = entryReader.withSessionEntryReadOnlyInWorker;
         vi.spyOn(entryReader, "withSessionEntryReadOnlyInWorker").mockImplementation(
           (scope, assertCurrent, consume) =>
-            read(scope, assertCurrent, async (result) => {
+            read(scope, assertCurrent, async (result, owner) => {
               readStarted.resolve();
               await resumeRead.promise;
-              return consume(result);
+              return consume(result, owner);
             }),
         );
         let current = true;
