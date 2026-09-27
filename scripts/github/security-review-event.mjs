@@ -2,7 +2,6 @@
 
 import { appendFile, readFile } from "node:fs/promises";
 import {
-  CI_WAIT_DESCRIPTION,
   createGitHubApi,
   parseApprovalCommands,
   publishGuardStatus,
@@ -13,10 +12,13 @@ import {
 const shaPattern = /^[a-f0-9]{40}$/u;
 const GRACE_MS = 5 * 60_000;
 const FALLBACK_WINDOW_MS = 60 * 60_000;
-const MAX_WINDOW_MS = 6 * 60 * 60_000;
+const MAX_WINDOW_MS = 12 * 60 * 60_000;
+// Reruns keep their original creation time. Older runs outside this margin rely
+// on completion delivery; a lost event needs a new push or Security Review rerun.
 const CREATION_MARGIN_MS = 3 * 60 * 60_000;
 const PAGE_SIZE = 100;
-const MAX_PAGES = 10;
+const MAX_QUERY_RUNS = 1000;
+const MIN_SLICE_MS = 10 * 60_000;
 
 function positiveInteger(value) {
   return Number.isSafeInteger(value) && value > 0;
@@ -105,47 +107,61 @@ async function reconcileCompletedRuns(api, prefix, repository, defaultBranch) {
   );
   const upperBound = now - GRACE_MS;
   const createdSince = lowerBound - CREATION_MARGIN_MS;
-  const created = encodeURIComponent(`>=${new Date(createdSince).toISOString()}`);
-  const runsByHead = new Map();
-  for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const response = await api.request(
-      `${prefix}/actions/workflows/ci.yml/runs?event=pull_request&status=completed&created=${created}&per_page=${PAGE_SIZE}&page=${page}`,
+  const runsById = new Map();
+  async function readRange(start, end) {
+    const created = encodeURIComponent(
+      `${new Date(start).toISOString()}..${new Date(end).toISOString()}`,
     );
-    if (!Array.isArray(response.workflow_runs)) {
-      throw new Error("CI workflow response has no workflow run list.");
+    const path = `${prefix}/actions/workflows/ci.yml/runs?event=pull_request&status=completed&created=${created}&per_page=${PAGE_SIZE}`;
+    const first = await api.request(`${path}&page=1`);
+    if (!Number.isSafeInteger(first.total_count) || first.total_count < 0) {
+      throw new Error("CI workflow response has an invalid total_count.");
     }
-    let oldestCreatedAt = Infinity;
-    for (const run of response.workflow_runs) {
-      if (!positiveInteger(run.id)) {
-        throw new Error("CI event has no valid workflow run identifier.");
+    if (first.total_count > MAX_QUERY_RUNS) {
+      if (end - start < MIN_SLICE_MS) {
+        throw new Error(
+          "CI reconciliation found more than 1000 runs in a creation range shorter than ten minutes; the covered window does not advance, and the next pass rescans from the last successful pass.",
+        );
       }
-      if (
-        run.path !== ".github/workflows/ci.yml" ||
-        run.repository?.full_name !== repository ||
-        !shaPattern.test(run.head_sha ?? "")
-      ) {
-        throw new Error("CI completion does not match the repository's CI workflow.");
+      // GitHub's timestamp ranges include both endpoints, at second precision.
+      const midpoint = Math.floor((start + end) / 2000) * 1000;
+      await readRange(start, midpoint);
+      await readRange(midpoint + 1000, end);
+      return;
+    }
+    const pages = Math.max(1, Math.ceil(first.total_count / PAGE_SIZE));
+    for (let page = 1; page <= pages; page += 1) {
+      const response = page === 1 ? first : await api.request(`${path}&page=${page}`);
+      if (!Array.isArray(response.workflow_runs)) {
+        throw new Error("CI workflow response has no workflow run list.");
       }
-      const createdAt = timestamp(run.created_at);
-      const updatedAt = timestamp(run.updated_at);
-      oldestCreatedAt = Math.min(oldestCreatedAt, createdAt);
-      if (
-        run.status === "completed" &&
-        run.conclusion !== "skipped" &&
-        updatedAt >= lowerBound &&
-        updatedAt <= upperBound &&
-        (!runsByHead.has(run.head_sha) || run.id > runsByHead.get(run.head_sha).id)
-      ) {
-        runsByHead.set(run.head_sha, run);
+      for (const run of response.workflow_runs) {
+        if (!positiveInteger(run.id)) {
+          throw new Error("CI event has no valid workflow run identifier.");
+        }
+        if (
+          run.path !== ".github/workflows/ci.yml" ||
+          run.repository?.full_name !== repository ||
+          !shaPattern.test(run.head_sha ?? "")
+        ) {
+          throw new Error("CI completion does not match the repository's CI workflow.");
+        }
+        runsById.set(run.id, run);
       }
     }
-    if (response.workflow_runs.length < PAGE_SIZE || oldestCreatedAt < createdSince) {
-      break;
-    }
-    if (page === MAX_PAGES) {
-      throw new Error(
-        `CI reconciliation listing reached the ${MAX_PAGES}-page ceiling before the creation boundary; the covered window does not advance, and the next pass rescans from the last successful pass.`,
-      );
+  }
+  await readRange(createdSince, now);
+  const runsByHead = new Map();
+  for (const run of runsById.values()) {
+    const updatedAt = timestamp(run.updated_at);
+    if (
+      run.status === "completed" &&
+      run.conclusion !== "skipped" &&
+      updatedAt >= lowerBound &&
+      updatedAt <= upperBound &&
+      (!runsByHead.has(run.head_sha) || run.id > runsByHead.get(run.head_sha).id)
+    ) {
+      runsByHead.set(run.head_sha, run);
     }
   }
   const selected = new Map();
@@ -166,14 +182,13 @@ async function reconcileCompletedRuns(api, prefix, repository, defaultBranch) {
         break;
       }
     }
-    // Provisional resolver and in-progress review statuses stay eligible until
-    // review publishes a settled result. Only the review's own wait status
-    // defers to the next CI completion.
+    // Scheduled windows tile, so each completion is examined once, plus rescans
+    // after a failed pass. Pending statuses can follow a pre-completion CI read;
+    // an extra review waiting on newer in-progress CI is harmless and bounded.
     if (
       status &&
-      (status.state !== "pending" ||
-        (/^PR #[1-9][0-9]*: (.*)$/su.exec(status.description ?? "")?.[1] === CI_WAIT_DESCRIPTION &&
-          timestamp(status.created_at) >= timestamp(run.updated_at)))
+      status.state !== "pending" &&
+      timestamp(status.created_at) >= timestamp(run.updated_at)
     ) {
       continue;
     }
@@ -255,7 +270,7 @@ async function resolvePullRequests(api, event, eventName, repository) {
     }
     return [...selected.values()].toSorted((left, right) => left.pr - right.pr);
   }
-  if (eventName === "schedule" || eventName === "workflow_dispatch") {
+  if (eventName === "schedule") {
     return reconcileCompletedRuns(api, prefix, repository, defaultBranch);
   }
   if (eventName !== "workflow_run" || event.action !== "completed") {

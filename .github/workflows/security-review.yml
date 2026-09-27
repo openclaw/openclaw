@@ -10,7 +10,6 @@ on:
     types: [completed]
   schedule:
     - cron: "4-59/10 * * * *" # reconcile CI completions whose workflow_run delivery was lost
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -40,10 +39,10 @@ jobs:
       contains(github.event.changes.body.from, '/allow-dependencies-change')))))) &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request' ||
       github.event.workflow_run.event == 'workflow_dispatch') }}
-    # Rate-limit recovery can hold a resolver for up to an hour. GitHub keeps one
+    # Rate-limit recovery can hold a scheduled resolver for an hour. GitHub keeps one
     # pending pass; the next pass still starts from the last successful window.
     concurrency:
-      group: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'security-review-reconcile' || format('security-review-resolve-{0}', github.run_id) }}
+      group: ${{ github.event_name == 'schedule' && 'security-review-reconcile' || format('security-review-resolve-{0}', github.run_id) }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 85

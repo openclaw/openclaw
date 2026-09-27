@@ -323,24 +323,33 @@ the exact baseline and candidate commits remain recorded inside the artifact.
 
 ## Security Review reconciler
 
-Every ten minutes and on manual dispatch, Security Review reconciles CI completions
+Every ten minutes, Security Review reconciles CI completions
 from five minutes before the previous successful scheduled pass started until
-five minutes ago (sixty-minute fallback, six-hour cap). Passes tile without gaps;
+five minutes ago (sixty-minute fallback, twelve-hour cap). Passes tile without gaps;
 late or dropped cron ticks only widen the next window, up to the cap. Run listing
-uses a creation boundary three hours before the window and reads until a short
-page or a page's oldest run predates that boundary. Reaching the ten-page ceiling
-with an incomplete listing fails the pass before status publication or matrix
-output, so the covered window does not advance. The next pass rescans from the
-last successful pass. Scheduled and dispatched resolver passes share one
+covers creation times from three hours before the window through the current time.
+GitHub caps each filtered query at 1,000 results, so the resolver bisects ranges
+whose reported total exceeds that limit and pages each smaller range completely.
+Inclusive range endpoints are separated by one second, and run IDs are deduplicated
+across pages and slices. A range shorter than ten minutes that still exceeds
+1,000 runs fails before status publication or matrix output, so the covered window
+does not advance. The next pass rescans from the last successful pass. Scheduled resolver passes share one
 concurrency group without canceling an active pass; GitHub keeps one
 pending pass, which still starts from the last successful window.
+After a reconciler outage longer than twelve hours, older lost completions need
+a new push or a Security Review rerun.
+
+A CI rerun keeps its original creation time. A rerun of a run created more than
+three hours before the window relies on its own completion delivery; if that is
+lost, a new push or a Security Review rerun recovers it.
 
 Wholly skipped CI runs are ignored. Normal review runs only for heads whose
-`openclaw/ci-gate` status is missing, pending from before CI completion, or pending
-with a provisional description. Only a settled status or the review's own
-`PR #<n>: Waiting for CI; review updates automatically` status created at or after
-CI completion stops reselection, so provisional statuses from an interrupted
-handoff are retried. It never checks out PR code and uses one hosted
+`openclaw/ci-gate` status is missing, older than CI completion, or pending. Only a
+non-pending status created at or after CI completion is settled and stops
+reselection. Every pending status remains eligible, including a review wait
+published after a pre-completion CI read. Tiled windows bound the harmless extra
+review when a head legitimately waits on newer in-progress CI.
+It never checks out PR code and uses one hosted
 `ubuntu-24.04` resolver job per pass, run-list reads plus paginated
 combined-status reads per newly completed head, and no Blacksmith registrations.
 See [Security review checks](/ci/pipeline#security-review-checks).

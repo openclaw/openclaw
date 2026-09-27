@@ -6,7 +6,6 @@ export const GITHUB_ERROR_BODY_MAX_BYTES = 64 * 1024;
 export const GITHUB_RESPONSE_BODY_MAX_BYTES = 4 * 1024 * 1024;
 export const GITHUB_API_REQUEST_TIMEOUT_MS = 30_000;
 export const SECURITY_REVIEW_CHECK_INTERVAL_MS = 30_000;
-export const CI_WAIT_DESCRIPTION = "Waiting for CI; review updates automatically";
 
 const githubApiRetryStatuses = new Set([500, 502, 503, 504]);
 const githubApiRetryCodes = new Set([
