@@ -23,7 +23,6 @@ import {
   mergeStaticCatalogInlineModel,
   resolveConfiguredProviderConfig,
   shouldSuppressConfiguredModel,
-  type StaticCatalogFallbackModel,
 } from "./model.configured-overrides.js";
 import type { InlineModelEntry } from "./model.inline-provider.js";
 import {
@@ -63,7 +62,7 @@ export function resolveExplicitModelWithRegistry(params: {
   runtimeHooks?: ProviderRuntimeHooks;
   preparedInlineProviderModels?: readonly InlineModelEntry[];
   preparedCatalogModel?: ProviderRuntimeModel;
-  getStaticCatalogModel?: () => StaticCatalogFallbackModel | undefined;
+  getStaticCatalogModel?: () => ProviderRuntimeModel | undefined;
 }): ExplicitModelResolution | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir, runtimeHooks } = params;
   // Competing activated owners cannot lend either model or transport authority.
@@ -326,18 +325,6 @@ export async function resolveRuntimePreferredSuppressedModel(
   return resolvePluginDynamicModelWithRegistry({ ...params, runtimeHooks });
 }
 
-function shouldDropRuntimePreferredExplicitMiss(params: {
-  provider: string;
-  modelId: string;
-  explicitModel: ExplicitModelResolution;
-}): boolean {
-  return (
-    params.explicitModel.kind === "resolved" &&
-    params.explicitModel.source === "registry" &&
-    params.explicitModel.dropOnRuntimeMiss
-  );
-}
-
 export function shouldCompareProviderRuntimeResolvedModel(params: {
   provider: string;
   modelId: string;
@@ -414,7 +401,7 @@ type ResolveModelWithPreparedRegistryParams = ResolveModelWithRegistryParams & {
   // An empty result is prepared too; a dynamic-model miss must not read auth again.
   preparedAuthProfile?: DynamicModelAuthProfile;
   preparedDynamicModel?: ProviderRuntimeModel;
-  getStaticCatalogModel?: () => StaticCatalogFallbackModel | undefined;
+  getStaticCatalogModel?: () => ProviderRuntimeModel | undefined;
 };
 
 export async function resolveModelWithPreparedRegistry(
@@ -437,11 +424,7 @@ export async function resolveModelWithPreparedRegistry(
     params.assertCurrent?.();
     return (
       pluginDynamicModel ??
-      (shouldDropRuntimePreferredExplicitMiss({
-        provider: params.provider,
-        modelId: params.modelId,
-        explicitModel,
-      })
+      (explicitModel.source === "registry" && explicitModel.dropOnRuntimeMiss
         ? undefined
         : explicitModel.model)
     );
@@ -465,7 +448,7 @@ export async function resolveModelWithRegistry(
   const workspaceDir = params.workspaceDir ?? params.cfg?.agents?.defaults?.workspace;
   const normalizedRef = normalizeProviderModelRef({ ...params, workspaceDir });
   let staticCatalogResolved = false;
-  let staticCatalogModel: StaticCatalogFallbackModel | undefined;
+  let staticCatalogModel: ProviderRuntimeModel | undefined;
   const getStaticCatalogModel = () => {
     if (!staticCatalogResolved) {
       staticCatalogResolved = true;

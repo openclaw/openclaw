@@ -7,11 +7,7 @@ import {
   type GatewayGuildDeleteDispatchData,
   type GatewayVoiceStateUpdateDispatchData,
 } from "discord-api-types/v10";
-
-export type DiscordGatewayVoiceStateTransition = {
-  current: APIVoiceState;
-  previous?: APIVoiceState;
-};
+import type { DiscordGatewayVoiceStateTransition } from "./plugin-contract.js";
 
 export class DiscordGatewayVoiceStateCache {
   private readonly statesByGuild = new Map<string, Map<string, APIVoiceState>>();

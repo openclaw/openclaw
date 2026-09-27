@@ -442,6 +442,12 @@ public struct OpenClawChatStreamFallback: Codable, Hashable, Sendable {
     public let itemId: String?
     public let runId: String?
 
+    init(source: String, itemId: String, runId: String) {
+        self.source = source
+        self.itemId = itemId
+        self.runId = runId
+    }
+
     private enum CodingKeys: String, CodingKey {
         case source
         case itemId
@@ -747,11 +753,13 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
 public struct OpenClawChatInFlightRun: Codable, Sendable {
     public let runId: String
     public let text: String
+    public let events: [OpenClawAgentEventPayload]?
 
     // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
-    public init(runId: String, text: String) {
+    public init(runId: String, text: String, events: [OpenClawAgentEventPayload]? = nil) {
         self.runId = runId
         self.text = text
+        self.events = events
     }
 }
 
@@ -1039,6 +1047,7 @@ public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {
     let diffStat: ChatToolDiffStat?
     var activity: OpenClawAgentActivityItem?
     var isComplete: Bool = false
+    var runID: String?
 }
 
 public struct OpenClawGatewayHealthOK: Codable, Sendable {

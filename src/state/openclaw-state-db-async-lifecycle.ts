@@ -22,6 +22,8 @@ export function isStateDatabaseReadAdmissionInvalidatedError(error: unknown): bo
 
 export type OpenClawStateDatabaseReadAdmission = {
   readonly databasePath: string;
+  /** Stable across first creation and aliases; coordinates work but grants no authority. */
+  readonly coordinationKey: string;
   readonly identity: DatabasePathIdentity;
   assertCurrent: () => void;
 };
@@ -32,6 +34,7 @@ export type OpenClawStateDatabaseAsyncResource = {
 };
 
 type IdentityRecord = {
+  readonly coordinationKey: string;
   identity: DatabasePathIdentity;
   paths: Set<string>;
   generation: object;
@@ -430,7 +433,13 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       }
     }
     if (!record) {
-      record = { identity, paths: new Set(), generation: {}, admissions: new Map() };
+      record = {
+        coordinationKey: identity.key,
+        identity,
+        paths: new Set(),
+        generation: {},
+        admissions: new Map(),
+      };
       records.set(identity.key, record);
     }
     bindPath(record, resolvedPath);
@@ -489,6 +498,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     const generation = record.generation;
     const admission: OpenClawStateDatabaseReadAdmission = Object.freeze({
       databasePath,
+      coordinationKey: record.coordinationKey,
       get identity() {
         return record.identity;
       },

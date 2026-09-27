@@ -130,6 +130,14 @@ export const historyLane: SessionHistoryWorkerLane = {
   retiredSequence: 0,
   pending: 0,
 };
+// Keep list materialization independent of large history pages, with one extra reader per store.
+export const projectionLane: SessionHistoryWorkerLane = {
+  name: "Session projection",
+  pool: createHistoryPool(),
+  nativeSequence: 0,
+  retiredSequence: 0,
+  pending: 0,
+};
 // Full-store validation cannot yield its snapshot to a foreground history read.
 export const maintenanceLane: SessionHistoryWorkerLane = {
   name: "Session maintenance",
@@ -153,7 +161,8 @@ export const costRefreshLane: SessionCostWorkerLane = {
   pending: 0,
 };
 
-const databaseWorkerLanes = [historyLane, maintenanceLane, costReadLane, costRefreshLane];
+const historyWorkerLanes = [historyLane, projectionLane, maintenanceLane];
+const databaseWorkerLanes = [...historyWorkerLanes, costReadLane, costRefreshLane];
 const memoryPressure = channel("openclaw.memory.critical");
 let pressureSubscribed = false;
 
@@ -284,12 +293,7 @@ async function closeDatabaseWorkerResource(
   lane: SessionDatabaseWorkerLane,
   idle: boolean,
 ): Promise<void> {
-  const pool =
-    lane === historyLane
-      ? historyLane.pool
-      : lane === maintenanceLane
-        ? maintenanceLane.pool
-        : undefined;
+  const pool = historyWorkerLanes.find((candidate) => candidate === lane)?.pool;
   // Active reads and Bun retain native-exit custody. Idle Node readers can
   // release the exact database while retaining the worker's loaded code.
   if (!idle || process.versions.bun || !pool) {

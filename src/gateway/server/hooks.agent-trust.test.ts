@@ -12,6 +12,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../../process/spawn-broker/host.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatMock = vi.fn();
@@ -95,6 +96,7 @@ function expectOwnedSystemEvent(text: string, ownerAgentId: string): void {
 
 function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number } = {}) {
   return {
+    scheduler: createTestGatewayScheduler("fake-timers"),
     deps: {} as never,
     getHooksConfig: () => null,
     getClientIpConfig: () => ({ trustedProxies: undefined, allowRealIpFallback: false }),

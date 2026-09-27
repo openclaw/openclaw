@@ -108,10 +108,6 @@ export async function renameForumTopicTelegram(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Forum topic creation
-// ---------------------------------------------------------------------------
-
 type TelegramCreateForumTopicOpts = TelegramApiCallOpts &
   Pick<TelegramMessageActionOpts, "assertPlatformSendAuthorized"> & {
     /** Icon color for the topic (must be one of 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F). */
@@ -126,14 +122,7 @@ type TelegramCreateForumTopicResult = {
   chatId: string;
 };
 
-/**
- * Create a forum topic in a Telegram supergroup.
- * Requires the bot to have `can_manage_topics` permission.
- *
- * @param chatId - Supergroup chat ID
- * @param name - Topic name (1-128 characters)
- * @param opts - Optional configuration
- */
+/** Requires the bot's can_manage_topics permission. */
 export async function createForumTopicTelegram(
   chatId: string,
   name: string,

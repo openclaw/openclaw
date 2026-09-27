@@ -8,6 +8,7 @@ import {
   deleteSessionEntryLifecycle,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -25,7 +26,7 @@ import * as rowInputs from "./session-utils-row.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("prepares dirty persistent row facts without Gateway-thread data reads", async () => {
+it("prepares dirty persistent row facts independently of history reads and the Gateway thread", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:worker-row";
     const cfg = {
@@ -60,10 +61,22 @@ it("prepares dirty persistent row facts without Gateway-thread data reads", asyn
       await projection.ensureMaterialized();
       try {
         const before = projection.materializedCount;
-        sessionChanges.emit({ agentId: "main", sessionKey: key });
+        const historyReads = vi
+          .spyOn(historyLane.pool, "run")
+          .mockRejectedValue(new Error("History reader is unavailable"));
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: key },
+          {
+            ...projection.capture({ agentId: "main", key })!.entry,
+            sessionId: "worker-row",
+            updatedAt: 2,
+            label: "Fresh worker row",
+          },
+        );
         const reads = observeSqliteReadSql(StatementSync.prototype);
         try {
-          await listProjectedSessions({ projection, opts: {} });
+          const listed = await listProjectedSessions({ projection, opts: {} });
+          expect(listed.sessions).toMatchObject([{ key, label: "Fresh worker row", updatedAt: 2 }]);
           expect(projection.materializedCount).toBeGreaterThan(before);
           expect(
             reads.queries.flatMap((sql) =>
@@ -83,6 +96,7 @@ it("prepares dirty persistent row facts without Gateway-thread data reads", asyn
           );
         } finally {
           reads.restore();
+          historyReads.mockRestore();
         }
       } finally {
         projection.dispose();

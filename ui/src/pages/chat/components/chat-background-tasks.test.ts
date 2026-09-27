@@ -676,12 +676,16 @@ describe("running-tasks status row", () => {
     expect(onOpenTaskList).toHaveBeenCalledOnce();
   });
 
-  it("anchors a hover preview of the latest tasks, active first, capped at five", () => {
+  it("anchors a hover preview of active tasks, capped at five with active-only overflow", () => {
     const container = renderStatusRow({
       tasks: (
         [
           ["a1", "running", "Active one", 9_000],
           ["a2", "queued", "Queued two", 8_000],
+          ["a3", "running", "Active three", 3_000],
+          ["a4", "running", "Active four", 2_000],
+          ["a5", "running", "Active five", 1_000],
+          ["a6", "running", "Active six", 500],
           ["f1", "completed", "Finished one", 7_000],
           ["f2", "failed", "Finished two", 6_000],
           ["f3", "completed", "Finished three", 5_000],
@@ -702,21 +706,29 @@ describe("running-tasks status row", () => {
     expect(titles).toEqual([
       "Active one",
       "Queued two",
-      "Finished one",
-      "Finished two",
-      "Finished three",
+      "Active three",
+      "Active four",
+      "Active five",
     ]);
     expect(container.querySelector(".chat-tasks-preview__more")?.textContent?.trim()).toBe(
       "+1 more",
     );
   });
 
-  it("sizes the preview to the task list without an overflow line", () => {
+  it("excludes finished tasks from preview rows and overflow", () => {
     const container = renderStatusRow({
-      tasks: [makeAggregateTask({ id: "t1", title: "Only task" })],
+      tasks: [
+        makeAggregateTask({ id: "t1", title: "Only active task" }),
+        ...(["completed", "failed", "cancelled", "timed_out"] as const).map((status) =>
+          makeAggregateTask({ id: status, status, title: `Finished ${status}` }),
+        ),
+      ],
     });
 
     expect(container.querySelectorAll(".chat-tasks-preview__row").length).toBe(1);
+    expect(container.querySelector(".chat-tasks-preview__title")?.textContent).toBe(
+      "Only active task",
+    );
     expect(container.querySelector(".chat-tasks-preview__more")).toBeNull();
   });
 

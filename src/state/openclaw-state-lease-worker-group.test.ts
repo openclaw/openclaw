@@ -41,6 +41,7 @@ function sourceContext(): OpenClawStateWorkerContext {
     environment: { OPENCLAW_STATE_DIR: "/synthetic-state" },
     coordinatorRuntime: { directory: "/synthetic-coordinator", keepAlive: false },
     admission: {
+      coordinationKey: "file:1:2",
       databasePath: "/synthetic-alias/state.sqlite",
       identity: { key: "file:1:2", canonicalPath: "/synthetic-state/state.sqlite" },
       assertCurrent() {},

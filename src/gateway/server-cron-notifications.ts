@@ -257,33 +257,22 @@ async function postCronWebhook(params: {
   webhookToken?: string;
   payload: unknown;
   ssrfPolicy?: SsrFPolicy;
-  logContext: Record<string, unknown>;
-  blockedLog: string;
-  failedLog: string;
+  jobId: string;
   logger: CronLogger;
 }): Promise<void> {
   try {
     await postCronWebhookStrict(params);
   } catch (err) {
-    if (err instanceof SsrFBlockedError) {
-      params.logger.warn(
-        {
-          ...params.logContext,
-          reason: formatErrorMessage(err),
-          webhookUrl: redactWebhookUrl(params.webhookUrl),
-        },
-        params.blockedLog,
-      );
-    } else {
-      params.logger.warn(
-        {
-          ...params.logContext,
-          err: formatErrorMessage(err),
-          webhookUrl: redactWebhookUrl(params.webhookUrl),
-        },
-        params.failedLog,
-      );
-    }
+    const blocked = err instanceof SsrFBlockedError;
+    params.logger.warn(
+      {
+        jobId: params.jobId,
+        source: "completionDestination",
+        [blocked ? "reason" : "err"]: formatErrorMessage(err),
+        webhookUrl: redactWebhookUrl(params.webhookUrl),
+      },
+      blocked ? "cron: webhook delivery blocked by SSRF guard" : "cron: webhook delivery failed",
+    );
   }
 }
 
@@ -502,9 +491,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
           webhookToken,
           ssrfPolicy: params.ssrfPolicy,
           payload,
-          logContext: { jobId: params.evt.jobId, source: "completionDestination" },
-          blockedLog: "cron: webhook delivery blocked by SSRF guard",
-          failedLog: "cron: webhook delivery failed",
+          jobId: params.evt.jobId,
           logger: params.logger,
         }),
     });

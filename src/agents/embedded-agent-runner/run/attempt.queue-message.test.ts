@@ -109,6 +109,9 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         secretValue,
         {
           isInboundUserMessage: true,
+          currentInboundContext: {
+            text: "Replied message (untrusted, for context): Enter the requested credential",
+          },
           userTurnTranscriptRecorder: recorder,
           ...(kind === "offloaded"
             ? { media: [{ path: "/tmp/image.png", contentType: "image/png" }] }

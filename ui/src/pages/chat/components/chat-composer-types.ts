@@ -31,7 +31,6 @@ import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { RealtimeTalkCameraDevice } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
-import type { RealtimeVoiceSelectionState } from "../talk/voice-selection.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
@@ -149,7 +148,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   realtimeTalkVideoCapable?: boolean;
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
-  realtimeTalkVoice?: RealtimeVoiceSelectionState;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   realtimeTalkInputDeviceId?: string;
@@ -172,7 +170,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
     submissionAction?: Event,
   ) => void | Promise<boolean | void>;
   onToggleRealtimeTalk?: () => void;
-  onSelectRealtimeVoice?: (voice: string) => void;
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;

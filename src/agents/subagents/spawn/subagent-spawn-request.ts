@@ -233,7 +233,14 @@ export async function resolveSubagentSpawnRequest(
       additionalActiveChildren: pendingChildren,
     });
   };
-  ctx.assertActive?.();
+  try {
+    ctx.assertActive?.();
+  } catch (error) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      `sessions_spawn could not read the requester session: ${summarizeSpawnError(error)}`,
+    );
+  }
   const admissionReservation = params.collect
     ? undefined
     : reserveChildAdmissionSlot({

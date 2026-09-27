@@ -1,7 +1,10 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
-import { resolveGitHubPublicationWorkspaceOwner } from "./github-publication-availability.js";
+import {
+  resolveGitHubPublicationWorkspaceOwner,
+  type PublicationSessionIdentity,
+} from "./github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
 import { projectGitHubPublicationResult } from "./github-publication-store.js";
 import {
@@ -12,12 +15,6 @@ import { failRepositoryGitHubPublicationPreparation } from "./github-repository-
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 
-export type RepositoryPublicationSessionIdentity = {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  lifecycleRevision?: string | null;
-};
 export type PreparedRepositoryPublicationSnapshot = {
   snapshot: GitHubRepositoryPublicationSnapshot;
   snapshotRoot: string;
@@ -25,7 +22,7 @@ export type PreparedRepositoryPublicationSnapshot = {
   digest: string;
 };
 
-export function repositoryOwner(session: RepositoryPublicationSessionIdentity) {
+export function repositoryOwner(session: PublicationSessionIdentity) {
   const owner = resolveGitHubPublicationWorkspaceOwner(session);
   if (owner.kind !== "repository") {
     throw new Error("GitHub publication repository owner changed.");

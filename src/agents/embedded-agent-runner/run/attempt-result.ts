@@ -1,6 +1,3 @@
-/**
- * Projects stream state into the stable embedded-attempt result contract.
- */
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -188,7 +185,6 @@ function hasVisiblePendingToolMediaReply(
   );
 }
 
-/** Runs output hooks, classifies terminal effects, and returns the finalized attempt result. */
 export function completeEmbeddedAttemptResult(
   input: EmbeddedAttemptExecutionPhaseInput & { preparedStreamRuntime: PreparedStreamRuntime },
   settled: Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>,
