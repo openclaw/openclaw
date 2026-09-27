@@ -57,7 +57,12 @@ describe("retained chat work admission", () => {
           currentRegistration: () => registered,
         },
       });
-      const settling = work.settleTerminal({ startedAt: 1, status: "killed", retryable: false });
+      const settling = work.settleTerminal({
+        controlUiVisible: false,
+        startedAt: 1,
+        status: "killed",
+        retryable: false,
+      });
       const observed = settling.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),

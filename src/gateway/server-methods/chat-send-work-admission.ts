@@ -425,7 +425,7 @@ export function createChatSendWorkAdmission(params: {
     retain,
     async settleTerminal(
       this: void,
-      state: RestartSafeChatTerminalState & { startedAt: number },
+      state: RestartSafeChatTerminalState & { controlUiVisible: boolean; startedAt: number },
     ): Promise<boolean> {
       const terminal = params.terminal;
       const settlement = retainTerminalSettlement();

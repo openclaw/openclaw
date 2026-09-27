@@ -359,6 +359,10 @@ export async function prepareChatSendSession(params: {
   const restartSafeRequest = await createRestartSafeChatRequest({
     goalRequestFingerprint: request.goalOperation?.requestFingerprint,
     cfg,
+    // Visibility is the browser-client fact alone: the remaining terms below
+    // describe restart safety, and an internal Goal request reaches the
+    // fingerprint branch without ever being a visible Control UI turn.
+    controlUiVisible: isBrowserOperatorUiClient(request.clientInfo),
     eligible:
       (isBrowserOperatorUiClient(request.clientInfo) || params.isDirectExternalUser === true) &&
       turnKind === "main" &&

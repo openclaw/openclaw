@@ -162,7 +162,11 @@ async function handleChatSendWithOptions(
 
   const admissionStartedAt = Date.now();
   const terminalizeRestartSafeAdmission = (terminalState: RestartSafeChatTerminalState) =>
-    admission.settleTerminal({ ...terminalState, startedAt: admissionStartedAt });
+    admission.settleTerminal({
+      ...terminalState,
+      controlUiVisible: restartSafeAdmission?.controlUiVisible ?? false,
+      startedAt: admissionStartedAt,
+    });
   // sessions.create invokes chat only after committing a fresh session. Its eligible
   // initial input transfers custody with the transcript and restart claim, not before.
   const commitInitialInput =

@@ -56,10 +56,17 @@ const RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN = "openclaw.chat.restart-retry.v
 const log = createSubsystemLogger("gateway/restart-recovery");
 
 type RestartSafeChatRequest = {
+  /**
+   * Whether the admitted turn is a visible Control UI chat turn. A restart-safe
+   * request also exists for internal Goal work, so the terminal write cannot
+   * assume visibility from the request's existence.
+   */
+  controlUiVisible: boolean;
   fingerprint: string;
 };
 
 type RestartSafeChatAdmission = {
+  controlUiVisible: boolean;
   priorTerminalSourceRunId?: string;
   requestFingerprint: string;
   retryExpectedState?: SessionTranscriptTurnExpectedState;
@@ -117,6 +124,7 @@ async function fingerprintRestartSafeChatRequest(params: {
 }
 
 export async function createRestartSafeChatRequest(params: {
+  controlUiVisible: boolean;
   goalRequestFingerprint?: string;
   eligible: boolean;
   message: string;
@@ -127,12 +135,16 @@ export async function createRestartSafeChatRequest(params: {
   if (params.goalRequestFingerprint) {
     // Goal admission owns literal intent; slash-looking objectives are not commands.
     // Its receipt fingerprints attachments, routing, and every immutable run option.
-    return { fingerprint: params.goalRequestFingerprint };
+    return {
+      controlUiVisible: params.controlUiVisible,
+      fingerprint: params.goalRequestFingerprint,
+    };
   }
   if (!params.eligible || hasRestartUnsafeMessageSemantics(params.message, params.cfg)) {
     return undefined;
   }
   return {
+    controlUiVisible: params.controlUiVisible,
     fingerprint: await fingerprintRestartSafeChatRequest(params),
   };
 }
@@ -381,6 +393,7 @@ export function resolveRestartSafeChatAdmission(params: {
     throw new Error("chat retry does not match its durable admission");
   }
   return {
+    controlUiVisible: request.controlUiVisible,
     requestFingerprint: request.fingerprint,
     ...(retryableClaim
       ? {
@@ -440,6 +453,7 @@ export async function terminalizeRestartSafeChatAdmission(
   params: RestartSafeChatTerminalState & {
     admittedSessionId: string;
     clientRunId: string;
+    controlUiVisible: boolean;
     expectedLifecycleRevision: string | undefined;
     target: SessionEntryTargetPatchScope & { readSource: CapturedSessionEntryReadSource };
     assertCurrent: () => void;
@@ -465,10 +479,11 @@ export async function terminalizeRestartSafeChatAdmission(
           event: {
             runId: params.clientRunId,
             ts: endedAt,
-            // A restart-safe admission only exists for the browser Control UI, so
-            // its terminal write counts as visible activity: the same unread
-            // marker a live visible terminal advances (see #155690).
-            controlUiVisible: true,
+            // Only a Control UI chat turn counts as visible activity: the same
+            // unread marker a live visible terminal advances (see #155690). The
+            // admission records whether this request actually was one, because
+            // internal Goal work also gets a restart-safe request.
+            controlUiVisible: params.controlUiVisible,
             data: {
               phase: params.status === "failed" ? "error" : "end",
               startedAt: params.startedAt,
