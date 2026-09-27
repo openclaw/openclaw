@@ -64,18 +64,18 @@ describe("renderLobsterdex", () => {
       "Carries sunshine through cloudy builds.",
     ],
     [
-      "clawdette",
-      "Clawdette",
-      "A very well-spotted visitor.",
-      "Connects the dots. Then adds a few more.",
+      "clawiestardust",
+      "Clawie Stardust",
+      "Something electric washed ashore.",
+      "Changes shells. Never changes style.",
     ],
   ] as const)(
     "discovers %s by palette, not an existing visitor name, and retains shiny sightings",
     (id, name, hint, flavor) => {
       const container = document.createElement("div");
       const renderDex = () => render(renderLobsterdex(getLobsterdexEntries()), container);
-      // Crimson visitors could already be called Clawdia or Clawdette. Those
-      // memories must neither reveal the new palette nor be renamed by it.
+      // Names are not palette identity. Remembered visitors must neither
+      // reveal the new palette nor be renamed by it.
       recordLobsterVisit("crimson", { name });
       renderDex();
       const card = () => container.querySelector(`#lobsterdex-${id}`);

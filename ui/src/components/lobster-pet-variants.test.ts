@@ -49,7 +49,7 @@ describe("lobster pet variants", () => {
     for (const grail of [
       "clawnstantine",
       "clawdia",
-      "clawdette",
+      "clawiestardust",
       "clawtron",
       "selene",
       "geode",
@@ -105,7 +105,7 @@ describe("lobster pet variants", () => {
   it.each([
     ["clawnstantine", "Clawnstantine"],
     ["clawdia", "Clawdia"],
-    ["clawdette", "Clawdette"],
+    ["clawiestardust", "Clawie Stardust"],
   ] as const)(
     "keeps %s's signature name and art without random accessories or freckles",
     (id, name) => {

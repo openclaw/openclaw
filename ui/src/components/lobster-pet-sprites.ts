@@ -171,17 +171,11 @@ const CLAWDIA_SKY = svg`
   </g>
 `;
 
-const CLAWDETTE_DOTS = svg`
-  <g class="lob-clawdette">
-    <g class="lob-clawdette__dots" fill="#fff0da">
-      <circle cx="35" cy="55" r="5" /><circle cx="59" cy="65" r="6" /><circle cx="84" cy="54" r="5" />
-      <circle cx="40" cy="78" r="5" /><circle cx="78" cy="78" r="5" /><circle cx="59" cy="88" r="3.5" />
-    </g>
-    <g class="lob-clawdette__ribbon" fill="#b49cdb" stroke="#775aa9" stroke-width="1.2" stroke-linejoin="round">
-      <path d="M59 46 Q41 36 43 48 Q44 57 59 50 Z M61 46 Q79 36 77 48 Q76 57 61 50 Z" />
-      <path d="M57 50 L51 61 L58 58 L62 62 L64 50 Z" />
-      <circle cx="60" cy="48" r="4" fill="#ffe1a3" />
-    </g>
+// Face paint rides the shell; the shared renderer draws the eyes above it.
+const CLAWIE_STARDUST_BOLT = svg`
+  <g class="lob-clawiestardust">
+    <path d="M72 14 L57 49 L70 43 L51 89 L85 38 L72 44 L83 18 Z" fill="#4dc8eb" transform="translate(2.5 0)" />
+    <path d="M72 14 L57 49 L70 43 L51 89 L85 38 L72 44 L83 18 Z" fill="#e6393d" />
   </g>
 `;
 
@@ -266,7 +260,7 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "blueprint",
   "clawnstantine",
   "clawdia",
-  "clawdette",
+  "clawiestardust",
   "clawtron",
   "selene",
   "pixel",
@@ -383,7 +377,7 @@ export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResul
   blueprint: BLUEPRINT_MARKS,
   clawnstantine: CLAWNSTANTINE_REGALIA,
   clawdia: CLAWDIA_SKY,
-  clawdette: CLAWDETTE_DOTS,
+  clawiestardust: CLAWIE_STARDUST_BOLT,
   clawtron: MECHA_PLATES,
   banana: BANANA_MARKS,
   bee: BEE_PARTS,

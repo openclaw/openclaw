@@ -957,7 +957,7 @@ describe("rare lobster loads", () => {
   it.each([
     ["clawnstantine", "Clawnstantine"],
     ["clawdia", "Clawdia"],
-    ["clawdette", "Clawdette"],
+    ["clawiestardust", "Clawie Stardust"],
   ] as const)("records a genuine %s arrival with its signature identity", async (id, name) => {
     vi.useFakeTimers();
     const now = new Date("2026-07-09T12:00:00");
