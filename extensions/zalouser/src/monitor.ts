@@ -801,6 +801,7 @@ export async function monitorZalouserProvider(
     if (allowNameMatching && (allowFromEntries.length > 0 || groupAllowFromEntries.length > 0)) {
       const friends = await listZaloFriends(profile);
       const byName = buildZaloNameIndex(friends, (friend) => friend.displayName);
+      account = { ...account, config: { ...account.config } };
       for (const [key, entries, label] of [
         ["allowFrom", allowFromEntries, "zalouser users"],
         ["groupAllowFrom", groupAllowFromEntries, "zalouser group users"],
@@ -809,13 +810,7 @@ export async function monitorZalouserProvider(
           continue;
         }
         const { additions, mapping, unresolved } = resolveUserAllowlistEntries(entries, byName);
-        account = {
-          ...account,
-          config: {
-            ...account.config,
-            [key]: mergeAllowlist({ existing: account.config[key], additions }),
-          },
-        };
+        account.config[key] = mergeAllowlist({ existing: account.config[key], additions });
         summarizeMapping(label, mapping, unresolved, runtime);
       }
     }
