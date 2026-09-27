@@ -2237,7 +2237,7 @@ describe("uninstallPlugin", () => {
   });
 
   it("returns a warning when directory deletion fails unexpectedly", async () => {
-    const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("permission denied"));
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockRejectedValueOnce(new Error("permission denied"));
     try {
       const { result } = await runDeleteInstalledNpmPluginFixture(tempDir);
 
@@ -2247,7 +2247,7 @@ describe("uninstallPlugin", () => {
       expect(successfulResult.warnings).toHaveLength(1);
       expect(successfulResult.warnings[0]).toContain("Failed to remove plugin directory");
     } finally {
-      rmSpy.mockRestore();
+      unlinkSpy.mockRestore();
     }
   });
 
