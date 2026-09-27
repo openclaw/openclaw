@@ -17,6 +17,7 @@ export type ArtifactTransferCapability = {
   artifactKey: string;
   artifact: TransferArtifact;
   expiresAtMs: number;
+  remainingServes: number;
   active?: ArtifactTransferAuthorization;
   abortController: AbortController;
   stopWatching?: () => void;
@@ -100,6 +101,7 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
         artifactKey: params.artifactKey,
         artifact: { ...params.artifact },
         expiresAtMs: now() + params.ttlMs,
+        remainingServes: 3,
         abortController: new AbortController(),
         isAuthorized: params.isAuthorized,
       };
@@ -133,6 +135,9 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
       if (capability.active) {
         throw new ArtifactTransferBusyError();
       }
+      // A buffering proxy can finish receiving a bundle, then reset the downstream download.
+      // Allow three serial serves, still bound to one artifact and the original TTL/live owner.
+      capability.remainingServes--;
       const authorization = { capability, abortController: new AbortController() };
       capability.active = authorization;
       return authorization;
@@ -174,14 +179,12 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
       }
     },
 
-    finish(authorization: ArtifactTransferAuthorization, completed: boolean): void {
+    finish(authorization: ArtifactTransferAuthorization): void {
       if (!isCurrent(authorization)) {
         return;
       }
       const { capability } = authorization;
-      // OpenClaw runtime/worker bundles stay artifact-bound with the original TTL (bootstrap: <=10m).
-      // Only interrupted transfers may retry; one complete download consumes the token.
-      if (completed) {
+      if (capability.remainingServes === 0) {
         revokeCapability(capability);
       } else {
         capability.active = undefined;

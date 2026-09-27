@@ -40,7 +40,6 @@ async function download(outcomes: Array<string | number>) {
       const outcome = outcomes[Math.min(requests.length, outcomes.length - 1)];
       requests.push(options.headers.authorization);
       const request = Object.assign(new EventEmitter(), {
-        setTimeout: () => {},
         destroy: (error: Error) => request.emit("error", error),
         end: () => {
           const response = Object.assign(

@@ -176,7 +176,6 @@ setPhase("preparation");
       agent: false, headers: { authorization: "Bearer " + token }, signal: AbortSignal.timeout(600000),
       ...(pin ? { rejectUnauthorized: false, session: Buffer.alloc(0) } : {}),
     });
-    request.setTimeout(60000, () => request.destroy(Object.assign(new Error("Cloud worker bootstrap download idle timeout"), { code: "ETIMEDOUT" })));
     // The response/body readers still reject; keep errors observed between their awaits.
     request.on("error", () => {});
     request.once("response", (response) => response.on("error", () => {}));

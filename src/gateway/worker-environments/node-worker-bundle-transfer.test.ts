@@ -104,6 +104,6 @@ describe("node worker bundle transfer", () => {
         gatewayUrl: `ws://127.0.0.1:${address.port}`,
       }),
     ).resolves.toEqual(prepared.input.build);
-    expect(service.authorize({ token: prepared.token, artifactKey: bundleHash })).toBeUndefined();
+    service.closeAll();
   });
 });

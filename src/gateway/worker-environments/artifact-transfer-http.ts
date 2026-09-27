@@ -141,7 +141,6 @@ export function createArtifactTransferHttpCallback(
           clientAbort.signal,
         ]);
         let fileHandle: FileHandle | undefined;
-        let completed = false;
         try {
           const file = await service.openFile(authorization);
           fileHandle = file?.handle;
@@ -149,10 +148,8 @@ export function createArtifactTransferHttpCallback(
             sendOpaqueNotFound(res);
             return;
           }
-          let bytesWritten = 0;
           const checkAuthority = new Transform({
             transform(chunk: Buffer, _encoding, next) {
-              bytesWritten += chunk.byteLength;
               next(
                 service.isAuthorizationCurrent(authorization)
                   ? null
@@ -174,7 +171,6 @@ export function createArtifactTransferHttpCallback(
             autoClose: false,
           });
           await pipeline(stream, checkAuthority, res, { signal });
-          completed = bytesWritten === file.bytes && res.writableFinished;
         } catch {
           if (!res.headersSent && !res.destroyed) {
             sendOpaqueNotFound(res);
@@ -186,7 +182,7 @@ export function createArtifactTransferHttpCallback(
           try {
             await fileHandle?.close();
           } finally {
-            service.finish(authorization, completed);
+            service.finish(authorization);
           }
         }
       },

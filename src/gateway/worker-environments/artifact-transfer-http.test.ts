@@ -85,7 +85,7 @@ describe("artifact transfer response settlement", () => {
     }
   }
 
-  it("retries an interrupted body only after descriptor settlement and consumes one complete write", async () => {
+  it("counts interrupted serves and keeps retries exclusive through descriptor settlement", async () => {
     rateLimiter = createGatewayAuthRateLimiter({
       maxAttempts: 1,
       exemptLoopback: false,
@@ -116,27 +116,22 @@ describe("artifact transfer response settlement", () => {
       await interrupted;
     }
     expect((await interrupted).res.writableFinished).toBe(false);
-    const completed = await serve();
-    expect(completed.res.statusCode).toBe(200);
-    expect(completed.res.writableFinished).toBe(true);
-    expect(completed.wire.endsWith(contents)).toBe(true);
+    for (let attempt = 2; attempt <= 3; attempt++) {
+      const completed = await serve();
+      expect(completed.res.statusCode).toBe(200);
+      expect(completed.res.writableFinished).toBe(true);
+      expect(completed.wire.endsWith(contents)).toBe(true);
+    }
     expect((await serve()).res.statusCode).toBe(404);
   });
 
-  it("keeps a normally ended short body retryable", async () => {
-    const open = service.openFile.bind(service);
-    vi.spyOn(service, "openFile").mockImplementationOnce(async (authorization) => {
-      const file = await open(authorization);
-      await fs.truncate(artifact.tarballPath, 3);
-      return file;
-    });
-    const truncated = await serve();
-    expect(truncated.res.writableFinished).toBe(true);
-    expect(truncated.wire.endsWith(contents)).toBe(false);
-    await fs.writeFile(artifact.tarballPath, contents);
-    const completed = await serve();
-    expect(completed.res.statusCode).toBe(200);
-    expect(completed.wire.endsWith(contents)).toBe(true);
+  it("allows three completed serves for buffering proxies, then rejects the token", async () => {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const completed = await serve();
+      expect(completed.res.statusCode).toBe(200);
+      expect(completed.res.writableFinished).toBe(true);
+      expect(completed.wire.endsWith(contents)).toBe(true);
+    }
     expect((await serve()).res.statusCode).toBe(404);
   });
 
@@ -145,17 +140,16 @@ describe("artifact transfer response settlement", () => {
     const first = service.authorize(request)!;
     expect(() => service.authorize(request)).toThrow(ArtifactTransferBusyError);
     now = expiresAtMs - 1;
-    service.finish(first, false);
+    service.finish(first);
     expect(service.authorizationSignal(first).aborted).toBe(true);
     const replacement = service.authorize(request)!;
     expect(replacement).toBeDefined();
     expect(replacement).not.toBe(first);
-    service.finish(first, true);
-    service.finish(first, false);
+    service.finish(first);
     service.revoke(first);
     await expect(service.openFile(first)).resolves.toBeNull();
     expect(service.isAuthorizationCurrent(replacement)).toBe(true);
-    service.finish(replacement, false);
+    service.finish(replacement);
     now = expiresAtMs;
     expect(service.authorize(request)).toBeUndefined();
     now = 1_000;
@@ -193,7 +187,7 @@ describe("artifact transfer response settlement", () => {
       } else {
         service.closeAll();
       }
-      service.finish(admission, false);
+      service.finish(admission);
       expect(service.authorizationSignal(admission).aborted).toBe(true);
       authorized = true;
       expect(service.authorize(request)).toBeUndefined();
