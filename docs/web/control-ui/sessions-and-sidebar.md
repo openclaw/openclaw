@@ -136,7 +136,8 @@ controls grouping, sorting, message previews, and empty groups. Choices take
 effect immediately. The filter button shows how many filter categories differ
 from the default; **Reset** clears those filters while preserving your display
 preferences. Tab moves between rows; Left and Right choose within a segmented
-status control. **Owners** opens a searchable picker with owner avatars.
+status control. **Owners** opens a picker with owner avatars and a search field;
+type to filter owners by name, and Escape clears the search before closing.
 **Group by**, **Sort by**, and **Hide empty groups** show their current choices
 and open submenus. Right opens a submenu and Left closes it (reversed in RTL);
 Up and Down move between choices, and Enter selects. Automation, system sessions,

@@ -446,7 +446,7 @@ export function renderSidebarSessionSortMenu(params: {
                     id: "sidebar-sessions-owner",
                     label: t("sessionsView.owners"),
                     value: ownerValue,
-                    searchable: true,
+                    searchable: "always",
                     showOptionTooltips: false,
                     renderLeading: (option) => {
                       const owner = params.owners.find(

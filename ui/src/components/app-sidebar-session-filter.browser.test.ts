@@ -120,6 +120,14 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
           ".picker-select__option .picker-select__leading openclaw-viewer-avatar",
         ),
       ).toHaveLength(2);
+      const search = page.getByRole("combobox", { name: "Search", exact: true });
+      await expect.element(search).toHaveFocus();
+      await userEvent.keyboard("bo");
+      await expect.poll(() => sidebar.querySelectorAll(".picker-select__option").length).toBe(1);
+      await expect.element(page.getByRole("option", { name: "Bob", exact: true })).toBeVisible();
+      await userEvent.keyboard("{Escape}");
+      await expect.element(search).toHaveValue("");
+      await expect.poll(() => sidebar.querySelectorAll(".picker-select__option").length).toBe(4);
       await userEvent.keyboard("{Escape}");
       await expect
         .element(page.getByRole("button", { name: "Owners: All owners", exact: true }))

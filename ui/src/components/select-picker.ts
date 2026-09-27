@@ -33,7 +33,8 @@ export type PickerParams<Option extends PickerOption> = {
   title?: string;
   placement?: "top" | "bottom";
   variant?: "submenu";
-  searchable?: boolean;
+  /** `true` searches long lists; `"always"` keeps the field for short lists too. */
+  searchable?: boolean | "always";
   searchPlaceholder?: string;
   groupBy?: (option: Option) => PickerGroup | undefined;
   showOptionTooltips?: boolean;
@@ -131,8 +132,9 @@ export class SelectPicker<
     if (this.params.disabled || this.mode !== "closed") {
       return undefined;
     }
+    const { searchable } = this.params;
     this.mode =
-      this.params.searchable && (this.params.groupBy || this.options().length > 8)
+      searchable === "always" || (searchable && (this.params.groupBy || this.options().length > 8))
         ? "search"
         : "compact";
     const choices = this.rows().filter((option) => !option.disabled);
@@ -260,6 +262,11 @@ export class SelectPicker<
         this.activeValue = null;
         return;
       }
+    }
+    if (event.key === "Escape" && this.query && this.params.searchable === "always") {
+      event.preventDefault();
+      this.query = "";
+      return;
     }
     // Group headers are native buttons in the popup tab order; focusout owns leaving it.
     if (event.key === "Tab" && this.params.groupBy) {
