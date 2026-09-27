@@ -2,6 +2,7 @@ import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
+import { repeat } from "lit/directives/repeat.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { configureAnchoredPopup } from "./anchored-overlay.ts";
@@ -62,6 +63,7 @@ export class SelectPicker<
   private readonly listboxId = nextPickerId();
   private typeahead = "";
   private typeaheadAt = 0;
+  private renderedSections: PickerSection<Option>[] = [];
 
   private options(): readonly Option[] {
     const { value, options } = this.params;
@@ -156,8 +158,9 @@ export class SelectPicker<
     if (this.params.disabled && this.mode !== "closed") {
       this.closeMenu();
     }
+    this.renderedSections = this.sections();
     if (this.mode !== "closed") {
-      const choices = this.rows().filter((option) => !option.disabled);
+      const choices = this.rows(this.renderedSections).filter((option) => !option.disabled);
       if (!choices.some((option) => option.value === this.activeValue)) {
         this.activeValue = choices[0]?.value ?? null;
       }
@@ -258,6 +261,9 @@ export class SelectPicker<
       this.commit(this.activeValue);
       return;
     }
+    if (editing && event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+      return;
+    }
     const choices = this.rows().filter((option) => !option.disabled);
     let index = choices.findIndex((option) => option.value === this.activeValue);
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -294,13 +300,18 @@ export class SelectPicker<
       : html`<span class="picker-select__leading">${content}</span>`;
   }
 
-  private renderOption(option: Option, index: number, grouped: boolean) {
+  private optionId(value: string) {
+    return `${this.listboxId}-option-${encodeURIComponent(JSON.stringify(value))}`;
+  }
+
+  private renderOption(option: Option, grouped: boolean, hidden = false) {
     return html`
       <div
         class="picker-select__option"
         role="option"
-        id=${`${this.listboxId}-${index}`}
+        id=${this.optionId(option.value)}
         data-value=${option.value}
+        ?hidden=${hidden}
         title=${this.params.showOptionTooltips === false ? nothing : option.value}
         aria-selected=${String(option.value === this.params.value)}
         aria-disabled=${String(Boolean(option.disabled))}
@@ -328,13 +339,14 @@ export class SelectPicker<
   }
 
   override render() {
-    const sections = this.sections();
+    const sections = this.renderedSections;
     const rows = this.rows(sections);
     const sectionIds = sections.map((_, index) => `${this.listboxId}-group-${index}`);
     const controls = this.params.groupBy ? sectionIds.join(" ") : this.listboxId;
-    let rowIndex = 0;
-    const selected = this.options().find((option) => option.value === this.params.value);
-    const active = rows.findIndex((option) => option.value === this.activeValue);
+    const allOptions = this.options();
+    const visibleValues = new Set(rows.map((option) => option.value));
+    const selected = allOptions.find((option) => option.value === this.params.value);
+    const active = rows.find((option) => option.value === this.activeValue);
     const open = this.mode !== "closed";
     return html`
       <div @focusout=${this.handleFocusOut} @keydown=${this.handleKeydown}>
@@ -388,7 +400,7 @@ export class SelectPicker<
                     aria-controls=${controls}
                     aria-invalid=${this.params.invalid ? "true" : nothing}
                     aria-describedby=${this.params.describedBy ?? nothing}
-                    aria-activedescendant=${active >= 0 ? `${this.listboxId}-${active}` : nothing}
+                    aria-activedescendant=${active ? this.optionId(active.value) : nothing}
                     .value=${live(this.query)}
                     @input=${(event: InputEvent) => {
                       this.query = (event.currentTarget as HTMLInputElement).value;
@@ -404,63 +416,74 @@ export class SelectPicker<
               aria-label=${this.params.groupBy ? nothing : this.params.label}
               ?data-picker-focus=${this.mode === "compact"}
               tabindex=${this.mode === "compact" ? 0 : -1}
-              aria-activedescendant=${this.mode === "compact" && active >= 0 ? `${this.listboxId}-${active}` : nothing}
+              aria-activedescendant=${this.mode === "compact" && active ? this.optionId(active.value) : nothing}
             >
-              ${sections.map((section, groupIndex) => {
-                const options = section.expanded
-                  ? section.options.map((option) =>
-                      this.renderOption(option, rowIndex++, Boolean(section.group)),
-                    )
-                  : nothing;
-                const group = section.group;
-                const groupId = sectionIds[groupIndex];
-                if (!group) {
-                  return this.params.groupBy
-                    ? html`<div id=${groupId} role="listbox" aria-label=${this.params.label}>
-                        ${options}
-                      </div>`
-                    : options;
-                }
-                return html`<div
-                  class="picker-select__group"
-                  role="group"
-                  aria-label=${group.label}
-                >
-                  <button
-                    class="picker-select__group-toggle"
-                    type="button"
-                    tabindex=${open ? 0 : -1}
-                    aria-expanded=${String(section.expanded)}
-                    aria-controls=${groupId}
-                    ?disabled=${Boolean(this.query.trim())}
-                    @click=${() => {
-                      const collapsed = new Set(this.collapsedGroups);
-                      if (collapsed.has(group.id)) {
-                        collapsed.delete(group.id);
-                      } else {
-                        collapsed.add(group.id);
-                      }
-                      this.collapsedGroups = collapsed;
-                    }}
-                  >
-                    ${group.leading ?? nothing}<span class="picker-select__group-label"
-                      >${group.label}</span
-                    >
-                    <span>${section.options.length}</span
-                    ><span class="picker-select__chevron" aria-hidden="true"
-                      >${icons.chevronDown}</span
-                    >
-                  </button>
-                  <div
-                    id=${groupId}
-                    class="picker-select__group-options"
-                    role="listbox"
+              ${repeat(
+                sections,
+                (section) => section.group?.id,
+                (section, groupIndex) => {
+                  const options = section.expanded
+                    ? repeat(
+                        this.params.groupBy ? section.options : allOptions,
+                        (option) => option.value,
+                        (option) =>
+                          this.renderOption(
+                            option,
+                            Boolean(section.group),
+                            !visibleValues.has(option.value),
+                          ),
+                      )
+                    : nothing;
+                  const group = section.group;
+                  const groupId = sectionIds[groupIndex];
+                  if (!group) {
+                    return this.params.groupBy
+                      ? html`<div id=${groupId} role="listbox" aria-label=${this.params.label}>
+                          ${options}
+                        </div>`
+                      : options;
+                  }
+                  return html`<div
+                    class="picker-select__group"
+                    role="group"
                     aria-label=${group.label}
                   >
-                    ${options}
-                  </div>
-                </div>`;
-              })}
+                    <button
+                      class="picker-select__group-toggle"
+                      type="button"
+                      tabindex=${open ? 0 : -1}
+                      aria-expanded=${String(section.expanded)}
+                      aria-controls=${groupId}
+                      ?disabled=${Boolean(this.query.trim())}
+                      @click=${() => {
+                        const collapsed = new Set(this.collapsedGroups);
+                        if (collapsed.has(group.id)) {
+                          collapsed.delete(group.id);
+                        } else {
+                          collapsed.add(group.id);
+                        }
+                        this.collapsedGroups = collapsed;
+                      }}
+                    >
+                      ${group.leading ?? nothing}<span class="picker-select__group-label"
+                        >${group.label}</span
+                      >
+                      <span>${section.options.length}</span
+                      ><span class="picker-select__chevron" aria-hidden="true"
+                        >${icons.chevronDown}</span
+                      >
+                    </button>
+                    <div
+                      id=${groupId}
+                      class="picker-select__group-options"
+                      role="listbox"
+                      aria-label=${group.label}
+                    >
+                      ${options}
+                    </div>
+                  </div>`;
+                },
+              )}
             </div>
             <div
               class="picker-select__empty"

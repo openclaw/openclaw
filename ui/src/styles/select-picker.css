@@ -203,6 +203,11 @@ openclaw-select-picker {
   gap: 8px;
 }
 
+/* Filtered flat options stay mounted so a keystroke does not invalidate siblings. */
+.picker-select__option[hidden] {
+  display: none;
+}
+
 .picker-select__empty {
   padding: 8px;
   color: var(--muted);

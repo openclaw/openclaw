@@ -50,7 +50,7 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     await picker.updateComplete;
     return input;
   };
-  const rows = () => [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
+  const rows = () => [...picker.querySelectorAll<HTMLElement>('[role="option"]:not([hidden])')];
   const key = async (name: string, input: KeyboardEventInit = {}) => {
     const target = picker.querySelector<HTMLElement>("[data-picker-focus]") ?? trigger;
     const event = new KeyboardEvent("keydown", {
@@ -67,6 +67,58 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
 }
 
 describe("renderPicker", () => {
+  it.each([false, true])(
+    "does not rewrite retained choices when search removes preceding rows (grouped=%s)",
+    async (grouped) => {
+      const choices = [
+        { value: "other", label: "Other choice" },
+        ...Array.from({ length: 8 }, (_, index) => ({
+          value: "atlas-" + index,
+          label: "Atlas " + index,
+        })),
+      ];
+      const p = await mount({
+        options: choices,
+        value: "atlas-0",
+        groupBy: grouped
+          ? (option) => ({
+              id: option.value === "other" ? "other" : "atlas",
+              label: option.value === "other" ? "Other" : "Atlas",
+            })
+          : undefined,
+      });
+      await p.open();
+      const retained = p.rows().find((row) => row.dataset.value === "atlas-3")!;
+      const mutations: MutationRecord[] = [];
+      const observer = new MutationObserver((records) => mutations.push(...records));
+      if (!grouped) {
+        observer.observe(p.picker.querySelector(".picker-select__options")!, { childList: true });
+      }
+      observer.observe(retained, {
+        attributes: true,
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+      try {
+        await p.search("atlas");
+        mutations.push(...observer.takeRecords());
+        expect(p.rows().map((row) => row.dataset.value)).toEqual(
+          choices.slice(1).map((option) => option.value),
+        );
+        expect(mutations).toHaveLength(0);
+        expect(retained.isConnected).toBe(true);
+        const input = p.picker.querySelector("input")!;
+        expect(
+          document.getElementById(input.getAttribute("aria-activedescendant")!)?.dataset.value,
+        ).toBe("atlas-0");
+        expect(p.params.onChange).not.toHaveBeenCalled();
+      } finally {
+        observer.disconnect();
+      }
+    },
+  );
+
   it("anchors its popup to the mounted trigger before the first open", async () => {
     const p = await mount();
     const popup = p.picker.querySelector<WaPopup>("wa-popup");
@@ -148,7 +200,9 @@ describe("renderPicker", () => {
   it("filters label and exact reference substrings without changing the selected value", async () => {
     const p = await mount();
     await p.open();
+    const filteredOut = p.rows()[0]!;
     await p.search("AURORA");
+    filteredOut.click();
     expect(p.rows().map((row) => row.dataset.value)).toEqual([
       "fixture/aurora-large",
       "other/aurora-small",
@@ -252,7 +306,7 @@ describe("renderPicker", () => {
     expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("retains label styles, open effects, and the capped readable-label floor", async () => {
+  it("retains label styles, tooltips, and open effects", async () => {
     const onOpen = vi.fn();
     const p = await mount({
       options: [
@@ -269,6 +323,5 @@ describe("renderPicker", () => {
     expect(onOpen).not.toHaveBeenCalled();
     await p.open();
     expect(onOpen).toHaveBeenCalledOnce();
-    expect(p.picker.getAttribute("style")).toContain("min-width:min(138px,100%)");
   });
 });
