@@ -56,7 +56,7 @@ const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
   ],
 ]);
 
-function listBundleDependencies(packageJson: unknown): string[] {
+export function listBundleDependencies(packageJson: unknown): string[] {
   if (!isRecord(packageJson)) {
     return [];
   }

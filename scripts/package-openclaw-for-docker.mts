@@ -74,6 +74,7 @@ type DocsMapLifecycle = {
 };
 type PackageManifestLifecycle = {
   preparePackageManifest: (cwd: string) => Promise<unknown>;
+  prepareRuntimePackageManifest?: (cwd: string) => Promise<unknown>;
   restorePackageManifest: (cwd: string) => Promise<unknown>;
 };
 type PackageOptions = RunOptions & {
@@ -84,6 +85,7 @@ type PackageOptions = RunOptions & {
   outputName?: string;
   packJsonPath?: string;
   pnpmPack?: boolean;
+  runtimeOnly?: boolean;
   prepareBundledAiRuntime?: typeof prepareBundledAiRuntimePackage;
   prepareChangelog?: (cwd: string) => Promise<unknown>;
   prepareDocsMap?: (cwd: string) => Promise<unknown>;
@@ -231,6 +233,7 @@ export function parseArgs(argv: string[]) {
       outputName: "",
       packJson: "",
       pnpmPack: false,
+      runtimeOnly: false,
       skipBuild: false,
       sourceDir: ROOT_DIR,
     },
@@ -241,6 +244,7 @@ export function parseArgs(argv: string[]) {
       stringFlag("--output-name", "outputName", { rejectShortOptions: true }),
       stringFlag("--pack-json", "packJson", { rejectShortOptions: true }),
       booleanFlag("--pnpm-pack", "pnpmPack"),
+      booleanFlag("--runtime-only", "runtimeOnly"),
       booleanFlag("--skip-build", "skipBuild"),
       stringFlag("--source-dir", "sourceDir", { rejectShortOptions: true }),
     ],
@@ -448,7 +452,7 @@ export async function buildPackageArtifacts(
   const buildEnv: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCLAW_BUILD_ALL_NO_PNPM: "1",
-    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: packageOptions.runtimeOnly ? "1" : "0",
   };
   for (const envName of PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES) {
     delete buildEnv[envName];
@@ -887,10 +891,16 @@ export async function packOpenClawPackageForDocker(
           "package-manifest.mjs",
           isPackageManifestLifecycle,
         )) as PackageManifestLifecycle | null);
-  const prepareManifest =
+  const prepareTypedManifest =
     packageOptions.prepareManifest ??
     sourceManifestLifecycle?.preparePackageManifest ??
     (async () => false);
+  const prepareManifest = packageOptions.runtimeOnly
+    ? sourceManifestLifecycle?.prepareRuntimePackageManifest
+    : prepareTypedManifest;
+  if (typeof prepareManifest !== "function") {
+    throw new Error("Source package lifecycle does not support private runtime-only packaging.");
+  }
   const restoreManifest =
     packageOptions.restoreManifest ??
     sourceManifestLifecycle?.restorePackageManifest ??
@@ -969,12 +979,16 @@ export async function packOpenClawPackageForDocker(
         outputPath,
         ...(packTool === "npm" ? ["--json=false"] : []),
       ];
-      packOutput = await runCaptureImpl(packTool, packArgs, sourcePath, {
-        timeoutMs: resolveTimeoutMs(
-          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-        ),
-      });
+      const { withMaterializedBundledDependencies } =
+        await import("./lib/package-bundled-links.mts");
+      packOutput = await withMaterializedBundledDependencies(sourcePath, () =>
+        runCaptureImpl(packTool, packArgs, sourcePath, {
+          timeoutMs: resolveTimeoutMs(
+            "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+            DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+          ),
+        }),
+      );
     } finally {
       try {
         await cleanupBundledAiRuntime();
@@ -1082,7 +1096,10 @@ async function main() {
   await fs.mkdir(outputDir, { recursive: true });
 
   if (!options.skipBuild) {
-    await buildPackageArtifacts(sourceDir, { bundlePlugins: options.bundlePlugins });
+    await buildPackageArtifacts(sourceDir, {
+      bundlePlugins: options.bundlePlugins,
+      runtimeOnly: options.runtimeOnly,
+    });
   }
 
   const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
@@ -1091,6 +1108,7 @@ async function main() {
     outputName: options.outputName,
     packJsonPath: options.packJson,
     pnpmPack: options.pnpmPack,
+    runtimeOnly: options.runtimeOnly,
   });
 
   console.error("==> Checking OpenClaw package tarball");

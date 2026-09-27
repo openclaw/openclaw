@@ -48,8 +48,11 @@ private Node worker from the canonical package artifact for every requested
 pnpm packer; Corepack-only setups are supported. Packaging verifies native
 capabilities and worker readiness in temporary state before and after signing,
 then replaces the previous app. `scripts/restart-mac.sh` uses
-the same path; `SKIP_TSC=1` does not bypass the runtime build. Existing
-content-checked build caches still avoid unnecessary declaration work.
+the same path; `SKIP_TSC=1` does not bypass the runtime build. App packaging skips
+SDK declaration compilation by default. Its private installation artifacts omit
+type-only package metadata; public npm packages retain their typed SDK contract.
+Set `OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` to also build declarations during app
+packaging. Existing content-checked caches still apply to the selected build.
 
 Worker pruning follows module imports, runtime launch descriptors, and named
 worker entrypoints transitively. Helpers launched by another retained worker

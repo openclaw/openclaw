@@ -12,8 +12,23 @@ const BACKUP_PATH = path.join(".artifacts", "package-manifest", "package.json.pr
 // Rewrite only during prepack so published commands load the bundled runtime.
 const CRABBOX_SOURCE_LAUNCHER = "node scripts/crabbox-wrapper.mjs";
 const CRABBOX_PUBLISHED_LAUNCHER = "node dist/crabbox-wrapper.js";
+const RUNTIME_RECEIPT_KIND = "openclaw-runtime-package-manifest-v1";
 
-function preparedPackageManifest(content) {
+function runtimeExportConditions(value) {
+  if (Array.isArray(value)) {
+    return value.map(runtimeExportConditions);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([condition]) => condition !== "types" && !condition.startsWith("types@"))
+        .map(([condition, target]) => [condition, runtimeExportConditions(target)]),
+    );
+  }
+  return value;
+}
+
+function preparedPackageManifest(content, runtimeOnly = false) {
   const packageJson = JSON.parse(content);
   let changed = false;
 
@@ -43,6 +58,18 @@ function preparedPackageManifest(content) {
       }
     }
   }
+  if (runtimeOnly) {
+    // Private app installation artifacts are not the published typed SDK.
+    // Keep runtime resolution intact without advertising declarations we did not build.
+    packageJson.private = true;
+    delete packageJson.types;
+    delete packageJson.typings;
+    delete packageJson.typesVersions;
+    if (packageJson.exports) {
+      packageJson.exports = runtimeExportConditions(packageJson.exports);
+    }
+    changed = true;
+  }
   return changed ? `${JSON.stringify(packageJson, null, 2)}\n` : content;
 }
 
@@ -53,11 +80,23 @@ export async function restorePackageManifest(cwd = process.cwd()) {
     return false;
   }
   const packageJsonPath = path.join(cwd, PACKAGE_JSON_PATH);
-  const [original, current] = await Promise.all([
+  const [backup, current] = await Promise.all([
     readFile(backupPath, "utf8"),
     readFile(packageJsonPath, "utf8"),
   ]);
-  if (current !== original && current !== preparedPackageManifest(original)) {
+  const receipt = JSON.parse(backup);
+  const runtimeOnly = receipt.kind === RUNTIME_RECEIPT_KIND;
+  if (
+    runtimeOnly &&
+    (typeof receipt.original !== "string" ||
+      typeof receipt.prepared !== "string" ||
+      receipt.prepared !== preparedPackageManifest(receipt.original, true))
+  ) {
+    throw new Error("Invalid runtime package manifest preparation receipt.");
+  }
+  const original = runtimeOnly ? receipt.original : backup;
+  const prepared = runtimeOnly ? receipt.prepared : preparedPackageManifest(original);
+  if (current !== original && current !== prepared) {
     throw new Error(
       `Refusing to restore ${PACKAGE_JSON_PATH} because it changed after prepack sanitized it.`,
     );
@@ -69,16 +108,30 @@ export async function restorePackageManifest(cwd = process.cwd()) {
 
 /** Prepare published package metadata while recording restorable source bytes. */
 export async function preparePackageManifest(cwd = process.cwd()) {
+  return prepareManifest(cwd, false);
+}
+
+/** Prepare an unpublished private runtime artifact, including bundled workspace packages. */
+export async function prepareRuntimePackageManifest(cwd = process.cwd()) {
+  return prepareManifest(cwd, true);
+}
+
+async function prepareManifest(cwd, runtimeOnly) {
   const packageJsonPath = path.join(cwd, PACKAGE_JSON_PATH);
   const backupPath = path.join(cwd, BACKUP_PATH);
   const original = await readFile(packageJsonPath, "utf8");
-  const prepared = preparedPackageManifest(original);
+  const prepared = preparedPackageManifest(original, runtimeOnly);
   if (prepared === original) {
     return false;
   }
   await mkdir(path.dirname(backupPath), { recursive: true });
   try {
-    await writeFile(backupPath, original, { encoding: "utf8", flag: "wx" });
+    // Pin the mode and exact prepared bytes to this owner. Normal preparation
+    // must never authorize restoring an unrelated runtime-only rewrite.
+    const backup = runtimeOnly
+      ? JSON.stringify({ kind: RUNTIME_RECEIPT_KIND, original, prepared })
+      : original;
+    await writeFile(backupPath, backup, { encoding: "utf8", flag: "wx" });
   } catch (error) {
     if (error?.code === "EEXIST") {
       throw new Error(
