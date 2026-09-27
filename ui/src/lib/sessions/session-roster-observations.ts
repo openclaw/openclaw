@@ -677,7 +677,8 @@ export function createSessionRosterObservations(
           accepted = merge(accepted, [row], agentId, entry.target.agentId, incomingRows);
         }
       }
-      return accepted;
+      // Publish canonical row identities now, not on a later unrelated event.
+      return projectSessionResultRows(accepted, observations.projectRows(accepted?.sessions ?? []));
     },
     inherit(
       this: void,
