@@ -407,7 +407,7 @@ export async function sanitizeImageBlocks(
 export async function sanitizeToolResultImages(
   result: AgentToolResult<unknown>,
   label: string,
-  opts: ToolImageSanitizationOptions = {},
+  opts: ImageSanitizationLimits = {},
 ): Promise<AgentToolResult<unknown>> {
   const content = Array.isArray(result.content) ? result.content : [];
   if (!content.some((block) => isImageTypeBlock(block) || isTextBlock(block))) {

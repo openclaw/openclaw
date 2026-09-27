@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentToolResult } from "../runtime/index.js";
-import { sanitizeToolResultImages } from "../tool-images.js";
+import { sanitizeContentBlocksImages } from "../tool-images.js";
 
 export type LoadedImageForTool = {
   buffer: Buffer;
@@ -32,26 +32,29 @@ export async function buildNativeImageToolResult(
   images: readonly LoadedImageForTool[],
   config?: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
-  const result: AgentToolResult<unknown> = {
+  const content = await sanitizeContentBlocksImages(
+    images.map((image) => ({
+      type: "image" as const,
+      data: image.buffer.toString("base64"),
+      mimeType: image.mimeType,
+    })),
+    "image:native",
+    { ...resolveImageSanitizationLimits(config), verifyDecodability: true },
+  );
+  // Sanitization replaces rejected image blocks with text at the same position.
+  const retainedImages = images.filter((_, index) => content[index]?.type === "image");
+  return {
     content: [
       {
         type: "text",
-        text: `Loaded ${images.length} image${images.length === 1 ? "" : "s"} into private model context for inspection; not displayed, attached, or sent to the user.`,
+        text: `Loaded ${retainedImages.length} image${retainedImages.length === 1 ? "" : "s"} into private model context for inspection; not displayed, attached, or sent to the user.`,
       },
-      ...images.map((image) => ({
-        type: "image" as const,
-        data: image.buffer.toString("base64"),
-        mimeType: image.mimeType,
-      })),
+      ...content,
     ],
     details: {
       transport: "native",
-      ...buildImageToolReferenceDetails(images),
+      ...buildImageToolReferenceDetails(retainedImages),
       media: { outbound: false },
     },
   };
-  return await sanitizeToolResultImages(result, "image:native", {
-    ...resolveImageSanitizationLimits(config),
-    verifyDecodability: true,
-  });
 }

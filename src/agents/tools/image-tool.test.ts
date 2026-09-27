@@ -1694,29 +1694,41 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("omits an undecodable JPEG while preserving readable batch members", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      const jpeg = await fs.readFile("test/fixtures/media/roof-camera-sky.jpg");
-      const corruptPath = path.join(agentDir, "truncated.jpg");
-      const validPath = path.join(agentDir, "valid.jpg");
-      await fs.writeFile(corruptPath, jpeg.subarray(0, 65536));
-      await fs.writeFile(validPath, jpeg);
-      const tool = createRequiredImageTool({
-        agentDir,
-        workspaceDir: agentDir,
-        modelHasVision: true,
-        config: { agents: { defaults: { imageMaxDimensionPx: 2048 } } },
+  it.each([true, false])(
+    "omits undecodable JPEGs (readable batch member: %s)",
+    async (includeValid) => {
+      await withTempAgentDir(async (agentDir) => {
+        const jpeg = await fs.readFile("test/fixtures/media/roof-camera-sky.jpg");
+        const corruptPath = path.join(agentDir, "truncated.jpg");
+        const validPath = path.join(agentDir, "valid.jpg");
+        await fs.writeFile(corruptPath, jpeg.subarray(0, 65536));
+        await fs.writeFile(validPath, jpeg);
+        const tool = createRequiredImageTool({
+          agentDir,
+          workspaceDir: agentDir,
+          modelHasVision: true,
+          config: { agents: { defaults: { imageMaxDimensionPx: 2048 } } },
+        });
+        const result = await tool.execute("corrupt-image", {
+          paths: includeValid ? [corruptPath, validPath] : [corruptPath],
+        });
+        expect(result.content.filter((block) => block.type === "image")).toEqual(
+          includeValid
+            ? [{ type: "image", data: jpeg.toString("base64"), mimeType: "image/jpeg" }]
+            : [],
+        );
+        expect(result.details).toMatchObject(includeValid ? { image: validPath } : { images: [] });
+        expect(result.content[0]).toMatchObject({
+          type: "text",
+          text: expect.stringMatching(includeValid ? /^Loaded 1 image\b/ : /^Loaded 0 images\b/),
+        });
+        expect(result.content).toContainEqual({
+          type: "text",
+          text: expect.stringMatching(/omitted.*decode/i),
+        });
       });
-      const result = await tool.execute("corrupt-image", { paths: [corruptPath, validPath] });
-      expect(result.content.filter((block) => block.type === "image")).toEqual([
-        { type: "image", data: jpeg.toString("base64"), mimeType: "image/jpeg" },
-      ]);
-      expect(result.content).toContainEqual({
-        type: "text",
-        text: expect.stringMatching(/omitted.*decode/i),
-      });
-    });
-  });
+    },
+  );
 
   it("falls back to the generic image runtime when openrouter has no media provider registration", async () => {
     await withTempAgentDir(async (agentDir) => {
