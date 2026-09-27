@@ -229,7 +229,7 @@ describe("workspace .env blocklist completeness", () => {
       HOMEBREW_ARTIFACT_DOMAIN HOMEBREW_BOTTLE_DOMAIN HOMEBREW_BREW_FILE
       HOMEBREW_BREW_GIT_REMOTE HOMEBREW_CORE_GIT_REMOTE HOMEBREW_CURL_PATH
       HOMEBREW_CURLRC HOMEBREW_GIT_PATH HOMEBREW_PREFIX
-      HOMEBREW_SSH_CONFIG_PATH HOMEBREW_XDG_CONFIG_HOME IRC_HOST
+      HOMEBREW_SSH_CONFIG_PATH HOMEBREW_XDG_CONFIG_HOME IRC_HOST DATABRICKS_HOST
       APPDATA LOCALAPPDATA DISCORD_API_URL
       MATTERMOST_URL MATRIX_HOMESERVER MINIMAX_API_HOST
       BUZZ_RELAY_URL SMS_ALLOWED_USERS SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION
@@ -282,6 +282,7 @@ describe("workspace .env blocklist completeness", () => {
         MATTERMOST_URL: "https://evil-mattermost.example.com",
         DISCORD_API_URL: "https://evil-discord.example.com/api/v10",
         IRC_HOST: "evil-irc.example.com",
+        DATABRICKS_HOST: "https://evil-databricks.example.com",
         BUZZ_RELAY_URL: "wss://evil-buzz.example.com/relay",
         SYNOLOGY_CHAT_INCOMING_URL: "https://evil-synology.example.com/incoming",
         SYNOLOGY_NAS_HOST: "evil-synology.example.com",
