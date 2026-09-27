@@ -19,7 +19,7 @@ import { prepareGatewayLocalUserIngress } from "../../gateway/local-user-ingress
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
-import { consumeChannelRunAdmission, prepareChannelRunAdmission } from "./channel-run-admission.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 
 const identityConfig = { logging: { audit: { executionIdentity: true } } } as const;
 
@@ -162,31 +162,6 @@ describe("channel run admission", () => {
     }
   });
 
-  it("projects a hardened channel handoff as boundary-verified assurance", () => {
-    const audit = createChannelAdmissionAudit({ enabled: true });
-    const clearCollection = () => audit.close();
-    try {
-      const evidence = createChannelParticipantAdmissionEvidence({
-        audit,
-        channelId: "test",
-        participantId: "person-1",
-      });
-
-      expect(consumeChannelRunAdmission(evidence).facts).toMatchObject({
-        invoker: { state: "present", kind: "person" },
-        assurance: [
-          {
-            kind: "channel-admission",
-            rawEvidenceRef: "channel-admission",
-            strength: "boundary-verified",
-          },
-        ],
-      });
-    } finally {
-      clearCollection();
-    }
-  });
-
   it("consumes once across fallback admission and closes the exact prepared owner", async () => {
     const identityWork: unknown[] = [];
     const decisions: unknown[] = [];
@@ -225,7 +200,21 @@ describe("channel run admission", () => {
       const fallback = await prepared.admit("embedded");
 
       expect(fallback).toBe(first);
-      expect(identityWork).toHaveLength(1);
+      expect(identityWork).toMatchObject([
+        {
+          kind: "capture",
+          envelope: {
+            invoker: { state: "present", kind: "person" },
+            assurance: [
+              {
+                kind: "channel-admission",
+                rawEvidenceRef: "channel-admission",
+                strength: "boundary-verified",
+              },
+            ],
+          },
+        },
+      ]);
       expect(decisions).toHaveLength(1);
       expect(admittedContexts).toEqual([first]);
       expect(decisions).toMatchObject([

@@ -1,11 +1,15 @@
 // Prompt metadata carrier tests cover collect batching, deferral, and retry identity.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   attachToolAllowlistIntersection,
   readToolAllowlistIntersection,
 } from "../../agents/tool-policy.js";
+import {
+  configureExecutionIdentityAdmissionSink,
+  type ExecutionIdentityAdmissionWork,
+} from "../../audit/execution-identity-admission.js";
 import {
   compareChannelAdmissionParticipants,
   createChannelAdmissionAudit,
@@ -18,7 +22,7 @@ import {
 } from "../../gateway/local-user-ingress.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
-import { consumeChannelRunAdmission } from "./channel-run-admission.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
 import { createQueueTestRun, installQueueRuntimeErrorSilencer } from "./queue.test-helpers.js";
@@ -466,6 +470,34 @@ describe("followup prompt metadata carrier", () => {
 
 describe("queued Gateway attach evidence", () => {
   installQueueRuntimeErrorSilencer();
+  const admissions: ExecutionIdentityAdmissionWork[] = [];
+
+  beforeEach(() => {
+    admissions.length = 0;
+    evidenceCleanups.add(
+      configureExecutionIdentityAdmissionSink((work) => {
+        admissions.push(work);
+        return true;
+      }),
+    );
+  });
+
+  async function admit(run: FollowupRun) {
+    const prepared = prepareChannelRunAdmission({
+      cfg: { logging: { audit: { executionIdentity: true } } },
+      runId: "queued-attach",
+      agentId: "main",
+      ingressKind: "channel",
+      boundary: "auto-reply.agent-runner",
+      evidence: run.channelAdmissionEvidence,
+      gatewayLocalUserIngress: run.gatewayLocalUserIngress,
+    });
+    try {
+      await prepared.admit("embedded");
+    } finally {
+      prepared.close();
+    }
+  }
 
   const prepareIngress = (profileId: string) =>
     prepareGatewayLocalUserIngress({
@@ -496,37 +528,44 @@ describe("queued Gateway attach evidence", () => {
       const collected = await done.promise;
       expect(collected.prompt).toContain("queued 0");
       expect(collected.prompt).toContain("queued 1");
-      const admission = consumeChannelRunAdmission(
-        collected.channelAdmissionEvidence,
-        collected.gatewayLocalUserIngress,
-      );
-      expect(admission.facts).toEqual(
-        kind === "matching"
-          ? {
-              ingress: {
-                kind: "gateway-client",
-                boundary: "gateway.ws.authenticated-connect",
-                state: "present",
-                rawSourceRef: "person-1",
-              },
-              invoker: { state: "present", kind: "person", rawPrincipalRef: "person-1" },
-              assurance: [
-                {
-                  kind: "durable-profile",
-                  rawEvidenceRef: "person-1",
-                  strength: "boundary-verified",
+      await admit(collected);
+      expect(admissions).toMatchObject([
+        {
+          kind: "capture",
+          envelope:
+            kind === "matching"
+              ? {
+                  ingress: {
+                    kind: "gateway-client",
+                    boundary: "gateway.ws.authenticated-connect",
+                    state: "present",
+                    rawSourceRef: "person-1",
+                  },
+                  invoker: { state: "present", kind: "person", rawPrincipalRef: "person-1" },
+                  assurance: [
+                    {
+                      kind: "durable-profile",
+                      rawEvidenceRef: "person-1",
+                      strength: "boundary-verified",
+                    },
+                  ],
+                }
+              : {
+                  ingress: {
+                    kind: "gateway-client",
+                    boundary: "gateway.ws.authenticated-connect",
+                    state: "unknown",
+                  },
+                  invoker: { state: "unknown" },
                 },
-              ],
-            }
-          : {
-              ingress: {
-                kind: "gateway-client",
-                boundary: "gateway.ws.authenticated-connect",
-                state: "unknown",
-              },
-              invoker: { state: "unknown" },
-            },
-      );
+        },
+      ]);
+      const captured = admissions[0];
+      if (kind !== "matching" && captured?.kind === "capture") {
+        expect(captured.envelope.assurance).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ kind: "durable-profile" })]),
+        );
+      }
       expect(collected.run).toMatchObject({ senderId: "transport", senderIsOwner: true });
     },
   );
@@ -547,7 +586,6 @@ describe("queued Gateway attach evidence", () => {
     enqueueFollowupRun(key, source, settings);
     enqueueFollowupRun(key, createQueueTestRun({ prompt: "surviving source" }), settings);
     const done = createDeferred();
-    const admissions: ReturnType<typeof consumeChannelRunAdmission>[] = [];
     let attempts = 0;
     scheduleFollowupDrain(key, async (run) => {
       if (!run.prompt.includes("overflow source")) {
@@ -559,18 +597,21 @@ describe("queued Gateway attach evidence", () => {
         attachGatewayLocalUserIngress(client, prepareIngress("replacement-person"));
         throw new Error("Synthetic pre-admission delivery failure");
       }
-      admissions.push(
-        consumeChannelRunAdmission(run.channelAdmissionEvidence, run.gatewayLocalUserIngress),
-      );
+      await admit(run);
     });
     await done.promise;
 
     expect(attempts).toBe(2);
     expect(admissions).toHaveLength(1);
-    expect(admissions[0]?.facts).toMatchObject({
-      ingress: { kind: "gateway-client", state: "present", rawSourceRef: "original-person" },
-      invoker: { state: "present", kind: "person", rawPrincipalRef: "original-person" },
-      assurance: [{ kind: "durable-profile", rawEvidenceRef: "original-person" }],
-    });
+    expect(admissions).toMatchObject([
+      {
+        kind: "capture",
+        envelope: {
+          ingress: { kind: "gateway-client", state: "present", rawSourceRef: "original-person" },
+          invoker: { state: "present", kind: "person", rawPrincipalRef: "original-person" },
+          assurance: [{ kind: "durable-profile", rawEvidenceRef: "original-person" }],
+        },
+      },
+    ]);
   });
 });

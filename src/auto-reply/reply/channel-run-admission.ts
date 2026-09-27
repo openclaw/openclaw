@@ -18,7 +18,7 @@ import {
 } from "../../gateway/local-user-ingress.js";
 
 /** Adapt reply ingress to admission; authenticated Gateway attach has no plugin-channel decision. */
-export function consumeChannelRunAdmission(
+function consumeChannelRunAdmission(
   evidence: ChannelAdmissionEvidence | undefined,
   gatewayLocalUserIngress?: GatewayLocalUserIngress,
 ): {
