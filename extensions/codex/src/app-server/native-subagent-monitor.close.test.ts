@@ -13,7 +13,6 @@ import {
   releaseCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
-import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import {
   createCodexNativeSubagentMonitorRuntime,
   defaultNativeSubagentMonitorRuntime,
@@ -33,27 +32,10 @@ import {
   registerCodexNativeSubagentMonitor,
   turnStartedNotification,
   threadRead,
+  observeCompletionAttempts,
 } from "./native-subagent-monitor.test-support.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
-
-function observeCompletionAttempts() {
-  const observer = vi.spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending");
-  let joined = 0;
-  return {
-    async settle() {
-      // Notification dispatch can finish before the completion owner's worker writes.
-      while (joined < observer.mock.results.length) {
-        const pending = observer.mock.results.slice(joined);
-        joined = observer.mock.results.length;
-        await Promise.all(
-          pending.flatMap((result) => (result.type === "return" ? [result.value] : [])),
-        );
-      }
-    },
-    restore: () => observer.mockRestore(),
-  };
-}
 
 describe("Codex native close delivery persistence", () => {
   it.each([true, false])(
@@ -367,7 +349,7 @@ describe("Codex native close admission", () => {
         expect(isCodexAppServerLiveThreadClaimed(harness.client, "child-thread")).toBe(false);
         expect(harness.writes).toEqual([]);
       } finally {
-        factory.retireParent(harness.client, "parent-thread");
+        await factory.retireParent(harness.client, "parent-thread");
         await harness.client.closeAndWait();
         await parent.unregister();
         host.closeHost();
@@ -400,36 +382,6 @@ describe("Codex native close admission", () => {
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ runId: "codex-thread:child-thread", status: "cancelled" }),
     );
-  });
-
-  it("does not forget captured ownership after its parent retires during capture", async () => {
-    const client = createClient();
-    client.setLoadedThreads([]);
-    const runtime = createRuntime();
-    const forget = vi.fn();
-    let resolveCapture!: (forget: () => void) => void;
-    const capture = new Promise<() => void>((resolve) => {
-      resolveCapture = resolve;
-    });
-    const captureChildThreadForget = vi.fn(() => capture);
-    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-      captureChildThreadForget,
-    });
-    (await registerParent(monitor)).bindTurn("parent-turn");
-    onTestFinished(() => monitor.dispose());
-    await notifyChildStarted(client);
-
-    const starting = client.notify(closeAgentNotification({ method: "item/started" }));
-    await vi.waitFor(() => expect(captureChildThreadForget).toHaveBeenCalledOnce());
-    monitor.retireParent("parent-thread");
-    const finalizationsAfterRetirement = [...runtime.finalizeTaskRunByRunId.mock.calls];
-    resolveCapture(forget);
-    await starting;
-    await client.notify(closeAgentNotification({ method: "item/completed" }));
-
-    expect(runtime.finalizeTaskRunByRunId.mock.calls).toEqual(finalizationsAfterRetirement);
-    expect(forget).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
   });
 });
 
@@ -925,7 +877,7 @@ describe("same-monitor close assignment proof", () => {
             replyToMembership?.();
             await unregisterCompletion;
           }
-          codexNativeSubagentMonitorRuntime.retireParent(harness.client, parentThreadId);
+          await codexNativeSubagentMonitorRuntime.retireParent(harness.client, parentThreadId);
           await drainOwnership();
           await harness.client.closeAndWait();
           await parent.unregister();

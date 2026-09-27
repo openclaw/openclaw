@@ -806,7 +806,7 @@ it.each(["restore", "fresh", "fresh after yield"] as const)(
       );
     } finally {
       sibling.release();
-      monitor.dispose();
+      await monitor.dispose();
       await parent.unregister();
       host.close();
     }
