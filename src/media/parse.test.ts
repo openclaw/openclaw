@@ -237,6 +237,24 @@ describe("splitMediaFromOutput", () => {
     );
   });
 
+  it("preserves quoted punctuation when a reference shares the line with another one", () => {
+    // Quoted punctuation belongs to the reference, exactly as it does when the directive holds a
+    // single reference. A signed URL loses its signature when that suffix is stripped during
+    // splitting, and the delivery then fails even though the reference looked accepted.
+    const base = "https://example.com/video.mp4?token=ends";
+    for (const suffix of [",", ")", "]", "\\"]) {
+      const signed = `${base}${suffix}`;
+      for (const quote of ['"', "'"]) {
+        expectParsedMediaOutputCase(`MEDIA:${quote}${signed}${quote} /tmp/second.png`, {
+          mediaUrls: [signed, "/tmp/second.png"],
+        });
+      }
+    }
+    expectParsedMediaOutputCase('MEDIA:"/tmp/first image.png," "/tmp/second.png"', {
+      mediaUrls: ["/tmp/first image.png,", "/tmp/second.png"],
+    });
+  });
+
   it.each([
     "MEDIA:../../../etc/passwd",
     "MEDIA:../../.env",

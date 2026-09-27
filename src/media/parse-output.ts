@@ -598,9 +598,13 @@ export function splitMediaOutput(
       const invalidParts: string[] = [];
       let hasValidMedia = false;
       for (const part of parts) {
-        // Matched quotes delimit the reference; punctuation inside them belongs to its value.
-        const candidate = unwrapped === undefined ? cleanCandidate(part) : part;
-        const allowSpaces = Boolean(unwrapped) || /\s/.test(candidate);
+        // Matched quotes delimit the reference; punctuation inside them belongs to its value. That
+        // holds for every reference a split payload lists, not just for a payload that unwraps as a
+        // single value, so a quoted part keeps its own characters instead of being cleaned. Cleaning
+        // one would drop the signed suffix and leave the reference short at delivery time.
+        const quotedPart = unwrapped === undefined ? unwrapQuoted(part) : undefined;
+        const candidate = unwrapped ?? quotedPart ?? cleanCandidate(part);
+        const allowSpaces = Boolean(unwrapped ?? quotedPart) || /\s/.test(candidate);
         if (isValidMedia(candidate, { allowSpaces })) {
           media.push(candidate);
           hasValidMedia = true;
