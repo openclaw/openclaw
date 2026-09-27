@@ -9466,11 +9466,8 @@ describe("update-cli", () => {
       expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledOnce();
       expect(packageInstallCommandCall()).toBeDefined();
       expect(resumeScheduledTaskAutoStartAfterUpdate.mock.calls.length).toBe(0);
-      await expect(fs.access(path.join(root, "dist", "index.js"))).resolves.toBeUndefined();
-      expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
-        version: "1.0.0",
-      });
       expect(serviceRestart).not.toHaveBeenCalled();
+      await runtimeRecovery.expectWindowsRecovery(root, runtimeCapture, "update invariant broke");
     } finally {
       platformSpy.mockRestore();
     }
@@ -9507,13 +9504,9 @@ describe("update-cli", () => {
       await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(1));
       await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalledWith(130));
       expect(resumeScheduledTaskAutoStartAfterUpdate.mock.calls.length).toBe(0);
-      await expect(fs.access(path.join(root, "dist", "index.js"))).resolves.toBeUndefined();
-      expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
-        version: "1.0.0",
-      });
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
       expect(serviceRestart).not.toHaveBeenCalled();
-      runtimeRecovery.expectInterruptedDoctorPackageRollback(listUpdateRuns({ limit: 1 }));
+      await runtimeRecovery.expectWindowsRecovery(root, runtimeCapture, "interrupted lifecycle");
     } finally {
       platformSpy.mockRestore();
       processOnSpy.mockRestore();

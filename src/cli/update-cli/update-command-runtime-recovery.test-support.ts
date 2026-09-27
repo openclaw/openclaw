@@ -1,10 +1,13 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { expect } from "vitest";
-import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect, vi } from "vitest";
+import { listUpdateRuns } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
+import { getMockCallOutput, type CliMockOutputRuntime } from "../test-runtime-capture.js";
 
 export const alreadyCurrentConvergenceCases = [
   { restart: true, running: true, failure: undefined },
@@ -167,34 +170,44 @@ export function currentGitCoreFixture(root: string, version: string) {
   };
 }
 
-export function expectInterruptedDoctorPackageRollback(runs: UpdateRunRecord[]): void {
-  expect(runs).toMatchObject([
-    {
-      phase: "finished",
-      status: "failed",
-      reason: "doctor-failed",
-      verification: {
-        recovery: {
-          serviceRestartSafe: false,
-          packageRollbackVerified: true,
-          reason: "runtime-verification-failed",
-        },
-        rollbackOutcome: { status: "succeeded" },
-      },
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          step: "openclaw doctor",
-          status: "failed",
-          detail: expect.stringContaining("interrupted lifecycle"),
-          failureFacts: expect.arrayContaining([
-            expect.objectContaining({
-              check: "openclaw doctor",
-              code: "Error",
-              message: "interrupted lifecycle",
-            }),
-          ]),
-        }),
-      ]),
-    },
+// Windows cannot prove native database displacement custody; retain both generations.
+export async function expectWindowsRecovery(
+  root: string,
+  runtime: CliMockOutputRuntime,
+  failureMessage: "update invariant broke" | "interrupted lifecycle",
+): Promise<void> {
+  const launcher = fs.access(path.join(root, "dist", "index.js"));
+  if (failureMessage === "update invariant broke") {
+    await expect(launcher).rejects.toHaveProperty("code", "ENOENT");
+  } else {
+    await expect(launcher).resolves.toBeUndefined();
+  }
+  expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
+    version: "9999.0.0",
+  });
+  expect(getMockCallOutput(vi.mocked(runtime.error))).toContain(
+    "Native database displacement custody is unavailable",
+  );
+  expect(getMockCallOutput(vi.mocked(runtime.log))).toContain(failureMessage);
+  expect(listUpdateRuns({ limit: 1 })).toMatchObject([
+    { phase: "activating", status: "running", finishedAtMs: null, verification: {} },
   ]);
+  const retained = (await fs.readdir(path.dirname(root))).find((name) =>
+    /^[.]openclaw[.]package-backup-[0-9]+-[0-9]+$/u.test(name),
+  );
+  const backup = path.join(path.dirname(root), expectDefined(retained, "retained package"));
+  expect(JSON.parse(await fs.readFile(path.join(backup, "package.json"), "utf8"))).toMatchObject({
+    version: "1.0.0",
+  });
+  await expect(fs.access(path.join(backup, "dist", "index.js"))).resolves.toBeUndefined();
+  const snapshots = await fs.readdir(backup + ".databases", {
+    recursive: true,
+    withFileTypes: true,
+  });
+  const databases = snapshots.filter((entry) => entry.isFile());
+  expect(databases.length).toBeGreaterThan(0);
+  for (const database of databases) {
+    const bytes = await fs.readFile(path.join(database.parentPath, database.name));
+    expect(bytes.subarray(0, 16).toString()).toBe("SQLite format 3\0");
+  }
 }
