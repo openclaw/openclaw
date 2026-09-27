@@ -34,12 +34,14 @@ import {
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
+  resetTelegramAccountThrottlersForTest,
   resetTelegramMessageCacheForTest as resetTelegramMessageCacheBucketsForTest,
   resetTelegramSentMessageCacheForTest,
 } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import type { TelegramApiOverride } from "./send.js";
 import {
+  createTelegramFloodWaitApi,
   getTelegramSendTestMocks,
   importTelegramSendModule,
   installTelegramSendTestHooks,
@@ -497,6 +499,8 @@ async function capturedLogText(logFile: string): Promise<string> {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
+  resetTelegramAccountThrottlersForTest();
   resetTelegramSentMessageCacheForTest();
   clearTelegramRuntime();
   resetPluginStateStoreForTests({ closeDatabase: false });
@@ -3596,36 +3600,25 @@ describe("sendMessageTelegram", () => {
 
   it("honors long Telegram retry_after hints above the default send retry cap", async () => {
     vi.useFakeTimers();
-    const chatId = "123";
-    const sendMessage = vi
-      .fn()
-      .mockRejectedValueOnce({
-        message: "429 Too Many Requests",
-        response: { parameters: { retry_after: 45 } },
-      })
-      .mockResolvedValueOnce({
-        message_id: 2,
-        chat: { id: chatId },
-      });
-    const api = makeTelegramApiTestMock({ sendMessage });
-    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
-
-    const promise = sendMessageTelegram(chatId, "hi", {
-      cfg: TELEGRAM_TEST_CFG,
-      token: "tok",
-      api,
-      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 },
-    });
+    const { api, requests } = await createTelegramFloodWaitApi(45, 2);
+    const startedAt = Date.now();
+    const result = expect(
+      sendMessageTelegramImported("123", "hi", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 },
+      }),
+    ).resolves.toEqual({ messageId: "2", chatId: "123" });
 
     await vi.advanceTimersByTimeAsync(44_999);
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-
+    expect(requests).toEqual([{ method: "sendMessage", at: startedAt }]);
     await vi.advanceTimersByTimeAsync(1);
-    await expect(promise).resolves.toEqual({ messageId: "2", chatId });
-    expect(firstMockCall(setTimeoutSpy, "setTimeout call")[1]).toBe(45_000);
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-    setTimeoutSpy.mockRestore();
-    vi.useRealTimers();
+    await result;
+    expect(requests).toEqual([
+      { method: "sendMessage", at: startedAt },
+      { method: "sendMessage", at: startedAt + 45_000 },
+    ]);
   });
 
   it("retries wrapped Undici connect timeout sends", async () => {
@@ -5173,33 +5166,25 @@ describe("sendStickerTelegram", () => {
 
   it("retries rate-limited sticker sends and honors retry_after", async () => {
     vi.useFakeTimers();
-    const chatId = "123";
-    const sendSticker = vi
-      .fn()
-      .mockRejectedValueOnce({
-        message: "429 Too Many Requests",
-        response: { parameters: { retry_after: 1 } },
-      })
-      .mockResolvedValueOnce({
-        message_id: 109,
-        chat: { id: chatId },
-      });
-    const api = makeTelegramApiTestMock({ sendSticker });
-    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+    const { api, requests } = await createTelegramFloodWaitApi(1, 109);
+    const startedAt = Date.now();
+    const result = expect(
+      sendStickerTelegram("123", "fileId123", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
+      }),
+    ).resolves.toEqual({ messageId: "109", chatId: "123" });
 
-    const promise = sendStickerTelegram(chatId, "fileId123", {
-      cfg: TELEGRAM_TEST_CFG,
-      token: "tok",
-      api,
-      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
-    });
-
-    await vi.runAllTimersAsync();
-    await expect(promise).resolves.toEqual({ messageId: "109", chatId });
-    expect(firstMockCall(setTimeoutSpy, "setTimeout call")[1]).toBe(1000);
-    expect(sendSticker).toHaveBeenCalledTimes(2);
-    setTimeoutSpy.mockRestore();
-    vi.useRealTimers();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(requests).toEqual([{ method: "sendSticker", at: startedAt }]);
+    await vi.advanceTimersByTimeAsync(1);
+    await result;
+    expect(requests).toEqual([
+      { method: "sendSticker", at: startedAt },
+      { method: "sendSticker", at: startedAt + 1000 },
+    ]);
   });
 });
 

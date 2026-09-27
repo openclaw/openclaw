@@ -7,6 +7,8 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, vi } from "vitest";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
+import { asTelegramClientFetch } from "./client-fetch.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
 
@@ -337,4 +339,40 @@ export function mockLoadedMedia({
     ...(contentType ? { contentType } : {}),
     ...(fileName ? { fileName } : {}),
   });
+}
+
+export async function createTelegramFloodWaitApi(retryAfterSeconds: number, messageId: number) {
+  const { Api } = await vi.importActual<typeof import("grammy")>("grammy");
+  const requests: Array<{ method: string; at: number }> = [];
+  const token = "123:send-flood-fixture";
+  const api = new Api(token, {
+    buildUrl: (_root, _token, method) => "https://telegram-send.invalid/" + method,
+    fetch: asTelegramClientFetch(async (input: unknown) => {
+      if (typeof input !== "string") {
+        throw new Error("Expected a Telegram send request URL");
+      }
+      requests.push({ method: input.slice(input.lastIndexOf("/") + 1), at: Date.now() });
+      return new Response(
+        JSON.stringify(
+          requests.length === 1
+            ? {
+                ok: false,
+                error_code: 429,
+                description: "Too Many Requests",
+                parameters: { retry_after: retryAfterSeconds },
+              }
+            : { ok: true, result: { message_id: messageId, chat: { id: 123 } } },
+        ),
+      );
+    }),
+  });
+  // Keep the real flood owner below the send boundary. Ordinary pacing is not
+  // under test and must not obscure the exact retry_after deadline.
+  api.config.use(
+    getOrCreateAccountThrottler(
+      token,
+      () => (prev, method, payload, signal) => prev(method, payload, signal),
+    ).transformer,
+  );
+  return { api, requests };
 }
