@@ -118,8 +118,10 @@ connecting to a different Gateway.
 Local diagnostics prefer their local paired-device credential; an origin-cache
 fallback must match the local Gateway's pairing record. Non-loopback remote
 probes retain their existing exact-origin cache. These changes use the existing
-credential tables without a schema migration. Older clients keep their existing
-lookup behavior; rolling back does not remove either set of credentials.
+credential tables without adding a schema migration. Reverting just the route
+binding leaves both credential sets intact. If an older binary rejects an
+independently upgraded database schema, restore compatible pre-update state;
+retained token rows alone are not a database downgrade.
 
 Running `openclaw configure --section gateway` or interactive onboarding again
 preserves the remote TLS fingerprint and transport settings when you keep the
