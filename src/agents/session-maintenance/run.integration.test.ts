@@ -36,6 +36,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { bindSessionMcpRuntimeTestScheduler } from "../agent-bundle-mcp-manager.test-support.js";
 import { resolveEffectiveCompactionReserveTokens } from "../agent-compaction-constants.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
@@ -411,6 +412,7 @@ function scheduleSafetyCaseMaintenance(
 
 describe("scheduled session maintenance final effects", () => {
   it("compacts through the real completed-turn path after its Gateway caller retires", async () => {
+    await bindSessionMcpRuntimeTestScheduler();
     await withOpenClawTestState({ label: "scheduled-compaction-final-effect" }, async (state) => {
       let scenario: Scenario | undefined;
       try {
