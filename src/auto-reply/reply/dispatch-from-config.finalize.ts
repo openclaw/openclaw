@@ -484,8 +484,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             fallbackOutcome === "recovery-owned"
           ) {
             queuedFinal = true;
-            noVisibleReplyFallbackDelivered = true;
-            // Re-snapshot so the delivered fallback is reflected in reported counts,
+            // Recovery-owned means the transport retains custody, not that the
+            // fallback became visible. Pending custody still prevents another
+            // fallback without falsely reporting this attempt as delivered.
+            if (fallbackOutcome !== "recovery-owned") {
+              noVisibleReplyFallbackDelivered = true;
+            }
+            // Re-snapshot so the accepted fallback is reflected in reported counts,
             // matching the TTS-only path which enqueues before the snapshot.
             counts = dispatcher.getQueuedCounts();
           }
