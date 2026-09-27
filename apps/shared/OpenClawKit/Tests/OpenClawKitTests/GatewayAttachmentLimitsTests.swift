@@ -11,6 +11,10 @@ struct GatewayAttachmentLimitsTests {
                 #"{"attachments":{"maxBytes":10485760,"maxImageBytes":5242880}}"#,
                 GatewayAttachmentLimits(maxBytes: 10_485_760, maxImageBytes: 5_242_880)),
             (#"{"maxPayload":16777216}"#, nil),
+            (#"{"attachments":{"maxBytes":0,"maxImageBytes":5242880}}"#, nil),
+            (
+                #"{"attachments":{"maxBytes":9223372036854775807,"maxImageBytes":9223372036854775807}}"#,
+                GatewayAttachmentLimits(maxBytes: Int(Int32.max), maxImageBytes: Int(Int32.max))),
         ] {
             let data = Data("""
             {
