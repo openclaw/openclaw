@@ -1,9 +1,14 @@
-// @vitest-environment node
-import { GatewaySessionMessageSubscriptionCoordinator } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { GatewaySessionMessageSubscriptionCoordinator } from "../../../packages/gateway-client/src/session-subscriptions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import {
+  browserVisibility,
+  createRunningNarrationController,
+  runningRow,
+} from "../test-helpers/app-sidebar-session-narration.ts";
 import {
   SidebarSessionNarrationController,
   type SidebarNarrationSyncInput,
@@ -13,34 +18,6 @@ import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
 // Mirrors the controller-internal throttle; asserting through timers keeps the
 // constant unexported (production-only export policy).
 const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-
-function runningRow(key: string): SidebarRecentSession {
-  return {
-    key,
-    label: "Run",
-    renameValue: "",
-    updatedAt: Date.now(),
-    active: false,
-    visuallyActive: false,
-    hasActiveRun: true,
-    modelSelectionLocked: false,
-    pinned: false,
-    pinnable: true,
-    cloudWorkerStopAction: null,
-    hasAutomation: false,
-    unread: false,
-    attention: { kind: "none" },
-    startedAt: 1,
-    childSessionKeys: [],
-    children: [],
-    isChild: false,
-    loadingChildren: false,
-    containsActiveDescendant: false,
-    runningChildCount: 0,
-    failedChildCount: 0,
-  };
-}
 
 function gatewayEvent(eventName: string, payload: unknown): GatewayEventFrame {
   return { event: eventName, payload } as GatewayEventFrame;
@@ -55,32 +32,6 @@ function chatDelta(text?: string, deltaText?: string, replace?: boolean): Gatewa
     replace,
     ...(text === undefined ? {} : { message: { role: "assistant", content: text } }),
   });
-}
-
-function createRunningNarrationController(source: SidebarNarrationSyncInput["source"]) {
-  const updates: Array<ReadonlyMap<string, string>> = [];
-  const controller = new SidebarSessionNarrationController((lines) => updates.push(lines));
-  controller.sync({
-    enabled: true,
-    connected: true,
-    connectionIdentity: {},
-    source,
-    openSessionKey: "",
-    rows: [runningRow("agent:main:run")],
-    agentId: "main",
-  });
-  return { controller, updates };
-}
-
-function browserVisibility(initial: DocumentVisibilityState = "visible") {
-  let visibility = initial;
-  const events = new EventTarget();
-  Object.defineProperty(events, "visibilityState", { get: () => visibility });
-  vi.stubGlobal("document", events);
-  return (next: DocumentVisibilityState) => {
-    visibility = next;
-    events.dispatchEvent(new Event("visibilitychange"));
-  };
 }
 
 describe("sidebar narration derivation", () => {

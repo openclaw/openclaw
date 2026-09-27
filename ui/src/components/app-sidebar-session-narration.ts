@@ -1,3 +1,8 @@
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+  resolveSafeTimeoutDelayMs,
+} from "@openclaw/gateway-client/browser";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
 import {
@@ -33,6 +38,8 @@ import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
 const SIDEBAR_NARRATION_SUBSCRIPTION_LIMIT = 6;
 const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
 const SIDEBAR_NARRATION_BUFFER_CHARS = 16_384;
+const SIDEBAR_NARRATION_RETRY_INITIAL_MS = 500;
+const SIDEBAR_NARRATION_RETRY_MAX_MS = 30_000;
 
 type SessionMessageSubscription = Awaited<ReturnType<SessionCapability["subscribeMessages"]>>;
 type NarrationSource = Pick<SessionCapability, "subscribeMessages" | "unsubscribeMessages">;
@@ -45,7 +52,9 @@ type NarrationSubscription = {
 
 type PendingSubscription = {
   agentId: string | null;
-  operationId: symbol;
+  retryWindowMs: number;
+  retryAt: number;
+  timer: ReturnType<typeof globalThis.setTimeout> | null;
 };
 
 type NarrationActivity = { kind: "text"; text: string } | { kind: "line"; line: string };
@@ -219,7 +228,10 @@ export class SidebarSessionNarrationController {
       ) {
         this.releaseKey(key);
       }
-      if (this.subscriptions.has(key) || this.pendingSubscriptions.has(key)) {
+      if (
+        this.subscriptions.has(key) ||
+        (this.pendingSubscriptions.get(key)?.retryAt ?? 0) > Date.now()
+      ) {
         continue;
       }
       void this.subscribeKey(key);
@@ -267,19 +279,29 @@ export class SidebarSessionNarrationController {
     ) {
       return;
     }
-    const operationId = Symbol(key);
-    const agentId = this.subscriptionAgentId(key);
-    this.pendingSubscriptions.set(key, { agentId, operationId });
+    const pending = this.pendingSubscriptions.get(key) ?? {
+      agentId: this.subscriptionAgentId(key),
+      retryWindowMs: SIDEBAR_NARRATION_RETRY_INITIAL_MS,
+      retryAt: 0,
+      timer: null,
+    };
+    if (pending.timer !== null) {
+      globalThis.clearTimeout(pending.timer);
+      pending.timer = null;
+    }
+    // Both in-flight and non-retryable failures hold their slot until intent changes.
+    pending.retryAt = Infinity;
+    this.pendingSubscriptions.set(key, pending);
     try {
       const subscription = await source.subscribeMessages(key, {
-        agentId: agentId ?? undefined,
+        agentId: pending.agentId ?? undefined,
       });
-      const pending = this.pendingSubscriptions.get(key);
-      if (pending?.operationId === operationId) {
+      const current = this.pendingSubscriptions.get(key) === pending;
+      if (current) {
         this.pendingSubscriptions.delete(key);
       }
       if (
-        pending?.operationId !== operationId ||
+        !current ||
         source !== this.source ||
         !this.connected ||
         !this.enabled ||
@@ -289,11 +311,26 @@ export class SidebarSessionNarrationController {
         return;
       }
       this.subscriptions.set(key, { source, subscription });
-    } catch {
-      const pending = this.pendingSubscriptions.get(key);
-      if (pending?.operationId === operationId) {
-        this.pendingSubscriptions.delete(key);
+    } catch (error) {
+      if (
+        this.pendingSubscriptions.get(key) !== pending ||
+        (!(error instanceof GatewayProtocolRequestTimeoutError) &&
+          (!(error instanceof GatewayProtocolRequestError) || !error.retryable))
+      ) {
+        return;
       }
+      const hint = error instanceof GatewayProtocolRequestError ? error.retryAfterMs : undefined;
+      const floor = typeof hint === "number" && Number.isFinite(hint) ? Math.max(0, hint) : 0;
+      const delay = resolveSafeTimeoutDelayMs(floor + Math.random() * pending.retryWindowMs);
+      pending.retryWindowMs = Math.min(pending.retryWindowMs * 2, SIDEBAR_NARRATION_RETRY_MAX_MS);
+      pending.retryAt = Date.now() + delay;
+      pending.timer = globalThis.setTimeout(() => {
+        pending.timer = null;
+        pending.retryAt = 0;
+        if (this.input && this.pendingSubscriptions.get(key) === pending) {
+          this.sync(this.input);
+        }
+      }, delay);
     }
   }
 
@@ -302,6 +339,10 @@ export class SidebarSessionNarrationController {
   }
 
   private releaseKey(key: string): void {
+    const pending = this.pendingSubscriptions.get(key);
+    if (pending?.timer != null) {
+      globalThis.clearTimeout(pending.timer);
+    }
     this.pendingSubscriptions.delete(key);
     const owned = this.subscriptions.get(key);
     this.subscriptions.delete(key);
