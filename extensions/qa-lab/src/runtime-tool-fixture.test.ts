@@ -1267,6 +1267,36 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow("expected mock happy-path tool output for read");
   });
 
+  it.each([false, true])(
+    "validates the linked mock patch after an unlinked plan (combined request: %s)",
+    async (combinedRequest) => {
+      const requests = mockToolRequests({
+        toolName: "apply_patch",
+        happyArgs: { input: runtimePatchAddInput() },
+        failureArgs: { input: runtimePatchUpdateInput() },
+        happyOutput: "Successfully applied patch",
+        failureOutput: "Error: Path escapes sandbox root",
+      });
+      await expect(
+        runMockRuntimeToolFixture({
+          toolName: "apply_patch",
+          requests: [
+            {
+              allInputText: "target=apply_patch",
+              plannedToolCallId: "unlinked-decoy",
+              plannedToolName: "apply_patch",
+              plannedToolArgs: { input: runtimePatchAddInput("runtime-tool-fixture-wrong.txt") },
+            },
+            ...(combinedRequest
+              ? [{ ...requests[0], ...requests[1] }, ...requests.slice(2)]
+              : requests),
+          ],
+          runAgentPrompt: vi.fn(simulateRuntimePatchHappyTurn),
+        }),
+      ).resolves.toContain("apply_patch mock provider happy planned args");
+    },
+  );
+
   it("rejects mismatched planned and output call ids on the same mock request", async () => {
     const requests = [
       {

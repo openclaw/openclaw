@@ -5,6 +5,7 @@ import type {
 } from "./whatsapp-live.contracts.js";
 import {
   callWhatsAppGatewaySend,
+  requireWhatsAppTriggerMessageId,
   waitForScenarioObservedMessage,
   waitForWhatsAppSutReactionSequenceToTrigger,
   waitForWhatsAppSutReactionToTrigger,
@@ -16,10 +17,7 @@ export const whatsappQaReplyDeliveryShapeScenario: WhatsAppQaScenarioImplementat
     const token = `WHATSAPP_QA_REPLY_SHAPE_${randomUUID().slice(0, 8).toUpperCase()}`;
     return {
       afterReply: async (_reply, context) => {
-        if (!context.sent.messageId) {
-          throw new Error("WhatsApp driver did not return a triggering message id.");
-        }
-        const quotedTriggerMessageId = context.sent.messageId;
+        const quotedTriggerMessageId = requireWhatsAppTriggerMessageId(context);
         const chunkStartedAt = new Date();
         const longText = `${token}_LONG_BEGIN\n${"A".repeat(4_500)}\n${token}_LONG_END`;
         await callWhatsAppGatewaySend(context, {

@@ -1,7 +1,6 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseQaTarget } from "./qa-bus-protocol.js";
 import type {
-  QaBusAttachment,
   QaBusConversation,
   QaBusEvent,
   QaBusMessage,
@@ -37,15 +36,11 @@ export function cloneMessage(message: QaBusMessage): QaBusMessage {
   return {
     ...message,
     conversation: { ...message.conversation },
-    attachments: (message.attachments ?? []).map(cloneAttachment),
+    attachments: (message.attachments ?? []).map((attachment) => ({ ...attachment })),
     ...(message.nativeCommand ? { nativeCommand: { ...message.nativeCommand } } : {}),
     toolCalls: message.toolCalls?.map(cloneToolCall),
     reactions: message.reactions.map((reaction) => ({ ...reaction })),
   };
-}
-
-function cloneAttachment(attachment: QaBusAttachment): QaBusAttachment {
-  return { ...attachment };
 }
 
 function cloneToolCall(toolCall: QaBusToolCall): QaBusToolCall {

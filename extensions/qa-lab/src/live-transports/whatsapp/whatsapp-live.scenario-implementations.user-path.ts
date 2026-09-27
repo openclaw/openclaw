@@ -11,6 +11,7 @@ import {
   createWhatsAppQaAudioWavBuffer,
   createWhatsAppQaPdfBuffer,
   matchesWhatsAppSutReactionToTrigger,
+  requireWhatsAppTriggerMessageId,
   waitForNoWhatsAppReply,
   waitForScenarioObservedMessage,
   waitForWhatsAppSutReactionToTrigger,
@@ -136,9 +137,7 @@ export const whatsappQaReplyContextIsolationScenario: WhatsAppQaScenarioImplemen
     const token = `WHATSAPP_QA_REPLY_ISOLATION_${randomUUID().slice(0, 8).toUpperCase()}`;
     return {
       afterReply: async (_reply, context) => {
-        if (!context.sent.messageId) {
-          throw new Error("WhatsApp driver did not return a triggering message id.");
-        }
+        requireWhatsAppTriggerMessageId(context);
         const quotedStartedAt = new Date();
         await callWhatsAppGatewaySend(context, {
           label: "quoted",

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements server behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   type Journal,
@@ -13,26 +12,13 @@ import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtim
 import { resolveQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
 import { resolveMockProviderVariant } from "../shared/mock-provider-variant.js";
-
-type AimockRequestSnapshot = {
-  raw: string;
-  body: Record<string, unknown>;
-  prompt: string;
-  allInputText: string;
-  toolOutput: string;
-  model: string;
-  providerVariant: "openai" | "anthropic" | "unknown";
-  imageInputCount: number;
-  plannedToolCallId?: string;
-  plannedToolName?: string;
-  toolOutputCallId?: string;
-  toolOutputStructuredError?: true;
-};
+import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.js";
+import type { QaMockRequestSnapshot } from "../shared/types.js";
 
 const AIMOCK_DEBUG_REQUEST_LIMIT = 1_000;
 const AIMOCK_DEBUG_FACTS_MAX_BYTES = 64 * 1024;
 
-type AimockRequestFacts = Omit<AimockRequestSnapshot, "raw" | "body">;
+type AimockRequestFacts = Omit<QaMockRequestSnapshot, "raw" | "body">;
 type AimockRequestProjection =
   | { complete: true; facts: AimockRequestFacts }
   | {
@@ -47,11 +33,6 @@ type AimockToolFacts = Pick<
 type AimockRequestObservation =
   | { kind: "retained-body"; tools: AimockToolFacts }
   | { kind: "projected"; projection: AimockRequestProjection };
-
-// Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
-// This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
-const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
-const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
 
 function requestMessages(body: ChatCompletionRequest | null | undefined) {
   return Array.isArray(body?.messages) ? body.messages : [];
@@ -69,14 +50,6 @@ function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
     }
   }
   return "";
-}
-
-function isInternalRuntimeContextCarrierText(text: string) {
-  const trimmed = text.trim();
-  return (
-    trimmed.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
-    trimmed.endsWith(INTERNAL_RUNTIME_CONTEXT_END)
-  );
 }
 
 function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
@@ -297,7 +270,7 @@ function createDebugMount(): Mountable {
       } else {
         selected = selected.slice(-1);
       }
-      const snapshots: AimockRequestSnapshot[] = [];
+      const snapshots: QaMockRequestSnapshot[] = [];
       const incomplete: Array<
         { cursor: number } & Extract<AimockRequestProjection, { complete: false }>
       > = [];
@@ -308,9 +281,7 @@ function createDebugMount(): Mountable {
             ? { complete: true, facts: extractRequestFacts(entry.body, observation.tools) }
             : observation.projection;
         if (plannedToolCallId) {
-          projection = projection.complete
-            ? { complete: true, facts: { ...projection.facts, plannedToolCallId } }
-            : { ...projection, facts: { ...projection.facts, plannedToolCallId } };
+          projection = { ...projection, facts: { ...projection.facts, plannedToolCallId } };
           if (observation.kind === "projected") {
             projection = boundRequestFacts(projection);
           }

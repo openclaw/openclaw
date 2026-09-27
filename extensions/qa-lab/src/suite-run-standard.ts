@@ -478,15 +478,14 @@ export async function runQaFlowSuiteStandard(
     throw error;
   } finally {
     const activeEnv = env;
-    const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
-    const activeGateway = gateway;
+    const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
     const activeMock = mock;
     const cleanupFailures = await runQaFlowSuiteCleanupPlan({
       closeWebSessions: activeEnv ? () => closeQaWebSessions(activeEnv.webSessionIds) : undefined,
       cleanupTransportBeforeGatewayStop: () => transportFactoryResult.cleanupBeforeGatewayStop(),
       cleanupTransportAfterGatewayStop: () => transportFactoryResult.cleanupAfterGatewayStop(),
       stopGateway: () =>
-        activeGateway.stop({
+        gateway.stop({
           keepTemp,
           preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
           beforeTempCleanup: transport.captureBeforeGatewayCleanup,

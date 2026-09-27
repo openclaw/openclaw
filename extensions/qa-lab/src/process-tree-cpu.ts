@@ -40,11 +40,8 @@ function parsePsCpuTimeMs(raw: string): number | null {
   if (second >= 60 || (thirdRaw !== undefined && third >= 60)) {
     return null;
   }
-  if (daysRaw !== undefined && thirdRaw !== undefined) {
-    return Math.round((days * 24 * 60 * 60 + first * 60 * 60 + second * 60 + third) * 1000);
-  }
   if (thirdRaw !== undefined) {
-    return Math.round((first * 60 * 60 + second * 60 + third) * 1000);
+    return Math.round((days * 24 * 60 * 60 + first * 60 * 60 + second * 60 + third) * 1000);
   }
   return Math.round((first * 60 + second) * 1000);
 }

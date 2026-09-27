@@ -9,6 +9,7 @@ import {
   assertWhatsAppMessageFromSutPhone,
   assertWhatsAppMessagesFromSutPhone,
   buildWhatsAppQuotedMessageKeyFromObservedMessage,
+  requireWhatsAppTriggerMessageId,
   resolveWhatsAppQaNoReplyTarget,
   waitForDistinctWhatsAppSutMessages,
   waitForNoWhatsAppReply,
@@ -28,9 +29,7 @@ function buildWhatsAppQuoteReplyRun(target: "dm" | "group"): WhatsAppQaMessageSc
     matchText: token,
     target,
     verify: (reply, context) => {
-      if (!context.sent.messageId) {
-        throw new Error("WhatsApp driver did not return a triggering message id.");
-      }
+      requireWhatsAppTriggerMessageId(context);
       if (reply.quoted?.messageId !== context.sent.messageId) {
         throw new Error(
           `expected reply quote ${context.sent.messageId}, got ${reply.quoted?.messageId ?? "<missing>"}`,
