@@ -35,6 +35,13 @@ that card's browser and tab. This does not change `browser.defaultProfile` or
 another session's selection. Without a session browser target, the panel uses
 the configured default routing.
 
+The chat side panel shows only this session's tabs: tabs its agent or panel
+opened, plus tabs its conversation used. Other sessions' tabs and tabs opened
+outside OpenClaw stay hidden. The Browser dock outside a chat session lists
+every tab. Tabs opened from a session's panel belong to that session and follow
+the existing session tab cleanup: they close when the session is reset or
+deleted, with idle and per-session limits controlled by `browser.tabCleanup`.
+
 The panel streams the active tab live as the page repaints. It falls back to
 screenshots for node-routed browsers, Chrome MCP existing-session profiles,
 missing Playwright, or stream connection failures. Navigation rules apply to
