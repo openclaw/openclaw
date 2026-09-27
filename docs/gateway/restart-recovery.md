@@ -626,16 +626,45 @@ Subagent runs are persisted in the shared SQLite state database, so the
 subagent registry survives the process. On boot, interrupted child runs settle
 through their normal completion path. They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
-It can inspect retained child history, continue that child with `sessions_send`,
-or spawn a replacement after checking that the old execution has stopped.
+Its recovery input lists current unfinished child session and run identities,
+including children interrupted by the restart. Older runs superseded by a newer
+child run are omitted, as are records from another store, parent session, or
+parent lifecycle revision. A reset keeps the session ID but changes its lifecycle
+revision, so retained child work from before that reset cannot enter the new
+parent's actionable recovery roster. Large lists show the first 32 children and tell the parent
+to inspect the remaining children.
+
+The parent must reconcile each unfinished child with its saved history and the
+original request. When the child's task is still needed, it should prefer a
+follow-up in that retained session with `sessions_send`. It first confirms that
+the old execution stopped and checks any uncertain tool effects. It can use work
+already completed, assign a replacement, or finish the remaining work itself.
+Recovery does not automatically replay child commands or duplicate running work.
+An interruption alone is not a blocker; the parent continues until the request
+is finished or a specific blocker requires user input or unavailable authority.
 Existing cleanup and retention settings still apply.
 
 If a parent yielded while waiting for children, its saved batch collects both
 completed and interrupted results and wakes the parent once the batch settles.
 A parent already working on those results resumes through ordinary main-session
 recovery. A child result or an `announce:` run identifier does not make unfinished
-parent work disposable. The recovery turn explains the restart and tells the
-parent to check current state and uncertain effects before continuing.
+parent work disposable. Both recovery paths give the parent the interrupted
+children's identities and the same reconciliation guidance. Restart interruption
+remains in history as an interrupted outcome, rather than a child execution
+failure. Genuine execution and delivery failures still require attention.
+
+Saved batch wakes keep their original batch identity and completion-delivery
+contracts. Their actionable recovery roster includes only children whose captured
+parent ownership still matches. Older or stale records remain ordinary completion
+history; they cannot add new instructions to continue those child sessions.
+Current reset already revokes its live saved wakes. Recorded outcomes and historical
+child metadata are retained.
+
+On upgrade, saved interruptions that retain the typed restart-recovery owner
+are reconciled through the same startup path. Historical failed runs without
+that ownership evidence remain failed: their error text alone cannot distinguish
+a restart from a genuine failure. Inspect those retained sessions before
+continuing them; recovery does not rewrite ambiguous history.
 
 A completed child may still owe its requester a final follow-up. If that
 follow-up is waiting to retry or is interrupted by restart, the saved

@@ -453,11 +453,18 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           childSessionKey: child.childSessionKey,
           execution: {
             status: "terminal",
+            interruptionReason: "gateway-restart",
             outcome: { status: "error", error: expect.stringContaining("Gateway restart") },
           },
           requesterSettleWake: { requesterYieldBatch: true },
         });
         expect(getSubagentRunByChildSessionKey(child.childSessionKey)?.runId).toBe(child.runId);
+        const recoveredSession = loadSessionEntryReadOnly({
+          agentId: "main",
+          sessionKey: child.childSessionKey,
+        });
+        expect(recoveredSession).toMatchObject({ status: "interrupted" });
+        expect(recoveredSession?.lastRunError).toBeUndefined();
         expect(
           await loadTranscriptEvents({
             agentId: "main",

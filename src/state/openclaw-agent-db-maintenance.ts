@@ -112,10 +112,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
     const hasSupportedOlderVersion =
       userVersion >= 1 &&
       userVersion < OPENCLAW_AGENT_SCHEMA_VERSION &&
-      metadataVersion !== null &&
-      metadataVersion === userVersion &&
-      metadataVersion >= 1 &&
-      metadataVersion < OPENCLAW_AGENT_SCHEMA_VERSION;
+      metadataVersion === userVersion;
     if (!hasCurrentVersion && !hasSupportedOlderVersion) {
       return;
     }
