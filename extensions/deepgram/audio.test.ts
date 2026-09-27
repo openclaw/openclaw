@@ -30,6 +30,20 @@ const audioRequest = {
 };
 
 describe("transcribeDeepgramAudio", () => {
+  it("respects lowercase authorization header overrides", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+      results: { channels: [{ alternatives: [{ transcript: "ok" }] }] },
+    });
+    const result = await transcribeDeepgramAudio({
+      ...audioRequest,
+      headers: { authorization: "Token override" },
+      fetchFn,
+    });
+
+    expect(new Headers(getRequest().init?.headers).get("authorization")).toBe("Token override");
+    expect(result.text).toBe("ok");
+  });
+
   it("builds the expected request payload", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
       results: { channels: [{ alternatives: [{ transcript: "hello" }] }] },

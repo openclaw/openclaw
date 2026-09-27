@@ -1,4 +1,5 @@
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
+import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -25,6 +26,30 @@ describe("vydra video-generation provider", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(provider);
+  });
+
+  it("rejects generated video downloads that exceed the configured media cap", async () => {
+    stubFetch(
+      jsonResponse({ jobId: "job-123", status: "processing" }),
+      jsonResponse({
+        jobId: "job-123",
+        status: "completed",
+        videoUrl: "https://cdn.vydra.ai/generated/test.mp4",
+      }),
+      binaryResponse("too-large", "video/mp4"),
+    );
+
+    await expect(
+      provider.generateVideo({
+        ...request,
+        model: "veo3",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("Vydra video download exceeds 1 bytes");
   });
 
   it("submits, polls, and downloads veo3 video with the configured request policy", async () => {
