@@ -3,10 +3,7 @@ import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-se
 import { createCrabboxNodeProcessRuntime } from "./crabbox-worker-node-process.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
-import {
-  CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
-  CRABBOX_SETUP_TIMEOUT_MS,
-} from "./crabbox-worker-timeouts.js";
+import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
 const CLOUD_BOOTSTRAP_TOKEN_ENV = "CRABBOX_WORKER_BOOTSTRAP_TOKEN";
@@ -144,7 +141,6 @@ setPhase("preparation");
     setPhase("complete");
     return;
   }
-  const downloadPhaseSignal = AbortSignal.timeout(${CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS});
   const verifyRuntime = (root) => {
     setPhase("runtime verification");
     if (!fs.lstatSync(root).isDirectory() || fs.realpathSync(root) !== root) throw new Error("Cloud worker bootstrap runtime path is unsafe");
@@ -177,7 +173,7 @@ setPhase("preparation");
     if (pin && !/^[a-f0-9]{64}$/.test(pin)) throw new Error("Cloud worker bootstrap TLS fingerprint is invalid");
     const transport = url.protocol === "https:" ? https : http;
     const request = transport.request(url, {
-      agent: false, headers: { authorization: "Bearer " + token }, signal: AbortSignal.any([downloadPhaseSignal, AbortSignal.timeout(600000)]),
+      agent: false, headers: { authorization: "Bearer " + token }, signal: AbortSignal.timeout(600000),
       ...(pin ? { rejectUnauthorized: false, session: Buffer.alloc(0) } : {}),
     });
     // The response/body readers still reject; keep errors observed between their awaits.
@@ -229,15 +225,14 @@ setPhase("preparation");
     for (;;) {
       const partial = archive + ".attempt-" + attempt;
       try {
-        if (retries > 0) await delay(Math.round(250 * 2 ** Math.min(retries - 1, 3) * (0.5 + Math.random())), undefined, { signal: downloadPhaseSignal });
-        downloadPhaseSignal.throwIfAborted();
+        if (retries > 0) await delay(Math.round(250 * 2 ** Math.min(retries - 1, 3) * (0.5 + Math.random())));
         await downloadAttempt(artifact, token, partial, progress);
         fs.renameSync(partial, archive);
         return;
       } catch (error) {
         const busy = error.code === "TRANSFER_IN_PROGRESS";
         const transient = busy || ["ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EPIPE", "ERR_STREAM_PREMATURE_CLOSE", "ABORT_ERR", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EAI_AGAIN"].includes(error.code) || [502, 503, 504].includes(error.statusCode);
-        if (downloadPhaseSignal.aborted || !transient || (!busy && attempt === 3)) {
+        if (!transient || (!busy && attempt === 3)) {
           error.message += " (download attempt " + attempt + "/3)";
           throw error;
         }

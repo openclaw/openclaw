@@ -14,10 +14,14 @@ import {
 
 const require = createRequire(import.meta.url);
 const archive = Buffer.from("verified worker archive");
+const runtimeArchive = Buffer.from("verified runtime archive");
 
-type DownloadOutcome = string | number;
+type DownloadOutcome = string | number | { durationMs: number };
 
-async function download(outcomes: DownloadOutcome[] | ((elapsedMs: number) => DownloadOutcome)) {
+async function download(
+  outcomes: DownloadOutcome[] | ((elapsedMs: number) => DownloadOutcome),
+  freshRuntime = false,
+) {
   const sha256 = createHash("sha256").update(archive).digest("hex");
   const workerBundle = {
     ...createWorkerArchiveFixture(),
@@ -26,9 +30,13 @@ async function download(outcomes: DownloadOutcome[] | ((elapsedMs: number) => Do
     packageRelativePath: `worker-artifacts/${sha256}.tgz`,
     ...(Array.isArray(outcomes) && outcomes[0] === "pin" ? { tlsFingerprint: "a".repeat(64) } : {}),
   };
+  const nodeBootstrap = createNodeBootstrapFixture({
+    sha256: createHash("sha256").update(runtimeArchive).digest("hex"),
+    bytes: runtimeArchive.length,
+  });
   const setup = createCrabboxNodeRuntimeSetup({
     leaseId: "cbx_download_fixture",
-    nodeBootstrap: createNodeBootstrapFixture(),
+    nodeBootstrap,
     workerBundle,
   });
   const requests: string[] = [];
@@ -38,9 +46,20 @@ async function download(outcomes: DownloadOutcome[] | ((elapsedMs: number) => Do
   const delays: number[] = [];
   const output: string[] = [];
   let elapsedMs = 0;
+  let installations = 0;
   const deadlines: Array<{ atMs: number; controller: AbortController }> = [];
+  const advanceTime = (ms: number) => {
+    const untilMs = elapsedMs + ms;
+    for (const { atMs, controller } of deadlines.toSorted((a, b) => a.atMs - b.atMs)) {
+      if (!controller.signal.aborted && atMs <= untilMs) {
+        controller.abort(new Error("synthetic deadline exceeded"));
+      }
+    }
+    elapsedMs = untilMs;
+  };
   const transport = {
-    request: (_url: URL, options: { headers: { authorization: string } }) => {
+    request: (url: URL, options: { headers: { authorization: string }; signal: AbortSignal }) => {
+      const content = url.href === nodeBootstrap.url ? runtimeArchive : archive;
       const outcome =
         typeof outcomes === "function"
           ? outcomes(elapsedMs)
@@ -52,11 +71,15 @@ async function download(outcomes: DownloadOutcome[] | ((elapsedMs: number) => Do
           const response = Object.assign(
             Readable.from(
               (async function* () {
+                if (typeof outcome === "object") {
+                  advanceTime(outcome.durationMs);
+                  options.signal.throwIfAborted();
+                }
                 if (outcome === "busy") {
                   yield Buffer.from('{"error":"transfer_in_progress"}');
                   return;
                 }
-                yield archive.subarray(0, 4);
+                yield content.subarray(0, 4);
                 if (outcome === "short") {
                   return;
                 }
@@ -66,7 +89,7 @@ async function download(outcomes: DownloadOutcome[] | ((elapsedMs: number) => Do
                 ) {
                   throw Object.assign(new Error("transport interrupted"), { code: outcome });
                 }
-                yield outcome === "digest" ? Buffer.alloc(archive.length - 4) : archive.subarray(4);
+                yield outcome === "digest" ? Buffer.alloc(content.length - 4) : content.subarray(4);
                 if (outcome === "size") {
                   yield Buffer.from("excess");
                 }
@@ -99,15 +122,22 @@ async function download(outcomes: DownloadOutcome[] | ((elapsedMs: number) => Do
   const fileSystem = {
     constants: fs.constants,
     realpathSync: (file: string) => file,
-    existsSync: () => true,
+    existsSync: () => !freshRuntime,
     lstatSync: () => ({ isDirectory: () => true }),
     readFileSync: () => JSON.stringify({ name: "openclaw", version: "2026.8.1" }),
+    writeFileSync: () => {},
+    openSync: () => 1,
+    closeSync: () => {},
     mkdirSync: () => {},
     mkdtempSync: () => "/fixture/stage",
     readdirSync: () => [],
     renameSync: (from: string, to: string) => {
-      files.set(to, files.get(from)!);
-      files.delete(from);
+      for (const [file, bytes] of files) {
+        if (file === from || file.startsWith(from + "/")) {
+          files.set(to + file.slice(from.length), bytes);
+          files.delete(file);
+        }
+      }
     },
     rmSync: (file: string, options?: { recursive?: boolean }) => {
       removed.push({ file, bytes: files.get(file)?.length ?? 0 });
@@ -175,22 +205,22 @@ async function download(outcomes: DownloadOutcome[] | ((elapsedMs: number) => Do
       }
       if (name === "node:timers/promises") {
         return {
-          setTimeout: async (ms: number, _value: unknown, options?: { signal: AbortSignal }) => {
+          setTimeout: async (ms: number) => {
             delays.push(ms);
-            const untilMs = elapsedMs + ms;
-            for (const { atMs, controller } of deadlines.toSorted((a, b) => a.atMs - b.atMs)) {
-              if (!controller.signal.aborted && atMs <= untilMs) {
-                elapsedMs = atMs;
-                controller.abort(new Error("synthetic deadline exceeded"));
-                options?.signal.throwIfAborted();
-              }
-            }
-            elapsedMs = untilMs;
+            advanceTime(ms);
           },
         };
       }
       if (name === "node:child_process") {
-        return { spawnSync: () => ({ status: 0, stdout: "OpenClaw 2026.8.1" }) };
+        return {
+          spawnSync: () => ({ status: 0, stdout: "OpenClaw 2026.8.1" }),
+          spawn: () => {
+            installations++;
+            const child = new EventEmitter();
+            queueMicrotask(() => child.emit("close", 0));
+            return child;
+          },
+        };
       }
       return require(name);
     },
@@ -202,12 +232,26 @@ async function download(outcomes: DownloadOutcome[] | ((elapsedMs: number) => Do
     removed,
     delays,
     elapsedMs,
+    installations,
     output: output.join("\n"),
     published: [...files.values()],
   };
 }
 
 describe("bootstrap artifact download retries", () => {
+  it("completes sequential nine-minute runtime and eight-minute worker downloads", async () => {
+    const result = await download([{ durationMs: 9 * 60_000 }, { durationMs: 8 * 60_000 }], true);
+    expect(result.code, result.output).toBe(0);
+    expect(result.elapsedMs).toBe(17 * 60_000);
+    expect(result.requests).toEqual([
+      "Bearer synthetic-bootstrap-token",
+      "Bearer synthetic-worker-archive-token",
+    ]);
+    expect(result.installations).toBe(1);
+    expect(result.published).toEqual([archive]);
+    expect(result.output).toContain("CRABBOX_PHASE:openclaw-bootstrap-complete");
+  });
+
   it("waits for delayed serve settlement without spending content-transfer attempts", async () => {
     let transfers = 0;
     const result = await download((elapsedMs) => {
@@ -222,20 +266,6 @@ describe("bootstrap artifact download retries", () => {
     expect(new Set(result.requests)).toEqual(new Set(["Bearer synthetic-worker-archive-token"]));
     expect(result.published).toEqual([archive]);
     expect(result.created).toHaveLength(3);
-  });
-
-  it("bounds persistent busy replies by the phase deadline even on the third transfer attempt", async () => {
-    let transfers = 0;
-    const result = await download((elapsedMs) => {
-      if (elapsedMs >= 15 * 60_000) {
-        throw new Error("A request started after the phase deadline");
-      }
-      return transfers++ < 2 ? "ECONNRESET" : "busy";
-    });
-    expect(result.code).toBe(1);
-    expect(result.elapsedMs).toBe(15 * 60_000);
-    expect(result.output).toContain("synthetic deadline exceeded (download attempt 3/3)");
-    expect(result.published).toEqual([]);
   });
 
   it.each([
