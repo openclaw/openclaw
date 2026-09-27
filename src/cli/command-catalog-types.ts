@@ -7,7 +7,11 @@ export type CliCommandPluginLoadPolicy =
 type CliConfigGuardMode = "run" | "skip" | "validate" | "defer" | "when-suppressed";
 type CliConfigGuardPolicy =
   | CliConfigGuardMode
-  | ((ctx: { argv: string[]; commandPath: string[] }) => CliConfigGuardMode);
+  | ((ctx: {
+      argv: string[];
+      commandPath: string[];
+      options?: Readonly<Record<string, unknown>>;
+    }) => CliConfigGuardMode);
 export type CliPluginRegistryScope =
   | "all"
   | "channels"
