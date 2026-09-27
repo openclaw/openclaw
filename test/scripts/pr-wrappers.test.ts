@@ -691,6 +691,25 @@ describe("scripts/pr wrappers", () => {
     );
   });
 
+  itPosix("resolves explicit admin evidence from the caller before supervisor cwd changes", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    const caller = join(fixture.canonical, "nested");
+    mkdirSync(caller);
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+    );
+    const result = spawnSync(
+      join(fixture.canonical, "scripts/pr"),
+      ["merge-run", "123", "--admin-evidence", "admin proof.json", "--confirmed-operator-admin"],
+      { cwd: caller, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      `<123>\n<false>\n<>\n<>\n<>\n<>\n<false>\n<>\n<${join(caller, "admin proof.json")}>\n<true>\n`,
+    );
+  });
+
   itPosix(
     "requires an exact receipt and explicit confirmation for completion-only dispatch",
     () => {
