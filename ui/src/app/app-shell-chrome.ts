@@ -274,7 +274,8 @@ export class ShellChromeOwner {
   };
 
   readonly handleNativeNavigate = (event: Event): void => {
-    const detail = (event as CustomEvent<{ path?: unknown; search?: unknown }>).detail;
+    const detail = (event as CustomEvent<{ path?: unknown; search?: unknown; hash?: unknown }>)
+      .detail;
     const path = detail?.path;
     const schemeCandidate = typeof path === "string" ? path.slice(1) : "";
     if (
@@ -298,6 +299,10 @@ export class ShellChromeOwner {
     const search = detail?.search;
     if (typeof search === "string" && search.startsWith("?") && !search.includes("#")) {
       options.search = search;
+    }
+    const hash = detail?.hash;
+    if (typeof hash === "string" && hash.startsWith("#")) {
+      options.hash = hash;
     }
     this.host.navigate(routeId, options);
   };

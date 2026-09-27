@@ -41,7 +41,7 @@ import {
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
-import { isNativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
+import { isNativeWebChromeHost, nativeEmbedHost } from "./native-web-chrome.ts";
 import { beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import {
   floatingSidebarAttentionVisible,
@@ -125,6 +125,16 @@ export function renderApplicationShell(host: ShellViewHost) {
     // Scope-aware to match the store: admin-only, never advertisement alone.
     canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
   const activeRoute = host.routeState.routeId ?? "chat";
+  if (activeRoute === "panel-embed") {
+    return html`<main class="panel-embed-shell">
+      <openclaw-router-outlet
+        .router=${runtime.router}
+        .retryContext=${context}
+        .retentionScope=${presentationScope}
+      ></openclaw-router-outlet>
+      <openclaw-toast-host></openclaw-toast-host>
+    </main>`;
+  }
   const sessionRoute = isSessionRouteId(activeRoute);
   // Session routes have an offline outbox, New Session keeps a local draft, and
   // Appearance persists local preference intent for replay. Connection settings
@@ -149,7 +159,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       : null;
   // Onboarding renders without any navigation chrome, so the settings takeover
   // must not reserve its fixed sidebar column (the grid would stay off-center).
-  const nativeEmbed = isNativeEmbedHost();
+  const embedHost = nativeEmbedHost();
+  const nativeEmbed = embedHost !== null;
   const embedSettingsRoot = nativeEmbed && activeRoute === "settings";
   const embedSettings =
     nativeEmbed &&
@@ -266,6 +277,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     settingsTakeover || nativeEmbed
       ? renderLazySettingsSidebar(host, {
           presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
+          navigationChrome: embedHost?.navigationChrome,
           basePath: context.basePath,
           activeRouteId: activeRoute,
           agents: context.agents.state.agentsList?.agents ?? [],
@@ -339,7 +351,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         mergedChatChrome ? "shell--merged-chat-chrome" : ""
       } ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${
         onboarding ? "shell--onboarding" : ""
-      } ${nativeEmbed ? "shell--embed" : ""} ${embedSettings ? "shell--embed-settings" : ""} ${settingsTakeover ? "shell--settings" : ""}"
+      } ${nativeEmbed ? "shell--embed" : ""} ${embedHost?.navigationChrome === "host" ? "shell--embed-host-navigation" : ""} ${embedSettings ? "shell--embed-settings" : ""} ${settingsTakeover ? "shell--settings" : ""}"
       style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
       @theme-change=${(event: CustomEvent<ThemeModeChangeDetail>) => host.handleThemeChange(event)}
     >

@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { render, type LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../i18n/index.ts";
 import { pt_BR } from "../i18n/locales/pt-BR.ts";
 import type { AgentSelect } from "./agent-select.ts";
+import { renderLazySettingsSidebar } from "./settings-sidebar-lazy.ts";
 import { renderSettingsSidebar } from "./settings-sidebar.ts";
 import "./tooltip.ts";
 
@@ -56,37 +57,83 @@ afterEach(async () => {
 });
 
 describe("settings sidebar search", () => {
-  it("keeps save recovery available in the embedded page header", async () => {
-    const onRetry = vi.fn();
-    render(
-      renderSettingsSidebar({
-        ...sidebarAgentProps(),
-        presentation: "embed-page",
-        basePath: "",
-        activeRouteId: "appearance",
-        connectionStatus: null,
-        lastError: null,
-        gatewayVersion: "",
-        searchQuery: "",
-        onExit: vi.fn(),
-        onRetryConnect: vi.fn(),
-        onNavigate: vi.fn(),
-        onSearchQueryChange: vi.fn(),
-        preloadTimers: new Map(),
-        saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed", onRetry },
-      }),
-      container,
-    );
-    expect(container.querySelector(".settings-sidebar")).toBeNull();
-    await vi.waitFor(() => {
-      const retry = container.querySelector<HTMLButtonElement>(
-        ".native-embed-header .settings-save-indicator__action",
+  it.each([undefined, "host"] as const)(
+    "keeps embedded save recovery with %s navigation chrome",
+    async (navigationChrome) => {
+      const onRetry = vi.fn();
+      render(
+        renderSettingsSidebar({
+          ...sidebarAgentProps(),
+          presentation: "embed-page",
+          navigationChrome,
+          basePath: "",
+          activeRouteId: "appearance",
+          connectionStatus: null,
+          lastError: null,
+          gatewayVersion: "",
+          searchQuery: "",
+          onExit: vi.fn(),
+          onRetryConnect: vi.fn(),
+          onNavigate: vi.fn(),
+          onSearchQueryChange: vi.fn(),
+          preloadTimers: new Map(),
+          saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed", onRetry },
+        }),
+        container,
       );
+      expect(container.querySelector(".settings-sidebar")).toBeNull();
+      expect(container.querySelector(".native-embed-header__back") !== null).toBe(
+        navigationChrome !== "host",
+      );
+      expect(container.querySelector("h1") !== null).toBe(navigationChrome !== "host");
+      await container.querySelector<LitElement>("openclaw-settings-save-indicator")!.updateComplete;
+      const retry = container.querySelector<HTMLButtonElement>(".settings-save-indicator__action");
       expect(retry?.textContent?.trim()).toBe("Retry");
-    });
-    container.querySelector<HTMLButtonElement>(".settings-save-indicator__action")!.click();
-    expect(onRetry).toHaveBeenCalledOnce();
-  });
+      container.querySelector<HTMLButtonElement>(".settings-save-indicator__action")!.click();
+      expect(onRetry).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "keeps host-owned navigation out of the lazy header (failed=%s)",
+    (failed) => {
+      const retry = vi.fn();
+      render(
+        renderLazySettingsSidebar(
+          {
+            settingsSidebarRenderer: null,
+            settingsSidebarLoadFailed: failed,
+            loadSettingsSidebarRenderer: vi.fn(),
+            retrySettingsSidebarRenderer: retry,
+          },
+          {
+            ...sidebarAgentProps(),
+            presentation: "embed-page",
+            navigationChrome: "host",
+            basePath: "",
+            activeRouteId: "cron",
+            connectionStatus: null,
+            lastError: null,
+            gatewayVersion: "",
+            searchQuery: "",
+            onExit: vi.fn(),
+            onRetryConnect: vi.fn(),
+            onNavigate: vi.fn(),
+            onSearchQueryChange: vi.fn(),
+            preloadTimers: new Map(),
+            saveIndicator: saveIndicator(),
+          },
+        ),
+        container,
+      );
+      expect(container.querySelector(".native-embed-header__back, h1")).toBeNull();
+      expect(container.querySelector(failed ? '[role="alert"]' : '[role="status"]')).not.toBeNull();
+      if (failed) {
+        container.querySelector<HTMLButtonElement>("button")!.click();
+        expect(retry).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("keeps Models selected while its setup flow is open", () => {
     render(
@@ -638,22 +685,31 @@ describe("Settings agent selector", () => {
     return props;
   };
 
-  it.each(["sidebar", "embed-list", "embed-page"] as const)(
-    "uses the shared selection in the %s presentation",
-    async (presentation) => {
-      const props = renderSidebar({ presentation });
-      expect(container.querySelectorAll("openclaw-agent-select")).toHaveLength(1);
-      const selector = container.querySelector<AgentSelect>("openclaw-agent-select")!;
-      await selector.updateComplete;
-      expect(
-        selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label"),
-      ).toContain("Main");
-      const research = selector.querySelector<HTMLElement>('[aria-label="Research"]')!;
-      research.click();
-      expect(props.settingsAgentSelection.set).toHaveBeenCalledWith("research");
-      expect(props.onNavigate).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    { presentation: "sidebar" },
+    { presentation: "embed-list" },
+    { presentation: "embed-page" },
+    { presentation: "embed-page", navigationChrome: "host" },
+  ] as const)("uses the shared settings selection with %j", async (presentation) => {
+    const props = renderSidebar(presentation);
+    expect(container.querySelectorAll("openclaw-agent-select")).toHaveLength(1);
+    const selector = container.querySelector<AgentSelect>("openclaw-agent-select")!;
+    await selector.updateComplete;
+    expect(selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
+      "Main",
+    );
+    const research = selector.querySelector<HTMLElement>('[aria-label="Research"]')!;
+    research.click();
+    expect(props.settingsAgentSelection.set).toHaveBeenCalledWith("research");
+    expect(props.onNavigate).not.toHaveBeenCalled();
+  });
+
+  it("leaves host-embedded Automations agent scope with its page owner", () => {
+    renderSidebar({ presentation: "embed-page", navigationChrome: "host", activeRouteId: "cron" });
+    expect(container.querySelector("openclaw-agent-select")).toBeNull();
+    renderSidebar({ presentation: "embed-page", activeRouteId: "cron" });
+    expect(container.querySelector("openclaw-agent-select")).not.toBeNull();
+  });
 
   it.each([0, 1])(
     "keeps a disabled shared selector visible with %i selectable agents",

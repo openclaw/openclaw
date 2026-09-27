@@ -1,6 +1,7 @@
-import type { ApplicationGateway } from "./gateway.ts";
+import type { ApplicationContext } from "./context.ts";
 import type { NativeDeviceSettingsCapability } from "./native-device-settings.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
+import { nativePanelBridge } from "./native-web-chrome.ts";
 import type { createStartupLifecycle, StartupStep } from "./startup-lifecycle.ts";
 
 type NativeCapabilities = {
@@ -9,7 +10,7 @@ type NativeCapabilities = {
 };
 
 export async function startNativeCapabilities(
-  gateway: ApplicationGateway,
+  context: ApplicationContext,
   lifecycle: ReturnType<typeof createStartupLifecycle>,
   update: (capabilities: NativeCapabilities) => void,
 ): Promise<void> {
@@ -48,14 +49,20 @@ export async function startNativeCapabilities(
       return undefined;
     });
   }
-  if (typeof handlers?.openclawGateways?.postMessage === "function") {
+  if (typeof handlers?.openclawGateways?.postMessage === "function" || nativePanelBridge()) {
     steps.push(async () => {
       const { startNativeGatewayHealthReporting } =
         await import("./native-gateway-health.runtime.ts");
       if (!lifecycle.signal.aborted) {
-        return startNativeGatewayHealthReporting(gateway);
+        return startNativeGatewayHealthReporting(context.gateway);
       }
       return undefined;
+    });
+  }
+  if (nativePanelBridge()) {
+    steps.push(async () => {
+      const { startNativePresentation } = await import("./native-presentation.runtime.ts");
+      return lifecycle.signal.aborted ? undefined : startNativePresentation(context);
     });
   }
   await lifecycle.run(steps);

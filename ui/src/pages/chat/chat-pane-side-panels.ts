@@ -1,5 +1,6 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { panelEmbedLayout } from "../panel-embed/target.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
@@ -45,6 +46,9 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
   }
 
   protected restorePaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
+    if (this.panelEmbed) {
+      return panelEmbedLayout(this.panelEmbed);
+    }
     if (!this.compact) {
       return layout;
     }

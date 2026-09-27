@@ -11,6 +11,7 @@ import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
+import { publishPanelEmbedState } from "../panel-embed/bridge.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -19,7 +20,11 @@ import {
 } from "./chat-pane-embedded-panels.ts";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
+import {
+  renderSidebarRegion,
+  sidebarRegionCallbacks,
+  renderEmbeddedSidebarPanel,
+} from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { ChatToolIconController } from "./chat-tool-icon-controller.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
@@ -61,6 +66,7 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  private panelEmbedState = "";
   private readonly toolIcons = new ChatToolIconController(
     this,
     () => this.context,
@@ -132,18 +138,22 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       }}
     ></openclaw-chat-outbox-recovery>`;
     const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
-    const chat = renderChat({
-      ...chatProps,
-      pluginToolIcons: this.toolIcons.icons,
-      presented: this.active && this.presented,
-      transcriptVisible:
-        this.presented &&
-        this.visuallyPresented &&
-        isSidebarSlotVisible(sidebarLayout, "conversation"),
-      latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
-      historyState: catalog ? undefined : state,
-      header: nothing,
-    });
+    const chat =
+      this.panelEmbed && this.panelEmbed.panel?.slot !== "conversation"
+        ? nothing
+        : renderChat({
+            ...chatProps,
+            pluginToolIcons: this.toolIcons.icons,
+            presented: this.active && this.presented,
+            transcriptVisible:
+              this.presented &&
+              this.visuallyPresented &&
+              isSidebarSlotVisible(sidebarLayout, "conversation"),
+            latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
+            historyState: catalog ? undefined : state,
+            header: nothing,
+            hideComposer: Boolean(this.panelEmbed),
+          });
     const primary = html`<div class="chat-pane-primary-column">${chat}</div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
@@ -271,6 +281,23 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         this.active && this.presented && isSidebarSlotVisible(sidebarLayout, slot),
     });
     const availableSlots = availableSidebarSlots(panelDefinitions);
+    if (this.panelEmbed) {
+      this.panelEmbedState = publishPanelEmbedState(
+        this.panelEmbed,
+        panelDefinitions,
+        state.sidebarLayout,
+        this.panelEmbedState,
+        [...latestBrowserTabs.values()].at(-1),
+      );
+      const slot = this.panelEmbed.panel?.slot;
+      const definition = panelDefinitions.find((entry) => entry.slot === slot);
+      return slot === undefined
+        ? nothing
+        : html`<div class="panel-embed-content side-panel__panel" data-panel-slot=${slot}>
+              ${slot === "conversation" ? chat : definition ? renderEmbeddedSidebarPanel(definition, state.requestUpdate!) : nothing}
+            </div>
+            ${renderChatImageLightbox(state.imageLightbox, state.handleCloseImage)}`;
+    }
     const panelTemplates = sidebarPanelTemplates(panelDefinitions);
     const panelActions = sidebarPanelTemplates(panelDefinitions, "headerAction");
     // Main panel actions share the task toolbar. Content roots stay in the

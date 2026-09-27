@@ -55,7 +55,7 @@ html.openclaw-native-embed .shell--embed {
   margin-inline-start: auto;
 }
 
-.shell--embed-settings .content-header .page-title {
+:is(.shell--embed-settings, .shell--embed-host-navigation) .content-header .page-title {
   display: none;
 }
 

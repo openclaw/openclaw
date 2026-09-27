@@ -395,6 +395,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       const previous = this.observedBoardPresence.get(sessionKey);
       this.observedBoardPresence.set(sessionKey, board.hasBoard);
       if (
+        !this.panelEmbed &&
         this.presented &&
         previous === false &&
         board.hasBoard &&

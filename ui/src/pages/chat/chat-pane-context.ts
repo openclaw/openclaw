@@ -513,13 +513,17 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (sidebarSessionKey && (layoutSourceChanged || sidebarKeyChanged)) {
       this.sidebarLayoutSource = { client: snapshot.client, ready: state.connected };
       this.dashboardPresentationActivation = undefined;
-      const sidebarSettings = migrateLegacyDockVisibility({
-        settings: loadSettings(),
-        sessionKey: sidebarSessionKey,
-        browserAvailable: state.browserPanelAvailable,
-        desktopAvailable: desktopPanelAvailable,
-      });
-      const persistedLayout = sidebarSettings.sidebarSessionLayouts?.[sidebarSessionKey];
+      const sidebarSettings = this.panelEmbed
+        ? loadSettings()
+        : migrateLegacyDockVisibility({
+            settings: loadSettings(),
+            sessionKey: sidebarSessionKey,
+            browserAvailable: state.browserPanelAvailable,
+            desktopAvailable: desktopPanelAvailable,
+          });
+      const persistedLayout = this.panelEmbed
+        ? { columns: [] }
+        : sidebarSettings.sidebarSessionLayouts?.[sidebarSessionKey];
       if (persistedLayout !== undefined) {
         state.sidebarLayout = this.restorePaneSidebarLayout(
           normalizeSidebarLayout(persistedLayout),
