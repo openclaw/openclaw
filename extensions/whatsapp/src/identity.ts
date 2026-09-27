@@ -1,5 +1,4 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
-// Whatsapp plugin module implements identity behavior.
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { jidToE164 } from "./targets-runtime.js";
 

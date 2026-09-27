@@ -176,6 +176,7 @@ restart the Slack monitor. The Gateway remains running.
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`
+    - `requireMentionInBotThreads`
     - `ignoreOtherMentions`
     - `replyToMode` (`off|first|all|batched`; overrides account/chat-type reply mode for this channel)
     - `users` (allowlist)
@@ -185,6 +186,31 @@ restart the Slack monitor. The Gateway remains running.
     - `tools`, `toolsBySender`
     - `toolsBySender` key format: `channel:`, `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
       (legacy unprefixed keys still map to `id:` only)
+
+    <a id="bot-created-threads" />
+    `requireMentionInBotThreads` overrides mention gating only in threads whose root message was sent by this bot. Set it to `false` to allow unmentioned replies there while keeping `requireMention: true` for the rest of the channel. Set it to `true` to require a mention in those threads even when implicit reply or thread-participation mentions are enabled. Authorized text commands keep their existing bypass.
+
+    Add the setting to an existing allowed channel entry:
+
+    ```json5
+    {
+      channels: {
+        slack: {
+          channels: {
+            C12345678: {
+              enabled: true,
+              requireMention: true,
+              requireMentionInBotThreads: false,
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    The setting resolves from the channel entry, then the `"*"` entry, then the account, then `channels.slack.requireMentionInBotThreads`. Omit it to preserve existing behavior, including `implicitMentions.replyToBot` and `implicitMentions.threadParticipation`. Slack's native parent author identifies the root; when that field is absent, OpenClaw uses accessible thread history. Unknown ownership retains the normal mention policy. Channel and sender access, bot-message restrictions, and `ignoreOtherMentions` still apply.
+
+    Invite the app to the channel and subscribe to `message.channels` for public channels or `message.groups` for private channels, with the matching history scope. Subscribing only to `app_mention` cannot deliver unmentioned follow-ups. Both setup manifests include these subscriptions; see [Manifest and scope checklist](/channels/slack/manifest-and-scopes#manifest-and-scope-checklist). To verify, have the bot post a new top-level message, then reply in that message's thread without mentioning it. Replies to a human-created root keep their existing implicit-mention policy even if the bot participates later.
 
     `ignoreOtherMentions` (default `false`) drops channel messages that mention another user or user group but not this bot. DMs and group DMs (MPIMs) are unaffected. The filter requires a resolved bot user ID from `auth.test`; if that identity is unavailable (for example a user-token-only identity), the gate fails open and messages pass through unchanged.
 

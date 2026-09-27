@@ -338,9 +338,6 @@ function buildStartupSourceScript(shellName: string): string {
   if (shellName === "zsh") {
     return `if [ -r "\${ZDOTDIR:-$HOME}/.zshrc" ]; then . "\${ZDOTDIR:-$HOME}/.zshrc"; fi`;
   }
-  if (shellName === "bash") {
-    return ":";
-  }
   return ":";
 }
 

@@ -83,7 +83,7 @@ import {
   TASK_MAINTENANCE_BATCH_SIZE,
   visitTaskRegistryMaintenanceTasks,
 } from "./task-registry-maintenance-snapshot.js";
-import { prepareTaskRegistryRead } from "./task-registry-read.js";
+import { createTaskRegistryMaintenanceReadPreparation } from "./task-registry-read.js";
 import { withTaskRegistryMutation } from "./task-registry-state.js";
 import {
   configureTaskAuditTaskProvider,
@@ -775,7 +775,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   try {
     const { read, deferred } = await visitTaskRegistryMaintenanceTasks(
       {
-        prepareTaskRegistryRead,
+        prepareTaskRegistryRead: createTaskRegistryMaintenanceReadPreparation(),
         getTaskRegistryMaintenanceSnapshot,
         getTaskRegistryMaintenanceTask,
       },

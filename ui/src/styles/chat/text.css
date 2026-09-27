@@ -347,10 +347,6 @@
 :is(.markdown-table, .markdown-table-dialog.chat-text) table:has(tr > :nth-child(5)) {
   width: max-content;
   min-width: 100%;
-
-  :where(th, td) {
-    max-width: 24rem;
-  }
 }
 
 :is(.markdown-table, .markdown-table-dialog.chat-text) :where(table, thead, tbody, tr, th, td) {
@@ -362,7 +358,9 @@
   border-right: 0;
   border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
   min-width: 0;
-  overflow-wrap: anywhere;
+  /* Preserve short tokens' intrinsic width; long hashes still wrap at the cap. */
+  max-width: 24rem;
+  overflow-wrap: break-word;
   white-space: normal;
   word-break: normal;
   vertical-align: top;
@@ -443,11 +441,6 @@
       table {
         width: 100%;
         min-width: 100%;
-      }
-
-      :where(th, td) {
-        max-width: 24rem;
-        overflow-wrap: break-word;
       }
 
       .markdown-table__actions {

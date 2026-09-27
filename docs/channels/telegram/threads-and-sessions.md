@@ -18,7 +18,7 @@ How forum topics map to sessions, agents, and ACP bindings.
 
     General topic (`threadId=1`) is a special case: message sends omit `message_thread_id` (Telegram rejects `sendMessage(...thread_id=1)` with "thread not found"), but typing actions still include `message_thread_id` (empirically required for the typing indicator to appear).
 
-    Topic entries inherit group settings unless overridden (`requireMention`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`). `agentId` is topic-only and does not inherit from group defaults. `topics."*"` sets defaults for every topic in that group; exact topic IDs still win over `"*"`.
+    Topic entries inherit group settings unless overridden (`requireMention`, `requireMentionInBotThreads`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`). `agentId` is topic-only and does not inherit from group defaults. `topics."*"` sets defaults for every topic in that group; exact topic IDs still win over `"*"`.
 
     **Per-topic agent routing**: each topic can route to a different agent via `agentId` in the topic config, giving it its own workspace, memory, and session:
 
@@ -55,3 +55,11 @@ How forum topics map to sessions, agents, and ACP bindings.
 
   </Accordion>
 </AccordionGroup>
+
+## Bot-created forum topics
+
+Set `requireMentionInBotThreads` on a group or topic to override mention gating only in forum topics created by the receiving bot. `false` allows unmentioned messages to start turns there; `true` requires a mention, including for replies to the bot. Omission preserves existing behavior. A topic setting wins over the selected group setting. The same paths are available under `channels.telegram.accounts.<accountId>.groups`.
+
+OpenClaw records the creator from an observed `forum_topic_created` service message or from a successful topic creation by the bot. Ownership is specific to that bot: another bot's topic or a human-created topic keeps its ordinary mention policy. Replying in a topic does not make the bot its creator.
+
+Topic ownership persists alongside topic names in the existing cache, which retains up to 2,048 recently used topics. Topics created before OpenClaw observed them and evicted entries keep the ordinary mention policy. Telegram does not provide a topic-owner lookup to recover those facts. This setting does not change DM topics, authorization, group silence policy, or visible-reply policy. See [Mention behavior](/channels/telegram/access-control#access-control-and-activation) for configuration and Telegram visibility requirements.

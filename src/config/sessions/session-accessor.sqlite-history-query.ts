@@ -449,6 +449,7 @@ export function readSessionTranscriptHistoryEventPageFromProjection(
     offset: number;
     beforeSeq?: number;
     maxBytes?: number;
+    allowOversizedFirst?: boolean;
     recentAtHead?: TranscriptRecentReadLimits;
   } & TranscriptReadWindowOptions,
 ): SessionTranscriptMessageEventPage {
@@ -498,7 +499,7 @@ export function readSessionTranscriptHistoryEventPageFromProjection(
           history,
           resolveIntegerOption(options.maxBytes, 1024 * 1024, { min: 1024 }),
           maxMessages,
-          false,
+          options.allowOversizedFirst ?? false,
         ).start;
   // A single oversized event must not defeat the hard limit or trap pagination.
   // Skip its source position explicitly; callers disclose the omission to readers.

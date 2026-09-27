@@ -193,19 +193,20 @@ export async function executeMcpAppOperation(
   operation: McpAppOperation,
 ): Promise<unknown> {
   const { runtime, view } = active;
-  switch (operation.method) {
-    case "tools/call":
-      return await withMcpAppActiveView(active, "tool", async () => {
-        await requireCallableTool(runtime, view, operation.params.name);
-        await requireMcpAppInteraction(view);
-        return await runtime.callTool(
-          view.serverName,
-          operation.params.name,
-          operation.params.arguments ?? {},
-        );
-      });
-    case "tools/list":
-      return await withMcpAppReadAuthority(active, async () => {
+  if (operation.method === "tools/call") {
+    return await withMcpAppActiveView(active, "tool", async () => {
+      await requireCallableTool(runtime, view, operation.params.name);
+      await requireMcpAppInteraction(view);
+      return await runtime.callTool(
+        view.serverName,
+        operation.params.name,
+        operation.params.arguments ?? {},
+      );
+    });
+  }
+  return await withMcpAppReadAuthority(active, async () => {
+    switch (operation.method) {
+      case "tools/list": {
         if (!runtime.listTools) {
           throw new Error("MCP tools/list is unavailable");
         }
@@ -227,9 +228,8 @@ export async function executeMcpAppOperation(
             (tool) => allowed.has(tool.name.trim()) && isAppCallableListedTool(tool),
           ),
         };
-      });
-    case "resources/list":
-      return await withMcpAppReadAuthority(active, async () => {
+      }
+      case "resources/list": {
         if (!runtime.listResources) {
           throw new Error("MCP resources/list is unavailable");
         }
@@ -237,9 +237,8 @@ export async function executeMcpAppOperation(
         // callers receive the complete list and no nextCursor is exposed.
         const resources = await runtime.listResources(view.serverName);
         return Array.isArray(resources) ? { resources } : resources;
-      });
-    case "resources/templates/list":
-      return await withMcpAppReadAuthority(active, async () => {
+      }
+      case "resources/templates/list":
         if (!runtime.listResourceTemplates) {
           throw new Error("MCP resources/templates/list is unavailable");
         }
@@ -247,19 +246,17 @@ export async function executeMcpAppOperation(
           view.serverName,
           operation.params?.cursor ? { cursor: operation.params.cursor } : undefined,
         );
-      });
-    case "resources/read":
-      return await withMcpAppReadAuthority(active, async () => {
+      case "resources/read":
         if (!runtime.readResource) {
           throw new Error("MCP resources/read is unavailable");
         }
         return await runtime.readResource(view.serverName, operation.params.uri);
-      });
-    default: {
-      const unsupported: never = operation;
-      throw new Error(`Unsupported MCP App operation: ${String(unsupported)}`);
+      default: {
+        const unsupported: never = operation;
+        throw new Error(`Unsupported MCP App operation: ${String(unsupported)}`);
+      }
     }
-  }
+  });
 }
 
 export function parseMcpAppOperation(value: unknown): McpAppOperation | undefined {

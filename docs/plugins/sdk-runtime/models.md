@@ -115,8 +115,8 @@ Backend adapters retain protocol validation and special-mode handling.
     equivalent control and otherwise may ignore them. They do not weaken the
     execution mode's isolation guarantees.
 
-    To require the configured agent runtime and a literal zero-tool model
-    surface, select isolated execution explicitly:
+    To require fresh inference through the configured agent runtime, select
+    isolated execution explicitly:
 
     ```typescript
     const result = await api.runtime.llm.complete({
@@ -132,10 +132,17 @@ Backend adapters retain protocol validation and special-mode handling.
     ```
 
     This mode accepts exactly one user message. Core derives the configured CLI
-    or harness owner, starts a fresh context, exposes no model-callable tools,
+    or harness owner, starts a fresh context, supplies no model-callable tools,
     and never falls back to direct provider transport. Unsupported runtimes fail
     before inference. `result.execution.owner` reports the selected owner;
     token usage remains absent when a CLI cannot report it.
+
+    Agents API has a documented exception to the literal zero-tool guarantee:
+    its restricted sessions may retain service-owned helpers despite having no
+    executor or supplied tools. Output rejection cannot prevent those helpers
+    from acting during inference. Callers requiring zero tools must select a
+    runtime that enforces that boundary. See the
+    [isolated-completion contract](/plugins/sdk-agent-harness/registration#isolated-completion).
 
     Completion failures expose a stable `code` on the thrown error. Isolated
     callers can distinguish authorization, invalid isolated input, unsupported

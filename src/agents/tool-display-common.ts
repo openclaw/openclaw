@@ -15,6 +15,7 @@ import {
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplayActionSpec = {
@@ -142,18 +143,12 @@ function lookupValueByPath(args: unknown, path: string): unknown {
 
 /** Format a detail path/key into a short display label. */
 export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
-  let last = "";
-  for (const segment of raw.split(".")) {
-    if (segment) {
-      last = segment;
-    }
-  }
-  last ||= raw;
+  const last = raw.split(".").findLast(Boolean) || raw;
   const override = overrides[last];
   if (override) {
     return override;
   }
-  const cleaned = last.replace(/_/g, " ").replace(/-/g, " ");
+  const cleaned = last.replace(/[_-]/g, " ");
   const spaced = cleaned.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
   return normalizeLowercaseStringOrEmpty(spaced) || normalizeLowercaseStringOrEmpty(last);
 }
@@ -230,7 +225,7 @@ function resolveWriteDetail(toolKey: string, args: unknown): string | undefined 
           ? record.new_string
           : undefined;
 
-  if (content && content.length > 0) {
+  if (content) {
     return `${destinationPrefix} ${path} (${content.length} chars)`;
   }
 
@@ -569,14 +564,12 @@ function resolveWebFetchDetail(args: unknown): string | undefined {
   const mode = normalizeOptionalString(record.extractMode);
   const maxChars = asPositiveFiniteNumber(record.maxChars);
 
-  let suffix = "";
-  if (mode) {
-    suffix = `mode ${mode}`;
-  }
-  if (maxChars !== undefined) {
-    const limit = `max ${Math.floor(maxChars)} chars`;
-    suffix = suffix ? `${suffix}, ${limit}` : limit;
-  }
+  const suffix = [
+    mode ? `mode ${mode}` : "",
+    maxChars === undefined ? "" : `max ${Math.floor(maxChars)} chars`,
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
@@ -610,16 +603,7 @@ function resolveDetailFromKeys(
     return entries.at(0)?.value;
   }
 
-  const seen = new Set<string>();
-  const unique: Array<{ label: string; value: string }> = [];
-  for (const entry of entries) {
-    const token = `${entry.label}:${entry.value}`;
-    if (seen.has(token)) {
-      continue;
-    }
-    seen.add(token);
-    unique.push(entry);
-  }
+  const unique = dedupeByKey(entries, (entry) => `${entry.label}:${entry.value}`);
   const maxEntries = opts.maxEntries ?? 8;
   const parts: string[] = [];
   for (let index = 0; index < unique.length && index < maxEntries; index += 1) {
@@ -666,7 +650,7 @@ export function resolveToolVerbAndDetailForArgs(params: {
       ? "search"
       : toolKey === "web_fetch"
         ? "fetch"
-        : toolKey.replace(/_/g, " ").replace(/\./g, " ");
+        : toolKey.replace(/[_.]/g, " ");
   const verb = normalizeOptionalString(actionSpec?.label ?? action ?? fallbackVerb)?.replace(
     /_/g,
     " ",
