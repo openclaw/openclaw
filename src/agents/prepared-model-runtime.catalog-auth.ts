@@ -12,21 +12,33 @@ export function replacePreparedModelCatalogAuth(
   next: Partial<PreparedModelCatalogAuth> &
     Pick<PreparedModelCatalogAuth, "authStore" | "authModes">,
   includesProvider: (provider: string) => boolean,
+  options: { observeScopedRemovals?: boolean } = {},
 ): PreparedModelCatalogAuth {
   const take = ([provider]: readonly [string, unknown]) => includesProvider(provider);
+  const rediscoveredProviders = new Set(
+    Object.values(next.authStore.profiles).map((profile) => profile.provider),
+  );
+  // A partial refresh is authoritative only for the providers it actually
+  // re-discovered; a scoped-but-absent entry keeps the prior value so a
+  // passive read cannot blank out still-valid auth (e.g. cli backends).
+  // An explicit auth refresh observes each scoped provider's credential source,
+  // so there a scoped omission is a removal and prior entries must not survive it.
+  const keepsPriorEntry = (provider: string) =>
+    includesProvider(provider)
+      ? options.observeScopedRemovals !== true && !rediscoveredProviders.has(provider)
+      : true;
   const replace = <T>(
     before: Readonly<Record<string, T>> | undefined,
     after: Readonly<Record<string, T>> | undefined,
   ) => {
-    const merged = new Map(Object.entries(before ?? {}));
+    const merged = new Map(
+      Object.entries(before ?? {}).filter(([provider]) => keepsPriorEntry(provider)),
+    );
     for (const [provider, value] of Object.entries(after ?? {})) {
       if (includesProvider(provider)) {
         merged.set(provider, value);
       }
     }
-    // A partial refresh is authoritative only for the providers it actually
-    // re-discovered; a scoped-but-absent entry keeps the prior value so a
-    // passive read cannot blank out still-valid auth (e.g. cli backends).
     return Object.fromEntries(merged);
   };
   const selectStore = (
@@ -54,12 +66,7 @@ export function replacePreparedModelCatalogAuth(
       runtimeLocalOrderProviderIds: store.runtimeLocalOrderProviderIds?.filter(select),
     };
   };
-  const rediscoveredProviders = new Set(
-    Object.values(next.authStore.profiles).map((profile) => profile.provider),
-  );
-  const retained = selectStore(previous.authStore, (provider) =>
-    includesProvider(provider) ? !rediscoveredProviders.has(provider) : true,
-  );
+  const retained = selectStore(previous.authStore, keepsPriorEntry);
   const refreshed = selectStore(next.authStore, includesProvider);
   // Both partitions belong to this agent; merging must retain each local-origin list.
   for (const key of ["runtimeLocalProfileIds", "runtimeLocalOrderProviderIds"] as const) {
@@ -78,7 +85,11 @@ export function replacePreparedModelCatalogAuth(
     providerAuthLabels: next.providerAuthLabels
       ? new Map(
           [...previous.providerAuthLabels]
-            .filter(([provider]) => !next.providerAuthLabels?.has(provider))
+            .filter(
+              ([provider]) =>
+                !includesProvider(provider) ||
+                (options.observeScopedRemovals !== true && !next.providerAuthLabels?.has(provider)),
+            )
             .concat([...next.providerAuthLabels].filter(take)),
         )
       : previous.providerAuthLabels,

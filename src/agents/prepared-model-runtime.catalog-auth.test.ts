@@ -78,4 +78,60 @@ describe("replacePreparedModelCatalogAuth", () => {
     expect(merged.credentials?.["claude-cli"]).toEqual(next.credentials?.["claude-cli"]);
     expect(merged.authModes["claude-cli"]).toBe("oauth");
   });
+
+  it("drops a scoped provider's prior entries when an observed refresh omits them", () => {
+    const previous = {
+      ...catalogAuth(["claude-cli", "other"]),
+      providerAuthLabels: new Map(),
+    };
+    // An explicit auth refresh observes each scoped provider's source, so the
+    // absent claude-cli entries are a removal, not a passive pass-over.
+    const next = {
+      ...catalogAuth([]),
+      providerAuthLabels: new Map(),
+    };
+
+    const merged = replacePreparedModelCatalogAuth(
+      previous,
+      next,
+      (provider) => provider === "claude-cli",
+      { observeScopedRemovals: true },
+    );
+
+    expect(merged.authModes["claude-cli"]).toBeUndefined();
+    expect(merged.credentials?.["claude-cli"]).toBeUndefined();
+    expect(Object.keys(merged.authStore.profiles)).not.toContain("claude-cli-profile");
+    // Out-of-scope providers stay untouched.
+    expect(merged.authModes["other"]).toBe("oauth");
+    expect(merged.credentials?.["other"]).toBeDefined();
+  });
+
+  it("keeps an out-of-scope provider's label the partial refresh result also carries", () => {
+    const label = (name: string) => ({ all: name, apiKey: name });
+    const previous = {
+      ...catalogAuth(["claude-cli", "other"]),
+      providerAuthLabels: new Map([
+        ["claude-cli", label("claude-cli-label")],
+        ["other", label("other-label")],
+      ]),
+    };
+    // The worker can include labels for providers outside the requested scope;
+    // their replacements are filtered out, so the prior label must survive.
+    const next = {
+      ...catalogAuth(["claude-cli"]),
+      providerAuthLabels: new Map([
+        ["claude-cli", label("claude-cli-refreshed")],
+        ["other", label("other-unobserved")],
+      ]),
+    };
+
+    const merged = replacePreparedModelCatalogAuth(
+      previous,
+      next,
+      (provider) => provider === "claude-cli",
+    );
+
+    expect(merged.providerAuthLabels.get("claude-cli")).toEqual(label("claude-cli-refreshed"));
+    expect(merged.providerAuthLabels.get("other")).toEqual(label("other-label"));
+  });
 });

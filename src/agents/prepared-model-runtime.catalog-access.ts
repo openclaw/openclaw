@@ -638,10 +638,13 @@ export function createFullModelCatalogAccess(
       const previous =
         getPreparedModelFullCatalogAuth(published.catalog ?? staticCatalog) ?? currentAuth;
       const scope = preparedSyntheticAuthProviderScope(providerIds.map(normalizeProvider));
+      // An auth refresh reads each scoped provider's credential source, so a
+      // scoped provider its result omits was observed removed, not passed over.
       const { authStore, authModes } = replacePreparedModelCatalogAuth(
         previous,
         refreshed,
         (provider) => scope.has(normalizeProvider(provider)),
+        { observeScopedRemovals: true },
       );
       return { authStore, authModes: Object.freeze(authModes) };
     },
