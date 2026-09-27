@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
-import { resolveDecisionModelSetting } from "../../agents/decision-model-setting.js";
+import { isDecisionAssistanceEligible } from "../../agents/decision-assistance.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
@@ -189,7 +189,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     !isHeartbeat &&
     promptSessionCtx.WasMentioned !== true &&
     (conversation.activation ?? defaultActivation) === "always" &&
-    resolveDecisionModelSetting(cfg, agentId)
+    isDecisionAssistanceEligible(cfg, agentId)
       ? {
           agentName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.name),
           replyToText: sessionCtx.ReplyToBody,

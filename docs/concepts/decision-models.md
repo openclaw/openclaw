@@ -32,15 +32,15 @@ page for its host requirements.
 Decision models have a separate **Decision** picker in the Control UI. Selection
 chooses the provider for explicit evaluation and supported consumers. The core
 `decision_evaluate` tool follows that selection plus ordinary tool policy.
-Selection also enables group participation decisions for embedded harnesses
-when mention gating is disabled. The primary model still writes replies and
-uses tools. Experimental Decision assistance has its own
-[opt-in](/concepts/experimental-features#decision-assistance).
+Automatic features also require the existing
+[Decision assistance opt-in](/concepts/experimental-features#decision-assistance),
+which defaults off. The primary model still writes replies and uses tools.
 
 ## Group participation
 
-In groups and channels with mention gating disabled, a configured `decisionModel`
-helps the agent distinguish invitations from opportunities to contribute.
+With Decision assistance enabled, a configured `decisionModel` helps the agent
+distinguish invitations from opportunities to contribute in groups and channels
+with mention gating disabled.
 This behavior uses embedded harnesses, including the Codex harness. Generic CLI
 backends keep their existing reply behavior.
 
@@ -54,6 +54,13 @@ the agent to update its draft before another review.
 No additional participation setting is needed. If the Decision Model is
 unavailable, the turn resumes its ordinary behavior with the original permissions
 and delivery policy, using the work already completed. Cancellation ends the turn.
+
+Evaluations include bounded recent group history and reply references; draft
+reviews also include the proposed contribution and completed lookup results.
+Hosted providers receive this evidence and charge for evaluations under their
+normal usage terms. Attention and draft review each have a maximum 30-second
+budget, bounded further by the turn timeout. Turning assistance off stops new
+evaluations and discards pending judgments, restoring ordinary reply behavior.
 
 ## Choose a provider and model
 
