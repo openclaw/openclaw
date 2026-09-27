@@ -434,7 +434,11 @@ suite.define(() => {
 
       const initialRequests = await gateway.getRequests("browser.request");
       expect(initialRequests.map((request) => request.params)).toEqual([
-        { method: "GET", path: "/tabs" },
+        {
+          method: "GET",
+          path: "/tabs",
+          tabScope: { sessionKey: "agent:main:main", referencedTabs: [] },
+        },
       ]);
 
       await openChatSidePanelType(page, "Files");
@@ -495,6 +499,7 @@ suite.define(() => {
           body: { targetId: "blacksmith-tab", type: "png" },
           method: "POST",
           path: "/screenshot",
+          tabScope: { sessionKey: "agent:main:main" },
         });
 
       await browser.locator(".bp-shot").waitFor();

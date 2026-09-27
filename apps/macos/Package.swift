@@ -96,6 +96,13 @@ let package = Package(
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
+        .target(
+            name: "OpenClawWebKitTestSupport",
+            path: "Tests/OpenClawWebKitTestSupport",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("WebKit"),
+            ]),
         .testTarget(
             name: "OpenClawIPCTests",
             dependencies: [
@@ -103,6 +110,7 @@ let package = Package(
                 "OpenClaw",
                 "OpenClawMacCLI",
                 "OpenClawDiscovery",
+                "OpenClawWebKitTestSupport",
                 .product(name: "OpenClawChatUI", package: "OpenClawKit"),
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),

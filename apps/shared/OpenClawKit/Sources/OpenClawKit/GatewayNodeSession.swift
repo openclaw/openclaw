@@ -125,6 +125,7 @@ public actor GatewayNodeSession {
     private var serverMethods: Set<String>?
     private var serverCapabilities: Set<GatewayServerCapability>?
     private var operatorScopes: Set<String>?
+    private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
     private var snapshotWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     private var snapshotReadyWaiters: [CheckedContinuation<Bool, Never>] = []
@@ -740,6 +741,10 @@ public actor GatewayNodeSession {
         self.currentRouteValue(self.operatorScopes, ifCurrentRoute: route)
     }
 
+    public func currentAttachmentLimits(ifCurrentRoute route: GatewayNodeSessionRoute) -> GatewayAttachmentLimits? {
+        self.currentRouteValue(self.attachmentLimits, ifCurrentRoute: route)
+    }
+
     private func currentRouteValue<T>(
         _ value: T?,
         ifCurrentRoute route: GatewayNodeSessionRoute) -> T?
@@ -917,6 +922,7 @@ extension GatewayNodeSession {
             self.serverCapabilities = Set(
                 GatewayServerCapability.allCases.filter { ok.supportsServerCapability($0) })
             self.operatorScopes = ok.advertisedOperatorScopes()
+            self.attachmentLimits = ok.advertisedAttachmentLimits()
             let snapshotMainSessionKey = ok.snapshot.sessiondefaults?["mainSessionKey"]?.value as? String
             let trimmedMainSessionKey = snapshotMainSessionKey?
                 .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
@@ -949,6 +955,7 @@ extension GatewayNodeSession {
         self.serverMethods = nil
         self.serverCapabilities = nil
         self.operatorScopes = nil
+        self.attachmentLimits = nil
         self.mainSessionKey = nil
         self.drainSnapshotWaiters(returning: false)
         self.drainSnapshotReadyWaiters(returning: false)

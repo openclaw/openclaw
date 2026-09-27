@@ -132,6 +132,13 @@ windows, and WebKit starts helper processes. A temporary `HOME`, `TMPDIR`, or
 named app profile alone is not a sandbox: fixed preferences domains and
 Keychain access can still reach macOS services outside those directories.
 
+The native test bundle links `OpenClawWebKitTestSupport`, which suppresses WebKit
+Screen Time observation for every `WKWebView` in the test process. WebKit removes
+its KVO observer on the main thread during deallocation while ScreenTime delivers
+configuration on a private queue. Tearing down a windowed HTTP(S) web view right
+after its first commit can hit this race and abort the process with
+`NSInternalInconsistencyException`. Product builds keep Screen Time.
+
 The `macos-swift` GitHub CI job builds the tests with the runner's normal
 SwiftPM caches, then runs the built suite through `scripts/test-macos-native.mts`.
 Each invocation selects private `HOME` and `CFFIXED_USER_HOME`,

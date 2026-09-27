@@ -5,6 +5,8 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { canonicalizeWebhookRouteKey } from "openclaw/plugin-sdk/webhook-ingress";
+import { vi } from "vitest";
+import * as telegramIngressFactory from "../telegram-ingress-drain-factory.js";
 
 type StartWebhook = typeof import("../webhook.js").startTelegramWebhook;
 type StartWebhookOptions = Omit<Parameters<StartWebhook>[0], "token" | "abortSignal">;
@@ -80,20 +82,36 @@ export function createTelegramWebhookTestGateway(options: {
     startWebhook,
     withWebhook: async <T>(
       params: StartWebhookOptions,
-      run: (ctx: { server: Server; port: number }) => Promise<T>,
+      run: (ctx: {
+        server: Server;
+        port: number;
+        ingress: ReturnType<typeof telegramIngressFactory.createTelegramTransportIngressMonitor>;
+      }) => Promise<T>,
     ): Promise<T> => {
-      const abort = new AbortController();
-      const started = await startWebhook({
-        token: options.token,
-        abortSignal: abort.signal,
-        ...options.queueScope(),
-        ...params,
-      });
+      const createIngress = telegramIngressFactory.createTelegramTransportIngressMonitor;
+      let ingress: ReturnType<typeof createIngress> | undefined;
+      const ingressFactory = vi
+        .spyOn(telegramIngressFactory, "createTelegramTransportIngressMonitor")
+        .mockImplementation((ingressParams) => (ingress = createIngress(ingressParams)));
       try {
-        return await run({ server, port: getServerPort(server) });
+        const abort = new AbortController();
+        const started = await startWebhook({
+          token: options.token,
+          abortSignal: abort.signal,
+          ...options.queueScope(),
+          ...params,
+        });
+        try {
+          if (!ingress) {
+            throw new Error("Expected the started webhook's ingress monitor");
+          }
+          return await run({ server, port: getServerPort(server), ingress });
+        } finally {
+          await started.stop();
+          abort.abort();
+        }
       } finally {
-        await started.stop();
-        abort.abort();
+        ingressFactory.mockRestore();
       }
     },
   };

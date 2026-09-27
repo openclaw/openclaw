@@ -410,22 +410,33 @@ describe("release qualification workflow authority", () => {
       trials: [],
     });
   });
-  it("qualifies the checked-out release source before accessing signing assets", () => {
-    const steps = release.jobs.release.steps;
-    const qualify = steps.findIndex(
-      (step: { name: string }) => step.name === "Qualify native iOS pairing and chat",
-    );
+  it("isolates qualification builds from the release checkout before accessing signing assets", () => {
+    const releaseJob = release.jobs.release;
+    const qualification = release.jobs[releaseJob.needs];
+    expect(qualification).toMatchObject({
+      uses: "./.github/workflows/ios-release-e2e.yml",
+      permissions: { contents: "read" },
+      with: { target_sha: "${{ github.sha }}", mode: "stock" },
+    });
+    expect(qualification.if).toBe(releaseJob.if);
+    expect(qualification.secrets).toBeUndefined();
+    expect(qualification["continue-on-error"]).toBeUndefined();
+    expect(releaseJob["continue-on-error"]).toBeUndefined();
+    expect(releaseJob.if).not.toMatch(/\b(?:always|failure|cancelled)\s*\(/u);
+
+    const steps = releaseJob.steps;
+    expect(
+      steps.some((step: { run?: string }) => step.run?.includes("scripts/ios-release-e2e.ts")),
+    ).toBe(false);
     const signing = steps.findIndex(
       (step: { name: string }) => step.name === "Create apps-signing read token",
     );
     const upload = steps.findIndex(
       (step: { name: string }) => step.name === "Prepare and upload iOS release",
     );
-    expect(qualify).toBeGreaterThan(-1);
-    expect(signing).toBeGreaterThan(qualify);
+    expect(signing).toBeGreaterThan(-1);
     expect(upload).toBeGreaterThan(signing);
-    expect(steps[qualify].run).toContain('--mode stock --target-sha "$(git rev-parse HEAD)"');
-    for (const step of [steps[qualify], steps[signing], steps[upload]]) {
+    for (const step of [steps[signing], steps[upload]]) {
       expect(step.if).toBeUndefined();
       expect(step["continue-on-error"]).toBeUndefined();
     }
