@@ -29,6 +29,7 @@ import {
   type SlackNativeApprovalRequest,
   type SlackOriginTarget,
 } from "./approval-native-gates.js";
+import { resolvePluginApprovalSlackApprovers } from "./approval-plugin-policy.js";
 import {
   getSlackExecApprovalApprovers,
   isSlackExecApprovalAuthorizedSender,
@@ -141,7 +142,18 @@ const baseSlackApprovalCapability = createApproverRestrictedNativeApprovalCapabi
   hasApprovers: ({ cfg, accountId }) =>
     getSlackExecApprovalApprovers({ cfg, accountId }).length > 0,
   isExecAuthorizedSender: isSlackExecApprovalAuthorizedSender,
-  isPluginAuthorizedSender: isSlackPluginApprovalAuthorizedSender,
+  isPluginAuthorizedSender: (params) =>
+    isSlackPluginApprovalAuthorizedSender(params) &&
+    (!params.request ||
+      resolvePluginApprovalSlackApprovers(params.cfg, params.request) === undefined ||
+      // Custody must use the same account eligibility as delivery so a dormant
+      // sibling account cannot make an unbound request impossible to approve.
+      shouldHandleSlackNativeApprovalRequest({
+        cfg: params.cfg,
+        accountId: params.accountId,
+        approvalKind: "plugin",
+        request: params.request,
+      })),
   isNativeDeliveryEnabled: isSlackExecApprovalClientEnabled,
   resolveNativeDeliveryMode: resolveSlackExecApprovalTarget,
   requireMatchingTurnSourceChannel: true,

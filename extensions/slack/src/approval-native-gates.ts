@@ -35,6 +35,7 @@ import {
   getSlackApprovalApproversForTeam,
   getSlackApprovalApprovers,
   hasConfiguredSlackPluginApprovalApprovers,
+  resolveSlackApprovalOriginTeamId,
 } from "./approval-auth.js";
 import { resolvePluginApprovalSlackApprovers } from "./approval-plugin-policy.js";
 import {
@@ -388,7 +389,7 @@ export function shouldHandleSlackNativeApprovalRequest(params: {
   request: SlackNativeApprovalRequest;
 }): boolean {
   const account = resolveSlackAccount(params);
-  const originTeamId = resolveSlackOriginTeamId(params.request);
+  const originTeamId = resolveSlackApprovalOriginTeamId(params.request);
   const installedTeamId = getSlackInstallationTeamId(account.accountId);
   if (
     installedTeamId &&
@@ -429,15 +430,6 @@ export function shouldHandleSlackNativeApprovalRequest(params: {
   return shouldHandleSlackViaNativeClientConfig({ ...params, approvalKind: "exec" });
 }
 
-function resolveSlackOriginTeamId(request: SlackNativeApprovalRequest): string | undefined {
-  try {
-    const target = resolveTurnSourceSlackOriginTarget(request);
-    return target ? parseSlackTarget(target.to)?.teamId : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function resolveSlackApprovalTeamId(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -445,6 +437,6 @@ export function resolveSlackApprovalTeamId(params: {
 }): string | undefined {
   return (
     getSlackInstallationTeamId(resolveSlackAccount(params).accountId) ??
-    resolveSlackOriginTeamId(params.request)
+    resolveSlackApprovalOriginTeamId(params.request)
   );
 }

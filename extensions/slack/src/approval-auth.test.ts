@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   getSlackApprovalApprovers,
+  getSlackApprovalApproversForTeam,
   isSlackApprovalAuthorizedSender,
   isSlackPluginApprovalAuthorizedSender,
 } from "./approval-auth.js";
@@ -116,6 +117,44 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
   const pluginReviewer = "team:T11111111:user:U22222222";
   const toolReviewer = "team:T11111111:user:U33333333";
   const legacyReviewer = "team:T11111111:user:U44444444";
+
+  it("binds Enterprise Grid reviewers to the request workspace", () => {
+    const installation = registerSlackInstallationState("default", "enterprise");
+    try {
+      const otherWorkspaceReviewer = "team:T22222222:user:U22222222";
+      const cfg: OpenClawConfig = {
+        channels: { slack: { botToken: "xoxb-enterprise", appToken: "xapp-enterprise" } },
+        approvals: {
+          plugin: { slack: { approvers: [defaultReviewer, otherWorkspaceReviewer] } },
+        },
+      };
+      const base = pluginRequest({ pluginKey: "diffs", tool: "diffs" });
+      const request: PluginApprovalRequest = {
+        ...base,
+        request: {
+          ...base.request,
+          turnSourceChannel: "slack",
+          turnSourceAccountId: "default",
+          turnSourceTo: "team:T11111111:channel:C11111111",
+        },
+      };
+      expect(getSlackApprovalApproversForTeam({ cfg, request, teamId: "T11111111" })).toEqual([
+        defaultReviewer,
+      ]);
+      expect(
+        isSlackPluginApprovalAuthorizedSender({ cfg, senderId: defaultReviewer, request }),
+      ).toBe(true);
+      expect(
+        isSlackPluginApprovalAuthorizedSender({
+          cfg,
+          senderId: otherWorkspaceReviewer,
+          request,
+        }),
+      ).toBe(false);
+    } finally {
+      installation.release();
+    }
+  });
 
   it("rejects a reviewer whose workspace differs from the bot account", () => {
     const defaultInstallation = registerSlackInstallationState("default", "workspace", "T11111111");

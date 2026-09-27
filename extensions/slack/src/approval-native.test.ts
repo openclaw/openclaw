@@ -203,6 +203,49 @@ describe("slack native approval adapter", () => {
     expect(await targets("ops", bound)).toEqual([{ to: "team:T11111111:user:U11111111" }]);
   });
 
+  it("keeps custody aligned with delivery when another Slack account is disabled", () => {
+    installationStates.push(registerSlackInstallationState("default", "workspace", "T11111111"));
+    const cfg = {
+      channels: {
+        slack: {
+          accounts: {
+            default: { botToken: "xoxb-default", appToken: "xapp-default" },
+            dormant: { enabled: false, botToken: "xoxb-dormant", appToken: "xapp-dormant" },
+          },
+        },
+      },
+      approvals: {
+        plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } },
+      },
+    } as OpenClawConfig;
+    const request = buildPluginRequest({
+      turnSourceChannel: "slack",
+      turnSourceTo: "team:T11111111:channel:C11111111",
+      policySubject: { pluginKey: "diffs", tool: "diffs" },
+    });
+    const canHandle = (accountId: string) =>
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId,
+        approvalKind: "plugin",
+        request,
+      });
+    const canApprove = (accountId: string) =>
+      slackApprovalCapability.authorizeActorAction?.({
+        cfg,
+        accountId,
+        senderId: "team:T11111111:user:U11111111",
+        action: "approve",
+        approvalKind: "plugin",
+        request,
+      }).authorized;
+
+    expect(canHandle("default")).toBe(true);
+    expect(canHandle("dormant")).toBe(false);
+    expect(canApprove("default")).toBe(true);
+    expect(canApprove("dormant")).toBe(false);
+  });
+
   it("subscribes the native runtime to all approval events", () => {
     expect(slackApprovalCapability.nativeRuntime?.eventKinds).toEqual([
       "exec",

@@ -3,11 +3,15 @@ import {
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-auth-runtime";
 import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolveSlackAccount, resolveSlackAccountAllowFrom } from "./accounts.js";
 import { resolvePluginApprovalSlackApprovers } from "./approval-plugin-policy.js";
 import { normalizeSlackApproverTarget } from "./exec-approvals.js";
-import { getSlackInstallationTeamId } from "./installation-identity-state.js";
+import {
+  getSlackInstallationKind,
+  getSlackInstallationTeamId,
+} from "./installation-identity-state.js";
 import {
   resolveSlackAllowListMatch,
   resolveSlackUserAllowListForTeam,
@@ -39,6 +43,19 @@ function slackApprovalTargetMatches(
       id: sender.id,
     }).allowed
   );
+}
+
+export function resolveSlackApprovalOriginTeamId(request: {
+  request: { turnSourceChannel?: string | null; turnSourceTo?: string | null };
+}): string | undefined {
+  if (normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel) !== "slack") {
+    return undefined;
+  }
+  try {
+    return parseSlackTarget(request.request.turnSourceTo ?? "")?.teamId;
+  } catch {
+    return undefined;
+  }
 }
 
 const slackApproval = createChannelApprovalAuth({
@@ -86,16 +103,23 @@ export function isSlackPluginApprovalAuthorizedSender(
       : isSlackApprovalAuthorizedSender(params);
   }
   const configured = resolvePluginApprovalSlackApprovers(params.cfg, params.request);
+  const accountId = resolveSlackAccount(params).accountId;
+  const installedTeamId = getSlackInstallationTeamId(accountId);
+  const originTeamId = resolveSlackApprovalOriginTeamId(params.request);
+  if (
+    (installedTeamId &&
+      originTeamId &&
+      installedTeamId.toLowerCase() !== originTeamId.toLowerCase()) ||
+    (getSlackInstallationKind(accountId) === "enterprise" && !originTeamId)
+  ) {
+    return false;
+  }
   return configured === undefined
     ? isSlackApprovalAuthorizedSender(params)
     : Boolean(
         params.senderId &&
         // Custody must count only reviewers in the bot's authenticated workspace.
-        slackApprovalTargetMatches(
-          params.senderId,
-          configured,
-          getSlackInstallationTeamId(resolveSlackAccount(params).accountId),
-        ),
+        slackApprovalTargetMatches(params.senderId, configured, installedTeamId ?? originTeamId),
       );
 }
 
