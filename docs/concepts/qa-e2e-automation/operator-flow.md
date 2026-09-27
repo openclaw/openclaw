@@ -25,6 +25,11 @@ the QA Lab page where an operator or automation loop can give the agent a QA
 mission, observe real channel behavior, and record what worked, failed, or
 stayed blocked.
 
+QA Lab's capture endpoints require a host with async proxy capture support. On
+older hosts, capture requests report an upgrade error while unrelated lab
+operations remain available; an unavailable capture store is never reported as
+an empty successful query.
+
 The Runner's Scenarios panel can launch flow, Playwright, Vitest, and script
 catalog entries together. **Profile** uses the taxonomy-owned membership plan;
 checking scenarios creates an explicit override, while **Profile** in the
