@@ -1557,6 +1557,7 @@
     <string name="native_d68f3aaa52604f24" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Дочекайтеся завершення поточної відповіді, перш ніж починати новий чат."</string>
     <string name="native_d696a35bdd1883da" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Профіль"</string>
     <string name="native_d6a99dbee26515ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ліміти постачальника з’являться тут, коли ваш Gateway повідомить про них."</string>
+    <string name="native_d6b3e8c828d37420" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Presence"</string>
     <string name="native_d6bfda034106ecd6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 проблема"</string>
     <string name="native_d6f931ca6d5f5b60" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Гілки в \"%1$s\" зберігаються та повертаються до розділу «Без групи»."</string>
     <string name="native_d70604e843046137" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Рекомендовано"</string>

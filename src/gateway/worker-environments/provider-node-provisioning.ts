@@ -69,7 +69,10 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     provider: WorkerProvider,
     signal?: AbortSignal,
     beforeProvision?: () => void,
-  ) => {
+  ): Promise<
+    | { identity: WorkerNodeRuntimeIdentity; installation: WorkerInstallationArtifact | undefined }
+    | undefined
+  > => {
     const prepareNodeBootstrap = options.prepareNodeBootstrap;
     if (!provider.requiresNodeEnrollment || !prepareNodeBootstrap) {
       return undefined;
