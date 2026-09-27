@@ -379,7 +379,7 @@ describe("workspace attachment preparation", () => {
     },
   );
 
-  it.each(["ready", "stopped", "declared"])(
+  it.each(["ready", "bridge", "stopped", "declared"])(
     "never uses local attachment preparation for a %s remote binding",
     async (state) => {
       const root = workspace();
@@ -389,7 +389,7 @@ describe("workspace attachment preparation", () => {
           ? undefined
           : bindWorkspace(root, {
               ...provider(),
-              prepareTurnAttachments: prepare,
+              ...(state === "bridge" ? {} : { prepareTurnAttachments: prepare }),
             });
       if (state === "declared") {
         declareAgentWorkspaceAccess(root);
