@@ -147,6 +147,10 @@ struct ChatMessageMetadataTests {
             timestamp: date.timeIntervalSince1970 * 1000, now: now,
             locale: Locale(identifier: "en_US"), timeZone: utc))
         #expect(previousYear.label == "Dec 31, 2025")
+        let repeated = ChatMessageTimestampPresentation.make(
+            timestamp: date.timeIntervalSince1970 * 1000, now: now,
+            locale: Locale(identifier: "de_DE"), timeZone: localZone)
+        #expect(repeated == display)
         #expect(ChatMessageTimestampPresentation.make(timestamp: nil) == nil)
         #expect(ChatMessageTimestampPresentation.make(timestamp: .infinity) == nil)
     }

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Synchronization
 
 struct ChatMessageMetadata: Equatable {
     let timestamp: Double?
@@ -69,6 +70,37 @@ struct ChatMessageTimestampPresentation: Equatable {
     let label: String
     let exact: String
 
+    /// One locale/time-zone entry bounds retention. All formatter use stays under the lock.
+    private static let formatters = Mutex(Formatters(locale: .current, timeZone: .current))
+
+    private struct Formatters {
+        let locale: Locale
+        let timeZone: TimeZone
+        let exact: DateFormatter
+        let shortDate: DateFormatter
+        let dateWithYear: DateFormatter
+        let relative: RelativeDateTimeFormatter
+
+        init(locale: Locale, timeZone: TimeZone) {
+            self.locale = locale
+            self.timeZone = timeZone
+            func dateFormatter(_ template: String) -> DateFormatter {
+                let formatter = DateFormatter()
+                formatter.locale = locale
+                formatter.timeZone = timeZone
+                formatter.setLocalizedDateFormatFromTemplate(template)
+                return formatter
+            }
+            self.exact = dateFormatter("EEEE MMMM d yyyy jmmss z")
+            self.shortDate = dateFormatter("MMM d")
+            self.dateWithYear = dateFormatter("MMM d yyyy")
+            self.relative = RelativeDateTimeFormatter()
+            self.relative.locale = locale
+            self.relative.unitsStyle = .abbreviated
+            self.relative.dateTimeStyle = .named
+        }
+    }
+
     static func make(
         timestamp: Double?,
         now: Date = .now,
@@ -78,11 +110,16 @@ struct ChatMessageTimestampPresentation: Equatable {
         // Gateway transcript timestamps are milliseconds, including cached history.
         guard let timestamp, timestamp.isFinite else { return nil }
         let date = Date(timeIntervalSince1970: timestamp / 1000)
-        let formatter = DateFormatter()
-        formatter.locale = locale
-        formatter.timeZone = timeZone
-        formatter.setLocalizedDateFormatFromTemplate("EEEE MMMM d yyyy jmmss z")
-        let exact = formatter.string(from: date)
+        return Self.formatters.withLock { formatters in
+            if formatters.locale != locale || formatters.timeZone != timeZone {
+                formatters = Formatters(locale: locale, timeZone: timeZone)
+            }
+            return Self.format(date: date, now: now, using: formatters)
+        }
+    }
+
+    private static func format(date: Date, now: Date, using formatters: Formatters) -> Self {
+        let exact = formatters.exact.string(from: date)
         let age = now.timeIntervalSince(date)
         let label: String
         if age >= -120, age < 7 * 24 * 60 * 60 {
@@ -90,26 +127,21 @@ struct ChatMessageTimestampPresentation: Equatable {
             let minutes = (seconds / 60).rounded()
             let hours = (minutes / 60).rounded()
             if seconds < 60 {
-                label = String(localized: "Just now", locale: locale)
+                label = String(localized: "Just now", locale: formatters.locale)
             } else {
-                let relative = RelativeDateTimeFormatter()
-                relative.locale = locale
-                relative.unitsStyle = .abbreviated
-                relative.dateTimeStyle = .named
                 let components = minutes < 60 ? DateComponents(minute: -Int(minutes)) :
                     hours < 48 ? DateComponents(hour: -Int(hours)) :
                     DateComponents(day: -Int((hours / 24).rounded()))
-                label = relative.localizedString(from: components)
+                label = formatters.relative.localizedString(from: components)
             }
         } else {
             var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = timeZone
+            calendar.timeZone = formatters.timeZone
             if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
-                formatter.setLocalizedDateFormatFromTemplate("MMM d")
+                label = formatters.shortDate.string(from: date)
             } else {
-                formatter.setLocalizedDateFormatFromTemplate("MMM d yyyy")
+                label = formatters.dateWithYear.string(from: date)
             }
-            label = formatter.string(from: date)
         }
         return Self(label: label, exact: exact)
     }
