@@ -60,7 +60,7 @@ import {
   resolvePdfInputs,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
-import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
+import { type PdfToolActiveModel, resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
 const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
@@ -101,6 +101,8 @@ async function runPdfPrompt(params: {
   agentDir: string;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  authProfileStore?: AuthProfileStore;
+  activeModel?: PdfToolActiveModel;
   pdfModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
@@ -155,6 +157,8 @@ async function runPdfPrompt(params: {
     cfg: preparedRuntime.config,
     agentDir: runtimeAgentDir,
     ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
+    authStore: params.authProfileStore,
+    activeModel: params.activeModel,
   });
   if (!committedPdfModelConfig) {
     throw new ToolInputError("No PDF model configured in the active runtime generation.");
@@ -364,6 +368,7 @@ export function createPdfTool(options?: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MediaToolSandbox;
   fsPolicy?: ToolFsPolicy;
+  activeModel?: PdfToolActiveModel;
   /**
    * Avoid resolving auto PDF-provider/model candidates while registering the
    * tool. The concrete PDF model is still resolved before execution.
@@ -388,6 +393,7 @@ export function createPdfTool(options?: {
         agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
+        activeModel: options?.activeModel,
       });
   if (!registrationPdfModelConfig && !shouldDeferAutoModelResolution) {
     return null;
@@ -457,6 +463,7 @@ export function createPdfTool(options?: {
         agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
+        activeModel: options?.activeModel,
       });
     if (!pdfModelConfig) {
       throw new ToolInputError("No PDF model configured.");
@@ -591,6 +598,8 @@ export function createPdfTool(options?: {
       ...(options?.preparedModelRuntime
         ? { preparedModelRuntime: options.preparedModelRuntime }
         : {}),
+      authProfileStore: options?.authProfileStore,
+      activeModel: options?.activeModel,
       pdfModelConfig,
       modelOverride,
       prompt: promptRaw,
