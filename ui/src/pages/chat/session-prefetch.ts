@@ -21,10 +21,12 @@ import {
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 const SESSION_PREFETCH_COUNT = 2;
 const SESSION_PREFETCH_INITIAL_DELAY_MS = 250;
+const SESSION_PREFETCH_INTENT_DELAY_MS = 75;
 const SESSION_PREFETCH_COOLDOWN_MS = 30_000;
 const SESSION_PREFETCH_LOCK_NAME = "openclaw-chat-prefetch";
 
@@ -131,6 +133,10 @@ class SessionPrefetcher {
   update(snapshot: SessionPrefetchSnapshot): void {
     const previous = this.snapshot;
     this.snapshot = snapshot;
+    const intentChanged =
+      previous != null &&
+      previous.intentSessionKey !== snapshot.intentSessionKey &&
+      snapshot.intentSessionKey !== null;
     if (
       !previous ||
       previous.client !== snapshot.client ||
@@ -140,7 +146,11 @@ class SessionPrefetcher {
       previous.presentedTranscriptsReady !== snapshot.presentedTranscriptsReady ||
       !sameKeys(previous.openSessionKeys, snapshot.openSessionKeys)
     ) {
-      this.schedule();
+      if (intentChanged) {
+        this.scheduleIntent();
+      } else {
+        this.schedule();
+      }
     }
   }
 
@@ -166,6 +176,18 @@ class SessionPrefetcher {
       this.delayTimer = null;
       this.scheduleIdleCycle();
     }, delayMs);
+  }
+
+  private scheduleIntent(): void {
+    if (!this.connected) {
+      return;
+    }
+    if (this.running) {
+      this.rescheduleDelayMs = SESSION_PREFETCH_INTENT_DELAY_MS;
+      return;
+    }
+    this.cancelScheduledWork();
+    this.schedule(SESSION_PREFETCH_INTENT_DELAY_MS);
   }
 
   private scheduleIdleCycle(): void {
@@ -565,6 +587,24 @@ class SessionPrefetchController implements ReactiveController {
     const sessionKey = row?.dataset.sessionKey ?? null;
     if (sessionKey !== this.intentSessionKey) {
       this.intentSessionKey = sessionKey;
+      if (sessionKey) {
+        const context = this.readContext();
+        const matchingRow = context?.sessions.state.result?.sessions.find(
+          (candidate) => candidate.key === sessionKey,
+        );
+        if (context) {
+          prewarmChatSnapshot(
+            resolveChatSnapshotKey(
+              {
+                assistantAgentId: context.gateway.snapshot.assistantAgentId,
+                agentsList: context.agents.state.agentsList,
+                hello: context.gateway.snapshot.hello,
+              },
+              { sessionKey, agentId: matchingRow?.agentId },
+            ),
+          );
+        }
+      }
       this.sync();
     }
   };
