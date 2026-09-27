@@ -2,9 +2,11 @@
 import crypto from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
+import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
@@ -656,8 +658,36 @@ export function needsCronTimerMaintenance(job: CronJob, nowMs: number): boolean 
   return (
     isExpiredCronScheduleRepairCandidate(job, nowMs) ||
     isStaleFutureCronSlot(job, nowMs) ||
+    isPacedNextRunBeyondMax(job, nowMs) ||
     (isJobEnabled(job) && !hasScheduledNextRunAtMs(job.state.nextRunAtMs) && !hasActiveCronRun(job))
   );
+}
+
+function isPacedNextRunBeyondMax(job: CronJob, nowMs: number): boolean {
+  const next = job.state.nextRunAtMs;
+  if (
+    !isJobEnabled(job) ||
+    !job.pacing ||
+    !hasScheduledNextRunAtMs(next) ||
+    job.state.pacedNextRunAtMs !== next ||
+    job.state.startupCatchupAtMs === next ||
+    job.state.forcePreservedNextRunAtMs === next ||
+    hasActiveCronRun(job)
+  ) {
+    return false;
+  }
+  try {
+    const { maxMs } = parseCronPacingBounds(job.pacing);
+    const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);
+    return (
+      maxMs !== undefined &&
+      (!job.trigger || maxMs >= resolveCronTriggerMinIntervalMs()) &&
+      !(backoffUntilMs !== undefined && nowMs < backoffUntilMs && next <= backoffUntilMs) &&
+      next > nowMs + maxMs
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function recomputeSingleJobForMaintenance(
@@ -708,6 +738,19 @@ export function recomputeSingleJobForMaintenance(
 
   if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
     changed = recomputeJob() || changed;
+  } else if (
+    repairFutureCronNextRunAtMs &&
+    !hasPendingStartupCatchup &&
+    !hasForcePreservedNextRun &&
+    isPacedNextRunBeyondMax(job, now)
+  ) {
+    // Repair persisted paced slots written by older runtimes that treated a
+    // distant managed Flow obligation as the next run of the entire job.
+    // The Flow receipt stays durable and can still pull a later check forward.
+    const maxMs = parseCronPacingBounds(job.pacing!).maxMs!;
+    job.state.nextRunAtMs = now + maxMs;
+    job.state.pacedNextRunAtMs = now + maxMs;
+    changed = true;
   } else if (
     repairFutureCronNextRunAtMs &&
     !hasPendingStartupCatchup &&
