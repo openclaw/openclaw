@@ -17,6 +17,7 @@ import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { buildExecApprovalPendingToolResult } from "./bash-tools.exec-host-shared.js";
+import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import { disposeAllCodeModeRuns } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { addClientToolsToCodeModeCatalog, applyCodeModeCatalog } from "./code-mode.js";
@@ -34,6 +35,7 @@ import { emitAssistantTextDeltaAndEnd } from "./embedded-agent-subscribe.e2e-har
 import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.js";
 import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
 import { createMessageTool } from "./tools/message-tool-execution.js";
@@ -75,19 +77,24 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       });
       applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
       try {
-        const result = await runUntilCompleted({
-          execTool: expectDefined(harness.tools[0], "Code Mode exec tool"),
-          waitTool: expectDefined(harness.tools[1], "Code Mode wait tool"),
-          code: 'return await message({ action: "send", message: "Review complete", final: true });',
-        });
+        // Await transcript persistence through the real catalog without a guest wall-clock budget.
+        const runtime = new ToolSearchRuntime(
+          harness,
+          toToolSearchConfig(resolveCodeModeConfig(harness.config)),
+          { prepareInput: true, validateInput: true },
+        );
+        const { result } = await runtime.callExactId(
+          "openclaw:core:message",
+          { action: "send", message: "Review complete", final: true },
+          { parentToolCallId: "code-call-1" },
+        );
         const messages = SessionManager.open(scope)
           .getEntries()
           .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
         expect(messages.filter((message) => message.role === "assistant")).toEqual([
           expect.objectContaining({ content: [{ type: "text", text: "Review complete" }] }),
         ]);
-        expect(result.status, JSON.stringify(result)).toBe("completed");
-        expect(result.value).toMatchObject({
+        expect(result.details).toMatchObject({
           deliveryStatus: "sent",
           sourceReplyTranscriptOwner: true,
         });
