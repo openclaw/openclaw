@@ -319,9 +319,11 @@ describe("plugin doctor session identity evidence", () => {
             },
           },
         });
-        const queue = context.channelIngressQueues?.[0]?.openChannelIngressQueue?.<string>();
+        const ingress = context.channelIngressQueues?.[0];
+        const queue = ingress?.openChannelIngressQueue?.<string>();
+        const inspection = ingress?.openChannelIngressQueueForInspection<string>();
         const purge = queue?.purge?.bind(queue);
-        if (!queue || !purge) {
+        if (!queue || !purge || !inspection) {
           throw new Error("Doctor repair did not provide ingress purge");
         }
 
@@ -333,7 +335,7 @@ describe("plugin doctor session identity evidence", () => {
         active = false;
 
         await expect(Promise.resolve().then(() => purge())).rejects.toThrow("repair owner expired");
-        expect((await queue.listPending()).map((entry) => entry.id)).toEqual(["retained"]);
+        expect((await inspection.listPending()).map((entry) => entry.id)).toEqual(["retained"]);
       },
     );
   });
