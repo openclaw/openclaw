@@ -472,8 +472,9 @@ panes, top-level assistant tables stay at the reading width when their content f
 and use extra space only as needed, without widening the surrounding prose. Long
 cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
 Short values such as byte counts stay intact beside long filenames or hashes, including on mobile.
-Wide desktop tables use compact icon-only controls above the header. Mobile and
-phone-landscape views retain larger touch controls and a visible **Expand table** label.
+Table controls appear below the table. Wide desktop tables use compact icon-only
+controls; mobile and phone-landscape views retain larger touch controls and a visible
+**Expand table** label.
 Ordinary inline tables grow vertically instead of adding a vertical scrollbar.
 **Copy table** copies tab-separated cells, and **Expand table** opens a larger view
 with a sticky header. If copying fails, the button clears any earlier success checkmark. In Chat, workspace
