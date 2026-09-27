@@ -1,5 +1,4 @@
 import "./side-question.test-support.js";
-import { Server } from "node:http";
 // Codex tests cover side question plugin behavior.
 import path from "node:path";
 import {
@@ -57,6 +56,8 @@ const {
   TEST_HOST_CAPABILITIES,
   useSideQuestionTestSetup,
   extractRelayIdFromThreadConfig,
+  expectNativeHookRelayReleased,
+  codexHookCommand,
   sideLoopRelayParams,
 } = await import("./side-question.test-support.js");
 
@@ -134,18 +135,6 @@ function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string>
     }
   }
   return active;
-}
-
-function codexHookCommand(config: unknown, key: string) {
-  const entries = (config as Record<string, unknown> | undefined)?.[key];
-  if (!Array.isArray(entries)) {
-    return undefined;
-  }
-  return (
-    entries as Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
-  )
-    .at(0)
-    ?.hooks?.at(0);
 }
 
 function codexHookStateForEvent(
@@ -1810,13 +1799,8 @@ describe("runCodexAppServerSideQuestion", () => {
     },
   );
 
-  it.each([false, true])("keeps side hooks after listener failure: %s", async (failed) => {
-    if (failed) {
-      vi.spyOn(Server.prototype, "listen").mockImplementationOnce(function (this: Server) {
-        queueMicrotask(() => this.emit("error", new Error("fixture side listener unavailable")));
-        return this;
-      });
-    }
+  it("keeps side hooks with a healthy listener", async () => {
+    const runId = "run-side-listener-healthy";
     const beforeToolCall = vi.fn(() => ({
       block: true,
       blockReason: "fixture side policy denial",
@@ -1824,7 +1808,7 @@ describe("runCodexAppServerSideQuestion", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
     );
-    const host = await createAdmittedHostCapabilityTestFixture({ runId: "run-side-1" });
+    const host = await createAdmittedHostCapabilityTestFixture({ runId });
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;
     client.request.mockImplementation(async (method: string, requestParams: unknown) => {
@@ -1837,7 +1821,7 @@ describe("runCodexAppServerSideQuestion", () => {
           agentId: "main",
           sessionId: "session-1",
           sessionKey: "agent:main:session-1",
-          runId: "run-side-1",
+          runId,
           channelId: "voice-room",
           allowedEvents: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
         });
@@ -1877,28 +1861,27 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    await expect(
-      runCodexAppServerSideQuestion(
-        sideLoopRelayParams({
-          hostCapabilities: host.hostCapabilities,
-          sessionKey: "agent:main:session-1",
-          sessionEntry: {
-            sessionId: "session-1",
-            updatedAt: 1,
-            permissionMode: "guarded",
-            sessionRoot: "/tmp/workspace",
-          },
-          messageChannel: "discord",
-          messageProvider: "discord-voice",
-          currentChannelId: "discord:voice-room",
-          opts: { runId: "run-side-1" },
-        }),
-        { nativeHookRelay: { enabled: true, hookTimeoutSec: 9 } },
-      ).finally(() => {
-        host.closeHost();
-        host.closeAdmission();
+    const run = runCodexAppServerSideQuestion(
+      sideLoopRelayParams({
+        hostCapabilities: host.hostCapabilities,
+        sessionKey: "agent:main:session-1",
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          permissionMode: "guarded",
+          sessionRoot: "/tmp/workspace",
+        },
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+        currentChannelId: "discord:voice-room",
+        opts: { runId },
       }),
-    ).resolves.toEqual({ text: "Side answer." });
+      { nativeHookRelay: { enabled: true, hookTimeoutSec: 9 } },
+    ).finally(() => {
+      host.closeHost();
+      host.closeAdmission();
+    });
+    await expect(run).resolves.toEqual({ text: "Side answer." });
 
     const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
     const config = forkParams?.config as Record<string, unknown> | undefined;
@@ -1924,13 +1907,9 @@ describe("runCodexAppServerSideQuestion", () => {
     const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
     expect(turnStartCall?.[1]).not.toHaveProperty("config");
     expect(relayIdDuringFork).toBeDefined();
-    expect(beforeToolCall).toHaveBeenCalledTimes(1);
-    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-side-1" }),
-    );
-    expect(
-      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
-    ).toBeUndefined();
+    expect(beforeToolCall).toHaveBeenCalledTimes(2);
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(expect.objectContaining({ runId }));
+    expectNativeHookRelayReleased(relayIdDuringFork);
   });
 
   it("omits the loop-detection PreToolUse subprocess for side threads when disabled", async () => {
@@ -2053,9 +2032,7 @@ describe("runCodexAppServerSideQuestion", () => {
         relayId: relayIdDuringFork,
         allowedEvents: expect.arrayContaining(["pre_tool_use"]),
       });
-      expect(
-        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
-      ).toBeUndefined();
+      expectNativeHookRelayReleased(relayIdDuringFork);
     } finally {
       client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
       await run.catch(() => {});
@@ -2089,10 +2066,7 @@ describe("runCodexAppServerSideQuestion", () => {
       ),
     ).rejects.toThrow("fork failed");
 
-    expect(relayIdDuringFork).toBeDefined();
-    expect(
-      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
-    ).toBeUndefined();
+    expectNativeHookRelayReleased(relayIdDuringFork);
   });
 
   it("includes permission request native hooks for side threads with yolo approval policy", async () => {

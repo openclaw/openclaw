@@ -193,7 +193,9 @@ async function prepare(
       },
     },
   } as unknown as Parameters<typeof prepareCodexAttemptTurnRequest>[0];
-  const turnRuntime = { state: {} } as Parameters<typeof prepareCodexAttemptTurnRequest>[1];
+  const turnRuntime = { state: {}, turnIdRef: {} } as Parameters<
+    typeof prepareCodexAttemptTurnRequest
+  >[1];
   const prepared = await prepareCodexAttemptTurnRequest(
     resources,
     turnRuntime,

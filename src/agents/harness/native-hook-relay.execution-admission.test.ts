@@ -43,6 +43,7 @@ describe("native hook execution admission", () => {
       },
     });
     const accepted = vi.fn();
+    relay.claimTurn?.("native-turn");
     const invocation = invokeNativeHookRelay({
       provider: "codex",
       relayId: relay.relayId,
@@ -240,7 +241,11 @@ describe("native hook execution admission", () => {
       }
       expect(onResolution).toHaveBeenCalledExactlyOnceWith("cancelled");
       await expect(
-        resolveNativeHookRelayDeferredToolApproval({ relayId: relay.relayId, toolUseId: "call" }),
+        resolveNativeHookRelayDeferredToolApproval({
+          relayId: relay.relayId,
+          runId: relay.runId,
+          toolUseId: "call",
+        }),
       ).resolves.toBeUndefined();
     },
   );

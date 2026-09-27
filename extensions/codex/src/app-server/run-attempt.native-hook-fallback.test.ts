@@ -168,6 +168,9 @@ describe("Codex native hook Gateway fallback", () => {
       const params = createParams(sessionFile, workspaceDir);
       params.config = { tools: { loopDetection: { enabled: true } } };
       const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+      nativeHookRelayTesting.setNativeHookRelayReadinessGatewayInvokerForTests(
+        invokeNativeHookRelay,
+      );
       const abort = new AbortController();
       params.abortSignal = abort.signal;
       vi.spyOn(Server.prototype, "listen").mockImplementationOnce(function (this: Server) {

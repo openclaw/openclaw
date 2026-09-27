@@ -191,6 +191,23 @@ export function extractRelayIdFromThreadConfig(config: unknown): string {
   return match[1];
 }
 
+export function codexHookCommand(config: unknown, key: string) {
+  const entries = (config as Record<string, unknown> | undefined)?.[key];
+  if (!Array.isArray(entries)) {
+    return undefined;
+  }
+  return (
+    entries as Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
+  )
+    .at(0)
+    ?.hooks?.at(0);
+}
+
+export function expectNativeHookRelayReleased(relayId: string | undefined): void {
+  expect(relayId).toBeDefined();
+  expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId!)).toBeUndefined();
+}
+
 function threadResult(threadId: string) {
   const { thread } = nativeThreadStartResult(threadId, "/tmp/workspace");
   return {

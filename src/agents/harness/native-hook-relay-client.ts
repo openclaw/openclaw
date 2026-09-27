@@ -18,7 +18,7 @@ import {
 
 const MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES = 5_000_000;
 const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
-export const NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS = 250;
+const NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS = 250;
 export const NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR =
   "native hook relay bridge stale registration";
 
@@ -62,6 +62,7 @@ export async function invokeNativeHookRelayBridge(
           relayId,
           event,
           generation: params.generation,
+          readinessNonce: params.readinessNonce,
           rawPayload: params.rawPayload,
         },
       });

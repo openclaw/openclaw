@@ -17,6 +17,7 @@ import {
 } from "../agent-tools.before-tool-call.js";
 import { formatMcpCodexApprovalRemedy } from "../mcp-codex-tool-approval.js";
 import { callGatewayTool } from "../tools/gateway.js";
+import { nativeHookRelayPreToolUseApprovalKey } from "./native-hook-relay-approval-key.js";
 import { formatNativeHookRelayApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import {
   nativeHookRelayParamsWereRewritten,
@@ -72,16 +73,9 @@ let nativeHookRelayPermissionApprovalRequester: NativeHookRelayPermissionApprova
 let nativeHookRelayDeferredToolApprovalRequester: NativeHookRelayDeferredToolApprovalRequester =
   requestDeferredPluginToolApproval;
 
-function nativeHookRelayPreToolUseApprovalKey(params: {
-  relayId: string;
-  toolUseId?: string;
-}): string | undefined {
-  const toolUseId = params.toolUseId?.trim();
-  return toolUseId ? JSON.stringify([params.relayId, toolUseId]) : undefined;
-}
-
 export function setNativeHookRelayPreToolUseApproval(params: {
   relayId: string;
+  runId: string;
   toolUseId?: string;
   deferredApproval: DeferredPluginToolApproval;
   originalParamsFingerprint: string;
@@ -93,6 +87,7 @@ export function setNativeHookRelayPreToolUseApproval(params: {
   const previousApproval = pendingPreToolUseApprovals.get(key);
   pendingPreToolUseApprovals.set(key, {
     relayId: params.relayId,
+    runId: params.runId,
     deferredApproval: params.deferredApproval,
     originalParamsFingerprint: params.originalParamsFingerprint,
   });
@@ -115,15 +110,15 @@ export function setNativeHookRelayPreToolUseApproval(params: {
   return true;
 }
 
-export function detachNativeHookRelayApprovalState(relayId: string): () => void {
+export function detachNativeHookRelayApprovalState(relayId: string, runId?: string): () => void {
   const preToolUseApprovals: NativeHookRelayPreToolUseApproval[] = [];
   for (const [key, approval] of pendingPreToolUseApprovals) {
-    if (approval.relayId === relayId) {
+    if (approval.relayId === relayId && (runId === undefined || approval.runId === runId)) {
       pendingPreToolUseApprovals.delete(key);
       preToolUseApprovals.push(approval);
     }
   }
-  const permissionApprovals = detachNativeHookRelayPermissionState(relayId);
+  const permissionApprovals = detachNativeHookRelayPermissionState(relayId, runId);
   // Detach every old entry before any callback can register a same-id successor.
   // Completion finalizers still compare object identity before deleting entries.
   return () => {
@@ -138,6 +133,7 @@ export function detachNativeHookRelayApprovalState(relayId: string): () => void 
 
 export async function resolveNativeHookRelayDeferredToolApproval(params: {
   relayId: string;
+  runId: string;
   toolUseId?: string;
   signal?: AbortSignal;
 }): Promise<NativeHookRelayDeferredApprovalOutcome | undefined> {
@@ -274,6 +270,7 @@ export async function runNativeHookRelayPermissionRequest(params: {
       rememberNativeHookRelayPermissionAllowAlways({
         key: allowAlwaysKey,
         relayId: params.registration.relayId,
+        runId: params.registration.runId,
         mcpTool: mcpToolName !== undefined,
       });
       return params.adapter.renderPermissionDecisionResponse("allow");
@@ -312,6 +309,7 @@ async function waitForNativeHookRelayPermissionApproval(params: {
     const controller = new AbortController();
     const pending: NativeHookRelayPendingPermissionApproval = {
       relayId: params.registration.relayId,
+      runId: params.registration.runId,
       controller,
       waiters: 0,
       cancelWhenUnobserved: params.registration.approvalHost !== undefined,
@@ -410,6 +408,7 @@ function nativeHookRelayPermissionAllowAlwaysKey(params: {
     .update(
       JSON.stringify([
         params.registration.relayId,
+        params.registration.runId,
         params.request.provider,
         params.request.agentId,
         params.request.sessionKey ?? params.request.sessionId,
@@ -570,7 +569,7 @@ function hasNativeHookRelayPermissionAllowAlways(key: string, now = Date.now()):
 }
 
 function rememberNativeHookRelayPermissionAllowAlways(
-  params: { key: string; relayId: string; mcpTool: boolean },
+  params: { key: string; relayId: string; runId: string; mcpTool: boolean },
   now = Date.now(),
 ): void {
   pruneNativeHookRelayPermissionAllowAlways(now);
@@ -581,7 +580,11 @@ function rememberNativeHookRelayPermissionAllowAlways(
   if (!params.mcpTool && expiresAtMs === undefined) {
     return;
   }
-  permissionAllowAlwaysApprovals.set(params.key, { relayId: params.relayId, expiresAtMs });
+  permissionAllowAlwaysApprovals.set(params.key, {
+    relayId: params.relayId,
+    runId: params.runId,
+    expiresAtMs,
+  });
   pruneMapToMaxSize(permissionAllowAlwaysApprovals, MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES);
 }
 
@@ -595,27 +598,24 @@ export function pruneNativeHookRelayPermissionAllowAlways(now = Date.now()): voi
 
 function detachNativeHookRelayPermissionState(
   relayId: string,
+  runId?: string,
 ): NativeHookRelayPendingPermissionApproval[] {
   const approvals: NativeHookRelayPendingPermissionApproval[] = [];
-  permissionApprovalWindows.delete(relayId);
+  if (runId === undefined) {
+    permissionApprovalWindows.delete(relayId);
+  }
   for (const [key, entry] of permissionAllowAlwaysApprovals) {
-    if (entry.relayId === relayId) {
+    if (entry.relayId === relayId && (runId === undefined || entry.runId === runId)) {
       permissionAllowAlwaysApprovals.delete(key);
     }
   }
   for (const [key, approval] of pendingPermissionApprovals) {
-    if (approval.relayId === relayId) {
+    if (approval.relayId === relayId && (runId === undefined || approval.runId === runId)) {
       pendingPermissionApprovals.delete(key);
       approvals.push(approval);
     }
   }
   return approvals;
-}
-
-export function removeNativeHookRelayPermissionState(relayId: string): void {
-  for (const approval of detachNativeHookRelayPermissionState(relayId)) {
-    approval.controller.abort();
-  }
 }
 
 async function requestNativeHookRelayPermissionApproval(

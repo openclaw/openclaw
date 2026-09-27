@@ -69,7 +69,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
   turnId: string;
   nativeHookRelay?: Pick<
     NativeHookRelayRegistrationHandle,
-    "allowedEvents" | "generation" | "relayId"
+    "allowedEvents" | "generation" | "relayId" | "runId"
   >;
   autoApprove?: boolean;
   signal?: AbortSignal;
@@ -506,7 +506,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
   context: ApprovalContext;
   nativeHookRelay?: Pick<
     NativeHookRelayRegistrationHandle,
-    "allowedEvents" | "generation" | "relayId"
+    "allowedEvents" | "generation" | "relayId" | "runId"
   >;
   autoApprove?: boolean;
   signal?: AbortSignal;
@@ -585,7 +585,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
   policyRequest: { toolName: string; params: JsonObject };
   nativeHookRelay?: Pick<
     NativeHookRelayRegistrationHandle,
-    "allowedEvents" | "generation" | "relayId"
+    "allowedEvents" | "generation" | "relayId" | "runId"
   >;
   autoApprove?: boolean;
   assertActive: () => void;
@@ -626,6 +626,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
   const resolveDeferredApproval = async () => {
     const approvalOutcome = await resolveNativeHookRelayDeferredToolApproval({
       relayId: nativeHookRelay.relayId,
+      runId: nativeHookRelay.runId,
       toolUseId: params.context.approvalId,
       signal: params.signal,
     });

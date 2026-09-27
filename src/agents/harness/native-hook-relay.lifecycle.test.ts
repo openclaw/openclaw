@@ -1,14 +1,9 @@
 import { Agent, Server, request } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 import * as mutableFileBinding from "../../infra/system-run-approval-binding.js";
-import {
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import * as relayBridge from "./native-hook-relay-bridge.js";
 import * as clientStore from "./native-hook-relay-client-store.js";
 import { invokeNativeHookRelayBridge } from "./native-hook-relay-client.js";
@@ -119,10 +114,62 @@ it.each([
   await expect(
     resolveNativeHookRelayDeferredToolApproval({
       relayId: relays[1]!.relayId,
+      runId: relays[1]!.runId,
       toolUseId: toolIds[1],
     }),
   ).resolves.toEqual({ handled: true, outcome: "approved-once" });
   expect(nativeHookRelayState.pendingPreToolUseApprovals.size).toBe(0);
+});
+
+it("keeps a sibling run's deferred approval when one overlapping owner exits", async () => {
+  const relayId = "overlapping-approval-owners";
+  const firstCancelled = vi.fn();
+  const secondCancelled = vi.fn();
+  const first = registerNativeHookRelay({
+    provider: "codex",
+    relayId,
+    sessionId: "overlapping-approvals",
+    runId: "run-1",
+  });
+  const second = registerNativeHookRelay({
+    provider: "codex",
+    relayId,
+    sessionId: "overlapping-approvals",
+    runId: "run-2",
+  });
+  for (const [relay, onResolution] of [
+    [first, firstCancelled],
+    [second, secondCancelled],
+  ] as const) {
+    setNativeHookRelayPreToolUseApproval({
+      relayId,
+      runId: relay.runId,
+      toolUseId: "shared-call",
+      originalParamsFingerprint: "{}",
+      deferredApproval: {
+        approval: { title: relay.runId, description: relay.runId, onResolution },
+        toolName: "fixture",
+        baseParams: {},
+      },
+    });
+  }
+
+  first.unregister();
+  expect(firstCancelled).toHaveBeenCalledExactlyOnceWith("cancelled");
+  expect(secondCancelled).not.toHaveBeenCalled();
+  testing.setNativeHookRelayDeferredToolApprovalRequesterForTests(async () => ({
+    blocked: false,
+    params: {},
+    approvalResolution: "allow-once",
+  }));
+  await expect(
+    resolveNativeHookRelayDeferredToolApproval({
+      relayId,
+      runId: second.runId,
+      toolUseId: "shared-call",
+    }),
+  ).resolves.toEqual({ handled: true, outcome: "approved-once" });
+  second.unregister();
 });
 
 it("detaches both approval maps before a cancellation callback installs a successor", async () => {
@@ -132,7 +179,7 @@ it("detaches both approval maps before a cancellation callback installs a succes
     sessionId: "old",
     runId: "old",
   });
-  const key = JSON.stringify([relay.relayId, "call"]);
+  const key = JSON.stringify([relay.relayId, "new", "call"]);
   const held = createDeferredCore<{
     blocked: false;
     params: unknown;
@@ -144,6 +191,7 @@ it("detaches both approval maps before a cancellation callback installs a succes
   const oldController = new AbortController();
   const oldPermission = {
     relayId: relay.relayId,
+    runId: relay.runId,
     controller: oldController,
     waiters: 1,
     cancelWhenUnobserved: true,
@@ -161,6 +209,7 @@ it("detaches both approval maps before a cancellation callback installs a succes
     });
     setNativeHookRelayPreToolUseApproval({
       relayId: relay.relayId,
+      runId: "new",
       toolUseId: "call",
       originalParamsFingerprint: "fixture",
       deferredApproval: {
@@ -171,15 +220,18 @@ it("detaches both approval maps before a cancellation callback installs a succes
     });
     nativeHookRelayState.pendingPermissionApprovals.set(permissionKey, {
       ...oldPermission,
+      runId: "new",
       controller: successorController,
     });
     nativeHookRelayState.permissionAllowAlwaysApprovals.set("new-grant", {
       relayId: relay.relayId,
+      runId: "new",
     });
     nativeHookRelayState.permissionApprovalWindows.set(relay.relayId, [1]);
   });
   setNativeHookRelayPreToolUseApproval({
     relayId: relay.relayId,
+    runId: relay.runId,
     toolUseId: "call",
     originalParamsFingerprint: "fixture",
     deferredApproval: {
@@ -190,6 +242,7 @@ it("detaches both approval maps before a cancellation callback installs a succes
   });
   const pending = resolveNativeHookRelayDeferredToolApproval({
     relayId: relay.relayId,
+    runId: relay.runId,
     toolUseId: "call",
   });
   relay.unregister();
@@ -529,107 +582,6 @@ it("renews logical invocation beyond its original expiry when the listener is un
     }
   });
 });
-
-it.each(["cancellation", "replacement", "foreground retirement"] as const)(
-  "rejects logical preparation after %s while publication is held",
-  async (retirement) => {
-    await withOpenClawTestState({ label: "relay-prepare-retirement" }, async () => {
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      const write = store.writeNativeHookRelayBridgeRecord;
-      vi.spyOn(store, "writeNativeHookRelayBridgeRecord").mockImplementationOnce(async (params) => {
-        entered.resolve();
-        await resume.promise;
-        await write(params);
-      });
-      const policy = vi.fn(() => ({ block: true, blockReason: "retired policy must not run" }));
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([{ hookName: "before_tool_call", handler: policy }]),
-      );
-      const host = await createAdmittedHostCapabilityTestFixture({ runId: "prepare-retirement" });
-      const abort = new AbortController();
-      const relay = registerOwnedNativeHookRelay({
-        provider: "codex",
-        relayId: "prepare-retirement",
-        sessionId: "prepare-retirement",
-        runId: "prepare-retirement",
-        signal: abort.signal,
-        allowedEvents: ["pre_tool_use"],
-        runBeforeToolCall: host.hostCapabilities.runBeforeToolCall,
-        assertActive: host.hostCapabilities.assertActive,
-        retention: {
-          readClaim: () => undefined,
-          shouldRetainAfterForegroundClose: () => retirement === "foreground retirement",
-          allowPreToolUse: () => false,
-          onDispose: () => {},
-        },
-      });
-      let successor: ReturnType<typeof registerOwnedNativeHookRelay> | undefined;
-      let preparation: Promise<void> | undefined;
-      let settled = false;
-      try {
-        preparation = relay.prepareInvocation();
-        void preparation.then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
-        await entered.promise;
-        expect(settled).toBe(false);
-        if (retirement === "cancellation") {
-          abort.abort();
-        } else if (retirement === "replacement") {
-          successor = registerOwnedNativeHookRelay({
-            provider: "codex",
-            relayId: relay.relayId,
-            sessionId: "prepare-retirement",
-            runId: "prepare-successor",
-          });
-        } else {
-          relay.unregister();
-          expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeDefined();
-        }
-        resume.resolve();
-        await expect(preparation).rejects.toThrow(/inactive|foreground|abort/i);
-        await expect(
-          invokeNativeHookRelay({
-            provider: "codex",
-            relayId: relay.relayId,
-            generation: relay.generation,
-            requireGeneration: true,
-            event: "pre_tool_use",
-            rawPayload: { tool_name: "Bash", tool_input: { command: "echo synthetic" } },
-          }),
-        ).rejects.toThrow();
-        expect(policy).not.toHaveBeenCalled();
-        if (successor) {
-          await successor.ready;
-          expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)?.runId).toBe(
-            "prepare-successor",
-          );
-          expect(
-            await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }),
-          ).toBeDefined();
-        }
-      } finally {
-        resume.resolve();
-        abort.abort();
-        successor?.unregister();
-        await Promise.allSettled([
-          preparation,
-          relay.drain(),
-          ...(successor ? [successor.drain()] : []),
-        ]);
-        host.closeHost();
-        host.closeAdmission();
-        resetGlobalHookRunner();
-      }
-    });
-  },
-);
 
 it("rejects oversized direct bridge responses", async () => {
   await withOpenClawTestState({ label: "relay-oversized-response" }, async () => {

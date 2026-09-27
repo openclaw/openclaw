@@ -356,7 +356,9 @@ describe("Codex finalization generation ownership", () => {
         expect(adopted.binding).toEqual(admittedBinding);
         harness.close();
 
-        const nextHarness = createResumeHarness();
+        const nextHarness = createResumeHarness("thread-existing", async (method) =>
+          method === "turn/start" ? turnStartResult("turn-2") : undefined,
+        );
         const nextParams = createParams(sessionFile, workspaceDir, {
           sessionId: successor.sessionId,
           runId: "run-successor",
@@ -366,7 +368,7 @@ describe("Codex finalization generation ownership", () => {
         await prepareGenerationAttempt(nextParams);
         const nextRun = runCodexAppServerAttempt(nextParams, { bindingStore: baseStore });
         await nextHarness.waitForMethod("turn/start");
-        await nextHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+        await nextHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-2" });
         expect(readAttemptTerminal(await nextRun)).toMatchObject({
           promptError: null,
           aborted: false,

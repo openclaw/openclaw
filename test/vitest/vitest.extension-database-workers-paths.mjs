@@ -153,6 +153,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt-connection.test.ts",
   "extensions/codex/src/app-server/run-attempt-connection.environment.test.ts",
   "extensions/codex/src/app-server/side-question.test.ts",
+  "extensions/codex/src/app-server/side-question.native-hook-relay-readiness.test.ts",
   "extensions/codex/src/app-server/side-question.execution.test.ts",
   "extensions/codex/src/app-server/side-question.prompt.test.ts",
   "extensions/codex/src/app-server/side-question.images.test.ts",

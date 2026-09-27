@@ -97,6 +97,8 @@ describe("Codex native configuration", () => {
       const params = createParams(path.join(tempDir, "session.jsonl"), tempDir, {
         provider: "openai",
       });
+      // This matrix verifies retry-model policy, not the synthetic five-second run budget.
+      params.timeoutMs = 60_000;
       params.agentDir = path.join(tempDir, "agent");
       params.authProfileId = "openai:retry-policy";
       params.authProfileStore.profiles[params.authProfileId] = {
@@ -433,6 +435,8 @@ describe("Codex native configuration", () => {
           } else if (message.method === "turn/start") {
             result = turnStartResult();
             turnStarted.resolve();
+          } else if (message.method === "thread/backgroundTerminals/list") {
+            result = { data: [], nextCursor: null };
           } else if (message.method === "thread/unsubscribe") {
             result = { status: "unsubscribed" };
           }
@@ -445,6 +449,11 @@ describe("Codex native configuration", () => {
       // This test owns review-policy projection, not requester-scoped MCP discovery.
       agentHarnessRuntimeMocks.forceModelToolsUnsupported = !nativeSearchEnabled;
       const params = createParams(sessionFile, workspaceDir);
+      // This matrix exercises native transport and model fencing, not the
+      // synthetic five-second execution budget. Cold worker startup plus the
+      // mandatory relay-readiness probe can legitimately exceed that fixture
+      // default before the test supplies its immediate completion event.
+      params.timeoutMs = 120_000;
       setCodexTestToolFactory(params, () =>
         nativeSearchEnabled ? [createRuntimeDynamicTool("web_search")] : [],
       );

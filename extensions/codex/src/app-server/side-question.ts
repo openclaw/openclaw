@@ -430,7 +430,7 @@ export async function runCodexAppServerSideQuestion(
   let sandboxEnvironment: CodexSandboxExecEnvironment | undefined;
   let sandboxDisconnectError: Error | undefined;
   let sandboxEnvironmentClient: CodexAppServerClient | undefined;
-  let nativeHookRelay: ReturnType<typeof registerNativeHookRelayForBundledRuntime> | undefined;
+  let relay: ReturnType<typeof registerNativeHookRelayForBundledRuntime> | undefined;
   const activeDynamicToolCalls = new Set<Promise<unknown>>();
   let primaryFailure: { error: unknown } | undefined;
   const releaseSandboxEnvironment = async () => {
@@ -557,7 +557,7 @@ export async function runCodexAppServerSideQuestion(
           paramsForRun: sideRunParams,
           threadId: childThreadId,
           turnId,
-          nativeHookRelay,
+          nativeHookRelay: relay,
           autoApprove: autoApproveMcpTools,
           signal,
           onNativeToolFailureDisposition: (itemId, disposition) =>
@@ -626,7 +626,7 @@ export async function runCodexAppServerSideQuestion(
         messageProvider: params.messageProvider,
         currentChannelId: params.currentChannelId,
       }).channelId;
-      nativeHookRelay = registerNativeHookRelayForBundledRuntime({
+      relay = registerNativeHookRelayForBundledRuntime({
         provider: "codex",
         ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
         sessionId: params.sessionId,
@@ -662,11 +662,11 @@ export async function runCodexAppServerSideQuestion(
         command: { timeoutMs: options.nativeHookRelay.gatewayTimeoutMs },
       });
     }
-    await nativeHookRelay?.prepareInvocation();
+    await relay?.prepareInvocation();
     assertCurrent();
-    const nativeHookRelayConfig = nativeHookRelay
+    const nativeHookRelayConfig = relay
       ? buildCodexNativeHookRelayConfig({
-          relay: nativeHookRelay,
+          relay,
           events: nativeHookRelayEvents,
           hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
           clearOmittedEvents: true,
@@ -787,8 +787,8 @@ export async function runCodexAppServerSideQuestion(
           });
           // A terminal answer may still be projecting after transport closure;
           // native hook authority ends with the route, not that projection.
-          if (nativeHookRelay) {
-            collector.route.signal.addEventListener("abort", nativeHookRelay.unregister, {
+          if (relay) {
+            collector.route.signal.addEventListener("abort", relay.unregister, {
               once: true,
             });
           }
@@ -896,7 +896,7 @@ export async function runCodexAppServerSideQuestion(
         }),
     );
     turnId = turnResponse.turn.id;
-    assertCurrent();
+    await (relay?.claimAndVerifyTurn(turnId, assertCurrent) ?? Promise.resolve(assertCurrent()));
     nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
       { ...sideRunParams, agentId: sessionAgentId },
       sideThreadId,
@@ -980,7 +980,7 @@ export async function runCodexAppServerSideQuestion(
         flushPendingNativePreToolUseFailures,
         releaseSandboxEnvironment,
         () => releaseCodexAppServerClientLease(clientLease),
-        () => nativeHookRelay?.unregister(),
+        () => relay?.unregister(),
         () =>
           runAgentCleanupStep({
             runId: sideRunParams.runId,
@@ -988,7 +988,7 @@ export async function runCodexAppServerSideQuestion(
             step: "codex-side-native-hook-relay-release",
             log: embeddedAgentLog,
             cleanup: async () => {
-              await nativeHookRelay?.drain();
+              await relay?.drain();
             },
           }),
       ],

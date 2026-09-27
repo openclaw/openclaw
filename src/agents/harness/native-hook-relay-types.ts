@@ -153,6 +153,7 @@ export type InvokeNativeHookRelayParams = {
   provider: unknown;
   relayId: unknown;
   generation?: unknown;
+  readinessNonce?: unknown;
   event: unknown;
   rawPayload: unknown;
   requireGeneration?: boolean;
@@ -206,17 +207,31 @@ export type NativeHookRelayPermissionApprovalResult =
 
 export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
+  /** In-memory proof that a direct-bridge request is the registration's startup probe. */
+  readinessNonce: string;
   preToolUseLoopDetection: boolean;
   preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
+  claimedTurnIds: Set<string>;
 };
 
 export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {
   generation: string;
+  /** Strict policy preparation and direct publication result. */
+  ready: Promise<void>;
 };
 
 export type OwnedNativeHookRelayRegistrationHandle = ActiveNativeHookRelayRegistrationHandle & {
-  /** Strict policy preparation and direct publication result. */
-  ready: Promise<void>;
+  /** Binds an exact provider thread/turn within the bundled runtime. */
+  claimTurn: (turnId: string, threadId?: string) => boolean;
+  /** Proves the direct bridge and PreToolUse policy path without executing the tool. */
+  verifyPreToolUse: (turnId: string, threadId?: string) => Promise<void>;
+  /** Claims a provider turn, binds its process authority, then proves its policy path. */
+  claimAndVerifyTurn: (
+    turnId: string,
+    assertCurrent?: () => void,
+    bindProcessAuthority?: () => void,
+    threadId?: string,
+  ) => Promise<void>;
   /** Requires current foreground authority; direct publication may use the Gateway fallback. */
   prepareInvocation: () => Promise<void>;
   /** Joins accepted policy, publication, renewal and cleanup without retiring retained children. */
@@ -243,6 +258,7 @@ export type NativeHookRelayPermissionApprovalRequester = (
 
 export type NativeHookRelayPendingPermissionApproval = {
   relayId: string;
+  runId: string;
   promise: Promise<NativeHookRelayPermissionApprovalResult>;
   controller: AbortController;
   waiters: number;
@@ -251,6 +267,7 @@ export type NativeHookRelayPendingPermissionApproval = {
 
 export type NativeHookRelayPreToolUseApproval = {
   relayId: string;
+  runId: string;
   deferredApproval: DeferredPluginToolApproval;
   originalParamsFingerprint: string;
   resolutionPromise?: Promise<NativeHookRelayDeferredApprovalOutcome>;
@@ -281,13 +298,20 @@ export type NativeHookRelayBridgeRegistration = {
 
 export type NativeHookRelaySharedState = {
   relays: Map<string, ActiveNativeHookRelayRegistration>;
+  /** Live registrations grouped by stable relay id, oldest first. */
+  relayRegistrationsById?: Map<string, Set<ActiveNativeHookRelayRegistration>>;
+  /** Bounded claims whose exact owner retired while a sibling remained live. */
+  retiredTurnClaimsById?: Map<string, Set<string>>;
   relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
   pendingOperations: Set<Promise<unknown>>;
   invocations: NativeHookRelayInvocation[];
   pendingPermissionApprovals: Map<string, NativeHookRelayPendingPermissionApproval>;
   pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
   permissionApprovalWindows: Map<string, number[]>;
-  permissionAllowAlwaysApprovals: Map<string, { relayId: string; expiresAtMs?: number }>;
+  permissionAllowAlwaysApprovals: Map<
+    string,
+    { relayId: string; runId: string; expiresAtMs?: number }
+  >;
 };
 
 /** Private bundled-runtime callbacks for retained direct-child hook policy. */

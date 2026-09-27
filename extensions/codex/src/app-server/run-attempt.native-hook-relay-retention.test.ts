@@ -145,6 +145,10 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     if (!relay) {
       throw new Error("Expected native input admission relay");
     }
+    // This direct relay fixture bypasses turn/start, so publish the two exact
+    // accepted parent turns that the model-source fencing assertions exercise.
+    relay.claimTurn?.("parent-a");
+    relay.claimTurn?.("parent-b");
     const invoke = (
       turnId: string,
       callId: string,
@@ -740,7 +744,10 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           { stdout: "", stderr: "", exitCode: 0 },
           { stdout: "", stderr: "", exitCode: 0 },
         ]);
-        expect(beforeToolCall).toHaveBeenCalledTimes(2);
+        const admittedCommands = beforeToolCall.mock.calls.map(
+          ([event]) => (event as { params?: { command?: string } }).params?.command,
+        );
+        expect(admittedCommands).toEqual(["/bin/echo ok", "allow-child", "allow-child"]);
 
         const yieldResponse = await harness.handleServerRequest({
           id: "request-sessions-yield",
@@ -822,7 +829,18 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
             permissionDecisionReason: "child policy denied",
           },
         });
-        expect(beforeToolCall).toHaveBeenCalledTimes(5);
+        expect(
+          beforeToolCall.mock.calls.map(
+            ([event]) => (event as { params?: { command?: string } }).params?.command,
+          ),
+        ).toEqual([
+          "/bin/echo ok",
+          "allow-child",
+          "allow-child",
+          undefined,
+          "allow-child",
+          "deny-child",
+        ]);
         expect(
           nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
         ).toBeDefined();
@@ -902,7 +920,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     });
     params.hostCapabilities = fixture.hostCapabilities;
 
-    const beforeToolCall = vi.fn(async () => undefined);
+    const beforeToolCall = vi.fn(async (_event: unknown) => undefined);
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
     );
@@ -956,7 +974,11 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           rawPayload: childPayload,
         }),
       ).resolves.toMatchObject({ exitCode: 0 });
-      expect(beforeToolCall).toHaveBeenCalledOnce();
+      expect(
+        beforeToolCall.mock.calls.map(
+          ([event]) => (event as { params?: { command?: string } }).params?.command,
+        ),
+      ).toEqual(["/bin/echo ok", "allow-child"]);
 
       await expect(
         harness.handleServerRequest({

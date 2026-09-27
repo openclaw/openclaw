@@ -244,6 +244,6 @@ export async function startCodexAttemptTurn(
       configCwd: connection.effectiveCwd,
     };
   }
-  turnIdRef.current = started.turn.turn.id;
+  turnIdRef.current ??= started.turn.turn.id;
   return started;
 }

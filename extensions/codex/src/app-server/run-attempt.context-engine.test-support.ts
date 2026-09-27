@@ -133,14 +133,18 @@ export function createStartedThreadHarness(
   const harness = createSharedStartedThreadHarness(requestImpl, options);
   return {
     ...harness,
-    async completeTurn(status: "completed" | "failed" = "completed", threadId = "thread-1") {
+    async completeTurn(
+      status: "completed" | "failed" = "completed",
+      threadId = "thread-1",
+      turnId = "turn-1",
+    ) {
       await harness.notify({
         method: "turn/completed",
         params: {
           threadId,
-          turnId: "turn-1",
+          turnId,
           turn: {
-            id: "turn-1",
+            id: turnId,
             status,
             ...(status === "failed" ? { error: { message: "codex failed" } } : {}),
             items: [{ type: "agentMessage", id: "msg-1", text: "final answer" }],

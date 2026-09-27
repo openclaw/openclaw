@@ -18,6 +18,7 @@ export const nativeHookRelayHandlers: GatewayRequestHandlers = {
           provider: params.provider,
           relayId: params.relayId,
           generation: params.generation,
+          readinessNonce: params.readinessNonce,
           event: params.event,
           rawPayload: params.rawPayload,
           requireGeneration: true,

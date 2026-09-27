@@ -2,7 +2,10 @@ import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
 import { resolveProjectedMcpCodexToolApprovalMode } from "../mcp-codex-tool-approval.js";
 import { drainNativeHookRelayBridge } from "./native-hook-relay-bridge.js";
-import { nativeHookRelayState } from "./native-hook-relay-state.js";
+import {
+  nativeHookRelayRegistrationsById,
+  nativeHookRelayState,
+} from "./native-hook-relay-state.js";
 import type {
   ActiveNativeHookRelayRegistration,
   NativeHookRelayBridgeRegistration,
@@ -13,6 +16,15 @@ import type {
 } from "./native-hook-relay-types.js";
 
 const { relays } = nativeHookRelayState;
+
+function isNativeHookRelayRegistrationCurrent(
+  registration: ActiveNativeHookRelayRegistration,
+): boolean {
+  return (
+    nativeHookRelayRegistrationsById.get(registration.relayId)?.has(registration) === true ||
+    relays.get(registration.relayId) === registration
+  );
+}
 
 /** Capture synchronous inputs before the relay owner admits its deferred policy read. */
 export function prepareNativeHookRelayMcpPolicy(
@@ -83,7 +95,10 @@ export function assertNativeHookRelayForegroundCurrent(
   lifetime: { foregroundOpen: boolean; foregroundToken: symbol },
   foregroundToken: symbol,
 ): void {
-  if (relays.get(registration.relayId) !== registration || Date.now() > registration.expiresAtMs) {
+  if (
+    !isNativeHookRelayRegistrationCurrent(registration) ||
+    Date.now() > registration.expiresAtMs
+  ) {
     throw new Error("native hook relay registration is inactive");
   }
   registration.signal?.throwIfAborted();
@@ -99,6 +114,7 @@ export async function resolveNativeHookRelayInvocationBinding(
   event: NativeHookRelayEvent,
   rawPayload: unknown,
   signal?: AbortSignal,
+  skipRetentionClaim = false,
 ): Promise<{
   registration: NativeHookRelayRegistration;
   assertExecutionAdmissionCurrent: () => void;
@@ -109,17 +125,20 @@ export async function resolveNativeHookRelayInvocationBinding(
   // Gateway fallback shares policy readiness without depending on HTTP locator publication.
   await racePromiseWithAbortSignal(lifetime.policyReady, signal);
   signal?.throwIfAborted();
-  if (relays.get(registration.relayId) !== registration || Date.now() > registration.expiresAtMs) {
+  if (
+    !isNativeHookRelayRegistrationCurrent(registration) ||
+    Date.now() > registration.expiresAtMs
+  ) {
     throw new Error("native hook relay registration is inactive");
   }
-  const claim = lifetime.retention?.readClaim(rawPayload);
+  const claim = skipRetentionClaim ? undefined : lifetime.retention?.readClaim(rawPayload);
   if (claim && event === "pre_tool_use" && lifetime.retained && lifetime.retention) {
     const retained = lifetime.retained;
     const retention = lifetime.retention;
     let assertAdmission: (() => boolean) | undefined;
     const assertRetainedAuthority = () => {
       if (
-        relays.get(registration.relayId) !== registration ||
+        !isNativeHookRelayRegistrationCurrent(registration) ||
         Date.now() > registration.expiresAtMs
       ) {
         throw new Error("native hook relay registration is inactive");

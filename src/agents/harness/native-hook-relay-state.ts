@@ -21,3 +21,10 @@ function getNativeHookRelaySharedState(): NativeHookRelaySharedState {
 }
 
 export const nativeHookRelayState = getNativeHookRelaySharedState();
+
+// Duplicate module copies share the symbol-backed object. Upgrade older state
+// in place so a hot plugin refresh does not split relay ownership.
+export const nativeHookRelayRegistrationsById = (nativeHookRelayState.relayRegistrationsById ??=
+  new Map());
+export const nativeHookRelayRetiredTurnClaimsById = (nativeHookRelayState.retiredTurnClaimsById ??=
+  new Map());

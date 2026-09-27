@@ -122,6 +122,7 @@ describe("registered Codex harness model attribution", () => {
       },
     });
     let nativeModel = "ready-native-model";
+    let turnNumber = 0;
     const readyThread = {
       ...threadStartResult("native-thread", { cwd: params.workspaceDir }),
       model: "ready-native-model",
@@ -165,7 +166,7 @@ describe("registered Codex harness model attribution", () => {
             result = readyThread;
             break;
           case "turn/start":
-            result = turnStartResult();
+            result = turnStartResult(`turn-${++turnNumber}`);
             turnStarted.resolve();
             break;
           case "turn/interrupt":
@@ -317,7 +318,7 @@ describe("registered Codex harness model attribution", () => {
           params: {
             threadId: "native-thread",
             turn: {
-              id: "turn-1",
+              id: "turn-2",
               status: "completed",
               items: [{ type: "agentMessage", id: "second-answer", text: "Second native answer." }],
             },

@@ -118,6 +118,11 @@ export function createCodexAttemptServerRequestController(
     setExecutionTimeoutMs?: (timeoutMs: number) => void,
   ) => {
     const signal = AbortSignal.any([runAbortController.signal, requestSignal]);
+    if (state.pendingTurnStart) {
+      if (!(await state.pendingTurnStart)) {
+        return undefined;
+      }
+    }
     const turnId = turnIdRef.current;
     const projector = projectorRef.current;
     let requestCountsAsTurnActivity = false;

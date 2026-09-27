@@ -18,6 +18,7 @@ import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtim
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Codex tests cover run attempt.context engine plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import { turnStartResult } from "./codex-app-server.test-fixtures.js";
 import {
   assistantMessage,
   setupRunAttemptTestHooks,
@@ -609,7 +610,14 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
       })),
     });
-    const firstHarness = createStartedThreadHarness();
+    let turnNumber = 0;
+    const firstHarness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        turnNumber += 1;
+        return turnStartResult(`turn-${turnNumber}`);
+      }
+      return undefined;
+    });
     const firstParams = createParams(sessionFile, workspaceDir);
     firstParams.contextEngine = contextEngine;
 
@@ -648,7 +656,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(secondInputText).not.toContain("OpenClaw assembled context for this turn:");
     expect(secondInputText).not.toContain("bootstrap-only context");
     expect(secondInputText).toBe("hello");
-    await firstHarness.completeTurn();
+    await firstHarness.completeTurn("completed", "thread-1", "turn-2");
     await secondRun;
   });
 

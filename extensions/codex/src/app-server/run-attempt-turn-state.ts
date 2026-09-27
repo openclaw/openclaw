@@ -49,6 +49,10 @@ class CodexAttemptState {
   lifecycleStarted = false;
   lifecycleTerminalEmitted = false;
   nativeHookRelayLastRenewedAt = 0;
+  // Cover the complete turn-start interval so an immediate native server request
+  // cannot race ahead of accepted-turn publication or relay readiness. The
+  // boolean remains false after a failed proof, keeping that turn fail-closed.
+  pendingTurnStart?: Promise<boolean>;
   activeAppServerTurnRequests = 0;
   activeLocalProjections = 0;
   projectionClosed = false;

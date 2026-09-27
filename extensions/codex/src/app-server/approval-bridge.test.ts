@@ -837,6 +837,7 @@ describe("Codex app-server approval bridge", () => {
       autoApprove: true,
       nativeHookRelay: {
         relayId: "relay-1",
+        runId: "run-1",
         generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
@@ -904,6 +905,7 @@ describe("Codex app-server approval bridge", () => {
       autoApprove: true,
       nativeHookRelay: {
         relayId: "relay-late",
+        runId: "run-late",
         generation: "generation-late",
         allowedEvents: ["pre_tool_use"],
       },
@@ -940,6 +942,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       nativeHookRelay: {
         relayId: "relay-deferred-late",
+        runId: "run-deferred-late",
         allowedEvents: ["pre_tool_use"],
       },
     });
@@ -969,6 +972,7 @@ describe("Codex app-server approval bridge", () => {
       .mockResolvedValueOnce({ id: "plugin:approval-execve-2", decision: "allow-once" });
     const nativeHookRelay = {
       relayId: "relay-1",
+      runId: "run-1",
       generation: "generation-1",
       allowedEvents: ["pre_tool_use" as const],
     };
@@ -1027,6 +1031,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       nativeHookRelay: {
         relayId: "relay-1",
+        runId: "run-1",
         generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
@@ -1037,6 +1042,7 @@ describe("Codex app-server approval bridge", () => {
     expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
     expect(mockResolveNativeHookRelayDeferredToolApproval).toHaveBeenCalledWith({
       relayId: "relay-1",
+      runId: "run-1",
       toolUseId: "cmd-native-relay-noop",
       signal: undefined,
     });
@@ -1069,6 +1075,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       nativeHookRelay: {
         relayId: "relay-1",
+        runId: "run-1",
         generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
@@ -1083,6 +1090,7 @@ describe("Codex app-server approval bridge", () => {
     });
     expect(mockResolveNativeHookRelayDeferredToolApproval).toHaveBeenCalledWith({
       relayId: "relay-1",
+      runId: "run-1",
       toolUseId: "cmd-native-relay-observed",
       signal: undefined,
     });
@@ -1110,6 +1118,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       nativeHookRelay: {
         relayId: "relay-1",
+        runId: "run-1",
         allowedEvents: ["pre_tool_use"],
       },
     });
@@ -1145,6 +1154,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       nativeHookRelay: {
         relayId: "relay-1",
+        runId: "run-1",
         allowedEvents: ["pre_tool_use"],
       },
       onNativeToolFailureDisposition,
@@ -1176,6 +1186,7 @@ describe("Codex app-server approval bridge", () => {
       autoApprove: true,
       nativeHookRelay: {
         relayId: "relay-1",
+        runId: "run-1",
         generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
@@ -1216,6 +1227,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       nativeHookRelay: {
         relayId: "relay-1",
+        runId: "run-1",
         generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
@@ -1249,6 +1261,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       nativeHookRelay: {
         relayId: "relay-1",
+        runId: "run-1",
         generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
@@ -1277,6 +1290,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       nativeHookRelay: {
         relayId: "relay-missing",
+        runId: "run-missing",
         generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
@@ -1307,6 +1321,7 @@ describe("Codex app-server approval bridge", () => {
       autoApprove: true,
       nativeHookRelay: {
         relayId: "relay-missing",
+        runId: "run-missing",
         generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
@@ -1337,6 +1352,7 @@ describe("Codex app-server approval bridge", () => {
       autoApprove: true,
       nativeHookRelay: {
         relayId: "relay-1",
+        runId: "run-1",
         generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
@@ -1361,6 +1377,7 @@ describe("Codex app-server approval bridge", () => {
       .mockResolvedValueOnce({ id: "plugin:permission-approval", decision: "deny" });
     const nativeHookRelay = {
       relayId: "relay-1",
+      runId: "run-1",
       generation: "generation-1",
       allowedEvents: ["pre_tool_use" as const],
     };

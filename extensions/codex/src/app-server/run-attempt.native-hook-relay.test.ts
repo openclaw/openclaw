@@ -30,6 +30,7 @@ import {
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
+  turnStartResult,
 } from "./run-attempt-test-harness.js";
 import {
   readCodexAppServerBinding,
@@ -421,13 +422,17 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       createMockPluginRegistry([
         {
           hookName: "before_tool_call",
-          handler: vi.fn(() => ({
-            requireApproval: {
-              title: "Operator review required",
-              description: "Command needs an interactive approver",
-              onResolution,
-            },
-          })),
+          handler: vi.fn((event) =>
+            event.toolCallId.startsWith("openclaw-relay-readiness-")
+              ? undefined
+              : {
+                  requireApproval: {
+                    title: "Operator review required",
+                    description: "Command needs an interactive approver",
+                    onResolution,
+                  },
+                },
+          ),
         },
       ]),
     );
@@ -742,15 +747,14 @@ describe("runCodexAppServerAttempt native hook relay", () => {
           },
         }),
       ).resolves.toMatchObject({ exitCode: 0 });
-
       firstHarness.close();
       const secondHarness = sameExecutionSession
-        ? createResumeHarness("thread-1")
+        ? createResumeHarness("thread-1", async (method) =>
+            method === "turn/start" ? turnStartResult("turn-2") : undefined,
+          )
         : createStartedThreadHarness();
-      const secondParams = createLoopRelayParams(
-        sameExecutionSession ? sessionFile : path.join(tempDir, "independent-session.jsonl"),
-        workspaceDir,
-      );
+      const file = sameExecutionSession ? sessionFile : path.join(tempDir, "session-2.jsonl");
+      const secondParams = createLoopRelayParams(file, workspaceDir);
       secondParams.runId = "run-2";
       secondParams.sandboxSessionKey = firstParams.sandboxSessionKey;
       if (!sameExecutionSession) {
@@ -764,7 +768,6 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         },
       });
       await secondHarness.waitForMethod("turn/start");
-
       const secondThreadRequest = secondHarness.requests.find(
         (request) => request.method === (sameExecutionSession ? "thread/resume" : "thread/start"),
       );
@@ -780,13 +783,12 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       expect(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId)?.runId,
       ).toBe(sameExecutionSession ? "run-2" : "run-1");
-
       await nativeHookRelayUnregisterQueue.flush();
       expect(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(secondRelayId)?.runId,
       ).toBe("run-2");
-
-      await secondHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      const secondTurnId = sameExecutionSession ? "turn-2" : "turn-1";
+      await secondHarness.completeTurn({ threadId: "thread-1", turnId: secondTurnId });
       await secondRun;
       expect(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(secondRelayId)?.runId,

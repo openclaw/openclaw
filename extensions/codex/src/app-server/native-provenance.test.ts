@@ -1,12 +1,14 @@
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import type {
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  HarnessContextEngine as ContextEngine,
+import {
+  invokeNativeHookRelay,
+  nativeHookRelayTesting,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assistantMessage,
   createParams,
@@ -82,6 +84,10 @@ async function completeTurn(harness: ReturnType<typeof createStartedThreadHarnes
 setupRunAttemptTestHooks();
 
 describe("native Codex provenance", () => {
+  beforeEach(() => {
+    nativeHookRelayTesting.setNativeHookRelayReadinessGatewayInvokerForTests(invokeNativeHookRelay);
+  });
+
   it("sends stable sender provenance through an active context-engine projection", async () => {
     const sessionFile = path.join(tempDir, "sender-provenance-context-engine.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-sender-provenance-context-engine");
