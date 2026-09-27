@@ -6,7 +6,6 @@ import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
@@ -28,9 +27,7 @@ function createTerminalPane(client: GatewayBrowserClient) {
   const paint = (
     row: GatewaySessionRow | undefined,
     workspace = createSessionWorkspaceProps(state),
-    tasks = createBackgroundTasksProps(state),
-  ) =>
-    render(pane.renderPaneHeader(workspace, tasks, row, false, undefined, false, null), container);
+  ) => render(pane.renderPaneHeader(workspace, row, false, undefined, false, null), container);
   return { pane, state, container, paint };
 }
 
@@ -223,7 +220,7 @@ describe("chat pane terminal action", () => {
     }
   });
 
-  it("keeps Browser and Tasks reachable in the topbar", () => {
+  it("keeps Browser reachable in the topbar", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { state, container, paint } = createTerminalPane(client);
     const session = {
@@ -231,12 +228,7 @@ describe("chat pane terminal action", () => {
       kind: "direct",
       updatedAt: 0,
     } satisfies GatewaySessionRow;
-    const onToggleTasks = vi.fn();
-    const backgroundTasks = {
-      ...createBackgroundTasksProps(state),
-      onToggleCollapsed: onToggleTasks,
-    };
-    const renderHeader = () => paint(session, undefined, backgroundTasks);
+    const renderHeader = () => paint(session);
     const panelActionIds = () =>
       container
         .querySelector<HTMLElement & { panelActions: Array<{ id: string }> }>(
@@ -248,12 +240,10 @@ describe("chat pane terminal action", () => {
     renderHeader();
     expect(container.querySelector(".chat-browser-panel-toggle")).toBeNull();
     expect(panelActionIds()).not.toContain("browser");
-    container.querySelector<HTMLButtonElement>(".chat-tasks-toggle")?.click();
-    expect(onToggleTasks).toHaveBeenCalledOnce();
 
     state.browserPanelAvailable = true;
     const onToggleBrowser = vi.fn();
-    paint(session, { ...createSessionWorkspaceProps(state), onToggleBrowser }, backgroundTasks);
+    paint(session, { ...createSessionWorkspaceProps(state), onToggleBrowser });
     container.querySelector<HTMLButtonElement>(".chat-browser-panel-toggle")?.click();
     expect(onToggleBrowser).toHaveBeenCalledOnce();
     expect(panelActionIds()).toContain("browser");

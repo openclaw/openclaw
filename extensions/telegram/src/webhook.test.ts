@@ -38,7 +38,6 @@ import { installTelegramIngressQueueRuntime } from "./runtime-state.test-support
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
-import * as telegramIngressFactory from "./telegram-ingress-drain-factory.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
 import {
   writeTelegramSpooledUpdate,
@@ -161,6 +160,7 @@ const {
   startWebhook: startTelegramWebhook,
   server: gatewayServer,
   pendingRequests: pendingRouteRequests,
+  withWebhook: withStartedWebhook,
 } = gateway;
 let webhookStateDir: string | undefined;
 
@@ -199,6 +199,8 @@ beforeEach(async () => {
   resetTelegramWebhookMocks();
   webhookStateDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-telegram-webhook-"));
   installTelegramIngressQueueRuntime(() => webhookStateDir ?? os.tmpdir());
+  // The production monitor prepares shared state before starting the webhook.
+  await openTelegramIngressQueue(requireWebhookQueueScope()).listPending();
 });
 
 afterEach(async () => {
@@ -213,31 +215,6 @@ afterEach(async () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   }
 });
-
-async function withStartedWebhook<T>(
-  options: Parameters<typeof gateway.withWebhook>[0],
-  run: (ctx: {
-    server: typeof gateway.server;
-    port: number;
-    ingress: ReturnType<typeof telegramIngressFactory.createTelegramTransportIngressMonitor>;
-  }) => Promise<T>,
-): Promise<T> {
-  const createIngress = telegramIngressFactory.createTelegramTransportIngressMonitor;
-  let ingress: ReturnType<typeof createIngress> | undefined;
-  const ingressFactory = vi
-    .spyOn(telegramIngressFactory, "createTelegramTransportIngressMonitor")
-    .mockImplementation((params) => (ingress = createIngress(params)));
-  try {
-    return await gateway.withWebhook(options, async (ctx) => {
-      if (!ingress) {
-        throw new Error("Expected the started webhook's ingress monitor");
-      }
-      return await run({ ...ctx, ingress });
-    });
-  } finally {
-    ingressFactory.mockRestore();
-  }
-}
 
 function startWebhookStartupFixture(
   options: Partial<Parameters<typeof startTelegramWebhook>[0]> = {},

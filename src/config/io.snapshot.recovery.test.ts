@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as deferredMigrations from "../infra/deferred-plugin-migrations.js";
 import { acquireStartupMigrationLeaseWithWait } from "../infra/startup-migration-checkpoint.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
@@ -11,6 +12,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createConfigIoContext } from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import {
   captureConfigHealthStateStore,
@@ -81,6 +83,136 @@ async function prepare(io: ReturnType<typeof createConfigIO>) {
 }
 
 describe("prepared config recovery", () => {
+  it.each(["sync", "async"] as const)(
+    "preserves unavailable dependencies when preparing a backup candidate (%s)",
+    async (mode) => {
+      const root = tempDirs.make("openclaw-backup-preparation-io-");
+      const context = createConfigIoContext({
+        configPath: path.join(root, "openclaw.json"),
+        env: { HOME: root, OPENCLAW_STATE_DIR: root },
+        observe: false,
+      });
+      const unavailable = Object.assign(new Error("migration metadata unavailable"), {
+        code: "EIO",
+      });
+      const candidate = {
+        raw: '{"gateway":{"mode":"local"}}',
+        parsed: { gateway: { mode: "local" } },
+      };
+      if (mode === "sync") {
+        const read = vi
+          .spyOn(deferredMigrations, "readDeferredPluginMigrations")
+          .mockImplementation(() => {
+            throw unavailable;
+          });
+        try {
+          expect(() => context.prepareRecoveryBackupCandidate(candidate)).toThrow(unavailable);
+        } finally {
+          read.mockRestore();
+        }
+      } else {
+        const read = vi
+          .spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync")
+          .mockRejectedValue(unavailable);
+        try {
+          await expect(context.prepareRecoveryBackupCandidateAsync(candidate)).rejects.toBe(
+            unavailable,
+          );
+        } finally {
+          read.mockRestore();
+        }
+      }
+    },
+  );
+
+  it.each(["absent", "unparseable", "invalid"] as const)(
+    "does not prepare recovery from an unusable %s backup",
+    async (kind) => {
+      const { root, configPath, original, io } = fixture();
+      const backupPath = `${configPath}.bak`;
+      const bytes =
+        kind === "unparseable" ? "{ not JSON5" : '{"gateway":{"mode":"local","port":"bad"}}';
+      if (kind === "absent") {
+        fs.unlinkSync(backupPath);
+      } else {
+        fs.writeFileSync(backupPath, bytes);
+      }
+      await expect(prepare(io)).resolves.toBeNull();
+      expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+      if (kind !== "absent") {
+        expect(fs.readFileSync(backupPath, "utf8")).toBe(bytes);
+      }
+      expect(fs.readdirSync(root).filter((name) => name.includes(".clobbered."))).toEqual([]);
+    },
+  );
+
+  it.each(["discovery", "sync-read", "sync-stat", "async-read", "async-stat"] as const)(
+    "preserves unavailable backup I/O during %s instead of reporting recovery drift",
+    async (phase) => {
+      const readError = Object.assign(new Error("backup device unavailable"), { code: "EIO" });
+      let armed = phase === "discovery";
+      const isBackup = (target: fs.PathLike | number) => String(target).endsWith(".bak");
+      const { root, configPath, original, backup, io } = fixture({
+        fs: {
+          ...fs,
+          readFileSync: ((target: fs.PathOrFileDescriptor, options?: unknown) => {
+            if (armed && isBackup(target) && phase === "sync-read") {
+              throw readError;
+            }
+            return fs.readFileSync(target, options as Parameters<typeof fs.readFileSync>[1]);
+          }) as typeof fs.readFileSync,
+          statSync: ((target: fs.PathLike, options?: { throwIfNoEntry?: boolean }) => {
+            if (armed && isBackup(target) && phase === "sync-stat") {
+              throw readError;
+            }
+            return fs.statSync(target, options);
+          }) as typeof fs.statSync,
+          promises: {
+            ...fs.promises,
+            readFile: ((target: fs.PathLike, options?: unknown) =>
+              armed && isBackup(target) && (phase === "discovery" || phase === "async-read")
+                ? Promise.reject(readError)
+                : fs.promises.readFile(
+                    target,
+                    options as Parameters<typeof fs.promises.readFile>[1],
+                  )) as typeof fs.promises.readFile,
+            stat: ((target: fs.PathLike) =>
+              armed && isBackup(target) && phase === "async-stat"
+                ? Promise.reject(readError)
+                : fs.promises.stat(target)) as typeof fs.promises.stat,
+          },
+        },
+      });
+      if (phase === "discovery") {
+        await expect(prepare(io)).rejects.toBe(readError);
+      } else {
+        const plan = await prepare(io);
+        expect(plan).not.toBeNull();
+        armed = true;
+        await expect(plan!.apply()).rejects.toBe(readError);
+      }
+      expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+      expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backup);
+      expect(fs.readdirSync(root).filter((name) => name.includes(".clobbered."))).toEqual([]);
+    },
+  );
+
+  it("preserves unavailable full backup validation instead of dropping the recovery candidate", async () => {
+    let validations = 0;
+    const { root, configPath, original, backup, io } = fixture({
+      measure: async (name, run) => {
+        if (name === "config.snapshot.read.validate" && ++validations === 2) {
+          throw Object.assign(new Error("backup validation storage unavailable"), { code: "EIO" });
+        }
+        return await run();
+      },
+    });
+    await expect(prepare(io)).rejects.toMatchObject({ code: "CONFIG_READ_FAILED" });
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backup);
+    expect(fs.readdirSync(root).filter((name) => name.includes(".clobbered."))).toEqual([]);
+  });
+
   it("leaves a newer live observation current when an older prepared recovery is applied", async () => {
     const { root, configPath, original, env, io } = fixture();
     const plan = await prepare(io);

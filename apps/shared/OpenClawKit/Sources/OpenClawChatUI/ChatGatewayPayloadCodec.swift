@@ -238,8 +238,6 @@ public enum OpenClawChatGatewayPayloadCodec {
             return decode(OpenClawAgentEventPayload.self).map(OpenClawChatTransportEvent.agent)
         case "progressCard.changed":
             return decode(ProgressCardChangedEvent.self).map(OpenClawChatTransportEvent.progressCardChanged)
-        case "task":
-            return decode(OpenClawChatTaskEvent.self).map(OpenClawChatTransportEvent.task)
         case "question.requested":
             return decode(QuestionRecord.self).map(OpenClawChatTransportEvent.questionRequested)
         case "question.resolved":

@@ -579,9 +579,7 @@ extension OpenClawChatView {
             transcript.rows,
             tools: self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : [],
             liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
-            hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText ||
-                (self.displayOptions.contains(.toolActivity) &&
-                    !self.viewModel.subagentActivities.isEmpty),
+            hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
             searchActive: self.isSearchPresented)
         ForEach(groups) { group in
             if group.runID != nil {
@@ -692,13 +690,6 @@ extension OpenClawChatView {
                 runIdentity: self.viewModel.workingIndicatorIdentity,
                 outputTokens: self.viewModel.liveRunOutputTokens)
                 .equatable()
-        }
-
-        if self.displayOptions.contains(.toolActivity), !self.viewModel.subagentActivities.isEmpty {
-            ChatSubagentActivityList(
-                activities: self.viewModel.subagentActivities,
-                hiddenWorkingCount: self.viewModel.hiddenWorkingSubagentCount)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
 
         if let text = viewModel.streamingAssistantText {
@@ -1083,7 +1074,6 @@ extension OpenClawChatView {
 
     private var hasVisibleTransientContent: Bool {
         self.viewModel.hasBlockingRunActivity ||
-            (self.displayOptions.contains(.toolActivity) && !self.viewModel.subagentActivities.isEmpty) ||
             (self.displayOptions.contains(.toolActivity) && !self.viewModel.pendingToolCalls.isEmpty) ||
             self.hasVisibleStreamingAssistantText ||
             !self.viewModel.visibleQuestionCards.isEmpty
@@ -1135,7 +1125,6 @@ extension OpenClawChatView {
         self.viewModel.messages.isEmpty &&
             !self.hasVisibleStreamingAssistantText &&
             !self.viewModel.hasBlockingRunActivity &&
-            self.viewModel.subagentActivities.isEmpty &&
             self.viewModel.pendingToolCalls.isEmpty
     }
 
@@ -1200,7 +1189,6 @@ extension OpenClawChatView {
         guard self.searchMessageID == nil else { return }
         if self.viewModel.messages.isEmpty,
            !self.viewModel.hasBlockingRunActivity,
-           self.viewModel.subagentActivities.isEmpty,
            self.viewModel.pendingToolCalls.isEmpty,
            self.viewModel.streamingAssistantText == nil
         {

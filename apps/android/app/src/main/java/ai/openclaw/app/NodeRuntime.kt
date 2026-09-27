@@ -141,7 +141,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -245,26 +244,7 @@ private data class SessionCatalogProgressOwner(
 
 internal const val WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS = 8_000L
 
-internal data class WearAgentPulseReads<Tasks, Swarm>(
-  val tasks: Tasks?,
-  val swarm: Swarm?,
-)
-
-internal suspend fun <Tasks, Swarm> readWearAgentPulseConcurrently(
-  readTasks: suspend () -> Tasks,
-  readSwarm: suspend () -> Swarm,
-  budgetMillis: Long = WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS,
-): WearAgentPulseReads<Tasks, Swarm> =
-  coroutineScope {
-    val tasks = async { readWearAgentPulseComponent(budgetMillis, readTasks) }
-    val swarm = async { readWearAgentPulseComponent(budgetMillis, readSwarm) }
-    WearAgentPulseReads(
-      tasks = tasks.await(),
-      swarm = swarm.await(),
-    )
-  }
-
-private suspend fun <T> readWearAgentPulseComponent(
+internal suspend fun <T> readWearAgentPulseComponent(
   budgetMillis: Long,
   read: suspend () -> T,
 ): T? =
@@ -1902,23 +1882,16 @@ class NodeRuntime private constructor(
     val gatewayScope = captureGatewayDataScope()
     val agentId = currentWearAgentId()
     val connected = gatewayScope != null && operatorSession.isReady()
-    val reads =
-      if (connected && agentId != null) {
-        readWearAgentPulseConcurrently(
-          readTasks = { chat.listBackgroundTasks(agentId) },
-          readSwarm = {
-            requestedSessionKey?.let { sessionKey ->
-              chat.readSwarmSnapshotFor(sessionKey, agentId)
-            }
-          },
-        )
+    val swarmSnapshot =
+      if (connected && agentId != null && requestedSessionKey != null) {
+        readWearAgentPulseComponent(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS) {
+          chat.readSwarmSnapshotFor(requestedSessionKey, agentId)
+        }
       } else {
         null
       }
-    val tasks = reads?.tasks
-    val swarmSnapshot = reads?.swarm
     // Capture every projection input before the final route check so a route
-    // change cannot mix a current task result with later-route aggregates.
+    // change cannot mix a current swarm result with later-route aggregates.
     val approvals = currentWearAgentPulseApprovals()
     val routeStillCurrent =
       gatewayScope?.let { capturedScope ->
@@ -1933,7 +1906,6 @@ class NodeRuntime private constructor(
         swarmSnapshot?.isAvailableFor(requestedSessionKey) == true
     return projectWearAgentPulse(
       gatewayConnected = routeStillCurrent,
-      tasks = tasks.takeIf { routeStillCurrent },
       swarmAvailable = swarmAvailable,
       swarmGroups = if (swarmAvailable) swarmSnapshot.groups else emptyList(),
       pendingApprovalCount = approvals.pendingCount,
@@ -9708,6 +9680,9 @@ internal fun gatewayRegistryEntry(
       stableId = endpoint.stableId,
       kind = GatewayRegistryEntryKind.DISCOVERED,
       name = endpoint.name,
+      host = endpoint.host,
+      port = endpoint.port,
+      contextPath = endpoint.contextPath,
       tls = true,
       lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
     )

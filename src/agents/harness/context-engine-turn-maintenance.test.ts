@@ -16,10 +16,6 @@ import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { createContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
@@ -44,8 +40,6 @@ async function withAcceptedTurn(
 ) {
   await withStateDirEnv("openclaw-accepted-turn-maintenance-", async ({ stateDir }) => {
     resetCommandQueueStateForTest();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     const fixture = await createAcceptedTurn(stateDir, outcome, maintenanceFails, maintenanceInfo);
     try {
       await run(fixture);
@@ -56,8 +50,6 @@ async function withAcceptedTurn(
       await fixture.source.release();
       await fixture.sourceDisposed.promise;
       resetCommandQueueStateForTest();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
     }
   });
 }

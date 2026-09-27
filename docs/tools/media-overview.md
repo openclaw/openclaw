@@ -127,7 +127,7 @@ OpenClaw until the shared realtime-voice contract can represent it.
 | Music          | Asynchronous | Same provider-processing characteristic as video.                                                    |
 
 For async tools, OpenClaw submits the request to the provider, returns a task
-id immediately, and tracks the job in the task ledger. The agent continues
+id immediately, and tracks the job in the media runtime. The agent continues
 responding to other messages while the job runs. When the provider finishes,
 OpenClaw wakes the agent with the generated media paths so it can tell the
 user through the session's normal visible-reply mode: automatic final reply
@@ -136,6 +136,14 @@ the message tool. If the requester session is inactive or its active wake
 fails, and some generated media is still missing from the completion reply,
 OpenClaw sends an idempotent direct fallback with only the missing media. Media
 already delivered by the completion reply is not posted again.
+
+If completion delivery cannot be confirmed and the original session still exists,
+OpenClaw tries to retain the generated media references in that session's history.
+Completion stays bound to the original session and storage location; a replacement
+session never receives it. Transient queue admission failures use a bounded retry.
+If both queue admission and history storage remain unavailable, the completion
+ends with a diagnostic and process-local media references; durable recovery is
+not guaranteed. The local history notice does not resend media to the channel.
 
 ## Speech-to-text and Voice Call
 

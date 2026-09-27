@@ -2,6 +2,7 @@ import { resolveActiveEmbeddedRunSessionId } from "openclaw/plugin-sdk/agent-har
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import {
   createStartedThreadHarness,
   createTestParams,
@@ -39,6 +40,7 @@ describe("runCodexAppServerAttempt activation ownership", () => {
   it.each(["execution observer", "published backend"] as const)(
     "stops accepted native work when activation fails at %s",
     async (stage) => {
+      const cancelTurn = vi.spyOn(CodexNativeProcessAuthority.prototype, "cancelTurn");
       const harness = createStartedThreadHarness();
       const params = createTestParams();
       const failActivation = () => {
@@ -65,9 +67,9 @@ describe("runCodexAppServerAttempt activation ownership", () => {
       );
       expect(cleanup).toEqual([
         { method: "turn/interrupt", params: { threadId: "thread-1", turnId: "turn-1" } },
-        { method: "thread/backgroundTerminals/list", params: { threadId: "thread-1" } },
         { method: "thread/unsubscribe", params: { threadId: "thread-1" } },
       ]);
+      expect(cancelTurn).toHaveBeenCalledExactlyOnceWith(harness.client, "thread-1", "turn-1");
       expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBeUndefined();
       expect(harness.client.getCloseError()).toBeUndefined();
     },
