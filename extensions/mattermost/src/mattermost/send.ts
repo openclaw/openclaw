@@ -277,14 +277,10 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
     {
       ...params.dmRetryOptions,
       onRetry: (attempt, delayMs, error) => {
-        // Call user's onRetry if provided
         params.dmRetryOptions?.onRetry?.(attempt, delayMs, error);
-        // Log if verbose mode is enabled
-        if (params.logger) {
-          params.logger.warn?.(
-            `DM channel creation retry ${attempt} after ${delayMs}ms: ${error.message}`,
-          );
-        }
+        params.logger?.warn?.(
+          `DM channel creation retry ${attempt} after ${delayMs}ms: ${error.message}`,
+        );
       },
     },
   );
@@ -336,7 +332,6 @@ async function resolveMattermostSendContext(
     allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
     assertRequestCurrent: opts.assertDirectAdapterHandoff,
   });
-  // Build retry options from account config, allowing opts to override
   const dmRetryOptions = mergeDmRetryOptions(account.config.dmChannelRetry, opts.dmRetryOptions);
 
   let channelId: string;

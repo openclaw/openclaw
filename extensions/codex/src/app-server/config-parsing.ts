@@ -155,6 +155,7 @@ const codexPluginConfigSchema = z.strictObject({
       sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).optional(),
       approvalsReviewer: z.enum(["user", "auto_review", "guardian_subagent"]).optional(),
       serviceTier: codexAppServerServiceTierSchema,
+      enableUltrafast: z.boolean().optional(),
       cyberFailover: codexAppServerCyberFailoverSchema.optional(),
       networkProxy: codexAppServerNetworkProxySchema.optional(),
       defaultWorkspaceDir: z.string().optional(),

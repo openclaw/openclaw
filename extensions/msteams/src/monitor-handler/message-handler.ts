@@ -3,19 +3,25 @@ import {
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatUnknownError } from "../errors.js";
-import { normalizeMSTeamsConversationId, parseMSTeamsActivityTimestamp } from "../inbound.js";
+import {
+  extractMSTeamsConversationMessageId,
+  normalizeMSTeamsConversationId,
+  parseMSTeamsActivityTimestamp,
+} from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
-import { resolveMSTeamsReplyPolicy } from "../policy.js";
+import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "../policy.js";
 import { extractMSTeamsPollVote } from "../polls.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
+import { wasMSTeamsMessageSentWithPersistence } from "../sent-message-cache.js";
 import { admitMSTeamsMessage } from "./access.js";
 import { prepareMSTeamsInboundContent } from "./inbound-content.js";
 import { dispatchMSTeamsInboundTurn } from "./inbound-dispatch.js";
@@ -100,8 +106,42 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
+    let currentCfg = readConfig();
+    let isBotOwnedThread = false;
+    if (isChannel && facts.threadId && activity.recipient?.id) {
+      const channelConfig = currentCfg.channels?.msteams;
+      const routeConfig = resolveMSTeamsRouteConfig({
+        cfg: channelConfig,
+        teamId,
+        teamName: activity.channelData?.team?.name,
+        conversationId,
+        channelName: activity.channelData?.channel?.name,
+        allowNameMatching: channelConfig?.dangerouslyAllowNameMatching === true,
+      });
+      const policy = resolveMSTeamsReplyPolicy({
+        isDirectMessage: false,
+        globalConfig: channelConfig,
+        ...routeConfig,
+      });
+      if (policy.requireMentionInBotThreads !== undefined) {
+        isBotOwnedThread = await wasMSTeamsMessageSentWithPersistence({
+          conversationId,
+          messageId: facts.threadId,
+          botId: activity.recipient.id,
+        });
+        currentCfg = readConfig();
+      }
+    }
+    const currentMSTeamsCfg = currentCfg.channels?.msteams;
+    if (
+      currentMSTeamsCfg?.enabled === false ||
+      (currentMSTeamsCfg?.appId && currentMSTeamsCfg.appId !== appId)
+    ) {
+      return;
+    }
+
     const admission = await admitMSTeamsMessage({
-      cfg,
+      cfg: currentCfg,
       activity,
       text,
       conversationId,
@@ -156,7 +196,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     }
 
     const threadRouting = prepareMSTeamsThreadRouting({
-      cfg,
+      cfg: currentCfg,
       context,
       isDirectMessage,
       isChannel,
@@ -180,18 +220,25 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const channelId = conversationId;
     const { teamConfig, channelConfig } = channelGate;
-    const { requireMention, replyStyle } = resolveMSTeamsReplyPolicy({
+    const replyPolicy = resolveMSTeamsReplyPolicy({
       isDirectMessage,
-      globalConfig: msteamsCfg,
+      globalConfig: currentMSTeamsCfg,
       teamConfig,
       channelConfig,
     });
+    const { requireMention, implicitMentionKinds } = resolveBotThreadMentionPolicy({
+      isBotOwnedThread,
+      requireMention: replyPolicy.requireMention,
+      requireMentionInBotThreads: replyPolicy.requireMentionInBotThreads,
+      implicitMentionKinds: params.implicitMentionKinds,
+    });
+    const { replyStyle } = replyPolicy;
     const timestamp = parseMSTeamsActivityTimestamp(activity.timestamp);
     const mentionDecision = resolveInboundMentionDecision({
       facts: {
         canDetectMention: true,
         wasMentioned: params.wasMentioned,
-        implicitMentionKinds: params.implicitMentionKinds,
+        implicitMentionKinds,
       },
       policy: {
         isGroup: !isDirectMessage,
@@ -239,9 +286,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       resolveTeamAadGroupId: threadRouting.resolveTeamAadGroupId,
       mediaMaxBytes,
       tokenProvider,
-      mediaAllowHosts: msteamsCfg?.mediaAllowHosts,
-      mediaAuthAllowHosts: msteamsCfg?.mediaAuthAllowHosts,
-      graphMediaFallback: msteamsCfg?.graphMediaFallback,
+      mediaAllowHosts: currentMSTeamsCfg?.mediaAllowHosts,
+      mediaAuthAllowHosts: currentMSTeamsCfg?.mediaAuthAllowHosts,
+      graphMediaFallback: currentMSTeamsCfg?.graphMediaFallback,
       deadline: preprocessingDeadline,
       log,
     });
@@ -266,7 +313,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
 
     await dispatchMSTeamsInboundTurn({
-      cfg,
+      cfg: currentCfg,
       runtime,
       appId,
       app,
@@ -292,15 +339,19 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     debounceMs: resolveDebounceMs(),
     resolveDebounceMs,
     buildKey: (entry) => {
-      const conversationId = normalizeMSTeamsConversationId(
-        entry.context.activity.conversation?.id ?? "",
-      );
+      const activity = entry.context.activity;
+      const rawConversationId = activity.conversation?.id ?? "";
+      const conversationId = normalizeMSTeamsConversationId(rawConversationId);
+      const threadId =
+        activity.conversation?.conversationType === "channel"
+          ? (extractMSTeamsConversationMessageId(rawConversationId) ?? activity.replyToId)
+          : undefined;
       const senderId =
         entry.context.activity.from?.aadObjectId ?? entry.context.activity.from?.id ?? "";
       if (!senderId || !conversationId) {
         return null;
       }
-      return `msteams:${appId}:${conversationId}:${senderId}`;
+      return JSON.stringify(["msteams", appId, conversationId, threadId ?? null, senderId]);
     },
     shouldDebounce: (entry) => {
       if (!entry.text.trim()) {

@@ -1,8 +1,10 @@
-export function jsonActionResult(data: Record<string, unknown>) {
-  const text = JSON.stringify(data);
+export function jsonActionResult(
+  data: Record<string, unknown>,
+  details: Record<string, unknown> = data,
+) {
   return {
-    content: [{ type: "text" as const, text }],
-    details: data,
+    content: [{ type: "text" as const, text: JSON.stringify(data) }],
+    details,
   };
 }
 
@@ -15,7 +17,7 @@ export function jsonMSTeamsOkActionResult(action: string, data: Record<string, u
 }
 
 export function jsonMSTeamsConversationResult(conversationId: string | undefined) {
-  return jsonActionResultWithDetails(
+  return jsonActionResult(
     {
       ok: true,
       channel: "msteams",
@@ -23,16 +25,6 @@ export function jsonMSTeamsConversationResult(conversationId: string | undefined
     },
     { ok: true, channel: "msteams" },
   );
-}
-
-function jsonActionResultWithDetails(
-  contentData: Record<string, unknown>,
-  details: Record<string, unknown>,
-) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(contentData) }],
-    details,
-  };
 }
 
 export function actionError(message: string) {

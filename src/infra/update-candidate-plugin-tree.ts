@@ -634,6 +634,8 @@ export async function copyUpdateCandidatePluginTrees(
         // native binding. Recheck the inventory before its private stage is published.
         await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
           overwrite: false,
+          // Every destination parent is prepared before copies are admitted.
+          mkdir: false,
           // Rehearsal payloads are disposable and never serve as recovery backups.
           durable: false,
           maxBytes: entry.size,

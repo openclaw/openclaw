@@ -6,7 +6,7 @@ import {
   clearTelegramRuntimeForTest,
   resetTelegramTopicNameCacheForTest,
 } from "./runtime.test-support.js";
-import { getTopicName, updateTopicName } from "./topic-name-cache.js";
+import { getTopicCreatorUserId, getTopicName, updateTopicName } from "./topic-name-cache.js";
 
 describe("topic-name-cache", () => {
   let state: OpenClawTestState;
@@ -29,26 +29,28 @@ describe("topic-name-cache", () => {
   });
 
   it("preserves a renamed topic through status-only events without inventing unnamed topics", async () => {
-    await updateTopicName(-100123, 42, { name: "Deployments" });
+    await updateTopicName(-100123, 42, { name: "Deployments", creatorUserId: 7 });
     await updateTopicName(-100123, 42, { name: "CI/CD" });
     await updateTopicName(-100123, 42, { closed: true });
     await updateTopicName(-100123, 43, { closed: true });
     resetTelegramTopicNameCacheForTest();
     resetPluginStateStoreForTests();
     await expect(getTopicName(-100123, 42)).resolves.toBe("CI/CD");
+    await expect(getTopicCreatorUserId(-100123, 42)).resolves.toBe(7);
     await expect(getTopicName(-100123, 43)).resolves.toBeUndefined();
   });
 
   it("retains active topics and evicts the inactive oldest topic across database reopen", async () => {
     await updateTopicName(-100000, 1, { name: "Active" });
     for (let id = 2; id <= 2048; id++) {
-      await updateTopicName(-100000, id, { name: `Topic ${id}` });
+      await updateTopicName(-100000, id, { name: `Topic ${id}`, creatorUserId: 7 });
     }
     await getTopicName(-100000, 1);
     await updateTopicName(-100000, 9999, { name: "Newcomer" });
     resetTelegramTopicNameCacheForTest();
     resetPluginStateStoreForTests();
     await expect(getTopicName(-100000, 2)).resolves.toBeUndefined();
+    await expect(getTopicCreatorUserId(-100000, 2)).resolves.toBeUndefined();
     await expect(getTopicName(-100000, 1)).resolves.toBe("Active");
     await expect(getTopicName(-100000, 9999)).resolves.toBe("Newcomer");
   });

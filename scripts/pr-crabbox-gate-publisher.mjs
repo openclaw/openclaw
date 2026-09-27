@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -430,6 +430,7 @@ function resolvePlanInDetachedWorktree(context) {
 const defaultResolvePlan = resolvePlanInDetachedWorktree;
 
 export async function runPublisher({
+  phase,
   broker,
   clock = Date.now,
   event,
@@ -439,7 +440,18 @@ export async function runPublisher({
   resolvePlan = defaultResolvePlan,
   runCrabbox = executeCrabbox,
 }) {
+  if (phase !== "proof" && phase !== "publish") {
+    throw new Error("Crabbox gate publisher requires --proof or --publish");
+  }
   const context = validatePublisherRequest(event, env);
+  const outputPath = phase === "proof" ? requiredEnv(env, "GITHUB_OUTPUT") : "";
+  if (phase === "publish") {
+    context.runId = requiredEnv(env, "CRABBOX_PROOF_RUN_ID");
+    context.leaseId = requiredEnv(env, "CRABBOX_PROOF_LEASE_ID");
+    if (!RUN_ID_PATTERN.test(context.runId) || !LEASE_ID_PATTERN.test(context.leaseId)) {
+      throw new Error("Crabbox proof step outputs must be exact run and lease IDs");
+    }
+  }
   const bootstrap = readFileSync(BOOTSTRAP_PATH, "utf8");
   const localBootstrapHash = createHash("sha256").update(bootstrap).digest("hex");
   validateActiveAdminMembership(
@@ -467,39 +479,44 @@ export async function runPublisher({
     throw new Error("Crabbox gate plan does not bind the requested base and head");
   }
   const principal = validateServicePrincipal(await broker.request("/v1/whoami"));
-  const crabboxBin = requiredEnv(env, "CRABBOX_BIN");
-  const crabboxHome = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-publisher-"));
-  try {
-    const crabboxEnv = sanitizedCrabboxEnvironment(env, crabboxHome);
-    const configResult = await runCrabbox({
-      args: ["config", "show", "--provider", "aws", "--json"],
-      bin: crabboxBin,
-      env: crabboxEnv,
-    });
-    if (configResult.exitCode !== 0) {
-      throw new Error(`Crabbox config resolution failed with exit code ${configResult.exitCode}`);
-    }
-    validateCrabboxConfig(JSON.parse(configResult.stdout), requiredEnv(env, "CRABBOX_COORDINATOR"));
-    const transport = buildCrabboxGateTransport({
-      bootstrap,
-      command: buildCrabboxGateCommand(context.plan, localBootstrapHash),
-      headSha: context.headSha,
-    });
-    const { args, label } = buildCrabboxRunArgs(context, transport);
-    const timing = parseCrabboxTiming(
-      await runCrabbox({
-        args,
+  if (phase === "proof") {
+    const crabboxBin = requiredEnv(env, "CRABBOX_BIN");
+    const crabboxHome = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-publisher-"));
+    try {
+      const crabboxEnv = sanitizedCrabboxEnvironment(env, crabboxHome);
+      const configResult = await runCrabbox({
+        args: ["config", "show", "--provider", "aws", "--json"],
         bin: crabboxBin,
         env: crabboxEnv,
-        input: transport.input,
-        stream: true,
-      }),
-      label,
-    );
-    context.runId = timing.runId;
-    context.leaseId = timing.leaseId;
-  } finally {
-    rmSync(crabboxHome, { force: true, recursive: true });
+      });
+      if (configResult.exitCode !== 0) {
+        throw new Error(`Crabbox config resolution failed with exit code ${configResult.exitCode}`);
+      }
+      validateCrabboxConfig(
+        JSON.parse(configResult.stdout),
+        requiredEnv(env, "CRABBOX_COORDINATOR"),
+      );
+      const transport = buildCrabboxGateTransport({
+        bootstrap,
+        command: buildCrabboxGateCommand(context.plan, localBootstrapHash),
+        headSha: context.headSha,
+      });
+      const { args, label } = buildCrabboxRunArgs(context, transport);
+      const timing = parseCrabboxTiming(
+        await runCrabbox({
+          args,
+          bin: crabboxBin,
+          env: crabboxEnv,
+          input: transport.input,
+          stream: true,
+        }),
+        label,
+      );
+      context.runId = timing.runId;
+      context.leaseId = timing.leaseId;
+    } finally {
+      rmSync(crabboxHome, { force: true, recursive: true });
+    }
   }
   const runResponse = record(
     await broker.request(`/v1/runs/${context.runId}`),
@@ -518,6 +535,12 @@ export async function runPublisher({
     principal,
     run: runResponse.run,
   });
+  if (phase === "proof") {
+    // App tokens expire after one hour. Hand off only joined, verified proof;
+    // the next workflow step mints fresh membership authority before publication.
+    appendFileSync(outputPath, `run_id=${context.runId}\nlease_id=${context.leaseId}\n`);
+    return { checkId: null, context };
+  }
   validatePullRequest(
     await github.request("GET", `/repos/${REPOSITORY}/pulls/${context.prNumber}`),
     context,
@@ -626,7 +649,7 @@ export function createGitHubApi({ token, fetchImpl = fetch }) {
   };
 }
 
-async function main() {
+async function main(phase) {
   const event = JSON.parse(readFileSync(requiredEnv(process.env, "GITHUB_EVENT_PATH"), "utf8"));
   const brokerUrl = requiredEnv(process.env, "CRABBOX_COORDINATOR");
   const broker = createJsonApi({
@@ -639,7 +662,17 @@ async function main() {
   const organization = createGitHubApi({
     token: requiredEnv(process.env, "GH_APP_TOKEN"),
   });
-  const result = await runPublisher({ broker, env: process.env, event, github, organization });
+  const result = await runPublisher({
+    phase,
+    broker,
+    env: process.env,
+    event,
+    github,
+    organization,
+  });
+  if (phase === "proof") {
+    return;
+  }
   console.log(`published_check_id=${result.checkId}`);
   console.log(`published_head_sha=${result.context.headSha}`);
 }
@@ -652,8 +685,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       );
       const bootstrapSha256 = requiredString(process.argv[4], "bootstrap SHA-256");
       console.log(buildCrabboxGateCommand(plan, bootstrapSha256));
+    } else if (process.argv.length === 3 && ["--proof", "--publish"].includes(process.argv[2])) {
+      await main(process.argv[2].slice(2));
     } else {
-      await main();
+      throw new Error("Crabbox gate publisher requires --proof or --publish");
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

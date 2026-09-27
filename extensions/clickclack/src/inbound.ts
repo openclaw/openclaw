@@ -124,7 +124,7 @@ export async function handleClickClackInbound(params: {
       config: params.config,
       message,
     }));
-  if (!access.shouldDispatch || !access.channelIngress) {
+  if (!access.shouldDispatch || !access.channelIngress || !access.isCurrent()) {
     return;
   }
   const conversationId = message.channel_id || message.direct_conversation_id;
