@@ -23,10 +23,8 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import {
-  captureHttpExchangeAsync,
-  resolveEffectiveDebugProxyUrl,
-} from "openclaw/plugin-sdk/proxy-capture";
+import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
+import { resolveEffectiveDebugProxyUrl } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -48,6 +46,10 @@ import {
 export { normalizeTelegramApiRoot as resolveTelegramApiBase } from "./api-root.js";
 
 const log = createSubsystemLogger("telegram/network");
+
+// The shipped 2026.9.6 host omits async capture; retire this check when the minimum advances.
+const captureSdk: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
+  proxyCaptureSdk;
 
 const TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
 const TELEGRAM_API_HOSTNAME = "api.telegram.org";
@@ -711,21 +713,29 @@ export function resolveTelegramTransport(
       );
     }
     let err: unknown;
-
-    if (callerProvidedDispatcher) {
-      try {
-        const response = await requestFetch(input, init);
-        signal?.throwIfAborted();
-        // Finalization retains capture failures; observe Promises returned by the SDK view.
-        void captureHttpExchangeAsync({
+    const captureResponse = (response: Response, fallbackAttempt?: number): void => {
+      // Finalization retains capture failures; observe the Promise returned by the SDK view.
+      void captureSdk
+        .captureHttpExchangeAsync?.({
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
           requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
           requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
           response,
           flowId: randomUUID(),
-          meta: { subsystem: "telegram-fetch" },
-        }).catch(() => {});
+          meta:
+            fallbackAttempt === undefined
+              ? { subsystem: "telegram-fetch" }
+              : { subsystem: "telegram-fetch", fallbackAttempt },
+        })
+        .catch(() => {});
+    };
+
+    if (callerProvidedDispatcher) {
+      try {
+        const response = await requestFetch(input, init);
+        signal?.throwIfAborted();
+        captureResponse(response);
         return response;
       } catch (caught) {
         signal?.throwIfAborted();
@@ -758,18 +768,7 @@ export function resolveTelegramTransport(
       try {
         const response = await requestFetch(input, init, attempt.createDispatcher(freshConnection));
         signal?.throwIfAborted();
-        void captureHttpExchangeAsync({
-          url: resolveRequestUrl(input),
-          method: init?.method ?? "GET",
-          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
-          response,
-          flowId: randomUUID(),
-          meta:
-            attemptIndex === startIndex
-              ? { subsystem: "telegram-fetch" }
-              : { subsystem: "telegram-fetch", fallbackAttempt: attemptIndex },
-        }).catch(() => {});
+        captureResponse(response, attemptIndex === startIndex ? undefined : attemptIndex);
         recordSuccessfulAttempt(attemptIndex);
         return response;
       } catch (caught) {
