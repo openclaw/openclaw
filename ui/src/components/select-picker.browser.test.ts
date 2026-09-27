@@ -2,14 +2,71 @@ import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderDecisionModelPicker } from "./decision-model-picker.ts";
 import { renderModelPicker } from "./model-picker.ts";
-import type { SelectPicker } from "./select-picker.ts";
+import { renderPicker, type SelectPicker } from "./select-picker.ts";
+import { renderSettingsRow } from "./settings-ui.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../styles/base.css";
 import "../styles/settings-controls.css";
+import "../styles/settings.css";
 
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
+  it.each([
+    { width: 1280, direction: "ltr" },
+    { width: 390, direction: "ltr" },
+    { width: 1280, direction: "rtl" },
+    { width: 390, direction: "rtl" },
+  ])(
+    "starts picker searches at the writing edge in $direction at $width pixels",
+    async ({ width, direction }) => {
+      const { page, userEvent } = await import("vitest/browser");
+      await page.viewport(width, 844);
+      const host = document.createElement("div");
+      host.dir = direction;
+      document.body.append(host);
+      const options = Array.from({ length: 9 }, (_, index) => ({
+        value: `fixture/model-${index}`,
+        label: `Model ${index}`,
+      }));
+      const onChange = vi.fn();
+      const shared = renderPicker({
+        label: "Shared",
+        value: "fixture/model-0",
+        options,
+        searchable: true,
+        onChange,
+      });
+      render(
+        html`
+          ${renderSettingsRow({ title: "Primary", control: renderModelPicker({ label: "Primary", value: "fixture/model-0", options, onChange }) })}
+          ${renderSettingsRow({ title: "Decision", control: renderDecisionModelPicker({ id: "alignment-decision", models: [{ provider: "fixture", id: "one", name: "Decision one", pluginId: "fixture" }], value: "fixture/one", disabled: false, onChange }) })}
+          ${renderSettingsRow({ title: "Shared", control: shared })} ${shared}
+          ${renderSettingsRow({ title: "Value", control: html`<input class="settings-input" aria-label="Value" value="42" /><span class="settings-secret"><input class="settings-input" aria-label="Nested value" value="example" /></span>` })}
+        `,
+        host,
+      );
+      for (const picker of host.querySelectorAll<SelectPicker>("openclaw-select-picker")) {
+        await picker.updateComplete;
+        const trigger = picker.querySelector<HTMLButtonElement>("button")!;
+        await page.elementLocator(trigger).click();
+        const search = picker.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+        await expect.element(search).toHaveFocus();
+        expect(getComputedStyle(search).direction).toBe(direction);
+        expect(getComputedStyle(search).textAlign).toBe("start");
+        await page.elementLocator(search).fill("one");
+        expect(getComputedStyle(search).textAlign).toBe("start");
+        await userEvent.keyboard("{Escape}");
+        await expect.element(trigger).toHaveFocus();
+      }
+      for (const label of ["Value", "Nested value"]) {
+        const input = host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+        expect(getComputedStyle(input).textAlign).toBe("right");
+      }
+      expect(onChange).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { width: 1280, placement: "bottom" as const },
     { width: 390, placement: "top" as const },
