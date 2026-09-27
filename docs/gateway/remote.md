@@ -96,6 +96,9 @@ when the remote Gateway port differs from the port in the URL. TUI/RPC clients
 and diagnostic probes share that credential scope; after pairing, diagnostics
 do not require a shared token or password on every connection. The client closes
 its tunnel on shutdown and cannot reconnect through a released forwarding port.
+Existing configurations with `sshTarget` adopt this client-managed route on
+upgrade. Set `gateway.remote.transport: "direct"` to retain a manually managed
+forward instead.
 
 Pinned `wss://` loopback endpoints use a credential scope that also includes the
 certificate fingerprint. Unidentified, manually forwarded loopback URLs cannot
@@ -108,6 +111,9 @@ the selected listener instead of starting the configured SSH tunnel, even when
 the URLs match. A CLI `--url` still follows the explicit credential rules above.
 SSH aliases and their OpenSSH configuration remain
 operator-owned route selections, not cryptographic Gateway identifiers.
+Reassigning an enrolled SSH alias keeps its saved-credential scope, so its device
+token can be sent to the newly selected destination. Use a new alias when
+connecting to a different Gateway.
 
 Local diagnostics prefer their local paired-device credential; an origin-cache
 fallback must match the local Gateway's pairing record. Non-loopback remote
