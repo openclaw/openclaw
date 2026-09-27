@@ -1,4 +1,5 @@
 import { setImmediate } from "node:timers/promises";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   replaceSessionEntry,
@@ -6,6 +7,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import * as projection from "../config/sessions/session-accessor.sqlite-active-projection.js";
+import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { AgentDatabaseRegistryChangedError } from "../state/openclaw-agent-db-registry-listing.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -114,7 +116,7 @@ it.each([
   "continuous metadata refresh",
   "source retirement",
   "read failure",
-] as const)("honors %s during initial registry discovery before publication", async (change) => {
+] as const)("honors %s while a native primary reply awaits publication", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { target, handler, broadcastToConnIds } = await seedBroadcastHistory(
       resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
@@ -129,54 +131,62 @@ it.each([
     broadcastToConnIds.mockClear();
     const registration = { agentId: "other", path: sibling.path, env: state.env };
     registerOpenClawAgentDatabase(registration);
-    const held = createDeferredCore();
+    const held = createDeferredCore<unknown>();
     const release = createDeferredCore();
-    const readError = new Error("Registry worker read failed");
+    const readError =
+      change === "continuous metadata refresh"
+        ? new AgentDatabaseRegistryChangedError()
+        : new Error("Registry worker read failed");
     const read = stateReads.executeExistingOpenClawStateRead;
     let registryReads = 0;
-    const observation = vi
+    const registryObservation = vi
       .spyOn(stateReads, "executeExistingOpenClawStateRead")
       .mockImplementation(async (...args) => {
-        const result = await read(...args);
         if (args[1].type === "agentDatabaseRegistry.read") {
           registryReads++;
-          if (registryReads === 1) {
-            held.resolve();
-            await release.promise;
-            if (change === "read failure") {
-              throw readError;
-            }
-          } else if (change === "continuous metadata refresh") {
-            // Two documented metadata retries allow three acquisitions, never unbounded churn.
-            registerOpenClawAgentDatabase(registration);
-          }
+          throw readError;
         }
-        return result;
+        return read(...args);
+      });
+    const run = historyLane.pool.run;
+    const nativeObservation = vi
+      .spyOn(historyLane.pool, "run")
+      .mockImplementation(async (...args) => {
+        const reply = await run(...args);
+        if (reply.ok && asOptionalRecord(reply.value)?.kind === "message-by-id") {
+          held.resolve(reply.value);
+          await release.promise;
+        }
+        return reply;
       });
     const pending = handler(update);
     try {
-      await Promise.race([
+      const nativeReply = await Promise.race([
         held.promise,
         pending.then(() => {
-          throw new Error("Publication completed before its initial registry read");
+          throw new Error("Publication completed before its native primary reply was released");
         }),
       ]);
+      expect(nativeReply).toMatchObject({
+        kind: "message-by-id",
+        result: { found: true, seq: 2, message: { content: "Stored answer" } },
+      });
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
       if (change === "source retirement") {
         await closeOpenClawStateDatabaseByPathAsync(openOpenClawStateDatabase().path);
         openOpenClawStateDatabase();
       } else {
-        registerOpenClawAgentDatabase(registration);
+        const refreshes = change === "continuous metadata refresh" ? 3 : 1;
+        for (let refresh = 0; refresh < refreshes; refresh++) {
+          registerOpenClawAgentDatabase(registration);
+        }
       }
       release.resolve();
       if (change === "source retirement") {
         await expect(pending).rejects.toMatchObject({
           code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
         });
-      } else if (change === "read failure") {
-        await expect(pending).rejects.toBe(readError);
-      } else if (change === "continuous metadata refresh") {
-        await expect(pending).rejects.toBeInstanceOf(AgentDatabaseRegistryChangedError);
-        expect(registryReads).toBe(3);
+        expect(broadcastToConnIds).not.toHaveBeenCalled();
       } else {
         await pending;
         expect(broadcastToConnIds).toHaveBeenCalledWith(
@@ -188,13 +198,12 @@ it.each([
           expect.any(Set),
         );
       }
-      if (change !== "metadata refresh") {
-        expect(broadcastToConnIds).not.toHaveBeenCalled();
-      }
+      expect(registryReads).toBe(0);
     } finally {
       release.resolve();
       await pending.catch(() => undefined);
-      observation.mockRestore();
+      nativeObservation.mockRestore();
+      registryObservation.mockRestore();
     }
   });
 });
