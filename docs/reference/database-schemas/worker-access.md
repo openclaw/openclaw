@@ -461,6 +461,11 @@ Synchronous operator inspection uses the same selected-row reader. An unavailabl
 schema refuses the read rather than reporting missing backing sessions. Canonical
 admission, malformed-row handling, retention, and update behavior are unchanged.
 
+Task registry publication keeps retained readers available when a concurrent
+publication exactly matches the canonical readback, including delivery metadata.
+Changed or unreconciled facts still require preparation; receipt and observer
+invalidation retain their write-witness checks.
+
 Cron task reconciliation reads durable outcomes and applies recovery or loss in
 the shared-state worker. The final recovery check and lost-task write share one
 transaction, including after a recovery hook yields. The host rechecks the
