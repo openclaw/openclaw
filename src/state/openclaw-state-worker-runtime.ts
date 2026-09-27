@@ -48,9 +48,8 @@ import {
 import { executeFleetRegistryCommand } from "../fleet/registry.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
 import {
-  readManagedImageRecordInDatabase,
-  listManagedImageRecordEntriesInDatabase,
-  listManagedImageOriginalMediaIdsInDatabase,
+  executeManagedImageRecordCommand,
+  isManagedImageRecordCommand,
 } from "../gateway/managed-image-record-store.kernel.js";
 import {
   executeOperatorApprovalCommand,
@@ -489,14 +488,8 @@ export function executeSharedStateCommand(
     default:
       break;
   }
-  if (command.type === "managedImages.read") {
-    return readManagedImageRecordInDatabase(database.db, command.input.attachmentId);
-  }
-  if (command.type === "managedImages.entries") {
-    return listManagedImageRecordEntriesInDatabase(database.db, command.input.sessionKey);
-  }
-  if (command.type === "managedImages.originalMediaIds") {
-    return listManagedImageOriginalMediaIdsInDatabase(database.db);
+  if (isManagedImageRecordCommand(command)) {
+    return executeManagedImageRecordCommand(command, database);
   }
   if (isApnsRegistrationWorkerCommand(command)) {
     return executeApnsRegistrationCommand(command, database);

@@ -415,7 +415,7 @@ describe("Gateway agent and artifact APIs", () => {
       } as never,
     });
     expect(
-      attachManagedOutgoingMediaToMessage({ messageId, blocks: managedBlocks, stateDir }),
+      await attachManagedOutgoingMediaToMessage({ messageId, blocks: managedBlocks, stateDir }),
     ).toBe(true);
 
     await disconnectGatewayClient(client);

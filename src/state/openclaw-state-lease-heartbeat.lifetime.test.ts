@@ -140,6 +140,7 @@ function options() {
   const databasePath = "/synthetic/state.sqlite";
   const startupContext: OpenClawStateWorkerContext = {
     admission: {
+      coordinationKey: "file:12:34",
       databasePath,
       identity: { key: "file:12:34", canonicalPath: databasePath },
       assertCurrent: () => {
