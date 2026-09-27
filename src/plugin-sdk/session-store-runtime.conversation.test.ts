@@ -33,6 +33,7 @@ describe("current conversation session binding", () => {
   });
 
   afterEach(async () => {
+    // Retained reclamation cleanup still needs the shared-state broker.
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();

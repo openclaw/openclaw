@@ -71,8 +71,6 @@ type CreateProfileResult = {
   isRemote: boolean;
 };
 
-const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
-
 /** Create a profile service bound to one browser route context. */
 export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
@@ -100,9 +98,6 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       throw new BrowserConflictError(`profile "${name}" already exists`);
     }
 
-    const explicitProfileColor =
-      params.color && HEX_COLOR_RE.test(params.color) ? params.color : undefined;
-
     let parsedCdpUrl: string | undefined;
     if (normalizedUserDataDir && driver !== "existing-session") {
       throw new BrowserValidationError(
@@ -129,7 +124,6 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     const profileConfig = await createBrowserProfileConfig({
       name,
       resolved: state.resolved,
-      ...(explicitProfileColor ? { color: explicitProfileColor } : {}),
       ...(parsedCdpUrl ? { parsedCdpUrl } : {}),
       ...(normalizedUserDataDir ? { userDataDir: normalizedUserDataDir } : {}),
       ...(driver ? { driver } : {}),

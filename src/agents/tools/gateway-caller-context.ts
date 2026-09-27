@@ -393,7 +393,9 @@ export function wrapToolWithGatewayCallerIdentity(
     execute: async (...args) =>
       await withGatewayToolCallerIdentity(identity, async () => await tool.execute?.(...args)),
   };
-  copyAgentToolMetadata(tool, wrapped);
+  copyAgentToolMetadata(tool, wrapped, (source) =>
+    wrapToolWithGatewayCallerIdentity(source, identity),
+  );
   const sourcePreparer = getInternalToolExecutionPreparer(tool);
   if (sourcePreparer) {
     attachInternalToolExecutionPreparer(wrapped, async (params) => {

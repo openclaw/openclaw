@@ -449,7 +449,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       retainProviderSettlement?.(cancellation.settled);
     }
     try {
-      let installation: WorkerInstallationArtifact | undefined;
       beforeProvision?.();
       const preparedNode = await nodeProvisioning.prepare(
         record,
@@ -457,7 +456,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         signal,
         beforeProvision,
       );
-      installation = preparedNode?.installation;
+      let installation = preparedNode?.installation;
       cancellation?.assertActive();
       if (
         record.state === "requested" &&
@@ -512,13 +511,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (record.destroyRequestedAtMs === null && inState(record, "ready", "idle", "attached")) {
       try {
         currentBundle = await options.prepareInstallation("bundle", signal);
-        if (record.bootstrapReceipt) {
-          if (sameWorkerBuild(record.bootstrapReceipt, currentBundle)) {
-            const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : null;
-            if (record.state !== "attached" || sessionId) {
-              await ensurePendingCredential(record, sessionId ?? null);
-              record = store.get(record.environmentId) ?? record;
-            }
+        if (record.bootstrapReceipt && sameWorkerBuild(record.bootstrapReceipt, currentBundle)) {
+          const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : null;
+          if (record.state !== "attached" || sessionId) {
+            await ensurePendingCredential(record, sessionId ?? null);
+            record = store.get(record.environmentId) ?? record;
           }
         }
       } catch {
@@ -611,7 +608,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       );
       return;
     }
-    if (record.state === "draining" && record.destroyRequestedAtMs === null) {
+    if (record.state === "draining") {
       // Draining without destroy intent is durable provider-loss cleanup.
       record = await stopOwner(record);
       await move(record, "orphaned", { lastError: record.lastError ?? ORPHANED_LEASE_ERROR });

@@ -864,7 +864,7 @@ it.each([false, true])(
           runUpdatedInstallGatewayCommand(
             {
               result: { root: rootB },
-              opts: { json: true },
+              opts: {},
               invocationEnv: state.env,
               originalManagedServiceRuntime: original,
             },

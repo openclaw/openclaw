@@ -41,7 +41,8 @@ type CheckoutOptions = WorktreeFilesystemOptions & {
   base: string;
   branch?: string | { mode: "existing"; name: string };
   sourceProfile?: WorktreeSourceProfile;
-  prepareCommit?: (commit: string) => Promise<void>;
+  /** Hydrate the registered commit and return its estimated checkout bytes. */
+  prepareCommit?: (commit: string) => Promise<number>;
   rollbackGuard?: () => void;
   /** Restore reuses a warm template, or materializes its snapshot after registration. */
   deferGitCheckout?: boolean;
@@ -455,10 +456,10 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         "Worktree source commit changed before sparse materialization; preserve it for recovery.",
       );
     }
-    await options.prepareCommit?.(commit);
+    const checkoutBytes = await options.prepareCommit?.(commit);
     let template: Awaited<ReturnType<typeof prepareTemplate>>;
     let cloneBytes: number | undefined;
-    if (options.enabled && !profile && !options.sourceOnly) {
+    if (options.enabled && checkoutBytes !== 0 && !profile && !options.sourceOnly) {
       try {
         template = await prepareTemplate(options);
         cloneBytes = template ? await estimateTemplateCloneBytes(template) : undefined;

@@ -15,10 +15,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 
 internal data class MobileUiActRequest(
   val snapshotId: String,
@@ -86,48 +89,34 @@ internal fun mobileUiSnapshotJson(snapshot: MobileUiSnapshot): String =
     put("capturedAtMs", snapshot.capturedAtMs)
     put("package", JsonPrimitive(snapshot.packageName))
     put("windowTitle", JsonPrimitive(snapshot.windowTitle))
-    put(
-      "nodes",
-      buildJsonArray {
-        snapshot.nodes.forEach { node ->
-          add(
-            buildJsonObject {
-              put("ref", node.ref)
-              put("parentRef", JsonPrimitive(node.parentRef))
-              put("role", node.role)
-              put("text", JsonPrimitive(node.text))
-              put("contentDescription", JsonPrimitive(node.contentDescription))
-              put("viewId", JsonPrimitive(node.viewId))
-              put(
-                "bounds",
-                buildJsonArray {
-                  add(JsonPrimitive(node.boundsInScreen.left))
-                  add(JsonPrimitive(node.boundsInScreen.top))
-                  add(JsonPrimitive(node.boundsInScreen.right))
-                  add(JsonPrimitive(node.boundsInScreen.bottom))
-                },
-              )
-              put(
-                "flags",
-                buildJsonObject {
-                  put("clickable", node.clickable)
-                  put("editable", node.editable)
-                  put("scrollable", node.scrollable)
-                  put("enabled", node.enabled)
-                  put("focused", node.focused)
-                },
-              )
-              put(
-                "actions",
-                buildJsonArray {
-                  node.actions.forEach { action -> add(JsonPrimitive(action)) }
-                },
-              )
-            },
-          )
+    putJsonArray("nodes") {
+      snapshot.nodes.forEach { node ->
+        addJsonObject {
+          put("ref", node.ref)
+          put("parentRef", node.parentRef)
+          put("role", node.role)
+          put("text", node.text)
+          put("contentDescription", node.contentDescription)
+          put("viewId", node.viewId)
+          putJsonArray("bounds") {
+            add(node.boundsInScreen.left)
+            add(node.boundsInScreen.top)
+            add(node.boundsInScreen.right)
+            add(node.boundsInScreen.bottom)
+          }
+          putJsonObject("flags") {
+            put("clickable", node.clickable)
+            put("editable", node.editable)
+            put("scrollable", node.scrollable)
+            put("enabled", node.enabled)
+            put("focused", node.focused)
+          }
+          putJsonArray("actions") {
+            node.actions.forEach { action -> add(action) }
+          }
         }
-      },
-    )
+      }
+    }
   }.toString()
 
 internal fun parseMobileUiActRequest(paramsJson: String?): MobileUiActRequest? {
@@ -162,17 +151,17 @@ internal fun parseMobileUiActRequest(paramsJson: String?): MobileUiActRequest? {
 
       "tap" -> {
         MobileUiAction.Tap(
-          x = actionParams.int("x") ?: return null,
-          y = actionParams.int("y") ?: return null,
+          x = parseJsonInt(actionParams, "x") ?: return null,
+          y = parseJsonInt(actionParams, "y") ?: return null,
         )
       }
 
       "swipe" -> {
         MobileUiAction.Swipe(
-          x1 = actionParams.int("x1") ?: return null,
-          y1 = actionParams.int("y1") ?: return null,
-          x2 = actionParams.int("x2") ?: return null,
-          y2 = actionParams.int("y2") ?: return null,
+          x1 = parseJsonInt(actionParams, "x1") ?: return null,
+          y1 = parseJsonInt(actionParams, "y1") ?: return null,
+          x2 = parseJsonInt(actionParams, "x2") ?: return null,
+          y2 = parseJsonInt(actionParams, "y2") ?: return null,
           durationMs = actionParams.long("durationMs") ?: return null,
         )
       }
@@ -212,7 +201,5 @@ private fun JsonObject.string(key: String): String? =
     ?.contentOrNull
 
 private fun JsonObject.requiredString(key: String): String? = string(key)?.takeIf(String::isNotBlank)
-
-private fun JsonObject.int(key: String): Int? = (this[key] as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
 
 private fun JsonObject.long(key: String): Long? = (this[key] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()

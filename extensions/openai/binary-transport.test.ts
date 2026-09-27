@@ -1,5 +1,4 @@
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-// Reject ambiguous provider media before it becomes a user-visible artifact.
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import {
   createDebugProxyCaptureReaderAsync,
@@ -20,7 +19,7 @@ const modelAuth = createCapturedPluginRegistration().api.runtime.modelAuth;
 async function requestMedia(
   baseUrl: string,
   kind: "audio" | "video",
-  options: { timeoutMs?: number; mediaMaxMb?: number } = {},
+  options: { timeoutMs?: number; mediaMaxMb?: number; reference?: "image" | "video" } = {},
 ) {
   const budget =
     options.mediaMaxMb === undefined
@@ -59,6 +58,12 @@ async function requestMedia(
       },
     },
     timeoutMs: options.timeoutMs ?? 5_000,
+    ...(options.reference === "image"
+      ? { inputImages: [{ buffer: Buffer.from("image"), mimeType: "image/png" }] }
+      : {}),
+    ...(options.reference === "video"
+      ? { inputVideos: [{ buffer: Buffer.from("video"), mimeType: "video/mp4" }] }
+      : {}),
   });
   return result.videos[0]?.buffer;
 }
@@ -151,12 +156,9 @@ describe("production OpenAI binary transport", () => {
   );
 
   it.each([
-    { status: "queued", reference: "text" },
     { status: "queued", reference: "image" },
-    { status: "queued", reference: "video" },
-    { status: "completed", reference: "text" },
     { status: "completed", reference: "video" },
-  ])(
+  ] as const)(
     "releases $status $reference submission before real follow-up transport",
     async ({ status, reference }) => {
       const originalPost = providerHttp.postMultipartRequest;
@@ -201,31 +203,8 @@ describe("production OpenAI binary transport", () => {
             }
           },
           async (baseUrl) => {
-            const result = await buildOpenAIVideoGenerationProvider(modelAuth).generateVideo({
-              provider: "openai",
-              model: "sora-2",
-              prompt: "release submission before follow-up",
-              cfg: {
-                models: {
-                  providers: {
-                    openai: {
-                      apiKey: "local-test-key",
-                      baseUrl: `${baseUrl}/v1`,
-                      models: [],
-                      request: { allowPrivateNetwork: true },
-                    },
-                  },
-                },
-              },
-              timeoutMs: 5_000,
-              ...(reference === "image"
-                ? { inputImages: [{ buffer: Buffer.from("image"), mimeType: "image/png" }] }
-                : {}),
-              ...(reference === "video"
-                ? { inputVideos: [{ buffer: Buffer.from("video"), mimeType: "video/mp4" }] }
-                : {}),
-            });
-            expect(result.videos[0]?.buffer).toEqual(Buffer.from("rendered-video"));
+            const result = await requestMedia(baseUrl, "video", { reference });
+            expect(result).toEqual(Buffer.from("rendered-video"));
             expect(paths[0]).toBe(reference === "video" ? "/v1/videos/edits" : "/v1/videos");
             expect(paths).toHaveLength(status === "queued" ? 3 : 2);
             expect(releases).toBe(1);

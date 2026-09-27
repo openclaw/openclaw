@@ -3311,17 +3311,7 @@ private fun notificationPackageSelectionSummary(
     }
   }
 
-private fun notificationAppBadge(label: String): String {
-  val initials =
-    label
-      .split(' ', '-', '_', '.')
-      .asSequence()
-      .filter { it.isNotBlank() }
-      .take(2)
-      .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
-      .joinToString("")
-  return initials.ifBlank { "A" }
-}
+private fun notificationAppBadge(label: String): String = badgeInitials(label.replace('.', ' '), fallback = "A")
 
 internal fun formatCronWake(
   timeMs: Long?,

@@ -6,6 +6,7 @@ import {
   type SessionCatalog,
   validateSessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { prepareShellPathFromLoginShell } from "../../infra/shell-env.js";
 import {
   capturePluginLifecycleAuthority,
   capturePluginRegistryLifecycleEpoch,
@@ -330,6 +331,11 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     const finishProvider = diagnostics?.startWait("provider");
     let catalogList: SessionCatalog[];
     try {
+      if (selected.length > 0) {
+        // Plugin availability callbacks retain synchronous executable resolution contracts.
+        await prepareShellPathFromLoginShell({ env: process.env });
+        progress.assertCurrent();
+      }
       catalogList = await Promise.all(
         selected.map(async (provider): Promise<SessionCatalog> => {
           const shareRoute = catalogRegistrations.shareRoutes.get(provider);

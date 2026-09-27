@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   isPrimarySessionTranscriptFileName,
   resolveTrajectoryPath,
@@ -80,14 +81,14 @@ export type DeferredPluginSessionImport = z.infer<typeof receiptSchema>;
 /** Capture originals before deferral; settlement may only archive these verified identities. */
 export function captureDeferredPluginSessionSources(params: {
   storePath: string;
-  indexIdentity: MigrationArtifactIdentity;
+  indexIdentity?: MigrationArtifactIdentity;
   records: readonly { transcriptPath?: string; sourceFingerprint?: TranscriptFileFingerprint }[];
   unreferencedJsonlFiles: readonly string[];
   referencedPaths?: ReadonlySet<string>;
 }): DeferredPluginSessionImport["sources"] {
-  const sources = new Map<string, MigrationArtifactIdentity>([
-    [path.resolve(params.storePath), params.indexIdentity],
-  ]);
+  const sources = new Map<string, MigrationArtifactIdentity>(
+    params.indexIdentity ? [[path.resolve(params.storePath), params.indexIdentity]] : [],
+  );
   for (const file of params.unreferencedJsonlFiles) {
     if (!params.referencedPaths?.has(canonicalMigrationFilePath(file))) {
       sources.set(path.resolve(file), readMigrationArtifactIdentity(file));
@@ -154,9 +155,11 @@ function sourceKey(target: SessionImportTarget): string {
 }
 
 function databaseIdentity(sqlitePath: string): string {
-  const file = fs.lstatSync(sqlitePath, { bigint: true });
-  if (!file.isFile()) {
-    throw new Error("The imported session database is no longer a regular file.");
+  const file = fs.lstatSync(sqlitePath, { bigint: true, throwIfNoEntry: false });
+  if (!file?.isFile()) {
+    throw new Error(
+      `The imported session database is missing or no longer a regular file: ${sqlitePath}. Run ${formatCliCommand("openclaw doctor --session-sqlite recover --session-sqlite-all-agents")} against the same state/config before retrying repair.`,
+    );
   }
   return `${file.dev}:${file.ino}`;
 }
@@ -317,6 +320,9 @@ function assertVerifiedSessionSources(
     (source) => source.path === path.resolve(params.target.storePath),
   );
   const sourcePath = index && verifiedPaths.get(index.path);
+  if (!index && statMigrationPath(params.target.storePath) && onSourceConflict) {
+    onSourceConflict(path.resolve(params.target.storePath));
+  }
   // Doctor can replace an unavailable legacy index with the receipt's hash-bound source list.
   // A later index is new input and cannot inherit the completed import's authority.
   if (
@@ -326,7 +332,9 @@ function assertVerifiedSessionSources(
     return;
   }
   if (!index || !sourcePath) {
-    throw new Error("A deferred session import requires its verified original index.");
+    throw new Error(
+      `Session source changed in ${path.dirname(params.target.storePath)}: the current index has no verified import receipt. Run ${formatCliCommand("openclaw doctor --fix --non-interactive --yes", params.env)} against the same state/config to preserve and reverify it.`,
+    );
   }
   const issues: Array<{ code: string; message: string }> = [];
   const source = readLegacySessionStoreEntries(params.target, issues, { sourcePath });
@@ -336,7 +344,9 @@ function assertVerifiedSessionSources(
     source.bytes.length !== index.identity.size ||
     createHash("sha256").update(source.bytes).digest("hex") !== index.identity.sha256
   ) {
-    throw new Error(`Retained session migration source changed: ${params.target.storePath}`);
+    throw new Error(
+      `Retained session migration source changed in ${path.dirname(params.target.storePath)}: ${params.target.storePath}. Run ${formatCliCommand("openclaw doctor --fix --non-interactive --yes", params.env)} against the same state/config to preserve and reverify it.`,
+    );
   }
   for (const { entry, sessionKey } of source.entries) {
     if (
@@ -456,7 +466,7 @@ function parseSessionImportReceipt(
   if (recorded.databaseIdentity !== databaseIdentity(params.sqlitePath)) {
     if (purpose !== "readiness") {
       throw new Error(
-        "The verified session import database changed; run openclaw doctor --session-sqlite recover to verify the retained sources against the current database.",
+        `The verified session import database changed for ${path.dirname(params.target.storePath)}; run ${formatCliCommand("openclaw doctor --session-sqlite recover --session-sqlite-all-agents", params.env)} against the same state/config to verify the retained sources against the current database.`,
       );
     }
     recordStartupMigrationWarnings([
@@ -584,7 +594,9 @@ export function rebuildDeferredPluginSessionSourceIndex(
         !isDeepStrictEqual(current, receipt) ||
         databaseIdentity(params.sqlitePath) !== currentDatabaseIdentity
       ) {
-        throw new Error("Deferred session import changed before its source index was rebuilt.");
+        throw new Error(
+          `Deferred session import changed in ${path.dirname(params.target.storePath)} before its source index was rebuilt. Run ${formatCliCommand("openclaw doctor --fix --non-interactive --yes", params.env)} against the same state/config to retry.`,
+        );
       }
       const reportJson = JSON.stringify(rebuilt);
       const rebuiltIndex = rebuilt.sources.find(
@@ -659,7 +671,7 @@ export function prepareDeferredPluginSessionImportReader(params: {
     }
     if (prepared.imported.databaseIdentity !== databaseIdentity(target.sqlitePath)) {
       throw new Error(
-        "The verified session import database changed; retained source was not replayed.",
+        `The verified session import database changed for ${path.dirname(target.storePath)}; retained source was not replayed. Run ${formatCliCommand("openclaw doctor --session-sqlite recover --session-sqlite-all-agents", params.env)} against the same state/config.`,
       );
     }
     return target;
@@ -682,14 +694,13 @@ export function recordDeferredPluginSessionImport(
   const index = params.sources.find(
     (source) => source.path === path.resolve(params.target.storePath),
   );
-  if (!index) {
-    throw new Error("A deferred session import requires its verified original index.");
-  }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       assertVerifiedSessionSources(params, report);
       if (report.databaseIdentity !== databaseIdentity(params.sqlitePath)) {
-        throw new Error("Session import database changed before its receipt was recorded.");
+        throw new Error(
+          `Session import database changed for ${path.dirname(params.target.storePath)} before its receipt was recorded. Run ${formatCliCommand("openclaw doctor --fix --non-interactive --yes", params.env)} against the same state/config to retry.`,
+        );
       }
       const key = sourceKey({ ...params.target, sqlitePath: params.sqlitePath });
       recordLegacyMigrationReceipt(db, {
@@ -697,8 +708,8 @@ export function recordDeferredPluginSessionImport(
         migrationKind: RECEIPT_KIND,
         sourcePath: path.resolve(params.target.storePath),
         targetTable: "session_nodes",
-        sourceSha256: index.identity.sha256,
-        sourceSizeBytes: index.identity.size,
+        sourceSha256: index?.identity.sha256 ?? null,
+        sourceSizeBytes: index?.identity.size ?? null,
         sourceRecordCount: params.recordCount,
         runId: key,
         reportJson: JSON.stringify(report),

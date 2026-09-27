@@ -6,7 +6,6 @@ import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayDreamingSummary
-import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.GatewaySkillWorkshopSummary
@@ -80,7 +79,6 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -1245,18 +1243,13 @@ private fun RecentSessionList(
   onOpen: (String, String?) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-    Column {
-      rows.forEachIndexed { index, row ->
-        RecentSessionRowContent(
-          title = row.title,
-          source = row.source,
-          metadata = row.metadata,
-          onClick = { onOpen(row.key, row.ownerAgentId) },
-        )
-        if (index != rows.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.48f), thickness = 1.dp)
-        }
-      }
+    ClawSeparatedColumn(items = rows, dividerColor = ClawTheme.colors.border.copy(alpha = 0.48f)) { row ->
+      RecentSessionRowContent(
+        title = row.title,
+        source = row.source,
+        metadata = row.metadata,
+        onClick = { onOpen(row.key, row.ownerAgentId) },
+      )
     }
   }
 }
@@ -1544,10 +1537,7 @@ private fun usageSummaryText(count: Int): String =
   }
 
 private fun skillsSummaryText(skills: List<GatewaySkillSummary>): String {
-  val ready =
-    skills.count {
-      !it.disabled && it.eligible && !it.blockedByAllowlist && !it.blockedByAgentFilter && it.missingCount == 0
-    }
+  val ready = skills.count(::skillReady)
   return if (skills.isEmpty()) {
     nativeString("No skills")
   } else {
@@ -1610,12 +1600,7 @@ private fun nodesDevicesStatus(summary: GatewayNodesDevicesSummary): Boolean? =
     else -> null
   }
 
-private fun GatewayNodesDevicesSummary.hasNodeCapabilityApprovalPending(): Boolean =
-  nodes.any { node ->
-    node.approvalState is GatewayNodeCapabilityApproval.PendingApproval ||
-      node.approvalState is GatewayNodeCapabilityApproval.PendingReapproval ||
-      node.approvalState == GatewayNodeCapabilityApproval.Unapproved
-  }
+private fun GatewayNodesDevicesSummary.hasNodeCapabilityApprovalPending(): Boolean = nodes.any { node -> nodeCapabilityApprovalNeedsUserAction(node.approvalState) }
 
 internal fun channelsSummaryText(summary: GatewayChannelsSummary): String {
   val connected = summary.channels.count { it.connected }
