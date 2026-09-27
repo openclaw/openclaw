@@ -88,7 +88,7 @@ export function normalizeChromeMcpOptions(
         : []),
       ...connectionArgs,
       ...defaultFeatureArgs,
-      // Stable custom launchers may still need the opt-in flag; pinned 1.8 enables it by default.
+      // Stable custom launchers may still need the opt-in flag; the pinned server enables it by default.
       ...(managedServer ? [] : ["--experimental-page-id-routing"]),
       ...(!overridesConnection && !browserUrl && userDataDir && argv.userDataDir === undefined
         ? ["--userDataDir", userDataDir]

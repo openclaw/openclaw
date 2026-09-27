@@ -12,7 +12,6 @@ on:
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - "patches/chrome-devtools-mcp@*.patch"
-      - "src/infra/node-runtime-executable.ts"
       - "src/plugin-sdk/process-runtime.ts"
       - "scripts/check-openclaw-package-tarball.mts"
       - "scripts/lib/package-bundled-dependencies.mts"
