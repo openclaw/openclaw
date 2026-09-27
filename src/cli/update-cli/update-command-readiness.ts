@@ -443,7 +443,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         // observation cannot inherit an earlier snapshot's startup phase.
         startupPhase: interval ? health.startupPhase : `timed out during ${error.phase}`,
         elapsedMs: performance.now() - startedAtMs,
-        probeError: error.message,
+        probeError: interval ? health.probeError : error.message,
       },
       readyz: false,
       http,
