@@ -1,17 +1,25 @@
-// Control UI component implements the file preview modal element.
-import { css, html, type PropertyValues, type TemplateResult } from "lit";
+import { html, type PropertyValues, type TemplateResult } from "lit";
 import { property, query } from "lit/decorators.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { t } from "../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { renderCopyButton } from "./copy-button.ts";
 import { type FileKind, fileKindForPath } from "./file-kind.ts";
+import { filePreviewModalStyles } from "./file-preview-modal.styles.ts";
 import { icons } from "./icons.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { renderPanelLoadingSkeleton } from "./panel-loading-skeleton.ts";
 import "./modal-dialog.ts";
 
-type FilePreviewModalFile = {
+registerFilePreviewEnglish();
+
+export type FilePreviewModalFile = {
   path: string;
   size: string;
   contents: string;
+  message?: string;
 };
 
 export class OpenClawFilePreviewModal extends OpenClawLitElement {
@@ -26,6 +34,12 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   @property() emptyTitle = "";
   @property() emptySubtitle = "";
   @property() copyLabel = "";
+  @property() layout: "files" | "document" = "files";
+  @property({ attribute: false }) directories: string[] = [];
+  @property({ type: Boolean }) loading = false;
+  @property({ type: Boolean }) fileLoading = false;
+  @property() error = "";
+  @property() notice = "";
   @query(".search") private searchInput?: HTMLInputElement;
   @query(".detail-body") private detailBody?: HTMLElement;
 
@@ -38,425 +52,15 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   // Reconnection does not rerun firstUpdated; defer focus until shadow DOM is ready.
   private focusAfterUpdate = false;
 
-  static override styles = css`
-    :host {
-      display: contents;
-    }
-
-    .modal {
-      width: 100%;
-      height: min(780px, 86vh);
-      background: var(--bg);
-      border: 1px solid var(--border-strong);
-      border-radius: var(--radius-lg);
-      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    .head {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 16px 20px;
-      border-bottom: 1px solid var(--border);
-      background: var(--bg);
-    }
-
-    .search-icon {
-      color: var(--muted);
-      font-size: 18px;
-    }
-
-    .search {
-      flex: 1;
-      min-width: 0;
-      background: transparent;
-      border: none;
-      outline: none;
-      color: var(--text-strong);
-      font: inherit;
-      font-size: 18px;
-      font-weight: 400;
-      padding: 4px 0;
-    }
-
-    .search:focus,
-    .search:focus-visible {
-      outline: none;
-      border: none;
-      box-shadow: none;
-    }
-
-    .search::placeholder {
-      color: var(--muted);
-    }
-
-    .state {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-      color: var(--muted);
-      padding: 5px 10px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      background: var(--bg-elevated);
-    }
-
-    .body {
-      flex: 1;
-      display: grid;
-      grid-template-columns: 360px 1fr;
-      min-height: 0;
-    }
-
-    .list {
-      border-right: 1px solid var(--border);
-      padding: 14px 10px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-
-    .list-section {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--muted);
-      padding: 4px 12px 8px;
-    }
-
-    .item {
-      display: grid;
-      grid-template-columns: 16px 1fr auto;
-      gap: 12px;
-      align-items: center;
-      padding: 12px 14px;
-      border-radius: var(--radius-md);
-      border: none;
-      background: transparent;
-      color: var(--text);
-      font: inherit;
-      outline: none;
-      text-align: left;
-    }
-
-    .item:focus-visible {
-      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
-    }
-
-    .item:hover {
-      background: var(--bg-elevated);
-    }
-
-    .item.is-active {
-      background: var(--accent-subtle);
-    }
-
-    .item.is-active .item-name {
-      color: var(--text-strong);
-    }
-
-    .item-icon {
-      width: 16px;
-      height: 16px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--muted);
-      opacity: 0.85;
-    }
-
-    .item.is-active .item-icon {
-      color: var(--accent);
-      opacity: 1;
-    }
-
-    .item-icon svg,
-    .chat-copy-btn svg {
-      width: 16px;
-      height: 16px;
-      stroke: currentColor;
-      fill: none;
-      stroke-width: 1.5px;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-    }
-
-    .item-name {
-      font-family: var(--mono);
-      font-size: 14px;
-      color: var(--text);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .item-meta {
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .empty-list {
-      color: var(--muted);
-      font-size: 13px;
-      padding: 12px;
-    }
-
-    .detail {
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-      min-height: 0;
-    }
-
-    .detail.empty {
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      padding: 24px;
-    }
-
-    .detail-head {
-      padding: 20px 24px 14px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .detail-title-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 10px;
-    }
-
-    .title {
-      flex: 1;
-      min-width: 0;
-      margin: 0;
-      font-family: var(--mono);
-      font-size: 22px;
-      color: var(--text-strong);
-      font-weight: 700;
-      letter-spacing: -0.01em;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .chat-copy-btn {
-      width: 32px;
-      height: 32px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      flex: 0 0 auto;
-      padding: 0;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      background: var(--bg-elevated);
-      color: var(--muted);
-    }
-
-    .chat-copy-btn:hover {
-      border-color: var(--border-strong);
-      color: var(--text-strong);
-    }
-
-    .chat-copy-btn:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-    }
-
-    .chat-copy-btn__icon {
-      display: inline-flex;
-      width: 16px;
-      height: 16px;
-      position: relative;
-    }
-
-    .chat-copy-btn__icon-copy,
-    .chat-copy-btn__icon-check {
-      position: absolute;
-      inset: 0;
-      transition: opacity 150ms ease;
-    }
-
-    .chat-copy-btn__icon-check,
-    .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
-      opacity: 0;
-    }
-
-    .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
-      opacity: 1;
-    }
-
-    .chat-copy-btn[data-copy-state="copying"] {
-      opacity: 0;
-      pointer-events: none;
-    }
-
-    .chat-copy-btn[data-copy-state="error"] {
-      border-color: var(--danger-subtle);
-      background: var(--danger-subtle);
-      color: var(--danger);
-    }
-
-    .chat-copy-btn[data-copy-state="copied"] {
-      border-color: var(--ok-subtle);
-      background: var(--ok-subtle);
-      color: var(--ok);
-    }
-
-    .chips {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-
-    .chip {
-      display: inline-flex;
-      align-items: center;
-      padding: 3px 10px;
-      border-radius: 999px;
-      font-size: 11.5px;
-      background: var(--bg-elevated);
-      border: 1px solid var(--border);
-      color: var(--muted);
-    }
-
-    .chip.accent {
-      background: var(--accent-subtle);
-      border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-      color: var(--accent);
-    }
-
-    .chip.ok {
-      background: color-mix(in srgb, var(--ok) 12%, transparent);
-      border-color: color-mix(in srgb, var(--ok) 30%, transparent);
-      color: var(--ok);
-    }
-
-    .detail-body {
-      flex: 1;
-      overflow-x: hidden;
-      overflow-y: auto;
-      padding: 20px 24px 24px;
-    }
-
-    .code-content {
-      min-width: 0;
-    }
-
-    .code-chunk {
-      margin: 0;
-      min-width: 0;
-      font-family: var(--mono);
-      font-size: 13px;
-      line-height: 1.7;
-      color: var(--text);
-      white-space: pre-wrap;
-      word-break: break-word;
-      content-visibility: auto;
-      contain-intrinsic-block-size: auto 1414px;
-    }
-
-    .foot {
-      display: flex;
-      align-items: center;
-      gap: 18px;
-      padding: 12px 20px;
-      border-top: 1px solid var(--border);
-      background: var(--bg);
-      font-size: 12px;
-      color: var(--muted);
-    }
-
-    .foot-group {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .kbd {
-      font-family: var(--mono);
-      font-size: 10.5px;
-      padding: 2px 6px;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      background: var(--bg-elevated);
-      color: var(--text);
-    }
-
-    .spacer {
-      flex: 1;
-    }
-
-    .button {
-      height: 36px;
-      padding: 0 14px;
-      border-radius: var(--radius-md);
-      border: 1px solid var(--border);
-      background: var(--bg-elevated);
-      color: var(--text);
-      font-weight: 600;
-    }
-
-    .button:hover {
-      border-color: var(--border-strong);
-      color: var(--text-strong);
-    }
-
-    .empty-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--text-strong);
-      margin: 0 0 8px;
-    }
-
-    .empty-subtitle {
-      margin: 0;
-      font-size: 13px;
-      color: var(--muted);
-      max-width: 380px;
-    }
-
-    @media (max-width: 640px) {
-      .head {
-        padding: 12px;
-      }
-
-      .body {
-        grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: minmax(0, min(180px, 30dvh)) minmax(0, 1fr);
-      }
-
-      .list {
-        min-width: 0;
-        border-right: 0;
-        border-bottom: 1px solid var(--border);
-        padding: 10px 8px;
-      }
-
-      .item {
-        min-width: 0;
-      }
-
-      .foot {
-        gap: 8px;
-        padding: 10px 12px;
-      }
-    }
-  `;
+  static override styles = filePreviewModalStyles;
 
   protected override willUpdate(changed: PropertyValues<this>) {
     const inputsChanged =
       !this.derivedInputsReady ||
       changed.has("activePath") ||
       changed.has("query") ||
-      changed.has("files");
+      changed.has("files") ||
+      changed.has("layout");
     if (!inputsChanged) {
       return;
     }
@@ -464,6 +68,14 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     this.derivedInputsReady = true;
     this.filteredFiles = this.filterFiles();
     const nextActiveFile = this.resolveActiveFile(this.filteredFiles);
+    // A late sibling read replaces the inventory, not the document being read.
+    // Reset only when the displayed document or explicit view context changes.
+    this.resetScrollAfterUpdate ||=
+      changed.has("layout") ||
+      changed.has("query") ||
+      this.activeFile?.path !== nextActiveFile?.path ||
+      this.activeFile?.contents !== nextActiveFile?.contents ||
+      this.activeFile?.message !== nextActiveFile?.message;
     this.activeFile = nextActiveFile;
 
     const nextCodeSource = nextActiveFile?.contents;
@@ -471,8 +83,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       this.codeSource = nextCodeSource;
       this.codeChunks = nextCodeSource === undefined ? [] : chunkFileContents(nextCodeSource);
     }
-
-    this.resetScrollAfterUpdate = true;
   }
 
   override render() {
@@ -498,76 +108,155 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       >
         <div class="modal">
           <header class="head">
-            <span class="search-icon">⌕</span>
-            <input
-              class="search"
-              placeholder=${searchPlaceholder}
-              .value=${this.query}
-              @input=${this.handleQueryInput}
-            />
-            <span class="state">${fileCount}</span>
+            ${
+              this.layout === "document"
+                ? html`<h1 class="heading">${label}</h1>
+                    <button
+                      class="close-button"
+                      type="button"
+                      aria-label=${t("common.close")}
+                      @click=${this.emitClose}
+                    >
+                      ${icons.x}
+                    </button>`
+                : html`<span class="search-icon">⌕</span
+                    ><input
+                      class="search"
+                      placeholder=${searchPlaceholder}
+                      .value=${this.query}
+                      @input=${this.handleQueryInput}
+                    /><span class="state">${fileCount}</span>`
+            }
           </header>
-          <div class="body">
+          ${this.notice ? html`<p class="notice" role="status">${this.notice}</p>` : ""}
+          <div
+            class="body ${this.layout === "document" ? "tree" : ""}"
+            aria-busy=${this.loading || this.fileLoading}
+          >
             <aside class="list">
-              <div class="list-section">${listLabel} · ${filteredFiles.length}</div>
-              ${
-                filteredFiles.length === 0
-                  ? html`<div class="empty-list">${t("filePreview.noMatches")}</div>`
-                  : filteredFiles.map(
-                      (file) => html`
-                        <button
-                          class="item ${file.path === activeFile?.path ? "is-active" : ""}"
-                          @pointerdown=${this.preventItemPointerFocus}
-                          @mousedown=${this.preventItemPointerFocus}
-                          @click=${() => this.emitSelect(file.path)}
-                        >
-                          <span class="item-icon">${iconForFile(file.path)}</span>
-                          <span class="item-name">${file.path}</span>
-                          <span class="item-meta">${file.size}</span>
-                        </button>
-                      `,
-                    )
-              }
+              ${this.layout === "files" ? html`<div class="list-section">${listLabel} · ${filteredFiles.length}</div>` : ""}
+              ${this.loading && !this.error ? renderPanelLoadingSkeleton("file-list", t("common.loading"), true) : filteredFiles.length === 0 ? (this.error ? "" : html`<div class="empty-list">${t("filePreview.noMatches")}</div>`) : this.layout === "document" ? this.renderFolder("") : filteredFiles.map((file) => this.renderItem(file))}
             </aside>
-            ${activeFile ? this.renderFile(activeFile) : this.renderEmpty()}
+            ${
+              this.error
+                ? html`<section class="detail empty">
+                    <p role="alert">${this.error}</p>
+                    <button
+                      class="button"
+                      @click=${() => this.dispatchEvent(new CustomEvent("file-preview-retry", { bubbles: true, composed: true }))}
+                    >
+                      ${t("common.retry")}
+                    </button>
+                  </section>`
+                : this.loading || this.fileLoading
+                  ? html`<section class="detail">
+                      <div class="detail-body">
+                        ${renderPanelLoadingSkeleton("document", t("common.loading"), true)}
+                      </div>
+                    </section>`
+                  : activeFile
+                    ? this.renderFile(activeFile)
+                    : this.renderEmpty()
+            }
           </div>
-          <footer class="foot">
-            <span class="foot-group"><span class="kbd">↑↓</span> ${t("filePreview.navigate")}</span>
-            <span class="spacer"></span>
-            <button class="button" @click=${this.emitClose}>
-              ${t("common.close")} <span class="kbd">esc</span>
-            </button>
-          </footer>
+          ${
+            this.layout === "files"
+              ? html`<footer class="foot">
+                  <span class="foot-group"
+                    ><span class="kbd">↑↓</span> ${t("filePreview.navigate")}</span
+                  >
+                  <span class="spacer"></span>
+                  <button class="button" @click=${this.emitClose}>
+                    ${t("common.close")} <span class="kbd">esc</span>
+                  </button>
+                </footer>`
+              : ""
+          }
         </div>
       </openclaw-modal-dialog>
     `;
   }
 
+  private renderItem(file: FilePreviewModalFile) {
+    return html`<button
+      class="item ${file.path === this.activeFile?.path ? "is-active" : ""}"
+      data-path=${file.path}
+      aria-current=${file.path === this.activeFile?.path ? "true" : "false"}
+      @pointerdown=${this.preventItemPointerFocus}
+      @mousedown=${this.preventItemPointerFocus}
+      @click=${() => this.emitSelect(file.path)}
+    >
+      <span class="item-icon">${FILE_KIND_ICONS[fileKindForPath(file.path)]}</span
+      ><span class="item-name" title=${file.path}
+        >${this.layout === "document" ? file.path.split("/").pop() : file.path}</span
+      >${this.layout === "files" ? html`<span class="item-meta">${file.size}</span>` : ""}
+    </button>`;
+  }
+
+  private renderFolder(prefix: string): TemplateResult {
+    const files = this.filteredFiles.filter((file) => file.path.startsWith(prefix));
+    const direct = files.filter((file) => !file.path.slice(prefix.length).includes("/"));
+    const folders = new Set(
+      [...files.map((file) => file.path), ...this.directories.map((directory) => `${directory}/`)]
+        .filter((path) => path.startsWith(prefix) && path.slice(prefix.length).includes("/"))
+        .map((path) => path.slice(prefix.length).split("/")[0]!),
+    );
+    return html`${direct.map((file) => this.renderItem(file))}${[...folders].toSorted().map(
+      (folder) =>
+        html`<details class="folder" open>
+          <summary>${icons.folder}<span>${folder}</span></summary>
+          <div>${this.renderFolder(`${prefix}${folder}/`)}</div>
+        </details>`,
+    )}`;
+  }
+
+  private handleDocumentLink = (event: MouseEvent) => {
+    // SAFETY: This delegated click handler is bound to the rendered Markdown element tree.
+    const anchor = (event.target as Element).closest<HTMLAnchorElement>("a[href]");
+    const href = anchor?.getAttribute("href");
+    if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//iu.test(href)) {
+      return;
+    }
+    event.preventDefault();
+    const base = new URL(this.activeFile?.path ?? "SKILL.md", "https://skill.invalid/");
+    const target = new URL(href, base);
+    let filePath: string;
+    try {
+      filePath = decodeURIComponent(target.pathname.slice(1));
+    } catch {
+      return;
+    }
+    const file = this.files.find((candidate) => candidate.path === filePath);
+    if (file) {
+      this.emitSelect(file.path);
+    }
+  };
+
   private renderFile(file: FilePreviewModalFile) {
     return html`
       <section class="detail">
-        <div class="detail-head">
-          <div class="detail-title-row">
-            <h2 class="title">${file.path}</h2>
-            ${
-              file.contents
-                ? renderCopyButton(file.contents, this.copyLabel || t("filePreview.copyFile"))
-                : ""
-            }
-          </div>
-          <div class="chips">
-            <span class="chip accent">${fileKind(file.path)}</span>
-            <span class="chip">${file.size}</span>
-            <span class="chip">${this.readOnlyLabel || t("filePreview.readOnly")}</span>
-            ${this.contextLabel ? html`<span class="chip ok">${this.contextLabel}</span>` : ""}
-          </div>
-        </div>
+        ${
+          this.layout === "files"
+            ? html`<div class="detail-head">
+                <div class="detail-title-row">
+                  <h2 class="title">${file.path}</h2>
+                  ${
+                    file.contents
+                      ? renderCopyButton(file.contents, this.copyLabel || t("filePreview.copyFile"))
+                      : ""
+                  }
+                </div>
+                <div class="chips">
+                  <span class="chip accent">${fileKind(file.path)}</span>
+                  <span class="chip">${file.size}</span>
+                  <span class="chip">${this.readOnlyLabel || t("filePreview.readOnly")}</span>
+                  ${this.contextLabel ? html`<span class="chip ok">${this.contextLabel}</span>` : ""}
+                </div>
+              </div>`
+            : ""
+        }
         <div class="detail-body">
-          <div class="code-content">
-            ${this.codeChunks.map(
-              (chunk, index) => html`<pre class="code-chunk" data-chunk=${index}>${chunk}</pre>`,
-            )}
-          </div>
+          ${file.message ? html`<p role="status">${file.message}</p>` : this.layout === "document" && /\.md$/iu.test(file.path) ? html`<article class="markdown" @click=${this.handleDocumentLink}>${unsafeHTML(toSanitizedMarkdownHtml(stripFrontmatterBlock(file.contents), { mode: "document", remoteImages: false, codeBlockChrome: "none", fileLinks: false }))}</article>` : html`<div class="code-content">${this.codeChunks.map((chunk, index) => html`<pre class="code-chunk" data-chunk=${index}>${chunk}</pre>`)}</div>`}
         </div>
       </section>
     `;
@@ -583,7 +272,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   }
 
   private filterFiles(): FilePreviewModalFile[] {
-    const normalizedQuery = this.query.trim().toLowerCase();
+    const normalizedQuery = this.layout === "files" ? this.query.trim().toLowerCase() : "";
     if (!normalizedQuery) {
       return this.files;
     }
@@ -615,6 +304,9 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     }
     if (changed.has("activePath") || changed.has("query") || changed.has("files")) {
       this.scrollActiveFileIntoView();
+      if (this.layout === "document" && changed.has("activePath")) {
+        this.focusModal();
+      }
     }
     if (this.focusAfterUpdate && this.isConnected) {
       this.focusAfterUpdate = false;
@@ -634,7 +326,9 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   };
 
   private preventItemPointerFocus = (event: Event) => {
-    event.preventDefault();
+    if (this.layout === "files") {
+      event.preventDefault();
+    }
   };
 
   private handleKeydown = (event: KeyboardEvent) => {
@@ -654,14 +348,24 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   };
 
   private focusModal() {
-    const target = this.searchInput ?? this.shadowRoot?.querySelector<HTMLElement>(".modal");
+    const target =
+      this.searchInput ??
+      this.shadowRoot?.querySelector<HTMLElement>(".item.is-active, .button") ??
+      this.shadowRoot?.querySelector<HTMLElement>(".close-button");
     target?.focus({ preventScroll: true });
   }
 
   private moveSelection(offset: number, event: KeyboardEvent) {
     event.preventDefault();
     event.stopPropagation();
-    const files = this.filterFiles();
+    const files =
+      this.layout === "document"
+        ? [...(this.shadowRoot?.querySelectorAll<HTMLButtonElement>(".item") ?? [])]
+            .filter((button) => !button.closest("details:not([open])"))
+            .flatMap((button) =>
+              this.filteredFiles.filter((file) => file.path === button.dataset.path),
+            )
+        : this.filterFiles();
     if (files.length === 0) {
       return;
     }
@@ -695,7 +399,9 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
         detail: path,
       }),
     );
-    this.focusModal();
+    if (this.layout === "files") {
+      this.focusModal();
+    }
   }
 
   private emitClose = () => {
@@ -732,7 +438,7 @@ function fileKind(path: string): string {
     py: "Python",
     sh: t("filePreview.kind.shell"),
   };
-  return map[ext] ?? (ext ? ext.toUpperCase() : t("filePreview.kind.file"));
+  return Object.hasOwn(map, ext) ? map[ext]! : ext ? ext.toUpperCase() : t("filePreview.kind.file");
 }
 
 // Same glyph vocabulary chat file links paint through CSS masks
@@ -747,11 +453,8 @@ const FILE_KIND_ICONS: Record<FileKind, TemplateResult> = {
   markdown: icons.book,
   package: icons.box,
   shell: icons.terminal,
+  skill: icons.pencilSparkles,
 };
-
-function iconForFile(path: string) {
-  return FILE_KIND_ICONS[fileKindForPath(path)];
-}
 
 declare global {
   interface HTMLElementTagNameMap {

@@ -6,9 +6,11 @@ const state = vi.hoisted(() => ({
   drainEmbeddingProviders: vi.fn(),
   completeClose: vi.fn(),
   flushSessionChanges: vi.fn(),
+  drainSessionPublications: vi.fn(),
   stopPlugins: vi.fn(),
-  clearPluginRegistry: vi.fn(),
   preparePluginRegistryShutdown: vi.fn(async () => undefined),
+  artifactsAvailable: true,
+  waitForPluginCacheRetirement: vi.fn(async () => undefined),
 }));
 
 vi.mock("./server-close.runtime.js", () => {
@@ -27,6 +29,17 @@ vi.mock("../plugins/hook-runner-global.js", () => {
 vi.mock("./server-methods/session-change-event.js", () => {
   state.loaded.push("session-change-events");
   return { flushPendingSessionsChangedEvents: state.flushSessionChanges };
+});
+vi.mock("./session-event-prepared-row.js", () => {
+  state.loaded.push("session-event-publications");
+  return {
+    get drainSessionEventPublications() {
+      if (!state.artifactsAvailable) {
+        throw new Error("installed session-event-prepared-row chunk was removed");
+      }
+      return state.drainSessionPublications;
+    },
+  };
 });
 vi.mock("./mcp-http.js", () => {
   state.loaded.push("mcp-http");
@@ -66,8 +79,18 @@ vi.mock("../agents/provider-transport-dispatcher-pool.js", () => {
 vi.mock("../plugins/runtime.js", () => {
   state.loaded.push("plugin-runtime");
   return {
-    clearActivePluginRegistry: state.clearPluginRegistry,
     prepareActivePluginRegistryShutdown: state.preparePluginRegistryShutdown,
+  };
+});
+vi.mock("../plugins/plugin-cache.js", () => {
+  state.loaded.push("plugin-cache");
+  return {
+    get waitForPluginCacheRetirement() {
+      if (!state.artifactsAvailable) {
+        throw new Error("installed plugin-cache chunk was removed");
+      }
+      return state.waitForPluginCacheRetirement;
+    },
   };
 });
 
@@ -82,6 +105,7 @@ describe("gateway shutdown runtime", () => {
         "server-close",
         "plugin-hooks",
         "session-change-events",
+        "session-event-publications",
         "mcp-http",
         "task-maintenance",
         "restart-recovery",
@@ -91,6 +115,7 @@ describe("gateway shutdown runtime", () => {
         "code-mode",
         "provider-transports",
         "plugin-runtime",
+        "plugin-cache",
       ].toSorted(),
     );
     expect(runtime.prepareGatewayClose).toBe(state.prepareClose);
@@ -98,7 +123,16 @@ describe("gateway shutdown runtime", () => {
     expect(runtime.completeGatewayClose).toBe(state.completeClose);
     expect(runtime.flushPendingSessionsChangedEvents).toBe(state.flushSessionChanges);
     expect(runtime.runGlobalGatewayStopSafely).toBe(state.stopPlugins);
-    expect(runtime.clearActivePluginRegistry).toBe(state.clearPluginRegistry);
     expect(state.preparePluginRegistryShutdown).toHaveBeenCalledOnce();
+    expect(state.waitForPluginCacheRetirement).not.toHaveBeenCalled();
+    expect(state.drainSessionPublications).not.toHaveBeenCalled();
+    state.artifactsAvailable = false;
+    try {
+      expect(runtime.drainSessionEventPublications).toBe(state.drainSessionPublications);
+      await runtime.waitForPluginCacheRetirement();
+      expect(state.waitForPluginCacheRetirement).toHaveBeenCalledOnce();
+    } finally {
+      state.artifactsAvailable = true;
+    }
   });
 });

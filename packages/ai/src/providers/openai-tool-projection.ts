@@ -1,7 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
-import { projectRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
+import {
+  prepareRuntimeToolInputSchema,
+  projectRuntimeToolInputSchema,
+} from "./tool-schema-json-projection.js";
+import type { PreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
 
 type OpenAIToolDescriptor = {
   readonly name?: unknown;
@@ -53,6 +57,19 @@ function unreadableToolDiagnostic(toolIndex: number): OpenAIToolProjectionDiagno
 
 /** Snapshots direct/custom tool descriptors before OpenAI payload construction. */
 export function projectOpenAITools(tools: readonly OpenAIToolDescriptor[]): OpenAIToolProjection {
+  return projectOpenAIToolDescriptors(tools);
+}
+
+/** Package-private facts are consumed before the projection or payload can escape. */
+export function prepareOpenAITools(tools: readonly OpenAIToolDescriptor[]) {
+  const schemas = new Map<Record<string, unknown>, PreparedToolSchemaNormalization>();
+  return { projection: projectOpenAIToolDescriptors(tools, schemas), schemas };
+}
+
+function projectOpenAIToolDescriptors(
+  tools: readonly OpenAIToolDescriptor[],
+  schemas?: Map<Record<string, unknown>, PreparedToolSchemaNormalization>,
+): OpenAIToolProjection {
   let inputToolCount: number;
   try {
     inputToolCount = tools.length;
@@ -109,7 +126,11 @@ export function projectOpenAITools(tools: readonly OpenAIToolDescriptor[]): Open
       });
       continue;
     }
-    const schemaProjection = projectRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`);
+    const prepared = schemas
+      ? prepareRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`)
+      : undefined;
+    const schemaProjection =
+      prepared?.projection ?? projectRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`);
     if (!isRecord(schemaProjection.schema) || schemaProjection.violations.length > 0) {
       diagnostics.push({
         toolIndex,
@@ -120,6 +141,9 @@ export function projectOpenAITools(tools: readonly OpenAIToolDescriptor[]): Open
             : [`${name}.parameters must be a JSON object schema`],
       });
       continue;
+    }
+    if (prepared?.normalization) {
+      schemas?.set(schemaProjection.schema, prepared.normalization);
     }
 
     let descriptionValue: unknown;

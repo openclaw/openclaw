@@ -1,4 +1,6 @@
+import type { RouteLocation } from "@openclaw/uirouter";
 import { vi } from "vitest";
+import type { ApplicationRouter, RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "./context.ts";
 
 export type ShellKeyboardState = {
@@ -55,4 +57,20 @@ export function stubRenderedWhenDefined(shell: object): void {
     value: (tagName: string) =>
       customElements.get(tagName) ? document.createElement(tagName) : null,
   });
+}
+
+export function committedRouterState(
+  routeId: RouteId,
+  pathname: string,
+  data?: unknown,
+): ReturnType<ApplicationRouter["getState"]> {
+  const location = { pathname, search: "", hash: "" } satisfies RouteLocation;
+  return {
+    location,
+    resolvedLocation: location,
+    status: "success",
+    matches: [{ routeId, location, data }],
+    pendingMatches: [],
+    cachedMatches: [],
+  } as unknown as ReturnType<ApplicationRouter["getState"]>;
 }

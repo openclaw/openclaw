@@ -2,7 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { HOST_ENV_SECURITY_POLICY } from "./host-env-security-policy.js";
-import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
+import { markOpenClawExecEnv, SUBAGENT_EXEC_ENV_VAR } from "./openclaw-exec-env.js";
 
 const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const WINDOWS_COMPAT_OVERRIDE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_()]*$/;
@@ -34,6 +34,7 @@ const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Ob
   "COLORTERM",
   "NO_COLOR",
   "FORCE_COLOR",
+  SUBAGENT_EXEC_ENV_VAR,
 ]);
 const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_PREFIX_VALUES: readonly string[] = Object.freeze([
   "LC_",

@@ -77,10 +77,12 @@ Make the referenced environment variable available to the Gateway process.
 See [Secret management](/gateway/secrets) for other secret providers. If you
 use `plugins.allow`, include `team-reports` in that list.
 
-Restart the Gateway after changing plugin configuration, then check startup:
+Plugin configuration changes apply automatically with the default hybrid reload
+mode. If the Gateway is offline, start it with its configured secrets available.
+If you changed its process environment, restart it with the updated environment.
+Then check the plugin:
 
 ```bash
-openclaw gateway restart
 openclaw team-reports status --json
 openclaw dashboard
 ```
@@ -90,6 +92,13 @@ successful run started at or after that day's closing UTC midnight and includes
 that day. A completed manual run after close also satisfies catch-up, including
 one that finishes during the startup delay or deferred wait. A successful run
 that started while the day was still open does not satisfy closed-day catch-up.
+When retrying a partially failed run, catch-up reuses healthy closed daily reports
+from the same organization scope and collects the remaining days. Manual generation
+still refreshes the requested day. Week and month reports use stored daily activity.
+Collection and aggregation run in workers, with bounded batches staged in the
+plugin's SQLite connection. Scratch activity disappears when that connection closes;
+accepted report history and retention are unchanged.
+
 Status shows the run, stored periods, next scheduled times, and source warnings.
 To request a report immediately, use:
 
@@ -97,7 +106,7 @@ To request a report immediately, use:
 openclaw team-reports generate --intraday
 ```
 
-Generation returns a run ID before collection and summarization finish. Check
+Generation returns a run ID after recording the run, before collection and summarization finish. Check
 `status` for the result, then open **Reports** in the Control UI.
 
 ## Read reports in the Control UI
@@ -120,6 +129,37 @@ GitHub and other external links may not open inside the sandboxed frame. Each
 page includes **Open in a new window** with that page's own URL. If the browser
 blocks that action too, copy the link into a new tab. Gateway authentication
 still applies there.
+
+### Work sessions
+
+The overview shows recent **Work sessions** on this Gateway. Open **All work
+sessions** (or **Work sessions** in the report navigation) to page through the
+current session list. Each entry links to the conversation and shows its current
+owner, run status, and project when present. Sessions are ordered by recent activity.
+
+Each person’s history page and each member section in daily, weekly, and monthly
+reports also shows **Current work / owned sessions**, including when filtering a
+report by person. These direct conversation links reflect current ownership, not
+the historical report window. **All owned sessions** opens a paginated directory
+filtered to that member before pagination.
+
+Members are matched case-insensitively using their configured and report GitHub
+aliases against linked GitHub identities on Gateway profiles. Merged profiles
+resolve to their canonical owner. Unlinked or ambiguous identities are labeled
+separately from a linked member with no sessions visible to you. Display names
+are never used to infer ownership.
+
+The list is read when you open or refresh the page, using your existing session
+permissions. Archived, incognito, automation, system, and hidden subagent sessions
+are excluded. Session owners are not guessed from GitHub handles or display names.
+This is a current-work view, not a historical contribution count: it does not
+change daily totals, model summaries, Markdown or JSON exports, or stored report
+history. Session transcripts are not copied into the reports database.
+
+Inside the Control UI, selecting a session opens its chat through the host
+navigation. Outside the embedded tab, session links are ordinary Control UI
+links. If session discovery fails, the page shows **Work sessions unavailable**
+while stored reports remain usable.
 
 Pages mirror the maintainer report site layout: a banner and activity dateline,
 latest-period quick cards, day/week/month history, people timelines, and a
@@ -154,8 +194,11 @@ fonts, so no external stylesheets, web fonts, or scripts are needed.
 ## Configuration
 
 All keys below live under `plugins.entries.team-reports.config`. Unknown keys
-are rejected. Configuration and secret changes require a Gateway restart;
-secrets resolve once when the report service starts.
+are rejected. Configuration changes reload the running plugin with the default
+hybrid reload mode; see [Hot reload](/gateway/configuration/hot-reload). Secrets
+resolve when the report service starts. After rotating a file, exec, or store
+secret, run `openclaw plugins reload team-reports`. Environment changes require
+restarting the Gateway with the updated environment.
 
 | Key               | Default                   | Behavior                                                                                                                                                                                                                                                               |
 | ----------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -267,7 +310,7 @@ is a sibling of `config`, not a field inside it:
     // Keep your github and identity configuration here.
     summaries: {
       enabled: true,
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       reasoning: "high",
     },
   },
@@ -303,7 +346,9 @@ call. Collection is stored before summarization, which may take several minutes.
 Only one run executes at a time. Scheduled work waits for an active run;
 manual generation is rejected while another run is active. Runs have a
 45-minute deadline. Stopping the service cancels its timers and waits up to
-30 seconds for active work before closing storage.
+30 seconds for active work, then cancels remote collection and summarization.
+Any database operation already in progress and the final run outcome finish
+before storage closes.
 
 ## Understand report windows and counts
 
@@ -372,6 +417,7 @@ With the default `basePath`, authenticated readers can use:
 | `/plugins/team-reports/day/<key>/`          | Daily HTML report; replace `day` with `week` or `month` for aggregates. |
 | `/plugins/team-reports/day/<key>/report.md` | Markdown export; also available for weeks and months.                   |
 | `/plugins/team-reports/day/<key>/data.json` | Structured report; also available for weeks and months.                 |
+| `/plugins/team-reports/sessions/`           | Current work sessions, with links to their conversations.               |
 | `/plugins/team-reports/people/`             | Roster index.                                                           |
 | `/plugins/team-reports/people/<login>/`     | Per-person history, calendar, and 30-day trend.                         |
 | `/plugins/team-reports/index.json`          | Latest keys and stored-period index.                                    |
@@ -390,8 +436,9 @@ set `retention.days: 0` to preserve all report history.
 
 **The Reports tab is missing or unavailable.** Confirm the plugin is enabled,
 allowed by `plugins.allow` if present, and the Control UI session has
-`operator.read`. Restart the Gateway after config changes. For an unavailable
-frame, check HTTPS or trusted loopback access and third-party-cookie policy.
+`operator.read`. Config changes automatically reload the plugin. If it remains
+unavailable after fixing its configuration, run `openclaw plugins reload team-reports`.
+For an unavailable frame, check HTTPS or trusted loopback access and third-party-cookie policy.
 
 **There are no reports yet.** Run `openclaw team-reports status --json`. Startup
 catch-up waits 60 seconds, and collection or model calls may still be running.
@@ -399,11 +446,13 @@ Use `generate --intraday` for today's partial report. `/latest/` requires at
 least one closed daily report.
 
 **A source has warnings or reports look incomplete.** Read the warnings in
-status and the report. Check GitHub token access, organization/team names,
+status and the report. Failed-run errors name each affected period and source
+(for example, `day/2026-08-20/github`). Check GitHub token access, organization/team names,
 excluded repositories, and Discord bot access to each configured channel and
 its history. Rate limits can delay a run. Regenerate affected days once access
-or rate limits recover, then refresh aggregates. Changing a secret requires
-a Gateway restart.
+or rate limits recover, then refresh aggregates. After rotating a file, exec, or
+store secret, run `openclaw plugins reload team-reports`; environment changes
+require a Gateway restart with the updated environment.
 
 Repository advisories are optional. An advisory request returning HTTP 403 or
 404 counts toward `advisoriesSkipped` in the GitHub source stats without adding

@@ -320,6 +320,9 @@ suite.define(() => {
         await waitForTextContaining(app.locator("#capabilities"), "serverResources");
         await waitForTextContaining(app.locator("#capabilities"), "updateModelContext");
         await waitForText(app.locator("#ping"), "{}");
+        await app.locator("#list-tools").click();
+        await waitForTextContaining(app.locator("#tools"), "app_companion");
+        await waitForTextContaining(app.locator("#tools"), "model_only", false);
         await waitForText(app.locator("#isolation"), "isolated");
         await waitForText(app.locator("#host-theme"), "dark");
         await waitForTextContaining(
@@ -435,6 +438,9 @@ suite.define(() => {
         await waitForTextContaining(app.locator("#capabilities"), "serverResources");
         await waitForTextContaining(app.locator("#capabilities"), "updateModelContext", false);
         await waitForText(app.locator("#ping"), "{}");
+        await app.locator("#list-tools").click();
+        await waitForTextContaining(app.locator("#tools"), "app_companion");
+        await waitForTextContaining(app.locator("#tools"), "model_only", false);
         await waitForText(app.locator("#isolation"), "isolated");
         await app.locator("#call-app").click();
         await waitForTextContaining(app.locator("#app-tool"), "companion-called");
@@ -846,7 +852,7 @@ suite.define(() => {
             ).toHaveLength(initializations);
 
             // Playwright does not support BFCache restoration; use its supported history flow.
-            // Production no-store headers stay unchanged, and ordinary history is not BFCache proof.
+            // App documents stay uncached; the public versioned sandbox shell is immutable.
             const historyContext = await newProofContext();
             const historyPage = await historyContext.newPage();
             const historyStates: Array<Record<string, unknown>> = [];
@@ -871,12 +877,19 @@ suite.define(() => {
                   shown.push({ persisted: event.persisted, atMs: Date.now() }),
                 );
               });
-              const responses: Array<Record<string, unknown>> = [];
+              const responses: Array<{
+                pathname: string;
+                version: string | null;
+                status: number;
+                cacheControl: string | undefined;
+              }> = [];
               historyObservations.responses = responses;
               historyPage.on("response", (response) => {
                 if (response.url().includes("mcp-app")) {
+                  const url = new URL(response.url());
                   responses.push({
-                    pathname: new URL(response.url()).pathname,
+                    pathname: url.pathname,
+                    version: url.searchParams.get("v"),
                     status: response.status(),
                     cacheControl: response.headers()["cache-control"],
                   });
@@ -917,16 +930,23 @@ suite.define(() => {
               expect(
                 historyEvents.filter((event) => event.event === "response-written"),
               ).toMatchObject([{ id: historyCallId, isError: false }]);
-              for (const pathname of [
-                "/__openclaw__/mcp-app",
-                "/__openclaw__/mcp-app/view",
-                "/mcp-app-sandbox",
-              ]) {
+              for (const pathname of ["/__openclaw__/mcp-app", "/__openclaw__/mcp-app/view"]) {
                 expect(responses.filter((response) => response.pathname === pathname)).toEqual(
                   expect.arrayContaining([
                     expect.objectContaining({ status: 200, cacheControl: "no-store" }),
                   ]),
                 );
+              }
+              const sandboxResponses = responses.filter(
+                (response) => response.pathname === "/mcp-app-sandbox",
+              );
+              expect(sandboxResponses.length).toBeGreaterThan(0);
+              for (const response of sandboxResponses) {
+                expect(response.version).toMatch(/^[a-f0-9]{64}$/);
+                expect(response).toMatchObject({
+                  status: 200,
+                  cacheControl: "public, max-age=31536000, immutable",
+                });
               }
               historyObservations.phase = "complete";
             } finally {

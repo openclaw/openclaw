@@ -2,12 +2,20 @@ import Foundation
 import OpenClawKit
 
 extension OpenClawChatViewModel {
-    static func decodeMessages(_ raw: [AnyCodable]) -> [OpenClawChatMessage] {
+    static func decodeMessages(
+        _ raw: [AnyCodable],
+        activity: [OpenClawChatHistoryActivity]? = nil) -> [OpenClawChatMessage]
+    {
+        let byID = Dictionary((activity ?? []).map { ($0.messageId, $0.items) }, uniquingKeysWith: { _, next in next })
         let decoded = raw.compactMap { item in
             (try? ChatPayloadDecoding.decode(item, as: OpenClawChatMessage.self))
                 .map { Self.stripInboundMetadata(from: $0) }
         }
-        return Self.dedupeMessages(decoded)
+        return Self.dedupeMessages(decoded.map { message in
+            var message = message
+            if let id = message.transcriptMessageID { message.activity = byID[id] }
+            return message
+        })
     }
 
     static func stripInboundMetadata(from message: OpenClawChatMessage) -> OpenClawChatMessage {
@@ -15,51 +23,14 @@ extension OpenClawChatViewModel {
             return message
         }
 
-        let sanitizedContent = message.content.map { content -> OpenClawChatMessageContent in
+        var sanitized = message
+        sanitized.content = message.content.map { content in
             guard let text = content.text else { return content }
-            let cleaned = ChatMarkdownPreprocessor.preprocess(markdown: text).cleaned
-            return OpenClawChatMessageContent(
-                type: content.type,
-                text: cleaned,
-                thinking: content.thinking,
-                thinkingSignature: content.thinkingSignature,
-                mimeType: content.mimeType,
-                fileName: content.fileName,
-                artifactId: content.artifactId,
-                url: content.url,
-                openUrl: content.openUrl,
-                alt: content.alt,
-                width: content.width,
-                height: content.height,
-                sizeBytes: content.sizeBytes,
-                durationSeconds: content.durationSeconds,
-                playback: content.playback,
-                content: content.content,
-                id: content.id,
-                name: content.name,
-                arguments: content.arguments,
-                details: content.details,
-                isError: content.isError)
+            var sanitized = content
+            sanitized.text = ChatMarkdownPreprocessor.preprocess(markdown: text).cleaned
+            return sanitized
         }
-
-        return OpenClawChatMessage(
-            id: message.id,
-            role: message.role,
-            content: sanitizedContent,
-            timestamp: message.timestamp,
-            transcriptMessageID: message.transcriptMessageID,
-            transcriptRunID: message.transcriptRunID,
-            isTruncated: message.isTruncated,
-            idempotencyKey: message.idempotencyKey,
-            toolCallId: message.toolCallId,
-            toolName: message.toolName,
-            usage: message.usage,
-            stopReason: message.stopReason,
-            errorMessage: message.errorMessage,
-            details: message.details,
-            isError: message.isError,
-            provenance: message.provenance,
-            historyMarker: message.historyMarker)
+        return sanitized
     }
 
     static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
@@ -95,12 +66,7 @@ extension OpenClawChatViewModel {
 
         // The gateway persists this key with the canonical user row. Prefer it
         // so a server timestamp change cannot replace the optimistic row's ID.
-        if let idempotencyKey = Self.normalizedIdempotencyKey(message.idempotencyKey) {
-            return [role, "idempotency", idempotencyKey].joined(separator: "|")
-        }
-        if let transcriptMessageID = Self.normalizedTranscriptMessageID(message.transcriptMessageID) {
-            return [role, "transcript", transcriptMessageID].joined(separator: "|")
-        }
+        if let key = Self.correlatedMessageIdentityKey(for: message, role: role) { return key }
 
         let timestamp: String = {
             guard let value = message.timestamp, value.isFinite else { return "" }
@@ -133,6 +99,7 @@ extension OpenClawChatViewModel {
         // Like src/sessions/transcript-events.ts, exclude intermediate tool rows:
         // they carry the same run ID but cannot settle the final reply.
         self.isAssistantMessage(message) &&
+            message.streamSegmentID == nil &&
             !["tooluse", "tool_use", "tool_calls"].contains(message.stopReason?.lowercased() ?? "") &&
             !message.content.contains {
                 ["toolcall", "tool_call", "tooluse", "tool_use", "functioncall"]
@@ -177,30 +144,32 @@ extension OpenClawChatViewModel {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func correlatedMessageIdentityKey(for message: OpenClawChatMessage, role: String) -> String? {
+        if let segmentID = message.streamSegmentID {
+            let runID = Self.normalizedRunID(message.transcriptRunID) ??
+                Self.normalizedRunID(message.streamFallback?.runId) ?? ""
+            return [role, "segment", runID, segmentID].joined(separator: "|")
+        }
+        if let idempotencyKey = Self.normalizedIdempotencyKey(message.idempotencyKey) {
+            return [role, "idempotency", idempotencyKey].joined(separator: "|")
+        }
+        guard let id = Self.normalizedTranscriptMessageID(message.transcriptMessageID) else { return nil }
+        return [role, "transcript", id].joined(separator: "|")
+    }
+
     static func adoptingCanonicalMessage(
         _ incoming: OpenClawChatMessage,
         over existing: OpenClawChatMessage) -> OpenClawChatMessage
     {
-        OpenClawChatMessage(
-            id: existing.id,
-            role: incoming.role,
-            content: self.preservingLocalAudioDurations(
-                in: incoming.content,
-                from: existing.content),
-            timestamp: incoming.timestamp ?? existing.timestamp,
-            transcriptMessageID: incoming.transcriptMessageID ?? existing.transcriptMessageID,
-            transcriptRunID: incoming.transcriptRunID ?? existing.transcriptRunID,
-            isTruncated: incoming.isTruncated,
-            idempotencyKey: incoming.idempotencyKey,
-            toolCallId: incoming.toolCallId,
-            toolName: incoming.toolName,
-            usage: incoming.usage,
-            stopReason: incoming.stopReason,
-            errorMessage: incoming.errorMessage,
-            details: incoming.details,
-            isError: incoming.isError,
-            provenance: incoming.provenance ?? existing.provenance,
-            historyMarker: incoming.historyMarker ?? existing.historyMarker)
+        var adopted = incoming
+        adopted.id = existing.id
+        adopted.content = self.preservingLocalAudioDurations(in: incoming.content, from: existing.content)
+        adopted.timestamp = incoming.timestamp ?? existing.timestamp
+        adopted.transcriptMessageID = incoming.transcriptMessageID ?? existing.transcriptMessageID
+        adopted.transcriptRunID = incoming.transcriptRunID ?? existing.transcriptRunID
+        adopted.provenance = incoming.provenance ?? existing.provenance
+        adopted.historyMarker = incoming.historyMarker ?? existing.historyMarker
+        return adopted
     }
 
     private static func preservingLocalAudioDurations(
@@ -220,28 +189,9 @@ extension OpenClawChatViewModel {
             else {
                 return content
             }
-            return OpenClawChatMessageContent(
-                type: content.type,
-                text: content.text,
-                thinking: content.thinking,
-                thinkingSignature: content.thinkingSignature,
-                mimeType: content.mimeType,
-                fileName: content.fileName,
-                artifactId: content.artifactId,
-                url: content.url,
-                openUrl: content.openUrl,
-                alt: content.alt,
-                width: content.width,
-                height: content.height,
-                sizeBytes: content.sizeBytes,
-                durationSeconds: localDuration,
-                playback: content.playback,
-                content: content.content,
-                id: content.id,
-                name: content.name,
-                arguments: content.arguments,
-                details: content.details,
-                isError: content.isError)
+            var adopted = content
+            adopted.durationSeconds = localDuration
+            return adopted
         }
     }
 
@@ -499,27 +449,10 @@ extension OpenClawChatViewModel {
                 Self.normalizedIdempotencyKey(message.idempotencyKey) == remoteKey
         }
         var updated = self.messages
-        updated[matchIndex] = if let canonical {
-            Self.adoptingCanonicalMessage(canonical, over: existing)
+        if let canonical {
+            updated[matchIndex] = Self.adoptingCanonicalMessage(canonical, over: existing)
         } else {
-            OpenClawChatMessage(
-                id: existing.id,
-                role: existing.role,
-                content: existing.content,
-                timestamp: existing.timestamp,
-                transcriptMessageID: existing.transcriptMessageID,
-                transcriptRunID: existing.transcriptRunID,
-                isTruncated: existing.isTruncated,
-                idempotencyKey: remoteKey,
-                toolCallId: existing.toolCallId,
-                toolName: existing.toolName,
-                usage: existing.usage,
-                stopReason: existing.stopReason,
-                errorMessage: existing.errorMessage,
-                details: existing.details,
-                isError: existing.isError,
-                provenance: existing.provenance,
-                historyMarker: existing.historyMarker)
+            updated[matchIndex].idempotencyKey = remoteKey
         }
         self.replaceMessages(Self.dedupeMessages(updated))
         guard let survivingIndex = self.messages.firstIndex(where: { message in
@@ -741,12 +674,7 @@ extension OpenClawChatViewModel {
     }
 
     static func dedupeKey(for message: OpenClawChatMessage) -> String? {
-        if let idempotencyKey = normalizedIdempotencyKey(message.idempotencyKey) {
-            return "\(message.role)|idempotency|\(idempotencyKey)"
-        }
-        if let transcriptMessageID = normalizedTranscriptMessageID(message.transcriptMessageID) {
-            return "\(message.role)|transcript|\(transcriptMessageID)"
-        }
+        if let key = correlatedMessageIdentityKey(for: message, role: message.role) { return key }
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -756,12 +684,13 @@ extension OpenClawChatViewModel {
 }
 
 extension OpenClawChatViewModel {
-    private func canApplyHistory(_ request: HistoryRequest) -> Bool {
+    func canApplyHistory(_ request: HistoryRequest) -> Bool {
         request.id >= self.latestAppliedHistoryRequestID &&
             self.isCurrentSession(request.session)
     }
 
     func advanceSessionGeneration() {
+        self.cancelHistoryInvalidationRefresh()
         self.sessionGeneration &+= 1
     }
 
@@ -771,6 +700,11 @@ extension OpenClawChatViewModel {
 
     func invalidateHistorySnapshots() {
         self.historyMutationGeneration &+= 1
+    }
+
+    func cancelHistoryInvalidationRefresh() {
+        self.historyInvalidationRefresh?.task.cancel()
+        self.historyInvalidationRefresh = nil
     }
 
     func beginHistoryRequest(
@@ -791,6 +725,9 @@ extension OpenClawChatViewModel {
 
     private func markHistoryRequestApplied(_ request: HistoryRequest) {
         self.latestAppliedHistoryRequestID = max(self.latestAppliedHistoryRequestID, request.id)
+        if let refresh = self.historyInvalidationRefresh, request.id >= refresh.requestID {
+            self.cancelHistoryInvalidationRefresh()
+        }
     }
 
     @discardableResult
@@ -802,7 +739,7 @@ extension OpenClawChatViewModel {
     {
         guard self.canApplyHistory(request) else { return false }
         let incoming = self.adoptingProvisionalFinalMessageIDs(
-            in: Self.decodeMessages(payload.messages ?? []))
+            in: Self.decodeMessages(payload.messages ?? [], activity: payload.activity))
         let unmatchedProvisionalFinalIDs = Set(provisionalFinalMessagesMissing(from: incoming).map(\.id))
         var retainedMessageIDs = unmatchedProvisionalFinalIDs
         if request.historyMutationGeneration != self.historyMutationGeneration {

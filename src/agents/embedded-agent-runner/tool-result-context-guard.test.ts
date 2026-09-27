@@ -27,148 +27,22 @@ import {
   installToolResultContextGuard,
   markTranscriptPromptText,
 } from "./tool-result-context-guard.js";
+import {
+  CONTEXT_LIMIT_TRUNCATION_NOTICE,
+  makeUser,
+  makeToolResult,
+  makeAssistant,
+  makeReadToolResult,
+  makeLegacyToolResult,
+  makeToolResultWithDetails,
+  getToolResultText,
+  makeGuardableAgent,
+  applyGuardToContext,
+  applyMidTurnPrecheckGuardToContext,
+  expectOpenClawTruncation,
+} from "./tool-result-context-guard.test-support.js";
 import { estimateToolResultTextChars } from "./tool-result-text-budget.js";
 import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
-
-const CONTEXT_LIMIT_TRUNCATION_NOTICE = "more characters truncated";
-
-function makeUser(text: string): AgentMessage {
-  return castAgentMessage({
-    role: "user",
-    content: text,
-    timestamp: Date.now(),
-  });
-}
-
-function makeToolResult(id: string, text: string, toolName = "grep"): AgentMessage {
-  return castAgentMessage({
-    role: "toolResult",
-    toolCallId: id,
-    toolName,
-    content: [{ type: "text", text }],
-    isError: false,
-    timestamp: Date.now(),
-  });
-}
-
-function makeAssistant(text: string, extras: Record<string, unknown> = {}): AgentMessage {
-  return castAgentMessage({
-    role: "assistant",
-    content: text,
-    timestamp: Date.now(),
-    ...extras,
-  });
-}
-
-function makeReadToolResult(id: string, text: string): AgentMessage {
-  return makeToolResult(id, text, "read");
-}
-
-function makeLegacyToolResult(id: string, text: string): AgentMessage {
-  return castAgentMessage({
-    role: "tool",
-    tool_call_id: id,
-    tool_name: "read",
-    content: text,
-  });
-}
-
-function makeToolResultWithDetails(id: string, text: string, detailText: string): AgentMessage {
-  // details can be much larger than replay content; guards should drop them
-  // only when rewriting the visible tool result.
-  return castAgentMessage({
-    role: "toolResult",
-    toolCallId: id,
-    toolName: "read",
-    content: [{ type: "text", text }],
-    details: {
-      truncation: {
-        truncated: true,
-        outputLines: 100,
-        content: detailText,
-      },
-    },
-    isError: false,
-    timestamp: Date.now(),
-  });
-}
-
-function getToolResultText(msg: AgentMessage): string {
-  const content = (msg as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  const block = content.find(
-    (entry) => entry && typeof entry === "object" && (entry as { type?: string }).type === "text",
-  ) as { text?: string } | undefined;
-  return typeof block?.text === "string" ? block.text : "";
-}
-
-function makeGuardableAgent(
-  transformContext?: (
-    messages: AgentMessage[],
-    signal: AbortSignal,
-  ) => AgentMessage[] | Promise<AgentMessage[]>,
-) {
-  return { transformContext };
-}
-
-async function applyGuardToContext(
-  agent: { transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown },
-  contextForNextCall: AgentMessage[],
-  contextWindowTokens = 1_000,
-) {
-  installToolResultContextGuard({
-    agent,
-    contextWindowTokens,
-  });
-  return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
-}
-
-async function applyMidTurnPrecheckGuardToContext(
-  agent: { transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown },
-  contextForNextCall: AgentMessage[],
-  options: {
-    contextWindowTokens?: number;
-    contextTokenBudget?: number;
-    reserveTokens?: number;
-    toolResultMaxChars?: number;
-    prePromptMessageCount?: number;
-    systemPrompt?: string;
-  } = {},
-) {
-  // Mid-turn precheck simulates a new tool result being appended after the
-  // original prompt fence; it raises structured signals instead of mutating history.
-  const contextWindowTokens = options.contextWindowTokens ?? options.contextTokenBudget ?? 20_000;
-  installToolResultContextGuard({
-    agent,
-    contextWindowTokens,
-    midTurnPrecheck: {
-      enabled: true,
-      contextTokenBudget: options.contextTokenBudget ?? contextWindowTokens,
-      reserveTokens: () => options.reserveTokens ?? 10_000,
-      toolResultMaxChars: options.toolResultMaxChars,
-      getSystemPrompt: () => options.systemPrompt,
-      ...(options.prePromptMessageCount !== undefined
-        ? { getPrePromptMessageCount: () => options.prePromptMessageCount as number }
-        : {}),
-    },
-  });
-  return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
-}
-
-function expectOpenClawTruncation(text: string): void {
-  expect(text).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
-  expect(text).toMatch(
-    /\[\.\.\. \d+ more characters truncated; rerun with narrower args if needed\]$/,
-  );
-  expect(text).not.toContain("[compacted: tool output removed to free context]");
-  expect(text).not.toContain("[compacted: tool output trimmed to free context]");
-  expect(text).not.toContain("[truncated: output exceeded context limit]");
-}
 
 function mockCallArg(
   mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
@@ -1539,6 +1413,98 @@ describe("installContextEngineLoopHook", () => {
     for (const [index, message] of withNew.entries()) {
       expect(message).toBe(preassemblyMessages[index]);
     }
+  });
+
+  it.each([
+    "afterTurn throws",
+    "assemble throws",
+    "assemble returns null",
+    "assemble omits messages",
+    "assemble returns non-array messages",
+  ] as const)("restores hook-mutated history and retries when %s", async (failure) => {
+    const agent = makeGuardableAgent();
+    const original = [
+      makeUser("preserve instruction"),
+      makeToolResult("call_1", "preserve result"),
+    ];
+    const messages = original.slice();
+    let fail = true;
+    const engine = makeMockEngine({
+      afterTurn: async ({ messages: history }) => {
+        if (!fail) {
+          return;
+        }
+        history.splice(0, history.length, makeUser("mutated history"));
+        if (failure === "afterTurn throws") {
+          throw new Error("failed after mutation");
+        }
+      },
+      assemble: async ({ messages: history }) => {
+        if (!fail) {
+          return { messages: history, estimatedTokens: 1 };
+        }
+        if (failure === "assemble throws") {
+          throw new Error("assembly failed after mutation");
+        }
+        if (failure === "assemble returns null") {
+          return null as never;
+        }
+        return (
+          failure === "assemble omits messages"
+            ? { estimatedTokens: 0 }
+            : { messages: "malformed", estimatedTokens: 0 }
+        ) as never;
+      },
+    });
+    installHook(agent, engine, 1);
+
+    expect(await callTransform(agent, messages)).toBe(messages);
+    expect(messages).toEqual(original);
+    original.forEach((message, index) => expect(messages[index]).toBe(message));
+    fail = false;
+    expect(await callTransform(agent, messages)).toEqual(original);
+    expect(engine.afterTurn).toHaveBeenCalledTimes(2);
+    expect(recordMockArg(engine.afterTurn, 1).prePromptMessageCount).toBe(1);
+    expect(await callTransform(agent, messages)).toEqual(original);
+    expect(engine.afterTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("restores hook-mutated history before propagating cancellation", async () => {
+    const agent = makeGuardableAgent();
+    const controller = new AbortController();
+    const cancellation = new Error("cancelled during hook");
+    const original = [makeUser("instruction"), makeToolResult("call_1", "result")];
+    const messages = original.slice();
+    const engine = makeMockEngine({
+      afterTurn: async ({ messages: history }) => {
+        history.length = 0;
+        controller.abort(cancellation);
+      },
+    });
+    installHook(agent, engine, 1);
+    const transform = expectDefined(agent.transformContext, "installed transform");
+
+    await expect(transform(messages, controller.signal)).rejects.toBe(cancellation);
+    expect(messages).toEqual(original);
+    expect(engine.assemble).not.toHaveBeenCalled();
+  });
+
+  it("keeps successful in-place hook windowing and caches its assembled view", async () => {
+    const agent = makeGuardableAgent();
+    const result = makeToolResult("call_1", "result");
+    const messages = [makeUser("instruction"), result];
+    const engine = makeMockEngine({
+      afterTurn: async ({ messages: history }) => {
+        history.splice(0, 1);
+      },
+    });
+    installHook(agent, engine, 1);
+
+    const assembled = await callTransform(agent, messages);
+    expect(assembled).toEqual([result]);
+    expect(messages).toEqual([result]);
+    expect(await callTransform(agent, messages)).toBe(assembled);
+    expect(engine.afterTurn).toHaveBeenCalledOnce();
   });
 
   it("invokes any pre-existing transformContext before the engine sees messages", async () => {

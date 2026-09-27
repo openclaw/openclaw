@@ -1,5 +1,6 @@
 {
   "id": "xai",
+  "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
     "configRepair": true
@@ -19,6 +20,7 @@
         "aliases": {
           "grok-4.3-latest": "grok-4.3",
           "grok-4.5-latest": "grok-4.5",
+          "grok-4.7-latest": "grok-4.7",
           "grok-build-latest": "grok-4.5"
         }
       }
@@ -28,6 +30,10 @@
     {
       "endpointClass": "xai-native",
       "hosts": ["api.x.ai"]
+    },
+    {
+      "endpointClass": "custom",
+      "baseUrls": ["https://cli-chat-proxy.grok.com/v1"]
     }
   ],
   "providerRequest": {
@@ -43,6 +49,15 @@
         "baseUrl": "https://api.x.ai/v1",
         "api": "openai-responses",
         "models": [
+          {
+            "id": "grok-4.7",
+            "name": "Grok 4.7",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 2, "output": 6, "cacheRead": 0.5, "cacheWrite": 0 },
+            "contextWindow": 500000,
+            "maxTokens": 64000
+          },
           {
             "id": "grok-4.6",
             "name": "Grok 4.6",
@@ -107,9 +122,9 @@
       {
         "provider": "xai",
         "model": "auto",
-        "reason": "The OpenClaw xAI OAuth auto selector has retired; use a concrete model.",
-        "retirement": { "replacedBy": "grok-4.6" },
-        "when": { "baseUrlHosts": ["cli-chat-proxy.grok.com"] }
+        "reason": "The xAI auto selector has retired; use a concrete model.",
+        "retirement": { "replacedBy": "grok-4.7" },
+        "when": { "baseUrlHosts": ["cli-chat-proxy.grok.com", "api.x.ai"] }
       },
       {
         "provider": "xai",
@@ -180,6 +195,8 @@
       "personalAccount": true,
       "choiceId": "xai-oauth",
       "appGuidedAuth": "device-code",
+      "credentialOnly": true,
+      "channelLogin": {},
       "choiceLabel": "xAI OAuth",
       "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
       "groupId": "xai",
@@ -313,6 +330,26 @@
       ]
     }
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    },
+    {
+      "id": "x-search",
+      "title": "X search",
+      "order": 20,
+      "properties": ["xSearch"]
+    },
+    {
+      "id": "code-execution",
+      "title": "Code execution",
+      "order": 30,
+      "properties": ["codeExecution"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

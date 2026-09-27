@@ -61,7 +61,7 @@ export {
   resolveTelegramTransport,
   shouldRetryTelegramTransportFallback,
 } from "./src/fetch.js";
-export { makeProxyFetch } from "./src/proxy.js";
+export { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 export {
   createForumTopicTelegram,
   deleteMessageTelegram,

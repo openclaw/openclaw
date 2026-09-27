@@ -19,14 +19,14 @@ from a single entry point:
 
 - **`openclaw/plugin-sdk`** and **`openclaw/plugin-sdk/compat`** - re-exported
   dozens of helpers while the focused SDK was being built. Both roots are now
-  removed; import a documented subpath instead.
+  removed. Import a documented subpath instead.
 - **`openclaw/plugin-sdk/infra-runtime`** - a broad barrel mixing system
   events, heartbeat state, delivery queues, fetch/proxy helpers, file helpers,
   approval types, and unrelated utilities.
 - **`openclaw/plugin-sdk/config-runtime`** - a broad config barrel retained
   for compatibility, including deprecated direct `loadConfig` and
   `writeConfigFile` exports. Those methods were removed from the injected
-  plugin runtime, not from this retained facade.
+  plugin runtime, not from this retained barrel.
 - **`openclaw/extension-api`** - a removed bridge that gave plugins direct
   access to host-side helpers like the embedded agent runner.
 - **`api.registerEmbeddedExtensionFactory(...)`** - a removed embedded-runner-only
@@ -36,7 +36,7 @@ from a single entry point:
 
 The root SDK, compat barrel, extension bridge, and embedded extension factory
 have been removed. `infra-runtime` and `config-runtime` remain only for their
-separately recorded later windows; new plugins should use focused subpaths.
+separately recorded later windows. New plugins should use focused subpaths.
 
 <Warning>
   Plugins importing the removed root, compat, or extension surfaces no longer
@@ -50,8 +50,8 @@ applies to SDK imports, manifest fields, setup APIs, hooks, and runtime
 registration behavior.
 
 `ChatCommandDefinition.category` retains the `"docks"` value accepted by the
-2026.8.1 SDK. Command lists display these legacy definitions under **Tools**;
-the category does not enable channel docking or restore retired docking commands.
+2026.8.1 SDK. Command lists display these legacy definitions under **Tools**.
+The category does not enable channel docking or restore retired docking commands.
 New definitions should use `"tools"`.
 
 ### Why

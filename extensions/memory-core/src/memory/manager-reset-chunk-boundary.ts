@@ -1,7 +1,7 @@
 import {
   chunkMarkdown,
   type MemoryChunk,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+} from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 
 export function chunkSessionContentAtResetBoundary(params: {
   content: string;

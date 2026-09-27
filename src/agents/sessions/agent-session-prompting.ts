@@ -23,15 +23,10 @@ import {
 import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
+import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
-
-function rethrowPromptFinalizationFailure(failed: boolean, error: unknown): void {
-  if (failed) {
-    throw error;
-  }
-}
 
 /** @internal Host preparation runs after SDK prompt hooks and owns its run cancellation. */
 export const agentSessionSetPromptPreparation: unique symbol = Symbol.for(
@@ -94,34 +89,17 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       }
     } finally {
       this.systemPromptOverride = undefined;
-      let flushFailed = false;
-      let flushError: unknown;
-      try {
-        this.flushPendingBashMessages();
-      } catch (error) {
-        flushFailed = true;
-        flushError = error;
-      }
       this.logicalPromptActive = false;
-      let terminalFailed = false;
-      let terminalError: unknown;
-      try {
-        // Consume handoff state before callbacks can start a nested run and set it again.
-        endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
-        this.lastRunEndedForTurnHandoff = false;
-        // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
-        if (endedForTurnHandoff) {
-          this.emit({ type: "agent_handoff" });
-        } else {
-          this.emit({ type: "agent_settled" });
-          await this.currentExtensionRunner.emit({ type: "agent_settled" });
-        }
-      } catch (error) {
-        terminalFailed = true;
-        terminalError = error;
+      // Consume handoff state before callbacks can start a nested run and set it again.
+      endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
+      this.lastRunEndedForTurnHandoff = false;
+      // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
+      if (endedForTurnHandoff) {
+        this.emit({ type: "agent_handoff" });
+      } else {
+        this.emit({ type: "agent_settled" });
+        await this.currentExtensionRunner.emit({ type: "agent_settled" });
       }
-      rethrowPromptFinalizationFailure(flushFailed, flushError);
-      rethrowPromptFinalizationFailure(terminalFailed, terminalError);
     }
   }
 
@@ -269,9 +247,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         preflightResult?.(true);
         return;
       }
-
-      // Flush any pending bash messages before the new prompt
-      this.flushPendingBashMessages();
 
       // Validate model
       if (!this.model) {
@@ -610,13 +585,15 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     } else if (options?.triggerTurn) {
       await this.runAgentPrompt(appMessage);
     } else {
-      this.agent.state.messages.push(appMessage);
-      this.sessionManager.appendCustomMessageEntry(
-        message.customType,
-        message.content,
-        message.display,
-        message.details,
-      );
+      await withSessionManagerWrite(this.sessionManager, () => {
+        this.sessionManager.appendCustomMessageEntry(
+          appMessage.customType,
+          appMessage.content,
+          appMessage.display,
+          appMessage.details,
+        );
+        this.agent.state.messages.push(appMessage);
+      });
       this.emit({ type: "message_start", message: appMessage });
       this.emit({ type: "message_end", message: appMessage });
     }

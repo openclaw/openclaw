@@ -84,6 +84,25 @@ private struct CacheMessageRowProbe: Sendable {
     let payloadJSON: String
 }
 
+private final class OutboxReadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reads = 0
+
+    func record(_ sql: String) {
+        let normalized = sql.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalized.hasPrefix("select"), normalized.contains("outbox_") else { return }
+        self.lock.lock()
+        self.reads += 1
+        self.lock.unlock()
+    }
+
+    var count: Int {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.reads
+    }
+}
+
 private func outboxCommand(
     id: String = UUID().uuidString,
     sessionKey: String = "main",
@@ -1472,16 +1491,98 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
             fileName: "note.m4a",
             data: Data([4, 5, 6]),
             durationSeconds: 1.5)
+        let secondAttachment = OpenClawChatOutboxAttachment(
+            type: "file",
+            mimeType: "application/octet-stream",
+            fileName: "empty.bin",
+            data: Data())
+        let now = Date().timeIntervalSince1970
+        let composedID = "caf\u{00e9}"
+        let decomposedID = "cafe\u{0301}"
         #expect(await store.enqueueCommand(outboxCommand(
-            id: "later", text: "two", attachments: [attachment], createdAt: 2)))
-        #expect(await store.enqueueCommand(outboxCommand(id: "earlier", text: "one", createdAt: 1)))
+            id: "later", text: "two", attachments: [attachment, secondAttachment], createdAt: now)))
+        #expect(await store.enqueueCommand(outboxCommand(id: "earlier", text: "one", createdAt: now - 1)))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: composedID, text: "three", attachments: [secondAttachment], createdAt: now)))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: decomposedID, text: "four", attachments: [attachment], createdAt: now)))
+        let otherGateway = databases.store(gatewayID: "gw-b")
+        #expect(await otherGateway.enqueueCommand(outboxCommand(
+            id: "later", text: "other gateway", attachments: [secondAttachment], createdAt: now)))
 
-        let commands = await store.loadCommands()
-        #expect(commands.map(\.id) == ["earlier", "later"])
-        #expect(commands[1].attachments == [attachment])
+        let counter = OutboxReadCounter()
+        try await databases.stateQueue.writeWithoutTransaction { db in
+            db.trace(options: .statement) { event in
+                counter.record(String(describing: event))
+            }
+        }
+        let loaded = await store.loadCommandsIfAvailable()
+        try await databases.stateQueue.writeWithoutTransaction { db in
+            db.trace(options: [])
+        }
+        let commands = try #require(loaded)
+        #expect(counter.count > 0)
+        #expect(counter.count <= 2)
+        #expect(commands.map { Data($0.id.utf8) } == [
+            Data("earlier".utf8), Data("later".utf8), Data(composedID.utf8), Data(decomposedID.utf8),
+        ])
+        #expect(commands.map(\.text) == ["one", "two", "three", "four"])
+        #expect(commands.map(\.attachments) == [
+            [], [attachment, secondAttachment], [secondAttachment], [attachment],
+        ])
+        #expect(commands.allSatisfy { $0.status == .queued })
+        let otherCommands = await otherGateway.loadCommands()
+        #expect(otherCommands.map(\.text) == ["other gateway"])
+        #expect(otherCommands.first?.attachments == [secondAttachment])
         #expect(try await databases.stateQueue.read { db in
-            try Data.fetchOne(db, sql: "SELECT payload FROM outbox_attachments WHERE command_id = 'later'")
+            try Data.fetchOne(
+                db,
+                sql: """
+                SELECT payload FROM outbox_attachments
+                WHERE gateway_id = 'gw-a' AND command_id = 'later' AND position = 0
+                """)
         } == attachment.data)
+    }
+
+    @Test(arguments: [false, true])
+    func `earlier command decode failure precedes later attachment corruption`(changeBranch: Bool) async throws {
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
+        let attachment = OpenClawChatOutboxAttachment(
+            type: "file",
+            mimeType: "application/octet-stream",
+            fileName: "later.bin",
+            data: Data([9]))
+        let now = Date().timeIntervalSince1970
+        #expect(await store.enqueueCommand(outboxCommand(id: "first", text: "first", createdAt: now)))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "later", text: "later", attachments: [attachment], createdAt: now)))
+        try await databases.stateQueue.write { db in
+            try db.execute(
+                sql: "UPDATE outbox_commands SET expected_settings_json = '{' WHERE client_uuid = 'first'")
+            // BLOB affinity accepts this value; GRDB's Data conversion must not run before the first error.
+            try db.execute(sql: "UPDATE outbox_attachments SET payload = 7 WHERE command_id = 'later'")
+        }
+        let before = try #require(await store.branchState(for: scope))
+        let result: [OpenClawChatOutboxCommand]? = if changeBranch {
+            await store.confirmBranchChange(
+                scope, activeLeafEntryID: "leaf-b", lastError: "branch changed")
+        } else {
+            await store.loadCommandsIfAvailable()
+        }
+        #expect(result == nil)
+        #expect(await store.branchState(for: scope) == before)
+        try await databases.stateQueue.read { db in
+            let statuses = try String.fetchAll(
+                db,
+                sql: "SELECT status || ':' || last_error FROM outbox_commands ORDER BY enqueue_sequence")
+            #expect(statuses == ["queued:", "queued:"])
+            let settingsJSON = try String.fetchOne(
+                db, sql: "SELECT expected_settings_json FROM outbox_commands WHERE client_uuid = 'first'")
+            #expect(settingsJSON == "{")
+            let payload = try Int.fetchOne(db, sql: "SELECT payload FROM outbox_attachments WHERE command_id = 'later'")
+            #expect(payload == 7)
+        }
     }
 
     @Test func `claims are insertion FIFO when timestamps tie and exclusive`() async throws {

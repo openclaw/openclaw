@@ -1,4 +1,5 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { resolveGitHubPublicationWorkspaceOwner } from "./github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
@@ -7,10 +8,7 @@ import {
   readGitHubRepositoryPublicationMetadata,
   type GitHubRepositoryPublicationSnapshot,
 } from "./github-repository-publication-snapshot.js";
-import {
-  failRepositoryGitHubPublicationPreparation,
-  type RepositoryGitHubPublicationRow,
-} from "./github-repository-publication-store.js";
+import { failRepositoryGitHubPublicationPreparation } from "./github-repository-publication-store.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 
@@ -35,7 +33,17 @@ export function repositoryOwner(session: RepositoryPublicationSessionIdentity) {
   return owner;
 }
 
-export function resolveReceiptOwner(row: RepositoryGitHubPublicationRow) {
+export function resolveReceiptOwner(
+  row: Pick<
+    RepositoryGitHubPublicationRow,
+    | "session_key"
+    | "agent_id"
+    | "session_id"
+    | "session_lifecycle_revision"
+    | "workspace_id"
+    | "branch"
+  >,
+) {
   const loaded = loadGatewaySessionEntryReadOnly(row.session_key, { agentId: row.agent_id });
   const workspace = getSessionRepositoryWorkspaceStore().get(row.workspace_id);
   if (

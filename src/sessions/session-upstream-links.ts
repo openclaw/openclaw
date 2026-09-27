@@ -1,10 +1,7 @@
 /** Best-effort shared-state registry for adopted upstream sessions. */
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import { safeParseJson } from "@openclaw/normalization-core";
-import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { SessionUpstreamJsonValue, SessionUpstreamKind } from "../plugins/session-catalog.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -13,56 +10,23 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
+import {
+  rowToSessionUpstreamLink,
+  type SessionUpstreamLink,
+} from "./session-upstream-links.kernel.js";
+
+export type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
 type SessionUpstreamDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "session_upstream_links" | "session_watch_cursors"
 >;
-type SessionUpstreamLinkRow = Selectable<OpenClawStateKyselyDatabase["session_upstream_links"]>;
-
-export type SessionUpstreamLink = {
-  sessionKey: string;
-  agentId: string;
-  catalogId: string;
-  hostId: string;
-  threadId: string;
-  upstreamKind: SessionUpstreamKind;
-  upstreamRef: SessionUpstreamJsonValue;
-  marker: SessionUpstreamJsonValue | null;
-  lastScannedAt?: number;
-  createdAt: number;
-  updatedAt: number;
-};
-
 const log = createSubsystemLogger("sessions/upstream-links");
 
 function getSessionUpstreamKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<SessionUpstreamDatabase>(db);
-}
-
-function parseJson(value: string | null): SessionUpstreamJsonValue | null {
-  if (value === null) {
-    return null;
-  }
-  return (safeParseJson(value) as SessionUpstreamJsonValue | undefined) ?? null;
-}
-
-function rowToSessionUpstreamLink(row: SessionUpstreamLinkRow): SessionUpstreamLink {
-  return {
-    sessionKey: row.session_key,
-    agentId: row.agent_id,
-    catalogId: row.catalog_id,
-    hostId: row.host_id,
-    threadId: row.thread_id,
-    upstreamKind: row.upstream_kind as SessionUpstreamKind,
-    upstreamRef: parseJson(row.upstream_ref_json),
-    marker: parseJson(row.last_marker_json),
-    ...(row.last_scanned_at === null
-      ? {}
-      : { lastScannedAt: normalizeSqliteNumber(row.last_scanned_at) ?? 0 }),
-    createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
-    updatedAt: normalizeSqliteNumber(row.updated_at) ?? 0,
-  };
 }
 
 export function upsertSessionUpstreamLink(
@@ -266,31 +230,16 @@ export function deleteSessionUpstreamLink(
   }
 }
 
-export function listWatchedSessionUpstreamLinks(
-  options: OpenClawStateDatabaseOptions = {},
-): Map<string, SessionUpstreamLink[]> {
+export async function listWatchedSessionUpstreamLinks(
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<Map<string, SessionUpstreamLink[]>> {
   const grouped = new Map<string, SessionUpstreamLink[]>();
   try {
-    const { db } = openOpenClawStateDatabase(options);
-    // Watch cursors own demand. Their key-only join relies on one owning agent per
-    // adopted session key, not one agent per native thread. Agent-qualified keys
-    // keep separate adoptions of the same thread distinct.
-    const rows = executeSqliteQuerySync(
-      db,
-      getSessionUpstreamKysely(db)
-        .selectFrom("session_upstream_links as links")
-        .innerJoin(
-          "session_watch_cursors as cursors",
-          "cursors.target_session_key",
-          "links.session_key",
-        )
-        .selectAll("links")
-        .distinct()
-        .orderBy("links.catalog_id", "asc")
-        .orderBy("links.session_key", "asc"),
-    ).rows;
-    const links = rows.map(rowToSessionUpstreamLink);
-    // Fail closed on the single-agent-per-key invariant: the key-only cursor join
+    const links = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
+      type: "sessionUpstream.listWatched",
+      input: undefined,
+    });
+    // Fail closed on the single-agent-per-key invariant: the key-only cursor lookup
     // cannot disambiguate multiple agents sharing the exact same adopted key.
     // Drop every link for that key rather than probe an arbitrary agent's upstream.
     const keyCounts = new Map<string, number>();

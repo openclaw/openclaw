@@ -3,11 +3,14 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 import { normalizeRoute } from "../../scripts/lib/docs-published-routes.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { preparedScriptWrapperEnv } from "../../test/scripts/prepared-script-wrapper.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 
 const { auditDocsLinks, prepareExternalLinkAuditTree, prepareMirroredDocsDir, resolveRoute } =
   await import("../../scripts/docs-link-audit.mts");
@@ -19,6 +22,7 @@ type AuditCliCase = {
   anchors?: boolean;
   diagnostics?: string[];
   files?: Record<string, string>;
+  navigation?: string[];
   redirects?: Array<{ source: string; destination: string }>;
 };
 
@@ -200,6 +204,28 @@ describe("docs-link-audit", () => {
       broken: 1,
     },
     { name: "valid prose", source: ["[valid](/page)"], broken: 0 },
+    ...[false, true].map((anchors) => ({
+      name: `fenced raw HTML boundaries (anchors=${anchors})`,
+      anchors,
+      source: [
+        "```html",
+        "",
+        "<code>",
+        "```",
+        "",
+        '<ParamField path="live" type="string">',
+        "[Visible](/missing-page)",
+        "</ParamField>",
+        "",
+        "```html",
+        "</code>",
+        "```",
+        "",
+        "[valid](/page)",
+      ],
+      broken: 1,
+      diagnostics: ["page.mdx:7 :: /missing-page :: route/file not found"],
+    })),
     {
       name: "repeated occurrences beside protected literals",
       source: [
@@ -313,6 +339,26 @@ describe("docs-link-audit", () => {
         ":: /missing-page :: route/file not found",
       ],
     })),
+    ...[false, true].map((anchors) => ({
+      name: `unpublished permalink routes (anchors=${anchors})`,
+      anchors,
+      source: [
+        "---",
+        "permalink: /unpublished",
+        "---",
+        "[unpublished](/unpublished)",
+        "[fragment](/unpublished#connection)",
+        "[valid](/page#connection)",
+        '<a id="connection" />',
+      ],
+      navigation: ["unpublished"],
+      broken: 3,
+      diagnostics: [
+        "page.mdx:4 :: /unpublished :: route/file not found",
+        "page.mdx:5 :: /unpublished#connection :: route/file not found",
+        "docs.json:unknown :: unpublished :: navigation page not published",
+      ],
+    })),
     {
       name: "shared emitted fragments",
       anchors: true,
@@ -352,7 +398,7 @@ describe("docs-link-audit", () => {
     },
   ])(
     "audits real CLI links after $name",
-    ({ source, broken, anchors = false, diagnostics, files = {}, redirects }) => {
+    ({ source, broken, anchors = false, diagnostics, files = {}, navigation = [], redirects }) => {
       const tempDirs: string[] = [];
       const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-cli-");
       const docsRoot = path.join(fixtureRoot, "docs");
@@ -364,7 +410,7 @@ describe("docs-link-audit", () => {
       fs.writeFileSync(
         path.join(docsRoot, "docs.json"),
         JSON.stringify({
-          navigation: [],
+          navigation: [{ pages: navigation }],
           redirects:
             redirects ??
             (anchors && !diagnostics
@@ -397,19 +443,27 @@ describe("docs-link-audit", () => {
           {
             cwd: fixtureRoot,
             encoding: "utf8",
-            env: {
-              PATH: process.env.PATH,
-              HOME: home,
-              USERPROFILE: home,
-              TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
-              OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot,
-            },
+            env: preparedScriptWrapperEnv(
+              [
+                [
+                  new URL("../../scripts/docs-link-audit.mts", import.meta.url),
+                  resolveRuntimeWorkerUrl(scriptModuleEntrypoints.docsLinkAudit),
+                ],
+              ],
+              {
+                PATH: process.env.PATH,
+                HOME: home,
+                USERPROFILE: home,
+                TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+                OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot,
+              },
+            ),
             timeout: 30_000,
           },
         );
         expect(result.error).toBeUndefined();
         expect(result.stderr).toBe("");
-        expect(result.status).toBe(broken ? 1 : 0);
+        expect(result.status, result.stdout).toBe(broken ? 1 : 0);
         if (!anchors) {
           expect(result.stdout).toContain(`checked_internal_links=${broken + 1}\n`);
         }
@@ -489,50 +543,56 @@ describe("docs-link-audit", () => {
       }
     });
 
-    it("leaves fragments into mirrored routes alone in plain mode", () => {
-      const tempDirs: string[] = [];
-      try {
-        // Plain mode has never inspected fragments; the declared route is proof
-        // enough, so the unverifiable fragment must not become a broken link.
-        const result = auditDocsLinks({
-          docsDir: buildDocsTree(tempDirs, "/clawhub/publishing#package-publish-source"),
-          allowExternalClawHubRoutes: true,
-        });
-        expect(result.broken).toEqual([]);
-        expect(result.unverifiedMirroredFragments).toBe(0);
-      } finally {
-        cleanupTempDirs(tempDirs);
-      }
-    });
-
     it("exits clean from the CLI in plain mode for a fragment into a mirrored route", () => {
       const tempDirs: string[] = [];
       try {
-        // Nest the fixture so `<root>/../clawhub` cannot accidentally resolve and
-        // turn the allowance off: this run must be the source-absent shape.
+        // Resolve source discovery from an owned module root, not the caller's checkout.
         const fixtureRoot = path.join(makeTempDir(tempDirs, "docs-clawhub-mirror-cli-"), "repo");
         const home = path.join(fixtureRoot, "home");
+        const auditSource = new URL("../../scripts/docs-link-audit.mts", import.meta.url);
+        const auditRuntime = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.docsLinkAudit);
+        const syncSource = new URL("../../scripts/docs-sync-publish.mjs", import.meta.url);
+        const syncRuntime =
+          auditRuntime.href === auditSource.href
+            ? syncSource
+            : new URL("./docs-sync-publish.js", auditRuntime);
+        const fixtureSync = path.join(fixtureRoot, "scripts", "docs-sync-publish.mjs");
         buildDocsTree(tempDirs, "/clawhub/publishing#package-publish-source", {
           root: fixtureRoot,
         });
         fs.mkdirSync(home, { recursive: true });
+        fs.mkdirSync(path.dirname(fixtureSync), { recursive: true });
+        fs.copyFileSync(syncSource, fixtureSync);
+        fs.writeFileSync(
+          path.join(fixtureRoot, "package.json"),
+          '{"private":true,"type":"module"}\n',
+        );
+        fs.writeFileSync(path.join(fixtureRoot, "pnpm-workspace.yaml"), "packages: []\n");
         const result = spawnSync(
           process.execPath,
           [fileURLToPath(new URL("../../scripts/docs-link-audit.mjs", import.meta.url))],
           {
             cwd: fixtureRoot,
             encoding: "utf8",
-            env: {
-              PATH: process.env.PATH,
-              HOME: home,
-              USERPROFILE: home,
-              TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
-            },
+            env: preparedScriptWrapperEnv(
+              [
+                [auditSource, auditRuntime],
+                [syncSource, syncRuntime],
+              ],
+              {
+                PATH: process.env.PATH,
+                HOME: home,
+                USERPROFILE: home,
+                TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+              },
+              [[pathToFileURL(fixtureSync), syncRuntime]],
+            ),
             timeout: 30_000,
           },
         );
         expect(result.error).toBeUndefined();
         expect(result.stdout).toContain("broken_links=0\n");
+        expect(result.stdout).not.toContain("Synced ");
         expect(result.stdout).not.toContain("fragment unverified");
         expect(result.status).toBe(0);
       } finally {

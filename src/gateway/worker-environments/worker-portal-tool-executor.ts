@@ -1,22 +1,16 @@
-import type {
-  WorkerPortalParams,
-  WorkerSessionToolResult,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerSessionToolResult } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { formatPortalResult } from "../../agents/tools/portal-tool.js";
 import type { GatewayPortalService } from "../portals/portal-service.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { serializeWorkerSessionToolResult } from "./worker-session-tool-result.js";
+import {
+  serializeWorkerSessionToolResult,
+  type WorkerSessionToolRequest,
+} from "./worker-session-tool-result.js";
 import { resolveWorkerSessionToolSource } from "./worker-session-tool-topology.js";
 
-export type WorkerPortalToolRequest = {
-  identity: WorkerConnectionIdentity;
-  toolName: "portal";
-  request: WorkerPortalParams;
-  signal?: AbortSignal;
-};
+type WorkerPortalToolRequest = Extract<WorkerSessionToolRequest, { toolName: "portal" }>;
 
 export type WorkerPortalToolExecutorDependencies = {
   placements: WorkerSessionPlacementStore;

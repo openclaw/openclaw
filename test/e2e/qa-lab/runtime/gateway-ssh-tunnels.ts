@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { gatewayStatusCommand } from "../../../../src/commands/gateway-status.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";

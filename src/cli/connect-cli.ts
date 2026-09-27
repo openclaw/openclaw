@@ -1,5 +1,6 @@
 // One-paste node onboarding from setup codes or single-use Gateway join URLs.
 import fs from "node:fs/promises";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import type { Command } from "commander";
 import {
   buildCloudflareAccessHeaders,
@@ -7,14 +8,12 @@ import {
   CF_ACCESS_CLIENT_SECRET_HEADER,
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig, mutateConfigFileWithRetry } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
-import { readRegularFile } from "../infra/regular-file.js";
 import { loadNodeHostConfig, type NodeHostGatewayConfig } from "../node-host/config.js";
 import {
   nodeHostCloudflareAccessConfigFromEnv,
@@ -27,7 +26,8 @@ import { runNodeHost } from "../node-host/runner.js";
 import { isDevicePairingJoinCode } from "../pairing/join-code.js";
 import { decodePairingSetupCode, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatHelpExamples } from "./help-format.js";
+import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
+import { addNodeCommandOptions } from "./node-cli/command-options.js";
 import { runNodeDaemonInstall } from "./node-cli/daemon.js";
 import { resolveNodePairGatewayPayload } from "./node-cli/gateway-options.js";
 
@@ -37,6 +37,8 @@ type ConnectCommandOptions = {
   sessionHost?: boolean;
   targetFile?: string;
   displayName?: string;
+  commands?: string[];
+  allCommands?: boolean;
 };
 
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
@@ -240,6 +242,8 @@ async function runConnectCommand(
     ...(forceWorkerRuns ? { forceWorkerRuns: true } : {}),
     ...(opts.ephemeral === true ? { ephemeral: true } : {}),
     displayName: opts.displayName,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
   };
 
   if (!opts.service) {
@@ -264,13 +268,18 @@ async function runConnectCommand(
       },
     });
   }
-  await runNodeDaemonInstall({ displayName: opts.displayName, force: true });
+  await runNodeDaemonInstall({
+    displayName: opts.displayName,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
+    force: true,
+  });
 }
 
 export function registerConnectCli(program: Command): void {
-  program
-    .command("connect")
-    .description("Connect this machine to an OpenClaw Gateway as a node")
+  addNodeCommandOptions(
+    program.command("connect").description("Connect this machine to an OpenClaw Gateway as a node"),
+  )
     .argument("[target]", "oc-pair URL, setup code, or HTTPS Gateway join URL")
     .option("--service", "Install and run the node host as an OS service", false)
     .option("--ephemeral", "Run as an environment-managed disposable session host", false)
@@ -294,7 +303,7 @@ export function registerConnectCli(program: Command): void {
             "openclaw connect https://gateway.example/j/<code> --service --session-host",
             "Install a worker-session host service.",
           ],
-        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/connect", "docs.openclaw.ai/cli/connect")}\n`,
+        ])}\n${formatDocsHelp("/cli/connect")}`,
     )
     .action(async (target: string | undefined, opts: ConnectCommandOptions) => {
       try {

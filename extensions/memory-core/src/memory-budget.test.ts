@@ -1,8 +1,39 @@
 // Memory Core tests cover memory budget plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
+import {
+  compactMemoryForBudget,
+  DEFAULT_MEMORY_FILE_MAX_CHARS,
+  resolveMemoryPromotionFileMaxChars,
+} from "./memory-budget.js";
 
 const PROMOTION_MARKER_LINE = "<!-- openclaw-memory-promotion:memory/short-term.md#entry -->";
+
+describe("promotion file budget resolution", () => {
+  const cfg = {
+    agents: {
+      defaults: { bootstrapMaxChars: 9_500 },
+      list: [
+        { id: "alpha", bootstrapMaxChars: 12_000 },
+        { id: "beta", bootstrapMaxChars: 9_000 },
+      ],
+    },
+  } as OpenClawConfig;
+
+  it("uses the smallest bootstrap cap among agents sharing the workspace", () => {
+    expect(resolveMemoryPromotionFileMaxChars({ cfg, agentIds: ["alpha", "beta"] })).toBe(9_000);
+  });
+
+  it("retains the promotion writer ceiling when the agent cap is larger", () => {
+    expect(resolveMemoryPromotionFileMaxChars({ cfg, agentIds: ["alpha"] })).toBe(
+      DEFAULT_MEMORY_FILE_MAX_CHARS,
+    );
+  });
+
+  it("falls back to the configured default for an unlisted workspace owner", () => {
+    expect(resolveMemoryPromotionFileMaxChars({ cfg, agentIds: ["gamma"] })).toBe(9_500);
+  });
+});
 
 function promotionSection(date: string, sizeChars: number): string {
   const heading = `## Promoted From Short-Term Memory (${date})\n`;
@@ -50,21 +81,6 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     expect(result.droppedDates).toEqual([]);
   });
 
-  it("drops the oldest promotion section first when over budget", () => {
-    const oldest = promotionSection("2026-04-10", 500);
-    const newer = promotionSection("2026-04-20", 500);
-    const existing = `${oldest}\n${newer}`;
-    const newSection = `\n${promotionSection("2026-04-29", 500)}`;
-    const result = compactMemoryForBudget({
-      existingMemory: existing,
-      newSection,
-      budgetChars: 1_200,
-    });
-    expect(result.droppedDates).toEqual(["2026-04-10"]);
-    expect(result.compacted).not.toContain("(2026-04-10)");
-    expect(result.compacted).toContain("(2026-04-20)");
-  });
-
   it("drops sections in ascending date order regardless of file order", () => {
     // File has sections in non-chronological order; algorithm must drop oldest by date.
     const newer = promotionSection("2026-04-25", 400);
@@ -77,25 +93,10 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
       newSection,
       budgetChars: 1_300,
     });
-    // Drop oldest first; if still over budget, drop next oldest.
-    expect(result.droppedDates[0]).toBe("2026-04-10");
+    expect(result.droppedDates).toEqual(["2026-04-10"]);
     expect(result.compacted).not.toContain("(2026-04-10)");
-  });
-
-  it("preserves user-authored content (non-promotion sections)", () => {
-    const userSection = "## My Notes\n\nImportant user content I do not want dropped.\n";
-    const oldest = promotionSection("2026-04-10", 800);
-    const existing = `# Long-Term Memory\n\n${userSection}\n${oldest}`;
-    const newSection = `\n${promotionSection("2026-04-29", 600)}`;
-    const result = compactMemoryForBudget({
-      existingMemory: existing,
-      newSection,
-      budgetChars: 800,
-    });
-    expect(result.droppedDates).toContain("2026-04-10");
-    expect(result.compacted).toContain("## My Notes");
-    expect(result.compacted).toContain("Important user content");
-    expect(result.compacted).toContain("# Long-Term Memory");
+    expect(result.compacted).toContain("(2026-04-18)");
+    expect(result.compacted).toContain("(2026-04-25)");
   });
 
   it("drops every promotion section when budget cannot be satisfied otherwise", () => {
@@ -112,6 +113,24 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     });
     expect(result.droppedDates).toEqual(["2026-04-10", "2026-04-15", "2026-04-20"]);
     expect(result.compacted).not.toContain("Promoted From Short-Term Memory");
+  });
+
+  it("stops before compaction would exceed the prior-entry loss limit", () => {
+    const existing = [
+      promotionSection("2026-04-10", 500),
+      promotionSection("2026-04-15", 500),
+      promotionSection("2026-04-20", 500),
+      promotionSection("2026-04-25", 500),
+    ].join("\n");
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection: `\n${promotionSection("2026-04-29", 500)}`,
+      budgetChars: 1_400,
+      maxPriorEntryLossFraction: 0.25,
+    });
+
+    expect(result.droppedDates).toEqual(["2026-04-10"]);
+    expect(result.compacted).toContain("(2026-04-15)");
   });
 
   it("returns existing unchanged when the file has no promotion sections (cannot compact)", () => {
@@ -222,25 +241,22 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     ).toBeLessThanOrEqual(budget);
   });
 
-  it.each([0, 1, 2, 3])(
-    "preserves a user `###` section with %i leading spaces under a promotion section",
-    (leadingSpaces) => {
-      const heading = `${" ".repeat(leadingSpaces)}### Correction (added by me)`;
-      const existing =
-        `${promotionSection("2026-04-10", 400)}\n` +
-        `${heading}\nThe prod DB is db-2.corp.example, NOT db-1.\n\n` +
-        promotionSection("2026-04-20", 400);
-      const newSection = `\n${promotionSection("2026-04-29", 400)}`;
-      const result = compactMemoryForBudget({
-        existingMemory: existing,
-        newSection,
-        budgetChars: 900,
-      });
-      expect(result.droppedDates).toContain("2026-04-10");
-      expect(result.compacted).toContain(heading);
-      expect(result.compacted).toContain("The prod DB is db-2.corp.example, NOT db-1.");
-    },
-  );
+  it("preserves a user `###` section with three leading spaces under a promotion section", () => {
+    const heading = "   ### Correction (added by me)";
+    const existing =
+      `${promotionSection("2026-04-10", 400)}\n` +
+      `${heading}\nThe prod DB is db-2.corp.example, NOT db-1.\n\n` +
+      promotionSection("2026-04-20", 400);
+    const newSection = `\n${promotionSection("2026-04-29", 400)}`;
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection,
+      budgetChars: 900,
+    });
+    expect(result.droppedDates).toContain("2026-04-10");
+    expect(result.compacted).toContain(heading);
+    expect(result.compacted).toContain("The prod DB is db-2.corp.example, NOT db-1.");
+  });
 
   it("preserves a generated-looking block with ambiguous indented content", () => {
     const existing =

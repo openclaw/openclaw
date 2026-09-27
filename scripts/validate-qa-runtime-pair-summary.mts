@@ -118,6 +118,13 @@ function projectedReportCellStatus(cell: Record<string, unknown>) {
   return cell.runtimeErrorClass || cell.transportErrorClass ? "fail" : "pass";
 }
 
+function acceptedReportCellStatuses(cell: Record<string, unknown>) {
+  const health = projectedReportCellStatus(cell);
+  // Reports written since #129616 preserve an approved scenario-level skip on
+  // the cell itself; older frozen candidates still project only health.
+  return cell.status === "skip" ? new Set([health, "skip"]) : new Set([health]);
+}
+
 function formatRuntimePairReportValue(value: unknown) {
   if (typeof value === "string") {
     return value;
@@ -355,9 +362,12 @@ export function validateQaRuntimePairReport(
         scenario.status !== expectedStatus ||
         scenario.drift !== source.runtimeParity.drift ||
         scenario.driftDetails !== source.runtimeParity.driftDetails ||
-        scenario.openclawStatus !==
-          projectedReportCellStatus(source.runtimeParity.cells.openclaw) ||
-        scenario.codexStatus !== projectedReportCellStatus(source.runtimeParity.cells.codex)
+        ![...acceptedReportCellStatuses(source.runtimeParity.cells.openclaw)].some(
+          (status) => status === scenario.openclawStatus,
+        ) ||
+        ![...acceptedReportCellStatuses(source.runtimeParity.cells.codex)].some(
+          (status) => status === scenario.codexStatus,
+        )
       );
     })
   ) {
@@ -397,13 +407,13 @@ export function validateQaRuntimePairReport(
           `- drift: ${formatRuntimePairReportValue(scenario.runtimeParity.drift)}`,
         ) ||
         ![...sectionLines].some((line) =>
-          line.startsWith(
-            `- openclaw: ${projectedReportCellStatus(scenario.runtimeParity.cells.openclaw)} `,
+          [...acceptedReportCellStatuses(scenario.runtimeParity.cells.openclaw)].some((status) =>
+            line.startsWith(`- openclaw: ${status} `),
           ),
         ) ||
         ![...sectionLines].some((line) =>
-          line.startsWith(
-            `- codex: ${projectedReportCellStatus(scenario.runtimeParity.cells.codex)} `,
+          [...acceptedReportCellStatuses(scenario.runtimeParity.cells.codex)].some((status) =>
+            line.startsWith(`- codex: ${status} `),
           ),
         )
       );

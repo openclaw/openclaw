@@ -51,7 +51,7 @@ extension OpenClawChatViewModel {
             // Replace stale local ownership so only that run consumes later events.
             clearPendingRuns(reason: nil)
             self.pendingRuns.insert(runId)
-            self.pendingToolCallsById = [:]
+            self.turnToolCallsById = [:]
             self.updateStreamingAssistantText(nil)
         }
         if self.runMessageScopesByRunID[runId] == nil {

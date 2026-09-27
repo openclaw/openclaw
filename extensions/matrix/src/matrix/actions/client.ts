@@ -1,21 +1,26 @@
-// Matrix plugin module implements client behavior.
-import { withResolvedRuntimeMatrixClient } from "../client-bootstrap.js";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixRoomId } from "../send.js";
-import type { MatrixActionClient, MatrixActionClientOpts } from "./types.js";
+import type { MatrixActionClientOpts } from "./types.js";
 
 type MatrixActionClientStopMode = "stop" | "persist" | "discard";
 
+const loadMatrixActionClientRuntime = createLazyRuntimeModule(
+  () => import("../client-bootstrap.js"),
+);
+
 export async function withResolvedActionClient<T>(
   opts: MatrixActionClientOpts,
-  run: (client: MatrixActionClient["client"], abortSignal?: AbortSignal) => Promise<T>,
+  run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
   mode: MatrixActionClientStopMode = "stop",
 ): Promise<T> {
+  const { withResolvedRuntimeMatrixClient } = await loadMatrixActionClientRuntime();
   return await withResolvedRuntimeMatrixClient(opts, run, mode);
 }
 
 export async function withStartedActionClient<T>(
   opts: MatrixActionClientOpts,
-  run: (client: MatrixActionClient["client"], abortSignal?: AbortSignal) => Promise<T>,
+  run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
 ): Promise<T> {
   return await withResolvedActionClient({ ...opts, readiness: "started" }, run, "persist");
 }
@@ -23,11 +28,7 @@ export async function withStartedActionClient<T>(
 export async function withResolvedRoomAction<T>(
   roomId: string,
   opts: MatrixActionClientOpts,
-  run: (
-    client: MatrixActionClient["client"],
-    resolvedRoom: string,
-    abortSignal?: AbortSignal,
-  ) => Promise<T>,
+  run: (client: MatrixClient, resolvedRoom: string, abortSignal?: AbortSignal) => Promise<T>,
 ): Promise<T> {
   return await withResolvedActionClient(opts, async (client, abortSignal) => {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);

@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -9,6 +9,7 @@ import {
 } from "../lib/sessions/session-key.ts";
 import {
   controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -29,26 +30,29 @@ const ONE_PIXEL_PNG_B64 =
 
 type DeferredAttachmentProof = {
   aborts: number;
-  finish: (() => void) | undefined;
+  finish: (() => Promise<void>) | undefined;
 };
 
 async function installDeferredAttachmentReader(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const proof = { aborts: 0, finish: undefined as (() => void) | undefined };
+    const proof = { aborts: 0, finish: undefined as (() => Promise<void>) | undefined };
     (globalThis as unknown as { attachmentReadProof: typeof proof }).attachmentReadProof = proof;
     // Keep the native methods before overriding them so deferred completion and
     // cancellation cannot recursively call their own test hooks.
-    const readAsDataURL = Reflect.get(
-      FileReader.prototype,
-      "readAsDataURL",
-    ) as FileReader["readAsDataURL"];
-    const abort = Reflect.get(FileReader.prototype, "abort") as FileReader["abort"];
+    const readAsDataURL = Reflect.get(FileReader.prototype, "readAsDataURL") as (
+      this: FileReader,
+      blob: Blob,
+    ) => void;
+    const abort = Reflect.get(FileReader.prototype, "abort") as (this: FileReader) => void;
     FileReader.prototype.readAsDataURL = function (blob: Blob) {
       proof.finish = () => {
         // Only the paste read is held; later outbox hydration uses native reads.
         FileReader.prototype.readAsDataURL = readAsDataURL;
         proof.finish = undefined;
-        readAsDataURL.call(this, blob);
+        return new Promise<void>((resolve) => {
+          this.addEventListener("loadend", () => resolve(), { once: true });
+          readAsDataURL.call(this, blob);
+        });
       };
     };
     FileReader.prototype.abort = function () {
@@ -94,6 +98,234 @@ async function waitForCommittedAttachmentDraft(
 }
 
 suite.define(() => {
+  it("keeps a preparing Home attachment through the page and dock route", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installDeferredAttachmentReader(page);
+      const homeKey = "agent:main:main";
+      const draft = "QA attachment handoff: keep this file with my Home draft.";
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
+        sessionKey: homeKey,
+        sessions: [{ key: homeKey, kind: "direct", label: "Main", updatedAt: 1 }],
+      });
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      const proofDir = path.join(suite.artifactDir, "home-handoff");
+      await mkdir(proofDir, { recursive: true });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
+      const home = page.locator("openclaw-chat-page");
+      const composer = home.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill(draft);
+      await home.locator(".agent-chat__file-input").setInputFiles({
+        name: "handoff.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("Synthetic attachment payload survives Home handoff."),
+      });
+      await home.locator('.chat-attachment-thumb[aria-busy="true"]').waitFor();
+      await page.getByRole("link", { name: "Agents", exact: true }).click();
+      await page.waitForURL((url) => url.pathname.endsWith("/agents"));
+      await page.getByRole("region", { name: "Agents", exact: true }).waitFor();
+      await page.locator(".sidebar-footer-bar__home").click();
+      const dock = page.locator("openclaw-assistant-panel");
+      const dockComposer = dock.locator(".agent-chat__composer-combobox textarea");
+      await dockComposer.waitFor({ state: "visible" });
+      await expect.poll(() => dockComposer.inputValue()).toBe(draft);
+      const pending = {
+        files: await dock.locator('.chat-attachment-thumb[aria-busy="true"]').count(),
+        sendDisabled: await dock
+          .getByRole("button", { name: "Send message", exact: true })
+          .isDisabled(),
+      };
+      await page.screenshot({ path: path.join(proofDir, "dock-pending.png"), fullPage: true });
+      await page.evaluate(async () => {
+        const proof = (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
+          .attachmentReadProof;
+        if (!proof.finish) {
+          throw new Error("Selected file read was not held");
+        }
+        await proof.finish();
+      });
+      await page.locator("a.nav-item--home").click();
+      await composer.waitFor({ state: "visible" });
+      await expect.poll(() => dockComposer.isVisible()).toBe(false);
+      const receipt = {
+        pending,
+        returnedDraft: await composer.inputValue(),
+        returnedFiles: await home.locator('.chat-attachment-thumb[aria-busy="false"]').count(),
+        removeAvailable: await home
+          .getByRole("button", { name: "Remove handoff.txt", exact: true })
+          .count(),
+        pageErrors,
+        requests: await gateway.getRequests("chat.send"),
+      };
+      await writeFile(path.join(proofDir, "handoff.json"), JSON.stringify(receipt, null, 2));
+      await page.screenshot({ path: path.join(proofDir, "returned-home.png"), fullPage: true });
+      console.log(JSON.stringify({ artifactDir: proofDir, ...receipt }));
+      expect(receipt.pending).toEqual({ files: 1, sendDisabled: true });
+      expect(receipt.returnedDraft).toBe(draft);
+      expect(receipt.returnedFiles).toBe(1);
+      expect(receipt.removeAvailable).toBe(1);
+      expect(receipt.pageErrors).toEqual([]);
+      expect(receipt.requests).toEqual([]);
+    });
+  });
+
+  it.each([
+    "same-draft",
+    "rewind-completed",
+    "rewind-pending",
+    "rewind-failed",
+    "rewind-newer-draft",
+    "rewind-newer-file",
+  ] as const)("rewind draft attachment custody: %s", async (scenario) => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installDeferredAttachmentReader(page);
+      const earlierText = "Restore this earlier synthetic prompt.";
+      const currentText = "Current synthetic draft with a selected file.";
+      const newerText = "Newer synthetic draft while rewind is pending.";
+      const retainsFile = !["rewind-completed", "rewind-pending"].includes(scenario);
+      const expectedText =
+        scenario === "rewind-newer-draft" ? newerText : retainsFile ? currentText : earlierText;
+      const prefix = {
+        role: "assistant",
+        content: "Synthetic conversation before the selected turn.",
+        __openclaw: { id: "rewind-prefix", seq: 1 },
+      };
+      const gateway = await installMockGateway(page, {
+        historyMessages: [
+          prefix,
+          { role: "user", content: earlierText, __openclaw: { id: "rewind-user", seq: 2 } },
+          {
+            role: "assistant",
+            content: "Synthetic answer after the selected turn.",
+            __openclaw: { id: "rewind-answer", seq: 3 },
+          },
+        ],
+      });
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      const proofDir = path.join(suite.artifactDir, scenario);
+      await mkdir(proofDir, { recursive: true });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const send = page.getByRole("button", { name: "Send message", exact: true });
+      await composer.fill(currentText);
+      const selectFile = () =>
+        page.locator(".agent-chat__file-input").setInputFiles({
+          name: "late-selection.png",
+          mimeType: "image/png",
+          buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+        });
+      if (scenario !== "rewind-newer-file") {
+        await selectFile();
+        await expect.poll(() => send.isDisabled()).toBe(true);
+      }
+      const finishRead = () =>
+        page.evaluate(() => {
+          const proof = (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
+            .attachmentReadProof;
+          if (!proof.finish) {
+            throw new Error("Selected file read was not held");
+          }
+          return proof.finish();
+        });
+      if (scenario === "same-draft" || scenario === "rewind-completed") {
+        await finishRead();
+        await page.getByRole("img", { name: "late-selection.png", exact: true }).waitFor();
+        await expect.poll(() => send.isEnabled()).toBe(true);
+      }
+      if (scenario !== "same-draft") {
+        await gateway.deferNext("sessions.rewind");
+        await page
+          .locator(".chat-bubble")
+          .filter({ hasText: earlierText })
+          .click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Rewind to here", exact: true }).click();
+        await page
+          .locator(".chat-confirm-popover")
+          .getByRole("button", { name: "Rewind", exact: true })
+          .click();
+        const rewind = await gateway.waitForRequest("sessions.rewind");
+        expect(rewind.params).toMatchObject({ entryId: "rewind-user" });
+        if (scenario === "rewind-failed") {
+          await gateway.rejectDeferred("sessions.rewind", {
+            code: "UNAVAILABLE",
+            message: "Synthetic rewind failed; draft retained.",
+          });
+          await page
+            .getByText("Synthetic rewind failed; draft retained.", { exact: false })
+            .first()
+            .waitFor();
+        } else {
+          if (scenario === "rewind-newer-draft") {
+            await composer.fill(newerText);
+          } else if (scenario === "rewind-newer-file") {
+            await selectFile();
+            await expect.poll(() => send.isDisabled()).toBe(true);
+          }
+          await gateway.setHistoryMessages([prefix]);
+          await gateway.resolveDeferred("sessions.rewind", {
+            editorText: earlierText,
+            editorAttachments: [],
+          });
+          if (scenario === "rewind-newer-draft" || scenario === "rewind-newer-file") {
+            await expect
+              .poll(() => page.locator(".chat-bubble").filter({ hasText: earlierText }).count())
+              .toBe(0);
+          }
+        }
+        if (scenario !== "rewind-newer-file") {
+          await expect.poll(() => composer.inputValue()).toBe(expectedText);
+        }
+        await page.screenshot({ path: path.join(proofDir, "restored-before-release.png") });
+      }
+      if (scenario !== "same-draft" && scenario !== "rewind-completed") {
+        await finishRead();
+      }
+      await expect.poll(() => send.isEnabled()).toBe(true);
+      const observed = {
+        scenario,
+        composerText: await composer.inputValue(),
+        composerFiles: await page
+          .locator(".chat-attachment-thumb img")
+          .evaluateAll((images) => images.map((image) => image.getAttribute("alt"))),
+        readAborts: await page.evaluate(
+          () =>
+            (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
+              .attachmentReadProof.aborts,
+        ),
+        pageErrors,
+      };
+      await page.screenshot({ path: path.join(proofDir, "settled-before-send.png") });
+      await send.click();
+      const request = await gateway.waitForRequest("chat.send");
+      const sent = request.params as {
+        message: string;
+        attachments?: { fileName: string; mimeType: string; content: string }[];
+      };
+      await writeFile(
+        path.join(proofDir, "result.json"),
+        JSON.stringify({ ...observed, sent }, null, 2),
+      );
+      expect(pageErrors).toEqual([]);
+      expect(sent.message).toBe(expectedText);
+      expect(observed.composerFiles).toEqual(retainsFile ? ["late-selection.png"] : []);
+      expect(sent.attachments ?? []).toEqual(
+        retainsFile
+          ? [
+              {
+                type: "image",
+                fileName: "late-selection.png",
+                origin: "file",
+                mimeType: "image/png",
+                content: ONE_PIXEL_PNG_B64,
+              },
+            ]
+          : [],
+      );
+    });
+  });
+
   it.each([
     { attachment: false, gesture: "held Enter", expectedTurns: 1 },
     { attachment: true, gesture: "held Enter", expectedTurns: 1 },
@@ -234,6 +466,20 @@ suite.define(() => {
             await page.keyboard.down("Enter");
             if (!held) {
               await page.keyboard.up("Enter");
+              await expect.poll(() => composer.inputValue()).toBe("");
+              await expect.poll(() => pane.locator(".chat-attachment-thumb").count()).toBe(0);
+              await composer.fill(followUpText);
+              if (attachment) {
+                await pane.locator(".agent-chat__file-input").setInputFiles({
+                  name: fileName,
+                  mimeType: "text/plain",
+                  buffer: Buffer.from(fileContents),
+                });
+                await pane.locator(".chat-attachment-thumb", { hasText: fileName }).waitFor();
+                await expect
+                  .poll(() => pane.getByRole("button", { name: "Send message" }).isEnabled())
+                  .toBe(true);
+              }
             }
             await page.keyboard.down("Enter");
           } finally {
@@ -246,8 +492,9 @@ suite.define(() => {
           ]);
           expect(await gateway.getRequests("chat.history")).toHaveLength(historyBefore + 1);
           expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-          expect(await composer.inputValue()).toBe(followUpText);
-          expect(await pane.locator(".chat-attachment-thumb").count()).toBe(attachment ? 1 : 0);
+          await expect.poll(() => composer.inputValue()).toBe("");
+          await expect.poll(() => pane.locator(".chat-attachment-thumb").count()).toBe(0);
+          await expect.poll(() => pane.locator(".chat-queue__item").count()).toBe(expectedTurns);
 
           const sendsBefore = (await gateway.getRequests("chat.send")).length;
           await gateway.deferNext("chat.send");
@@ -275,6 +522,7 @@ suite.define(() => {
                     {
                       content: Buffer.from(fileContents).toString("base64"),
                       fileName,
+                      origin: "file",
                       mimeType: "text/plain",
                       type: "file",
                     },
@@ -378,7 +626,7 @@ suite.define(() => {
       await composer.waitFor();
 
       await gateway.setOnline(false);
-      await page.locator('.agent-chat__composer-underlaps[data-tone="warn"]').waitFor();
+      await page.locator(".agent-chat__input--offline").waitFor();
       await composer.fill(text);
       await page.locator(".agent-chat__file-input").setInputFiles({
         name: "offline.txt",
@@ -405,6 +653,7 @@ suite.define(() => {
           {
             content: Buffer.from(contents).toString("base64"),
             fileName: "offline.txt",
+            origin: "file",
             mimeType: "text/plain",
           },
         ],
@@ -508,7 +757,14 @@ suite.define(() => {
       expect(send.params).toMatchObject({
         sessionKey: firstSession,
         message: "restart draft A with image",
-        attachments: [{ content: ONE_PIXEL_PNG_B64, fileName: "pixel.png", mimeType: "image/png" }],
+        attachments: [
+          {
+            content: ONE_PIXEL_PNG_B64,
+            fileName: "pixel.png",
+            mimeType: "image/png",
+            origin: "file",
+          },
+        ],
       });
       await expect.poll(() => activeComposer(restoredPage).inputValue()).toBe("");
       await expect.poll(() => activeAttachments(restoredPage).count()).toBe(0);
@@ -551,7 +807,9 @@ suite.define(() => {
         { name: "first.txt", mimeType: "text/plain", buffer: Buffer.alloc(200, 0x61) },
         { name: "second.txt", mimeType: "text/plain", buffer: Buffer.alloc(200, 0x62) },
       ]);
-      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
+      await expect
+        .poll(() => page.locator('.chat-attachment-thumb[aria-busy="false"]').count())
+        .toBe(2);
 
       await composer.press("Enter");
 
@@ -577,7 +835,7 @@ suite.define(() => {
       await composer.press("Enter");
       const request = await gateway.waitForRequest("chat.send");
       expect(request.params).toMatchObject({
-        attachments: [{ fileName: "second.txt", mimeType: "text/plain" }],
+        attachments: [{ fileName: "second.txt", mimeType: "text/plain", origin: "file" }],
         message: "Send both files",
       });
     });
@@ -604,7 +862,7 @@ suite.define(() => {
         if (!proof.finish) {
           throw new Error("Pasted image read was not started");
         }
-        proof.finish();
+        return proof.finish();
       });
       await page.getByRole("img", { name: "pixel.png" }).waitFor();
       await expect.poll(() => send.isEnabled()).toBe(true);
@@ -612,7 +870,14 @@ suite.define(() => {
 
       const request = await gateway.waitForRequest("chat.send");
       expect(request.params).toMatchObject({
-        attachments: [{ content: ONE_PIXEL_PNG_B64, fileName: "pixel.png", mimeType: "image/png" }],
+        attachments: [
+          {
+            content: ONE_PIXEL_PNG_B64,
+            fileName: "pixel.png",
+            mimeType: "image/png",
+            origin: "file",
+          },
+        ],
         message: "Include the image that is still loading",
       });
     });
@@ -683,12 +948,78 @@ suite.define(() => {
         if (!proof.finish) {
           throw new Error("Pasted image read was not retained");
         }
-        proof.finish();
+        return proof.finish();
       });
       await page
         .locator('openclaw-chat-pane[aria-hidden="false"]')
         .getByRole("img", { name: "pixel.png" })
         .waitFor();
+    });
+  });
+
+  it("settles an eventless stalled attachment read through failure, preserves draft, and releases send", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installDeferredAttachmentReader(page);
+      const gateway = await installMockGateway(page);
+
+      const proofDir = path.join(suite.artifactDir, "stalled-attachment-read");
+      await mkdir(proofDir, { recursive: true });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const send = page.getByRole("button", { name: "Send message" });
+      const draftText = "Draft message while attachment read stalls";
+      await composer.fill(draftText);
+
+      await page.clock.install();
+      await pastePng(composer);
+
+      // 1. Stalled preparing state
+      await expect.poll(() => send.isDisabled()).toBe(true);
+      await page.locator(".chat-attachment-loading").waitFor();
+      await page.screenshot({
+        path: path.join(proofDir, "screenshot-1-attachment-stalled-preparing.png"),
+      });
+
+      // Advance virtual clock past the 15-second read timeout
+      await page.clock.runFor(15_001);
+
+      // 2. Settles through failure, error icon visible, send released for draft text
+      await page.locator(".chat-attachment-thumb--error").waitFor();
+      await page.locator(".chat-attachment-error").waitFor();
+      await expect.poll(() => send.isEnabled()).toBe(true);
+      await page.screenshot({
+        path: path.join(proofDir, "screenshot-2-attachment-stalled-settled-error.png"),
+      });
+
+      // 3. Remove failed attachment tile, draft retained, send still ready
+      const removeButton = page.locator(".chat-attachment-remove").first();
+      await removeButton.click();
+      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
+      expect(await composer.inputValue()).toBe(draftText);
+      await expect.poll(() => send.isEnabled()).toBe(true);
+      await page.screenshot({
+        path: path.join(proofDir, "screenshot-3-attachment-removed-draft-ready.png"),
+      });
+
+      // 4. Send draft message successfully
+      await send.click();
+      const request = await gateway.waitForRequest("chat.send");
+      expect(request.params).toMatchObject({
+        message: draftText,
+      });
+      expect((request.params as { attachments?: unknown }).attachments).toBeUndefined();
+      await expect.poll(() => composer.inputValue()).toBe("");
+      await page.screenshot({
+        path: path.join(proofDir, "screenshot-4-attachment-draft-sent.png"),
+      });
+
+      const aborts = await page.evaluate(
+        () =>
+          (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
+            .attachmentReadProof.aborts,
+      );
+      expect(aborts).toBe(1);
     });
   });
 });

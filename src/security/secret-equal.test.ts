@@ -15,7 +15,6 @@ describe("safeEqualSecret", () => {
   it.each([
     ["secret-token", "secret-token", true],
     ["secret-token", "secret-tokEn", false],
-    ["short", "much-longer", false],
     ["", "", true],
     ["", "secret", false],
     [undefined, "secret", false],

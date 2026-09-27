@@ -7,7 +7,7 @@ import {
   MIN_NODE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../packages/gateway-protocol/src/version.js";
-import { listCoreGatewayMethodNames } from "../src/gateway/methods/core-descriptors.js";
+import { listCoreGatewayMethodNames } from "../src/gateway/methods/core-method-policy.js";
 import { extractGatewayEventNames } from "./check-protocol-event-coverage.mts";
 
 type JsonSchema = {

@@ -76,3 +76,25 @@ export function isTerminalTaskFlow(flow: Pick<TaskFlowRecord, "status" | "endedA
     flow.status === "lost"
   );
 }
+
+export type TaskFlowUpdateResult =
+  | {
+      applied: true;
+      flow: TaskFlowRecord;
+    }
+  | {
+      applied: false;
+      reason: "not_found" | "revision_conflict" | "persist_failed";
+      current?: TaskFlowRecord;
+    };
+
+export type TaskFlowSyncResult =
+  | {
+      ok: true;
+      flow: TaskFlowRecord | null;
+    }
+  | {
+      ok: false;
+      reason: "persist_failed";
+      current: TaskFlowRecord;
+    };

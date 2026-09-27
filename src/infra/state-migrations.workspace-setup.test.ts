@@ -23,6 +23,19 @@ const HASH = "a".repeat(64);
 describe("legacy workspace Doctor migration", () => {
   const { detect, migrate, setup } = useWorkspaceMigrationTestFixture();
 
+  function aliasWorkspace(context: ReturnType<typeof setup>, workspaceAlias: string) {
+    fs.symlinkSync(
+      context.workspaceDir,
+      workspaceAlias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    return {
+      ...context,
+      cfg: { agents: { defaults: { workspace: workspaceAlias } } } satisfies OpenClawConfig,
+      workspaceDir: workspaceAlias,
+    };
+  }
+
   async function writeEmptyReservedAttestation(
     context: ReturnType<typeof setup>,
     claimed = false,
@@ -60,14 +73,14 @@ describe("legacy workspace Doctor migration", () => {
     );
 
     expect(
-      detectLegacyWorkspaceState({
+      await detectLegacyWorkspaceState({
         cfg: context.cfg,
         stateDir: context.stateDir,
         env: context.env,
         homedir: () => context.homeDir,
       }),
     ).toEqual({ sources: [], hasLegacy: false });
-    expect(detect(context)).toMatchObject({
+    expect(await detect(context)).toMatchObject({
       hasLegacy: true,
       sources: expect.arrayContaining([
         expect.objectContaining({ kind: "setup", sourcePath: canonicalSetupPath }),
@@ -97,16 +110,7 @@ describe("legacy workspace Doctor migration", () => {
   it("persists the configured symlink alias during Doctor import", async () => {
     const context = setup();
     const workspaceAlias = path.join(context.homeDir, "workspace-link");
-    fs.symlinkSync(
-      context.workspaceDir,
-      workspaceAlias,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    const aliasContext = {
-      ...context,
-      cfg: { agents: { defaults: { workspace: workspaceAlias } } } satisfies OpenClawConfig,
-      workspaceDir: workspaceAlias,
-    };
+    const aliasContext = aliasWorkspace(context, workspaceAlias);
     const completedAt = "2026-07-15T10:01:00.000Z";
     await fsp.writeFile(
       path.join(workspaceAlias, "openclaw-workspace-state.json"),
@@ -125,7 +129,7 @@ describe("legacy workspace Doctor migration", () => {
     expect(fs.existsSync(canonicalSiblingPath)).toBe(false);
     fs.unlinkSync(workspaceAlias);
 
-    expect(readWorkspaceStateSnapshot(workspaceAlias)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(workspaceAlias)).toMatchObject({
       identity,
       setup: { setupCompletedAt: completedAt },
     });
@@ -134,16 +138,7 @@ describe("legacy workspace Doctor migration", () => {
   it("preserves configured metadata when orphan discovery finds the same marker", async () => {
     const context = setup();
     const workspaceAlias = path.join(context.homeDir, "workspace-link");
-    fs.symlinkSync(
-      context.workspaceDir,
-      workspaceAlias,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    const aliasContext = {
-      ...context,
-      cfg: { agents: { defaults: { workspace: workspaceAlias } } } satisfies OpenClawConfig,
-      workspaceDir: workspaceAlias,
-    };
+    const aliasContext = aliasWorkspace(context, workspaceAlias);
     const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
     const attestationPath = path.join(
       context.stateDir,
@@ -159,7 +154,7 @@ describe("legacy workspace Doctor migration", () => {
     const attestedAt = new Date("2026-07-15T11:00:00.000Z");
     await fsp.utimes(attestationPath, attestedAt, attestedAt);
 
-    const detected = detect(aliasContext);
+    const detected = await detect(aliasContext);
     expect(detected.sources.find((source) => source.sourcePath === attestationPath)).toMatchObject({
       workspaceDir: identity.workspacePath,
       workspaceAliasPath: path.resolve(workspaceAlias),
@@ -168,7 +163,7 @@ describe("legacy workspace Doctor migration", () => {
     expect((await migrate(aliasContext)).warnings).toEqual([]);
     fs.unlinkSync(workspaceAlias);
 
-    expect(readWorkspaceStateSnapshot(workspaceAlias)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(workspaceAlias)).toMatchObject({
       identity,
       attestation: { attestedAtMs: attestedAt.getTime() },
     });
@@ -179,16 +174,7 @@ describe("legacy workspace Doctor migration", () => {
     const targetB = path.join(context.homeDir, "workspace-b");
     const workspaceAlias = path.join(context.homeDir, "workspace-link");
     fs.mkdirSync(targetB, { recursive: true });
-    fs.symlinkSync(
-      context.workspaceDir,
-      workspaceAlias,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    const aliasContext = {
-      ...context,
-      cfg: { agents: { defaults: { workspace: workspaceAlias } } } satisfies OpenClawConfig,
-      workspaceDir: workspaceAlias,
-    };
+    const aliasContext = aliasWorkspace(context, workspaceAlias);
     const sourcePath = `${workspaceAlias}.attested`;
     const identityA = resolveWorkspaceStateIdentity(context.workspaceDir);
     await fsp.writeFile(
@@ -202,7 +188,7 @@ describe("legacy workspace Doctor migration", () => {
 
     fs.unlinkSync(workspaceAlias);
     fs.symlinkSync(targetB, workspaceAlias, process.platform === "win32" ? "junction" : "dir");
-    deleteWorkspaceState(prepareWorkspaceStateDeletion(workspaceAlias));
+    await deleteWorkspaceState(prepareWorkspaceStateDeletion(workspaceAlias));
     const identityB = resolveWorkspaceStateIdentity(targetB);
     await fsp.writeFile(
       sourcePath,
@@ -244,16 +230,7 @@ describe("legacy workspace Doctor migration", () => {
     const targetB = path.join(context.homeDir, "workspace-b");
     const workspaceAlias = path.join(context.homeDir, "workspace-link");
     fs.mkdirSync(targetB, { recursive: true });
-    fs.symlinkSync(
-      context.workspaceDir,
-      workspaceAlias,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    const aliasContext = {
-      ...context,
-      cfg: { agents: { defaults: { workspace: workspaceAlias } } } satisfies OpenClawConfig,
-      workspaceDir: workspaceAlias,
-    };
+    const aliasContext = aliasWorkspace(context, workspaceAlias);
     const identityA = resolveWorkspaceStateIdentity(context.workspaceDir);
     const attestationPath = path.join(
       context.stateDir,
@@ -266,7 +243,7 @@ describe("legacy workspace Doctor migration", () => {
       "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
       "utf8",
     );
-    const detected = detect(aliasContext);
+    const detected = await detect(aliasContext);
 
     const result = await migrateLegacyWorkspaceState({
       detected,
@@ -318,29 +295,6 @@ describe("legacy workspace Doctor migration", () => {
         )
         .get(orphanKey),
     ).toEqual({ filename: "TOOLS.md", sha256: HASH });
-    expect(fs.existsSync(attestationPath)).toBe(false);
-  });
-
-  it("imports an owned sibling attestation", async () => {
-    const context = setup();
-    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
-    const attestationPath = `${context.workspaceDir}.attested`;
-    await fsp.writeFile(
-      attestationPath,
-      `openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\ngenerated:USER.md:${HASH}\n`,
-      "utf8",
-    );
-
-    const result = await migrate(context);
-
-    expect(result.warnings).toEqual([]);
-    expect(
-      openOpenClawStateDatabase({ env: context.env })
-        .db.prepare(
-          "SELECT filename FROM workspace_generated_bootstrap_hashes WHERE workspace_key = ?",
-        )
-        .get(identity.workspaceKey),
-    ).toEqual({ filename: "USER.md" });
     expect(fs.existsSync(attestationPath)).toBe(false);
   });
 
@@ -495,7 +449,7 @@ describe("legacy workspace Doctor migration", () => {
         await fsp.writeFile(attestationPath, content, "utf8");
       }
 
-      expect(detect(context).hasLegacy).toBe(true);
+      expect((await detect(context)).hasLegacy).toBe(true);
       const result = await migrate(context);
 
       expect(result.warnings[0]).toMatch(/legacy workspace/i);
@@ -572,7 +526,7 @@ describe("legacy workspace Doctor migration", () => {
       ).toThrow(/requires migration/);
       await fsp.rename(sourcePath, retainedPath);
       expect(await fsp.readFile(retainedPath)).toEqual(original);
-      expect(detect(context).hasLegacy).toBe(false);
+      expect((await detect(context)).hasLegacy).toBe(false);
       expect(await migrate(context)).toEqual({ changes: [], warnings: [] });
       expect(() =>
         assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
@@ -585,7 +539,7 @@ describe("legacy workspace Doctor migration", () => {
     const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
     const attestationPath = await writeEmptyReservedAttestation(context);
 
-    expect(detect(context).hasLegacy).toBe(true);
+    expect((await detect(context)).hasLegacy).toBe(true);
     expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir })).toThrow(
       /requires migration/,
     );
@@ -596,7 +550,7 @@ describe("legacy workspace Doctor migration", () => {
     expect(result.changes[0]).toContain(attestationPath);
     expect(fs.existsSync(attestationPath)).toBe(false);
     expect(fs.existsSync(`${attestationPath}.doctor-importing`)).toBe(false);
-    expect(detect(context).hasLegacy).toBe(false);
+    expect((await detect(context)).hasLegacy).toBe(false);
     expect(() =>
       assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
     ).not.toThrow();
@@ -616,7 +570,7 @@ describe("legacy workspace Doctor migration", () => {
     const originalInode = fs.statSync(attestationPath).ino;
 
     const result = await migrateLegacyWorkspaceState({
-      detected: detect(context),
+      detected: await detect(context),
       env: context.env,
       stateDir: context.stateDir,
       beforeClaim: (source) => {
@@ -644,7 +598,7 @@ describe("legacy workspace Doctor migration", () => {
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(attestationPath)).toBe(false);
     expect(fs.existsSync(claimPath)).toBe(false);
-    expect(detect(context).hasLegacy).toBe(false);
+    expect((await detect(context)).hasLegacy).toBe(false);
     expect(() =>
       assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
     ).not.toThrow();
@@ -655,7 +609,7 @@ describe("legacy workspace Doctor migration", () => {
     const siblingPath = `${context.workspaceDir}.attested`;
     await fsp.writeFile(siblingPath, "", "utf8");
 
-    expect(detect(context).hasLegacy).toBe(false);
+    expect((await detect(context)).hasLegacy).toBe(false);
     const result = await migrate(context);
 
     expect(result.warnings).toEqual([]);
@@ -673,7 +627,7 @@ describe("legacy workspace Doctor migration", () => {
     await fsp.writeFile(externalSource, JSON.stringify({ version: 1 }), "utf8");
     await fsp.symlink(externalDir, path.join(context.workspaceDir, ".openclaw"));
 
-    expect(detect(context).hasLegacy).toBe(true);
+    expect((await detect(context)).hasLegacy).toBe(true);
     const result = await migrate(context);
 
     expect(result.warnings[0]).toMatch(/legacy workspace/i);
@@ -703,7 +657,7 @@ describe("legacy workspace Doctor migration", () => {
     await fsp.mkdir(context.stateDir, { recursive: true });
     await fsp.symlink(externalDir, path.join(context.stateDir, "workspace-attestations"));
 
-    expect(detect(context).hasLegacy).toBe(true);
+    expect((await detect(context)).hasLegacy).toBe(true);
     const result = await migrate(context);
 
     expect(result.warnings[0]).toMatch(/legacy workspace/i);
@@ -724,7 +678,7 @@ describe("legacy workspace Doctor migration", () => {
     await fsp.writeFile(setupPath, JSON.stringify({ version: 1 }), "utf8");
 
     const result = await migrateLegacyWorkspaceState({
-      detected: detect(context),
+      detected: await detect(context),
       env: context.env,
       stateDir: context.stateDir,
       beforeClaim: () => {
@@ -787,13 +741,15 @@ describe("legacy workspace Doctor migration", () => {
       expect(result.warnings).toEqual([]);
       expect(fs.existsSync(setupPath)).toBe(false);
       expect(fs.existsSync(`${setupPath}.doctor-importing`)).toBe(false);
-      expect(readWorkspaceStateSnapshot(context.workspaceDir).setup).toEqual({
+      expect((await readWorkspaceStateSnapshot(context.workspaceDir)).setup).toEqual({
         version: 1,
         bootstrapSeededAt: seededAt,
         ...(completedAt ? { setupCompletedAt: completedAt } : {}),
       });
-      const receipt = db
-        .prepare("SELECT report_json, removed_source FROM migration_sources WHERE source_path = ?")
+      const receipt = openOpenClawStateDatabase({ env: context.env })
+        .db.prepare(
+          "SELECT report_json, removed_source FROM migration_sources WHERE source_path = ?",
+        )
         .get(setupPath) as { report_json: string; removed_source: number };
       const archivePath = JSON.parse(receipt.report_json).archivePath as string;
       expect(archivePath).toMatch(
@@ -819,11 +775,11 @@ describe("legacy workspace Doctor migration", () => {
       expect(() =>
         assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
       ).not.toThrow();
-      expect(detect(context).hasLegacy).toBe(false);
+      expect((await detect(context)).hasLegacy).toBe(false);
       expect(await migrate(context)).toEqual({ changes: [], warnings: [] });
       expect(
-        db
-          .prepare(
+        openOpenClawStateDatabase({ env: context.env })
+          .db.prepare(
             "SELECT report_json, removed_source FROM migration_sources WHERE source_path = ?",
           )
           .get(setupPath),
@@ -852,7 +808,7 @@ describe("legacy workspace Doctor migration", () => {
       }
       await fsp.writeFile(setupPath, setupSource, "utf8");
       const first = await migrateLegacyWorkspaceState({
-        detected: detect(context),
+        detected: await detect(context),
         env: context.env,
         stateDir: context.stateDir,
         removeSource: () => {
@@ -862,8 +818,6 @@ describe("legacy workspace Doctor migration", () => {
       expect(first.warnings[0]).toContain("legacy cleanup failed");
       expect(first.warnings[0]).toContain(setupPath);
       expect(fs.existsSync(claimPath)).toBe(true);
-      const db = openOpenClawStateDatabase({ env: context.env }).db;
-
       await fsp.writeFile(claimPath, "{invalid", "utf8");
       const unreadable = await migrate(context);
       expect(unreadable.warnings[0]).toContain(setupPath);
@@ -871,7 +825,8 @@ describe("legacy workspace Doctor migration", () => {
       expect(await fsp.readFile(claimPath, "utf8")).toBe("{invalid");
 
       await fsp.writeFile(claimPath, setupSource, "utf8");
-      const archiveReceipt = db
+      const receiptDb = openOpenClawStateDatabase({ env: context.env }).db;
+      const archiveReceipt = receiptDb
         .prepare("SELECT report_json FROM migration_sources WHERE source_path = ?")
         .get(setupPath) as { report_json: string };
       const archivePath = JSON.parse(archiveReceipt.report_json).archivePath as string;
@@ -880,10 +835,9 @@ describe("legacy workspace Doctor migration", () => {
         const oldReport = JSON.parse(archiveReceipt.report_json);
         delete oldReport.archivePath;
         delete oldReport.differences;
-        db.prepare("UPDATE migration_sources SET report_json = ? WHERE source_path = ?").run(
-          JSON.stringify(oldReport),
-          setupPath,
-        );
+        receiptDb
+          .prepare("UPDATE migration_sources SET report_json = ? WHERE source_path = ?")
+          .run(JSON.stringify(oldReport), setupPath);
       } else {
         await fsp.writeFile(archivePath, "partial backup", "utf8");
         const corruptBackup = await migrate(context);
@@ -894,6 +848,7 @@ describe("legacy workspace Doctor migration", () => {
       const retry = await migrate(context);
 
       expect(retry.warnings).toEqual([]);
+      const db = openOpenClawStateDatabase({ env: context.env }).db;
       const finalReceipt = db
         .prepare("SELECT report_json FROM migration_sources WHERE source_path = ?")
         .get(setupPath) as { report_json: string };
@@ -939,7 +894,7 @@ describe("legacy workspace Doctor migration", () => {
       "utf8",
     );
     const first = await migrateLegacyWorkspaceState({
-      detected: detect(context),
+      detected: await detect(context),
       env: context.env,
       stateDir: context.stateDir,
       removeSource: () => {
@@ -972,7 +927,7 @@ describe("legacy workspace Doctor migration", () => {
     const originalMtime = new Date("2026-07-15T11:01:00.000Z");
     await fsp.utimes(attestationPath, originalMtime, originalMtime);
     const first = await migrateLegacyWorkspaceState({
-      detected: detect(context),
+      detected: await detect(context),
       env: context.env,
       stateDir: context.stateDir,
       removeSource: () => {

@@ -1,9 +1,12 @@
 // Control UI component renders the login gate.
 import { html, nothing, type TemplateResult } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
+import type { ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
+import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts";
 import { t } from "../i18n/index.ts";
 import "../lib/toast.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
@@ -24,6 +27,7 @@ import {
 registerLoginEnglish();
 
 type LoginGateProps = LoginFailureFeedbackParams & {
+  mascot?: ThemeMascot;
   resourceBasePath: string;
   gatewayUrl: string;
   secret: string;
@@ -32,6 +36,7 @@ type LoginGateProps = LoginFailureFeedbackParams & {
   onSecretChange: (value: string) => void;
   onToggleGatewaySecret: () => void;
   onConnect: () => void;
+  onOpenGatewaySettings?: () => void;
 };
 
 const TONE_ICONS: Record<LoginFailureTone, TemplateResult> = {
@@ -40,12 +45,10 @@ const TONE_ICONS: Record<LoginFailureTone, TemplateResult> = {
   danger: icons.shieldAlert,
 };
 
-function refreshLoginGatePage() {
-  // A terminal reconnect failure can show this gate while startup still owns unsaved input.
-  if (canReloadControlUiDocument(true)) {
-    window.location.reload();
-  }
-}
+type RefreshAction = {
+  state: "idle" | "pending" | "failed";
+  onRefresh: () => void;
+};
 
 function renderLoginFailureStep({ text, commands }: LoginFailureStep) {
   const unmatchedCommands = new Set(commands);
@@ -103,7 +106,7 @@ function renderFailureFooter(feedback: LoginFailureFeedback) {
   `;
 }
 
-function renderRefreshAction(feedback: LoginFailureFeedback) {
+function renderRefreshAction(feedback: LoginFailureFeedback, action: RefreshAction) {
   if (!feedback.refreshAction) {
     return nothing;
   }
@@ -111,9 +114,16 @@ function renderRefreshAction(feedback: LoginFailureFeedback) {
     <button
       type="button"
       class="btn primary login-gate__failure-refresh"
-      @click=${refreshLoginGatePage}
+      ?disabled=${action.state === "pending"}
+      @click=${action.onRefresh}
     >
-      ${feedback.refreshAction.label}
+      ${
+        action.state === "pending"
+          ? t("common.refreshing")
+          : action.state === "failed"
+            ? t("common.retry")
+            : feedback.refreshAction.label
+      }
     </button>
   `;
 }
@@ -230,7 +240,11 @@ function renderConnectionSummary(props: LoginGateProps) {
   `;
 }
 
-function renderStatusBody(params: { props: LoginGateProps; feedback: LoginFailureFeedback }) {
+function renderStatusBody(params: {
+  props: LoginGateProps;
+  feedback: LoginFailureFeedback;
+  refreshAction: RefreshAction;
+}) {
   const { props, feedback } = params;
   const waitingForPairing = feedback.kind === "pairing-required" && props.reconnectPending;
   return html`
@@ -268,7 +282,7 @@ function renderStatusBody(params: { props: LoginGateProps; feedback: LoginFailur
           : nothing
       }
       <div class="login-gate__actions">
-        ${renderRefreshAction(feedback)}
+        ${renderRefreshAction(feedback, params.refreshAction)}
         <button class="btn login-gate__connect" @click=${props.onConnect}>
           ${waitingForPairing ? t("login.failure.pairing.checkNow") : t("common.connect")}
         </button>
@@ -331,24 +345,46 @@ function renderFormBody(params: { props: LoginGateProps; feedback: LoginFailureF
   `;
 }
 
-function renderLoginGate(props: LoginGateProps) {
+function renderLoginGate(props: LoginGateProps, refreshAction: RefreshAction) {
   const resourceBasePath = normalizeBasePath(props.resourceBasePath);
   const faviconSrc = controlUiPublicAssetPath("favicon.svg", resourceBasePath);
   const feedback = resolveLoginFailureFeedback(props);
   const body =
     feedback?.placement === "status"
-      ? renderStatusBody({ props, feedback })
+      ? renderStatusBody({ props, feedback, refreshAction })
       : renderFormBody({ props, feedback });
 
   return html`
-    <div class="login-gate">
+    <div
+      class="login-gate"
+      @mousedown=${(event: MouseEvent) => {
+        if (event.target === event.currentTarget) {
+          beginNativeWindowDrag(event);
+        }
+      }}
+    >
       <openclaw-toast-host></openclaw-toast-host>
       <div class="login-gate__card" data-mode=${feedback?.placement ?? "form"}>
         <header class="login-gate__brand">
-          <img class="login-gate__logo" src=${faviconSrc} alt="" />
+          ${
+            props.mascot === "none"
+              ? html`<span class="login-gate__logo login-gate__logo--neutral" aria-hidden="true"
+                  >${icons.mark}</span
+                >`
+              : html`<img class="login-gate__logo" src=${faviconSrc} alt="" />`
+          }
           <span class="login-gate__brand-name">OpenClaw</span>
         </header>
         ${body}
+        ${
+          props.onOpenGatewaySettings
+            ? html`<footer class="login-gate__recovery">
+                <button type="button" class="btn btn--ghost" @click=${props.onOpenGatewaySettings}>
+                  ${t("login.gatewaySettings")}
+                </button>
+              </footer>`
+            : nothing
+        }
       </div>
     </div>
   `;
@@ -356,9 +392,110 @@ function renderLoginGate(props: LoginGateProps) {
 
 class LoginGate extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: LoginGateProps;
+  @state() private refreshState: RefreshAction["state"] = "idle";
+  private refreshAttempt?: { props: LoginGateProps };
+
+  private ownsRefresh(attempt: { props: LoginGateProps }): boolean {
+    const current = this.props;
+    return (
+      this.refreshAttempt === attempt &&
+      this.isConnected &&
+      current !== undefined &&
+      !current.connected &&
+      !current.reconnectPending &&
+      (
+        [
+          "lastError",
+          "lastErrorCode",
+          "lastErrorAuthReason",
+          "gatewayUrl",
+          "resourceBasePath",
+          "secret",
+        ] as const
+      ).every((key) => current[key] === attempt.props[key])
+    );
+  }
+
+  private cancelRefresh() {
+    this.refreshAttempt = undefined;
+    this.refreshState = "idle";
+  }
+
+  override willUpdate() {
+    if (this.refreshAttempt && !this.ownsRefresh(this.refreshAttempt)) {
+      this.cancelRefresh();
+    }
+  }
+
+  override disconnectedCallback() {
+    this.cancelRefresh();
+    super.disconnectedCallback();
+  }
+
+  private async refreshPage() {
+    const props = this.props;
+    if (
+      !props ||
+      this.refreshAttempt ||
+      this.refreshState === "pending" ||
+      !this.isConnected ||
+      props.connected ||
+      props.reconnectPending ||
+      !resolveLoginFailureFeedback(props)?.refreshAction ||
+      !canReloadControlUiDocument(true)
+    ) {
+      return;
+    }
+    const attempt = { props };
+    this.refreshAttempt = attempt;
+    this.refreshState = "pending";
+    try {
+      const reloaded = await retryStaleChunkReloadWhenReachable({
+        canReload: () => this.ownsRefresh(attempt),
+      });
+      if (this.ownsRefresh(attempt) && !reloaded) {
+        this.refreshState = "failed";
+      }
+    } catch {
+      // A rejected probe must not escape the click handler or strand its pending state.
+      if (this.ownsRefresh(attempt)) {
+        this.refreshState = "failed";
+      }
+    } finally {
+      if (this.refreshAttempt === attempt) {
+        if (!this.ownsRefresh(attempt)) {
+          this.cancelRefresh();
+        } else {
+          this.refreshAttempt = undefined;
+        }
+      }
+    }
+  }
 
   override render() {
-    return this.props ? renderLoginGate(this.props) : nothing;
+    const props = this.props;
+    if (!props) {
+      return nothing;
+    }
+    return renderLoginGate(
+      {
+        ...props,
+        // Retire refresh before forwarding new intent, even if the host has not rendered yet.
+        onConnect: () => {
+          this.cancelRefresh();
+          props.onConnect();
+        },
+        onGatewayUrlChange: (value) => {
+          this.cancelRefresh();
+          props.onGatewayUrlChange(value);
+        },
+        onSecretChange: (value) => {
+          this.cancelRefresh();
+          props.onSecretChange(value);
+        },
+      },
+      { state: this.refreshState, onRefresh: () => void this.refreshPage() },
+    );
   }
 }
 

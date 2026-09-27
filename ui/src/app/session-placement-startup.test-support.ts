@@ -61,6 +61,7 @@ export function createPlacementStartupHarness(
     get state() {
       return state;
     },
+    invalidate: vi.fn(),
     refresh: vi.fn(async () => undefined),
     subscribe: vi.fn(() => () => undefined),
   } as unknown as SessionCapability;
@@ -88,7 +89,7 @@ export function createPlacementStartupHarness(
   }
   return {
     startup,
-    input: { recovery, persistRecovery: true, recovering: false, createdAt: 1_000 },
+    input: { recovery, persistRecovery: true, mode: "dispatch" as const, createdAt: 1_000 },
     client,
     gateway,
     sessions,
@@ -96,6 +97,22 @@ export function createPlacementStartupHarness(
     chatSubmissions,
     dependencies,
   };
+}
+
+export function blockStorageWrites() {
+  const storage = sessionStorage;
+  vi.stubGlobal("sessionStorage", {
+    get length() {
+      return storage.length;
+    },
+    key: storage.key.bind(storage),
+    getItem: storage.getItem.bind(storage),
+    removeItem: storage.removeItem.bind(storage),
+    setItem: () => {
+      throw new Error("quota");
+    },
+  });
+  return storage;
 }
 
 export async function flushStartupMicrotasks() {

@@ -20,7 +20,7 @@ vi.mock("../../infra/update-campaign.js", () => ({
   },
 }));
 
-vi.mock("../../infra/update-startup.js", () => ({
+vi.mock("../../infra/update-status-state.js", () => ({
   getUpdateAvailable: () => null,
   getUpdateSchedule: getUpdateScheduleMock,
 }));

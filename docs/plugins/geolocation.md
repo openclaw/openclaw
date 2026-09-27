@@ -126,8 +126,8 @@ Four behaviors are worth knowing because they decide what you see during a failu
 
 - The response is read against a compressed ceiling and inflated against an on-disk ceiling, both enforced while reading. A replaced source cannot allocate an unbounded body, and a compression bomb cannot inflate past the limit.
 - A body that does not parse as an MMDB is discarded without replacing a working database. A rate-limit page or truncated download cannot break a Gateway that was working a minute ago.
-- A failed refresh serves the cached copy and logs a warning. Stale data beats no data.
-- Concurrent first lookups share one download rather than each starting their own.
+- A failed download or invalid database serves the cached copy and logs a warning. If a valid download cannot be saved to disk, lookups use it from memory and log the cache-write failure.
+- Concurrent first lookups in one Gateway share one download. Separate Gateways stage their downloads independently and close the complete file before replacing the cache, so another Gateway never reads a partially written download.
 
 ## Troubleshooting
 

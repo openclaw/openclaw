@@ -2,13 +2,14 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { expect, it } from "vitest";
-import { WebSocketServer } from "ws";
 import { closeTrackedBrowserTabsForSessions } from "./browser-maintenance.js";
 import { resolveCdpTabOwnership } from "./src/browser/cdp.helpers.js";
 import { resolveBrowserConfig } from "./src/browser/config.js";
@@ -72,6 +73,7 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
     await state.writeConfig(config);
     initializeBrowserSessionTabStore({
       state: {
+        openKeyedStore: (options) => createPluginStateKeyedStoreForTests("browser", options),
         openSyncKeyedStore: (options) =>
           createPluginStateSyncKeyedStoreForTests("browser", options),
       },

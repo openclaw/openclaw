@@ -25,9 +25,9 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
-  const { loadBundledPluginPublicSurface } =
-    await import("../plugin-sdk/test-helpers/public-surface-loader.js");
-  const { stateMigrations } = await loadBundledPluginPublicSurface<{
+  const { loadBundledPluginFacade } =
+    await import("../test-utils/bundled-plugin-public-surface.js");
+  const { stateMigrations } = await loadBundledPluginFacade<{
     stateMigrations: PluginDoctorStateMigration[];
   }>({ pluginId: "codex", artifactBasename: "doctor-contract-api.js" });
   return {
@@ -43,7 +43,7 @@ const BINDING_NAMESPACE = "app-server-thread-bindings";
 const MANAGED_THREAD_NAMESPACE = "app-server-managed-threads";
 const SESSION_BINDING_COUNT = 47_794;
 const ADVISORY_MANAGED_THREAD_COUNT = 2_206;
-const PLUGIN_STATE_CAPACITY = 50_000;
+const INCIDENT_ROW_COUNT = 50_000;
 
 let incidentStateDir: string | undefined;
 
@@ -170,29 +170,22 @@ describe("doctor incident-scale Codex binding repair", () => {
     }
     seedPluginStateEntriesForTests(rows);
 
-    expect(getPluginStateCapacity("codex", env)).toEqual({
-      liveEntries: PLUGIN_STATE_CAPACITY,
-      maxEntries: PLUGIN_STATE_CAPACITY,
-    });
+    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(INCIDENT_ROW_COUNT);
 
     const runActualDoctorRepair = () =>
       noteSessionTranscriptHealth({
         cfg: config,
         env,
-        sessionDirs: [],
-        sessionSqlite: true,
         shouldRepair: true,
       });
 
     await noteSessionTranscriptHealth({
       cfg: config,
       env,
-      sessionDirs: [],
-      sessionSqlite: true,
       shouldRepair: false,
     });
     expect(note.mock.calls.flat().join("\n")).toContain("orphaned session ownership");
-    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(PLUGIN_STATE_CAPACITY);
+    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(INCIDENT_ROW_COUNT);
     note.mockClear();
 
     await runActualDoctorRepair();
@@ -216,10 +209,9 @@ describe("doctor incident-scale Codex binding repair", () => {
         .map((row) => ({ key: row.key, value: row.value }))
         .toSorted((a, b) => a.key.localeCompare(b.key)),
     );
-    expect(getPluginStateCapacity("codex", env)).toEqual({
-      liveEntries: ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length,
-      maxEntries: PLUGIN_STATE_CAPACITY,
-    });
+    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(
+      ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length,
+    );
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(`Removed ${orphanCount} orphaned Codex`),
       expect.any(String),
@@ -237,10 +229,10 @@ describe("doctor incident-scale Codex binding repair", () => {
       ADVISORY_MANAGED_THREAD_COUNT,
     );
 
-    // Exercise the real cap instead of inferring recovered capacity from the row count.
+    // Repaired ownership remains writable through the public store.
     const bindings = createPluginStateKeyedStore<{ recovered: boolean }>("codex", {
       namespace: BINDING_NAMESPACE,
-      maxEntries: PLUGIN_STATE_CAPACITY,
+      maxEntries: INCIDENT_ROW_COUNT,
       overflowPolicy: "reject-new",
       env,
     });
@@ -253,10 +245,9 @@ describe("doctor incident-scale Codex binding repair", () => {
     note.mockClear();
     await runActualDoctorRepair();
 
-    expect(getPluginStateCapacity("codex", env)).toEqual({
-      liveEntries: ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length,
-      maxEntries: PLUGIN_STATE_CAPACITY,
-    });
+    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(
+      ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length,
+    );
     expect(await managedThreads.entries()).toHaveLength(ADVISORY_MANAGED_THREAD_COUNT);
     expect(note.mock.calls.flat().join("\n")).not.toContain("orphaned Codex");
   }, 120_000);

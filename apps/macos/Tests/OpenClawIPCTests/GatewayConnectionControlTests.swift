@@ -549,12 +549,6 @@ private func assertConfigLookupCannotRecreateRoute(
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
         let storeKey = "autoqa-185-tls-recovery"
         GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
-        let route = try #require(GatewayTLSRoute.resolve(
-            url: url,
-            connectionMode: .remote,
-            configuredFingerprint: nil,
-            storedFingerprint: "old",
-            storeKey: storeKey))
         let failure = GatewayTLSValidationFailure(
             kind: .pinMismatch,
             host: "gateway.example.ts.net",
@@ -577,7 +571,12 @@ private func assertConfigLookupCannotRecreateRoute(
         })
         let connection = GatewayConnection(
             testEndpointProvider: {
-                GatewayConnection.EndpointSnapshot(
+                let route = try #require(GatewayTLSRoute.resolve(
+                    url: url,
+                    connectionMode: .remote,
+                    configuredFingerprint: nil,
+                    storeKey: storeKey))
+                return GatewayConnection.EndpointSnapshot(
                     config: (url: url, token: nil, password: nil),
                     tls: route,
                     routeAuthority: nil)
@@ -781,7 +780,9 @@ private func assertConfigLookupCannotRecreateRoute(
         await connection.shutdown()
     }
 
-    @Test func `realtime talk event overflow terminates its bounded subscription`() async throws {
+    private func withRealtimeTalkTransport(
+        _ operation: (GatewayConnection, RealtimeTalkRelayTransport, UInt64) async throws -> Void) async throws
+    {
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(
                 sendHook: { task, message, sendIndex in
@@ -808,37 +809,152 @@ private func assertConfigLookupCannotRecreateRoute(
                     password: nil)
             },
             sessionBox: WebSocketSessionBox(session: session))
-        try await connection.refresh()
-        let transport = try await connection.acquireRealtimeTalkTransport()
-        let events = await transport.subscribeServerEvents(1)
-        let socketGeneration = try #require(await connection._test_activeSocketGeneration())
+        do {
+            try await connection.refresh()
+            let transport = try await connection.acquireRealtimeTalkTransport()
+            let socketGeneration = try #require(await connection._test_activeSocketGeneration())
+            try await operation(connection, transport, socketGeneration)
+        } catch {
+            await connection.shutdown()
+            throw error
+        }
+        await connection.shutdown()
+    }
 
-        for seq in 1...20 {
+    @Test func `realtime talk event overflow terminates its bounded subscription`() async throws {
+        try await self.withRealtimeTalkTransport { connection, transport, socketGeneration in
+            let events = await transport.subscribeServerEvents(1)
+            for seq in 1...20 {
+                await connection._test_handlePush(
+                    .event(EventFrame(
+                        type: "event",
+                        event: "talk.event",
+                        payload: AnyCodable(["seq": seq]),
+                        seq: seq,
+                        stateversion: nil)),
+                    socketGeneration: socketGeneration)
+            }
+            let terminalRead = Task {
+                var iterator = events.makeAsyncIterator()
+                var received: [EventFrame] = []
+                while let event = await iterator.next() {
+                    received.append(event)
+                }
+                return received
+            }
+            do {
+                let received = try await AsyncTimeout.withTimeout(
+                    seconds: 1,
+                    onTimeout: { CancellationError() },
+                    operation: { await terminalRead.value })
+                #expect(!received.isEmpty)
+                #expect(received.count <= 2)
+            } catch {
+                terminalRead.cancel()
+                _ = await terminalRead.value
+                throw error
+            }
+        }
+    }
+
+    @Test func `realtime event capacity excludes snapshots and gaps while preserving chat events`() async throws {
+        try await self.withRealtimeTalkTransport { connection, transport, socketGeneration in
+            let events = await transport.subscribeServerEvents(1)
+            await connection._test_handlePush(
+                .seqGap(expected: 1, received: 2), socketGeneration: socketGeneration)
             await connection._test_handlePush(
                 .event(EventFrame(
-                    type: "event",
-                    event: "talk.event",
-                    payload: AnyCodable(["seq": seq]),
-                    seq: seq,
-                    stateversion: nil)),
+                    type: "event", event: "talk.event", payload: nil, seq: 2, stateversion: nil)),
                 socketGeneration: socketGeneration)
-        }
 
-        let terminalRead = Task {
-            var iterator = events.makeAsyncIterator()
-            var received: [EventFrame] = []
-            while let event = await iterator.next() {
-                received.append(event)
+            let firstRead = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let reader = Task {
+                var iterator = events.makeAsyncIterator()
+                let first = await iterator.next()
+                firstRead.continuation.yield(())
+                firstRead.continuation.finish()
+                return await (first, iterator.next())
             }
-            return received
+            do {
+                _ = try await AsyncTimeout.withTimeout(seconds: 1, onTimeout: { CancellationError() }) {
+                    var iterator = firstRead.stream.makeAsyncIterator()
+                    return await iterator.next()
+                }
+                await connection._test_handlePush(
+                    .seqGap(expected: 3, received: 4), socketGeneration: socketGeneration)
+                await connection._test_handlePush(
+                    .event(EventFrame(
+                        type: "event", event: "chat",
+                        payload: AnyCodable(["runId": "tool-run", "state": "final"]),
+                        seq: 4, stateversion: nil)),
+                    socketGeneration: socketGeneration)
+                let (first, second) = try await AsyncTimeout.withTimeout(
+                    seconds: 1, onTimeout: { CancellationError() }, operation: { await reader.value })
+                #expect(first?.event == "talk.event")
+                #expect(first?.seq == 2)
+                #expect(second?.event == "chat")
+                #expect(second?.seq == 4)
+                let completion = try #require(second?.payload?.dictionaryValue)
+                #expect(completion["runId"]?.stringValue == "tool-run")
+                #expect(completion["state"]?.stringValue == "final")
+            } catch {
+                reader.cancel()
+                _ = await reader.value
+                throw error
+            }
         }
-        let received = try await AsyncTimeout.withTimeout(
-            seconds: 1,
-            onTimeout: { CancellationError() },
-            operation: { await terminalRead.value })
-        #expect(!received.isEmpty)
-        #expect(received.count <= 2)
-        await connection.shutdown()
+    }
+
+    @Test func `realtime events queued by a retired socket are not delivered`() async throws {
+        try await self.withRealtimeTalkTransport { connection, transport, socketGeneration in
+            let events = await transport.subscribeServerEvents(1)
+            await connection._test_handlePush(
+                .event(EventFrame(
+                    type: "event", event: "talk.event", payload: nil, seq: 1, stateversion: nil)),
+                socketGeneration: socketGeneration)
+            await connection.shutdown()
+            let reader = Task {
+                var iterator = events.makeAsyncIterator()
+                return await iterator.next()
+            }
+            do {
+                let event = try await AsyncTimeout.withTimeout(
+                    seconds: 1, onTimeout: { CancellationError() }, operation: { await reader.value })
+                #expect(event == nil)
+            } catch {
+                reader.cancel()
+                _ = await reader.value
+                throw error
+            }
+        }
+    }
+
+    @Test func `realtime cancellation before demand removes its subscription`() async throws {
+        try await self.withRealtimeTalkTransport { connection, transport, _ in
+            let events = await transport.subscribeServerEvents(1)
+            let start = AsyncTestGate()
+            let reader = Task {
+                await start.wait()
+                var iterator = events.makeAsyncIterator()
+                return await iterator.next()
+            }
+            reader.cancel()
+            start.open()
+            do {
+                let event = try await AsyncTimeout.withTimeout(
+                    seconds: 1, onTimeout: { CancellationError() }, operation: { await reader.value })
+                #expect(event == nil)
+                try await AsyncTimeout.withTimeout(seconds: 1, onTimeout: { CancellationError() }) {
+                    while await !(connection.realtimeTalkSubscribers.isEmpty) {
+                        try await Task.sleep(for: .milliseconds(5))
+                    }
+                }
+            } catch {
+                reader.cancel()
+                _ = await reader.value
+                throw error
+            }
+        }
     }
 
     @Test func `operator widget capability refresh is shared and retained`() async throws {
@@ -988,22 +1104,31 @@ extension GatewayConnectionControlTests {
             routeB: (urlB, ownerB))
     }
 
-    @Test func `SSH endpoint never receives another route device token`() async throws {
-        let tunnelURL = try #require(URL(string: "ws://127.0.0.1:18789"))
-        let ownerA = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(
-            connectionMode: .remote,
-            remoteTransport: .ssh,
-            remoteURL: "",
-            remoteTarget: "operator@gateway-a.example"))
-        let ownerB = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(
-            connectionMode: .remote,
-            remoteTransport: .ssh,
-            remoteURL: "",
-            remoteTarget: "operator@gateway-b.example"))
+    @Test(arguments: [false, true])
+    func `SSH endpoint never receives another route device token`(sameHostDifferentPort: Bool) async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": TestIsolation.tempConfigPath(),
+            "OPENCLAW_GATEWAY_PORT": nil,
+        ]) {
+            let tunnelURL = try #require(URL(string: "ws://127.0.0.1:18789"))
+            let rootA: [String: Any] = ["gateway": [
+                "mode": "remote", "port": 19789,
+                "remote": ["transport": "ssh", "sshTarget": "operator@gateway-a.example"],
+            ]]
+            let rootB: [String: Any] = ["gateway": [
+                "mode": "remote", "port": sameHostDifferentPort ? 19889 : 19789,
+                "remote": [
+                    "transport": "ssh",
+                    "sshTarget": sameHostDifferentPort ? "operator@gateway-a.example" : "operator@gateway-b.example",
+                ],
+            ]]
+            let ownerA = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(root: rootA))
+            let ownerB = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(root: rootB))
 
-        try await self.assertDeviceTokenIsolation(
-            routeA: (tunnelURL, ownerA),
-            routeB: (tunnelURL, ownerB))
+            try await self.assertDeviceTokenIsolation(
+                routeA: (tunnelURL, ownerA),
+                routeB: (tunnelURL, ownerB))
+        }
     }
 
     @Test func `retired socket callbacks cannot mutate cache or subscribers`() async throws {
@@ -1175,14 +1300,6 @@ extension GatewayConnectionControlTests {
         await connection.shutdown()
     }
 
-    @Test func `status fails when process missing`() async {
-        let (connection, _) = makeTestGatewayConnection()
-        let result = await connection.status()
-        await connection.shutdown()
-        #expect(result.ok == false)
-        #expect(result.error != nil)
-    }
-
     @Test func `reject empty message`() async {
         let (connection, _) = makeTestGatewayConnection()
         let result = await connection.sendAgent(GatewayAgentInvocation(
@@ -1312,12 +1429,36 @@ extension GatewayConnectionControlTests {
             [{"id":"main","model":{"primary":"   "}}]}
             """#,
             nil),
+        (
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main","utilityModel":" apple-fm/on-device "}]}
+            """#,
+            "apple-fm/on-device"),
+        (
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main","model":{"primary":"openai/gpt-5.5"},"utilityModel":"apple-fm/on-device"}]}
+            """#,
+            "openai/gpt-5.5"),
+        (
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main"},{"id":"other","utilityModel":"apple-fm/on-device"}]}
+            """#,
+            nil),
+        (
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main","model":{"primary":"   "},"utilityModel":"   "}]}
+            """#,
+            nil),
     ])
     func `configured inference model follows the default agent`(
         json: String,
         expected: String?) throws
     {
-        #expect(try GatewayConnection.decodeConfiguredInferenceModel(Data(json.utf8)) == expected)
+        #expect(try GatewayConnection.decodeConfiguredInferenceModels(Data(json.utf8)).setupModel == expected)
     }
 
     static func messageData(_ message: URLSessionWebSocketTask.Message) -> Data? {

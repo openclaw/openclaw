@@ -54,6 +54,9 @@ use `url`. If the Gateway is not ready or a browser handoff cannot be issued, th
 `{"ok":false,"reason":"..."}` and exits non-zero. SecretRef-managed shared tokens are never included
 in `url`.
 
+For terminal HTTP failures, an unreadable repair diagnostic leaves the observed HTTP status
+in `reason` (for example, `HTTP 503`).
+
 Notes:
 
 - Resolves configured `gateway.auth.token` SecretRefs when possible.

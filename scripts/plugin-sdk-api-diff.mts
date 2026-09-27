@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createPluginSdkApiDiff,
   diffPluginSdkApi,
   formatPluginSdkApiDiffReport,
   hasPluginSdkApiChanges,
@@ -19,6 +20,7 @@ import { isConstrainedCiCheckHost } from "./lib/local-check-runtime.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmPreflightSdkSelectors } from "./openclaw-npm-extended-stable-release.mjs";
 import {
+  createPluginSdkApiDiffSet,
   createPluginSdkApiReleaseEvidence,
   createPluginSdkApiReleaseEvidenceSet,
 } from "./plugin-sdk-api-release-evidence.mjs";
@@ -265,8 +267,13 @@ async function main(): Promise<void> {
     path.join(temporaryParent, "openclaw-plugin-sdk-api-diff-"),
   );
   // A regular release compares two npm predecessors against one frozen head.
-  // Install and render each commit once, including selectors already at that head.
-  const commits = [...new Set([...bases.map((base) => base.commit), headCommit])];
+  // Identical commits need no rendering, even when the caller's checkout is dirty.
+  const commits = [
+    ...new Set(bases.map((base) => base.commit).filter((commit) => commit !== headCommit)),
+  ];
+  if (commits.length > 0) {
+    commits.push(headCommit);
+  }
   const addedWorktrees: string[] = [];
   const abortController = new AbortController();
   let interruptedExitCode: number | undefined;
@@ -307,7 +314,7 @@ async function main(): Promise<void> {
     })
       ? 1
       : 2;
-    const rendered = await runTasksWithConcurrency({
+    const prepared = await runTasksWithConcurrency({
       limit,
       errorMode: "stop",
       // Drain aborted siblings before removing their registered worktrees.
@@ -320,6 +327,25 @@ async function main(): Promise<void> {
         git(worktree, ["sparse-checkout", "set", "src", "packages", "patches", "scripts"]);
         git(worktree, ["checkout", "--detach", commit]);
         await installRevisionDependencies(worktree, abortController.signal);
+        return worktree;
+      }),
+    });
+    if (prepared.hasError) {
+      throw prepared.firstError;
+    }
+    // pnpm can hardlink revision dependencies into its shared store. Finish every
+    // install before any compiler snapshots those files, or a sibling install can
+    // change inode metadata while the declaration renderer is proving immutability.
+    const rendered = await runTasksWithConcurrency({
+      limit,
+      errorMode: "stop",
+      throwOnError: false,
+      onTaskError: () => abortController.abort(),
+      tasks: commits.map((commit, index) => async () => {
+        const worktree = prepared.results[index];
+        if (!worktree) {
+          throw new Error(`Plugin SDK API worktree is missing for ${commit}`);
+        }
         const renderPath = path.join(temporaryRoot, `${commit}.json`);
         await renderRevision(repoRoot, worktree, renderPath, abortController.signal);
         surfaces.set(commit, parsePluginSdkApiDiffSurface(await fs.readFile(renderPath, "utf8")));
@@ -328,19 +354,27 @@ async function main(): Promise<void> {
     if (rendered.hasError) {
       throw rendered.firstError;
     }
-    const after = surfaces.get(headCommit);
-    if (!after) {
-      throw new Error("Plugin SDK API head snapshot is missing");
-    }
-    const diffs = new Map<string, PluginSdkApiDiff>();
+    const diffs = new Map<string, PluginSdkApiDiff>([
+      [
+        headCommit,
+        createPluginSdkApiDiff({ entrypointsAdded: [], entrypointsRemoved: [], exports: [] }),
+      ],
+    ]);
     const workflowSha = git(repoRoot, ["rev-parse", "HEAD"]);
     const comparisons = bases.map((base) => {
-      const before = surfaces.get(base.commit);
-      if (!before) {
-        throw new Error("Plugin SDK API predecessor snapshot is missing");
+      let diff = diffs.get(base.commit);
+      if (!diff) {
+        const after = surfaces.get(headCommit);
+        if (!after) {
+          throw new Error("Plugin SDK API head snapshot is missing");
+        }
+        const before = surfaces.get(base.commit);
+        if (!before) {
+          throw new Error("Plugin SDK API predecessor snapshot is missing");
+        }
+        diff = diffPluginSdkApi(before, after);
+        diffs.set(base.commit, diff);
       }
-      const diff = diffs.get(base.commit) ?? diffPluginSdkApi(before, after);
-      diffs.set(base.commit, diff);
       return {
         selector: base.selector,
         diff,
@@ -368,8 +402,10 @@ async function main(): Promise<void> {
     process.stdout.write(report);
     if (args.jsonPath) {
       const diff = args.bases
-        ? Object.fromEntries(
-            comparisons.map((comparison) => [comparison.selector, comparison.diff]),
+        ? createPluginSdkApiDiffSet(
+            Object.fromEntries(
+              comparisons.map((comparison) => [comparison.selector, comparison.diff]),
+            ),
           )
         : primary.diff;
       await writeFile(args.jsonPath, `${JSON.stringify(diff, null, 2)}\n`);

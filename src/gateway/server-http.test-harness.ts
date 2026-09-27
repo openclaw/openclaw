@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { expect, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
@@ -75,10 +76,7 @@ export function createResponse(): {
 } {
   const setHeader = vi.fn();
   let body = "";
-  let resolveEnd!: () => void;
-  const ended = new Promise<void>((resolve) => {
-    resolveEnd = resolve;
-  });
+  const { promise: ended, resolve: resolveEnd } = createDeferred();
   const end = vi.fn((chunk?: unknown) => {
     res.writableFinished = true;
     res.emit("finish");
@@ -217,8 +215,9 @@ export function createHooksHandler(
       },
 ) {
   const options = typeof params === "string" ? { bindHost: params } : params;
+  const hooksConfig = createHooksConfig();
   return createHooksRequestHandler({
-    getHooksConfig: () => createHooksConfig(),
+    getHooksConfig: () => hooksConfig,
     bindHost: options.bindHost ?? "127.0.0.1",
     port: 18789,
     logHooks: {

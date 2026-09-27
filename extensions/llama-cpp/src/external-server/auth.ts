@@ -50,7 +50,7 @@ export async function resolveLlamaServerProviderHeaders(params: {
       }
       continue;
     }
-    const path = `models.providers.${LLAMA_CPP_PROVIDER_ID}.headers.${name}`;
+    const path = `models.providers.${LLAMA_CPP_PROVIDER_ID}.headers[${JSON.stringify(name)}]`;
     const header = await resolveConfiguredSecretInputString({
       config: params.config,
       env: params.env ?? process.env,

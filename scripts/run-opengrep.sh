@@ -50,7 +50,7 @@ if ! command -v opengrep >/dev/null 2>&1; then
 error: 'opengrep' not found on PATH.
 
 Install with:
-  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.27.1/install.sh | bash -s -- -v v1.27.1
+  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.30.0/install.sh | bash -s -- -v v1.30.0
 
 (See https://opengrep.dev for other options.)
 EOF
@@ -120,7 +120,7 @@ write_empty_sarif() {
         "driver": {
           "name": "Opengrep OSS",
           "informationUri": "https://opengrep.dev",
-          "semanticVersion": "1.27.1",
+          "semanticVersion": "1.30.0",
           "rules": []
         }
       },

@@ -64,6 +64,7 @@ Each entry points at the page that now holds the content.
 - <a id="synthetic" />[Synthetic](/concepts/model-providers/custom-providers#synthetic)
 - <a id="minimax" />[MiniMax](/concepts/model-providers/custom-providers#minimax)
 - <a id="llama.cpp" /><a id="llama-cpp" />[llama.cpp](/concepts/model-providers/custom-providers#llama-cpp)
+- <a id="llmman" />[llmman](/concepts/model-providers/custom-providers#llmman)
 - <a id="lm-studio" />[LM Studio](/concepts/model-providers/custom-providers#lm-studio)
 - <a id="ollama" />[Ollama](/concepts/model-providers/custom-providers#ollama)
 - <a id="vllm" />[vLLM](/concepts/model-providers/custom-providers#vllm)
@@ -89,3 +90,4 @@ See also: [Configuration](/gateway/configuration) for full configuration example
 - [Models](/concepts/models) - model configuration and aliases
 - [Providers](/providers) - per-provider setup guides
 - [Agent harness plugins](/plugins/sdk-agent-harness) - SDK surface for plugins that replace the embedded agent executor
+- [`openclaw models`](/cli/models) - list, select, and authenticate providers from the CLI

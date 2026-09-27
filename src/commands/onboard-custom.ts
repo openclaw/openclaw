@@ -130,21 +130,20 @@ async function requestVerification(params: {
   }
 }
 
-async function requestOpenAiVerification(params: {
+async function verifyCustomApiCompatibility(params: {
   baseUrl: string;
   apiKey: string;
   modelId: string;
-  responsesApi?: boolean;
+  compatibility: CustomApiCompatibility;
 }): Promise<VerificationResult> {
-  return await requestVerification(buildOpenAiVerificationProbeRequest(params));
-}
-
-async function requestAnthropicVerification(params: {
-  baseUrl: string;
-  apiKey: string;
-  modelId: string;
-}): Promise<VerificationResult> {
-  return await requestVerification(buildAnthropicVerificationProbeRequest(params));
+  return await requestVerification(
+    params.compatibility === "anthropic"
+      ? buildAnthropicVerificationProbeRequest(params)
+      : buildOpenAiVerificationProbeRequest({
+          ...params,
+          responsesApi: params.compatibility === "openai-responses",
+        }),
+  );
 }
 
 async function promptBaseUrlAndKey(params: {
@@ -234,7 +233,7 @@ async function applyCustomApiRetryChoice(params: {
   return { baseUrl, apiKey, resolvedApiKey, modelId };
 }
 
-/** Prompts for a custom API provider and prepares its verified endpoint config without writing it. */
+/** Prompts for a custom API provider and prepares its endpoint config without writing it. */
 export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -242,6 +241,8 @@ export async function promptCustomApiConfig(params: {
   target?: OnboardingAgentTarget;
   secretInputMode?: SecretInputMode;
   setAsPrimary?: boolean;
+  /** Setup owns its single confirmation turn after saving the credential. */
+  verification?: "immediate" | "deferred";
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
   const manifestPlugins = loadManifestMetadataSnapshot({
@@ -261,7 +262,9 @@ export async function promptCustomApiConfig(params: {
 
   const compatibilityChoice = await prompter.select({
     message: t("wizard.customProvider.compatibility"),
-    options: COMPATIBILITY_OPTIONS.map((option) => ({
+    options: COMPATIBILITY_OPTIONS.filter(
+      (option) => params.verification !== "deferred" || option.value !== "unknown",
+    ).map((option) => ({
       value: option.value,
       label: t(option.labelKey),
       hint: t(option.hintKey),
@@ -273,92 +276,62 @@ export async function promptCustomApiConfig(params: {
   let compatibility: CustomApiCompatibility | null =
     compatibilityChoice === "unknown" ? null : compatibilityChoice;
 
-  while (true) {
-    let verifiedFromProbe = false;
+  while (params.verification !== "deferred") {
     if (!compatibility) {
       // Probe in a fixed order so unknown endpoints converge to a concrete
       // config API value before we write provider metadata.
       const probeSpinner = prompter.progress(t("wizard.customProvider.detectionProgress"));
-      const openaiProbe = await requestOpenAiVerification({
-        baseUrl,
-        apiKey: resolvedApiKey,
-        modelId,
-      });
-      if (openaiProbe.ok) {
-        probeSpinner.stop(t("wizard.customProvider.detectedOpenAi"));
-        compatibility = "openai";
-        verifiedFromProbe = true;
-      } else {
-        const openaiResponsesProbe = await requestOpenAiVerification({
+      const detectionMessages = {
+        openai: "wizard.customProvider.detectedOpenAi",
+        "openai-responses": "wizard.customProvider.detectedOpenAiResponses",
+        anthropic: "wizard.customProvider.detectedAnthropic",
+      };
+      for (const candidate of ["openai", "openai-responses", "anthropic"] as const) {
+        const result = await verifyCustomApiCompatibility({
           baseUrl,
           apiKey: resolvedApiKey,
           modelId,
-          responsesApi: true,
+          compatibility: candidate,
         });
-        if (openaiResponsesProbe.ok) {
-          probeSpinner.stop(t("wizard.customProvider.detectedOpenAiResponses"));
-          compatibility = "openai-responses";
-          verifiedFromProbe = true;
-        } else {
-          const anthropicProbe = await requestAnthropicVerification({
-            baseUrl,
-            apiKey: resolvedApiKey,
-            modelId,
-          });
-          if (anthropicProbe.ok) {
-            probeSpinner.stop(t("wizard.customProvider.detectedAnthropic"));
-            compatibility = "anthropic";
-            verifiedFromProbe = true;
-          } else {
-            probeSpinner.stop(t("wizard.customProvider.detectionFailed"));
-            await prompter.note(
-              t("wizard.customProvider.detectionFailedNote"),
-              t("wizard.customProvider.detectionNoteTitle"),
-            );
-            const retryChoice = await promptCustomApiRetryChoice(prompter);
-            ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
-              prompter,
-              config,
-              secretInputMode: params.secretInputMode,
-              retryChoice,
-              current: { baseUrl, apiKey, resolvedApiKey, modelId },
-            }));
-            continue;
-          }
+        if (result.ok) {
+          probeSpinner.stop(t(detectionMessages[candidate]));
+          compatibility = candidate;
+          break;
         }
       }
-    }
-
-    if (verifiedFromProbe) {
-      break;
-    }
-
-    // Explicit compatibility choices still get a live probe so setup does not
-    // persist endpoints or models that fail the selected protocol.
-    const verifySpinner = prompter.progress(t("wizard.customProvider.verifying"));
-    const result =
-      compatibility === "anthropic"
-        ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
-        : await requestOpenAiVerification({
-            baseUrl,
-            apiKey: resolvedApiKey,
-            modelId,
-            responsesApi: compatibility === "openai-responses",
-          });
-    if (result.ok) {
-      verifySpinner.stop(t("wizard.customProvider.verificationSuccessful"));
-      break;
-    }
-    if (result.error !== undefined) {
-      verifySpinner.stop(
-        t("wizard.customProvider.verificationFailedError", {
-          error: formatVerificationError(result.error),
-        }),
+      if (compatibility) {
+        break;
+      }
+      probeSpinner.stop(t("wizard.customProvider.detectionFailed"));
+      await prompter.note(
+        t("wizard.customProvider.detectionFailedNote"),
+        t("wizard.customProvider.detectionNoteTitle"),
       );
     } else {
-      verifySpinner.stop(
-        t("wizard.customProvider.verificationFailedStatus", { status: result.status }),
-      );
+      // Explicit compatibility choices still get a live probe so setup does not
+      // persist endpoints or models that fail the selected protocol.
+      const verifySpinner = prompter.progress(t("wizard.customProvider.verifying"));
+      const result = await verifyCustomApiCompatibility({
+        baseUrl,
+        apiKey: resolvedApiKey,
+        modelId,
+        compatibility,
+      });
+      if (result.ok) {
+        verifySpinner.stop(t("wizard.customProvider.verificationSuccessful"));
+        break;
+      }
+      if (result.error !== undefined) {
+        verifySpinner.stop(
+          t("wizard.customProvider.verificationFailedError", {
+            error: formatVerificationError(result.error),
+          }),
+        );
+      } else {
+        verifySpinner.stop(
+          t("wizard.customProvider.verificationFailedStatus", { status: result.status }),
+        );
+      }
     }
     const retryChoice = await promptCustomApiRetryChoice(prompter);
     ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({

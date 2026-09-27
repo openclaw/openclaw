@@ -11,11 +11,7 @@ import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persis
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
-import {
-  isNonSecretApiKeyMarker,
-  isOAuthApiKeyMarker,
-  NON_ENV_SECRETREF_MARKER,
-} from "../../agents/model-auth-markers.js";
+import { isNonSecretApiKeyMarker, isOAuthApiKeyMarker } from "../../agents/model-auth-markers.js";
 import { resolveProviderConfigSecretInput } from "../../agents/model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../../agents/model-auth-runtime-config.js";
 import {
@@ -24,6 +20,7 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
 import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
 import { maskApiKey } from "../../security/secret-mask.js";
 import { shortenHomePath } from "../../utils.js";
@@ -163,6 +160,16 @@ export function resolveProviderAuthOverview(params: {
     authEvidenceMap: params.authEvidenceMap,
     skipSetupProviderFallback: hasPrecomputedCandidates || hasPrecomputedEvidence,
   });
+  const env = envKey
+    ? {
+        value:
+          envKey.source.includes("OAUTH_TOKEN") ||
+          normalizeLowercaseStringOrEmpty(envKey.source).includes("oauth")
+            ? "OAuth (env)"
+            : maskApiKey(envKey.apiKey),
+        source: envKey.source,
+      }
+    : undefined;
   const customKey = getCustomProviderApiKey(cfg, provider);
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   const providerApiKeyRef = resolveProviderConfigSecretInput(cfg, provider).ref;
@@ -195,13 +202,10 @@ export function resolveProviderAuthOverview(params: {
         ),
       };
     }
-    if (envKey) {
-      const normalizedSource = normalizeLowercaseStringOrEmpty(envKey.source);
-      const isOAuthEnv =
-        envKey.source.includes("OAUTH_TOKEN") || normalizedSource.includes("oauth");
+    if (env) {
       return {
         kind: "env",
-        detail: isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey),
+        detail: env.value,
       };
     }
     if (usableCustomKey) {
@@ -226,19 +230,7 @@ export function resolveProviderAuthOverview(params: {
       apiKey: apiKeyCount,
       labels,
     },
-    ...(envKey
-      ? {
-          env: {
-            value: (() => {
-              const normalizedSource = normalizeLowercaseStringOrEmpty(envKey.source);
-              return envKey.source.includes("OAUTH_TOKEN") || normalizedSource.includes("oauth")
-                ? "OAuth (env)"
-                : maskApiKey(envKey.apiKey);
-            })(),
-            source: envKey.source,
-          },
-        }
-      : {}),
+    ...(env ? { env } : {}),
     ...(customKey
       ? {
           modelsJson: {

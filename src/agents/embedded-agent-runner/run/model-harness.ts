@@ -2,10 +2,10 @@ import type { Model } from "../../../llm/types.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agent-runtime-id.js";
 import { resolveAuthoredModelContextTokens } from "../../context-resolution.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
+import type { AgentHarnessPreparedModelProvider } from "../../harness/selection-decision.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
 } from "../../harness/selection.js";
 import {
   resolveAgentHarnessPreparedAuthSupport,
@@ -47,6 +47,9 @@ export function resolveEmbeddedRunEffectiveModel(
     runtimeModel: params.runtimeModel,
     nativeModelOwned: params.nativeModelOwned,
     ...(params.runParams.contextWindow ? { contextWindow: params.runParams.contextWindow } : {}),
+    ...(params.runParams.contextTokenBudget === undefined
+      ? {}
+      : { contextTokenBudget: params.runParams.contextTokenBudget }),
   });
   const authoredContextTokenCap =
     params.nativeModelOwned || params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID

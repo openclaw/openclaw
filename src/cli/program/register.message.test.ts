@@ -91,7 +91,6 @@ vi.mock("./message/register.discord-admin.js", () => ({
 describe("registerMessageCommands", () => {
   const ctx: ProgramContext = {
     programVersion: "9.9.9-test",
-    channelOptions: ["telegram", "discord"],
     messageChannelOptions: "telegram|discord",
     agentChannelOptions: "last|telegram|discord",
   };

@@ -6,6 +6,7 @@ import {
   openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, test } from "vitest";
 import {
@@ -17,21 +18,36 @@ import {
 } from "./dreaming-state.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
     configureMemoryCoreDreamingState(() => {
       throw new Error("memory workspace test store is closed");
     });
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     cleanup();
   }),
 );
 
-function createFixture() {
+function createFixture(onMutation?: (operation: "register" | "delete") => void) {
   const root = tempDirs.make("memory-workspace-state-");
   const env = { OPENCLAW_STATE_DIR: root };
-  configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("memory-core", { ...options, env }),
-  );
+  configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) => {
+    const store = createPluginStateKeyedStoreForTests<T>("memory-core", { ...options, env });
+    return {
+      ...store,
+      async register(...args: Parameters<typeof store.register>) {
+        await store.register(...args);
+        onMutation?.("register");
+      },
+      async delete(key: string) {
+        const deleted = await store.delete(key);
+        if (deleted) {
+          onMutation?.("delete");
+        }
+        return deleted;
+      },
+    };
+  });
   const scope = { namespace: "workspace-progress", workspaceDir: path.join(root, "workspace") };
   return {
     scope,
@@ -50,7 +66,12 @@ async function readValues(scope: ReturnType<typeof createFixture>["scope"]) {
 test.each(["replacement", "cleanup", "clear"] as const)(
   "workspace %s lets queued event-loop work observe committed progress",
   async (phase) => {
-    const { scope, foreignWorkspace, foreignNamespace, database } = createFixture();
+    let observeMutation: (() => void) | undefined;
+    const { scope, foreignWorkspace, foreignNamespace, database } = createFixture((operation) => {
+      if (phase === "replacement" || operation === "delete") {
+        observeMutation?.();
+      }
+    });
     const originals = Array.from({ length: 64 }, (_, index) => ({
       key: `entry-${index}`,
       value: "old",
@@ -72,22 +93,27 @@ test.each(["replacement", "cleanup", "clear"] as const)(
       transactionOpen: boolean;
       entries: Array<{ key: string; value: string }>;
     }>((resolve, reject) => {
-      setImmediate(() => {
-        const completedAtCallback = completed;
-        const transactionOpen = database.db.isTransaction;
-        void readMemoryCoreWorkspaceEntries<string>(scope).then(
-          (current) =>
-            resolve({ completed: completedAtCallback, transactionOpen, entries: current }),
-          reject,
-        );
-      });
+      // Queue after the first durable mutation; initial worker reads can yield before progress.
+      observeMutation = () => {
+        observeMutation = undefined;
+        setImmediate(() => {
+          const completedAtCallback = completed;
+          const transactionOpen = database.db.isTransaction;
+          void readMemoryCoreWorkspaceEntries<string>(scope).then(
+            (current) =>
+              resolve({ completed: completedAtCallback, transactionOpen, entries: current }),
+            reject,
+          );
+        });
+      };
     });
     const operation = (
       phase === "clear"
         ? clearMemoryCoreWorkspaceNamespace(scope)
         : writeMemoryCoreWorkspaceEntries({ ...scope, entries })
-    ).then(() => {
+    ).finally(() => {
       completed = true;
+      observeMutation?.();
     });
     try {
       const [, observed] = await Promise.all([operation, observation]);

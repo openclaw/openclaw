@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import type http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -24,7 +24,9 @@ import {
 import {
   configWithInstalledPackageTreeBlockPolicy,
   createInstalledPackageTreePolicyExec,
+  installNpmPlugin,
   installProjectDependencies,
+  registerNpmPayloadIdentityTests,
 } from "./install.npm-spec.test-support.js";
 import { runPluginPayloadSmokeCheck } from "./payload-verification.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
@@ -44,6 +46,7 @@ const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[ke
 const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const server of servers.splice(0)) {
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
@@ -88,23 +91,9 @@ function useRegistry(registry: string): void {
   process.env.npm_config_registry = registry;
 }
 
-async function installNpmPlugin(params: {
-  config?: OpenClawConfig;
-  expectedIntegrity?: string;
-  npmRoot: string;
-  spec: string;
-}) {
-  return await installPluginFromNpmSpec({
-    ...(params.config ? { config: params.config } : {}),
-    ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
-    spec: params.spec,
-    npmDir: params.npmRoot,
-    logger: { info: () => {}, warn: () => {} },
-    timeoutMs: 120_000,
-  });
-}
-
 describe("installPluginFromNpmSpec e2e", () => {
+  registerNpmPayloadIdentityTests({ makeInstallFixture, uniquePackageName, useStaticRegistry });
+
   it.each(["npm", "npm-pack"] as const)(
     "preserves a real %s successor when an earlier lifecycle lease has closed",
     { timeout: 120_000 },
@@ -349,7 +338,7 @@ describe("installPluginFromNpmSpec e2e", () => {
           observations[stage] = {
             exitCode, authorityClosed, error: errors.join("\\n"),
             configUnchanged: configBefore === await fs.readFile(process.env.OPENCLAW_CONFIG_PATH, "utf8"),
-            pluginInstalls: await readPersistedInstalledPluginIndexInstallRecords() ?? {},
+            pluginInstalls: readPersistedInstalledPluginIndexInstallRecords() ?? {},
             hookInstalls: readHookInstalls(),
             npmPayloads: npmEntries.filter((entry) => entry.endsWith(path.join("node_modules", packageName))),
             hookPayload: existsSync(path.join(process.env.OPENCLAW_STATE_DIR, "hooks", packageName)),

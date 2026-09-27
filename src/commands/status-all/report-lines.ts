@@ -19,45 +19,17 @@ import { appendStatusReportHeading, appendStatusReportTable } from "./text-repor
 
 type OverviewRow = { Item: string; Value: string };
 
-type ChannelsTable = {
-  rows: Array<{
-    id: string;
-    label: string;
-    enabled: boolean;
-    state: "ok" | "warn" | "off" | "setup";
-    detail: string;
-  }>;
-  details: Array<{
-    title: string;
-    columns: string[];
-    rows: Array<Record<string, string>>;
-  }>;
-};
-
-type ChannelIssueLike = {
-  channel: string;
-  message: string;
-};
-
-type AgentStatusLike = {
-  agents: Array<{
-    id: string;
-    name?: string | null;
-    bootstrapPending?: boolean | null;
-    sessionsCount: number;
-    lastActiveAgeMs?: number | null;
-    sessionsPath: string;
-  }>;
-};
-
 /** Builds the complete status-all text report, including overview tables and diagnosis lines. */
 export async function buildStatusAllReportLines(params: {
   progress: ProgressReporter;
   configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
   overviewRows: OverviewRow[];
-  channels: ChannelsTable;
-  channelIssues: ChannelIssueLike[];
-  agentStatus: AgentStatusLike;
+  channels: {
+    rows: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["rows"][number]>;
+    details: Parameters<typeof buildStatusChannelDetailSections>[0]["details"];
+  };
+  channelIssues: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["channelIssues"][number]>;
+  agentStatus: Parameters<typeof buildStatusAgentTableRows>[0]["agentStatus"];
   connectionDetailsForReport: string;
   diagnosis: Omit<
     Parameters<typeof appendStatusAllDiagnosis>[0],

@@ -65,21 +65,6 @@ struct ExecAllowlistEntryMatchKey: Hashable, Sendable {
     }
 }
 
-struct ExecApprovalsSnapshot: Codable, Sendable {
-    var path: String
-    var exists: Bool
-    var hash: String
-    var file: ExecApprovalsFile
-}
-
-enum ExecApprovalsConditionalSaveResult {
-    case saved(ExecApprovalsSnapshot)
-    case baseHashUnavailable
-    case baseHashRequired
-    case conflict
-    case unavailable
-}
-
 enum ExecApprovalsMutationError: Error, Equatable, Sendable {
     case invalidPattern(ExecAllowlistPatternValidationReason)
     case unavailable
@@ -257,13 +242,6 @@ actor SkillBinsCache {
             return FileManager().isExecutableFile(atPath: expanded) ? expanded : nil
         }
         return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
-    }
-
-    static func _testBuildTrustIndex(
-        report: SkillsStatusReport,
-        searchPaths: [String]) -> SkillBinTrustIndex
-    {
-        self.buildTrustIndex(report: report, searchPaths: searchPaths)
     }
 }
 

@@ -1,5 +1,9 @@
 import type { ErrorShape, ResponseFrame } from "@openclaw/gateway-protocol";
 import {
+  GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
+  isGatewaySuspendUnavailableError,
+} from "@openclaw/gateway-protocol/restart-unavailable";
+import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
   retainGatewayResponsePayload,
@@ -31,6 +35,8 @@ type GatewayPendingRequest = {
   unbounded: boolean;
   method: string;
   startedAtMs: number;
+  resend?: () => void;
+  waitingForResume?: boolean;
 };
 
 type GatewayPendingRequestsOptions = {
@@ -48,8 +54,40 @@ type GatewayPendingRequestsOptions = {
 export class GatewayPendingRequests {
   private pending = new Map<string, GatewayPendingRequest>();
   private requestSequence = 0;
+  private suspensionTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly opts: GatewayPendingRequestsOptions) {}
+
+  setSuspensionPhase(phase: unknown): void {
+    if (phase === "accepting") {
+      this.resumeIdentityRequests();
+    } else if (phase === "preparing" || phase === "draining" || phase === "prepared") {
+      this.pauseIdentityRequests();
+    }
+  }
+
+  private pauseIdentityRequests(retryAfterMs = GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS): void {
+    clearTimeout(this.suspensionTimer);
+    this.suspensionTimer = setTimeout(
+      () => this.resumeIdentityRequests(),
+      resolveSafeTimeoutDelayMs(
+        Number.isFinite(retryAfterMs) && retryAfterMs > 0
+          ? retryAfterMs
+          : GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
+      ),
+    );
+    this.suspensionTimer.unref?.();
+  }
+
+  private resumeIdentityRequests(): void {
+    clearTimeout(this.suspensionTimer);
+    this.suspensionTimer = undefined;
+    for (const pending of this.pending.values()) {
+      if (pending.waitingForResume) {
+        pending.resend?.();
+      }
+    }
+  }
 
   get hasPending(): boolean {
     return this.pending.size > 0;
@@ -142,12 +180,33 @@ export class GatewayPendingRequests {
       options?.signal?.addEventListener("abort", onAbort, { once: true });
       this.pending.set(id, pending);
       try {
-        sender.send(JSON.stringify({ type: "req", id, method, params }));
-        if (this.pending.get(id) !== pending) {
-          return;
+        const frame = JSON.stringify({ type: "req", id, method, params });
+        const send = () => {
+          if (this.pending.get(id) !== pending) {
+            return;
+          }
+          pending.waitingForResume = Boolean(pending.resend && this.suspensionTimer);
+          if (pending.waitingForResume) {
+            return;
+          }
+          try {
+            sender.send(frame);
+            if (this.pending.get(id) !== pending) {
+              return;
+            }
+            requestSent = true;
+            this.invoke("sent", () => options?.onSent?.(id));
+          } catch (error) {
+            if (retire("CLIENT_SEND_ERROR")) {
+              reject(error instanceof Error ? error : new Error(String(error)));
+            }
+          }
+        };
+        // Writes retain their synchronous authority/send boundary and are never replayed.
+        if (method === "agent.identity.get") {
+          pending.resend = send;
         }
-        requestSent = true;
-        this.invoke("sent", () => options?.onSent?.());
+        send();
       } catch (error) {
         if (retire("CLIENT_SEND_ERROR")) {
           reject(error instanceof Error ? error : new Error(String(error)));
@@ -169,6 +228,19 @@ export class GatewayPendingRequests {
       }
       return;
     }
+    if (
+      !frame.ok &&
+      pending.resend &&
+      !pending.acceptedNotified &&
+      frame.error?.code === "UNAVAILABLE" &&
+      frame.error.retryable === true &&
+      isGatewaySuspendUnavailableError(frame.error)
+    ) {
+      // The admission fence refused execution. Keep the original deadline and cancellation.
+      this.pauseIdentityRequests(frame.error.retryAfterMs);
+      pending.waitingForResume = true;
+      return;
+    }
     this.pending.delete(frame.id);
     pending.cleanup?.();
     if (frame.ok) {
@@ -185,6 +257,8 @@ export class GatewayPendingRequests {
   }
 
   flush(error: Error): void {
+    clearTimeout(this.suspensionTimer);
+    this.suspensionTimer = undefined;
     const retired = this.pending;
     this.pending = new Map();
     // Timing observers can reconnect synchronously, so detach the entire old

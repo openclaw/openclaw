@@ -58,6 +58,26 @@ describe("runConfigureWizard", () => {
     setupWizardTestDefaults();
   });
 
+  it("directs invalid config to the doctor repair command before making changes", async () => {
+    setupBaseWizardState();
+    mocks.readConfigFileSnapshot.mockResolvedValueOnce({
+      ...EMPTY_CONFIG_SNAPSHOT,
+      exists: true,
+      valid: false,
+      issues: [{ path: "browser.actionTimeoutTypoMs", message: "Unknown key" }],
+    });
+    const runtime = createRuntime();
+
+    await runConfigureWizard({ command: "configure" }, runtime);
+
+    expect(mocks.clackOutro).toHaveBeenCalledWith(
+      "Config invalid. Run `openclaw doctor --fix` to apply supported repairs, then re-run configure.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.clackSelect).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it.each(["gateway", "daemon", "health", "web"] as const)(
     "configures %s without requiring an agent owner",
     async (section) => {

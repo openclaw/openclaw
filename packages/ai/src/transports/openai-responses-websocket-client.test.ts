@@ -343,6 +343,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
               headers: {
                 "x-client-request-id": context.sessionId ?? "",
                 "x-openclaw-session-id": context.sessionId ?? "",
+                "x-provider-route": "route-a",
               },
               degradeCooldownMs: 1_000,
             },
@@ -385,6 +386,28 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       );
     },
   );
+
+  it("preserves nonconflicting turn headers with an explicit OpenCode session", async () => {
+    transportState.responseBatches.push([message(completedEvent("resp_accepted", "ok"))]);
+
+    const result = await run(
+      { messages: [userMessage("hello", 1)], tools: [] },
+      {
+        model: {
+          ...model,
+          headers: { "X-OpenCode-Session": "configured-session" },
+        },
+      },
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(transportState.websocketOptions[0]?.headers).toMatchObject({
+      "X-OpenCode-Session": "configured-session",
+      "x-client-request-id": "session-1",
+      "x-openclaw-session-id": "session-1",
+      "x-provider-route": "route-a",
+    });
+  });
 
   it("closes the WebSocket when acceptance observation fails", async () => {
     transportState.responseBatches.push([message(completedEvent("resp_rejected", "ignored"))]);
@@ -554,9 +577,17 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(transportState.sdkRequests).toHaveLength(2);
   });
 
-  it.each(["previous_response_not_found", "websocket_connection_limit_reached"])(
-    "recovers a cached continuation rejected with %s over full-history SSE",
-    async (code) => {
+  it.each<{ code: string; param?: string; message?: string }>([
+    { code: "previous_response_not_found", param: "previous_response_id" },
+    { code: "websocket_connection_limit_reached" },
+    {
+      code: "unsupported_parameter",
+      param: "previous_response_id",
+      message: "Previous response cannot be used for this organization due to Zero Data Retention.",
+    },
+  ])(
+    "recovers a cached continuation rejected with $code over full-history SSE",
+    async ({ code, param, message: rejection }) => {
       transportState.responseBatches.push(
         [message(completedEvent("resp_1", "first answer"))],
         [
@@ -564,8 +595,8 @@ describe("native OpenAI Responses WebSocket client integration", () => {
             type: "error",
             error: wrappedSdkServerError({
               code,
-              message: `safe rejection: ${code}`,
-              param: code === "previous_response_not_found" ? "previous_response_id" : undefined,
+              message: rejection ?? `safe rejection: ${code}`,
+              param,
               status: 400,
             }),
           },

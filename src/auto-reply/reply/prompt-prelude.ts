@@ -9,7 +9,7 @@ import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-d
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
+import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
@@ -20,6 +20,7 @@ const ROOM_EVENT_PARTICIPATION_RULE =
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (chronological, selected for current message):",
   "Chat history since last reply:",
+  "Recent chat history:",
 ];
 
 /** Builds command/transcript/queued prompt bodies from inbound context. */
@@ -216,7 +217,10 @@ export function buildReplyPromptEnvelopeBase(
   const effectiveBaseBody =
     roomEventBody ?? (params.hasUserBody ? resetModelBody : MEDIA_ONLY_USER_TEXT);
   const transcriptBody = params.isHeartbeat
-    ? HEARTBEAT_TRANSCRIPT_PROMPT
+    ? resolveInternalTurnTranscript({
+        InputProvenance: params.ctx.InputProvenance ?? params.sessionCtx.InputProvenance,
+        InternalTurnSource: params.ctx.InternalTurnSource ?? params.sessionCtx.InternalTurnSource,
+      }).text
     : params.isBareSessionReset
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
       : (roomEventBody ?? (params.hasUserBody ? params.baseBody : MEDIA_ONLY_USER_TEXT));

@@ -27,12 +27,30 @@ describe("simple stream max-token clamp", () => {
     expect(clampMaxTokensToModel(makeModel(), 90_000)).toBe(9_000);
   });
 
-  it("keeps a valid floor for a non-positive request", () => {
-    expect(clampMaxTokensToModel(makeModel(), 0)).toBe(1);
+  it("preserves an explicit request when the model output limit is unknown", () => {
+    expect(clampMaxTokensToModel(makeModel({ maxTokens: undefined }), 360)).toBe(360);
   });
 
-  it("preserves an omitted output limit", () => {
-    expect(clampMaxTokensToModel(makeModel(), undefined)).toBeUndefined();
-    expect(buildBaseOptions(makeModel()).maxTokens).toBeUndefined();
+  it.each([9_000, undefined])(
+    "keeps a valid floor for a non-positive request with model limit %s",
+    (maxTokens) => {
+      expect(clampMaxTokensToModel(makeModel({ maxTokens }), 0)).toBe(1);
+    },
+  );
+
+  it.each([9_000, undefined])(
+    "preserves an omitted output limit with model limit %s",
+    (maxTokens) => {
+      expect(clampMaxTokensToModel(makeModel({ maxTokens }), undefined)).toBeUndefined();
+      expect(buildBaseOptions(makeModel({ maxTokens })).maxTokens).toBeUndefined();
+    },
+  );
+
+  it("preserves constrained-output requests", () => {
+    const responseFormat = {
+      type: "json_schema",
+      json_schema: { name: "result", strict: true, schema: { type: "object" } },
+    };
+    expect(buildBaseOptions(makeModel(), { responseFormat })).toMatchObject({ responseFormat });
   });
 });

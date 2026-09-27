@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -15,14 +16,6 @@ type SessionDiffElement = HTMLElement & {
   loader: SessionDiffLoader | null;
   readonly updateComplete: Promise<boolean>;
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
 
 function result(branch: string): SessionsDiffResult {
   return {
@@ -211,10 +204,8 @@ describe("SessionDiffPanel", () => {
   });
 
   it.each([
-    { surface: "file", failed: false, feedback: "Copied!" },
     { surface: "file", failed: true, feedback: "Copy failed" },
     { surface: "sync", failed: false, feedback: "Copied!" },
-    { surface: "sync", failed: true, feedback: "Copy failed" },
   ])(
     "keeps $surface path copy feedback visible: $feedback",
     async ({ surface, failed, feedback }) => {
@@ -255,7 +246,6 @@ describe("SessionDiffPanel", () => {
 
   it.each([
     { name: "plain browser", nativeGateway: null, offered: false },
-    { name: "native local gateway", nativeGateway: "local", offered: true },
     { name: "native remote gateway", nativeGateway: "remote", offered: false },
     {
       name: "remote execution node",

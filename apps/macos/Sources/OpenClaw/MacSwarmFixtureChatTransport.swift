@@ -22,8 +22,8 @@ struct MacSwarmFixtureChatTransport: OpenClawChatTransport {
 
     func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
         [OpenClawChatModelChoice(
-            modelID: "gpt-5.6-sol",
-            name: "GPT-5.6 Sol",
+            modelID: "gpt-6-astra",
+            name: "GPT-6 Astra",
             provider: "openai",
             contextWindow: 400_000)]
     }
@@ -55,7 +55,7 @@ struct MacSwarmFixtureChatTransport: OpenClawChatTransport {
             count: 1,
             defaults: OpenClawChatSessionsDefaults(
                 modelProvider: "openai",
-                model: "gpt-5.6-sol",
+                model: "gpt-6-astra",
                 contextTokens: 400_000,
                 mainSessionKey: self.sessionKey),
             sessions: [self.session(
@@ -133,7 +133,7 @@ struct MacSwarmFixtureChatTransport: OpenClawChatTransport {
             outputTokens: nil,
             totalTokens: nil,
             modelProvider: "openai",
-            model: "gpt-5.6-sol",
+            model: "gpt-6-astra",
             contextTokens: 400_000,
             parentSessionKey: parentKey,
             spawnedBy: parentKey,

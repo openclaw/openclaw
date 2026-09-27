@@ -4,6 +4,7 @@ import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import {
   commandResult,
   createWarmProvider,
+  managedBinary,
   openWarmImageStore,
   provisionWarmProfile,
   PROFILE,
@@ -24,29 +25,74 @@ const mixedContext = () => ({
   ],
 });
 const expiredImage = (id: string): WarmProfileRecord => ({
-  version: 2,
+  version: 3,
   allocations: {},
   image: {
     checkpointId: id,
     kind: "aws-ebs-snapshot",
     state: "available",
     createdAtMs: Date.now() - RETENTION_MS,
-    lastUsedAtMs: Date.now() - RETENTION_MS,
+    preparationKey: null,
+    cacheKey: null,
+    purpose: null,
+    lastDemandAtMs: Date.now() - RETENTION_MS,
   },
 });
 
 describe("Crabbox idle image maintenance", () => {
+  it("deletes expired images through a healthy binary when another acquisition fails", async () => {
+    const { provider, calls, warn } = createWarmProvider();
+    vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => {
+      if (params?.binary === "/opt/b/crabbox") {
+        throw new Error("fixture binary acquisition unavailable");
+      }
+      return { binary: params?.binary ?? "crabbox", version: "0.55.0" };
+    });
+    const store = openWarmImageStore();
+    store.register("expired", expiredImage("chk_expired"));
+
+    await provider.maintain!(mixedContext());
+
+    expect(calls.map(({ argv }) => argv)).toEqual([
+      ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
+    ]);
+    expect(store.lookup("expired")).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("fixture binary acquisition unavailable"),
+    );
+  });
+
+  it("rejects maintenance and retains images when every binary acquisition fails", async () => {
+    const { provider, calls } = createWarmProvider();
+    vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockRejectedValue(
+      new Error("fixture binary acquisition unavailable"),
+    );
+    const store = openWarmImageStore();
+    const expired = expiredImage("chk_expired");
+    store.register("expired", expired);
+
+    await expect(provider.maintain!(mixedContext())).rejects.toThrow();
+
+    expect(calls).toEqual([]);
+    expect(store.lookup("expired")).toEqual(expired);
+  });
+
   it.each(["scrubbing", "creating", "uncertain"] as const)(
     "preserves ownership and pins while reporting an old %s capture",
     async (phase) => {
       const { provider, calls, warn } = createWarmProvider();
       const store = openWarmImageStore();
       const recent = expiredImage("chk_recent");
-      recent.image!.lastUsedAtMs = Date.now();
+      recent.image!.lastDemandAtMs = Date.now();
       const pinned = expiredImage("chk_pinned");
       pinned.allocations.cbx_pending = {
         choice: { kind: "checkpoint", checkpointId: "chk_pinned" },
         machineClass: "standard",
+        preparationKey: null,
+        cacheKey: null,
+        purpose: null,
+        demandAtMs: null,
+        imageGeneration: null,
         phase: "pending",
       };
       const capturing = expiredImage("chk_capturing");
@@ -110,7 +156,63 @@ describe("Crabbox idle image maintenance", () => {
     expect(store.lookup("expired")).toBeUndefined();
   });
 
-  it.each(["dispose", "authority"] as const)(
+  it("reports paused captures once per ownership snapshot without attempting capture", async () => {
+    const { provider, calls, warn } = createWarmProvider();
+    const store = openWarmImageStore();
+    const records = Array.from({ length: 4 }, (_, index): WarmProfileRecord => ({
+      version: 3,
+      allocations: {},
+      operation: {
+        type: "capture",
+        id: `capture-${index}`,
+        phase: "uncertain",
+        startedAtMs: Date.now() - 1_200_000,
+      },
+    }));
+    records.forEach((record, index) => store.register(`profile-${index}`, record));
+
+    await provider.maintain!(context());
+    await provider.maintain!(context());
+
+    expect(warn).toHaveBeenCalledOnce();
+    const warning = warn.mock.calls[0]?.[0];
+    expect(warning).toContain("4");
+    expect(warning).toContain("paused");
+    expect(warning).not.toContain("failed");
+    expect(warning).toContain("Stop the owning Gateway");
+    expect(warning).toContain("--acknowledge-provider-cleanup");
+    for (const [index, record] of records.entries()) {
+      expect(warning).toContain(`capture-${index}`);
+      expect(store.lookup(`profile-${index}`)).toEqual(record);
+    }
+    expect(calls).toEqual([]);
+
+    store.register("profile-0", {
+      version: 3,
+      allocations: {},
+      operation: {
+        type: "capture",
+        id: "replacement-capture",
+        phase: "uncertain",
+        startedAtMs: Date.now(),
+      },
+    });
+    await provider.maintain!(context());
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]?.[0]).toContain("replacement-capture");
+    records.forEach((_, index) =>
+      store.register(`profile-${index}`, { version: 3, allocations: {} }),
+    );
+    await provider.maintain!(context());
+    expect(warn).toHaveBeenCalledTimes(2);
+    records.forEach((record, index) => store.register(`profile-${index}`, record));
+    await provider.maintain!(context());
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(warn.mock.calls[2]?.[0]).toBe(warning);
+    expect(calls).toEqual([]);
+  });
+
+  it.each(["dispose", "authority", "operator delete"] as const)(
     "fences %s during deletion and retains its obligation until an active retry",
     async (boundary) => {
       const started = createDeferred<AbortSignal>();
@@ -126,14 +228,17 @@ describe("Crabbox idle image maintenance", () => {
       const store = openWarmImageStore();
       store.register("expired", expiredImage("chk_expired"));
       let current = true;
-      const maintenance = provider.maintain!({
-        ...mixedContext(),
-        assertCurrent() {
-          if (!current) {
-            throw new Error("maintenance authority closed");
-          }
-        },
-      });
+      const maintenance =
+        boundary === "operator delete"
+          ? provider.images.delete("chk_expired", mixedContext().profiles)
+          : provider.maintain!({
+              ...mixedContext(),
+              assertCurrent() {
+                if (!current) {
+                  throw new Error("maintenance authority closed");
+                }
+              },
+            });
       const rejected = expect(maintenance).rejects.toThrow();
       let stopping: Promise<void> | undefined;
       let stopped = false;
@@ -144,7 +249,7 @@ describe("Crabbox idle image maintenance", () => {
           provisionWarmProfile(provider, PROFILE, "during-maintenance"),
         ).resolves.toMatchObject({ node: { deviceId: "device-1" } });
         current = false;
-        if (boundary === "dispose") {
+        if (boundary !== "authority") {
           stopping = provider.dispose().then(() => {
             stopped = true;
           });
@@ -167,9 +272,12 @@ describe("Crabbox idle image maintenance", () => {
       const replacement = createWarmProvider(undefined, stateDir);
       await replacement.provider.maintain!(context());
       expect(store.lookup("expired")).toBeUndefined();
-      if (boundary === "dispose") {
+      if (boundary !== "authority") {
         expect(stopped).toBe(true);
         expect(() => provider.maintain!(context())).toThrow();
+        await expect(provider.images.pin("chk_expired", true)).rejects.toThrow();
+        await expect(provider.images.rollback("chk_expired")).rejects.toThrow();
+        await expect(provider.images.delete("chk_expired", context().profiles)).rejects.toThrow();
       }
     },
   );

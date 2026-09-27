@@ -8,12 +8,14 @@ import {
 import {
   buildBootstrapInjectionStats,
   analyzeBootstrapBudget,
+  isFixedUserCapFile,
 } from "../agents/bootstrap-budget.js";
 import { resolveBootstrapContextForDiagnostics } from "../agents/bootstrap-files-diagnostics.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../agents/embedded-agent-helpers.js";
+import { USER_BOOTSTRAP_MAX_CHARS } from "../agents/embedded-agent-helpers/bootstrap.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 // Every warning uses the same locale; silent checks never need a formatter.
@@ -40,6 +42,28 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
   return causes.map((cause) => (cause === "per-file-limit" ? "max/file" : "max/total")).join(", ");
 }
 
+export async function collectBootstrapFileSize(
+  cfg: OpenClawConfig,
+  workspaceDir: string,
+  agentId?: string,
+) {
+  const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, agentId);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, agentId);
+  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
+    workspaceDir,
+    config: cfg,
+    agentId,
+  });
+  return {
+    bootstrapTotalMaxChars,
+    analysis: analyzeBootstrapBudget({
+      files: buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles: contextFiles }),
+      bootstrapMaxChars,
+      bootstrapTotalMaxChars,
+    }),
+  };
+}
+
 /**
  * Analyzes configured bootstrap files and emits warnings when injection will truncate content.
  *
@@ -48,28 +72,13 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
 export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const agentIds = listAgentIds(cfg);
-  const workspaces = agentIds.map((agentId) => ({
-    agentId,
-    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-  }));
   let defaultAnalysis: ReturnType<typeof analyzeBootstrapBudget> | undefined;
-  for (const { agentId, workspaceDir } of workspaces) {
-    const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, agentId);
-    const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, agentId);
-    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
-      workspaceDir,
-      config: cfg,
+  for (const agentId of agentIds) {
+    const { analysis, bootstrapTotalMaxChars } = await collectBootstrapFileSize(
+      cfg,
+      resolveAgentWorkspaceDir(cfg, agentId),
       agentId,
-    });
-    const stats = buildBootstrapInjectionStats({
-      bootstrapFiles,
-      injectedFiles: contextFiles,
-    });
-    const analysis = analyzeBootstrapBudget({
-      files: stats,
-      bootstrapMaxChars,
-      bootstrapTotalMaxChars,
-    });
+    );
     if (agentId === defaultAgentId) {
       defaultAnalysis = analysis;
     }
@@ -98,7 +107,7 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
     if (nonTruncatedNearLimit.length > 0) {
       for (const file of nonTruncatedNearLimit) {
         lines.push(
-          `- ${file.name}: ${formatInt(file.rawChars)} chars (${formatPercent(file.rawChars, bootstrapMaxChars)} of max/file ${formatInt(bootstrapMaxChars)})`,
+          `- ${file.name}: ${formatInt(file.rawChars)} chars (${formatPercent(file.rawChars, file.effectiveFileLimit)} of max/file ${formatInt(file.effectiveFileLimit)})`,
         );
       }
     }
@@ -110,14 +119,32 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
       `Total bootstrap raw chars (before truncation): ${formatInt(analysis.totals.rawChars)}.`,
     );
 
+    // The near-limit percentage names each file's effective limit: USER.md's
+    // fixed cap can sit far below the configured bootstrapMaxChars, so quoting
+    // the configured value there would report a small fraction for a file that
+    // is actually close to its ceiling.
+    const fixedUserCapApplied = analysis.truncatedFiles.some(
+      (file) => isFixedUserCapFile(file) && file.causes.includes("per-file-limit"),
+    );
+    // Near-limit USER.md files are not truncated, so the branch above emits no
+    // guidance unless the fixed-cap note also covers them; the ineffective
+    // tuning tip stays suppressed for them either way.
+    const fixedUserCapNearLimit = analysis.nearLimitFiles.some(isFixedUserCapFile);
+    const fixedUserCapRelevant = fixedUserCapApplied || fixedUserCapNearLimit;
     const needsPerFileTip =
-      analysis.truncatedFiles.some((file) => file.causes.includes("per-file-limit")) ||
-      analysis.nearLimitFiles.length > 0;
+      analysis.truncatedFiles.some(
+        (file) => file.causes.includes("per-file-limit") && !isFixedUserCapFile(file),
+      ) || analysis.nearLimitFiles.some((file) => !isFixedUserCapFile(file));
     const needsTotalTip =
       analysis.truncatedFiles.some((file) => file.causes.includes("total-limit")) ||
       analysis.totalNearLimit;
-    if (needsPerFileTip || needsTotalTip) {
+    if (needsPerFileTip || needsTotalTip || fixedUserCapRelevant) {
       lines.push("");
+    }
+    if (fixedUserCapRelevant) {
+      lines.push(
+        `USER.md has a fixed ${formatInt(USER_BOOTSTRAP_MAX_CHARS)}-character bootstrap cap; keep it compact.`,
+      );
     }
     if (needsPerFileTip) {
       lines.push(

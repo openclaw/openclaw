@@ -567,6 +567,125 @@ process.stdout.write("eligible.txt\\0".repeat(count));
 });
 
 describe("preflightWorkerWorkspace", () => {
+  it("inspects workspace files outside the Gateway thread", async () => {
+    const root = await fs.realpath(tempDirs.make("openclaw-workspace-preflight-thread-"));
+    await git(root, "init", "--quiet");
+    await git(
+      root,
+      "-c",
+      "user.name=OpenClaw Test",
+      "-c",
+      "user.email=test@openclaw.invalid",
+      "commit",
+      "--quiet",
+      "--allow-empty",
+      "-m",
+      "base",
+    );
+    const file = path.join(root, "content.txt");
+    await fs.writeFile(file, "content\n");
+    const originalLstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      if (args[0] === file) {
+        throw new Error("Workspace file inspection ran on the Gateway thread");
+      }
+      return await originalLstat(...args);
+    });
+    await expect(preflightWorkerWorkspace({ localPath: root })).resolves.toBeUndefined();
+  });
+
+  it.each(["complete", "abort", "write-failure"] as const)(
+    "settles worker inventory output before completing (%s)",
+    async (outcome) => {
+      const root = await fs.realpath(tempDirs.make("openclaw-workspace-preflight-output-"));
+      const scratch = tempDirs.make("openclaw-workspace-transfer-output-");
+      const temporaryDirectory = path.join(scratch, "first");
+      const outputPath = path.join(temporaryDirectory, "transfer-list");
+      await git(root, "init", "--quiet");
+      await fs.writeFile(path.join(root, "alpha.txt"), "alpha\n");
+      await fs.writeFile(path.join(root, "beta.txt"), "beta\n");
+      const entered = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      const cancellation = new Error("workspace preparation stopped");
+      const writeFailure = new Error("inventory output failed");
+      let settled = false;
+      let closed = false;
+      const originalOpen = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await originalOpen(...args);
+        if (args[0] === outputPath && args[1] === "wx") {
+          const writeFile = handle.writeFile.bind(handle);
+          const close = handle.close.bind(handle);
+          handle.writeFile = async (...writeArgs) => {
+            entered.resolve();
+            await release.promise;
+            if (outcome === "write-failure") {
+              throw writeFailure;
+            }
+            return await writeFile(...writeArgs);
+          };
+          handle.close = async () => {
+            closed = true;
+            await close();
+          };
+        }
+        return handle;
+      });
+      const producing = createWorkspaceGitTransferList({
+        gitRoot: root,
+        temporaryDirectory,
+        signal: controller.signal,
+        timeoutMs: 10_000,
+      })
+        .then(
+          (value) => ({ ok: true as const, value }),
+          (error: unknown) => ({ ok: false as const, error }),
+        )
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await Promise.race([
+          entered.promise,
+          producing.then(() => {
+            throw new Error("Inventory ended before reaching its output writer");
+          }),
+        ]);
+        if (outcome === "abort") {
+          controller.abort(cancellation);
+          const independent = await createWorkspaceGitTransferList({
+            gitRoot: root,
+            temporaryDirectory: path.join(scratch, "second"),
+            signal: new AbortController().signal,
+            timeoutMs: 10_000,
+          });
+          await expect(fs.readFile(independent, "utf8")).resolves.toBe("alpha.txt\0beta.txt\0");
+        }
+        expect(settled).toBe(false);
+        expect(closed).toBe(false);
+      } finally {
+        release.resolve();
+        await producing;
+      }
+      const result = await producing;
+      expect(closed).toBe(true);
+      if (outcome === "complete") {
+        expect(result).toEqual({ ok: true, value: outputPath });
+        await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("alpha.txt\0beta.txt\0");
+      } else {
+        expect(result).toEqual({
+          ok: false,
+          error: outcome === "abort" ? cancellation : writeFailure,
+        });
+        if (result.ok) {
+          throw new Error("Cancelled or failed inventory returned success");
+        }
+        expect(result.error).toBe(outcome === "abort" ? cancellation : writeFailure);
+      }
+    },
+  );
+
   it("measures the canonical Git eligibility boundary without hashing content", async () => {
     const root = tempDirs.make("openclaw-workspace-preflight-");
     const transferDirectory = `${root}-transfer`;

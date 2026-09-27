@@ -2,6 +2,8 @@ import type { RouteId } from "../../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
 
+export const SESSION_STORAGE_SETTINGS_TARGET_ID = "settings-session-storage";
+
 export const CONNECTION_SETTINGS_TARGET_IDS = {
   host: "settings-connection-host",
 } as const;
@@ -15,6 +17,7 @@ export const COMMUNICATION_SETTINGS_TARGET_IDS = {
 
 export const PROFILE_SETTINGS_TARGET_IDS = {
   identity: "settings-profile-identity",
+  personalInstructions: "settings-profile-personal-instructions",
   githubConnections: "settings-profile-github-connections",
 } as const;
 
@@ -29,12 +32,34 @@ export type SettingsSearchTarget = {
   readonly search?: string;
   readonly aliases?: string;
   readonly requiresIdentity?: true;
+  readonly requiresMultipleProfiles?: true;
   readonly requiresNativeDeviceSettings?: true;
 };
 
 // Keep destinations and translation keys together without importing page
 // renderers: settings search runs before the destination page is loaded.
 export const SETTINGS_SEARCH_TARGETS = {
+  webSearch: {
+    routeId: "search",
+    labelKey: "tabs.search",
+    hash: "",
+    searchKeys: [
+      "searchPage.enabled",
+      "searchPage.provider",
+      "searchPage.test",
+      "searchPage.setup",
+    ],
+    aliases:
+      "web internet native hosted automatic provider brave parallel google gemini searxng codex openai api key endpoint",
+  },
+  sessionStorage: {
+    routeId: "ai-agents",
+    labelKey: "configView.sessionStorage.title",
+    search: "?section=session",
+    hash: `#${SESSION_STORAGE_SETTINGS_TARGET_ID}`,
+    searchKeys: ["configView.sessionStorage.automatic", "configView.sessionStorage.afterDays"],
+    aliases: "database disk size transcripts storage cleanup archive compression retention",
+  },
   meetingCapture: {
     routeId: "communications",
     labelKey: "meetingCapture.title",
@@ -57,6 +82,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [],
     nativeSearchKeys: {
       "configPage.deviceSettings.app": (snapshot) => snapshot.app !== undefined,
+      "configPage.deviceSettings.nativeExperience": (snapshot) =>
+        snapshot.app?.nativeExperienceEnabled !== undefined,
       "configPage.deviceSettings.appearance": (snapshot) => snapshot.app?.appearance !== undefined,
       "configPage.deviceSettings.notificationsEnabled": (snapshot) =>
         snapshot.app?.notificationsEnabled !== undefined,
@@ -81,6 +108,8 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configPage.deviceSettings.panels.watch": (snapshot) => snapshot.device.platform === "ios",
       "configPage.deviceSettings.computerControl": (snapshot) =>
         snapshot.capabilities?.computerControlEnabled !== undefined,
+      "configPage.deviceSettings.desktopSharing": (snapshot) =>
+        snapshot.capabilities?.desktopSharingEnabled !== undefined,
       "configPage.deviceSettings.browser": (snapshot) => snapshot.browser !== undefined,
       "configPage.deviceSettings.cookieSync": (snapshot) => snapshot.browser !== undefined,
       "configPage.deviceSettings.developer": (snapshot) =>
@@ -91,12 +120,14 @@ export const SETTINGS_SEARCH_TARGETS = {
     routeId: "device-permissions",
     labelKey: "tabs.devicePermissions",
     hash: "",
-    searchKeys: [
-      "configPage.deviceSettings.systemAccess",
-      "configPage.deviceSettings.location",
-      "configPage.deviceSettings.preciseLocation",
-    ],
+    searchKeys: [],
     nativeSearchKeys: {
+      "configPage.deviceSettings.systemAccess": (snapshot) =>
+        snapshot.permissions.entries.length > 0,
+      "configPage.deviceSettings.location": (snapshot) =>
+        snapshot.permissions.location !== undefined,
+      "configPage.deviceSettings.preciseLocation": (snapshot) =>
+        snapshot.permissions.location !== undefined,
       "configPage.deviceSettings.permissions.contacts.title": (snapshot) =>
         snapshot.permissions.entries.some((entry) => entry.id === "contacts"),
       "configPage.deviceSettings.permissions.calendars.title": (snapshot) =>
@@ -183,6 +214,15 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "profile avatar image email",
     requiresIdentity: true,
   },
+  personalInstructions: {
+    routeId: "profile",
+    labelKey: "profilePage.personalInstructions.title",
+    hash: `#${PROFILE_SETTINGS_TARGET_IDS.personalInstructions}`,
+    searchKeys: ["profilePage.personalInstructions.description"],
+    aliases: "USER.md personal instructions preferences",
+    requiresIdentity: true,
+    requiresMultipleProfiles: true,
+  },
   githubConnections: {
     routeId: "profile",
     labelKey: "githubConnections.title",
@@ -253,6 +293,18 @@ export const SETTINGS_SEARCH_TARGETS = {
     ],
     aliases: "colour swatch palette highlight green purple neutral",
   },
+  appearanceTypography: {
+    routeId: "appearance",
+    labelKey: "configView.appearance.typography",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.typography}`,
+    searchKeys: [
+      "configView.appearance.fonts.ui",
+      "configView.appearance.fonts.chat",
+      "configView.appearance.fonts.themeDefault",
+    ],
+    aliases: "font fonts typeface",
+  },
   appearanceTextSize: {
     routeId: "appearance",
     labelKey: "configView.appearance.textSize",
@@ -284,6 +336,19 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.sessionObserver.modelPickerHint",
     ],
   },
+  sessionSources: {
+    ...SETTINGS_ROUTE_TARGETS.sessionSources,
+    labelKey: "configView.sessionSources.title",
+    searchKeys: [
+      "configView.sessionSources.hint",
+      "configView.sessionSources.claude",
+      "configView.sessionSources.codex",
+      "configView.sessionSources.opencode",
+      "configView.sessionSources.pi",
+    ],
+    aliases:
+      "automatic auto discover discovery native external conversations show hide sidebar claude sessions",
+  },
   appearanceChat: {
     routeId: "appearance",
     labelKey: "configView.chatPrefs.title",
@@ -292,6 +357,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "configView.chatPrefs.messageWidth",
       "configView.chatPrefs.messageWidthHint",
+      "configView.chatPrefs.showTaskProgress",
+      "configView.chatPrefs.showTaskProgressHint",
       "configView.chatPrefs.collapseTaskProgress",
       "configView.chatPrefs.collapseTaskProgressHint",
       "chat.sendShortcut",
@@ -302,7 +369,6 @@ export const SETTINGS_SEARCH_TARGETS = {
       "chat.followUpModeQueue",
       "chat.followUpModeServer",
       "chat.followUpModeLoading",
-      "chat.followUpModeUsingServer",
       "chat.followUpModeOverriding",
       "chat.followUpModeReset",
       "chat.catalogOpenTarget",

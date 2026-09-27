@@ -222,7 +222,8 @@ export class IdentityAvatarController implements ReactiveController {
       return cached.url;
     }
     const route: { url: string | null; result: typeof result; release?: () => void } = {
-      url: null,
+      // Keep the configured source visible to renderers until the shared fetch settles.
+      url: value,
       result,
       release: retainAvatarImageUrl(result),
     };

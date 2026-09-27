@@ -54,6 +54,8 @@ struct ChatComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var shouldFocus: Bool
     var isEnabled: Bool
+    var placeholder: String
+    var textColor: NSColor = .textColor
     var minHeight: CGFloat = 28
     var maxHeight: CGFloat = 88
     var onSend: () -> Void
@@ -74,6 +76,8 @@ struct ChatComposerTextView: NSViewRepresentable {
         composerTextView.delegate = context.coordinator
 
         composerTextView.string = self.text
+        composerTextView.placeholder = self.placeholder
+        composerTextView.textColor = self.textColor
         composerTextView.onSend = { [weak composerTextView] in
             composerTextView?.window?.makeFirstResponder(nil)
             self.onSend()
@@ -95,6 +99,8 @@ struct ChatComposerTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? ChatComposerNSTextView else { return }
         context.coordinator.parent = self
+        textView.placeholder = self.placeholder
+        if textView.textColor != self.textColor { textView.textColor = self.textColor }
         textView.onPasteImageAttachment = self.onPasteImageAttachment
         textView.onKeyCommand = self.onKeyCommand
         textView.isEditable = self.isEnabled
@@ -169,7 +175,7 @@ enum ChatComposerTextViewFactory {
         // Measure separately from the live editor so SwiftUI's layout proposals
         // never move the insertion point or change the editor's scroll position.
         let storage = NSTextStorage(string: text.isEmpty ? " " : text, attributes: [
-            .font: textView.font ?? NSFont.systemFont(ofSize: 14),
+            .font: textView.font ?? NSFont.systemFont(ofSize: OpenClawChatTypography.bodySize),
         ])
         let layout = NSLayoutManager()
         let container = NSTextContainer(containerSize: NSSize(
@@ -192,7 +198,7 @@ enum ChatComposerTextViewFactory {
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.font = .systemFont(ofSize: 14, weight: .regular)
+        textView.font = .systemFont(ofSize: OpenClawChatTypography.bodySize, weight: .regular)
         textView.textContainer?.lineBreakMode = .byWordWrapping
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainerInset = NSSize(width: 2, height: 4)
@@ -212,9 +218,39 @@ enum ChatComposerTextViewFactory {
 }
 
 private final class ChatComposerNSTextView: NSTextView {
+    var placeholder = "" {
+        didSet {
+            if self.placeholder != oldValue { self.needsDisplay = true }
+        }
+    }
+
     var onSend: (() -> Void)?
     var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
     var onKeyCommand: ((_ command: ChatComposerKeyCommand, _ context: ChatComposerKeyCommandContext) -> Bool)?
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard self.string.isEmpty, !self.placeholder.isEmpty, let font = self.font else { return }
+
+        // The native text container owns the placeholder and caret geometry.
+        let origin = self.textContainerOrigin
+        let padding = self.textContainer?.lineFragmentPadding ?? 0
+        let rect = NSRect(
+            x: origin.x + padding,
+            y: origin.y,
+            width: max(0, self.bounds.width - origin.x * 2 - padding * 2),
+            height: self.bounds.height - origin.y)
+        (self.placeholder as NSString).draw(
+            with: rect,
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font, .foregroundColor: NSColor.placeholderTextColor],
+            context: nil)
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        self.needsDisplay = true
+    }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         var types = super.readablePasteboardTypes

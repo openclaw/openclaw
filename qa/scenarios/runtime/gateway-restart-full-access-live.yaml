@@ -23,7 +23,7 @@ scenario:
   objective: Verify ordinary full-access task continuation retains shell and delegation after an ambiguous interrupted Code Mode call, without replaying its side effect.
   successCriteria:
     - An ordinary non-replay-safe Code Mode call records one shell side effect and remains pending during Gateway replacement.
-    - Recovery preserves the session's shell and session-spawn tools and executes fresh work.
+    - Recovery preserves the session's shell and session-spawn tools, executes fresh work, and starts a child that completes successfully.
     - The prior shell side effect occurs exactly once and recovery delivers one final response without another user turn.
   docsRefs:
     - docs/tools/code-mode.md
@@ -55,9 +55,9 @@ scenario:
         return "FULL-ACCESS-CHECKPOINT";
         When exec reports waiting, call wait exactly once. Do not issue any further actions until the Gateway recovery system message arrives. Do not send assistant text before that recovery message.
 
-        After the Gateway recovery message, the interrupted execution has an unknown outcome. Do not replay that original exec or append to restart-original.txt again. Discover the shell execution and sessions_spawn tools afresh. If either is absent, reply exactly FULL-ACCESS-RESTART-BLOCKED and name the absent capability. Otherwise use the shell tool to read restart-original.txt and verify it contains one line original-effect, then execute `echo fresh-effect > restart-fresh.txt`. Use sessions_spawn with label restart-proof-child and agentId qa to ask a child to reply exactly CHILD-RESTART-OK, and wait for its completion using the available session tools or completion notification. Do not claim success before the child completes.
+        After the Gateway recovery message, the interrupted execution has an unknown outcome. Do not replay that original exec or append to restart-original.txt again. Discover the shell execution and sessions_spawn tools afresh. If either is absent, reply exactly FULL-ACCESS-RESTART-BLOCKED and name the absent capability. Otherwise use the shell tool to read restart-original.txt and verify it contains one line original-effect, then execute `echo fresh-effect > restart-fresh.txt`. Use sessions_spawn with label restart-proof-child, agentId qa, and expectsCompletionMessage false to ask a child to reply exactly CHILD-RESTART-OK. The accepted spawn receipt proves delegation is available; do not call sessions_yield or wait for the child in this parent turn. The QA harness will verify the child completion independently.
 
-        Finish with exactly FULL-ACCESS-RESTART-OK only after verifying the original single side effect, successful fresh shell work, and the child's CHILD-RESTART-OK reply. Do not perform unrelated work.
+        Finish with exactly FULL-ACCESS-RESTART-OK only after verifying the original single side effect and successful fresh shell work. The QA harness will separately require the child to complete successfully with exactly CHILD-RESTART-OK. Do not perform unrelated work.
 
 flow:
   steps:
@@ -156,7 +156,7 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "(await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 })).tasks?.find(task => task.title === 'restart-proof-child' && task.sessionKey === sessionKey && task.status === 'completed')"
+                expr: "(await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 })).tasks?.find(task => task.title === 'restart-proof-child' && task.sessionKey === sessionKey && task.status === 'completed' && task.deliveryStatus === 'not_applicable')"
             - expr: liveTurnTimeoutMs(env, 60000)
             - 50
         - call: readSessionTranscriptSummary

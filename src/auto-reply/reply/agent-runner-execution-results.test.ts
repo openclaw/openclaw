@@ -8,6 +8,7 @@ import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
+  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
@@ -19,7 +20,6 @@ import {
   expectMockCallArgFields,
   createMinimalRunAgentTurnParams,
   createRunAgentTurnParams,
-  NON_DIRECT_FAILURE_SURFACE_CASES,
   createNonDirectFailureSessionCtx,
 } from "./agent-runner-execution.test-support.js";
 import type {
@@ -87,18 +87,8 @@ describe("executeAgentTurn: result and tool delivery", () => {
         onToolResult,
       } satisfies GetReplyOptions,
       typingSignals,
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
+      ...createAgentTurnExecutionDefaults(),
       pendingToolTasks,
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
     });
 
     await Promise.all(pendingToolTasks);
@@ -117,7 +107,10 @@ describe("executeAgentTurn: result and tool delivery", () => {
     ).toBeUndefined();
   });
 
-  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+  it.each([
+    { label: "Discord group", provider: "discord", chatType: "group" },
+    { label: "Slack channel", provider: "slack", chatType: "channel" },
+  ] as const)(
     "surfaces model capacity errors from no-text mid-turn failures in $label chats",
     async (testCase) => {
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -266,10 +259,10 @@ describe("executeAgentTurn: result and tool delivery", () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
+    const delivery =
+      await vi.importActual<typeof import("./reply-delivery.js")>("./reply-delivery.js");
     state.createBlockReplyDeliveryHandlerMock.mockImplementationOnce(
-      (params: { directlySentBlockKeys?: Set<string> }) => async () => {
-        params.directlySentBlockKeys?.add("block:1");
-      },
+      delivery.createBlockReplyDeliveryHandler,
     );
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onBlockReply?.({ text: "streamed block" });
@@ -291,7 +284,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
           attempt: 1,
           total: 2,
         }),
-      ).toBeNull();
+      ).toBeUndefined();
       return {
         result,
         provider: "openai",
@@ -301,12 +294,13 @@ describe("executeAgentTurn: result and tool delivery", () => {
     });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({
         followupRun,
         opts: { onBlockReply: vi.fn() } satisfies GetReplyOptions,
       }),
-    );
+      blockStreamingEnabled: true,
+    });
 
     expect(result.kind).toBe("success");
   });
@@ -323,6 +317,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
       didStream: vi.fn(() => false),
       isAborted: vi.fn(() => false),
       hasSentPayload: vi.fn(() => false),
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: vi.fn(() => []),
     };
     state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
@@ -339,7 +334,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
           attempt: 1,
           total: 2,
         }),
-      ).toBeNull();
+      ).toBeUndefined();
       return {
         result,
         provider: "openai",
@@ -462,18 +457,8 @@ describe("executeAgentTurn: result and tool delivery", () => {
         onToolResult,
       } satisfies GetReplyOptions,
       typingSignals,
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
+      ...createAgentTurnExecutionDefaults(),
       pendingToolTasks,
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
     });
 
     await Promise.all(pendingToolTasks);
@@ -508,18 +493,8 @@ describe("executeAgentTurn: result and tool delivery", () => {
       } as unknown as TemplateContext,
       opts: { onToolResult } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
+      ...createAgentTurnExecutionDefaults(),
       pendingToolTasks,
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
     });
 
     await Promise.all(pendingToolTasks);
@@ -600,18 +575,8 @@ describe("executeAgentTurn: result and tool delivery", () => {
       } as unknown as TemplateContext,
       opts: { onToolResult } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
+      ...createAgentTurnExecutionDefaults(),
       pendingToolTasks,
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
     });
 
     await Promise.all(pendingToolTasks);

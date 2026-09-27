@@ -22,6 +22,8 @@ Startup enforces ownership in three steps, in order:
 
 Each layer can fail independently and throws its own `GatewayLockError`.
 
+During startup or restart, the Gateway waits up to five minutes for another OpenClaw process to release lifecycle ownership, logging when it starts waiting and when it acquires ownership or times out.
+
 ### State and config locks
 
 - Lock files, SQLite coordinators, and transient reclaim guards live under

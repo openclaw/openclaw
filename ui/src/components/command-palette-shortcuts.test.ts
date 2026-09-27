@@ -1,6 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createContext, createGateway, mountPalette } from "./command-palette.test-support.ts";
 import "./command-palette.ts";
@@ -67,7 +71,16 @@ describe("CommandPalette platform shortcuts", () => {
       await palette.updateComplete;
       expect(open.defaultPrevented).toBe(true);
       expect(palette.isOpen).toBe(true);
-      const input = palette.querySelector<HTMLInputElement>(".cmd-palette__input")!;
+      const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+      const start = palette.querySelector<HTMLButtonElement>(
+        ".cmd-palette__input-actions .cmd-palette__create",
+      )!;
+      expect(start.disabled).toBe(true);
+      expect(start.hidden).toBe(false);
+      expect(start.textContent).toContain("New session");
+      expect(start.querySelector("kbd")?.textContent).toBe(
+        formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),
+      );
       const editQuery = chord(other);
       input.dispatchEvent(editQuery);
       expect(editQuery.defaultPrevented).toBe(false);

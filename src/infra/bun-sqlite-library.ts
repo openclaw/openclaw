@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { posix } from "node:path";
+import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 
@@ -15,6 +16,7 @@ export type SqliteLibrarySelection =
 
 type SelectionOptions = { explicitPath?: string };
 type LibraryProbe = { version: string; extensionLoadingSupported: boolean };
+const WORKER_SELECTION_KEY = "openclaw.bunSqliteLibrarySelection";
 type SelectionDependencies = {
   isBun: boolean;
   platform: string;
@@ -150,6 +152,64 @@ function selectionError(path: string, error: unknown): Error {
   );
 }
 
+function inheritedSelection(): SqliteLibrarySelection | undefined {
+  const value: unknown = getEnvironmentData(WORKER_SELECTION_KEY);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const source = "source" in value ? value.source : undefined;
+    if (source === "runtime") {
+      return { source: "runtime" };
+    }
+    const path = "path" in value ? value.path : undefined;
+    const version = "version" in value ? value.version : undefined;
+    const extensionLoadingSupported =
+      "extensionLoadingSupported" in value ? value.extensionLoadingSupported : undefined;
+    if (
+      (source === "env" || source === "discovered") &&
+      typeof path === "string" &&
+      typeof version === "string" &&
+      extensionLoadingSupported === true
+    ) {
+      return {
+        source,
+        path,
+        version,
+        extensionLoadingSupported: true,
+      };
+    }
+  }
+  throw new Error("Invalid inherited SQLite library selection");
+}
+
+function createRuntimeSelector(): ReturnType<typeof createSelector> {
+  const isBun = Boolean(process.versions.bun);
+  const sharedLibrary = isBun && process.platform === "darwin";
+  const inherited = sharedLibrary && !isMainThread ? inheritedSelection() : undefined;
+  if (inherited) {
+    return () => inherited;
+  }
+  const select = createSelector({
+    isBun,
+    platform: process.platform,
+    env: process.env,
+    exists: existsSync,
+    probe: probeLibrary,
+    select: selectLibrary,
+  });
+  let published = false;
+  return (options) => {
+    const selection = select(options);
+    if (sharedLibrary && isMainThread && !published) {
+      // Bun's library hook is process-wide; new workers inherit the completed owner's fact.
+      setEnvironmentData(WORKER_SELECTION_KEY, Object.freeze({ ...selection }));
+      published = true;
+    }
+    return selection;
+  };
+}
+
 /** Select once, before any SQLite open; shared across CLI and bundled SDK module graphs. */
 export function ensureSqliteLibrarySelected(
   options?: SelectionOptions & {
@@ -160,15 +220,9 @@ export function ensureSqliteLibrarySelected(
   const dependencies = options?.internals;
   const select = dependencies
     ? (dependencies.selector ??= createSelector(dependencies))
-    : resolveGlobalSingleton(Symbol.for("openclaw.bunSqliteLibrarySelection"), () =>
-        createSelector({
-          isBun: Boolean(process.versions.bun),
-          platform: process.platform,
-          env: process.env,
-          exists: existsSync,
-          probe: probeLibrary,
-          select: selectLibrary,
-        }),
+    : resolveGlobalSingleton(
+        Symbol.for("openclaw.bunSqliteLibrarySelection"),
+        createRuntimeSelector,
       );
   return select(options);
 }

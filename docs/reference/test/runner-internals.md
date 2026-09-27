@@ -8,6 +8,19 @@ read_when:
 
 ## Shared test state and process helpers
 
+TypeScript tooling uses the native `typescript` package. The `pnpm tsgo` lanes
+resolve its executable directly; syntax and semantic tools use its unstable API
+with explicit process lifetimes. The package root exports version metadata,
+while AST, filesystem, and compiler APIs live under `typescript/unstable/*`.
+Packaged declaration builds run the same native compiler with semantic checking
+and validate its complete source and package-manifest receipts before bundling.
+The tsdown wrapper defaults declaration builds to one configuration at a time,
+bounding native compiler processes alongside the existing Node heap budget.
+Runtime-only builds keep their parallelism, and an explicit `--concurrency` value
+retains tsdown's own behavior.
+Code Mode executes JavaScript directly and does not use this compiler;
+its TypeScript-style tool declarations are model-facing documentation.
+
 `build-all`, standalone tsdown builds, tsgo, SDK declaration preparation,
 package-boundary checks, and dependent lint use checkout-local ownership at
 `.artifacts/dist-artifacts.lock`. Ownership spans
@@ -40,59 +53,72 @@ owner validates its consumed source content, inherited config, selected compiler
 and complete output inventory. Unrelated existing source or test edits retain
 cache hits. Resolution-topology changes invalidate conservatively, including new
 module candidates outside declared roots. Stale declarations get a full native
-emit after clearing only their build-info file; the successful emitted inventory
+emit after clearing their private input receipt; the successful emitted inventory
 then drives obsolete declaration pruning. Missing or tampered outputs invalidate
 the owner. The content records live under
-`.artifacts/extension-package-boundary`, outside packaged build cleanup. A warm run validates the records without emitting declarations.
+`.artifacts/extension-package-boundary`, outside packaged build cleanup. Private
+`.inputs.json` receipts contain normalized checkout-relative source and manifest
+paths instead of native `.tsbuildinfo` state. A warm run validates the records
+without emitting declarations.
 
-Native declaration and package-boundary records accept only checkout-owned input
+Packaged declaration builds and package-boundary records accept only checkout-owned input
 realpaths, including compiler libraries, inherited config, dependency links, and
-package manifests. Local pnpm links remain supported when their targets stay
-inside the checkout. The tsgo wrapper does not create or reuse a shared external
-install; invocations from subdirectories still use the containing checkout as
-the ownership boundary. Declared checkout junctions and platform path aliases map
-to the same native root for validation and actual snapshot reads. Local declaration
-preparation also aligns the compiler's `PWD` with its working directory so shell
-aliases do not change emitted inventory paths. Native resolution itself is not
-sandboxed: an ancestor install can still enter a successful compiler
-receipt. Resolution can read an ancestor's candidate `package.json` while searching
-for declarations, then resolve the import to checkout-local JavaScript. This can
-happen with a complete local frozen install and no external source files in the
-compiler Program; it does not by itself prove an undeclared dependency. Those
-manifests still affect resolution and must remain in the receipt. The owner fails
-with `Declaration input escapes checkout`, without publishing a success record or
-pruning obsolete declarations. Warm records use the same input check.
+package manifests. These paths share `compileNativeProject`, which uses the
+pinned native compiler's asynchronous API for checking and in-memory declaration
+emission. Its filesystem callbacks make candidates outside the checkout appear
+missing before native resolution can read them. Source and package-manifest reads
+are captured directly; admission does not depend on parsing resolution traces.
+The compiler version is pinned in `package.json` because this API is unstable.
+Configuration and requested semantic checks run before emission. Declaration
+errors come from the in-memory emit result, avoiding a separate declaration
+transform solely for diagnostics. Any error prevents artifact publication.
 
-Repair this at checkout provisioning: use a separate physical checkout whose
-ancestor directories do not contain `node_modules`, with the same candidate source
-(including any uncommitted changes) and its own `pnpm install --frozen-lockfile`.
-Run declaration preparation and dependent lint or package-boundary checks in that
-checkout, so the checks consume its freshly sealed receipts. A symlink to the
-nested checkout, a repeated install there, or `nodeLinker: isolated` does not bound
-native ancestor lookup. Do not alter the ancestor installation, add incidental
-dependencies, filter compiler receipts, or transplant declarations to bypass the
-checks. The pinned native compiler's filesystem callback API supports analysis,
-not declaration and build-info emission; native validation does not automatically
-create an isolated checkout.
+Nested physical worktrees are supported with their own
+`pnpm install --frozen-lockfile`, even when ancestor directories contain
+`node_modules`. An ancestor dependency cannot satisfy a missing local input or
+change the emitted declarations. Local pnpm links remain supported when their
+targets stay inside the checkout. A local link that resolves outside still fails
+with `Declaration input escapes checkout`, without publishing a success record or
+pruning obsolete declarations. An outside candidate remains inaccessible even if
+it is a symlink back into the checkout. Warm records use the same input check.
+Do not filter compiler receipts or transplant declarations to bypass the checks.
+
+Declared checkout junctions and platform path aliases map to the same native root
+for validation and actual snapshot reads. Local declaration preparation also
+aligns the compiler's `PWD` with its working directory so shell aliases do not
+change emitted inventory paths. Invocations from subdirectories still use the
+containing checkout as the ownership boundary. Other `pnpm tsgo` lanes continue
+to use the native CLI; its wrapper does not create or reuse a shared external
+install.
 
 Packaged SDK declarations belong to one staged owner shared by full, package, and
 `ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
 and caches their complete staged generation. Each successful compiler supplies its
-source membership through a private staged receipt; missing receipts or inputs
+source and package-manifest membership through a private staged receipt; missing receipts or inputs
 changed during compilation prevent publication. The shared input snapshot policy
 validates consumed bytes, inherited configuration, generator and manifest inputs,
 and resolution topology without starting a compiler on hits. Cache hits restore
 into fresh staging and pass the same entry and relative declaration closure checks
 before publication.
 All tsdown declaration builds (the eight SDK/unified groups, workspace packages,
-and the AI package) resolve source and dependency realpaths within their checkout.
-Ancestor installs are invisible to TypeScript lookup; selected declaration paths
-that escape through symlinks or bundler resolution fail the build. Each checkout
-needs its own installed declaration inputs, including compiler libraries. Local
-pnpm links are supported when their targets remain inside the checkout; shared
-external installs are not. Actual compiler receipts remain unfiltered, and input
-changes still prevent publication. Runtime module resolution is unchanged;
-native tsgo uses the separate receipt-admission policy above.
+and the AI package) use the same bounded compiler as local declaration preparation
+and package-boundary checks. Successful builds need checkout-owned compiler
+libraries and declaration dependencies; shared external installs are not supported.
+Compiler receipts retain complete source and package-manifest membership, including
+JSON inputs. Default type roots stay within the checkout, explicit type roots must
+be local, and a valid root `package.json` bounds source-package scope lookup.
+
+The shared snapshot policy still validates consumed bytes and resolution topology.
+Source and namespace changes during compilation prevent acceptance. New local
+module candidates invalidate cached records, as do ancestor-install appearance
+and removal. Outside probes always see missing files, so later changes to ancestor
+package contents cannot enter the compiler's filesystem view.
+Each emitted declaration must have one source-map owner in the successful compiler
+membership. The bundler consumes those declarations under their original source
+paths; private compiler stages are removed only after their child settles.
+Compiler configuration, native executable and API files, input bytes, and
+resolution topology participate in cache invalidation. Runtime module resolution
+is unchanged.
 
 Local preparation never overwrites packaged declarations or writes workspace
 forwarding bridges.
@@ -100,9 +126,23 @@ forwarding bridges.
 Plugin SDK declaration preparation and `scripts/run-tsgo.mjs` require child work
 to finish before reporting success. On POSIX, each verifies its own managed
 process group: leftover children are terminated and the command fails instead of
-allowing artifact stamps or downstream checks to proceed. Windows retains normal
-joined-launcher completion because strict group verification is unsupported there.
-This does not detect descendants that deliberately leave the managed groups.
+allowing artifact stamps or downstream checks to proceed. POSIX process groups do
+not detect descendants that deliberately leave the group.
+
+On Windows, managed commands and the Gateway test instance use a retained kernel
+Job. Platform code loads only when a Windows command is requested; planner imports
+stay independent of installed application packages. Loading finishes before spawn,
+so listener registration remains synchronous with child creation. Tooling resolves
+its worker URL with Node built-ins and reuses the native Job bindings from core.
+The launcher joins that Job before it can start the command. Cleanup waits
+for an empty Job, leader exit, and output closure; leader exit alone never proves
+descendant completion. Failed termination reports the observed surviving PIDs and
+retains resource claims while the Job remains unresolved. Normal leader exit also
+terminates remaining Job members. Finalization records its outcome before closing
+the Job handle, including on failure; closing the handle alone does not verify
+termination or release resource claims. Existing callers with
+their own IPC channel keep the direct-launch contract; failed taskkill without an
+owned Job stays indeterminate even if the leader and its pipes have closed.
 
 `run-vitest` (including project shards), plugin batches, `test-live`
 (including live shards), `run-vitest-profile`, and the TUI PTY watcher give each
@@ -113,6 +153,11 @@ threads, named builtin imports, and import-time captures; changing only a worker
 JavaScript `process.env` does not change native thread home lookup. Per-worker and
 per-test fixture homes remain separate. Installed Corepack and Playwright browser
 caches retain their caller-selected locations.
+
+Gateway port claims remain in the common temporary directory outside all enclosing
+Vitest namespaces, found through their explicit resource owners. Parallel invocations
+therefore share port ownership while a fixture hands its reserved socket to a child;
+removing one invocation's files cannot remove another fixture's port claim.
 
 Live-aware setup still loads the original profile and stages live state when
 requested. A bounded invocation artifact carries the original home to that setup;
@@ -140,8 +185,8 @@ path for manual recovery. Nested namespaces, fixture lifetimes, and managed comm
 register ephemeral filesystem ownership before admitting work. Release requires
 positive completion evidence; caught cleanup failures, module resets, worker exit,
 or an intermediate runner crash cannot release a pending claim or its ancestors.
-Managed commands keep their existing close-based completion contract unless strict
-tree verification is requested; failed finalization never releases ownership.
+Managed commands keep their existing output-drain contract; Windows Job commands
+also join kernel Job completion. Failed finalization never releases ownership.
 Stop all remaining writers before manually removing the reported exact directory.
 Windows and non-detached launches allocate the same isolated native home, but retain
 their namespace and enclosing claims with a diagnostic after child exit and pipe
@@ -154,6 +199,10 @@ This is home isolation, not a filesystem sandbox: explicit absolute paths,
 `os.userInfo()` account lookup, children with stripped or replaced home variables,
 and intentionally real-home live execution remain outside its protection.
 
+Codex app-server fixtures await agent and shared-state SQLite drainage between
+cases. Their file teardown drains the shared disk-budget scan worker, preserving
+reuse during the file and releasing it before isolated fork shutdown.
+
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
 - `test/helpers/openclaw-test-instance.ts`: process-level E2E tests needing a running Gateway, CLI env, log capture, and cleanup in one place.
@@ -165,6 +214,36 @@ Await its asynchronous `restoreEnv()`; stop and join required producers before
 restoring selectors or removing state. Runtime reproductions of state-selection
 leaks require enforced storage isolation, such as a VM or container without access
 to operator stores, not merely temporary `HOME` or state-directory overrides.
+
+## Public test diagnostics
+
+The shared Vitest reporter factory redacts credential-shaped fields in assertion
+messages, diffs, expected/received values, stacks, source excerpts, and annotations
+before forwarding them to the selected reporters. Keys remain visible and values
+become `<redacted len=N>`. This also applies to explicit `--reporter` selections,
+UI/browser configurations, and JSON/JUnit reports. Hosted logs are public, and
+runner-issued tokens may not be registered for GitHub masking.
+
+Unquoted environment records use one assignment per line: spaces and punctuation
+on the right-hand side belong to that value. Multiline strings split into quoted
+fragments by Node's inspector are redacted as one value.
+
+Redaction is unconditional and affects diagnostic output, not assertion behavior.
+Test console capture is outside this boundary; tests must still avoid logging
+credentials directly.
+
+Configured extension fork projects use the `openclaw-forks` diagnostic adapter
+around Vitest's native fork transport. If the existing stop deadline fails while
+the child remains alive, the adapter spends at most two additional seconds
+collecting a Node report before native termination and pipe cleanup. The timeout
+remains a test failure. The report distinguishes a missing stop acknowledgement
+from a stall after acknowledgement and includes native stacks, libuv handles, and
+worker-thread reports. Environment variables, command arguments, and socket
+endpoints are omitted. A blocked event loop can prevent signal reporting; that
+case explicitly reports that no complete report was captured.
+
+Successful shutdown remains quiet. An explicit `--pool=forks` selects Vitest's
+built-in pool and bypasses this adapter.
 
 ## JSON reports across native processes
 
@@ -180,7 +259,8 @@ and blob files, then publish the requested JSON from Vitest's native report merg
 They print a companion `<output>.reports-<unique>` directory. Keep that directory:
 it contains original reports, per-attempt coverage files when coverage is enabled,
 and an `index.json` with child exit codes, signals, timeouts and unstarted work.
-Only the accepted retry attempt contributes to the aggregate.
+Each invocation runs once. A no-output timeout fails the command and leaves the
+report set incomplete; it never starts a replacement attempt.
 Blob reports are exact-version artifacts. Rerun child reports with the current
 Vitest version before merging artifacts produced by another version.
 

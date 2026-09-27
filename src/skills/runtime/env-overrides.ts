@@ -1,4 +1,3 @@
-// Skill environment override helpers expose safe env vars requested by active skills.
 import { sanitizeEnvVars, validateEnvVarValue } from "../../agents/sandbox/sanitize-env-vars.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
@@ -7,6 +6,7 @@ import {
   isDangerousHostEnvVarName,
 } from "../../infra/host-env-security.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { appendConfigPathSegment } from "../../shared/dot-path.js";
 import { isSkillSecretOwnerUnavailable, resolveSkillConfig } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillRuntimeConfig } from "../loading/runtime-config.js";
@@ -14,10 +14,7 @@ import type { SkillEntry, SkillSnapshot } from "../types.js";
 
 const log = createSubsystemLogger("env-overrides");
 
-type EnvUpdate = { key: string };
-type SkillConfig = NonNullable<ReturnType<typeof resolveSkillConfig>>;
 type ActiveSkillEnvEntry = {
-  baseline: string | undefined;
   value: string;
   count: number;
 };
@@ -48,7 +45,6 @@ function acquireActiveSkillEnvKey(key: string, value: string): boolean {
     return false;
   }
   activeSkillEnvEntries.set(key, {
-    baseline: process.env[key],
     value,
     count: 1,
   });
@@ -68,11 +64,7 @@ function releaseActiveSkillEnvKey(key: string) {
     return;
   }
   activeSkillEnvEntries.delete(key);
-  if (active.baseline === undefined) {
-    delete process.env[key];
-  } else {
-    process.env[key] = active.baseline;
-  }
+  delete process.env[key];
 }
 
 type SanitizedSkillEnvOverrides = {
@@ -81,18 +73,11 @@ type SanitizedSkillEnvOverrides = {
   warnings: string[];
 };
 
-// Always block skill env overrides that can alter runtime loading or host execution behavior.
-const SKILL_ALWAYS_BLOCKED_ENV_PATTERNS: ReadonlyArray<RegExp> = [/^OPENSSL_CONF$/i];
-
-function matchesAnyPattern(value: string, patterns: readonly RegExp[]): boolean {
-  return patterns.some((pattern) => pattern.test(value));
-}
-
 function isAlwaysBlockedSkillEnvKey(key: string): boolean {
   return (
     isDangerousHostEnvVarName(key) ||
     isDangerousHostEnvOverrideVarName(key) ||
-    matchesAnyPattern(key, SKILL_ALWAYS_BLOCKED_ENV_PATTERNS)
+    /^OPENSSL_CONF$/i.test(key)
   );
 }
 
@@ -141,13 +126,20 @@ function sanitizeSkillEnvOverrides(params: {
 }
 
 function applySkillConfigEnvOverrides(params: {
-  updates: EnvUpdate[];
-  skillConfig: SkillConfig;
+  updates: string[];
+  config?: OpenClawConfig;
   primaryEnv?: string | null;
   requiredEnv?: string[] | null;
   skillKey: string;
 }) {
-  const { updates, skillConfig, primaryEnv, requiredEnv, skillKey } = params;
+  const { updates, primaryEnv, requiredEnv, skillKey } = params;
+  if (isSkillSecretOwnerUnavailable(skillKey)) {
+    return;
+  }
+  const skillConfig = resolveSkillConfig(params.config, skillKey);
+  if (!skillConfig || skillConfig.enabled === false) {
+    return;
+  }
   const allowedSensitiveKeys = new Set<string>();
   const normalizedPrimaryEnv = primaryEnv?.trim();
   if (normalizedPrimaryEnv) {
@@ -181,7 +173,7 @@ function applySkillConfigEnvOverrides(params: {
     const resolvedApiKey =
       normalizeResolvedSecretInputString({
         value: skillConfig.apiKey,
-        path: `skills.entries.${skillKey}.apiKey`,
+        path: `${appendConfigPathSegment("skills.entries", skillKey)}.apiKey`,
       }) ?? "";
     if (resolvedApiKey) {
       pendingOverrides[normalizedPrimaryEnv] = resolvedApiKey;
@@ -204,19 +196,15 @@ function applySkillConfigEnvOverrides(params: {
     if (!acquireActiveSkillEnvKey(envKey, envValue)) {
       continue;
     }
-    updates.push({ key: envKey });
+    updates.push(envKey);
     process.env[envKey] = activeSkillEnvEntries.get(envKey)?.value ?? envValue;
   }
 }
 
-function shouldApplySkillConfigEnvOverrides(skillConfig: SkillConfig): boolean {
-  return skillConfig.enabled !== false;
-}
-
-function createEnvReverter(updates: EnvUpdate[]) {
+function createEnvReverter(updates: string[]) {
   return () => {
     for (const update of updates) {
-      releaseActiveSkillEnvKey(update.key);
+      releaseActiveSkillEnvKey(update);
     }
   };
 }
@@ -224,27 +212,15 @@ function createEnvReverter(updates: EnvUpdate[]) {
 export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
   const { skills } = params;
   const config = resolveSkillRuntimeConfig(params.config);
-  const updates: EnvUpdate[] = [];
+  const updates: string[] = [];
 
   for (const entry of skills) {
-    const skillKey = resolveSkillKey(entry.skill, entry);
-    if (isSkillSecretOwnerUnavailable(skillKey)) {
-      continue;
-    }
-    const skillConfig = resolveSkillConfig(config, skillKey);
-    if (!skillConfig) {
-      continue;
-    }
-    if (!shouldApplySkillConfigEnvOverrides(skillConfig)) {
-      continue;
-    }
-
     applySkillConfigEnvOverrides({
       updates,
-      skillConfig,
+      config,
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env,
-      skillKey,
+      skillKey: resolveSkillKey(entry.skill, entry),
     });
   }
 
@@ -257,30 +233,15 @@ export function applySkillEnvOverridesFromSnapshot(params: {
 }) {
   const { snapshot } = params;
   const config = resolveSkillRuntimeConfig(params.config);
-  if (!snapshot) {
-    return () => {};
-  }
-  const updates: EnvUpdate[] = [];
+  const updates: string[] = [];
 
-  for (const skill of snapshot.skills) {
-    const skillKey = skill.skillKey ?? skill.name;
-    if (isSkillSecretOwnerUnavailable(skillKey)) {
-      continue;
-    }
-    const skillConfig = resolveSkillConfig(config, skillKey);
-    if (!skillConfig) {
-      continue;
-    }
-    if (!shouldApplySkillConfigEnvOverrides(skillConfig)) {
-      continue;
-    }
-
+  for (const skill of snapshot?.skills ?? []) {
     applySkillConfigEnvOverrides({
       updates,
-      skillConfig,
+      config,
       primaryEnv: skill.primaryEnv,
       requiredEnv: skill.requiredEnv,
-      skillKey,
+      skillKey: skill.skillKey ?? skill.name,
     });
   }
 

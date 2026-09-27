@@ -26,10 +26,7 @@ function parseEnvFlags(raw?: string): ParsedEnvFlags {
     return { flags: ["*"], disablesAll: false };
   }
   return {
-    flags: trimmed
-      .split(/[,\s]+/)
-      .map((value) => normalizeLowercaseStringOrEmpty(value))
-      .filter(Boolean),
+    flags: trimmed.split(/[,\s]+/),
     disablesAll: false,
   };
 }

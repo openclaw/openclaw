@@ -14,8 +14,12 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   } = job;
   const state = { ...job.state };
   delete state.queuedAtMs;
+  delete state.runningReceiptId;
   delete state.startupCatchupAtMs;
   delete state.pacedNextRunAtMs;
   delete state.forcePreservedNextRunAtMs;
+  delete state.runningScheduleChangeId;
+  delete state.failureAlertIncident;
+  delete state.lastFailureNotificationId;
   return { ...publicJob, state };
 }

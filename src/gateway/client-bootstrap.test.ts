@@ -112,6 +112,43 @@ describe("resolveGatewayClientBootstrap", () => {
     });
   });
 
+  it("selects local credentials for a hosted Gateway port with a remote primary", async () => {
+    const config = {
+      gateway: {
+        mode: "remote" as const,
+        auth: { token: "local-token" },
+        remote: { url: "wss://primary.example", token: "remote-token" },
+      },
+    };
+    mockState.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://127.0.0.1:19876",
+      urlSource: "local loopback",
+      message: "Gateway target: ws://127.0.0.1:19876",
+    });
+    const credentials = await vi.importActual<typeof import("./credentials-secret-inputs.js")>(
+      "./credentials-secret-inputs.js",
+    );
+    mockState.resolveGatewayCredentialsWithSecretInputs.mockImplementation(
+      credentials.resolveGatewayCredentialsWithSecretInputs,
+    );
+
+    const result = await resolveGatewayClientBootstrap({
+      config,
+      localPortOverride: 19876,
+      env: { OPENCLAW_GATEWAY_URL: "wss://environment.example" },
+    });
+
+    expect(result.url).toBe("ws://127.0.0.1:19876");
+    expect(result.auth.token).toBe("local-token");
+    expect(result.urlOverrideSource).toBeUndefined();
+    expect(mockState.buildGatewayConnectionDetails).toHaveBeenCalledWith({
+      config,
+      url: undefined,
+      ignoreEnvUrlOverride: true,
+      localPortOverride: 19876,
+    });
+  });
+
   it("returns the local TLS fingerprint for config-derived WSS clients", async () => {
     const tlsConfig = { enabled: true };
     mockState.buildGatewayConnectionDetails.mockReturnValue({

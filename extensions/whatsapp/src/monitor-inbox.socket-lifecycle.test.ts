@@ -19,6 +19,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   settleInboundWork,
   startInboxMonitor,
+  waitForInboundWorkDrained,
   waitForMessageCalls,
   type InboxMonitorOptions,
   type InboxOnMessage,
@@ -390,23 +391,6 @@ describe("web monitor inbox socket lifecycle", () => {
     }
   });
 
-  it("socket session times out stalled sends at the Baileys query timeout", async () => {
-    const onMessage = vi.fn(async () => undefined);
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    vi.useFakeTimers();
-    try {
-      sock.sendMessage.mockImplementationOnce(() => new Promise(() => {}));
-
-      const sendPromise = listener.sendMessage("+1555", "hello");
-      await expectSocketOperationTimeout("sendMessage", sendPromise);
-      expect(vi.getTimerCount()).toBe(0);
-      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-      await listener.close();
-    }
-  });
-
   it("socket session preserves the socket after a local send timeout", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
@@ -416,6 +400,8 @@ describe("web monitor inbox socket lifecycle", () => {
       upsertId: "local-timeout-terminal",
       retryPolicy: fastReconnectPolicy(2),
     });
+    // Keep durable inbound settlement and its read receipt outside the socket clock.
+    await waitForInboundWorkDrained();
     vi.useFakeTimers();
     try {
       sock.sendMessage.mockImplementationOnce(() => new Promise(() => {}));
@@ -588,7 +574,7 @@ describe("web monitor inbox socket lifecycle", () => {
         );
         expect(loggedTimeoutFailure).toBe(true);
       });
-      expect(vi.getTimerCount()).toBe(0);
+      expect(sock.readMessages).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
       await listener.close();

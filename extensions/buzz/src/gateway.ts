@@ -1,3 +1,4 @@
+import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
@@ -5,7 +6,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import type { ChannelGatewayContext } from "../runtime-api.js";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { handleBuzzInbound } from "./inbound.js";
 import { openBuzzRecoveryWatermarkStore, resolveBuzzRecoverySince } from "./recovery-watermark.js";
@@ -142,6 +142,9 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
           ctx.log?.warn?.(
             `[${account.accountId}] Buzz history recovery incomplete: ${error.message}`,
           );
+        },
+        onRoomUnavailable: (error) => {
+          ctx.log?.warn?.(`[${account.accountId}] Buzz room skipped: ${error.message}`);
         },
         onPresenceError: (error) => {
           ctx.log?.warn?.(

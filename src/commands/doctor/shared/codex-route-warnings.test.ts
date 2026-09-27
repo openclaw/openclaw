@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
-  getInstalledPluginRecord: vi.fn(),
   isInstalledPluginEnabled: vi.fn(),
   loadInstalledPluginIndex: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
@@ -28,7 +27,6 @@ vi.mock("../../../agents/auth-profiles/credential-state.js", () => ({
 
 vi.mock("../../../plugins/installed-plugin-index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/installed-plugin-index.js")>()),
-  getInstalledPluginRecord: mocks.getInstalledPluginRecord,
   isInstalledPluginEnabled: mocks.isInstalledPluginEnabled,
   loadInstalledPluginIndex: mocks.loadInstalledPluginIndex,
 }));
@@ -193,7 +191,6 @@ describe("collectCodexRouteWarnings", () => {
       eligible: true,
       reasonCode: "ok",
     });
-    mocks.getInstalledPluginRecord.mockReturnValue(undefined);
     mocks.isInstalledPluginEnabled.mockReturnValue(false);
     mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
@@ -3022,28 +3019,6 @@ describe("collectCodexRouteWarnings", () => {
     });
   });
 
-  it("clears mixed legacy and canonical fallback notices atomically", () => {
-    const store: Record<string, SessionEntry> = {
-      main: {
-        sessionId: "s1",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "codex/gpt-5.6-sol",
-          activeModel: "openai/gpt-5.6-sol",
-          reason: "rate-limit",
-        },
-      },
-    };
-
-    const result = repairCodexSessionStoreRoutes({ store, now: 123 });
-
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
-    expect(store.main?.fallbackNotice).toBeUndefined();
-  });
-
   it("retains a fallback notice atomically when one legacy endpoint is blocked", () => {
     const store: Record<string, SessionEntry> = {
       main: {
@@ -3414,7 +3389,6 @@ describe("collectCodexRouteWarnings", () => {
     };
     mocks.ensureAuthProfileStore.mockReturnValue(store);
     mocks.loadInstalledPluginIndex.mockReturnValue(index);
-    mocks.getInstalledPluginRecord.mockReturnValue(index.plugins[0]);
     mocks.isInstalledPluginEnabled.mockReturnValue(true);
     mocks.resolveAuthProfileOrder.mockReturnValue(["openai-codex:default"]);
 
@@ -3444,7 +3418,6 @@ describe("collectCodexRouteWarnings", () => {
     };
     mocks.ensureAuthProfileStore.mockReturnValue(store);
     mocks.loadInstalledPluginIndex.mockReturnValue(index);
-    mocks.getInstalledPluginRecord.mockReturnValue(index.plugins[0]);
     mocks.isInstalledPluginEnabled.mockReturnValue(true);
     mocks.resolveAuthProfileOrder.mockReturnValue(["openai-codex:default"]);
 

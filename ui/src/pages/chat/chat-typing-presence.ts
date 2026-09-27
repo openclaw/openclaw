@@ -4,6 +4,18 @@ import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identi
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 
+export type ChatTypingActorState = {
+  label: string;
+  expiresAt: number;
+  preview?: string;
+  exitDurationMs?: number;
+};
+
+export type ChatTypingActorView = Omit<ChatTypingActorState, "expiresAt"> & {
+  id: string;
+  paused?: boolean;
+};
+
 export function clearTypingActorForSessionMessage(
   payload: unknown,
   actors: Map<string, unknown>,
@@ -14,16 +26,7 @@ export function clearTypingActorForSessionMessage(
   if (!event || !uiSessionEventMatches(sessionHost, event.key, event.agentId ?? undefined)) {
     return false;
   }
-  return clearTypingActorForUserMessage(payload, actors, timers);
-}
-
-function clearTypingActorForUserMessage(
-  payload: unknown,
-  actors: Map<string, unknown>,
-  timers: Map<string, number>,
-): boolean {
-  const event = recordOrNull(payload);
-  const message = recordOrNull(event?.message);
+  const message = recordOrNull(recordOrNull(payload)?.message);
   if (stringValue(message?.role)?.toLowerCase() !== "user") {
     return false;
   }

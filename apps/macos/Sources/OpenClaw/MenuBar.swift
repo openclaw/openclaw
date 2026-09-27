@@ -19,7 +19,10 @@ enum OpenClawProcessMain {
 }
 
 enum OpenClawProcessEntrypoint {
-    static func run(arguments: [String], launchApplication: () -> Void) -> Int32? {
+    static func run(arguments: [String], bundle: Bundle = .main, launchApplication: () -> Void) -> Int32? {
+        if let status = CloudWorkerHost.runIfRequested(arguments: arguments, bundle: bundle) {
+            return status
+        }
         if let status = ElevationExclusiveRename.runIfRequested(arguments: arguments) {
             return status
         }
@@ -84,14 +87,16 @@ struct OpenClawApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Gateway Window…") {
-                    WebChatManager.shared.newGatewayWindow()
+                    AppNavigationActions.newGatewayWindow()
                 }
                 .keyboardShortcut("n", modifiers: .command)
 
-                Button("New Thread") {
-                    DashboardManager.shared.dispatchNativeCommand(.newSession)
+                if !self.state.nativeExperienceEnabled {
+                    Button("New Thread") {
+                        DashboardManager.shared.dispatchNativeCommand(.newSession)
+                    }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
                 }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") {
@@ -109,23 +114,25 @@ struct OpenClawApp: App {
                 }
             }
             SidebarCommands()
-            CommandMenu("Navigate") {
-                Button("Back") {
-                    DashboardManager.shared.navigateBack()
-                }
-                .keyboardShortcut("[", modifiers: .command)
+            if !self.state.nativeExperienceEnabled {
+                CommandMenu("Navigate") {
+                    Button("Back") {
+                        DashboardManager.shared.navigateBack()
+                    }
+                    .keyboardShortcut("[", modifiers: .command)
 
-                Button("Forward") {
-                    DashboardManager.shared.navigateForward()
-                }
-                .keyboardShortcut("]", modifiers: .command)
+                    Button("Forward") {
+                        DashboardManager.shared.navigateForward()
+                    }
+                    .keyboardShortcut("]", modifiers: .command)
 
-                Divider()
+                    Divider()
 
-                Button("Command Palette…") {
-                    DashboardManager.shared.dispatchNativeCommand(.commandPalette)
+                    Button("Command Palette…") {
+                        DashboardManager.shared.dispatchNativeCommand(.commandPalette)
+                    }
+                    .keyboardShortcut("k", modifiers: .command)
                 }
-                .keyboardShortcut("k", modifiers: .command)
             }
             DashboardGatewayCommands()
         }
@@ -145,6 +152,10 @@ struct OpenClawApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var state: AppState?
     private var statusMenuController: StatusMenuController?
+    private lazy var dockMenu = AppDockMenu(
+        openDashboard: { [weak self] in self?.openDashboardAction() },
+        openGateway: { AppNavigationActions.openGateway($0) },
+        openSettings: { AppNavigationActions.openSettings() })
     private var terminationCleanupTask: Task<Void, Never>?
     private var terminationDeadlineTask: Task<Void, Never>?
     private var terminationCleanupFinished = false
@@ -230,35 +241,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDockMenu(_: NSApplication) -> NSMenu? {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        menu.addItem(self.dockMenuItem(
-            title: "Open Dashboard",
-            systemImage: "gauge",
-            action: #selector(self.openDashboardFromDockMenu(_:))))
-        menu.addItem(.separator())
-        menu.addItem(self.dockMenuItem(
-            title: "Settings…",
-            systemImage: "gearshape",
-            action: #selector(self.openSettingsFromDockMenu(_:))))
-        return menu
-    }
-
-    private func dockMenuItem(title: String, systemImage: String, action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: title)
-        return item
-    }
-
-    @objc
-    private func openDashboardFromDockMenu(_: Any?) {
-        self.openDashboardAction()
-    }
-
-    @objc
-    private func openSettingsFromDockMenu(_: Any?) {
-        AppNavigationActions.openSettings()
+        self.dockMenu.menu(
+            entries: DashboardManager.shared.gatewayEntries,
+            selectedTarget: AppNavigationActions.selectedGatewayTarget)
     }
 
     func application(_: NSApplication, open urls: [URL]) {
@@ -270,11 +255,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        guard AppLaunchRuntimePlan.current.allowsAutomaticPresentation else { return false }
-        if flag {
-            return true
-        }
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+        // Reopening is explicit user intent even after a background-only launch.
+        guard !AppLaunchRuntimePlan.current.isElevationHost else { return false }
         self.openDashboardAction()
         return false
     }
@@ -287,7 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_: Notification) {
         #if DEBUG
         if CommandLine.arguments.contains("--swarm-chat-fixture") {
-            AppActivationPolicy.apply(showDockIcon: true)
+            DockIconManager.shared.updateDockVisibility()
             WebChatManager.shared.showSwarmFixture()
             return
         }
@@ -310,13 +293,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Remote startup can spawn an SSH child. Admit tunnel work only after the
         // singleton check so a short-lived handoff process cannot orphan that child.
         GatewayEndpointStore.admitPrimaryAppLaunch()
+        ChromeExtensionSetup.shared.start(plan: launchPlan)
         GatewayConnectivityCoordinator.shared.start()
         self.state = AppStateStore.shared
         if let state {
             MacNodeModeCoordinator.prepareNodeIdentityProfile(
                 isExistingInstallation: state.onboardingSeen || state.connectionMode != .unconfigured)
         }
-        AppActivationPolicy.apply(showDockIcon: launchPlan.allowsDockIcon && (state?.showDockIcon ?? false))
+        DockIconManager.shared.updateDockVisibility()
         if launchPlan.allowsInteractiveServices, let state {
             let controller = StatusMenuController(state: state, updater: self.updaterController)
             controller.start()
@@ -332,7 +316,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 // Validate PATH selection before local startup. Existing installs may not
                 // have the validation cache yet, and a stale external CLI must not win.
-                if state.connectionMode == .local {
+                if state.connectionMode == .local ||
+                    (state.connectionMode == .remote && state.hostsLocalGatewayWithRemotePrimary)
+                {
                     _ = await CLIInstaller.status()
                 }
                 await ConnectionModeCoordinator.shared.apply(
@@ -388,15 +374,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
         if launchPlan.shouldAutoOpenChat(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
-            WebChatManager.shared.show()
+            AppNavigationActions.openChat()
         }
         if launchPlan.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
-            self.openDashboardAction()
+            AppNavigationActions.openDashboard(userGesture: false)
         }
     }
 
     func applicationWillTerminate(_: Notification) {
+        ChromeExtensionSetup.shared.stop()
         BackgroundSessionNotifications.shared.stop()
         self.statusMenuController?.stop()
         QuickChatController.shared.stop()

@@ -72,6 +72,7 @@ api.registerVideoGenerationProvider({
   id: "openai",
   label: "OpenAI",
   async generateVideo(req) {
+    // generateOpenAiVideo is a placeholder for your own vendor call.
     return await generateOpenAiVideo(req);
   },
 });

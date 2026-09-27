@@ -2,6 +2,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { client, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
 import "../styles/sidebar-attention-floating.css";
@@ -55,7 +56,7 @@ function panelParams(
     context: {
       basePath: "",
       navigate: vi.fn(),
-      gateway: { snapshot: undefined },
+      gateway: createGatewayHarness(client(vi.fn(async () => ({})))).gateway,
     } as unknown as ApplicationContext,
     mentions: {
       snapshot: {
@@ -216,7 +217,6 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         <button class="shell-chrome-controls__button"></button>
         <button class="shell-chrome-controls__button"></button>
         <button class="shell-chrome-controls__button"></button>
-        <button class="shell-chrome-controls__button shell-chrome-controls__custodian"></button>
         <button class="shell-chrome-controls__button shell-chrome-controls__home"></button>
       </div>
       <nav class="macos-titlebar-controls">
@@ -281,6 +281,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       expect(
         attention.getBoundingClientRect().left - nativeChrome.getBoundingClientRect().right,
       ).toBe(4);
+      expect(paint()).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)" });
+      expect(getComputedStyle(inbox).boxShadow).toBe("none");
+      expect(getComputedStyle(inbox).backdropFilter).toBe("none");
       attention.classList.remove("sidebar-attention--floating");
       expect(paint()).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)" });
       expect(getComputedStyle(inbox).boxShadow).toBe("none");
@@ -457,10 +460,12 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       <section class="sidebar-issues-panel">
         <div class="sidebar-issues-panel__grabber"></div>
         <header class="sidebar-issues-panel__header">
-          <button class="sidebar-issues-panel__dismiss-shown" type="button">Dismiss shown</button>
-          <button class="sidebar-brand__icon sidebar-issues-panel__mobile-close" type="button">
-            Close
-          </button>
+          <div class="sidebar-issues-panel__header-actions">
+            <button class="sidebar-issues-panel__dismiss-shown" type="button">Dismiss shown</button>
+            <button class="sidebar-brand__icon sidebar-issues-panel__mobile-close" type="button">
+              Close
+            </button>
+          </div>
         </header>
         <div class="sidebar-issues-panel__list-wrap"></div>
         <div class="sidebar-issues-panel__summary">

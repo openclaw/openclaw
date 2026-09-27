@@ -5,21 +5,9 @@ import {
   readQaScenarioExecutionConfig,
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
+import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { recentOutboundSummary } from "./suite-runtime-transport.js";
-
-type CatalogScenario = ReturnType<typeof readQaScenarioById>;
-type FlowCatalogScenario = CatalogScenario & {
-  execution: Extract<CatalogScenario["execution"], { kind: "flow" }>;
-};
-
-function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
-  expect(scenario.execution.kind).toBe("flow");
-  if (scenario.execution.kind !== "flow") {
-    throw new Error(`expected ${scenario.id} to be a flow scenario`);
-  }
-  return scenario as FlowCatalogScenario;
-}
 
 const telegramStreamingFinalScenarios = [
   {
@@ -43,19 +31,16 @@ const telegramStreamingFinalScenarios = [
 function runTelegramStreamingFinalScenario(params: {
   scenarioId: string;
   finalTexts: readonly string[];
-  deletedPreview: boolean;
 }) {
   return runLoadedScenarioFlow(params.scenarioId, {
     state: createQaBusState(),
     onWaitForOutboundMessage: ({ state }) => {
-      if (params.deletedPreview) {
-        const preview = state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "channel:telegram-stream-room",
-          text: "deleted streaming preview",
-        });
-        state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
-      }
+      const preview = state.addOutboundMessage({
+        accountId: "qa-channel",
+        to: "channel:telegram-stream-room",
+        text: "deleted streaming preview",
+      });
+      state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
       for (const text of params.finalTexts) {
         state.addOutboundMessage({
           accountId: "qa-channel",
@@ -257,12 +242,62 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain("QA-MSTEAMS-GROUP-OK");
   });
 
+  it("proves ambiguous Teams delivery at the Gateway send boundary", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("msteams-ambiguous-gateway-timeout"));
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(flow).toContain("env.gateway.call('send'");
+    expect(flow.match(/env\.gateway\.call\('send'/g)).toHaveLength(2);
+    expect(flow).toContain("idempotencyKey: randomUUID(), message: config.seedMarker");
+    expect(flow).toContain("sendError.includes('504')");
+    expect(flow).toContain("matchingOutbound.length === 1");
+    expect(flow).toContain("seed proactive conversation reference");
+    expect(flow.match(/"resetTransport":true/g)).toHaveLength(1);
+    expect(flow.match(/"waitForOutbound"/g)).toHaveLength(1);
+    expect(flow).toContain("conversation:19:ambiguous-timeout@thread.tacv2");
+    expect(scenario.execution.config).toMatchObject({
+      seedMarker: "QA-MSTEAMS-CONVERSATION-READY",
+    });
+  });
+
+  it("keeps Telegram semantic receipts and compaction previews order-independent", () => {
+    const semantic = requireFlowScenario(
+      readQaScenarioById("telegram-semantic-formatting-boundaries"),
+    );
+    const compaction = requireFlowScenario(
+      readQaScenarioById("telegram-claude-cli-compaction-final-priority"),
+    );
+    const semanticFlow = JSON.stringify(semantic.execution.flow);
+    const compactionFlow = JSON.stringify(compaction.execution.flow);
+
+    expect(semanticFlow).toContain(
+      "readTelegramMessages().slice(startIndex).some((message) => String(message.botApiMessageId) === String(receipt.messageId))",
+    );
+    expect(semanticFlow).not.toContain("received.at(-1)?.botApiMessageId");
+    expect(semanticFlow).not.toContain('"set":"expectedNormalized"');
+    expect(semanticFlow).toContain("actual.length === fixture.expectedChunks.length");
+    expect(semanticFlow).toContain("entity.type['@type'] === expectedEntity.type['@type']");
+    expect(semanticFlow).toContain("entity.type.url === expectedEntity.type.url");
+    expect(semanticFlow).toContain("entity.type.language === expectedEntity.type.language");
+    expect(semanticFlow).not.toContain("JSON.stringify(actual) === JSON.stringify");
+    expect(compactionFlow).toContain('"minimumPreviewEvents":2');
+    expect(compactionFlow).toContain("progress: { commentary: true, toolProgress: true }");
+    expect(compactionFlow).toContain("config.commentaryOne");
+    expect(compactionFlow).toContain("config.commentaryTwo");
+    expect(compactionFlow).toContain("Compacting context");
+  });
+
   it("isolates scenarios that own asynchronous transport state", () => {
     const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
     const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
+    const matrixProgress = requireFlowScenario(
+      readQaScenarioById("matrix-room-tool-progress-mention-safety"),
+    );
 
     expect(channelBaseline.execution.suiteIsolation).toBe("isolated");
     expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
+    expect(matrixProgress.execution.suiteIsolation).toBe("isolated");
+    expect(matrixProgress.execution.isolationReason).toContain("streaming progress configuration");
   });
 
   it("uses public parent history and durable task records before accepting fanout", () => {
@@ -322,7 +357,7 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain("postRestartUnexpectedPayloads.length === 0");
     expect(flow).toContain("env.providerMode === config.requiredProviderMode");
     expect(flow).not.toContain("interrupted by a gateway restart");
-    expect(flow).toContain("verdicts.length === 4");
+    expect(flow).toContain("verdicts.length === 5");
     expect(flow).not.toContain('"call":"sleep"');
   });
 
@@ -357,13 +392,8 @@ describe("qa scenario catalog channel contracts", () => {
     expect(scenario.gatewayConfigPatch).not.toHaveProperty("channels.telegram.groups");
   });
 
-  it.each(
-    telegramStreamingFinalScenarios.flatMap((scenario) => [
-      { ...scenario, deletedPreview: false },
-      { ...scenario, deletedPreview: true },
-    ]),
-  )(
-    "counts only visible Telegram finals for $scenarioId (deleted preview: $deletedPreview)",
+  it.each(telegramStreamingFinalScenarios)(
+    "counts only visible Telegram finals for $scenarioId after deleting its preview",
     async (scenario) => {
       await expect(runTelegramStreamingFinalScenario(scenario)).resolves.toMatchObject({
         status: "pass",
@@ -379,7 +409,6 @@ describe("qa scenario catalog channel contracts", () => {
           "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN first",
           "second TELEGRAM-LONG-FINAL-3CHUNK-END",
         ],
-        deletedPreview: true,
       }),
     ).rejects.toThrow("expected three complete final chunks; saw 2");
   });

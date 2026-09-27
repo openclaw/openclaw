@@ -374,7 +374,42 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
             ):
                 if action["type"] == "send":
                     text, _run = driver.apply_template(action["text"], sut)
-                    result = driver_obj.send_text(recorder.chat_id, text)
+                    # replyToPrevious targets the newest message this scenario sent.
+                    reply_to = sent_ids[-1] if action.get("replyToPrevious") and sent_ids else None
+                    photo = action.get("photo")
+                    try:
+                        if photo:
+                            results = driver_obj.send_photos(
+                                recorder.chat_id,
+                                [photo],
+                                text,
+                                reply_to=reply_to,
+                                forum_topic_id=action.get("forumTopicId"),
+                            )
+                            result = results[0] if results else None
+                        else:
+                            result = driver_obj.send_text(
+                                recorder.chat_id,
+                                text,
+                                reply_to=reply_to,
+                                forum_topic_id=action.get("forumTopicId"),
+                            )
+                    except driver.DriverError as error:
+                        failure = recorder._append(
+                            "action",
+                            None,
+                            actionType="send",
+                            actionIndex=action_index,
+                            status="failed",
+                            sendOutcome="unknown",
+                            error=str(error),
+                        )
+                        if barrier_dir:
+                            publish_recorder_state(Path(barrier_dir) / "action-failure.json", failure)
+                        # A confirmation timeout can follow an accepted send. Keep
+                        # observing without resending or claiming a sent receipt.
+                        recorder.pump(max(0, deadline - time.time()))
+                        raise
                     message_id = (result or {}).get("id")
                     sent_ids.append(message_id)
                     recorder._append(
@@ -383,6 +418,8 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
                         actionType="send",
                         status="completed",
                         text=text,
+                        **({"photo": photo} if photo else {}),
+                        **({"replyToMessageId": reply_to} if reply_to else {}),
                     )
                     next_action += 1
                     continue
@@ -436,12 +473,23 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
     return sent_ids
 
 
-def publish_recorder_ready(path, recorder, require_dm_peer=False):
+def publish_recorder_state(path, payload):
     if not path:
         return
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     pending = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    with pending.open("w") as handle:
+        json.dump(payload, handle)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(pending, target)
+
+
+def publish_recorder_ready(path, recorder, require_dm_peer=False):
+    if not path:
+        return
     payload = {
         "schemaVersion": 1,
         "startedAtUnixMs": int(recorder.started_at * 1000),
@@ -454,12 +502,7 @@ def publish_recorder_ready(path, recorder, require_dm_peer=False):
             raise driver.DriverError("Proof recorder requires the selected SUT private chat")
         payload["chatType"] = "private"
         payload["peerUserId"] = chat_type["user_id"]
-    with pending.open("w") as handle:
-        json.dump(payload, handle)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(pending, target)
+    publish_recorder_state(path, payload)
 
 
 def main():
@@ -511,6 +554,7 @@ def main():
     publish_recorder_ready(args.ready_file, recorder, args.proof_dm_peer)
 
     sent_ids = []
+    action_error = None
     try:
         if args.scenario:
             scenario = json.loads(Path(args.scenario).read_text())
@@ -534,6 +578,17 @@ def main():
             sent_ids.extend(message.get("id") for message in results)
         if not args.scenario:
             recorder.pump(args.seconds)
+    except driver.DriverError as error:
+        if not args.scenario:
+            raise
+        action_error = str(error)
+        sent_ids = [
+            event["messageId"]
+            for event in recorder.events
+            if event["kind"] == "action"
+            and event.get("actionType") == "send"
+            and event.get("status") == "completed"
+        ]
     finally:
         recorder.close()
 
@@ -553,6 +608,8 @@ def main():
         else None
     )
     summary["recordPath"] = str(args.record)
+    if action_error:
+        summary["actionError"] = action_error
 
     payload = json.dumps(summary, indent=2)
     if args.output:
@@ -560,7 +617,7 @@ def main():
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(f"{payload}\n")
     print(payload)
-    return 0
+    return 1 if action_error else 0
 
 
 if __name__ == "__main__":

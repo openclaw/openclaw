@@ -12,7 +12,6 @@ import {
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { findRepoRoot } from "./lib/repo-root.mjs";
-import { createDeclarationInputBoundary } from "./lib/tsdown-declaration-boundary.mts";
 import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
@@ -62,8 +61,7 @@ export function prepareTsgoCommand(
   }
 
   // Subdirectories share checkout ownership, but another checkout's install never does.
-  const inputs = createDeclarationInputBoundary(findRepoRoot(cwd) ?? cwd);
-  const tsgoPath = inputs.assert(resolveRepoToolBinPath("tsgo", { cwd: inputs.root }));
+  const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: findRepoRoot(cwd) ?? cwd });
   let timeoutMs: number | undefined;
   try {
     timeoutMs = resolveTsgoTimeoutMs(env);

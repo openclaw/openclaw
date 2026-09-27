@@ -144,8 +144,11 @@ describe("runHeartbeatOnce identity", () => {
       };
       const hooksStorePath = resolveSessionStorePathCore(storeTemplate, { agentId: "hooks" });
       await seedSessionStore(hooksStorePath, "global", {});
-      enqueueSystemEvent("Mapped hook wake", { sessionKey: "global" });
-      expect(peekSystemEventEntries("global").map((event) => event.text)).toEqual([
+      enqueueSystemEvent(
+        "Mapped hook wake",
+        withSystemEventOwner({ sessionKey: "global" }, "hooks"),
+      );
+      expect(peekSystemEventEntries("agent:hooks:global").map((event) => event.text)).toEqual([
         "Mapped hook wake",
       ]);
       const systemEventBlocks = mockReplyWithSystemEvents(replySpy, cfg);
@@ -170,7 +173,7 @@ describe("runHeartbeatOnce identity", () => {
       });
       expect(systemEventBlocks).toHaveLength(1);
       expect(systemEventBlocks[0]).toContain("Mapped hook wake");
-      expect(peekSystemEventEntries("global")).toEqual([]);
+      expect(peekSystemEventEntries("agent:hooks:global")).toEqual([]);
     });
   });
 
@@ -194,8 +197,6 @@ describe("runHeartbeatOnce identity", () => {
         "global",
         {},
       );
-      // Two hook agents complete before the coalesced wakes fire; both events
-      // land in the shared `global` queue with per-agent ownership.
       enqueueSystemEvent(
         "Hook Alpha: done",
         withSystemEventOwner({ sessionKey: "global" }, "alpha"),
@@ -224,7 +225,8 @@ describe("runHeartbeatOnce identity", () => {
       // The first targeted wake must not drain the other agent's queued event.
       expect(systemEventBlocks[0]).toContain("Hook Alpha: done");
       expect(systemEventBlocks[0]).not.toContain("Hook Beta: done");
-      expect(peekSystemEventEntries("global").map((event) => event.text)).toEqual([
+      expect(peekSystemEventEntries("agent:alpha:global")).toEqual([]);
+      expect(peekSystemEventEntries("agent:beta:global").map((event) => event.text)).toEqual([
         "Hook Beta: done",
       ]);
 
@@ -244,7 +246,7 @@ describe("runHeartbeatOnce identity", () => {
       expect(replySpy).toHaveBeenCalledTimes(2);
       expect(systemEventBlocks[1]).toContain("Hook Beta: done");
       expect(systemEventBlocks[1]).not.toContain("Hook Alpha: done");
-      expect(peekSystemEventEntries("global")).toEqual([]);
+      expect(peekSystemEventEntries("agent:beta:global")).toEqual([]);
     });
   });
 

@@ -14,5 +14,9 @@ type RuntimeTranscriptTarget = SessionTranscriptRuntimeTarget;
 export async function resolveRuntimeTranscriptReadTarget(
   scope: RuntimeTranscriptScope,
 ): Promise<RuntimeTranscriptTarget> {
-  return await resolveSessionTranscriptRuntimeTarget(scope);
+  const target = await resolveSessionTranscriptRuntimeTarget(scope);
+  const { restoreSessionColdTranscript } =
+    await import("../../config/sessions/session-cold-storage.js");
+  await restoreSessionColdTranscript({ ...target, ...(scope.env ? { env: scope.env } : {}) });
+  return target;
 }

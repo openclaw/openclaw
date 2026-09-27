@@ -1,4 +1,3 @@
-// Discord plugin module implements sanitize behavior.
 import { stripInlineDirectiveTagsForDisplay } from "openclaw/plugin-sdk/text-chunking";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 

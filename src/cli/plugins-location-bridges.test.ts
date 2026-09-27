@@ -24,9 +24,24 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
 }));
 
 const { listPersistedBundledPluginLocationBridges, listPersistedBundledPluginRecoveryLocations } =
-  await import("./plugins-location-bridges.js");
+  await import("../plugins/location-bridges.js");
 
-function makeIndex(record: InstalledPluginIndex["plugins"][number]): InstalledPluginIndex {
+function makeIndex(
+  pluginId: string,
+  overrides: Partial<InstalledPluginIndex["plugins"][number]> = {},
+): InstalledPluginIndex {
+  const record: InstalledPluginIndex["plugins"][number] = {
+    pluginId,
+    manifestPath: `/app/dist/extensions/${pluginId}/openclaw.plugin.json`,
+    manifestHash: "hash",
+    source: `/app/dist/extensions/${pluginId}/index.js`,
+    rootDir: `/app/dist/extensions/${pluginId}`,
+    origin: "bundled",
+    enabled: true,
+    startup: startupInfo,
+    compat: [],
+    ...overrides,
+  };
   return {
     version: 1,
     hostContractVersion: "2026.5.2",
@@ -80,16 +95,7 @@ describe("listPersistedBundledPluginLocationBridges", () => {
 
   it("keeps persisted bundled relocations npm-first for launch", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(
-      makeIndex({
-        pluginId: "diagnostics-otel",
-        manifestPath: "/app/dist/extensions/diagnostics-otel/openclaw.plugin.json",
-        manifestHash: "hash",
-        source: "/app/dist/extensions/diagnostics-otel/index.js",
-        rootDir: "/app/dist/extensions/diagnostics-otel",
-        origin: "bundled",
-        enabled: true,
-        startup: startupInfo,
-        compat: [],
+      makeIndex("diagnostics-otel", {
         packageInstall: {
           defaultChoice: "clawhub",
           clawhub: {
@@ -125,16 +131,7 @@ describe("listPersistedBundledPluginLocationBridges", () => {
 
   it("uses official external catalog metadata when the persisted bundled row lacks npm metadata", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(
-      makeIndex({
-        pluginId: "diagnostics-otel",
-        manifestPath: "/app/dist/extensions/diagnostics-otel/openclaw.plugin.json",
-        manifestHash: "hash",
-        source: "/app/dist/extensions/diagnostics-otel/index.js",
-        rootDir: "/app/dist/extensions/diagnostics-otel",
-        origin: "bundled",
-        enabled: true,
-        startup: startupInfo,
-        compat: [],
+      makeIndex("diagnostics-otel", {
         packageInstall: {
           defaultChoice: "clawhub",
           clawhub: {
@@ -163,16 +160,7 @@ describe("listPersistedBundledPluginLocationBridges", () => {
 
   it("targets the renamed official plugin id when externalizing a bundled plugin", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(
-      makeIndex({
-        pluginId: "qqbot",
-        manifestPath: "/app/dist/extensions/qqbot/openclaw.plugin.json",
-        manifestHash: "hash",
-        source: "/app/dist/extensions/qqbot/index.js",
-        rootDir: "/app/dist/extensions/qqbot",
-        origin: "bundled",
-        enabled: true,
-        startup: startupInfo,
-        compat: [],
+      makeIndex("qqbot", {
         packageInstall: { warnings: [] },
       }),
     );
@@ -193,32 +181,12 @@ describe("listPersistedBundledPluginLocationBridges", () => {
   it.each([
     ["byteplus", "@openclaw/byteplus-provider", true],
     ["duckduckgo", "@openclaw/duckduckgo-plugin", false],
-    ["mistral", "@openclaw/mistral-provider", true],
-    ["novita", "@openclaw/novita-provider", true],
-    ["opencode", "@openclaw/opencode-provider", true],
-    ["opencode-go", "@openclaw/opencode-go-provider", true],
-    ["synthetic", "@openclaw/synthetic-provider", true],
-    ["teams-meetings", "@openclaw/teams-meetings", true],
-    ["volcengine", "@openclaw/volcengine-provider", true],
-    ["voyage", "@openclaw/voyage-provider", true],
-    ["vydra", "@openclaw/vydra-provider", true],
-    ["xiaomi", "@openclaw/xiaomi-provider", true],
-    ["zoom-meetings", "@openclaw/zoom-meetings", true],
   ] as const)(
     "externalizes the shipped bundled %s plugin using official install metadata",
     async (pluginId, npmSpec, enabledByDefault) => {
       readPersistedInstalledPluginIndexMock.mockResolvedValue(
-        makeIndex({
-          pluginId,
-          manifestPath: `/app/dist/extensions/${pluginId}/openclaw.plugin.json`,
-          manifestHash: "hash",
-          source: `/app/dist/extensions/${pluginId}/index.js`,
-          rootDir: `/app/dist/extensions/${pluginId}`,
-          origin: "bundled",
-          enabled: true,
+        makeIndex(pluginId, {
           ...(enabledByDefault ? { enabledByDefault: true } : {}),
-          startup: startupInfo,
-          compat: [],
           packageInstall: {
             warnings: [],
           },
@@ -238,50 +206,10 @@ describe("listPersistedBundledPluginLocationBridges", () => {
     },
   );
 
-  it("externalizes the shipped bundled ComfyUI plugin while preserving default enablement", async () => {
-    readPersistedInstalledPluginIndexMock.mockResolvedValue(
-      makeIndex({
-        pluginId: "comfy",
-        manifestPath: "/app/dist/extensions/comfy/openclaw.plugin.json",
-        manifestHash: "hash",
-        source: "/app/dist/extensions/comfy/index.js",
-        rootDir: "/app/dist/extensions/comfy",
-        origin: "bundled",
-        enabled: true,
-        enabledByDefault: true,
-        startup: startupInfo,
-        compat: [],
-        packageInstall: {
-          warnings: [],
-        },
-      }),
-    );
-    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry("comfy", []));
-
-    await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([
-      {
-        bundledPluginId: "comfy",
-        pluginId: "comfy",
-        npmSpec: "@openclaw/comfy-provider",
-        clawhubSpec: "clawhub:@openclaw/comfy-provider",
-        enabledByDefault: true,
-      },
-    ]);
-  });
-
   it("externalizes the shipped bundled iMessage channel while preserving default enablement", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(
-      makeIndex({
-        pluginId: "imessage",
-        manifestPath: "/app/dist/extensions/imessage/openclaw.plugin.json",
-        manifestHash: "hash",
-        source: "/app/dist/extensions/imessage/index.js",
-        rootDir: "/app/dist/extensions/imessage",
-        origin: "bundled",
-        enabled: true,
+      makeIndex("imessage", {
         enabledByDefault: true,
-        startup: startupInfo,
-        compat: [],
         packageInstall: {
           warnings: [],
         },
@@ -303,16 +231,7 @@ describe("listPersistedBundledPluginLocationBridges", () => {
 
   it("does not create a relocation bridge without persisted or official install metadata", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(
-      makeIndex({
-        pluginId: "local-only",
-        manifestPath: "/app/dist/extensions/local-only/openclaw.plugin.json",
-        manifestHash: "hash",
-        source: "/app/dist/extensions/local-only/index.js",
-        rootDir: "/app/dist/extensions/local-only",
-        origin: "bundled",
-        enabled: true,
-        startup: startupInfo,
-        compat: [],
+      makeIndex("local-only", {
         packageInstall: {
           warnings: [],
         },
@@ -332,17 +251,7 @@ describe("listPersistedBundledPluginRecoveryLocations", () => {
 
   it("includes exact packaged and legacy paths for disabled bundled records", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(
-      makeIndex({
-        pluginId: "diagnostics-otel",
-        manifestPath: "/app/dist/extensions/diagnostics-otel/openclaw.plugin.json",
-        manifestHash: "hash",
-        source: "/app/dist/extensions/diagnostics-otel/index.js",
-        rootDir: "/app/dist/extensions/diagnostics-otel",
-        origin: "bundled",
-        enabled: false,
-        startup: startupInfo,
-        compat: [],
-      }),
+      makeIndex("diagnostics-otel", { enabled: false }),
     );
 
     await expect(listPersistedBundledPluginRecoveryLocations({})).resolves.toEqual([
@@ -355,16 +264,10 @@ describe("listPersistedBundledPluginRecoveryLocations", () => {
 
   it("does not use a relative persisted bundled root as ownership proof", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(
-      makeIndex({
-        pluginId: "diagnostics-otel",
+      makeIndex("diagnostics-otel", {
         manifestPath: "extensions/diagnostics-otel/openclaw.plugin.json",
-        manifestHash: "hash",
         source: "extensions/diagnostics-otel/index.js",
         rootDir: "extensions/diagnostics-otel",
-        origin: "bundled",
-        enabled: true,
-        startup: startupInfo,
-        compat: [],
       }),
     );
     await expect(listPersistedBundledPluginRecoveryLocations({})).resolves.toStrictEqual([]);

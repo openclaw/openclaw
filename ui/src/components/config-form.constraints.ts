@@ -51,13 +51,7 @@ function leastCommonMultiple(left: bigint, right: bigint): bigint {
 }
 
 function integerCompatibleStep(multipleOf: number): number {
-  const [coefficient = "", exponentText] = String(multipleOf).toLowerCase().split("e");
-  const [whole = "0", fraction = ""] = coefficient.split(".");
-  const exponent = Number(exponentText ?? 0);
-  const digits = BigInt(`${whole}${fraction}`);
-  const denominatorExponent = fraction.length - exponent;
-  const numerator = denominatorExponent < 0 ? digits * 10n ** BigInt(-denominatorExponent) : digits;
-  const denominator = denominatorExponent > 0 ? 10n ** BigInt(denominatorExponent) : 1n;
+  const { numerator, denominator } = decimalRational(multipleOf)!;
   const divisor = greatestCommonDivisor(numerator, denominator);
   const step = Number(numerator / divisor);
   if (!Number.isFinite(step) || step <= 0) {
@@ -421,13 +415,11 @@ export function numericInputConstraints(schema: JsonSchema): NumericInputConstra
         : undefined;
   const lowerBound = effectiveNumericBound(schemas, "lower");
   const upperBound = effectiveNumericBound(schemas, "upper");
-  const rawMinimum = lowerBound.exclusive ? undefined : lowerBound.value;
-  const rawMaximum = upperBound.exclusive ? undefined : upperBound.value;
   const exclusiveMinimum = lowerBound.exclusive ? lowerBound.value : undefined;
   const exclusiveMaximum = upperBound.exclusive ? upperBound.value : undefined;
 
-  let min = rawMinimum ?? exclusiveMinimum;
-  let max = rawMaximum ?? exclusiveMaximum;
+  let min = lowerBound.value;
+  let max = upperBound.value;
   if (numericStep) {
     if (min !== undefined) {
       min = alignToStep(min, numericStep, "ceil");

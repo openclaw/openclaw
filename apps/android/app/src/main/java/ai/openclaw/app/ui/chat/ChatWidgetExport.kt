@@ -1,11 +1,9 @@
 package ai.openclaw.app.ui.chat
 
-import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
-import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -264,10 +262,3 @@ private fun String.takeUtf8Bytes(limit: Int): String {
   }
   return substring(0, end)
 }
-
-private tailrec fun Context.findActivity(): Activity? =
-  when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-  }

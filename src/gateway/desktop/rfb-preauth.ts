@@ -33,6 +33,17 @@ export class RfbPreauthTimeoutError extends Error {
   }
 }
 
+export class RfbAuthenticationRejectedError extends Error {
+  constructor(status: number, reason: string) {
+    super(
+      reason
+        ? `RFB authentication failed: ${reason}`
+        : `RFB authentication failed with status ${status}`,
+    );
+    this.name = "RfbAuthenticationRejectedError";
+  }
+}
+
 function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
@@ -327,11 +338,7 @@ async function readSecurityResult(peer: RfbPreauthPeer, signal: AbortSignal): Pr
   } catch {
     // Older servers may close immediately after the status word.
   }
-  throw new Error(
-    reason
-      ? `RFB authentication failed: ${reason}`
-      : `RFB authentication failed with status ${status}`,
-  );
+  throw new RfbAuthenticationRejectedError(status, reason);
 }
 
 async function negotiateServer(params: {
@@ -374,10 +381,7 @@ async function negotiateServer(params: {
   await readSecurityResult(params.peer, params.signal);
 }
 
-async function synthesizeBrowserHandshake(
-  browser: RfbPreauthPeer,
-  signal: AbortSignal,
-): Promise<void> {
+async function negotiateBrowser(browser: RfbPreauthPeer, signal: AbortSignal): Promise<void> {
   await browser.write(RFB_3_8_VERSION, signal);
   const version = await browser.readExactly(RFB_VERSION_BYTES, signal);
   if (!version.equals(RFB_3_8_VERSION)) {
@@ -388,10 +392,9 @@ async function synthesizeBrowserHandshake(
   if (selected[0] !== RFB_SECURITY_NONE) {
     throw new Error("RFB browser did not select no authentication");
   }
-  await browser.write(Buffer.alloc(4), signal);
 }
 
-/** Authenticates the Gateway to an RFB server, then exposes a synthetic None handshake. */
+/** Overlaps browser negotiation with upstream authentication, withholding browser success. */
 export async function preauthenticateRfb(params: {
   server: Duplex;
   browser: RfbPreauthPeer;
@@ -406,9 +409,13 @@ export async function preauthenticateRfb(params: {
   );
   timeout.unref?.();
   try {
-    await negotiateServer({ peer: server, preauth: params.preauth, signal: controller.signal });
-    await synthesizeBrowserHandshake(params.browser, controller.signal);
+    await Promise.all([
+      negotiateServer({ peer: server, preauth: params.preauth, signal: controller.signal }),
+      negotiateBrowser(params.browser, controller.signal),
+    ]);
+    await params.browser.write(Buffer.alloc(4), controller.signal);
   } finally {
+    controller.abort();
     clearTimeout(timeout);
     server.dispose();
   }

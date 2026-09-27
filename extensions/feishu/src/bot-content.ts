@@ -1,6 +1,11 @@
-// Feishu plugin module implements bot content behavior.
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { buildFeishuConversationId } from "./conversation-id.js";
+import {
+  buildFeishuConversationId,
+  resolveConfiguredFeishuGroupSessionScope,
+  type FeishuGroupSessionScope as GroupSessionScope,
+} from "./conversation-id.js";
+import type { FeishuMessageEvent } from "./event-types.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
 import { saveMessageResourceFeishu } from "./media.js";
@@ -9,16 +14,7 @@ import { formatFeishuMediaContent } from "./message-content.js";
 import { parsePostContent } from "./post.js";
 import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
 
-type FeishuMention = {
-  key: string;
-  id: {
-    open_id?: string;
-    user_id?: string;
-    union_id?: string;
-  };
-  name: string;
-  tenant_key?: string;
-};
+type FeishuMention = NonNullable<FeishuMessageEvent["message"]["mentions"]>[number];
 
 type FeishuMessageLike = {
   message: {
@@ -38,8 +34,6 @@ type FeishuMessageLike = {
     };
   };
 };
-
-type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
 
 type ResolvedFeishuGroupSession = {
   peerId: string;
@@ -75,12 +69,7 @@ export function resolveFeishuGroupSession(params: {
   const replyInThread =
     (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
     threadReply;
-  const legacyTopicSessionMode =
-    groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
-  const groupSessionScope: GroupSessionScope =
-    groupConfig?.groupSessionScope ??
-    feishuCfg?.groupSessionScope ??
-    (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
+  const groupSessionScope = resolveConfiguredFeishuGroupSessionScope({ groupConfig, feishuCfg });
   const normalizedTopicGroupThreadId =
     chatType === "topic_group" ? (normalizedThreadId ?? normalizedRootId) : undefined;
   const topicScope =
@@ -200,7 +189,6 @@ export function normalizeMentions(
   if (!mentions || mentions.length === 0) {
     return text;
   }
-  const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const replacements = new Map<string, string>();
   for (const mention of mentions) {
@@ -214,7 +202,7 @@ export function normalizeMentions(
     replacements.set(mention.key, replacement);
   }
   // Longest keys win; a single pass keeps placeholder-like display names literal.
-  const keys = [...replacements.keys()].toSorted((a, b) => b.length - a.length).map(escaped);
+  const keys = [...replacements.keys()].toSorted((a, b) => b.length - a.length).map(escapeRegExp);
   return text.replace(new RegExp(keys.join("|"), "g"), (key) => replacements.get(key)!).trim();
 }
 
@@ -252,10 +240,6 @@ function parseMediaKeys(
   } catch {
     return {};
   }
-}
-
-function toMessageResourceType(messageType: string): "image" | "file" {
-  return messageType === "image" ? "image" : "file";
 }
 
 function resolveFeishuMediaKind(messageType: string): FeishuMediaInfo["kind"] {
@@ -335,20 +319,17 @@ export async function resolveFeishuMediaList(params: {
   }
 
   const mediaKeys = parseMediaKeys(content, messageType);
-  if (!mediaKeys.imageKey && !mediaKeys.fileKey) {
+  const fileKey = mediaKeys.fileKey || mediaKeys.imageKey;
+  if (!fileKey) {
     return [{ kind: resolveFeishuMediaKind(messageType) }];
   }
 
   try {
-    const fileKey = mediaKeys.fileKey || mediaKeys.imageKey;
-    if (!fileKey) {
-      return [{ kind: resolveFeishuMediaKind(messageType) }];
-    }
     const { saved } = await saveMessageResourceFeishu({
       cfg,
       messageId,
       fileKey,
-      type: toMessageResourceType(messageType),
+      type: messageType === "image" ? "image" : "file",
       accountId,
       maxBytes,
       originalFilename: mediaKeys.fileName,

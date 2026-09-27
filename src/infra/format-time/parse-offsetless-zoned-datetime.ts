@@ -12,17 +12,28 @@ export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: stri
     return null;
   }
   try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      era: "short",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    });
     // Probe both sides of the local day so non-hour DST folds use their first
     // real occurrence while nonexistent spring-forward times remain rejected.
     // At Date-range endpoints, one side of the probe window may be out of range.
     const matchingInstants = [-86_400_000, 0, 86_400_000]
       .map((shiftMs) => asDateTimestampMs(naiveMs + shiftMs))
       .filter((probeMs) => probeMs !== undefined)
-      .map((probeMs) => naiveMs - (getZonedWallTimeMs(probeMs, timeZone) - probeMs))
+      .map((probeMs) => naiveMs - (getZonedWallTimeMs(probeMs, formatter) - probeMs))
       .filter(
         (candidateMs) =>
           asDateTimestampMs(candidateMs) !== undefined &&
-          getZonedWallTimeMs(candidateMs, timeZone) === naiveMs,
+          getZonedWallTimeMs(candidateMs, formatter) === naiveMs,
       );
     return matchingInstants.length > 0
       ? new Date(Math.min(...matchingInstants)).toISOString()
@@ -32,19 +43,9 @@ export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: stri
   }
 }
 
-function getZonedWallTimeMs(utcMs: number, timeZone: string): number {
+function getZonedWallTimeMs(utcMs: number, formatter: Intl.DateTimeFormat): number {
   const utcDate = new Date(utcMs);
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    era: "short",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(utcDate);
+  const parts = formatter.formatToParts(utcDate);
   const getNumericPart = (type: string) => {
     const part = parts.find((candidate) => candidate.type === type);
     return Number.parseInt(part?.value ?? "0", 10);

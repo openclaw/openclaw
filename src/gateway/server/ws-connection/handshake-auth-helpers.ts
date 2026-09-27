@@ -366,6 +366,8 @@ export function resolveUnauthorizedHandshakeContext(params: {
   switch (params.failedAuth.reason) {
     case "token_missing":
     case "token_missing_config":
+    case "token_redacted_config":
+    case "password_redacted_config":
     case "password_missing":
     case "password_missing_config":
       return buildUnauthorizedHandshakeContext({

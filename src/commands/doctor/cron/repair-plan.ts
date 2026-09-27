@@ -62,7 +62,7 @@ export function formatScheduledToolPolicyAdvisory(params: {
   const lines: string[] = [];
   if (params.legacyJobs.length > 0) {
     lines.push(
-      `${pluralize(params.legacyJobs.length, "tool-bearing cron job")} ${params.legacyJobs.length === 1 ? "keeps" : "keep"} legacy sender-policy resolution because stored account authority is not provable${formatJobNameList(params.legacyJobs)}.`,
+      `${pluralize(params.legacyJobs.length, "tool-bearing cron job")} ${params.legacyJobs.length === 1 ? "keeps" : "keep"} legacy sender-policy resolution because an explicit tool cap or provable stored account identity is missing${formatJobNameList(params.legacyJobs)}.`,
     );
   }
   if (params.invalidJobs.length > 0) {
@@ -106,86 +106,36 @@ export function formatIncompleteInheritedAuthorityAdvisory(names: string[]): str
 
 /** Convert legacy cron issue counts into doctor preview lines. */
 export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
+  const descriptions: Record<string, string> = {
+    jobId: "still uses legacy `jobId`",
+    missingId: "is missing a canonical string `id`",
+    nonStringId: "stores `id` as a non-string value",
+    legacyScheduleString: "stores schedule as a bare string",
+    legacyScheduleCron: "still uses `schedule.cron`",
+    legacyScheduleKind:
+      "stores a non-canonical schedule `kind` or stream `mode` that will be normalized",
+    legacyPayloadKind: "needs payload kind normalization",
+    legacyPayloadCodexModel: "still uses legacy `openai-codex/*` cron model refs",
+    legacyTaskSuggestionToolName: `still grants legacy tool \`${TASK_SUGGESTION_TOOL_NAME_MIGRATION.legacyName}\`; doctor will rename it to \`${TASK_SUGGESTION_TOOL_NAME_MIGRATION.canonicalName}\``,
+    legacyImageInspectionToolName: `still relies on legacy \`${IMAGE_INSPECTION_TOOL_NAME_MIGRATION.legacyName}\` coverage; doctor will preserve equivalent \`${IMAGE_INSPECTION_TOOL_NAME_MIGRATION.canonicalName}\` access`,
+    legacyAgentTurnCommandPayload: "uses an agent prompt to run a shell command",
+    legacyPayloadProvider: "still uses payload `provider` as a delivery alias",
+    legacyTopLevelPayloadFields: "still uses top-level payload fields",
+    legacyTopLevelDeliveryFields: "still uses top-level delivery fields",
+    legacyDeliveryMode: "still uses delivery mode `deliver`",
+    migratedScheduledToolPolicy:
+      "can recover scheduled account authority from persisted owner identity",
+    reconciledOwnerAccount:
+      "can reconcile its owner account from persisted creator identity without changing tool permissions",
+    invalidSchedule: "has an invalid persisted schedule and will be removed",
+    invalidPayload: "has an invalid persisted payload and will be removed",
+  };
   const lines: string[] = [];
-  if (issues.jobId) {
-    lines.push(`- ${pluralize(issues.jobId, "job")} still uses legacy \`jobId\``);
-  }
-  if (issues.missingId) {
-    lines.push(`- ${pluralize(issues.missingId, "job")} is missing a canonical string \`id\``);
-  }
-  if (issues.nonStringId) {
-    lines.push(`- ${pluralize(issues.nonStringId, "job")} stores \`id\` as a non-string value`);
-  }
-  if (issues.legacyScheduleString) {
-    lines.push(
-      `- ${pluralize(issues.legacyScheduleString, "job")} stores schedule as a bare string`,
-    );
-  }
-  if (issues.legacyScheduleCron) {
-    lines.push(`- ${pluralize(issues.legacyScheduleCron, "job")} still uses \`schedule.cron\``);
-  }
-  if (issues.legacyScheduleKind) {
-    lines.push(
-      `- ${pluralize(issues.legacyScheduleKind, "job")} stores a non-canonical schedule \`kind\` or stream \`mode\` that will be normalized`,
-    );
-  }
-  if (issues.legacyPayloadKind) {
-    lines.push(`- ${pluralize(issues.legacyPayloadKind, "job")} needs payload kind normalization`);
-  }
-  if (issues.legacyPayloadCodexModel) {
-    lines.push(
-      `- ${pluralize(issues.legacyPayloadCodexModel, "job")} still uses legacy \`openai-codex/*\` cron model refs`,
-    );
-  }
-  if (issues.legacyTaskSuggestionToolName) {
-    lines.push(
-      `- ${pluralize(issues.legacyTaskSuggestionToolName, "job")} still grants legacy tool \`${TASK_SUGGESTION_TOOL_NAME_MIGRATION.legacyName}\`; doctor will rename it to \`${TASK_SUGGESTION_TOOL_NAME_MIGRATION.canonicalName}\``,
-    );
-  }
-  if (issues.legacyImageInspectionToolName) {
-    lines.push(
-      `- ${pluralize(issues.legacyImageInspectionToolName, "job")} still relies on legacy \`${IMAGE_INSPECTION_TOOL_NAME_MIGRATION.legacyName}\` coverage; doctor will preserve equivalent \`${IMAGE_INSPECTION_TOOL_NAME_MIGRATION.canonicalName}\` access`,
-    );
-  }
-  if (issues.legacyAgentTurnCommandPayload) {
-    lines.push(
-      `- ${pluralize(issues.legacyAgentTurnCommandPayload, "job")} uses an agent prompt to run a shell command`,
-    );
-  }
-  if (issues.legacyPayloadProvider) {
-    lines.push(
-      `- ${pluralize(issues.legacyPayloadProvider, "job")} still uses payload \`provider\` as a delivery alias`,
-    );
-  }
-  if (issues.legacyTopLevelPayloadFields) {
-    lines.push(
-      `- ${pluralize(issues.legacyTopLevelPayloadFields, "job")} still uses top-level payload fields`,
-    );
-  }
-  if (issues.legacyTopLevelDeliveryFields) {
-    lines.push(
-      `- ${pluralize(issues.legacyTopLevelDeliveryFields, "job")} still uses top-level delivery fields`,
-    );
-  }
-  if (issues.legacyDeliveryMode) {
-    lines.push(
-      `- ${pluralize(issues.legacyDeliveryMode, "job")} still uses delivery mode \`deliver\``,
-    );
-  }
-  if (issues.migratedScheduledToolPolicy) {
-    lines.push(
-      `- ${pluralize(issues.migratedScheduledToolPolicy, "job")} can recover scheduled account authority from persisted owner identity`,
-    );
-  }
-  if (issues.invalidSchedule) {
-    lines.push(
-      `- ${pluralize(issues.invalidSchedule, "job")} has an invalid persisted schedule and will be removed`,
-    );
-  }
-  if (issues.invalidPayload) {
-    lines.push(
-      `- ${pluralize(issues.invalidPayload, "job")} has an invalid persisted payload and will be removed`,
-    );
+  for (const [key, description] of Object.entries(descriptions)) {
+    const count = issues[key];
+    if (count) {
+      lines.push(`- ${pluralize(count, "job")} ${description}`);
+    }
   }
   return lines;
 }

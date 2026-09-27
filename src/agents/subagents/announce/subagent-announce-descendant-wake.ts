@@ -12,13 +12,13 @@ import {
   resolveSubagentAnnounceTimeoutMs,
 } from "./subagent-announce-delivery.js";
 import type {
-  callGateway,
+  callSubagentLifecycleGateway,
   dispatchGatewayMethodInProcess,
   getRuntimeConfig,
 } from "./subagent-announce.runtime.js";
 
 type DescendantWakeDeps = {
-  callGateway: typeof callGateway;
+  callGateway: typeof callSubagentLifecycleGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
   replaceSubagentRunAfterSteer: typeof import("../registry/subagent-registry-runtime.js").replaceSubagentRunAfterSteer;
@@ -59,6 +59,7 @@ function buildDescendantWakeMessage(params: { findings: string; taskLabel: strin
 export async function runDescendantWake(params: {
   runId: string;
   childSessionKey: string;
+  runTimeoutSeconds?: number;
   taskLabel: string;
   findings: string;
   announceId: string;
@@ -102,6 +103,7 @@ export async function runDescendantWake(params: {
             sessionKey: params.childSessionKey,
             message: wakeMessage,
             deliver: false,
+            timeout: params.runTimeoutSeconds ?? 0,
             inputProvenance: {
               kind: "inter_session",
               sourceSessionKey: params.childSessionKey,
@@ -152,7 +154,7 @@ export async function runDescendantWake(params: {
     await terminateUnownedWake();
     return false;
   }
-  const replaced = await params.deps.replaceSubagentRunAfterSteer({
+  const replaced = params.deps.replaceSubagentRunAfterSteer({
     previousRunId: params.runId,
     nextRunId: wakeRunId,
     lifecycleGeneration: wakeLifecycleGeneration,

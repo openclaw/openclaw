@@ -4,6 +4,7 @@ read_when:
   - You want to edit exec approvals from the CLI
   - You need to manage allowlists on gateway or node hosts
   - You need to list or resolve a pending approval without a chat surface
+  - An agent cannot run commands and you need to distinguish tool access from approvals
 title: "Approvals"
 ---
 
@@ -14,33 +15,6 @@ Manage exec approvals for the **local host**, **gateway host**, or a **node host
 Alias: `openclaw exec-approvals`
 
 Related: [Exec approvals](/tools/exec-approvals), [Nodes](/nodes)
-
-## `openclaw exec-policy`
-
-`openclaw exec-policy` is the **local-only** convenience command that keeps requested `tools.exec.*` config and the local host approvals document in sync in one step:
-
-```bash
-openclaw exec-policy show
-openclaw exec-policy show --json
-
-openclaw exec-policy preset yolo
-openclaw exec-policy preset cautious --json
-
-openclaw exec-policy set --host gateway --security full --ask off --ask-fallback full --json
-```
-
-Presets (`yolo`, `cautious`, `deny-all`) apply `host`, `security`, `ask`, and `askFallback` together. `set` applies only the flags you pass; each accepted value is validated (`--host auto|sandbox|gateway|node`, `--security deny|allowlist|full`, `--ask off|on-miss|always`, `--ask-fallback deny|allowlist|full`).
-
-`show`, `preset`, and `set` accept `--json` and return the same requested,
-host, and effective policy facts as one JSON object.
-
-Scope:
-
-- Updates the local config file and local approvals document together; does not push policy to the gateway or a node host.
-- `--host node` is rejected: node exec approvals are fetched from the node at runtime, so local `exec-policy` cannot synchronize them. Use `openclaw approvals set --node <id|name|ip>` instead.
-- `exec-policy show` marks `host=node` scopes as node-managed at runtime instead of deriving an effective policy from the local approvals document.
-
-For remote host approvals, use `openclaw approvals set --gateway` or `openclaw approvals set --node <id|name|ip>` directly.
 
 ## Common commands
 
@@ -215,10 +189,114 @@ No target flag means the local approvals row in the shared state database.
 
 `pending` and `resolve` always use the Gateway because pending requests are live Gateway state. They support the shared Gateway connection options `--url`, `--token`, and `--timeout`; `pending` also supports `--json`.
 
+## `openclaw exec-policy`
+
+`openclaw exec-policy show` explains an agent's terminal tool policies and shows
+command approvals separately. Inspection never changes permissions. `preset`
+and `set` synchronize requested `tools.exec.*` config with the local host
+approvals document.
+
+```bash
+openclaw exec-policy show
+openclaw exec-policy show --agent main
+openclaw exec-policy show --session agent:main:main
+openclaw exec-policy show --agent main --verbose
+openclaw exec-policy show --agent main --json
+
+openclaw exec-policy preset yolo
+openclaw exec-policy preset cautious --json
+
+openclaw exec-policy set --host gateway --security full --ask off --ask-fallback full --json
+```
+
+### Inspect terminal access
+
+Without `--session`, `show` works offline. It reports definitive exclusions from
+local tool profiles and policies. A locally allowed tool's execution access is
+**unverified**; model, channel, sandbox, session, and runtime restrictions may
+still affect availability.
+
+The report leads with the agent and terminal-access status, followed by profile
+inheritance, findings for `exec` and `process`, local command approvals, and a
+next step. An agent profile overrides the global profile. For example,
+`agents.entries.main.tools.profile: "messaging"` excludes terminal tools even if
+`tools.profile` is `"full"`. Command approval settings do not grant tool access.
+Intentionally restrictive profiles are valid configuration.
+
+- `--agent <id>` selects the agent to inspect. Without `--session`, the agent
+  must be configured locally. With a single configured
+  agent, selection is automatic. With multiple agents, an untargeted report
+  asks you to select an agent or an agent-qualified session key before inspecting
+  tool availability. With no configured agents, it explains how to add one.
+  Both cases still show a compact summary of all local command approval scopes.
+- `--session <key>` fetches a read-only tool preview for an **existing** session
+  from its saved settings through the Gateway. Use the full session key; for a
+  shared key such as `global`, the Gateway resolves its agent; pass `--agent`
+  when the Gateway needs an explicit selection. The agent need not exist in the
+  CLI machine's configuration. Conflicting agent and session targets are rejected.
+- `--verbose` adds policy sources and the complete requested/host/effective
+  approval tables for all scopes.
+- `--json` preserves all approval fields and scopes. With a selected agent, it
+  adds `toolAccess`, separating `local` findings from the optional `live` result.
+  `local` is omitted when the agent is not configured on the CLI machine. If a
+  failed session inspection could not resolve an agent, `agentId` is also omitted.
+  An untargeted multi-agent or empty-roster report instead adds
+  `toolAccessSelectionRequired` with `agentIds` and a `hint`; it makes no tool
+  availability claim.
+
+The session preview supports the shared Gateway connection options (`--url`,
+`--port`, `--token`, `--password`, `--timeout`). If the Gateway or session cannot
+be inspected, the report says **UNVERIFIED** and retains any available local
+findings. Missing local tool policy is labeled unavailable, never allowed. An
+unavailable inspection is not evidence that tools are allowed or denied.
+
+A successful fetch reports **PREVIEW** unless the checked policies establish
+an exclusion. Included tools are not guaranteed to execute, and a tool missing
+from the preview is not necessarily disabled. The preview may be cached; saved
+changes can take time to appear, and an active run can use different authority,
+credentials, discovery, or policy. Verify execution in a run; command approvals
+still apply.
+
+JSON retains the wire names `live`, `checked: "live-session"`, and tool statuses
+`available`/`unavailable`. These describe the fetched session preview.
+`live.status: "verified"` means the preview was retrieved successfully, not that
+execution was verified. `excluded` identifies a checked policy exclusion;
+`unavailable` alone does not establish one. The CLI translates an older Gateway's
+explicit `deniedBySession` flag to `excluded` with a `session` reason.
+
+Command approvals remain labeled **local**, including during session inspection.
+They do not describe remote host approvals or per-session `/exec` overrides.
+Use `openclaw approvals get --gateway` or `--node <id|name|ip>` for those host
+policies, and `/exec` in the session for its current defaults.
+
+When adding terminal tools to `alsoAllow` would address the checked restrictions,
+the report suggests the exact configuration path and tool names. Append them to
+existing entries; preserve command approval requirements. When another policy
+still blocks access, review the reported exclusions before enabling tools. A
+tool merely missing from the preview does not prompt an `alsoAllow` recipe.
+Changes use the existing config commands or the agent's Tools panel and Save
+controls. Check the updated preview and verify execution in a run.
+
+### Synchronize local command approvals
+
+Presets (`yolo`, `cautious`, `deny-all`) apply `host`, `security`, `ask`, and `askFallback` together. `set` applies only the flags you pass; each accepted value is validated (`--host auto|sandbox|gateway|node`, `--security deny|allowlist|full`, `--ask off|on-miss|always`, `--ask-fallback deny|allowlist|full`).
+
+`show`, `preset`, and `set` accept `--json` and return the requested, host, and
+effective command approval facts as one JSON object. `preset` and `set` do not
+change tool profiles or tool allow/deny rules.
+
+Scope:
+
+- Updates the local config file and local approvals document together; does not push policy to the gateway or a node host.
+- `--host node` is rejected: node exec approvals are fetched from the node at runtime, so local `exec-policy` cannot synchronize them. Use `openclaw approvals set --node <id|name|ip>` instead.
+- `exec-policy show` marks `host=node` scopes as node-managed at runtime instead of deriving an effective policy from the local approvals document.
+
+For remote host approvals, use `openclaw approvals set --gateway` or `openclaw approvals set --node <id|name|ip>` directly.
+
 ## Notes
 
 - The node host must advertise `system.execApprovals.get/set` (macOS app, headless node host, or Windows companion).
-- After upgrading from an argv-only generated-grant version, run `openclaw doctor --fix` if the update did not already do so. Doctor removes only inactive generated grants; manual allowlist rules stay in place. Rerun affected workflows to approve them in the intended directory.
+- Generated grants became directory-bound in `2026.8.1`. After upgrading from `2026.7.1` or earlier, run `openclaw doctor --fix` if the update did not already do so. Doctor removes only inactive generated grants; manual allowlist rules stay in place. Rerun affected workflows to approve them in the intended directory.
 - Approvals are stored per host in
   `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config`, or
   `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` when the variable is

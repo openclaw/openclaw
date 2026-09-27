@@ -58,11 +58,15 @@ describe("native gateways", () => {
     capability?.select("profile:studio");
     capability?.openWindow("profile:studio");
     capability?.setPrimary("profile:studio");
+    capability?.reconnect("profile:studio");
+    capability?.reconnectCancel("profile:studio");
     capability?.openSettings();
     expect(postMessage.mock.calls.map(([message]) => message)).toEqual([
       { type: "select", id: "profile:studio" },
       { type: "open-window", id: "profile:studio" },
       { type: "set-primary", id: "profile:studio" },
+      { type: "reconnect", id: "profile:studio" },
+      { type: "reconnect-cancel", id: "profile:studio" },
       { type: "open-settings" },
     ]);
   });

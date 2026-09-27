@@ -16,112 +16,32 @@ import {
   configIncludeOwnsAgentRoster,
   hasResolvedRosterBeforeMigrations,
 } from "../config/agent-roster-provenance.js";
-import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
+import { getConfigValueAtPath } from "../config/config-paths.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
-import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
-import { shortenHomePath } from "../utils.js";
+import { isRecord, shortenHomePath } from "../utils.js";
 
-type ConfigIO = {
-  configPath: string;
-  readConfigFileSnapshotForWrite: () => Promise<ReadConfigFileSnapshotForWriteResult>;
-};
-
-type ReplaceConfigFile = (
-  params: Parameters<ConfigIOModule["replaceConfigFile"]>[0],
-) => Promise<unknown>;
-
-type EnsureAgentWorkspace = (params: {
-  dir: string;
-  ensureBootstrapFiles?: boolean;
-  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
-}) => Promise<{ dir: string }>;
-
-type SetupCommandDeps = {
-  createConfigIO?: () => ConfigIO;
-  defaultAgentWorkspaceDir?: string | (() => string | Promise<string>);
-  ensureAgentWorkspace?: EnsureAgentWorkspace;
-  formatConfigFilePath?: (path: string) => string;
-  logConfigUpdated?: (
-    runtime: RuntimeEnv,
-    opts: { path?: string; suffix?: string },
-  ) => void | Promise<void>;
-  mkdir?: (dir: string, options: { recursive: true }) => Promise<unknown>;
-  resolveSessionTranscriptsDir?: (agentId: string) => string | Promise<string>;
-  replaceConfigFile?: ReplaceConfigFile;
-};
-
-type ConfigIOModule = typeof import("../config/config.js");
-
-// Keep setup's cold path small; config/workspace modules are loaded only when
-// their default dependency is actually needed.
+// Keep setup's cold path small; load each owner only when the command needs it.
 const loadAgentWorkspaceModule = createLazyPromise(() => import("../agents/workspace.js"));
 const loadConfigIOModule = createLazyPromise(() => import("../config/config.js"));
 const loadConfigLoggingModule = createLazyPromise(() => import("../config/logging.js"));
 
-async function createDefaultConfigIO(): Promise<ConfigIO> {
-  const { createConfigIO } = await loadConfigIOModule();
-  return createConfigIO();
-}
-
-async function resolveDefaultAgentWorkspaceDir(deps: SetupCommandDeps): Promise<string> {
-  const override = deps.defaultAgentWorkspaceDir;
-  if (typeof override === "string") {
-    return override;
-  }
-  if (typeof override === "function") {
-    return await override();
-  }
-  const { DEFAULT_AGENT_WORKSPACE_DIR } = await loadAgentWorkspaceModule();
-  return DEFAULT_AGENT_WORKSPACE_DIR;
-}
-
-async function ensureDefaultAgentWorkspace(
-  params: Parameters<EnsureAgentWorkspace>[0],
-): ReturnType<EnsureAgentWorkspace> {
-  const { ensureAgentWorkspace } = await loadAgentWorkspaceModule();
-  return ensureAgentWorkspace(params);
-}
-
-async function writeDefaultConfigFile(params: Parameters<ReplaceConfigFile>[0]): Promise<void> {
-  const { replaceConfigFile } = await loadConfigIOModule();
-  await replaceConfigFile(params);
-}
-
-async function formatDefaultConfigPath(configPath: string): Promise<string> {
-  const { formatConfigFilePath } = await loadConfigLoggingModule();
-  return formatConfigFilePath(configPath);
-}
-
-async function logDefaultConfigUpdated(
-  runtime: RuntimeEnv,
-  opts: { path?: string; suffix?: string },
-): Promise<void> {
-  const { logConfigUpdated } = await loadConfigLoggingModule();
-  logConfigUpdated(runtime, opts);
-}
-
-async function resolveDefaultSessionTranscriptsDir(agentId: string): Promise<string> {
-  const { resolveSessionTranscriptsDirForAgent } = await import("../config/sessions.js");
-  return resolveSessionTranscriptsDirForAgent(agentId);
-}
-
 /** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
-  opts?: { workspace?: string; json?: boolean },
+  opts?: { workspace?: string; skipBootstrap?: boolean; json?: boolean },
   runtime: RuntimeEnv = defaultRuntime,
-  deps: SetupCommandDeps = {},
 ) {
   const desiredWorkspace =
     typeof opts?.workspace === "string" && opts.workspace.trim()
       ? opts.workspace.trim()
       : undefined;
 
-  const io = deps.createConfigIO?.() ?? (await createDefaultConfigIO());
+  const { createConfigIO, replaceConfigFile } = await loadConfigIOModule();
+  const io = createConfigIO();
   const configPath = io.configPath;
   const prepared = await io.readConfigFileSnapshotForWrite();
   const snapshot = prepared.snapshot;
@@ -136,9 +56,8 @@ export async function setupCommand(
         issues: normalizeConfigIssues(snapshot.issues),
       });
     }
-    const formatConfigFilePath = deps.formatConfigFilePath ?? formatDefaultConfigPath;
     runtime.error(
-      `Config invalid at ${await formatConfigFilePath(configPath)}. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
+      `Config invalid at ${(await loadConfigLoggingModule()).formatConfigFilePath(configPath)}. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
     );
     runtime.exit(1);
     return;
@@ -153,6 +72,35 @@ export async function setupCommand(
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
+  const skipBootstrap = opts?.skipBootstrap === true || resolvedDefaults.skipBootstrap === true;
+  const shouldWriteSkipBootstrap =
+    opts?.skipBootstrap === true && resolvedDefaults.skipBootstrap !== true;
+  const skipBootstrapPath = ["agents", "defaults", "skipBootstrap"];
+  if (
+    shouldWriteSkipBootstrap &&
+    snapshot.includeProvenance?.some(
+      ({ path }) =>
+        path.length === skipBootstrapPath.length &&
+        path.every((part, index) => part === skipBootstrapPath[index]),
+    )
+  ) {
+    throw new Error(
+      "Baseline setup cannot override an included agents.defaults.skipBootstrap value. Edit the included file directly.",
+    );
+  }
+  const isInheritedPath = (defaultPath: string[]) => {
+    return (
+      isRecord(snapshot.parsed) &&
+      getConfigValueAtPath(snapshot.parsed, defaultPath) === undefined &&
+      snapshot.includeProvenance?.some(
+        ({ path }) =>
+          path.length < defaultPath.length &&
+          path.every((part, index) => part === defaultPath[index]),
+      ) === true
+    );
+  };
+  const writeInheritedSkipBootstrapOverride =
+    shouldWriteSkipBootstrap && isInheritedPath(skipBootstrapPath);
   const selectedAgentId = resolveAmbientOwnerAgentId(resolvedConfig, undefined, {
     surface: "baseline setup",
     hint: "Set agents.defaults.systemAgent.agentId.",
@@ -162,17 +110,21 @@ export async function setupCommand(
   const configuredWorkspace = defaultEntryWorkspace || resolvedDefaults.workspace;
 
   const workspace =
-    desiredWorkspace ?? configuredWorkspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
+    desiredWorkspace ??
+    configuredWorkspace ??
+    (await loadAgentWorkspaceModule()).DEFAULT_AGENT_WORKSPACE_DIR;
   // Bare setup is observational for an established roster. Only a caller
   // override or fresh bootstrap owns a persisted workspace change.
   const shouldWriteWorkspace =
     !snapshot.exists || (desiredWorkspace !== undefined && configuredWorkspace !== workspace);
   const shouldWriteGatewayMode = resolvedConfig.gateway?.mode === undefined;
+  const writeInheritedGatewayModeOverride =
+    shouldWriteGatewayMode && isInheritedPath(["gateway", "mode"]);
   const writeInheritedWorkspaceOverride =
     snapshot.exists &&
     shouldWriteWorkspace &&
     !defaultEntryWorkspace &&
-    configIncludeOwnsAgentRoster(snapshot);
+    isInheritedPath(["agents", "defaults", "workspace"]);
 
   // Keep the candidate runtime-shaped. replaceConfigFile persists only its
   // diff against snapshot.parsed, never resolved include/env values wholesale.
@@ -212,8 +164,14 @@ export async function setupCommand(
       };
     }
   }
-  if (shouldWriteGatewayMode) {
+  if (shouldWriteGatewayMode && !writeInheritedGatewayModeOverride) {
     next = { ...next, gateway: { ...next.gateway, mode: "local" } };
+  }
+  if (shouldWriteSkipBootstrap && !writeInheritedSkipBootstrapOverride) {
+    next = {
+      ...next,
+      agents: { ...next.agents, defaults: { ...next.agents?.defaults, skipBootstrap: true } },
+    };
   }
 
   let creationConfigHash: string | undefined;
@@ -233,38 +191,52 @@ export async function setupCommand(
   }
 
   const configChanged =
-    !snapshot.exists || shouldPersistRoster || shouldWriteWorkspace || shouldWriteGatewayMode;
+    !snapshot.exists ||
+    shouldPersistRoster ||
+    shouldWriteWorkspace ||
+    shouldWriteGatewayMode ||
+    shouldWriteSkipBootstrap;
   let configStatus: "created" | "updated" | "unchanged";
   if (configChanged) {
-    // Preserve all existing config fields and touch only workspace/gateway mode
-    // defaults that this command owns.
-    const replaceConfig = deps.replaceConfigFile ?? writeDefaultConfigFile;
-    await replaceConfig({
+    const explicitSetPaths: string[][] = [];
+    if (snapshot.exists && shouldPersistRoster) {
+      explicitSetPaths.push(["agents", "entries"]);
+    }
+    if (writeInheritedWorkspaceOverride) {
+      explicitSetPaths.push(["agents", "defaults", "workspace"]);
+    }
+    if (shouldWriteSkipBootstrap) {
+      explicitSetPaths.push(skipBootstrapPath);
+    }
+    if (shouldWriteGatewayMode) {
+      explicitSetPaths.push(["gateway", "mode"]);
+    }
+    // Preserve inherited values in the candidate; explicit leaves become local overrides.
+    await replaceConfigFile({
       nextConfig: next,
       // Agent creation advanced the revision; keep rejecting foreign writes after it.
       ...(creationConfigHash ? { baseHash: creationConfigHash } : { snapshot }),
       afterWrite: { mode: "auto" },
       writeOptions: {
         ...prepared.writeOptions,
-        ...(snapshot.exists && shouldPersistRoster
-          ? {
-              explicitSetPaths: [["agents", "entries"]],
-              explicitSetValueSource: cfg,
-            }
-          : {}),
-        ...(writeInheritedWorkspaceOverride
-          ? {
-              allowIncludeAncestorExplicitSetPaths: true,
-              explicitSetPaths: [["agents", "defaults", "workspace"]],
-              explicitSetValueSource: { agents: { defaults: { workspace } } },
-            }
-          : {}),
+        explicitSetPaths,
+        explicitSetValueSource: {
+          ...(shouldWriteGatewayMode ? { gateway: { mode: "local" } } : {}),
+          agents: {
+            ...(snapshot.exists && shouldPersistRoster ? { entries: cfg.agents?.entries } : {}),
+            defaults: {
+              ...(writeInheritedWorkspaceOverride ? { workspace } : {}),
+              ...(shouldWriteSkipBootstrap ? { skipBootstrap: true } : {}),
+            },
+          },
+        },
+        allowIncludeAncestorExplicitSetPaths:
+          writeInheritedWorkspaceOverride || shouldWriteSkipBootstrap || shouldWriteGatewayMode,
       },
     });
     configStatus = snapshot.exists ? "updated" : "created";
     if (!opts?.json && !snapshot.exists) {
-      const formatConfigFilePath = deps.formatConfigFilePath ?? formatDefaultConfigPath;
-      runtime.log(`Wrote ${await formatConfigFilePath(configPath)}`);
+      runtime.log(`Wrote ${(await loadConfigLoggingModule()).formatConfigFilePath(configPath)}`);
     } else if (!opts?.json) {
       const updates: string[] = [];
       if (shouldWriteWorkspace) {
@@ -273,8 +245,11 @@ export async function setupCommand(
       if (shouldWriteGatewayMode) {
         updates.push("set gateway.mode");
       }
+      if (shouldWriteSkipBootstrap) {
+        updates.push("set agents.defaults.skipBootstrap");
+      }
       const suffix = updates.length > 0 ? `(${updates.join(", ")})` : undefined;
-      await (deps.logConfigUpdated ?? logDefaultConfigUpdated)(runtime, {
+      (await loadConfigLoggingModule()).logConfigUpdated(runtime, {
         path: configPath,
         suffix,
       });
@@ -282,24 +257,26 @@ export async function setupCommand(
   } else {
     configStatus = "unchanged";
     if (!opts?.json) {
-      const formatConfigFilePath = deps.formatConfigFilePath ?? formatDefaultConfigPath;
-      runtime.log(`Config OK: ${await formatConfigFilePath(configPath)}`);
+      runtime.log(
+        `Config OK: ${(await loadConfigLoggingModule()).formatConfigFilePath(configPath)}`,
+      );
     }
   }
 
-  const ws = await (deps.ensureAgentWorkspace ?? ensureDefaultAgentWorkspace)({
+  const ws = await (
+    await loadAgentWorkspaceModule()
+  ).ensureAgentWorkspace({
     dir: workspace,
-    ensureBootstrapFiles: !resolvedDefaults.skipBootstrap,
+    ensureBootstrapFiles: !skipBootstrap,
     skipOptionalBootstrapFiles: resolvedDefaults.skipOptionalBootstrapFiles,
   });
   if (!opts?.json) {
     runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   }
 
-  const sessionsDir = await (
-    deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
-  )(selectedAgentId);
-  await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
+  const { resolveSessionTranscriptsDirForAgent } = await import("../config/sessions.js");
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(selectedAgentId);
+  await fs.mkdir(sessionsDir, { recursive: true });
   if (opts?.json) {
     writeRuntimeJson(runtime, {
       ok: true,

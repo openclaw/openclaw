@@ -16,15 +16,6 @@ export type {
   CustomMessage,
 } from "../types.js";
 
-/** Harness-only transcript entries that can be normalized into LLM messages. */
-export type HarnessMessage = AgentMessage;
-
-// Internal session paths keep call sites explicit about this harness-owned
-// boundary even though these message roles are part of AgentMessage.
-export function asAgentMessage(message: HarnessMessage): AgentMessage {
-  return message;
-}
-
 function requireSessionTimestampMs(value: string, label: string): number {
   const parsed = parseSessionTimestampMs(value);
   if (parsed === undefined) {

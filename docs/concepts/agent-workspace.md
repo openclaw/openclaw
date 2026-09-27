@@ -41,6 +41,8 @@ Override in `~/.openclaw/openclaw.json`:
 
 Per-agent override: `agents.entries.*.workspace`. To keep `main` at an existing shared root in a multi-agent roster, pin `agents.entries.main.workspace` to that root explicitly; changing `agents.defaults.workspace` alone sets the base for unpinned entries.
 
+Run workspace selection rejects an explicitly supplied blank or invalid agent ID. Omit the selector to use configured ownership, or supply the intended agent ID.
+
 `openclaw onboard`, `openclaw configure`, or `openclaw setup` create the workspace and seed the bootstrap files if they are missing.
 
 <Note>
@@ -238,6 +240,9 @@ Suggested `.gitignore` starter:
 
 ## Related
 
+- [Backups](/install/backups) - archives, per-database snapshots, scheduling, and offsite copies of state and workspace
+- [Bootstrapping](/start/bootstrapping) - the first-run ritual that seeds a new workspace and its identity files
+- [Default AGENTS.md](/reference/AGENTS.default) - the default agent instructions and skills roster placed in the workspace
 - [Heartbeat](/gateway/heartbeat) - heartbeat monitors and cron scratch
 - [Sandboxing](/gateway/sandboxing) - workspace access in sandboxed environments
 - [Session](/concepts/session) - session storage paths

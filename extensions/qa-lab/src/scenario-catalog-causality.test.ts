@@ -8,8 +8,70 @@ import {
 } from "./scenario-catalog.js";
 import { readFlowAssertExpression, requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import { createRestartFlowFixture } from "./scenario-restart-flow.test-support.js";
 
 describe("qa scenario catalog causality", () => {
+  it("exposes the message tool directly for delivery decision inspection", () => {
+    const scenario = readQaScenarioById("message-delivery-decision-inspection");
+
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      tools: {
+        toolSearch: false,
+        alsoAllow: ["message"],
+      },
+    });
+  });
+
+  it("requires one host-owned fallback for message suppression and no duplicate after restart", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("message-delivery-decision-inspection"),
+    );
+    const suppressionActions = scenario.execution.flow?.steps[1]?.actions ?? [];
+    const restartActions = scenario.execution.flow?.steps[2]?.actions ?? [];
+    const outboundCount =
+      "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length";
+
+    expect(scenario.execution.config?.expectedFallbackText).toBe(
+      "The tool run finished, but no final summary was produced. I did not repeat any completed actions.",
+    );
+    expect(suppressionActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          waitForOutbound: {
+            conversation: { id: "qa-message-suppression-room", kind: "direct" },
+            textIncludes: { ref: "config.expectedFallbackText" },
+            timeoutMs: 60000,
+          },
+          saveAs: "suppressionOutbound",
+        }),
+      ]),
+    );
+    expect(suppressionActions.map(readFlowAssertExpression)).toContain(
+      `${outboundCount} === suppressionOutboundStart + 1 && suppressionOutbound.text === config.expectedFallbackText`,
+    );
+    expect(restartActions.map(readFlowAssertExpression)).toContain(
+      `${outboundCount} === suppressionOutboundStart + 1`,
+    );
+    expect([...suppressionActions, ...restartActions].map(readFlowAssertExpression)).not.toContain(
+      `${outboundCount} === suppressionOutboundStart`,
+    );
+    expect(JSON.stringify(scenario.execution.flow)).not.toContain("waitForNoOutbound");
+    expect(JSON.stringify(scenario.execution.flow)).not.toContain("visibleOutbound=0");
+  });
+
+  it("treats denied Telegram admission as silent transport suppression", () => {
+    for (const scenarioId of [
+      "telegram-policy-hot-reload",
+      "telegram-group-policy-hot-reload",
+      "telegram-repeated-command-authorization",
+    ]) {
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+      const flow = JSON.stringify(scenario.execution.flow);
+      expect(flow).toContain("waitForNoOutbound");
+      expect(flow).not.toContain("not authorized");
+    }
+  });
+
   it("never slices bounded gateway log snapshots with absolute cursors", () => {
     expect(readQaScenarioPackYamlSource()).not.toMatch(
       /readGatewayLogs\s*\(\s*\)[^\r\n]*\.slice\s*\(/u,
@@ -164,111 +226,179 @@ describe("qa scenario catalog causality", () => {
     });
   });
 
-  it("keeps the deterministic restart proof on one inbound turn across three lifecycles", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("gateway-restart-inflight-run"));
-    const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
-    const contract = JSON.stringify(scenario.execution.flow);
-    const checkpointLoop = actions.find(
-      (action): action is { forEach: { items: unknown[]; actions: unknown[] } } =>
-        typeof action === "object" && action !== null && "forEach" in action,
-    );
-    const checkpointActions = checkpointLoop?.forEach.actions ?? [];
-    const pendingWaitIndex = checkpointActions.findIndex(
-      (action) =>
-        (action as { call?: string; saveAs?: string }).call === "waitForCondition" &&
-        (action as { saveAs?: string }).saveAs === "checkpointTranscript",
-    );
-    const checkpointStoreIndex = checkpointActions.findIndex(
-      (action) =>
-        (action as { call?: string; saveAs?: string }).call === "readRawQaSessionStore" &&
-        (action as { saveAs?: string }).saveAs === "checkpointStore",
-    );
-    const checkpointPersistenceIndex = checkpointActions.findIndex((action) => {
-      const expression = readFlowAssertExpression(action);
-      return (
-        expression.includes("checkpointTranscript.userMessageCount >= 1") &&
-        expression.includes("checkpointTranscript.probeTextEndLine ?? 0") &&
-        expression.includes("restartRecoveryDeliveryContext?.channel === 'qa-channel'") &&
-        expression.includes("restartRecoveryDeliveryContext.to === `dm:${conversationId}`")
+  it.each([false, true])(
+    "admits a restart checkpoint only when its own wait is pending (%s)",
+    async (hasPendingCodeModeWait) => {
+      const scenario = requireFlowScenario(readQaScenarioById("gateway-restart-inflight-run"));
+      const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
+      const checkpointLoop = actions.find(
+        (action): action is { forEach: { actions: unknown[] } } =>
+          typeof action === "object" && action !== null && "forEach" in action,
       );
+      const pendingWait = checkpointLoop?.forEach.actions.find(
+        (action) =>
+          (action as { call?: string }).call === "waitForCondition" &&
+          (action as { saveAs?: string }).saveAs === "checkpointTranscript",
+      );
+      if (!pendingWait) {
+        throw new Error("restart scenario checkpoint wait is missing");
+      }
+      const observations: unknown[] = [];
+      const result = runLoadedScenarioFlow("gateway-restart-inflight-run", {
+        flow: {
+          steps: [
+            {
+              name: "gates the current checkpoint",
+              actions: [
+                { set: "checkpoint", value: { expr: "2" } },
+                { set: "sessionKey", value: "agent:qa:checkpoint" },
+                pendingWait,
+              ],
+            },
+          ],
+        },
+        api: {
+          readSessionTranscriptSummary: async (
+            _env: unknown,
+            _sessionKey: string,
+            options: unknown,
+          ) => {
+            observations.push(options);
+            // Aggregate counts can include an unrelated pending wait after checkpoint 1.
+            return {
+              assistantToolCallCounts: { exec: 2, wait: 2 },
+              completedToolCallCounts: { wait: 1 },
+              hasPendingCodeModeWait,
+            };
+          },
+        },
+      });
+      if (hasPendingCodeModeWait) {
+        await expect(result).resolves.toMatchObject({ status: "pass" });
+      } else {
+        await expect(result).rejects.toThrow("test condition was not met");
+      }
+      expect(observations.length).toBeGreaterThan(0);
+      for (const options of observations) {
+        expect(options).toMatchObject({ pendingCodeModeExecNeedle: "CHECKPOINT-2" });
+      }
+    },
+  );
+
+  it("runs one persisted inbound through three distinct restart lifecycles and quiet delivery", async () => {
+    const scenario = requireFlowScenario(readQaScenarioById("gateway-restart-inflight-run"));
+    // These settings are applied by the suite launcher, outside the flow interpreter.
+    // In particular, the unsafe probe must start available for its later absence to prove fencing.
+    expect(scenario.execution).toMatchObject({ retryCount: 0, suiteIsolation: "isolated" });
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      logging: { audit: { executionIdentity: true } },
+      plugins: {
+        slots: { memory: "none" },
+        entries: { acpx: { enabled: false }, "memory-core": { enabled: false } },
+      },
+      tools: { alsoAllow: ["qa_restart_wait", "qa_restart_unsafe_probe"] },
     });
-    const restartIndex = checkpointActions.findIndex(
-      (action) => (action as { call?: string }).call === "restartGatewayWithConfigPatch",
-    );
+    const fixture = createRestartFlowFixture();
+    await expect(fixture.run()).resolves.toMatchObject({ status: "pass" });
+    expect(fixture.events).toEqual([
+      "inbound",
+      "pending:CHECKPOINT-1",
+      "persisted:1",
+      "restart:1",
+      "pending:CHECKPOINT-2",
+      "persisted:2",
+      "restart:2",
+      "pending:CHECKPOINT-3",
+      "persisted:3",
+      "restart:3",
+      "delivery",
+      "quiet:3000:1",
+    ]);
+    expect(fixture.auditRunIds).toEqual(["delivery-1", "delivery-1"]);
+    expect(fixture.restartOrigins).toEqual([
+      ["http://127.0.0.1:64001"],
+      ["http://127.0.0.1:64002"],
+      ["http://127.0.0.1:64003"],
+    ]);
+  });
+
+  it.each([
+    ["missing delivery claim", "did not persist the one original prompt", 0],
+    ["stale lifecycle", "did not rotate the accepted delivery run/lifecycle fence", 2],
+    ["stale delivery owner", "did not rotate the accepted delivery run/lifecycle fence", 2],
+    ["changed audit identity", "original admitted audit identity changed", 3],
+    ["duplicate delivery", "expected exactly one automatically recovered marker", 3],
+    ["extra inbound", "expected one real qa-channel inbound turn", 3],
+    ["late delivery", "unexpected outbound during quiet window", 3],
+  ] as const)("rejects %s in the loaded three-restart flow", async (fault, message, restarts) => {
+    const fixture = createRestartFlowFixture(fault);
+    await expect(fixture.run()).rejects.toThrow(message);
+    expect(fixture.restartOrigins).toHaveLength(restarts);
+  });
+
+  it("keeps full-access restart delivery independent from subagent completion handoff", async () => {
+    const scenario = requireFlowScenario(readQaScenarioById("gateway-restart-full-access-live"));
+    const prompt =
+      typeof scenario.execution.config?.prompt === "string" ? scenario.execution.config.prompt : "";
+    const actions = scenario.execution.flow?.steps[1]?.actions ?? [];
     const outboundIndex = actions.findIndex(
       (action) =>
         (action as { call?: string; saveAs?: string }).call === "waitForOutboundMessage" &&
         (action as { saveAs?: string }).saveAs === "outbound",
     );
-    const quietWindowIndex = actions.findIndex(
-      (action) => typeof action === "object" && action !== null && "waitForNoOutbound" in action,
+    const childIndex = actions.findIndex(
+      (action) =>
+        (action as { call?: string; saveAs?: string }).call === "waitForCondition" &&
+        (action as { saveAs?: string }).saveAs === "childTask",
     );
+    const childWait = actions[childIndex] as
+      | { args?: Array<{ lambda?: { expr?: string } }> }
+      | undefined;
 
-    expect(scenario.execution).toMatchObject({
-      retryCount: 0,
-      suiteIsolation: "isolated",
-    });
-    expect(scenario.gatewayConfigPatch).toMatchObject({
-      logging: { audit: { executionIdentity: true } },
-      plugins: {
-        slots: { memory: "none" },
-        entries: {
-          acpx: { enabled: false },
-          "memory-core": { enabled: false },
-        },
-      },
-      tools: {
-        alsoAllow: ["qa_restart_wait", "qa_restart_unsafe_probe"],
-      },
-    });
-    expect(checkpointLoop?.forEach.items).toEqual([1, 2, 3]);
-    expect(contract.match(/"sendInbound"/gu)).toHaveLength(1);
-    expect(contract).not.toContain("startAgentRun");
-    expect(contract).not.toContain("chat.send");
-    expect(contract).toContain(
-      "assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0)",
+    expect(prompt).toContain("expectsCompletionMessage false");
+    expect(prompt).toContain("do not call sessions_yield or wait for the child");
+    expect(childWait?.args?.[0]?.lambda?.expr).toContain("task.status === 'completed'");
+    expect(childWait?.args?.[0]?.lambda?.expr).not.toContain("terminalOutcome");
+    expect(childWait?.args?.[0]?.lambda?.expr).toContain(
+      "task.deliveryStatus === 'not_applicable'",
     );
-    expect(contract).toContain(
-      "checkpointTranscript.assistantToolCallCounts.wait ?? 0) > (checkpointTranscript.completedToolCallCounts.wait ?? 0)",
-    );
-    expect(contract).toContain("probeText: config.promptMarker");
-    expect(pendingWaitIndex).toBeGreaterThanOrEqual(0);
-    expect(checkpointStoreIndex).toBeGreaterThan(pendingWaitIndex);
-    expect(checkpointPersistenceIndex).toBeGreaterThan(checkpointStoreIndex);
-    expect(restartIndex).toBeGreaterThan(checkpointPersistenceIndex);
-    expect(contract).toContain("checkpointEntry.restartRecoveryDeliveryRunId");
-    expect(contract).toContain("checkpointEntry.restartRecoveryRuns?.find");
-    expect(contract).toContain("currentDeliveryFence.lifecycleGeneration");
-    expect(contract).toContain("runQaCli(env, ['audit', '--run', auditAnchorRunId");
-    expect(contract).toContain("capturedAuditAnchorInspection.identity.context");
-    expect(contract).toContain("postDeliveryAuditAnchorInspection.identity.context");
-    expect(contract).toContain(
-      "JSON.stringify(postDeliveryAuditAnchorIdentity) === JSON.stringify(auditAnchorIdentity)",
-    );
-    expect(contract).toContain("checkpointDeliveryRunIds.length === 3");
-    expect(contract).toContain("checkpointDeliveryRunIds[2] !== checkpointDeliveryRunIds[1]");
-    expect(contract).toContain("auditAnchorIdentity !== null");
-    expect(contract).not.toContain("finalInterruptedRunId");
-    expect(contract).not.toContain("auditedIdentities");
-    expect(contract).not.toContain("inspectQaRestartRecoveryIdentity");
-    expect(contract).not.toContain("mainRestartRecovery?.executionIdentity");
-    expect(contract).toContain("assistantToolCallCounts.exec ?? 0) === 3");
-    expect(contract).toContain("assistantToolCallCounts.wait ?? 0) >= 3");
-    expect(contract).toContain("recoveryDispatches === 3 && retainedPolicies === 3");
-    expect(contract).toContain("finalMatches.length === 1");
-    expect(contract).toContain("restartNotices.length === 0");
-    expect(contract).toContain("unsafeVisible=false");
-    expect(contract).toContain("!recoveryLogs.includes('unsafe-probe-executed')");
-    expect(restartIndex).toBeGreaterThan(checkpointPersistenceIndex);
     expect(outboundIndex).toBeGreaterThanOrEqual(0);
-    expect(quietWindowIndex).toBeGreaterThan(outboundIndex);
-    expect(actions[quietWindowIndex]).toMatchObject({
-      waitForNoOutbound: {
-        quietMs: 3000,
-        sinceIndex: { ref: "outboundCountAfterDelivery" },
-      },
-    });
-    expect(actions.some((action) => (action as { call?: string }).call === "sleep")).toBe(false);
+    expect(childIndex).toBeGreaterThan(outboundIndex);
+
+    const childAssertionPath = actions.slice(childIndex, childIndex + 3);
+    await expect(
+      runLoadedScenarioFlow("gateway-restart-full-access-live", {
+        flow: {
+          steps: [
+            {
+              name: "accepts a successful silent child task",
+              actions: [
+                { set: "sessionKey", value: "agent:qa:restart-proof" },
+                ...childAssertionPath,
+              ],
+            },
+          ],
+        },
+        api: {
+          env: {
+            gateway: {
+              call: async () => ({
+                tasks: [
+                  {
+                    title: "restart-proof-child",
+                    sessionKey: "agent:qa:restart-proof",
+                    childSessionKey: "agent:qa:restart-proof:child",
+                    status: "completed",
+                    deliveryStatus: "not_applicable",
+                  },
+                ],
+              }),
+            },
+          },
+          readSessionTranscriptSummary: async () => ({ finalText: "CHILD-RESTART-OK" }),
+        },
+      }),
+    ).resolves.toMatchObject({ status: "pass" });
   });
 
   it.each(["gateway-restart-inflight-run", "gateway-restart-multi-live"] as const)(

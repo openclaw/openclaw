@@ -393,14 +393,14 @@ export async function promosClaimCommand(
   // Config entries carry no promo marker, so provenance lives in the state
   // DB — it powers the `promo`/`promo ended` annotations in `models list`
   // and future cleanup. Best-effort by design: never fails the claim.
-  recordPromotionClaim({
+  await recordPromotionClaim({
     slug: promotion.slug,
     provider,
     modelKeys: [...new Set(registered)],
     endsAtMs: promotion.endsAt,
     claimedAtMs: Date.now(),
   });
-  markPromotionSlugsNotified([promotion.slug]);
+  await markPromotionSlugsNotified([promotion.slug]);
 
   if (makeDefault && suggested) {
     // `models set` repairs provider runtime plugin installs (Codex/Copilot)

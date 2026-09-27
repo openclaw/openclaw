@@ -1,8 +1,3 @@
-/**
- * Nodes media action executor.
- *
- * Captures camera/photos/screen media from paired nodes and formats media-safe tool results.
- */
 import crypto from "node:crypto";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
@@ -41,32 +36,8 @@ import {
   readPositiveIntegerParam,
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
-import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
+import { callNodesToolNodeInvoke, resolveNodesToolInvokeTimeouts } from "./nodes-tool-invoke.js";
 import { resolveAgentNode, resolveAgentNodeId } from "./nodes-utils.js";
-
-export const MEDIA_INVOKE_ACTIONS = {
-  "camera.snap": "camera_snap",
-  "camera.clip": "camera_clip",
-  "photos.latest": "photos_latest",
-  "screen.record": "screen_record",
-  "screen.snapshot": "screen_snapshot",
-  // file-transfer commands: redirect to dedicated tools for better result
-  // formatting and media-store handling. The gateway still enforces the
-  // underlying node-invoke path policy for raw callers.
-  "file.fetch": "file_fetch",
-  "dir.list": "dir_list",
-  "dir.fetch": "dir_fetch",
-  "file.write": "file_write",
-} as const;
-
-// Subset of MEDIA_INVOKE_ACTIONS where the dedicated tool is the preferred
-// agent UX. Gateway node-invoke policy still protects raw node.invoke callers.
-export const POLICY_REDIRECT_INVOKE_COMMANDS: ReadonlySet<string> = new Set([
-  "file.fetch",
-  "dir.list",
-  "dir.fetch",
-  "file.write",
-]);
 
 type NodeMediaAction =
   | "camera_snap"
@@ -75,8 +46,6 @@ type NodeMediaAction =
   | "screen_record"
   | "screen_snapshot";
 const MAX_RECORDING_DURATION_MS = 300_000;
-const RECORDING_INVOKE_GRACE_MS = 30_000;
-const RECORDING_TRANSPORT_GRACE_MS = 30_000;
 
 type ExecuteNodeMediaActionParams = {
   action: NodeMediaAction;
@@ -85,24 +54,6 @@ type ExecuteNodeMediaActionParams = {
   modelHasVision?: boolean;
   imageSanitization: ImageSanitizationLimits;
 };
-
-function resolveRecordingTimeouts(params: {
-  input: Record<string, unknown>;
-  gatewayOpts: GatewayCallOptions;
-  durationMs: number;
-}): { gatewayOpts: GatewayCallOptions; invokeTimeoutMs: number } {
-  const invokeTimeoutMs =
-    readPositiveIntegerParam(params.input, "invokeTimeoutMs") ??
-    params.durationMs + RECORDING_INVOKE_GRACE_MS;
-  // The Gateway transport starts before the forwarded node timer and must outlive it.
-  // Keep explicit transport and invoke overrides independent so callers can cancel either layer.
-  const transportTimeoutMs =
-    params.gatewayOpts.timeoutMs ?? invokeTimeoutMs + RECORDING_TRANSPORT_GRACE_MS;
-  return {
-    gatewayOpts: { ...params.gatewayOpts, timeoutMs: transportTimeoutMs },
-    invokeTimeoutMs,
-  };
-}
 
 export async function executeNodeMediaAction(
   input: ExecuteNodeMediaActionParams,
@@ -218,10 +169,7 @@ async function executeCameraSnap({
       message: "quality must be between 0 and 1",
     }) ?? 0.95;
   const delayMs = readNonNegativeIntegerParam(params, "delayMs");
-  const deviceId =
-    typeof params.deviceId === "string" && params.deviceId.trim()
-      ? params.deviceId.trim()
-      : undefined;
+  const deviceId = normalizeOptionalString(params.deviceId);
   if (deviceId && facing === "both" && resolvedNode.platform?.toLowerCase() !== "linux") {
     throw new Error("facing=both is not allowed when deviceId is set");
   }
@@ -335,11 +283,12 @@ async function executeCameraClip({
     MAX_RECORDING_DURATION_MS,
   );
   const includeAudio = typeof params.includeAudio === "boolean" ? params.includeAudio : true;
-  const deviceId =
-    typeof params.deviceId === "string" && params.deviceId.trim()
-      ? params.deviceId.trim()
-      : undefined;
-  const timeouts = resolveRecordingTimeouts({ input: params, gatewayOpts, durationMs });
+  const deviceId = normalizeOptionalString(params.deviceId);
+  const timeouts = resolveNodesToolInvokeTimeouts({
+    input: params,
+    gatewayOpts,
+    operationTimeoutMs: durationMs,
+  });
   const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(timeouts.gatewayOpts, {
     nodeId,
     command: "camera.clip",
@@ -389,7 +338,11 @@ async function executeScreenRecord({
     }) ?? 10;
   const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
   const includeAudio = typeof params.includeAudio === "boolean" ? params.includeAudio : true;
-  const timeouts = resolveRecordingTimeouts({ input: params, gatewayOpts, durationMs });
+  const timeouts = resolveNodesToolInvokeTimeouts({
+    input: params,
+    gatewayOpts,
+    operationTimeoutMs: durationMs,
+  });
   const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(timeouts.gatewayOpts, {
     nodeId,
     command: "screen.record",

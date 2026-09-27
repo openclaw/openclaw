@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 describe("doctor reserved incognito session key repair", () => {
-  it("renames durable collisions and every key-bearing linkage idempotently", () => {
+  it("renames durable collisions and every key-bearing linkage idempotently", async () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-doctor-incognito-key-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const sqlitePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
@@ -139,11 +139,11 @@ describe("doctor reserved incognito session key repair", () => {
         oldKey,
       );
 
-      expect(repairReservedIncognitoSessionKeys({ apply: false, cfg: {}, env })).toEqual({
+      expect(await repairReservedIncognitoSessionKeys({ apply: false, cfg: {}, env })).toEqual({
         found: 1,
         repaired: 0,
       });
-      expect(repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
+      expect(await repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
         found: 1,
         repaired: 1,
       });
@@ -246,7 +246,7 @@ describe("doctor reserved incognito session key repair", () => {
           entry: { sessionId: "session-work", updatedAt: 1 },
         },
       ]);
-      expect(repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
+      expect(await repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
         found: 0,
         repaired: 0,
       });
@@ -262,7 +262,7 @@ describe("doctor reserved incognito session key repair", () => {
 
   it.each([false, true])(
     "resumes an interrupted repair from its journal (shared owner: %s)",
-    (shared) => {
+    async (shared) => {
       const stateDir = fs.realpathSync(tempDirs.make("openclaw-doctor-incognito-resume-"));
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const sqlitePath = shared
@@ -316,11 +316,11 @@ describe("doctor reserved incognito session key repair", () => {
         )
         .run(resumedKey);
 
-      expect(repairReservedIncognitoSessionKeys({ apply: false, cfg, env })).toEqual({
+      expect(await repairReservedIncognitoSessionKeys({ apply: false, cfg, env })).toEqual({
         found: 2,
         repaired: 0,
       });
-      expect(repairReservedIncognitoSessionKeys({ apply: true, cfg, env })).toEqual({
+      expect(await repairReservedIncognitoSessionKeys({ apply: true, cfg, env })).toEqual({
         found: 2,
         repaired: 2,
       });
@@ -338,7 +338,7 @@ describe("doctor reserved incognito session key repair", () => {
     },
   );
 
-  it("rewrites dense incognito references in bounded batches without changing payloads", () => {
+  it("rewrites dense incognito references in bounded batches without changing payloads", async () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-doctor-incognito-density-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -390,7 +390,7 @@ describe("doctor reserved incognito session key repair", () => {
       return originalExec(sql);
     });
 
-    expect(repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
+    expect(await repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
       found: 1,
       repaired: 1,
     });

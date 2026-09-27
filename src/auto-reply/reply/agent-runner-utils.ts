@@ -24,10 +24,15 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import {
+  isTrustedMessageActionTurnIngress,
+  mintMessageActionTurnCapability,
+  resolveMessageActionTurnCapabilityLifetime,
+} from "../../gateway/message-action-turn-capability.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
-import { buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore } from "./agent-runner-run-params.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
@@ -48,15 +53,11 @@ type EmbeddedReplyRoute = Pick<
 
 /** Selects the freshest runtime config usable by queued reply execution. */
 export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
-  const runtimeConfig =
-    typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null;
-  const runtimeSourceConfig =
-    typeof getRuntimeConfigSourceSnapshot === "function" ? getRuntimeConfigSourceSnapshot() : null;
   return (
     selectApplicableRuntimeConfig({
       inputConfig: config,
-      runtimeConfig,
-      runtimeSourceConfig,
+      runtimeConfig: getRuntimeConfigSnapshot(),
+      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
     }) ?? config
   );
 }
@@ -127,15 +128,8 @@ export function buildThreadingToolContext(params: {
     provider: sessionCtx.Provider,
   });
   const originTo = sessionCtx.OriginatingTo ?? sessionCtx.To;
-  if (!config) {
-    return {
-      currentMessageId,
-      currentSourceTurnId,
-      replyToMode: sessionCtx.ReplyToMode,
-    };
-  }
-  const rawProvider = normalizeOptionalLowercaseString(originProvider);
-  if (!rawProvider) {
+  const rawProvider = config ? normalizeOptionalLowercaseString(originProvider) : undefined;
+  if (!config || !rawProvider) {
     return {
       currentMessageId,
       currentSourceTurnId,
@@ -234,29 +228,13 @@ export function resolveRunFastModeForFallbackCandidate(params: {
     agentId: params.run.agentId,
     sessionEntry: params.sessionEntry,
   });
-  if (params.run.fastModeOverride) {
-    return {
-      fastMode: params.run.fastMode,
-      fastModeAutoOnSeconds: params.run.fastModeAutoOnSecondsOverride
-        ? params.run.fastModeAutoOnSeconds
-        : state.fastAutoOnSeconds,
-    };
-  }
   return {
-    fastMode: state.mode,
+    fastMode: params.run.fastModeOverride ? params.run.fastMode : state.mode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSecondsOverride
       ? params.run.fastModeAutoOnSeconds
       : state.fastAutoOnSeconds,
   };
 }
-/** Builds base embedded run params with auth and provider runtime hints. */
-function buildEmbeddedRunBaseParams(params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0]) {
-  return buildEmbeddedRunBaseParamsCore({
-    ...params,
-    isReasoningTagProvider,
-  });
-}
-
 function buildEmbeddedContextFromTemplate(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;
@@ -326,6 +304,86 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
     senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
     senderE164: normalizeOptionalString(sessionCtx.SenderE164),
   };
+}
+
+/** Bind either runtime to the same trusted source turn and requester. */
+export function mintReplyMessageActionTurnCapability(
+  turn: Pick<
+    AgentTurnParams,
+    "followupRun" | "sessionCtx" | "opts" | "isHeartbeat" | "runtimePolicySessionKey"
+  >,
+  runId: string,
+): string | undefined {
+  const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
+  const dashboardAdmission = turn.opts?.dashboardReadAdmission;
+  if (
+    turn.isHeartbeat ||
+    (!channelIngress &&
+      (turn.sessionCtx.Provider !== "webchat" || dashboardAdmission?.runId !== runId))
+  ) {
+    return undefined;
+  }
+  const context = buildEmbeddedContextFromTemplate({
+    run: turn.followupRun.run,
+    replyRoute: turn.followupRun,
+    sessionCtx: turn.sessionCtx,
+    hasRepliedRef: turn.opts?.hasRepliedRef,
+  });
+  const sessionKey = turn.runtimePolicySessionKey ?? context.sessionKey;
+  if (!context.agentId || !sessionKey) {
+    return undefined;
+  }
+  if (!channelIngress) {
+    // Queue options may come from another input. Match the original admission,
+    // not opts.runId, which followup execution replaces with its own run ID.
+    if (
+      !dashboardAdmission ||
+      dashboardAdmission.agentId !== context.agentId ||
+      dashboardAdmission.sessionKey !== sessionKey ||
+      dashboardAdmission.sessionId !== context.sessionId
+    ) {
+      return undefined;
+    }
+    dashboardAdmission.assertCurrent();
+    return mintMessageActionTurnCapability({
+      agentId: context.agentId,
+      runId,
+      sessionKey,
+      sessionId: context.sessionId,
+      assertDashboardReadCurrent: dashboardAdmission.assertCurrent,
+      expiresWithRun: true,
+    });
+  }
+  if (!context.messageProvider || !context.currentChannelId) {
+    return undefined;
+  }
+  const sender = buildTemplateSenderContext(turn.sessionCtx);
+  return mintMessageActionTurnCapability({
+    agentId: context.agentId,
+    runId,
+    sessionKey,
+    sourceReplySessionKey: context.sessionKey,
+    sessionId: context.sessionId,
+    requesterAccountId: context.agentAccountId,
+    requesterSenderId: sender.senderId,
+    requesterSenderName: sender.senderName,
+    requesterSenderUsername: sender.senderUsername,
+    requesterSenderE164: sender.senderE164,
+    toolContext: {
+      currentChannelId: context.currentChannelId,
+      currentChatType: context.chatType,
+      currentMessagingTarget: context.currentMessagingTarget,
+      currentGraphChannelId: context.currentGraphChannelId,
+      currentChannelProvider: context.currentChannelProvider,
+      currentThreadTs: context.currentThreadTs,
+      currentMessageId: context.currentMessageId,
+      currentSourceTurnId: context.currentSourceTurnId,
+      replyToMode: context.replyToMode,
+      hasRepliedRef: context.hasRepliedRef,
+      sameChannelThreadRequired: context.sameChannelThreadRequired,
+    },
+    ...resolveMessageActionTurnCapabilityLifetime(turn.followupRun.run.timeoutMs),
+  });
 }
 
 /** Builds execution-specific embedded run params for queued reply dispatch. */

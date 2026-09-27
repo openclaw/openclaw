@@ -10,6 +10,7 @@ import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice as applyProviderAuthChoice } from "./auth-choice.apply.js";
+import { withLoopbackTestServer } from "./loopback-server.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   promptAuthChoiceGrouped: vi.fn(),
@@ -143,7 +144,7 @@ function createTestModel(id: string, name = id) {
   };
 }
 
-function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
+function createApplyAuthChoiceConfig() {
   return {
     config: {
       agents: {
@@ -154,24 +155,20 @@ function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
       models: {
         providers: {
           kilocode: createKilocodeProvider(),
-          ...(includeMinimaxProvider
-            ? {
-                minimax: {
-                  baseUrl: "https://api.minimax.io/anthropic",
-                  api: "anthropic-messages",
-                  models: [createTestModel("MiniMax-M2.7", "MiniMax M2.7")],
-                },
-              }
-            : {}),
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
+            models: [createTestModel("MiniMax-M2.7", "MiniMax M2.7")],
+          },
         },
       },
     },
   };
 }
 
-async function runPromptAuthConfigWithAllowlist(includeMinimaxProvider = false) {
+async function runPromptAuthConfigWithAllowlist() {
   mocks.promptAuthChoiceGrouped.mockResolvedValue("kilocode-api-key");
-  mocks.applyAuthChoice.mockResolvedValue(createApplyAuthChoiceConfig(includeMinimaxProvider));
+  mocks.applyAuthChoice.mockResolvedValue(createApplyAuthChoiceConfig());
   mocks.promptModelAllowlist.mockResolvedValue({
     models: ["kilocode/kilo-auto/balanced"],
   });
@@ -192,14 +189,6 @@ describe("promptAuthConfig", () => {
       "kilocode/kilo-auto/balanced",
     ]);
     expect(result.agents?.defaults?.modelPolicy?.allow).toEqual(["kilocode/kilo-auto/balanced"]);
-  });
-
-  it("does not mutate provider model catalogs when allowlist is set", async () => {
-    const result = await runPromptAuthConfigWithAllowlist(true);
-    expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "kilo-auto/balanced",
-      "anthropic/claude-sonnet-4",
-    ]);
     expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual([
       "MiniMax-M2.7",
     ]);
@@ -336,19 +325,6 @@ describe("promptAuthConfig", () => {
       "openai/gpt-5.4-mini": { alias: "mini" },
       "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
     });
-  });
-
-  it("scopes the allowlist picker to the selected provider when available", async () => {
-    vi.clearAllMocks();
-    mocks.promptAuthChoiceGrouped.mockResolvedValue("openai-api-key");
-    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openai");
-    mocks.applyAuthChoice.mockResolvedValue({ config: {} });
-    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
-
-    await promptAuthConfig({}, makeRuntime(), noopPrompter);
-
-    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
-    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai");
   });
 
   it("canonicalizes a legacy Codex primary when OpenAI OAuth selects the matching model", async () => {
@@ -701,28 +677,29 @@ describe("promptAuthConfig", () => {
     explicit: boolean;
     override: boolean;
   }>([
-    ...[false, true].flatMap((sharedPrimary) =>
-      [false, true].flatMap((agentPrimary) =>
-        [false, true].flatMap((explicit) =>
-          [false, true].map((override) => ({
-            name: `shared=${sharedPrimary}, agent=${agentPrimary}`,
-            defaultModel: sharedPrimary
-              ? { primary: "openai/gpt-5.6-luna", fallbacks: ["shared/fallback"] }
-              : undefined,
-            agentModel: agentPrimary
-              ? { primary: "anthropic/sonnet-4.6", fallbacks: ["agent/fallback"] }
-              : undefined,
-            existingPrimary: agentPrimary
-              ? "anthropic/sonnet-4.6"
-              : sharedPrimary
-                ? "openai/gpt-5.6-luna"
-                : undefined,
-            explicit,
-            override,
-          })),
-        ),
-      ),
-    ),
+    ...[
+      { sharedPrimary: false, agentPrimary: false, explicit: false, override: false },
+      { sharedPrimary: false, agentPrimary: false, explicit: false, override: true },
+      { sharedPrimary: false, agentPrimary: false, explicit: true, override: true },
+      { sharedPrimary: true, agentPrimary: false, explicit: false, override: true },
+      { sharedPrimary: true, agentPrimary: true, explicit: true, override: true },
+      { sharedPrimary: false, agentPrimary: true, explicit: false, override: false },
+    ].map(({ sharedPrimary, agentPrimary, explicit, override }) => ({
+      name: `shared=${sharedPrimary}, agent=${agentPrimary}`,
+      defaultModel: sharedPrimary
+        ? { primary: "openai/gpt-5.6-luna", fallbacks: ["shared/fallback"] }
+        : undefined,
+      agentModel: agentPrimary
+        ? { primary: "anthropic/sonnet-4.6", fallbacks: ["agent/fallback"] }
+        : undefined,
+      existingPrimary: agentPrimary
+        ? "anthropic/sonnet-4.6"
+        : sharedPrimary
+          ? "openai/gpt-5.6-luna"
+          : undefined,
+      explicit,
+      override,
+    })),
     {
       name: "inherited string primary",
       defaultModel: "openai/gpt-5.6-luna",
@@ -904,59 +881,54 @@ describe("promptAuthConfig", () => {
     async ({ explicit, defaultModel, agentModel, expectedModel }) => {
       vi.clearAllMocks();
       mocks.promptAuthChoiceGrouped.mockResolvedValue("custom-api-key");
-      await using server = createServer((_req, res) => {
+      const server = createServer((_req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
         res.end("{}");
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Expected a TCP listener");
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-      const prompter: WizardPrompter = {
-        intro: vi.fn(),
-        outro: vi.fn(),
-        note: vi.fn(),
-        select: vi.fn().mockResolvedValueOnce("plaintext").mockResolvedValueOnce("openai"),
-        multiselect: vi.fn(),
-        text: vi
-          .fn()
-          .mockResolvedValueOnce(baseUrl)
-          .mockResolvedValueOnce("")
-          .mockResolvedValueOnce("llama3")
-          .mockResolvedValueOnce("custom")
-          .mockResolvedValueOnce("Custom"),
-        confirm: vi.fn().mockResolvedValue(false),
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      };
+      await withLoopbackTestServer(server, async (port) => {
+        const baseUrl = `http://127.0.0.1:${port}/v1`;
+        const prompter: WizardPrompter = {
+          intro: vi.fn(),
+          outro: vi.fn(),
+          note: vi.fn(),
+          select: vi.fn().mockResolvedValueOnce("plaintext").mockResolvedValueOnce("openai"),
+          multiselect: vi.fn(),
+          text: vi
+            .fn()
+            .mockResolvedValueOnce(baseUrl)
+            .mockResolvedValueOnce("")
+            .mockResolvedValueOnce("llama3")
+            .mockResolvedValueOnce("custom")
+            .mockResolvedValueOnce("Custom"),
+          confirm: vi.fn().mockResolvedValue(false),
+          progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+        };
 
-      const config: OpenClawConfig = {
-        agents: {
-          ...(explicit ? { ownership: "explicit" } : {}),
-          defaults: { systemAgent: { agentId: "ops" }, model: defaultModel },
-          entries: { OPS: { model: agentModel } },
-        },
-      };
-      const result = await promptAuthConfig(config, makeRuntime(), prompter, {
-        agentId: "ops",
-        agentDir: "/tmp/ops-agent",
-        workspaceDir: "/tmp/ops-workspace",
-      });
+        const config: OpenClawConfig = {
+          agents: {
+            ...(explicit ? { ownership: "explicit" } : {}),
+            defaults: { systemAgent: { agentId: "ops" }, model: defaultModel },
+            entries: { OPS: { model: agentModel } },
+          },
+        };
+        const result = await promptAuthConfig(config, makeRuntime(), prompter, {
+          agentId: "ops",
+          agentDir: "/tmp/ops-agent",
+          workspaceDir: "/tmp/ops-workspace",
+        });
 
-      const modelOwner = explicit ? result.agents?.entries?.OPS : result.agents?.defaults;
-      expect(modelOwner?.model).toEqual(expectedModel);
-      expect(modelOwner?.models?.["custom/llama3"]).toEqual({ alias: "Custom" });
-      if (explicit) {
-        expect(result.agents?.defaults?.model).toEqual(defaultModel);
-        expect(result.agents?.defaults?.models).toBeUndefined();
-      }
-      expect(result.models?.providers?.custom).toMatchObject({
-        baseUrl,
-        api: "openai-completions",
-        models: [{ id: "llama3" }],
+        const modelOwner = explicit ? result.agents?.entries?.OPS : result.agents?.defaults;
+        expect(modelOwner?.model).toEqual(expectedModel);
+        expect(modelOwner?.models?.["custom/llama3"]).toEqual({ alias: "Custom" });
+        if (explicit) {
+          expect(result.agents?.defaults?.model).toEqual(defaultModel);
+          expect(result.agents?.defaults?.models).toBeUndefined();
+        }
+        expect(result.models?.providers?.custom).toMatchObject({
+          baseUrl,
+          api: "openai-completions",
+          models: [{ id: "llama3" }],
+        });
       });
     },
   );

@@ -134,7 +134,8 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
 
   private bindSessionList(): void {
     const context = this.context;
-    if (!context) {
+    // Lit can flush queued updates after removal; don't reacquire the released listener.
+    if (!this.isConnected || !context) {
       return;
     }
     const sessions = context.sessions;

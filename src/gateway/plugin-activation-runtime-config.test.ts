@@ -86,9 +86,9 @@ describe("resolveGatewayReloadPluginActivationCandidate", () => {
       ...sourceConfig,
       channels: { telegram: { enabled: true } },
       plugins: {
-        allow: ["openai-codex", "telegram"],
+        allow: ["openai", "telegram"],
         entries: {
-          "openai-codex": { enabled: true },
+          openai: { enabled: true },
           telegram: { enabled: true },
         },
       },
@@ -100,13 +100,14 @@ describe("resolveGatewayReloadPluginActivationCandidate", () => {
     });
 
     const result = resolveGatewayReloadPluginActivationCandidate({
-      runtimeConfig: sourceConfig,
       sourceConfig,
       env: {},
     });
 
-    expect(result.compareConfig).toBe(autoEnabledConfig);
-    expect(result.runtimeConfig.plugins).toEqual(autoEnabledConfig.plugins);
-    expect(result.runtimeConfig.channels?.telegram?.enabled).toBe(true);
+    expect(applyPluginAutoEnableMock).toHaveBeenCalledWith(
+      expect.objectContaining({ config: sourceConfig }),
+    );
+    expect(result.plugins).toEqual(autoEnabledConfig.plugins);
+    expect(result.channels?.telegram?.enabled).toBe(true);
   });
 });

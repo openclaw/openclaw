@@ -1,5 +1,6 @@
 // Node connection notification routing tests cover active-first delivery and fallback fanout.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   disposeNodeConnectionNotifications,
   scheduleNodeConnectionNotification,
@@ -234,10 +235,7 @@ describe("node connection notification routing", () => {
     const replacement = { ...node("new-node"), connId: "conn-new-node-replacement" };
     const desk = node("desk", { lastActiveAtMs: 100 });
     let connected = [oldSource, desk];
-    let resolveInvoke: ((result: { ok: boolean }) => void) | undefined;
-    const firstInvoke = new Promise<{ ok: boolean }>((resolve) => {
-      resolveInvoke = resolve;
-    });
+    const { promise: firstInvoke, resolve: resolveInvoke } = createDeferred<{ ok: boolean }>();
     const invoke = vi.fn(async () => await firstInvoke);
     const registryValue = registry({ listConnected: () => connected, invoke });
 

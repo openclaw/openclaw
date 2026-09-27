@@ -17,17 +17,6 @@ export OPENCLAW_PLUGINS_TMP_DIR
 OPENCLAW_PLUGINS_CLI_TIMEOUT="${OPENCLAW_PLUGINS_CLI_TIMEOUT:-180s}"
 mkdir -p "$OPENCLAW_PLUGINS_TMP_DIR"
 
-plugins_lifecycle_trace_enabled() {
-  case "${OPENCLAW_PLUGIN_LIFECYCLE_TRACE:-}" in
-    1 | true | TRUE | yes | YES)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 # Redact complete stderr before truncation so a split credential can never expose its suffix.
 print_plugins_stderr_log() {
   local error_file="$1"
@@ -70,7 +59,7 @@ run_plugins_command_logged() {
   }
   local status=0
   if "$@" >"$output_file" 2>"$error_file"; then
-    if plugins_lifecycle_trace_enabled; then
+    if docker_e2e_lifecycle_trace_enabled; then
       print_plugins_stderr_log "$error_file" || status=$?
     fi
   else
@@ -140,9 +129,6 @@ fi
 trap cleanup_openclaw_plugins_sweep EXIT
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
-PACKAGE_VERSION="$(node -p 'require("./package.json").version')"
-OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(node scripts/e2e/lib/package-compat.mjs "$PACKAGE_VERSION")"
-export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 BUNDLED_PLUGIN_ROOT_DIR="extensions"
 OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 

@@ -4,6 +4,76 @@ import { stripSuppressedControlReplyToken } from "./control-reply-text.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 
 describe("control reply display projection", () => {
+  it.each([
+    "REPLY_SKIP\n\nRE",
+    "reply_skip\n\nre",
+    "ANNOUNCE_SKIP\nREPLY_SKIP",
+    "\u00a0“NO_REPLY”\ufeff",
+    "«announce_skip»",
+    "*** \nREPLY_SKIP***",
+  ])("hides control-only output %s after an interrupted or completed stream", (text) => {
+    expect(projectLiveAssistantBufferedText(text, { suppressLeadFragments: false })).toMatchObject({
+      text: "",
+      suppress: true,
+    });
+    expect(projectChatDisplayMessages([{ role: "assistant", content: text }])).toEqual([]);
+  });
+
+  it.each(["REPLY_SKIP means the peer exchange is over.", "The literal marker is `REPLY_SKIP`."])(
+    "keeps substantive prose mentioning controls: %s",
+    (text) => {
+      expect(projectLiveAssistantBufferedText(text)).toMatchObject({ text, suppress: false });
+    },
+  );
+
+  it.each([63, 64, 65, 1_024])("classifies replies after %i padding characters", (length) => {
+    for (const padding of [" ".repeat(length), "。".repeat(length)]) {
+      const control = `${padding}NO_REPLY`;
+      expect(
+        projectLiveAssistantBufferedText(control, { suppressLeadFragments: false }),
+      ).toMatchObject({
+        text: "",
+        suppress: true,
+      });
+      expect(projectChatDisplayMessages([{ role: "assistant", content: control }])).toEqual([]);
+      const text = `${padding}Ready to continue.`;
+      expect(projectLiveAssistantBufferedText(text)).toMatchObject({ text, suppress: false });
+      expect(projectChatDisplayMessages([{ role: "assistant", content: text }])).toEqual([
+        { role: "assistant", content: text },
+      ]);
+    }
+  });
+
+  it.each(["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "holds every partial %s after separate control replies without losing ordinary final text",
+    (token) => {
+      for (let length = 1; length < token.length; length += 1) {
+        const prefix = token.slice(0, length);
+        for (const text of [prefix, `${token}\n\n${token}\n\n${prefix}`]) {
+          expect(projectLiveAssistantBufferedText(text).suppress, text).toBe(true);
+        }
+        expect(
+          projectLiveAssistantBufferedText(prefix, { suppressLeadFragments: false }).text,
+        ).toBe(prefix);
+      }
+      expect(projectLiveAssistantBufferedText(`${token}\n\nReady to continue.`).suppress).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each(["NO_", "ANNOUNCE_", "REPLY_"])(
+    "holds whitespace-padded %s prefixes while streaming",
+    (prefix) => {
+      const text = `${" \t\n".repeat(10)}${prefix}\u00a0\ufeff`;
+      expect(projectLiveAssistantBufferedText(text)).toEqual({
+        text,
+        suppress: true,
+        pendingLeadFragment: true,
+      });
+    },
+  );
+
   it("preserves text whitespace when no control token is present", () => {
     expect(stripSuppressedControlReplyToken("  keep padded  ")).toBe("  keep padded  ");
     expect(

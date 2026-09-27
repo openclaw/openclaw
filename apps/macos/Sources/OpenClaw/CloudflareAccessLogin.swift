@@ -5,6 +5,7 @@ import Subprocess
 enum CloudflareAccessLogin {
     struct Application: Sendable {
         let gatewayURL: URL
+        let handoffFilename: String
         fileprivate let issuer: URL
         fileprivate let audience: String
     }
@@ -41,12 +42,14 @@ enum CloudflareAccessLogin {
     private struct Metadata: Decodable {
         let type: String
         let hostname: String
+        let appHostname: String?
         let authDomain: String
         let aud: String
         let iat: Double
 
         enum CodingKeys: String, CodingKey {
             case type, hostname, aud, iat
+            case appHostname = "app_hostname"
             case authDomain = "auth_domain"
         }
     }
@@ -112,7 +115,12 @@ enum CloudflareAccessLogin {
         return try self.application(gatewayURL: gatewayURL, metadata: metadata)
     }
 
-    static func signIn(application: Application) async throws -> GatewayBrowserSession {
+    @MainActor
+    static func signIn(
+        application: Application,
+        attempt: MacGatewayProfileStore.BrowserSignInAttempt,
+        progress: GatewayBrowserSignInProgress) async throws -> GatewayBrowserSession
+    {
         let (executable, version) = try self.helper()
         let temporary = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-browser-login-\(UUID().uuidString)", isDirectory: true)
@@ -126,7 +134,10 @@ enum CloudflareAccessLogin {
         }
         // Upstream writes both app and organization tokens. Keep its HOME private to this attempt
         // and delete it only after the bounded process owner has joined every child.
-        defer { try? FileManager.default.removeItem(at: temporary) }
+        defer {
+            progress.update(nil)
+            try? FileManager.default.removeItem(at: temporary)
+        }
         let result: BoundedProcessResult
         do {
             result = try await BoundedProcess.run(
@@ -145,6 +156,31 @@ enum CloudflareAccessLogin {
                 ],
                 workingDirectory: temporary.path,
                 standardError: .discarded,
+                whileRunning: { process in
+                    let file = temporary.appendingPathComponent(".cloudflared")
+                        .appendingPathComponent(application.handoffFilename)
+                    // The pinned helper writes this private companion before invoking macOS `open`.
+                    // Offer its documented manual handoff without opening a second browser automatically.
+                    var published = false
+                    while attempt.isCurrent, process.isRunning {
+                        try Task.checkCancellation()
+                        if !published, let handle = try? FileHandle(forReadingFrom: file) {
+                            let data = try? handle.read(upToCount: 16385)
+                            try? handle.close()
+                            if let data, let url = self.handoffURL(data: data, application: application) {
+                                let handoff = GatewayBrowserHandoff(url: url) {
+                                    attempt.isCurrent && process.isRunning
+                                }
+                                await MainActor.run {
+                                    if handoff.isAvailable { progress.update(handoff) }
+                                }
+                                published = true
+                            }
+                        }
+                        try await Task.sleep(for: .milliseconds(100))
+                    }
+                    if !attempt.isCurrent { throw CancellationError() }
+                },
                 timeout: 300)
         } catch is CancellationError {
             throw CancellationError()
@@ -186,6 +222,36 @@ enum CloudflareAccessLogin {
         return session
     }
 
+    /// The helper writes in place. Its complete Curve25519 key and matching redirect
+    /// distinguish a usable handoff from a valid-looking prefix of a partial write.
+    static func handoffURL(data: Data, application: Application) -> URL? {
+        guard data.count <= 16384, let text = String(data: data, encoding: .utf8),
+              let parts = URLComponents(string: text), let url = parts.url,
+              self.sameAuthority(url, application.gatewayURL),
+              parts.path == "/cdn-cgi/access/cli", parts.fragment == nil,
+              let items = parts.queryItems,
+              Set(items.map(\.name)).count == items.count,
+              items.first(where: { $0.name == "aud" })?.value == application.audience,
+              let token = items.first(where: { $0.name == "token" })?.value,
+              Data(base64Encoded: token.replacingOccurrences(of: "-", with: "+")
+                  .replacingOccurrences(of: "_", with: "/"))?.count == 32,
+              items.first(where: { $0.name == "edge_token_transfer" })?.value == "true",
+              items.first(where: { $0.name == "send_org_token" })?.value == "true",
+              items.first(where: { $0.name == "close_interstitial" })?.value == "true",
+              let redirect = items.first(where: { $0.name == "redirect_url" })?.value,
+              let redirectURL = URL(string: redirect), self.sameAuthority(redirectURL, application.gatewayURL),
+              let redirectParts = URLComponents(url: redirectURL, resolvingAgainstBaseURL: false),
+              redirectParts.queryItems?.first(where: { $0.name == "token" })?.value == token,
+              redirectParts.queryItems?.first(where: { $0.name == "aud" })?.value == application.audience
+        else { return nil }
+        return url
+    }
+
+    private static func sameAuthority(_ lhs: URL, _ rhs: URL) -> Bool {
+        lhs.scheme == "https" && lhs.host?.lowercased() == rhs.host?.lowercased() &&
+            (lhs.port ?? 443) == (rhs.port ?? 443) && lhs.user == nil && lhs.password == nil
+    }
+
     /// Discovery candidates are untrusted. The official helper repeats discovery and verifies
     /// its RS256 signature, hostname, and freshness before any browser transfer or credential use.
     static func application(gatewayURL: URL, metadata: String, now: Date = Date()) throws -> Application {
@@ -204,7 +270,13 @@ enum CloudflareAccessLogin {
         guard let canonicalIssuer = URL(string: issuer.absoluteString.lowercased()) else {
             throw LoginError.invalidApplication
         }
-        return Application(gatewayURL: gatewayURL, issuer: canonicalIssuer, audience: claims.aud)
+        // cloudflared keys its companion by application hostname (possibly a wildcard/path),
+        // while the requested hostname above remains authoritative for origin validation.
+        let appHostname = claims.appHostname.flatMap { $0.isEmpty ? nil : $0 } ?? claims.hostname
+        let filename = "\(appHostname)-\(claims.aud)-token.url"
+            .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: "*", with: "-")
+        return Application(
+            gatewayURL: gatewayURL, handoffFilename: filename, issuer: canonicalIssuer, audience: claims.aud)
     }
 
     static func claims(token: String, application: Application, now: Date = Date()) throws -> TokenClaims {

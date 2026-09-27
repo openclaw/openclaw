@@ -1,4 +1,3 @@
-// Telegram plugin module implements targets behavior.
 import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,

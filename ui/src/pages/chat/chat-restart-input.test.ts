@@ -4,10 +4,13 @@ import type { ChatPendingInputsPage } from "../../../../packages/gateway-protoco
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { listChatOutboxAttention } from "./chat-outbox-owner.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-send-support.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 
 const sessionKey = "agent:main:restart-input";
@@ -43,6 +46,112 @@ afterEach(() => {
 });
 
 describe("accepted input restart handoff", () => {
+  it.each(["foreground history", "background reconciliation"] as const)(
+    "demotes an unknown send after exact pending custody via %s without losing its retry payload",
+    async (delivery) => {
+      let consumed = false;
+      const visible = delivery === "foreground history";
+      const host = makeChatHost({
+        sessionKey: visible ? sessionKey : "agent:main:another-conversation",
+        currentSessionId: visible ? sessionId : "another-physical-session",
+        requestHandlers: {
+          "chat.history": () => ({
+            sessionId,
+            messages: [],
+            pendingInputs: consumed ? { items: [], total: 0 } : pending("queued"),
+            inputReceipts: consumed
+              ? [{ runId: item.sendRunId, state: "consumed", consumedByEventId: "canonical-input" }]
+              : [{ runId: item.sendRunId, state: "pending" }],
+            sessionInfo: { key: sessionKey, sessionId, status: "done", hasActiveRun: false },
+          }),
+        },
+      });
+      const uncertain = {
+        ...item,
+        sessionId,
+        sendState: "unconfirmed" as const,
+        sendError: UNCONFIRMED_CHAT_SEND_ERROR,
+      };
+      expect(
+        admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, sessionKey), uncertain),
+      ).toBe(true);
+      expect(listChatOutboxAttention(host)).toHaveLength(1);
+      if (visible) {
+        await loadChatHistory(host);
+      } else {
+        await resumeStoredChatOutboxes(host);
+      }
+      expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
+        id: item.id,
+        text: item.text,
+        sessionId,
+        sendRunId: item.sendRunId,
+        sendAttempts: 1,
+        sendState: "waiting-idle",
+      });
+      expect(listStoredChatOutboxes(host)[0]?.queue[0]?.sendError).toBeUndefined();
+      expect(listChatOutboxAttention(host)).toEqual([]);
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+      consumed = true;
+      if (visible) {
+        await loadChatHistory(host);
+      } else {
+        await resumeStoredChatOutboxes(host);
+      }
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      expect(listChatOutboxAttention(host)).toEqual([]);
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    },
+  );
+
+  it.each(["unknown later", "storage unavailable"] as const)(
+    "retains the same attempted payload and never blindly replays it when %s",
+    async (condition) => {
+      let known = true;
+      const host = makeChatHost({
+        sessionKey,
+        currentSessionId: sessionId,
+        requestHandlers: {
+          "chat.history": () => ({
+            sessionId,
+            messages: [],
+            pendingInputs: known ? pending("queued") : { items: [], total: 0 },
+            inputReceipts: known ? [{ runId: item.sendRunId, state: "pending" }] : [],
+            sessionInfo: { key: sessionKey, sessionId, status: "done", hasActiveRun: false },
+          }),
+        },
+      });
+      expect(
+        admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, sessionKey), {
+          ...item,
+          sessionId,
+          sendState: "unconfirmed",
+          sendError: UNCONFIRMED_CHAT_SEND_ERROR,
+        }),
+      ).toBe(true);
+      if (condition === "storage unavailable") {
+        vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+          throw new Error("storage unavailable");
+        });
+      }
+      await resumeStoredChatOutboxes(host);
+      if (condition === "unknown later") {
+        expect(listChatOutboxAttention(host)).toEqual([]);
+        known = false;
+        await resumeStoredChatOutboxes(host);
+      }
+      expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
+        id: item.id,
+        text: item.text,
+        sendRunId: item.sendRunId,
+        sendAttempts: 1,
+        sendState: "unconfirmed",
+      });
+      expect(listChatOutboxAttention(host)).toHaveLength(1);
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    },
+  );
+
   it.each([
     { queueMode: undefined, status: "running", hasActiveRun: false, immediate: false },
     { queueMode: "followup", status: "running", hasActiveRun: false, immediate: false },

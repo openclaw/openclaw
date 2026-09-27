@@ -11,8 +11,6 @@ type ActiveManagedProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loop
 /** Ref-counted active proxy handle; callers must stop it when their proxy scope ends. */
 export type ActiveManagedProxyRegistration = {
   proxyUrl: ActiveManagedProxyUrl;
-  loopbackMode: ActiveManagedProxyLoopbackMode;
-  proxyTls?: ManagedProxyTlsOptions;
   stopped: boolean;
 };
 
@@ -79,19 +77,14 @@ export function registerActiveManagedProxyUrl(
     // Identical registrations are nested scopes; keep proxy state alive until
     // every owner stops its returned handle.
     activeProxyRegistrationCount += 1;
-    return {
-      proxyUrl: activeProxyUrl,
-      loopbackMode,
-      proxyTls: activeProxyTlsOptions,
-      stopped: false,
-    };
+    return { proxyUrl: activeProxyUrl, stopped: false };
   }
 
   activeProxyUrl = normalizedProxyUrl;
   activeProxyLoopbackMode = loopbackMode;
   activeProxyTlsOptions = proxyTls;
   activeProxyRegistrationCount = 1;
-  return { proxyUrl: activeProxyUrl, loopbackMode, proxyTls, stopped: false };
+  return { proxyUrl: activeProxyUrl, stopped: false };
 }
 
 function areProxyTlsOptionsEqual(

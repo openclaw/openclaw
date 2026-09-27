@@ -20,6 +20,7 @@ import {
   QuestionManagerError,
   QuestionManagerErrorCodes,
 } from "../gateway/question-manager.js";
+import { questionShapeError } from "../gateway/question-validation.js";
 import { notifyListeners } from "../shared/listeners.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
@@ -70,25 +71,12 @@ export class EmbeddedQuestionBroker {
       // A local prompt must not collect a value it cannot safely commit there.
       throw invalidRequest(EMBEDDED_SECRET_STORE_REQUEST_BLOCKER);
     }
-    const ids = new Set<string>();
-    for (const question of params.questions) {
-      if (ids.has(question.questionId)) {
-        throw invalidRequest(`duplicate question id '${question.questionId}'`);
-      }
-      ids.add(question.questionId);
-      if (question.options.length === 1) {
-        throw invalidRequest(
-          `question '${question.questionId}' must have either no options or 2 to 4 options`,
-        );
-      }
-      const labels = new Set<string>();
-      for (const option of question.options) {
-        const label = option.label.trim().toLowerCase();
-        if (labels.has(label)) {
-          throw invalidRequest(`question '${question.questionId}' has duplicate option labels`);
-        }
-        labels.add(label);
-      }
+    const error = questionShapeError(params.questions, {
+      allowPlainSecretQuestions: true,
+      validateUrls: false,
+    });
+    if (error) {
+      throw invalidRequest(error);
     }
     const caller = getGatewayToolCallerIdentity();
     const authority =

@@ -74,9 +74,8 @@ flow:
         # subagent-fanout-synthesis scenario — which also contains "delegate"
         # and produces its own pre-tool sessions_spawn request — cannot
         # satisfy the assertion here. The match is also constrained to
-        # pre-tool requests (no toolOutput) because the mock only plans
-        # sessions_spawn on requests with no toolOutput; the follow-up
-        # request after the tool runs has plannedToolName unset.
+        # pre-tool requests (no toolOutput), so waiting for a spawned child
+        # cannot substitute for evidence that the child was launched.
         - set: subagentDebugRequests
           value:
             expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))] : []"

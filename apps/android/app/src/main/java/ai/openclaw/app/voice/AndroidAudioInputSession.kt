@@ -191,6 +191,7 @@ internal class AndroidAudioInputSession private constructor(
       }
     }
     audioRecord.startRecording()
+    check(audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "Microphone did not start recording" }
     refreshActualRouteSafely()
     Log.d(tag, "capture started preferred=${preferredInputType ?: "default"} routed=${audioRecord.routedDevice?.type ?: "pending"}")
   }

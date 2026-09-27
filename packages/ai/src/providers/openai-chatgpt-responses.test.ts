@@ -372,11 +372,35 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(connections).toBe(2);
   });
 
+  it.each([undefined, "default", "priority"] as const)(
+    "sends service tier %s from ChatGPT simple completions",
+    async (serviceTier) => {
+      let capturedPayload: unknown;
+      await streamSimpleOpenAICodexResponses(model, context, {
+        apiKey: createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } }),
+        serviceTier,
+        transport: "sse",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop after payload");
+        },
+      }).result();
+      expect(capturedPayload).toBeDefined();
+      if (serviceTier) {
+        expect(capturedPayload).toMatchObject({ service_tier: serviceTier });
+      } else {
+        expect(capturedPayload).not.toHaveProperty("service_tier");
+      }
+    },
+  );
+
   it.each([
     { id: "gpt-5.6-sol", withCatalog: true },
     { id: "gpt-5.6-sol", withCatalog: false },
     { id: "gpt-6-astra", withCatalog: true },
     { id: "gpt-6-astra", withCatalog: false },
+    { id: "gpt-6-sol", withCatalog: false },
+    { id: "gpt-6-luna", withCatalog: false },
   ])(
     "preserves max for $id simple requests with catalog=$withCatalog",
     async ({ id, withCatalog }) => {
@@ -417,6 +441,8 @@ describe("streamOpenAICodexResponses transport", () => {
     { id: "gpt-6-astra", effort: "none", map: undefined, expected: undefined },
     { id: "gpt-6-astra", effort: "none", map: { off: null }, expected: undefined },
     { id: "gpt-6-astra", effort: "minimal", map: undefined, expected: "low" },
+    { id: "gpt-6-sol", effort: "none", map: undefined, expected: "none" },
+    { id: "gpt-6-luna", effort: "none", map: undefined, expected: "none" },
     { id: "custom-reasoning", effort: "xhigh", map: undefined, expected: "xhigh" },
     { id: "custom-reasoning", effort: "high", map: { high: "HIGH" }, expected: "HIGH" },
   ] as const)("normalizes raw $id $effort with map=$map", async ({ id, effort, map, expected }) => {
@@ -444,8 +470,118 @@ describe("streamOpenAICodexResponses transport", () => {
 
     expect(result.errorMessage).toBe("stop after payload");
     expect(capturedPayload?.reasoning).toEqual(
-      expected ? { effort: expected, summary: "auto" } : undefined,
+      expected
+        ? { effort: expected, ...(expected === "none" ? {} : { summary: "auto" }) }
+        : undefined,
     );
+  });
+
+  it.each<{
+    id?: string;
+    reasoning: boolean;
+    requested: "off" | "high";
+    supported?: string[];
+    scalar?: boolean;
+    off?: string;
+    expected?: string;
+  }>([
+    { reasoning: true, requested: "off", supported: ["none", "high"], expected: "none" },
+    { reasoning: true, requested: "off", expected: undefined },
+    { reasoning: true, requested: "off", supported: ["high"], expected: undefined },
+    { id: "gpt-6-sol", reasoning: true, requested: "off", expected: "none" },
+    { id: "gpt-6-luna", reasoning: true, requested: "off", expected: "none" },
+    { id: "gpt-6-sol", reasoning: true, requested: "off", supported: ["low", "high"] },
+    { id: "gpt-6-luna", reasoning: true, requested: "off", supported: ["low", "high"] },
+    {
+      reasoning: true,
+      requested: "off",
+      supported: ["none", "high"],
+      scalar: false,
+      expected: undefined,
+    },
+    { reasoning: true, requested: "off", supported: ["low", "high"], off: "low", expected: "low" },
+    { reasoning: false, requested: "off", supported: ["none", "high"], expected: undefined },
+    { reasoning: false, requested: "high", supported: ["none", "high"], expected: undefined },
+  ])(
+    "preserves $requested with reasoning=$reasoning supported=$supported scalar=$scalar off=$off in simple ChatGPT requests",
+    async ({ id = "custom-reasoning", reasoning, requested, supported, scalar, off, expected }) => {
+      let capturedPayload: { reasoning?: { effort?: string } } | undefined;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init);
+        const body = Buffer.from(await request.arrayBuffer());
+        const decoded =
+          request.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(body) : body;
+        capturedPayload = JSON.parse(decoded.toString("utf8"));
+        return completedSseResponse();
+      });
+
+      const result = await streamSimpleOpenAICodexResponses(
+        {
+          ...model,
+          id,
+          reasoning,
+          thinkingLevelMap: { off: off ?? "none" },
+          compat: { supportedReasoningEfforts: supported, supportsReasoningEffort: scalar },
+        },
+        context,
+        {
+          apiKey: createJwt({
+            "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+          }),
+          reasoning: requested,
+          transport: "sse",
+        },
+      ).result();
+
+      expect(result.errorMessage).toBeUndefined();
+      expect(result.stopReason).toBe("stop");
+      expect(capturedPayload?.reasoning).toEqual(
+        expected === undefined
+          ? undefined
+          : {
+              effort: expected,
+              ...(expected === "none" ? {} : { summary: "auto" }),
+            },
+      );
+    },
+  );
+
+  it("sends strict structured output without adding tools", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamSimpleOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+      }),
+      responseFormat: {
+        type: "json_schema",
+        json_schema: {
+          name: "reef_guard_verdict",
+          strict: true,
+          schema: { type: "object", additionalProperties: false },
+        },
+      },
+      transport: "sse",
+      onPayload: (payload) => {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop after payload");
+      },
+    });
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      text: {
+        verbosity: "low",
+        format: {
+          type: "json_schema",
+          name: "reef_guard_verdict",
+          strict: true,
+          schema: { type: "object", additionalProperties: false },
+        },
+      },
+    });
+    expect(capturedPayload).not.toHaveProperty("tools");
+    expect(capturedPayload).not.toHaveProperty("tool_choice");
   });
 
   it("does not fall back to SSE when websocket transport is explicit", async () => {

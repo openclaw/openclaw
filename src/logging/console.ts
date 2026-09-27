@@ -1,12 +1,13 @@
-// Console logging helpers format and write messages to console streams.
 import util from "node:util";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
+import { exitAfterSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { isVerbose } from "../global-state.js";
+import { readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { formatJsonConsoleLine } from "./json-console-line.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
-import { getLogger, readLoggerConfig } from "./logger.js";
+import { getLogger } from "./logger.js";
 import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
@@ -54,7 +55,7 @@ function resolveConsoleSettings(): ConsoleSettings {
     return { level: "silent", style: normalizeConsoleStyle(undefined) };
   }
 
-  const cfg = (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggerConfig();
+  const cfg = (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   const level = envLevel ?? normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
   return { level, style };
@@ -68,10 +69,6 @@ export function getConsoleSettings(): ConsoleLoggerSettings {
   const settings = resolveConsoleSettings();
   loggingState.cachedConsoleSettings = settings;
   return loggingState.cachedConsoleSettings as ConsoleSettings;
-}
-
-export function getResolvedConsoleSettings(): ConsoleLoggerSettings {
-  return getConsoleSettings();
 }
 
 // Route all console output (including tslog console writes) to stderr.
@@ -203,6 +200,7 @@ function writeFormattedConsoleOutput(params: {
           })
         : redactSensitiveText(stack ?? params.formatted);
     const line = timestamp ? `${timestamp} ${rendered}` : rendered;
+    clearActiveProgressLine();
     if (loggingState.forceConsoleToStderr) {
       process.stderr.write(`${line}\n`);
     } else if (
@@ -229,7 +227,6 @@ export function writeRootConsoleLine(method: "log" | "error", line: string): boo
   if (!rawConsole) {
     return false;
   }
-  clearActiveProgressLine();
   if (shouldSuppressConsoleMessage(line)) {
     return true;
   }
@@ -267,8 +264,7 @@ export function enableConsoleCapture(): void {
           // stdout/stderr broken means the process is orphaned (e.g. the parent
           // service restarted and closed the journal pipe). Exit cleanly instead
           // of spinning in a tight loop where every log attempt re-triggers EPIPE.
-          const exitCode = process.exitCode;
-          process.exit(exitCode !== undefined && exitCode !== 0 && exitCode !== "0" ? exitCode : 0);
+          exitAfterSignalExitBarriers(process.exitCode ?? 0);
           return;
         }
         throw err;

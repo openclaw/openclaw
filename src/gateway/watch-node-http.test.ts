@@ -1,4 +1,4 @@
-import { request as httpRequest, type Server, type ServerResponse } from "node:http";
+import { request as httpRequest, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -20,8 +20,8 @@ import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
 } from "../infra/device-pairing-approval.js";
+import { withDevicePairingLock } from "../infra/device-pairing-lock.js";
 import { listNodePairing } from "../infra/device-pairing-node.js";
-import { withDevicePairingLock } from "../infra/device-pairing-state.js";
 import { loadDevicePairSetupCompletionRecord } from "../infra/device-pairing-store.js";
 import { revokeDeviceToken, verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
@@ -32,8 +32,10 @@ import {
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   type DeviceBootstrapProfile,
 } from "../shared/device-bootstrap-profile.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { serializeEventPayload } from "./node-registry.js";
 import {
   connectWatchNode,
@@ -45,16 +47,42 @@ import {
 } from "./watch-node-http.test-helpers.js";
 
 const tempDirs = createTrackedTempDirs();
-const servers: Server[] = [];
+const cleanups: Array<() => Promise<void>> = [];
+const databasePaths = new Set<string>();
 
 afterEach(async () => {
-  for (const server of servers.splice(0)) {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+  const errors: unknown[] = [];
+  for (const cleanup of cleanups) {
+    try {
+      await cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Watch node fixture cleanup failed", { cause: errors[0] });
+  }
+  // Handlers enqueue connection history; drain that writer before closing its database.
+  await withDevicePairingLock(async () => {});
+  for (const databasePath of databasePaths) {
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
   }
   await tempDirs.cleanup();
+  cleanups.length = 0;
+  databasePaths.clear();
 });
+
+async function makeWatchNodeDir(prefix: string): Promise<string> {
+  const baseDir = await tempDirs.make(prefix);
+  databasePaths.add(path.join(baseDir, "watch-identity.sqlite"));
+  databasePaths.add(
+    resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: baseDir }),
+  );
+  return baseDir;
+}
 
 async function createWatchNodeFixture(
   prefix: string,
@@ -62,7 +90,7 @@ async function createWatchNodeFixture(
     bootstrapProfile?: DeviceBootstrapProfile;
   },
 ) {
-  const baseDir = await tempDirs.make(prefix);
+  const baseDir = await makeWatchNodeDir(prefix);
   const identity = loadOrCreateDeviceIdentity({
     path: path.join(baseDir, "watch-identity.sqlite"),
   });
@@ -74,7 +102,7 @@ async function createWatchNodeFixture(
     baseDir,
     identity,
     issued,
-    ...(await startWatchNodeHttpRuntime(baseDir, servers, options)),
+    ...(await startWatchNodeHttpRuntime(baseDir, cleanups, options)),
   };
 }
 
@@ -445,26 +473,7 @@ describe("watch node HTTP transport", () => {
       bootstrapToken: issued.token,
     });
     const connected = await readJson(connectResponse);
-    const invoke = nodeRegistry.invoke({
-      nodeId: identity.deviceId,
-      command: "device.info",
-      timeoutMs: 2_000,
-    });
-    const pollResponse = await fetch(`${baseUrl}/poll`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${String(connected.sessionToken)}` },
-    });
-    const polled = await readJson(pollResponse);
-    const event = polled.event as { payload: { id: string } };
-    const currentCheck = vi.spyOn(nodeRegistry, "isConnectionCurrentPairingState");
-    currentCheck.mockClear();
-    const partial = startPartialJsonRequest({
-      url: `${baseUrl}/result`,
-      authorization: `Bearer ${String(connected.sessionToken)}`,
-    });
-    partial.request.write(`{"id":${JSON.stringify(event.payload.id)},"ok":`);
-    await vi.waitFor(() => expect(currentCheck).toHaveBeenCalledTimes(1));
-
+    // Prepare the pending request before starting the invoke's two-second budget.
     const paired = await getPairedDevice(identity.deviceId, baseDir);
     const repair = await requestDevicePairing(
       {
@@ -476,6 +485,33 @@ describe("watch node HTTP transport", () => {
       },
       baseDir,
     );
+    const invoke = nodeRegistry.invoke({
+      nodeId: identity.deviceId,
+      command: "device.info",
+      timeoutMs: 2_000,
+    });
+    const pollResponse = await fetch(`${baseUrl}/poll`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${String(connected.sessionToken)}` },
+    });
+    const polled = await readJson(pollResponse);
+    const event = polled.event as { payload: { id: string } };
+    const initialPairingCheck = createDeferred<boolean>();
+    const checkCurrentPairing = nodeRegistry.isConnectionCurrentPairingState.bind(nodeRegistry);
+    const currentCheck = vi
+      .spyOn(nodeRegistry, "isConnectionCurrentPairingState")
+      .mockImplementationOnce((connId) => {
+        const current = checkCurrentPairing(connId);
+        void current.then(initialPairingCheck.resolve, initialPairingCheck.reject);
+        return current;
+      });
+    const partial = startPartialJsonRequest({
+      url: `${baseUrl}/result`,
+      authorization: `Bearer ${String(connected.sessionToken)}`,
+    });
+    partial.request.write(`{"id":${JSON.stringify(event.payload.id)},"ok":`);
+    await expect(initialPairingCheck.promise).resolves.toBe(true);
+    expect(currentCheck).toHaveBeenCalledTimes(1);
     await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
     partial.request.end(`true,"payloadJSON":"{\\"model\\":\\"stale\\"}"}`);
 
@@ -541,7 +577,7 @@ describe("watch node HTTP transport", () => {
       pruneIntervalMs: 0,
     };
 
-    const abortedBaseDir = await tempDirs.make("openclaw-watch-node-aborted-connect-");
+    const abortedBaseDir = await makeWatchNodeDir("openclaw-watch-node-aborted-connect-");
     const abortedIdentity = loadOrCreateDeviceIdentity({
       path: path.join(abortedBaseDir, "watch-identity.sqlite"),
     });
@@ -549,9 +585,9 @@ describe("watch node HTTP transport", () => {
       baseDir: abortedBaseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
-    const abortedLimiter = createAuthRateLimiter(limiterConfig);
+    const abortedLimiter = createGatewayAuthRateLimiter(limiterConfig);
     try {
-      const abortedRuntime = await startWatchNodeHttpRuntime(abortedBaseDir, servers, {
+      const abortedRuntime = await startWatchNodeHttpRuntime(abortedBaseDir, cleanups, {
         rateLimiter: abortedLimiter,
         abortConnectResponse: true,
       });
@@ -603,7 +639,7 @@ describe("watch node HTTP transport", () => {
       abortedLimiter.dispose();
     }
 
-    const completedBaseDir = await tempDirs.make("openclaw-watch-node-completed-connect-");
+    const completedBaseDir = await makeWatchNodeDir("openclaw-watch-node-completed-connect-");
     const completedIdentity = loadOrCreateDeviceIdentity({
       path: path.join(completedBaseDir, "watch-identity.sqlite"),
     });
@@ -611,9 +647,9 @@ describe("watch node HTTP transport", () => {
       baseDir: completedBaseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
-    const completedLimiter = createAuthRateLimiter(limiterConfig);
+    const completedLimiter = createGatewayAuthRateLimiter(limiterConfig);
     try {
-      const completedRuntime = await startWatchNodeHttpRuntime(completedBaseDir, servers, {
+      const completedRuntime = await startWatchNodeHttpRuntime(completedBaseDir, cleanups, {
         rateLimiter: completedLimiter,
       });
       const connectResponse = await connectWatchNode({
@@ -634,7 +670,7 @@ describe("watch node HTTP transport", () => {
   });
 
   it("restores an uncorrelated bootstrap token when the connect response aborts", async () => {
-    const baseDir = await tempDirs.make("openclaw-watch-node-generic-abort-");
+    const baseDir = await makeWatchNodeDir("openclaw-watch-node-generic-abort-");
     const identity = loadOrCreateDeviceIdentity({
       path: path.join(baseDir, "watch-identity.sqlite"),
     });
@@ -642,7 +678,7 @@ describe("watch node HTTP transport", () => {
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
-    const runtime = await startWatchNodeHttpRuntime(baseDir, servers, {
+    const runtime = await startWatchNodeHttpRuntime(baseDir, cleanups, {
       abortConnectResponse: true,
     });
 
@@ -887,6 +923,9 @@ describe("watch node HTTP transport", () => {
     });
     expect(stalePollResponse.status).toBe(401);
 
+    // Keep real pairing-worker latency out of this delivery assertion.
+    const invokeNow = performance.now();
+    using _ = vi.spyOn(performance, "now").mockReturnValue(invokeNow);
     const invoke = nodeRegistry.invoke({
       nodeId: identity.deviceId,
       command: "device.info",
@@ -910,6 +949,7 @@ describe("watch node HTTP transport", () => {
       body: JSON.stringify({ id: event.payload.id, ok: true, payloadJSON: '{"model":"Watch"}' }),
     });
     expect(resultResponse.status).toBe(200);
+    await expect(readJson(resultResponse)).resolves.toEqual({ ok: true });
     await expect(invoke).resolves.toMatchObject({
       ok: true,
       payloadJSON: '{"model":"Watch"}',

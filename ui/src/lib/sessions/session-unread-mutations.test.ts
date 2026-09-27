@@ -107,7 +107,7 @@ describe("session unread mutation capability", () => {
   it("keeps the pending read through stale events and canonical refreshes", async () => {
     const committed = createDeferred<unknown>();
     let serverUnread = true;
-    const { gateway } = unreadHarness({
+    const { gateway, emitEvent } = unreadHarness({
       patchResponse: () => committed.promise,
       serverUnread: () => serverUnread,
     });
@@ -117,14 +117,18 @@ describe("session unread mutation capability", () => {
     const operation = sessions.patch(key, { unread: false });
     expect(rowUnread(sessions.state.result)).toBe(false);
 
-    sessions.reconcileChanged({
-      key,
-      sessionId: `${key}:session`,
-      kind: "direct",
-      reason: "send",
-      sessionKey: key,
-      unread: true,
-      updatedAt: 2,
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        key,
+        sessionId: `${key}:session`,
+        kind: "direct",
+        reason: "send",
+        sessionKey: key,
+        unread: true,
+        updatedAt: 2,
+      },
     });
     expect(rowUnread(sessions.state.result)).toBe(false);
 

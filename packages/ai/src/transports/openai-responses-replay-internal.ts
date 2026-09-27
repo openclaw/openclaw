@@ -5,6 +5,7 @@ import type { OpenAIResponsesCompactionRejection } from "../provider-options.js"
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
   DEFAULT_AZURE_OPENAI_API_VERSION,
+  isPreviousResponseRejection,
   type OpenAIResponsesRequestParams,
 } from "./openai-responses-contracts.js";
 import type { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
@@ -187,8 +188,6 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
     | Promise<OpenAIResponsesRequestParams>;
 }): Promise<{
   stream: AsyncIterable<unknown>;
-  response: Response;
-  attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>;
 }> {
   const send = async (
     initialAttempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
@@ -224,7 +223,7 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
           error &&
           typeof error === "object" &&
           typeof (error as { status?: unknown }).status === "number" &&
-          (error as { code?: unknown }).code === "previous_response_not_found"
+          isPreviousResponseRejection(error as { code?: unknown; param?: unknown })
         ) {
           const request = {
             ...(params.buildFullHistoryRequest
@@ -259,7 +258,6 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
       : {}),
   });
   return {
-    ...result,
     stream: {
       async *[Symbol.asyncIterator]() {
         let current = result;

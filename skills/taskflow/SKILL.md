@@ -1,6 +1,6 @@
 ---
 name: taskflow
-description: "Run approval-gated workflows with durable TaskFlow state; distinguish workflow execution from linking real detached tasks."
+description: "Run resumable approval workflows and coordinated subagent recipes with TaskFlow, Swarm, and optional Workboard claims."
 metadata: { "openclaw": { "emoji": "🪝" } }
 ---
 
@@ -32,9 +32,13 @@ Read the tool result's `details` (also rendered as JSON text). It contains `stat
 
 1. For a non-cancelled result, require `mutation.applied === true`. Otherwise report its `code` and stop; workflow success alone does not prove the flow update persisted.
 2. For `needs_approval`, present `requiresApproval.prompt` and `items`, then wait for the user's decision.
-3. In the same owner session, build a separate `action: "resume"` call with the returned `resumeToken` as `token` (or the returned `approvalId`), `flowId` from `mutation.flow.flowId`, `flowExpectedRevision` from `mutation.flow.revision`, and `approve` set to the user's decision. Keep `maxStdoutBytes: 8192` on resume.
+3. In the same owner session, build a separate `action: "resume"` call with `flowId` from `mutation.flow.flowId`, `flowExpectedRevision` from `mutation.flow.revision`, and `approve` set to the user's decision. The tool retrieves the saved checkpoint when `token` and `approvalId` are omitted. If provided, they must match that checkpoint. Keep `maxStdoutBytes: 8192` on resume.
 
 Use the **post-mutation** revision, not the older top-level `flow.revision`. Set `approve: false` only when the user declines. On approval, check the new `mutation.applied` and flow status; on cancellation, check `mutation.cancelled`. Report errors, rejected mutations and pending cancellations rather than claiming completion. Do not blindly retry side effects after a revision conflict: reload and reconcile first.
+
+## Coordinate subagents
+
+For research/review fan-out, implement/verify handoffs, restart reconciliation, or optional shared-workspace claims, read [references/subagent-workflows.md](references/subagent-workflows.md). Use the recipe that fits the request; a small delegation does not need a Workboard or a second flow. Recipes use existing tools and their current receipts, not a separate scheduler.
 
 ## Complete the goal
 

@@ -12,9 +12,9 @@ import {
   type CompactionRequestBudget,
 } from "../../sessions/compaction/request-budget.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { ackPendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { recordAggregateTruncation } from "../prompt-cache-observability.js";
-import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import {
   type getEmbeddedSessionPromptState,
@@ -61,6 +61,7 @@ type PromptActiveSession = (
 type SteeringLease = {
   leaseId: string;
   runIds: readonly string[];
+  isCurrent: () => boolean;
 };
 
 type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
@@ -99,22 +100,35 @@ export async function submitEmbeddedAttemptPrompt(input: {
   transcriptPrompt: string;
 }): Promise<void> {
   const { activeSession, attempt } = input;
+  let pendingSteering = input.leasedSteering;
+  const assertSteeringCurrent = () => {
+    if (pendingSteering && !pendingSteering.isCurrent()) {
+      throw new Error(
+        "The queued child results lost authority before requester prompt submission.",
+      );
+    }
+  };
+  assertSteeringCurrent();
   const userTurnRecorder = attempt.userTurnTranscriptRecorder;
   const persistedUserIdempotencyKey =
     attempt.skipPreparedUserTurnMessage !== true && userTurnRecorder?.hasPersisted() === true
       ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
       : undefined;
-  const normalizedReplayMessages = normalizeAssistantReplayContent(activeSession.messages);
-  if (normalizedReplayMessages !== activeSession.messages) {
-    activeSession.agent.state.messages = normalizedReplayMessages;
-  }
 
   const installProviderPromptHistoryTransform = (): (() => void) => {
     const baseStreamFn = activeSession.agent.streamFn;
     const persistThenStream: StreamFn = async (model, context, options) => {
       await input.persistToolResultProjections();
+      // Runtime admission queues behind the user append; join it outside that write lane.
+      await userTurnRecorder?.waitForRuntimePersistence();
       options?.signal?.throwIfAborted();
-      return baseStreamFn(model, context, options);
+      assertSteeringCurrent();
+      const stream = await baseStreamFn(model, context, options);
+      // Pre-prompt compaction has not consumed the deferred answer.
+      if (captureCurrentPromptForModel) {
+        pendingSteering = undefined;
+      }
+      return stream;
     };
     const providerPromptStreamFn = wrapStreamFnWithMessageTransform(
       persistThenStream,
@@ -160,7 +174,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   });
   updateActiveEmbeddedRunSnapshot(attempt.sessionId, {
     transcriptLeafId: input.transcriptLeafId,
-    messages: snapshotRecentMessages(normalizedReplayMessages),
+    messages: snapshotRecentMessages(activeSession.messages),
     inFlightPrompt: input.transcriptPrompt,
   });
 
@@ -268,7 +282,7 @@ export async function handleEmbeddedAttemptPromptError(input: {
   activeSession: AgentSession;
   attempt: PromptErrorAttempt;
   error: unknown;
-  handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => void;
+  handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => Promise<void>;
   markYieldAborted: () => void;
   releaseLeasedSteering: (error?: unknown) => void;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
@@ -287,7 +301,10 @@ export async function handleEmbeddedAttemptPromptError(input: {
       sessionId: input.attempt.sessionId,
     });
     await input.withOwnedTranscriptWrite(async () => {
-      const transcriptRewritten = stripSessionsYieldArtifacts(input.activeSession);
+      const transcriptRewritten = await withSessionManagerWrite(
+        input.activeSession.sessionManager,
+        () => stripSessionsYieldArtifacts(input.activeSession),
+      );
       if (input.yieldMessage) {
         await persistSessionsYieldContextMessage(input.activeSession, input.yieldMessage);
       }
@@ -305,9 +322,11 @@ export async function handleEmbeddedAttemptPromptError(input: {
 
   if (isMidTurnPrecheckSignal(input.error)) {
     const request = input.error.request;
-    await input.withOwnedTranscriptWrite(() => {
-      input.handleMidTurnPrecheckRequest(request);
-    });
+    await input.withOwnedTranscriptWrite(() =>
+      withSessionManagerWrite(input.activeSession.sessionManager, () =>
+        input.handleMidTurnPrecheckRequest(request),
+      ),
+    );
     return {};
   }
 

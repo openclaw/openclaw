@@ -50,16 +50,10 @@ internal fun resolveChatComposerRoutingOwner(
   gatewayDefaultAgentId: String?,
   sessionKey: String,
   mainSessionKey: String,
-): ChatComposerOwner? {
-  val effectiveSessionKey = sessionKey.trim().ifEmpty { mainSessionKey.trim().ifEmpty { "main" } }
-  val agentId =
-    resolveAgentIdFromMainSessionKey(effectiveSessionKey)
-      ?: gatewayDefaultAgentId?.trim()?.takeIf(String::isNotEmpty)
-      ?: return null
-  return ChatComposerOwner(
+): ChatComposerOwner? =
+  resolveChatComposerOwner(
     gatewayStableId = gatewayStableId,
-    agentId = agentId,
-    sessionKey = effectiveSessionKey,
-    routingVerified = true,
-  )
-}
+    gatewayDefaultAgentId = gatewayDefaultAgentId,
+    sessionKey = sessionKey,
+    mainSessionKey = mainSessionKey,
+  ).takeIf { it.routingVerified }

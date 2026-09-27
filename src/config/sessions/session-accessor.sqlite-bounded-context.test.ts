@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
@@ -16,12 +17,15 @@ import {
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
 } from "./session-accessor.sqlite-active-events.js";
-import { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
+import { readSessionTranscriptHistoryEventById } from "./session-accessor.sqlite-history.test-support.js";
+import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
+import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { transcriptMessage } from "./transcript-message.test-support.js";
 
 async function withBoundedContextScope(
   run: (scope: {
@@ -85,9 +89,9 @@ it("reads only the newest bounded active context and accounts for its header", a
   await withBoundedContextScope(async (scope) => {
     await persistSessionTranscriptTurn(scope, {
       messages: [
-        { eventId: "old", parentId: null, message: { role: "user", content: "old" } },
-        { eventId: "middle", parentId: "old", message: { role: "assistant", content: "middle" } },
-        { eventId: "new", parentId: "middle", message: { role: "user", content: "new" } },
+        transcriptMessage("old", null, { role: "user", content: "old" }),
+        transcriptMessage("middle", "old", { role: "assistant", content: "middle" }),
+        transcriptMessage("new", "middle", { role: "user", content: "new" }),
       ],
       touchSessionEntry: false,
     });
@@ -109,13 +113,62 @@ it("reads only the newest bounded active context and accounts for its header", a
     expect(context.serializedBytes).toBeGreaterThan(
       Buffer.byteLength(JSON.stringify(context.events.slice(1)), "utf8"),
     );
+    expect(
+      readSessionTranscriptBoundedActiveContextCore(scope, { maxBytes: 1024, maxEvents: 3 })
+        .truncated,
+    ).toBe(false);
+  });
+});
+
+it.each([false, true])("bounds context sizing with newest oversized=%s", async (oversized) => {
+  await withBoundedContextScope(async (scope) => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: ["old", "large", "new"].map((eventId, index, ids) =>
+        transcriptMessage(eventId, ids[index - 1] ?? null, {
+          role: "user",
+          content:
+            eventId === "large" || (oversized && eventId === "new") ? "🦞".repeat(1024) : eventId,
+        }),
+      ),
+      touchSessionEntry: false,
+    });
+    const options = { maxBytes: 1024, maxEvents: 100 };
+    readSessionTranscriptBoundedActiveContextCore(scope, options);
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const counter = trackSqliteStatementExecutions(db, ["sizing"], (sql) =>
+      sql.includes("serialized_bytes") ? "sizing" : null,
+    );
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const context = readSessionTranscriptBoundedActiveContextCore(scope, options);
+        expect(context.events.map((event) => (event as { id: string }).id)).toEqual([
+          scope.sessionId,
+          ...(oversized ? [] : ["new"]),
+        ]);
+        expect(context.truncated).toBe(true);
+      }
+      // Each read sizes its header and stops at the first event that cannot fit.
+      expect(counter.rowCounts.sizing).toBeGreaterThan(0);
+      expect(counter.rowCounts.sizing).toBeLessThanOrEqual(oversized ? 6 : 9);
+      await persistSessionTranscriptTurn(scope, {
+        messages: [transcriptMessage("next", "new", { role: "user", content: "next" })],
+        touchSessionEntry: false,
+      });
+      expect(
+        readSessionTranscriptBoundedActiveContextCore(scope, options).events.at(-1),
+      ).toMatchObject({
+        id: "next",
+      });
+    } finally {
+      counter.restore();
+    }
   });
 });
 
 it("reserves the transcript header inside the exact byte limit", async () => {
   await withBoundedContextScope(async (scope) => {
     await persistSessionTranscriptTurn(scope, {
-      messages: [{ eventId: "new", parentId: null, message: { role: "user", content: "new" } }],
+      messages: [transcriptMessage("new", null, { role: "user", content: "new" })],
       touchSessionEntry: false,
     });
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
@@ -208,9 +261,7 @@ it("selects the session header by type when a mirror row precedes it", async () 
       message: { role: "assistant", content: [{ type: "text", text: "New session started." }] },
     });
     await persistSessionTranscriptTurn(scope, {
-      messages: [
-        { eventId: "new", parentId: mirror.messageId, message: { role: "user", content: "new" } },
-      ],
+      messages: [transcriptMessage("new", mirror.messageId, { role: "user", content: "new" })],
       touchSessionEntry: false,
     });
     // Settle the projection first, then reproduce the file-era import row order (delivery
@@ -271,24 +322,28 @@ it("selects the session header when an exact migrated transcript has no identity
       sessionKey: "agent:ops:main",
       storePath: path.join(state.sessionsDir("ops"), "sessions.json"),
     };
-    await importSqliteSessionRows({
+    await seedUnindexedTranscriptForTest({
       ...scope,
       entry: { sessionId: scope.sessionId, updatedAt: 1 },
-      readExactTranscriptRows: (append) => {
-        append({
-          createdAt: 1,
-          eventJson: JSON.stringify({ type: "session", version: 3, id: scope.sessionId }),
-        });
-        append({
-          createdAt: 2,
-          eventJson: JSON.stringify({
+      events: [
+        {
+          session_id: scope.sessionId,
+          seq: 0,
+          created_at: 1,
+          event_json: JSON.stringify({ type: "session", version: 3, id: scope.sessionId }),
+        },
+        {
+          session_id: scope.sessionId,
+          seq: 1,
+          created_at: 2,
+          event_json: JSON.stringify({
             type: "message",
             id: "message-1",
             parentId: null,
             message: { role: "user", content: "hello" },
           }),
-        });
-      },
+        },
+      ],
     });
 
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
@@ -310,10 +365,67 @@ it("selects the session header when an exact migrated transcript has no identity
   });
 });
 
+it("keeps an imported retention anchor before a later indexed duplicate", async () => {
+  await withBoundedContextScope(async (scope) => {
+    const events = [
+      { type: "session", version: 3, id: scope.sessionId },
+      {
+        type: "message",
+        id: "kept",
+        parentId: null,
+        message: { role: "user", content: "Imported kept question." },
+      },
+      {
+        type: "compaction",
+        id: "cut",
+        parentId: "kept",
+        firstKeptEntryId: "kept",
+        summary: "Summary.",
+      },
+      {
+        type: "message",
+        id: "reply",
+        parentId: "cut",
+        message: { role: "assistant", content: "Original reply." },
+      },
+    ];
+    await seedUnindexedTranscriptForTest({
+      ...scope,
+      entry: { sessionId: scope.sessionId, updatedAt: 1 },
+      events: events.map((event, seq) => ({
+        session_id: scope.sessionId,
+        seq,
+        created_at: seq,
+        event_json: JSON.stringify(event),
+      })),
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "kept",
+      parentId: "reply",
+      message: { role: "assistant", content: "Later indexed duplicate.".repeat(100) },
+    });
+    const context = readSessionTranscriptBoundedActiveContextCore(scope, {
+      maxBytes: 32_768,
+      maxEvents: 10,
+    });
+    const range = context.firstKeptRanges.get("cut");
+    expect(range).toBeDefined();
+    expect(context.events.slice(range!.startIndex, range!.endIndex)).toEqual([
+      expect.objectContaining({
+        id: "kept",
+        message: { role: "user", content: "Imported kept question." },
+      }),
+    ]);
+    expect(
+      readSessionTranscriptHistoryEventById(scope, "kept", { currentOnly: true, maxBytes: 100 }),
+    ).toBeUndefined();
+  });
+});
+
 it("retains the latest boundary and counts earlier resets before a truncated tail", async () => {
   await withBoundedContextScope(async (scope) => {
     await persistSessionTranscriptTurn(scope, {
-      messages: [{ eventId: "old", parentId: null, message: { role: "user", content: "old" } }],
+      messages: [transcriptMessage("old", null, { role: "user", content: "old" })],
       touchSessionEntry: false,
     });
     await appendTranscriptEvent(scope, {
@@ -334,8 +446,8 @@ it("retains the latest boundary and counts earlier resets before a truncated tai
     });
     await persistSessionTranscriptTurn(scope, {
       messages: [
-        { eventId: "middle", parentId: "summary", message: { role: "user", content: "middle" } },
-        { eventId: "new", parentId: "middle", message: { role: "assistant", content: "new" } },
+        transcriptMessage("middle", "summary", { role: "user", content: "middle" }),
+        transcriptMessage("new", "middle", { role: "assistant", content: "new" }),
       ],
       touchSessionEntry: false,
     });
@@ -360,21 +472,18 @@ it("counts the retained tail instead of compacted transcript bytes", async () =>
   await withBoundedContextScope(async (scope) => {
     await persistSessionTranscriptTurn(scope, {
       messages: [
-        {
-          eventId: "discarded-old",
-          parentId: null,
-          message: { role: "user", content: `discarded ${"x".repeat(20_000)}` },
-        },
-        {
-          eventId: "kept-user",
-          parentId: "discarded-old",
-          message: { role: "user", content: `kept ${"k".repeat(3_000)}` },
-        },
-        {
-          eventId: "kept-assistant",
-          parentId: "kept-user",
-          message: { role: "assistant", content: "kept answer" },
-        },
+        transcriptMessage("discarded-old", null, {
+          role: "user",
+          content: `discarded ${"x".repeat(20_000)}`,
+        }),
+        transcriptMessage("kept-user", "discarded-old", {
+          role: "user",
+          content: `kept ${"k".repeat(3_000)}`,
+        }),
+        transcriptMessage("kept-assistant", "kept-user", {
+          role: "assistant",
+          content: "kept answer",
+        }),
       ],
       touchSessionEntry: false,
     });
@@ -389,11 +498,10 @@ it("counts the retained tail instead of compacted transcript bytes", async () =>
     });
     await persistSessionTranscriptTurn(scope, {
       messages: [
-        {
-          eventId: "post-compaction",
-          parentId: "compaction-boundary",
-          message: { role: "user", content: "fresh turn" },
-        },
+        transcriptMessage("post-compaction", "compaction-boundary", {
+          role: "user",
+          content: "fresh turn",
+        }),
       ],
       touchSessionEntry: false,
     });
@@ -511,41 +619,28 @@ it("counts paired reset tool results without counting discarded orphan results",
     };
     await persistSessionTranscriptTurn(scope, {
       messages: [
-        {
-          eventId: "discarded-old",
-          parentId: null,
-          message: { role: "user", content: `discarded ${"x".repeat(12_000)}` },
-        },
-        {
-          eventId: "kept-user",
-          parentId: "discarded-old",
-          message: { role: "user", content: "kept question" },
-        },
-        { eventId: "kept-assistant", parentId: "kept-user", message: assistantMessage },
-        {
-          eventId: "kept-result",
-          parentId: "kept-assistant",
-          message: {
-            role: "toolResult",
-            toolCallId: "call-1",
-            toolName: "read",
-            content: [{ type: "text", text: `paired ${"p".repeat(3_000)}` }],
-            isError: false,
-            timestamp: Date.parse("2026-08-15T00:00:01.000Z"),
-          },
-        },
-        {
-          eventId: "discarded-orphan",
-          parentId: "kept-result",
-          message: {
-            role: "toolResult",
-            toolCallId: "orphan-call",
-            toolName: "read",
-            content: [{ type: "text", text: `orphan ${"o".repeat(20_000)}` }],
-            isError: false,
-            timestamp: Date.parse("2026-08-15T00:00:02.000Z"),
-          },
-        },
+        transcriptMessage("discarded-old", null, {
+          role: "user",
+          content: `discarded ${"x".repeat(12_000)}`,
+        }),
+        transcriptMessage("kept-user", "discarded-old", { role: "user", content: "kept question" }),
+        transcriptMessage("kept-assistant", "kept-user", assistantMessage),
+        transcriptMessage("kept-result", "kept-assistant", {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "read",
+          content: [{ type: "text", text: `paired ${"p".repeat(3_000)}` }],
+          isError: false,
+          timestamp: Date.parse("2026-08-15T00:00:01.000Z"),
+        }),
+        transcriptMessage("discarded-orphan", "kept-result", {
+          role: "toolResult",
+          toolCallId: "orphan-call",
+          toolName: "read",
+          content: [{ type: "text", text: `orphan ${"o".repeat(20_000)}` }],
+          isError: false,
+          timestamp: Date.parse("2026-08-15T00:00:02.000Z"),
+        }),
       ],
       touchSessionEntry: false,
     });
@@ -559,11 +654,7 @@ it("counts paired reset tool results without counting discarded orphan results",
     });
     await persistSessionTranscriptTurn(scope, {
       messages: [
-        {
-          eventId: "post-reset",
-          parentId: "reset-boundary",
-          message: { role: "user", content: "fresh turn" },
-        },
+        transcriptMessage("post-reset", "reset-boundary", { role: "user", content: "fresh turn" }),
       ],
       touchSessionEntry: false,
     });
@@ -582,11 +673,10 @@ it("counts paired reset tool results without counting discarded orphan results",
 
     await persistSessionTranscriptTurn(scope, {
       messages: [
-        {
-          eventId: "second-post-reset",
-          parentId: "post-reset",
-          message: { role: "assistant", content: "fresh answer" },
-        },
+        transcriptMessage("second-post-reset", "post-reset", {
+          role: "assistant",
+          content: "fresh answer",
+        }),
       ],
       touchSessionEntry: false,
     });
@@ -686,5 +776,77 @@ it("counts retained raw bytes without hydrating private native payloads", async 
     } finally {
       parseSpy.mockRestore();
     }
+  });
+});
+
+it("keeps later unindexed feedback payloads outside an admitted context read", async () => {
+  await withBoundedContextScope(async (scope) => {
+    const events = [
+      { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId },
+      {
+        type: "message",
+        id: "imported-user",
+        parentId: null,
+        message: { role: "user", content: "Imported conversation." },
+      },
+    ];
+    await seedUnindexedTranscriptForTest({
+      ...scope,
+      entry: { sessionId: scope.sessionId, updatedAt: 1 },
+      events: events.map((event, seq) => ({
+        session_id: scope.sessionId,
+        seq,
+        created_at: seq,
+        event_json: JSON.stringify(event),
+      })),
+    });
+    const admitted = await appendTranscriptMessage(scope, {
+      eventId: "current-user",
+      parentId: "imported-user",
+      message: { role: "user", content: "Current request.", timestamp: 2 },
+    });
+    const anchor = admitted.anchor;
+    if (!anchor) {
+      throw new Error("missing admission anchor");
+    }
+    const marker = "synthetic-later-feedback-payload:";
+    const privateText = marker + "x".repeat(4096);
+    const details: unknown = JSON.parse(
+      `${"[".repeat(1_001)}${JSON.stringify(privateText)}${"]".repeat(1_001)}`,
+    );
+    const { recordChannelFeedbackEvent } = await import("openclaw/plugin-sdk/channel-inbound");
+    expect(
+      await recordChannelFeedbackEvent({
+        cfg: { session: { store: scope.storePath } },
+        agentId: scope.agentId,
+        sessionKey: scope.sessionKey,
+        event: {
+          type: "custom_message",
+          customType: "synthetic-feedback",
+          content: "Later feedback.",
+          display: true,
+          details,
+        },
+      }),
+    ).toBe(true);
+    await waitForSessionTranscriptProjection(scope);
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const acquiredBytes = countAcquiredTranscriptPayloadBytes(db, marker, () => {
+      runWithSessionTranscriptReadFence(
+        { ...anchor, logicalTurnId: "current", role: "user" },
+        () => {
+          const context = readSessionTranscriptBoundedActiveContextCore(scope, {
+            maxBytes: 1024,
+            maxEvents: 10,
+          });
+          expect(context.events.map((event) => (event as { id: string }).id)).toEqual([
+            scope.sessionId,
+            "imported-user",
+          ]);
+          expect(context.activeLeafEntryId).toBe("imported-user");
+        },
+      );
+    });
+    expect(acquiredBytes).toBe(0);
   });
 });

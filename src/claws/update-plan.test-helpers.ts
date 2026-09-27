@@ -7,7 +7,7 @@ import { buildClawAddPlan } from "./lifecycle.js";
 import { installClawMcpServers } from "./mcp.js";
 import { persistClawPackageRef } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
-import type { ClawSourceIdentity, ResolvedClawPackage } from "./types.js";
+import type { ClawOpenClawProfile, ClawSourceIdentity, ResolvedClawPackage } from "./types.js";
 
 export const packagePreflight = async (pkg: { kind: "skill" | "plugin"; ref: string }) => ({
   ok: true as const,
@@ -16,7 +16,10 @@ export const packagePreflight = async (pkg: { kind: "skill" | "plugin"; ref: str
   ...(pkg.kind === "plugin" ? { installId: pkg.ref } : {}),
 });
 
-export async function createUpdatePlanFixture(root: string) {
+export async function createUpdatePlanFixture(
+  root: string,
+  fixtureOptions: { config?: OpenClawConfig; openClawProfile?: ClawOpenClawProfile } = {},
+) {
   await writeFile(join(root, "SOUL.md"), "base soul\n", "utf8");
   await writeFile(join(root, "OLD.md"), "old\n", "utf8");
   const raw = {
@@ -67,13 +70,14 @@ export async function createUpdatePlanFixture(root: string) {
   const env = { OPENCLAW_STATE_DIR: join(root, "state") };
   const addPlan = await buildClawAddPlan({
     manifest: parsed.manifest,
+    openClawProfile: fixtureOptions.openClawProfile,
     source,
     context: { workspace: join(root, "workspace-worker"), packagePreflight },
   });
   if (addPlan.blockers.length > 0) {
     throw new Error(JSON.stringify(addPlan.blockers));
   }
-  let config: OpenClawConfig = {};
+  let config: OpenClawConfig = fixtureOptions.config ?? {};
   await applyClawAddPlan(addPlan, {
     consentPlanIntegrity: addPlan.planIntegrity,
     env,

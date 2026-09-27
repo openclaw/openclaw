@@ -1,11 +1,9 @@
-// Line plugin module implements monitor behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
-import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
   logVerbose,
@@ -14,39 +12,23 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import {
   canonicalizeWebhookRouteKey,
-  normalizePluginHttpPath,
-  normalizeWebhookPath,
   registerWebhookTargetWithPluginRoute,
-  resolveSingleWebhookTarget,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
 } from "openclaw/plugin-sdk/webhook-request-guards";
-import { resolveDefaultLineAccountId } from "./accounts.js";
+import { resolveDefaultLineAccountId, resolveLineAccount } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
-import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
-import { buildLineMediaMessage } from "./outbound-media.js";
 import { prepareLineReplyPayload } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
-import {
-  createFlexMessage,
-  createLocationMessage,
-  pushMessagesLine,
-  replyMessageLine,
-  showLoadingAnimation,
-} from "./send.js";
-import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import { showLoadingAnimation } from "./send.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
-import {
-  createLineNodeWebhookHandler,
-  readLineWebhookRequestBody,
-  rejectLineWebhookRequest,
-} from "./webhook-node.js";
+import { createLineNodeWebhookHandler } from "./webhook-node.js";
 import { LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
-import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
+import { resolveLineWebhookPath } from "./webhook-utils.js";
 
 interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -68,8 +50,6 @@ interface LineProviderMonitor {
 }
 
 const lineWebhookInFlightLimiter = createWebhookInFlightLimiter();
-const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
-const LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS = 5_000;
 
 type LineWebhookTarget = {
   accountId: string;
@@ -191,11 +171,26 @@ export async function monitorLineProvider(
       // A group's configured skill scope only applies if the turn answering it carries it.
       // An empty filter is a real scope ("no skills"), so presence decides, not length.
       const skillFilter = ctx.skillFilter;
+      // Read this turn's own config: LINE resolves it per event so a hot-applied
+      // change reaches the next turn, and the streaming choice must too.
+      // Ask each scope separately. Core reads coalescing that way and lets an account
+      // override only the fields it names; an account config is merged shallowly, so
+      // reading the merged view alone would let an account that tunes nothing but
+      // coalescing erase the channel's explicit enable or disable.
+      const blockStreaming =
+        resolveChannelStreamingBlockEnabled(
+          resolveLineAccount({ cfg: turnConfig, accountId: route.accountId }).config,
+        ) ?? resolveChannelStreamingBlockEnabled(turnConfig.channels?.line);
+      // Only an explicit channel choice may speak here. Left unset the field stays
+      // undefined, which is how core reads "no opinion" and keeps the agent default.
+      const disableBlockStreaming =
+        typeof blockStreaming === "boolean" ? !blockStreaming : undefined;
       const replyOptions =
-        turnAbortSignal || skillFilter
+        turnAbortSignal || skillFilter || disableBlockStreaming !== undefined
           ? {
               ...(turnAbortSignal ? { abortSignal: turnAbortSignal } : {}),
               ...(skillFilter ? { skillFilter } : {}),
+              ...(disableBlockStreaming !== undefined ? { disableBlockStreaming } : {}),
             }
           : undefined;
 
@@ -236,7 +231,7 @@ export async function monitorLineProvider(
               delivery: {
                 // Core renders presentations inside the outbound send pipeline only,
                 // so this path resolves them before either branch reads channelData.
-                preparePayload: prepareLineReplyPayload,
+                preparePayload: (payload) => prepareLineReplyPayload(payload, ctxPayload.From),
                 durable: (payload, info) =>
                   resolveLineDurableReplyOptions({
                     payload,
@@ -264,20 +259,10 @@ export async function monitorLineProvider(
                     accountId: ctx.accountId,
                     cfg: turnConfig,
                     textLimit,
-                    deps: {
-                      buildTemplateMessageFromPayload,
-                      processLineMessage,
-                      chunkMarkdownText,
-                      replyMessageLine,
-                      pushMessagesLine,
-                      createFlexMessage,
-                      buildMediaMessage: buildLineMediaMessage,
-                      createLocationMessage,
-                      onReplyError: (replyErr) => {
-                        logVerbose(
-                          `line: reply token failed, falling back to push: ${String(replyErr)}`,
-                        );
-                      },
+                    onReplyError: (replyErr) => {
+                      logVerbose(
+                        `line: reply token failed, falling back to push: ${String(replyErr)}`,
+                      );
                     },
                   });
                   replyTokenUsed = deliveryResult.replyTokenUsed;
@@ -318,16 +303,12 @@ export async function monitorLineProvider(
     },
   });
 
-  const normalizedPath = normalizeWebhookPath(
-    normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook",
-  );
+  const normalizedPath = resolveLineWebhookPath(webhookPath);
   const webhookRouteKey = canonicalizeWebhookRouteKey(normalizedPath);
-  const createScopedLineWebhookHandler = (target: LineWebhookTarget) =>
-    createLineNodeWebhookHandler({
-      channelSecret: target.channelSecret,
-      bot: target.bot,
-      runtime: target.runtime,
-    });
+  const handleWebhook = createLineNodeWebhookHandler({
+    getTargets: () => lineWebhookTargets.get(webhookRouteKey) ?? [],
+    runtime,
+  });
   const registrationParams: Parameters<
     typeof registerWebhookTargetWithPluginRoute<LineWebhookTarget>
   >[0] = {
@@ -347,15 +328,8 @@ export async function monitorLineProvider(
       log: (msg) => logVerbose(msg),
       throwOnFailure: true,
       handler: async (req, res) => {
-        const targets = lineWebhookTargets.get(webhookRouteKey) ?? [];
-        const firstTarget = targets[0];
         if (req.method !== "POST") {
-          if (!firstTarget) {
-            res.statusCode = 404;
-            res.end("Not Found");
-            return;
-          }
-          await createScopedLineWebhookHandler(firstTarget)(req, res);
+          await handleWebhook(req, res);
           return;
         }
 
@@ -370,73 +344,7 @@ export async function monitorLineProvider(
         }
 
         try {
-          const signatureHeader = req.headers["x-line-signature"];
-          const signature =
-            typeof signatureHeader === "string"
-              ? signatureHeader.trim()
-              : Array.isArray(signatureHeader)
-                ? (signatureHeader[0] ?? "").trim()
-                : "";
-
-          if (!signature) {
-            logVerbose("line: webhook missing X-Line-Signature header");
-            res.statusCode = 400;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Missing X-Line-Signature header" }));
-            return;
-          }
-
-          const rawBody = await readLineWebhookRequestBody(
-            req,
-            LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES,
-            LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
-          );
-          const match = resolveSingleWebhookTarget(targets, (target) =>
-            validateLineSignature(rawBody, signature, target.channelSecret),
-          );
-          if (match.kind === "none") {
-            logVerbose("line: webhook signature validation failed");
-            res.statusCode = 401;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Invalid signature" }));
-            return;
-          }
-          if (match.kind === "ambiguous") {
-            logVerbose("line: webhook signature matched multiple accounts");
-            res.statusCode = 401;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Ambiguous webhook target" }));
-            return;
-          }
-
-          const body = parseLineWebhookBody(rawBody);
-          if (!body) {
-            res.statusCode = 400;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Invalid webhook payload" }));
-            return;
-          }
-
-          if (body.events && body.events.length > 0) {
-            logVerbose(`line: received ${body.events.length} webhook events`);
-            // Only the admission owner can distinguish queued events from ignored standby deliveries.
-            if ((await match.target.bot.handleWebhook(body)) === "durable") {
-              res.setHeader("x-openclaw-delivery-accepted", "durable");
-            }
-          }
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ status: "ok" }));
-        } catch (err) {
-          if (await rejectLineWebhookRequest(req, res, err)) {
-            return;
-          }
-          runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
-          if (!res.headersSent) {
-            res.statusCode = 500;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Internal server error" }));
-          }
+          await handleWebhook(req, res);
         } finally {
           requestLifecycle.release();
         }

@@ -1,16 +1,28 @@
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
+import type { GatewayStaleConnectionReason } from "../../gateway/stale-install.js";
 import type { PortUsage } from "../../infra/ports.js";
 
-export type GatewayRestartWaitOutcome =
-  | "healthy"
-  | "plugin-errors"
-  | "channel-errors"
-  | "version-mismatch"
-  | "build-id-mismatch"
-  | "stale-pids"
-  | "stopped-free"
-  | "timeout";
+export const GATEWAY_RESTART_WAIT_OUTCOMES = [
+  "healthy",
+  "plugin-errors",
+  "channel-errors",
+  "version-mismatch",
+  "build-id-mismatch",
+  "stale-pids",
+  "stopped-free",
+  "timeout",
+  "still-starting",
+  "generation-changed",
+] as const;
+
+export type GatewayRestartWaitOutcome = (typeof GATEWAY_RESTART_WAIT_OUTCOMES)[number];
+
+export type UnavailablePluginHealthSummary = {
+  id: string;
+  reason: string;
+  detail: string;
+};
 
 export type GatewayRestartSnapshot = {
   runtime: GatewayServiceRuntime;
@@ -18,9 +30,12 @@ export type GatewayRestartSnapshot = {
   healthy: boolean;
   staleGatewayPids: number[];
   gatewayVersion?: string | null;
+  gatewayBootId?: string;
   gatewayBuildId?: string | null;
   probeError?: string;
+  staleConnection?: GatewayStaleConnectionReason;
   activatedPluginErrors?: PluginHealthErrorSummary[];
+  unavailablePlugins?: UnavailablePluginHealthSummary[];
   channelProbeErrors?: Array<{ id: string; error: string }>;
   expectedVersion?: string;
   versionMismatch?: {
@@ -34,6 +49,7 @@ export type GatewayRestartSnapshot = {
   };
   waitOutcome?: GatewayRestartWaitOutcome;
   elapsedMs?: number;
+  startupPhase?: string;
 };
 
 export type GatewayPortHealthSnapshot = {

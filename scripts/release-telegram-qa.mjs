@@ -36,11 +36,14 @@ function advisoryStatus() {
   const status = cancelled ? "cancelled" : succeeded ? "success" : "failure";
   const runId = required("GITHUB_RUN_ID");
   const runAttempt = required("GITHUB_RUN_ATTEMPT");
+  const candidateRunAttempt = required("CANDIDATE_RUN_ATTEMPT");
   const targetSha = required("TARGET_SHA");
   const candidateArtifact =
+    POSITIVE_ID.test(candidateRunAttempt) &&
     POSITIVE_ID.test(env.CANDIDATE_ARTIFACT_ID ?? "") &&
     DIGEST.test(env.CANDIDATE_ARTIFACT_DIGEST ?? "") &&
-    env.ARCHIVE_NAME === `release-telegram-candidate-${runId}-${runAttempt}-${targetSha}.tar.zst` &&
+    env.ARCHIVE_NAME ===
+      `release-telegram-candidate-${runId}-${candidateRunAttempt}-${targetSha}.tar.zst` &&
     DIGEST.test(env.ARCHIVE_SHA256 ?? "") &&
     Boolean(env.CANDIDATE_VERSION)
       ? {
@@ -48,7 +51,7 @@ function advisoryStatus() {
           name: env.ARCHIVE_NAME,
           digest: env.CANDIDATE_ARTIFACT_DIGEST,
           runId,
-          runAttempt: Number(runAttempt),
+          runAttempt: Number(candidateRunAttempt),
           fileName: env.ARCHIVE_NAME,
           sha256: env.ARCHIVE_SHA256,
           sourceSha: targetSha,

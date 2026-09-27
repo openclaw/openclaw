@@ -524,9 +524,7 @@ export function classifyPullRequestCandidateLabels(pullRequest, files) {
       text,
     );
   const discoverabilityDocs = filenames.some((filename) =>
-    /^(README(?:\.[^.]+)?\.md|docs\/plugins\/community\.md|docs\/start\/showcase\.md)$/i.test(
-      filename,
-    ),
+    /^(README(?:\.[^.]+)?\.md|docs\/plugins\/community\.md)$/i.test(filename),
   );
   if (docsOnly && !linkedReference && (blankTemplate || docsSignal)) {
     labelsToAdd.push(candidateLabels.lowSignalDocs);

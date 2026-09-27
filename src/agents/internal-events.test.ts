@@ -1,9 +1,14 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
 import {
   buildAgentInternalEventContext,
   buildGeneratedMediaDeliveryContext,
   formatAgentInternalEventsForPrompt,
+  formatGeneratedMediaDeliveryRetryForPrompt,
   type AgentInternalEvent,
   prependInternalEventContext,
   resolveAcpPromptBody,
@@ -15,8 +20,6 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
 
-const MAX_CHILD_RESULT_CHARS = 6_000;
-const CHILD_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
 const MAX_STATUS_LABEL_CHARS = 500;
 const STATUS_LABEL_TRUNCATION_MARKER = "…[truncated]";
 
@@ -83,6 +86,55 @@ describe("agent internal events", () => {
     expect(media).toEqual(["https://example.test/report.png"]);
   });
 
+  it.each([
+    "https://example.com/video.mp4?X-Amz-Signature=fake[[reply_to:999]]",
+    "https://example.com/video.mp4?signature=fake[[audio_as_voice]]",
+    "https://example.com/video.mp4?caption=![cover](https://example.org/cover.png)",
+    'https://example.com/video.mp4?signature=part.png"}tail',
+    "https://example.com/video.mp4?token=ends,",
+    'https://example.com/video.mp4?token=ends"',
+    "https://example.com/video.mp4?token=ends\\",
+  ])("preserves signed media through completion and retry directives: %s", (mediaUrl) => {
+    const event = {
+      ...taskCompletionEvent("Generated video."),
+      source: "video_generation",
+      mediaUrls: [mediaUrl],
+      attachments: [{ type: "video", url: mediaUrl }],
+    } satisfies AgentInternalEvent;
+    const prompts = [
+      formatAgentInternalEventsForPrompt([event]),
+      resolveAcpPromptBody("", [event]),
+      buildAgentInternalEventContext([event])
+        .map((fragment) => fragment.text)
+        .join("\n"),
+      formatGeneratedMediaDeliveryRetryForPrompt([mediaUrl]),
+      ...[false, true].map((retry) =>
+        buildGeneratedMediaDeliveryContext([mediaUrl], retry)
+          .map((fragment) => fragment.text)
+          .join("\n"),
+      ),
+    ];
+
+    for (const prompt of prompts) {
+      expect(parseReplyDirectives(prompt, { extractMarkdownImages: true })).toMatchObject({
+        mediaUrls: [mediaUrl],
+        replyToId: undefined,
+        replyToCurrent: undefined,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      });
+    }
+  });
+
+  it("preserves generated file URL bytes until native reply parsing owns conversion", () => {
+    const filePath = path.resolve("media", "render-final.png,");
+    const fileUrl = pathToFileURL(filePath).href;
+    const prompt = formatGeneratedMediaDeliveryRetryForPrompt([fileUrl]);
+    expect(splitMediaFromOutput(prompt).mediaUrls).toEqual([fileUrl]);
+    expect(parseReplyDirectives(prompt).mediaUrls).toEqual([filePath]);
+  });
+
   it("normalizes media references while preserving Unicode and delimiter modes", () => {
     const unicode = "雪😀\ud800x\udc00\u0085\u200b\u2028Z";
     const reference = ` /tmp/a\r\nb\rc\nd\te\u0000f\u001fg\u007fh/${unicode}/${INTERNAL_RUNTIME_CONTEXT_BEGIN}/${INTERNAL_RUNTIME_CONTEXT_END}.png `;
@@ -102,25 +154,24 @@ describe("agent internal events", () => {
     expect(mediaUrls).toEqual([reference, normalized]);
   });
 
-  it("bounds protected and plain child-result projections after escaping", () => {
-    const fullResult = `${"<".repeat(MAX_CHILD_RESULT_CHARS)}-unbounded-tail`;
+  it("preserves complete child results in parent context and retained transcript projections", () => {
+    const fullResult = `${"<🚀>".repeat(2_000)}-required-tail`;
     const event = taskCompletionEvent(fullResult);
-    const protectedResult = extractChildResult(formatAgentInternalEventsForPrompt([event]));
+    const protectedPrompt = formatAgentInternalEventsForPrompt([event]);
+    const protectedResult = extractChildResult(protectedPrompt);
     const plainResult = extractChildResult(resolveAcpPromptBody("", [event]));
+    const transcriptResult = extractChildResult(
+      resolveInternalEventTranscriptBody(protectedPrompt, [event]),
+    );
+    const data = buildAgentInternalEventContext([event]).find(
+      (fragment) => fragment.kind === "conversation-data",
+    );
 
+    expect(protectedResult).toBe(`${"&lt;🚀&gt;".repeat(2_000)}-required-tail`);
     expect(protectedResult).toBe(plainResult);
-    expect(protectedResult.length).toBeLessThanOrEqual(MAX_CHILD_RESULT_CHARS);
-    expect(protectedResult.endsWith(CHILD_RESULT_TRUNCATION_NOTICE)).toBe(true);
-    expect(protectedResult).not.toContain("unbounded-tail");
+    expect(transcriptResult).toBe(protectedResult);
+    expect(data?.text).toContain(fullResult);
     expect(event.result).toBe(fullResult);
-  });
-
-  it("keeps ordinary child results unchanged", () => {
-    const result = "small useful result";
-
-    expect(
-      extractChildResult(formatAgentInternalEventsForPrompt([taskCompletionEvent(result)])),
-    ).toBe(result);
   });
 
   it("keeps a bounded route change separate from child result text", () => {

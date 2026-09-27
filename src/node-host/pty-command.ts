@@ -135,6 +135,7 @@ export async function runNodePtyCommand(
     cwd?: string;
     /** Fresh starts require the selected directory; resume retains its home fallback. */
     requiredCwd?: boolean;
+    assertCurrent?: () => void;
     env?: Record<string, string>;
     pathEnv?: string;
     cols: number;
@@ -152,14 +153,18 @@ export async function runNodePtyCommand(
     params.pathEnv ? { PATH: params.pathEnv } : undefined,
     { OPENCLAW_TERMINAL: "1" },
   ]);
-  const pty = await spawn({
-    file: params.file,
-    args: params.args,
-    cwd: resolvePtyCwd(params.cwd, params.requiredCwd),
-    env,
-    cols: params.cols,
-    rows: params.rows,
-  });
+  params.assertCurrent?.();
+  const pty = await spawn(
+    {
+      file: params.file,
+      args: params.args,
+      cwd: resolvePtyCwd(params.cwd, params.requiredCwd),
+      env,
+      cols: params.cols,
+      rows: params.rows,
+    },
+    { abortSignal: io.signal, assertCurrent: params.assertCurrent },
+  );
   let outputQueue = Promise.resolve();
   let settled = false;
   const kill = () => pty.kill();

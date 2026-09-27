@@ -1,4 +1,5 @@
 // Machine-state mutations own serialization and the shared write transaction.
+import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -67,41 +68,58 @@ export function updateConfigMachineState<T>(
   const stateKey = normalizeConfigMachineStateKey(key);
   const now = Date.now();
   return runOpenClawStateWriteTransaction(
-    (database) => {
-      const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database.db);
-      const row = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("config_machine_state")
-          .select("value_json")
-          .where("state_key", "=", stateKey),
-      );
-      // SAFETY: Each key's owner supplies its JSON shape; this generic store only decodes it.
-      const value = update(row ? (JSON.parse(row.value_json) as T) : undefined);
-      if (value === undefined) {
-        if (row) {
-          executeSqliteQuerySync(
-            database.db,
-            db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
-          );
-        }
-        return undefined;
-      }
-      const valueJson = serializeStateValue(value);
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("config_machine_state")
-          .values({ state_key: stateKey, value_json: valueJson, updated_at_ms: now })
-          .onConflict((conflict) =>
-            conflict.column("state_key").doUpdateSet({ value_json: valueJson, updated_at_ms: now }),
-          ),
-      );
-      return value;
-    },
+    ({ db }) => updateConfigMachineStateInDatabase(db, stateKey, update, now),
     options,
     { operationLabel: "config-machine-state.update" },
   );
+}
+
+/** Update an already-normalized key on the caller's admitted transaction connection. */
+export function updateConfigMachineStateInDatabase<T>(
+  database: DatabaseSync,
+  stateKey: string,
+  update: (current: T | undefined) => T,
+  now: number,
+): T;
+export function updateConfigMachineStateInDatabase<T>(
+  database: DatabaseSync,
+  stateKey: string,
+  update: (current: T | undefined) => T | undefined,
+  now: number,
+): T | undefined;
+export function updateConfigMachineStateInDatabase<T>(
+  database: DatabaseSync,
+  stateKey: string,
+  update: (current: T | undefined) => T | undefined,
+  now: number,
+): T | undefined {
+  const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database);
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    db.selectFrom("config_machine_state").select("value_json").where("state_key", "=", stateKey),
+  );
+  // SAFETY: Each key's owner supplies its JSON shape; this generic store only decodes it.
+  const value = update(row ? (JSON.parse(row.value_json) as T) : undefined);
+  if (value === undefined) {
+    if (row) {
+      executeSqliteQuerySync(
+        database,
+        db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
+      );
+    }
+    return undefined;
+  }
+  const valueJson = serializeStateValue(value);
+  executeSqliteQuerySync(
+    database,
+    db
+      .insertInto("config_machine_state")
+      .values({ state_key: stateKey, value_json: valueJson, updated_at_ms: now })
+      .onConflict((conflict) =>
+        conflict.column("state_key").doUpdateSet({ value_json: valueJson, updated_at_ms: now }),
+      ),
+  );
+  return value;
 }
 
 /** Delete one machine-state value, reporting whether a stored value existed. */

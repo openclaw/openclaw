@@ -38,40 +38,6 @@ export const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
 
-export const MAX_TRANSIENT_RETRIES = 8;
-const MAX_TRANSIENT_RETRY_TIME_MS = 90_000;
-const TRANSIENT_RETRY_BASE_DELAY_MS = 1_000;
-const TRANSIENT_RETRY_MAX_DELAY_MS = 30_000;
-
-/** Resolves jittered exponential backoff without exceeding the turn retry ceiling. */
-export function resolveTransientRetryDelayMs(params: {
-  retryNumber: number;
-  retryAfterMs?: number;
-  elapsedMs?: number;
-}): number | undefined {
-  const remainingMs =
-    params.elapsedMs === undefined
-      ? Infinity
-      : MAX_TRANSIENT_RETRY_TIME_MS - Math.max(0, params.elapsedMs);
-  // The header parser uses Infinity for a floor too large to represent safely.
-  if (remainingMs <= 0 || params.retryAfterMs === Infinity) {
-    return undefined;
-  }
-  const exponentialMs = Math.min(
-    TRANSIENT_RETRY_MAX_DELAY_MS,
-    TRANSIENT_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, params.retryNumber - 1),
-  );
-  const jitteredMs = Math.min(
-    TRANSIENT_RETRY_MAX_DELAY_MS,
-    Math.round(exponentialMs * (0.5 + Math.random())),
-  );
-  const retryAfterMs = Number.isFinite(params.retryAfterMs)
-    ? Math.max(0, Math.ceil(params.retryAfterMs ?? 0))
-    : 0;
-  const delayMs = Math.max(jitteredMs, retryAfterMs);
-  return delayMs <= remainingMs ? delayMs : undefined;
-}
-
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "[redacted]";
 

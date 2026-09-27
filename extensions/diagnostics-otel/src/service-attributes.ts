@@ -1,7 +1,10 @@
 import type { LogRecord } from "@opentelemetry/api-logs";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
-import type { DiagnosticEventPayload, DiagnosticTraceContext } from "../api.js";
-import { redactSensitiveText } from "../api.js";
+import type {
+  DiagnosticEventPayload,
+  DiagnosticTraceContext,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import {
   BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS,
   DROPPED_OTEL_ATTRIBUTE_KEYS,
@@ -12,7 +15,6 @@ import {
   SECURITY_TARGET_NAME_VALUE_RE,
 } from "./service-constants.js";
 import { normalizeOtelLogString } from "./service-content-normalization.js";
-import type { OtelContentCapturePolicy } from "./service-content-normalization.js";
 import type { SecuritySeverityText } from "./service-types.js";
 
 export function redactOtelAttributes(attributes: Record<string, string | number | boolean>) {
@@ -36,10 +38,6 @@ function securityTargetNameAttr(value: string | undefined, fallback = "unknown")
     return fallback;
   }
   return SECURITY_TARGET_NAME_VALUE_RE.test(redacted) ? redacted : fallback;
-}
-
-export function shouldCaptureOtelLogBody(policy: OtelContentCapturePolicy): boolean {
-  return policy.logBodies;
 }
 
 function otelLogTimestampIso(timestamp: LogRecord["timestamp"]): string {

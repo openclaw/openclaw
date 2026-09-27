@@ -2,26 +2,30 @@
 summary: "Index of the OpenClaw Code Mode documentation, one page per reader job"
 title: "Code Mode"
 sidebarTitle: "Code Mode"
+doc-schema-version: 1
 read_when:
-  - You want to enable OpenClaw code mode for an agent run
+  - You want to enable OpenClaw Code Mode for an agent run
   - You need to explain why Code Mode is different from Codex Code Mode
   - You are looking for the Code Mode page that matches your task
 ---
 
-Code mode is an experimental, opt-in OpenClaw agent-runtime feature. When
-enabled, the model no longer sees every enabled tool schema; instead, it sees
+Code mode is an experimental OpenClaw agent-runtime feature. When
+enabled, the model no longer sees every enabled tool schema. Instead, it sees
 `exec`, `wait`, and any direct-only tool whose structured result cannot cross
-the JSON-only guest bridge. The model writes a small JavaScript or TypeScript
+the JSON-only guest bridge. The model writes a small JavaScript
 program that searches, describes, and calls the hidden tool catalog.
+TypeScript-style signatures describe the available tools; executable cells use
+plain JavaScript without type annotations.
 
 <Note>
-OpenClaw Code Mode is off by default. To try it, open **Settings → Agents &
-Tools → Labs** and turn on **Code Mode**. The Labs switch writes the `"auto"`
-tier, which engages only for models marked as preferred Code Mode performers.
-This is the global default; agent and model overrides take precedence.
+When `tools.codeMode` is absent, OpenClaw uses the `"auto"` tier and engages
+Code Mode only for models marked as preferred Code Mode performers. An authored
+object without `enabled` remains off, as do `false` and `{ enabled: false }`.
+Agent and model overrides take precedence. Use **Settings → Agents & Tools →
+Labs → Code Mode** to choose the global setting.
 </Note>
 
-This page documents OpenClaw code mode, not Codex Code Mode. The two features
+This page documents OpenClaw Code Mode, not Codex Code Mode. The two features
 share a name and the same control-tool names (`exec`, `wait`), but they are
 separate implementations:
 
@@ -29,35 +33,35 @@ separate implementations:
   freeform-grammar tool: the model writes raw JavaScript source (optionally
   prefixed by a `// @exec: {...}` pragma line for execution options), executed
   in Codex's in-process V8 Code Mode runtime.
-- OpenClaw code mode runs in the generic OpenClaw agent runtime and is
+- OpenClaw Code Mode runs in the generic OpenClaw agent runtime and is
   enabled through global, agent, or model activation settings. Its `exec`
-  tool takes a JSON `{ code, language }` payload, executed in a QuickJS-WASI
-  worker.
+  tool takes a JSON `{ title, code }` payload, executed by the selected Node or
+  QuickJS executor.
 
 Both are JavaScript execution surfaces, not shell-command surfaces. Treat them
 as independent, differently-implemented features that happen to expose
 identically-named `exec`/`wait` tools.
 
-In OpenClaw code mode, `command` is a JavaScript or TypeScript alias for
+In OpenClaw Code Mode, `command` is a JavaScript alias for
 `code`, not a shell command. For shell or file operations, call the appropriate
 async tool global from guest JavaScript. Recognizable shell
 commands are rejected before guest execution with actionable
 `invalid_input` guidance.
 
-Source validation, TypeScript compilation, and guest execution run in a bounded
-pool of worker threads that scales with available CPU cores. Workers stay warm
-between calls; each cell gets an isolated QuickJS VM. Fast host exchanges retain
-that VM within the same call rather than snapshotting every await. Tool
-permissions, approvals, and session ownership remain with the Gateway. Queued
-work shares the execution deadline, and cancellation stops an active worker
-before the call settles.
+JavaScript executes outside the Gateway's main event loop. Node is the default
+executor and uses `node:vm` in a worker thread for trusted execution; it is not
+a security boundary. The bundled QuickJS executor provides hardened guest
+isolation. Both use the same tool bridge, where permissions, approvals, and
+session ownership remain with the Gateway. See
+[Code Mode executors](/tools/code-mode/executors) before enabling it.
 
-This page is an index. Code Mode is documented on eight pages, one per reader
+This page is an index. Code Mode is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
 | Page                                                      | Read it when                                                                       |
 | --------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | [Code Mode quickstart](/tools/code-mode/quickstart)       | You want to turn Code Mode on, override one model, and recover from tool errors.   |
+| [Code Mode executors](/tools/code-mode/executors)         | You want to choose Node or QuickJS and understand their security boundaries.       |
 | [Code Mode configuration](/tools/code-mode/configuration) | You need the configuration fields, the preferred-model list, and activation order. |
 
 ## What it does
@@ -65,32 +69,33 @@ job. Open the page that matches your task.
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
   such as `computer` or the native-vision `view_image` loader whose image result
   cannot survive the guest bridge.
-- `exec` evaluates model-generated JavaScript or TypeScript in an isolated
-  QuickJS-WASI worker thread.
+- `exec` evaluates model-generated JavaScript in the selected executor's worker
+  thread.
 - Every catalog-eligible enabled non-MCP tool (OpenClaw core, plugin, client) is
   hidden as a standalone model tool and exposed inside the guest program as an
   async global function. MCP stays under the `MCP` namespace.
 - The `exec` description carries a bounded quick index of final callable names,
   compact input hints, and compact declared output hints when a
   trusted tool provides an output schema. It omits descriptions, full schemas,
-  MCP entries, and overflow entries; callable `catalog.search(...)` results are
+  MCP entries, and overflow entries. Callable `catalog.search(...)` results are
   the fallback. Input hints retain integer and numeric bounds as comments, such
   as `offset?: number /* integer, >= 1 */`. Other validation details remain in
-  the full schema available through `describe()`; these hints do not change
+  the full schema available through `describe()`. These hints do not change
   tool validation or output contracts.
 - Guest code calls globals directly or searches the hidden catalog for callable
   handles. A handle exposes bounded metadata and `describe()`, but never the
   exact internal catalog id. Calls use the same execution path as normal agent
   turns (policy, approvals, hooks, telemetry all still apply).
-- MCP tools are grouped under the `MCP` namespace; in code mode this is the
-  only supported way to call them.
-- `wait` resumes a suspended code-mode run when nested tool calls are still
+- MCP tools are grouped under the `MCP` namespace and discoverable by task
+  through `catalog.search(...)`. MCP search handles call the same namespace
+  path and point to its exact declarations.
+- `wait` resumes a suspended Code Mode run when nested tool calls are still
   pending.
 
-Call `wait` only when the outer code-mode result has `status: "waiting"`, using
+Call `wait` only when the outer Code Mode result has `status: "waiting"`, using
 its top-level `runId`. A completed cell can return a background shell operation
-with its own `sessionId` inside `value`; use the enabled process-control tool
-inside a new `exec` to poll that operation. Its `sessionId` is not a code-mode
+with its own `sessionId` inside `value`. Use the enabled process-control tool
+inside a new `exec` to poll that operation. Its `sessionId` is not a Code Mode
 run ID.
 
 Code mode changes the model-facing orchestration surface only. It does not
@@ -105,10 +110,10 @@ behavior, or model selection.
 - Better orchestration: the model can use loops, joins, small transforms,
   conditional logic, and parallel nested tool calls inside one code cell.
 - Fewer model round trips: a declared output contract lets the model call and
-  transform a tool result in one `exec`; unknown outputs remain raw-first.
+  transform a tool result in one `exec`. Unknown outputs remain raw-first.
 - Provider neutral: works for OpenClaw, plugin, MCP, and client tools without
   depending on provider-native code execution.
-- Fails closed: if code mode is enabled but the QuickJS-WASI runtime is
+- Fails closed: if Code Mode is enabled but the selected executor is
   unavailable, the run fails instead of silently falling back to broad direct
   tool exposure.
 
@@ -118,7 +123,7 @@ the model needs to search, combine, and call several tools before answering.
 Keep direct tool exposure for a small catalog or a model that does not reliably
 write short programs. Use [Tool Search](/tools/tool-search) when you want a
 compact catalog but prefer structured search/describe/call controls instead of
-the QuickJS-WASI guest.
+JavaScript cells.
 
 ## Technical tour
 

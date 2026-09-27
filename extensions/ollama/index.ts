@@ -1024,7 +1024,7 @@ export default definePluginEntry({
             config: ctx.config ?? {},
             env: process.env,
             value: providerConfig.apiKey,
-            path: `models.providers.${ctx.provider}.apiKey`,
+            path: `models.providers[${JSON.stringify(ctx.provider)}].apiKey`,
             unresolvedReasonStyle: "detailed",
           });
           if (resolved.unresolvedRefReason) {

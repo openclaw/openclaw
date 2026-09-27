@@ -4,16 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import {
+  resolveBundledInstallPlanForCatalogEntry,
+  resolveBundledInstallPlanForNpmFailure,
+  resolvePluginInstallSourcePlan,
+} from "../plugins/install-source-plan.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import {
   resolveCatalogOfficialExternalInstallPlan,
   resolveCatalogOfficialExternalNpmPackageTrust,
 } from "../plugins/official-external-install-trust.js";
-import {
-  resolveBundledInstallPlanForCatalogEntry,
-  resolveBundledInstallPlanForNpmFailure,
-  resolvePluginInstallSourcePlan,
-} from "./plugin-install-plan.js";
 
 function createSourceCheckoutPlugin(pluginId: string): {
   packageRoot: string;
@@ -31,26 +31,25 @@ function createSourceCheckoutPlugin(pluginId: string): {
 }
 
 describe("plugin install plan helpers", () => {
-  it.each([
-    "clawhub:",
-    "clawhub:demo@",
-    "clawhub:@scope/pkg@",
-    "CLAWHUB:",
-    "ClAwHuB:demo@",
-    " clawhub:demo@ ",
-  ])("rejects the malformed explicit ClawHub selector %s before npm fallback", (raw) => {
-    expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toEqual({
-      ok: false,
-      error: `Unsupported ClawHub plugin spec: ${raw}`,
-    });
-  });
-
-  it.each(["clawhub:demo", "CLAWHUB:demo", "clawhub:@scope/pkg@1.2.3"])(
-    "keeps the valid explicit ClawHub selector %s on the ClawHub install path",
+  it.each(["clawhub:", "clawhub:@scope/pkg@", " ClAwHuB:demo@ "])(
+    "rejects the malformed explicit ClawHub selector %s before npm fallback",
     (raw) => {
+      expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toEqual({
+        ok: false,
+        error: `Unsupported ClawHub plugin spec: ${raw}`,
+      });
+    },
+  );
+
+  it.each([
+    ["CLAWHUB:demo", "demo", undefined],
+    ["clawhub:@scope/pkg@1.2.3", "@scope/pkg", "1.2.3"],
+  ])(
+    "keeps the valid explicit ClawHub selector %s on the ClawHub install path",
+    (raw, packageName, version) => {
       expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toMatchObject({
         ok: true,
-        request: { source: "clawhub", spec: raw },
+        request: { source: "clawhub", packageName, version },
       });
     },
   );
@@ -98,6 +97,25 @@ describe("plugin install plan helpers", () => {
           expectedIntegrity:
             "sha512-7kqdBIOF3SgDDoBoFtO6jxnxofbYSgbKdxZDNabD0y0jg2xKcVqlXZOOJ9+XQho/QOtIFrnRH2IRnPukFEYwJg==",
         }),
+      ],
+    });
+  });
+
+  it("resolves Telnyx to its integrity-pinned npm artifact", () => {
+    expect(resolveCatalogOfficialExternalInstallPlan("telnyx")).toEqual({
+      pluginId: "telnyx",
+      spec: "@telnyx/openclaw-provider@0.2.0",
+      installSources: [
+        {
+          source: "npm",
+          spec: "@telnyx/openclaw-provider@0.2.0",
+          expectedIntegrity:
+            "sha512-htqOJfPx+TlLWE/nmpdJJVgrg8zDqRIX87smzY3CnKcdJPlx51Rc1kWzarvE+2hvhpm2lzD5sKkxRSIWKz2AaA==",
+        },
+        {
+          source: "clawhub",
+          spec: "clawhub:@telnyx/openclaw-provider@0.2.0",
+        },
       ],
     });
   });

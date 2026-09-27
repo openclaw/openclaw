@@ -13,6 +13,12 @@ import { asNonArrayRecord, filterStringEntries } from "openclaw/plugin-sdk/strin
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const BASETEN_MANIFEST_CATALOG = manifest.modelCatalog.providers.baseten;
+const BASETEN_MODEL_COMPAT = new Map(
+  buildManifestModelProviderConfig({
+    providerId: "baseten",
+    catalog: BASETEN_MANIFEST_CATALOG,
+  }).models.map(({ id, compat }) => [id, compat]),
+);
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
 
@@ -24,14 +30,6 @@ const CHAT_TEMPLATE_THINKING_MODEL_IDS = new Set([
   "moonshotai/kimi-k2.7-code",
   "nvidia/nvidia-nemotron-3-ultra-550b-a55b",
 ]);
-
-const FULL_REASONING_EFFORT_MODEL_IDS = new Set([
-  "deepseek-ai/DeepSeek-V4-Pro",
-  "openai/gpt-oss-120b",
-]);
-
-const INKLING_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
-const FULL_REASONING_EFFORTS = [...INKLING_REASONING_EFFORTS, "max"];
 
 const BASE_COMPAT: ModelCompatConfig = {
   supportsStore: false,
@@ -56,53 +54,11 @@ export function usesBasetenChatTemplateThinking(modelId: string): boolean {
   return CHAT_TEMPLATE_THINKING_MODEL_IDS.has(modelId.trim().toLowerCase());
 }
 
-function buildBasetenReasoningCompat(modelId: string): ModelCompatConfig {
-  if (FULL_REASONING_EFFORT_MODEL_IDS.has(modelId)) {
-    return {
-      supportsReasoningEffort: true,
-      supportedReasoningEfforts: FULL_REASONING_EFFORTS,
-      reasoningEffortMap: {
-        off: "none",
-        none: "none",
-        adaptive: "max",
-      },
-    };
-  }
-  if (modelId === BASETEN_DEFAULT_MODEL_ID) {
-    return {
-      supportsReasoningEffort: true,
-      supportedReasoningEfforts: INKLING_REASONING_EFFORTS,
-      reasoningEffortMap: {
-        off: "none",
-        none: "none",
-        adaptive: "xhigh",
-        max: "xhigh",
-      },
-    };
-  }
-  if (modelId === "zai-org/GLM-5.2" || modelId === "zai-org/GLM-5.2-Fast") {
-    return {
-      supportsReasoningEffort: true,
-      supportedReasoningEfforts: ["none", "high", "max"],
-      reasoningEffortMap: {
-        off: "none",
-        none: "none",
-        minimal: "high",
-        low: "high",
-        medium: "high",
-        xhigh: "high",
-        adaptive: "max",
-      },
-    };
-  }
-  return {};
-}
-
 /** Complete OpenAI-compatible transport policy for one Baseten model. */
 export function buildBasetenModelCompat(modelId: string): ModelCompatConfig {
   return {
     ...BASE_COMPAT,
-    ...buildBasetenReasoningCompat(modelId),
+    ...structuredClone(BASETEN_MODEL_COMPAT.get(modelId)),
   };
 }
 

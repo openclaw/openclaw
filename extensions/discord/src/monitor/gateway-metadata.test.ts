@@ -1,6 +1,7 @@
 // Discord tests cover gateway metadata plugin behavior.
 import { createServer, type Server } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import {
   fetchDiscordGatewayInfoWithTimeout,
   fetchDiscordGatewayMetadataGuarded,
@@ -95,11 +96,7 @@ describe("Discord gateway metadata", () => {
         }),
       timeoutMs: 1_000,
     }).catch((err: unknown) => err);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
 
     const resolved = resolveGatewayInfoWithFallback({ runtime, error });
 

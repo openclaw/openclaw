@@ -12,16 +12,14 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   disconnectUserGitHubConnection,
   readUserGitHubConnection,
   updateUserGitHubConnection,
 } from "../state/user-github-connections.js";
-import { linkEmail } from "../state/user-profiles.js";
+import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   readPersonalGitHubPublication,
   requirePersonalGitHubPublicationConfirmation,
@@ -48,7 +46,6 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   persistPublicationTestSession,
-  root,
 } from "./github-publication.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
@@ -58,6 +55,7 @@ import {
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 const mocks = githubPublicationTestMocks();
 
@@ -443,7 +441,7 @@ describe("personal publication authority and recovery", () => {
       ),
     ).toThrow("not found");
     const count = commands.length;
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     coordinator = createTestGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
     });
@@ -476,7 +474,7 @@ describe("personal publication authority and recovery", () => {
     async (state) => {
       let selectedAction = action;
       if (state === "turn") {
-        placements.claimTurn({
+        await placements.claimTurn({
           ...action,
           claimId: "busy",
           runId: "busy-run",
@@ -484,10 +482,16 @@ describe("personal publication authority and recovery", () => {
         });
       }
       if (state === "remote" || state === "reconciliation") {
-        const active = seedActivePlacement(placements, { environmentId: "remote", ownerEpoch: 1 });
+        const worker = {
+          environmentId: "remote",
+          sessionId: REQUEST.sessionId,
+          ownerEpoch: 1,
+        };
+        seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), worker);
+        const active = await seedActivePlacement(placements, worker);
         selectedAction = { ...action, sessionId: active.sessionId, sessionKey: REQUEST.sessionKey };
         if (state === "reconciliation") {
-          const claim = placements.claimTurn({
+          const claim = await placements.claimTurn({
             ...active,
             claimId: "pending",
             runId: "pending-run",
@@ -516,14 +520,14 @@ describe("personal publication authority and recovery", () => {
     const pending = coordinator.requestPersonalForSession(request(), action);
     await Promise.race([entered.promise, pending]);
     try {
-      expect(() =>
+      await expect(
         placements.claimTurn({
           ...action,
           claimId: "later",
           runId: "later-run",
           owner: { kind: "local" },
         }),
-      ).toThrow("being published");
+      ).rejects.toThrow("being published");
       await expect(acquireWorktreeRunLease("worktree-1")).rejects.toThrow("in use");
       await expect(
         coordinator.requestPersonalForSession(
@@ -542,13 +546,13 @@ describe("personal publication authority and recovery", () => {
       release.resolve();
     }
     await expect(pending).resolves.toMatchObject({ status: "published" });
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       ...action,
       claimId: "after",
       runId: "after-run",
       owner: { kind: "local" },
     });
-    placements.releaseTurn(claim);
+    await placements.releaseTurn(claim);
   });
 
   it.each(["socket", "scope", "disconnect", "reconnect", "merge", "session"] as const)(
@@ -574,7 +578,7 @@ describe("personal publication authority and recovery", () => {
             );
           }
           if (race === "merge") {
-            linkEmail("alice@example.test", otherOwner);
+            await linkCanonicalUserProfileEmail("alice@example.test", otherOwner);
           }
           if (race === "session") {
             const original = mocks.loadSession.getMockImplementation()!;
@@ -683,7 +687,7 @@ describe("personal publication authority and recovery", () => {
       publisher: { source: "personal", ...account },
     });
     const count = commands.length;
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
     coordinator = createTestGitHubPublicationCoordinator({ placements });
     requirePersonalGitHubPublicationConfirmation(placements.workspaceResultInstanceId());
@@ -992,7 +996,8 @@ describe("personal publication authority and recovery", () => {
     expect(receipt?.status).toBe("published");
     const binding = { publicationKind: "personal" as const, requestId: result.requestId };
     const originalLifecycle = readGitHubPublicationSessionLifecycle(binding);
-    expect(originalLifecycle).toEqual({ lifecycle_revision: session.read().lifecycleRevision });
+    const lifecycle_revision = session.read().lifecycleRevision;
+    expect(originalLifecycle).toEqual({ lifecycle_revision, requester_authority_json: null });
     await session.reset(placements);
     expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toEqual(receipt);
     expect(
@@ -1003,7 +1008,7 @@ describe("personal publication authority and recovery", () => {
         })
       )[1],
     ).toMatchObject({ result: { status: "published" }, confirmation: null });
-    const storePath = path.join(root, "sessions.json");
+    const storePath = session.storePath;
     await patchSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY, storePath }, () => ({
       archivedAt: Date.now(),
     }));

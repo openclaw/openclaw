@@ -1,4 +1,3 @@
-// Line plugin module implements common behavior.
 import type { FlexBox, FlexBubble, FlexText } from "./types.js";
 
 export function attachFooterText(bubble: FlexBubble, footer: string) {

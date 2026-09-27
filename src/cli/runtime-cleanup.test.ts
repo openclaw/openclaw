@@ -4,6 +4,13 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeCliResources, getPendingCliDisposers } from "./runtime-cleanup.js";
 
 const memoryClosed = vi.hoisted(() => vi.fn(async () => {}));
+const databasesClosed = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../state/openclaw-agent-db-resources.js", () => ({
+  hasOpenClawAgentDatabaseAsyncResources: () => true,
+}));
+vi.mock("../state/openclaw-agent-db-lifecycle.js", () => ({
+  closeOpenClawAgentDatabasesAsync: databasesClosed,
+}));
 vi.mock("../agents/harness/registry.js", () => ({
   listRegisteredAgentHarnesses: () => [],
   disposeRegisteredAgentHarnesses: async () => {},
@@ -24,6 +31,7 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 beforeEach(() => {
   vi.useFakeTimers();
   memoryClosed.mockClear();
+  databasesClosed.mockClear();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -56,6 +64,7 @@ it("continues later cleanup when a harness disposer never settles", async () => 
     await vi.advanceTimersByTimeAsync(5_000);
     await closing;
     expect(memoryClosed).toHaveBeenCalledOnce();
+    expect(databasesClosed).toHaveBeenCalledOnce();
     expect(getPendingCliDisposers()).toEqual(["agent-harness/stalled-fixture"]);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining("agent-harness/stalled-fixture"));
   } finally {

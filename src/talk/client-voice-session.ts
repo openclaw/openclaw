@@ -16,8 +16,11 @@ import {
 } from "../infra/diagnostic-events.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
+  type ClientVoiceConfirmationUtteranceContext,
   deactivateClientVoiceConfirmationSession,
   noteClientVoiceConfirmationUtterance,
+  prepareClientVoiceConfirmationTranscript,
+  recordClientVoiceConfirmationTranscriptAppend,
   releaseClientVoiceConfirmationRun,
 } from "./client-voice-confirmation.js";
 import {
@@ -40,10 +43,12 @@ import {
   writeVoiceSessionRecordInTransaction as writeRecordInTransaction,
 } from "./client-voice-session-store.js";
 import {
+  buildPersistedVoiceMessage,
   createVoiceTranscriptOperationRegistry,
   normalizeVoiceTranscriptText,
   VOICE_TRANSCRIPT_MAX_UNRESOLVED,
   VOICE_TRANSCRIPT_QUEUE_POLICY,
+  voiceTranscriptEventId,
 } from "./voice-transcript.js";
 
 const voiceSessionByRunId = new Map<string, ClientVoiceRunBinding>();
@@ -222,7 +227,6 @@ export function createOrResumeClientVoiceSession(params: {
   );
   return voiceSessionId;
 }
-
 /** Read the canonical agent-session id without creating state during provider startup. */
 export function resolveClientVoiceAgentSessionId(params: {
   agentId: string;
@@ -417,33 +421,6 @@ export function resolveOpenClientVoiceSessionId(params: {
   return match;
 }
 
-function buildPersistedVoiceMessage(params: {
-  role: "user" | "assistant";
-  text: string;
-  timestamp: number;
-  provider: string;
-}): Record<string, unknown> {
-  const provenance = { kind: "realtime_voice", sourceChannel: "talk" };
-  if (params.role === "user") {
-    return {
-      role: "user",
-      content: [{ type: "text", text: params.text }],
-      timestamp: params.timestamp,
-      provenance,
-    };
-  }
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: params.text }],
-    api: "realtime",
-    provider: params.provider,
-    model: "realtime-voice",
-    stopReason: "stop",
-    timestamp: params.timestamp,
-    provenance,
-  };
-}
-
 function transcriptFailureKey(entryId: string): string {
   return createHash("sha256").update(entryId, "utf8").digest("hex");
 }
@@ -459,12 +436,22 @@ function appendVoiceTranscript(params: {
   text: string;
   timestamp?: number;
   config?: OpenClawConfig;
+  confirmation?: ClientVoiceConfirmationUtteranceContext | null;
 }): Promise<void> {
   // Normalize before admission so the queued task retains only bounded text.
   const normalized = { ...params, text: normalizeVoiceTranscriptText(params.text) };
   if (!normalized.text) {
     return Promise.resolve();
   }
+  const confirmation =
+    normalized.role === "user"
+      ? prepareClientVoiceConfirmationTranscript({
+          agentId: normalized.agentId,
+          voiceSessionId: normalized.voiceSessionId,
+          entryId: normalized.entryId,
+          confirmation: normalized.confirmation,
+        })
+      : null;
   return runVoiceSessionOperation(
     normalized.agentId,
     normalized.voiceSessionId,
@@ -494,8 +481,7 @@ function appendVoiceTranscript(params: {
       if (!sessionEntry?.sessionId) {
         throw new Error(`agent session not found (${normalized.sessionKey})`);
       }
-      const observedAt = Date.now();
-      const timestamp = normalized.timestamp ?? observedAt;
+      const timestamp = normalized.timestamp ?? Date.now();
       // Reserve before the fallible append. A crash can leave a conservative
       // retry requirement, but can never let close skip an accepted entry.
       runOpenClawAgentWriteTransaction(
@@ -517,7 +503,7 @@ function appendVoiceTranscript(params: {
         { ...sessionTarget, sessionId: sessionEntry.sessionId },
         {
           ...(normalized.config ? { config: normalized.config } : {}),
-          eventId: `voice:${normalized.voiceSessionId}:${normalized.entryId}`,
+          eventId: voiceTranscriptEventId(normalized.voiceSessionId, normalized.entryId),
           message: buildPersistedVoiceMessage({
             role: normalized.role,
             text: normalized.text,
@@ -528,6 +514,14 @@ function appendVoiceTranscript(params: {
         },
       );
       // Publish the committed row before fallible bookkeeping; a retry can deduplicate it.
+      if (confirmation) {
+        recordClientVoiceConfirmationTranscriptAppend({
+          confirmation,
+          entryId: normalized.entryId,
+          text: normalized.text,
+          appended: appended.appended,
+        });
+      }
       if (appended.appended) {
         await publishTranscriptUpdate(
           { ...sessionTarget, sessionId: sessionEntry.sessionId },
@@ -555,12 +549,12 @@ function appendVoiceTranscript(params: {
         },
         { agentId: normalized.agentId },
       );
-      if (normalized.role === "user") {
+      if (normalized.role === "user" && confirmation) {
         noteClientVoiceConfirmationUtterance({
           agentId: normalized.agentId,
           voiceSessionId: normalized.voiceSessionId,
-          text: normalized.text,
-          timestamp: observedAt,
+          timestamp: Date.now(),
+          confirmation,
         });
       }
     },

@@ -43,7 +43,7 @@ function prunePendingReactionPollTargets(nowMs = Date.now()): void {
   }
 }
 
-function resolvePendingReactionPollExpiry(
+export function resolveIMessageApprovalReactionPollExpiry(
   ttlMs: number | undefined,
 ): { ttlMs: number; expiresAtMs: number } | undefined {
   const nowMs = asDateTimestampMs(Date.now());
@@ -164,7 +164,7 @@ function readPersistedPollTarget(value: unknown): PendingIMessageApprovalReactio
   };
 }
 
-export function recordIMessageApprovalReactionPollTarget(params: {
+export async function recordIMessageApprovalReactionPollTarget(params: {
   keys: readonly string[];
   accountId: string;
   conversation: IMessageApprovalConversationKey;
@@ -172,12 +172,9 @@ export function recordIMessageApprovalReactionPollTarget(params: {
   approvalId: string;
   approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
-  ttlMs?: number;
-}): { ttlMs: number; expiresAtMs: number } | null {
-  const expiry = resolvePendingReactionPollExpiry(params.ttlMs);
-  if (!expiry || params.keys.length === 0) {
-    return null;
-  }
+  expiry: { ttlMs: number; expiresAtMs: number };
+}): Promise<void> {
+  const { expiry } = params;
   const target: PendingIMessageApprovalReactionPollTarget = {
     accountId: params.accountId,
     conversation: params.conversation,
@@ -188,22 +185,33 @@ export function recordIMessageApprovalReactionPollTarget(params: {
     expiresAtMs: expiry.expiresAtMs,
   };
   const store = getPendingReactionPollTargetStore();
+  const writes: Promise<void>[] = [];
   for (const key of params.keys) {
     pendingReactionPollTargets.set(key, target);
-    void store
-      ?.register(key, target, { ttlMs: expiry.ttlMs })
-      .catch(disablePendingReactionPollTargetStore);
+    if (store) {
+      writes.push(
+        store
+          .register(key, target, { ttlMs: expiry.ttlMs })
+          .catch(disablePendingReactionPollTargetStore),
+      );
+    }
   }
   prunePendingReactionPollTargets();
-  return expiry;
+  await Promise.all(writes);
 }
 
-export function deleteIMessageApprovalReactionPollTargets(keys: readonly string[]): void {
+export async function deleteIMessageApprovalReactionPollTargets(
+  keys: readonly string[],
+): Promise<void> {
   const store = getPendingReactionPollTargetStore();
+  const deletions: Promise<boolean | void>[] = [];
   for (const key of keys) {
     pendingReactionPollTargets.delete(key);
-    void store?.delete(key).catch(disablePendingReactionPollTargetStore);
+    if (store) {
+      deletions.push(store.delete(key).catch(disablePendingReactionPollTargetStore));
+    }
   }
+  await Promise.all(deletions);
 }
 
 export async function listPendingIMessageApprovalReactionPollTargets(params: {

@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import { terminalOpenResult } from "./terminal-panel.test-support.ts";
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -57,26 +59,6 @@ function terminalUploadFile(name: string, content: string): File {
     value: async () => new TextEncoder().encode(content).buffer,
   });
   return file;
-}
-
-function terminalOpenResult(sessionId: string) {
-  return {
-    sessionId,
-    agentId: "ops",
-    shell: "/bin/zsh",
-    cwd: "/work/ops",
-    confined: false,
-  };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
 }
 
 describe("OpenClawTerminalPanel upload lifecycle", () => {
@@ -184,7 +166,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     const controller = createTerminalController();
     createGhosttyTerminalMock.mockResolvedValue(controller);
     const requests: Array<{ method: string; params: unknown; signal?: AbortSignal }> = [];
-    const failedUpload = deferred<{ path: string; size: number }>();
+    const failedUpload = createDeferred<{ path: string; size: number }>();
     let notesAttempts = 0;
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
@@ -324,7 +306,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
   it("cancels an active batch without pasting staged paths", async () => {
     const controller = createTerminalController();
     createGhosttyTerminalMock.mockResolvedValue(controller);
-    const pendingUpload = deferred<{ path: string; size: number }>();
+    const pendingUpload = createDeferred<{ path: string; size: number }>();
     let uploadSignal: AbortSignal | undefined;
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
@@ -379,19 +361,13 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
   it("cancels a pending upload when its terminal tab closes", async () => {
     const controller = createTerminalController();
     createGhosttyTerminalMock.mockResolvedValue(controller);
-    const pendingUpload = deferred<{ path: string; size: number }>();
+    const pendingUpload = createDeferred<{ path: string; size: number }>();
     let uploadSignal: AbortSignal | undefined;
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
       request: async <T>(method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
         if (method === "terminal.open") {
-          return {
-            sessionId: "session-1",
-            agentId: "ops",
-            shell: "/bin/zsh",
-            cwd: "/work/ops",
-            confined: false,
-          } as T;
+          return terminalOpenResult("session-1") as T;
         }
         if (method === "terminal.upload") {
           uploadSignal = options?.signal;

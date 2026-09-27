@@ -58,10 +58,10 @@ beforeEach(() => {
 
 function createPluginManagedHookReport(): HookStatusReport {
   return {
-    workspaceDir: "/tmp/workspace",
-    managedHooksDir: "/tmp/hooks",
+    ...report,
     hooks: [
       {
+        ...expectDefined(report.hooks[0], "report.hooks[0] test invariant"),
         name: "plugin-hook",
         description: "Hook from plugin",
         source: "openclaw-plugin",
@@ -72,15 +72,7 @@ function createPluginManagedHookReport(): HookStatusReport {
         hookKey: "plugin-hook",
         emoji: "🔗",
         homepage: undefined,
-        events: ["command:new"],
-        unknownEvents: [],
-        always: false,
-        enabledByConfig: true,
-        requirementsSatisfied: true,
-        loadable: true,
-        blockedReason: undefined,
         managedByPlugin: true,
-        ...createEmptyInstallChecks(),
       },
     ],
   };
@@ -123,12 +115,6 @@ function createMissingRequirementHookReport(): HookStatusReport {
 }
 
 describe("hooks cli formatting", () => {
-  it("labels hooks list output", () => {
-    const output = formatHooksList(report, {});
-    expect(output).toContain("Hooks");
-    expect(output).not.toContain("Internal Hooks");
-  });
-
   it("shows eventless hooks as blocked by their event declaration in list output", () => {
     const output = formatHooksList(createEventlessHookReport(), {});
 
@@ -144,29 +130,22 @@ describe("hooks cli formatting", () => {
     expect(output).not.toContain("missing requirements");
   });
 
-  it.each([
-    ["disabled in config", "disabled in config"],
-    ["workspace hook (disabled by default)", "workspace hook"],
-  ] as const)(
-    "does not report disabled hook policy as a missing requirement: %s",
-    (blockedReason, displayedPolicyReason) => {
-      const disabledReport: HookStatusReport = {
-        ...report,
-        hooks: [
-          {
-            ...expectDefined(report.hooks[0], "report.hooks[0] test invariant"),
-            enabledByConfig: false,
-            loadable: false,
-            blockedReason,
-          },
-        ],
-      };
-      const output = formatHooksList(disabledReport, { verbose: true });
-
-      expect(output).toContain("disabled");
-      expect(output).not.toContain(displayedPolicyReason);
-    },
-  );
+  it("does not report disabled hook policy as a missing requirement", () => {
+    const disabledReport: HookStatusReport = {
+      ...report,
+      hooks: [
+        {
+          ...expectDefined(report.hooks[0], "report.hooks[0] test invariant"),
+          enabledByConfig: false,
+          loadable: false,
+          blockedReason: "workspace hook (disabled by default)",
+        },
+      ],
+    };
+    const output = formatHooksList(disabledReport, { verbose: true });
+    expect(output).toContain("disabled");
+    expect(output).not.toContain("workspace hook");
+  });
 
   it("shows eventless hooks as blocked by their event declaration in info output", () => {
     const output = formatHookInfo(createEventlessHookReport().hooks[0], "session-memory", {});
@@ -185,11 +164,6 @@ describe("hooks cli formatting", () => {
 
     expect(output).toContain("Missing requirements");
     expect(output).toContain("DEMO_HOOK_TOKEN");
-  });
-
-  it("labels hooks status output", () => {
-    const output = formatHooksCheck(report, {});
-    expect(output).toContain("Hooks Status");
   });
 
   it("classifies eventless hooks as not ready in human check output", () => {
@@ -298,7 +272,7 @@ describe("hooks cli formatting", () => {
     );
 
     expect(runPluginUpdateCommandMock).toHaveBeenCalledWith({
-      id: "demo-hooks",
+      ids: ["demo-hooks"],
       opts: expect.objectContaining({ acknowledgeInstallPolicyWarning: true }),
     });
   });

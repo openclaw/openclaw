@@ -1,49 +1,92 @@
 // Workboard tests cover gateway plugin behavior.
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
-import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
-import { WorkboardStore } from "./store.js";
+import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
-function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
-  const entries = new Map<string, T>();
-  return {
-    async register(key, value) {
-      entries.set(key, value);
-    },
-    async lookup(key) {
-      return entries.get(key);
-    },
-    async delete(key) {
-      return entries.delete(key);
-    },
-    async entries() {
-      return [...entries].flatMap(([key, value]) => (value ? [{ key, value }] : []));
-    },
+function createGatewayMethodCapture() {
+  type RegisteredMethod = {
+    handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+    opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
   };
+  const methods = new Map<string, RegisteredMethod>();
+  const api = {
+    runtime: {
+      state: {
+        openKeyedStore: vi.fn(),
+      },
+    },
+    registerGatewayMethod: vi.fn(
+      (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+        methods.set(method, { handler, opts });
+      },
+    ),
+  } as unknown as OpenClawPluginApi;
+  return { api, methods, registerGatewayMethod: api.registerGatewayMethod };
 }
 
 describe("workboard gateway methods", () => {
-  it("registers CRUD methods with read/write scopes", async () => {
-    type RegisteredMethod = {
-      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
-    };
-    const methods = new Map<string, RegisteredMethod>();
-    const api = {
-      runtime: {
-        state: {
-          openKeyedStore: vi.fn(() => createMemoryStore()),
+  it.each(["move", "archive", "delete"] as const)(
+    "returns a redacted conflict for stale %s requests",
+    async (action) => {
+      type Handler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      const methods = new Map<string, Handler>();
+      const store = createWorkboardSqliteTestStore();
+      const api = createTestPluginApi({
+        registerGatewayMethod: (name, handler) => {
+          methods.set(name, handler);
         },
-      },
-      registerGatewayMethod: vi.fn(
-        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
-          methods.set(method, { handler, opts });
+      });
+      registerWorkboardGatewayMethods({ api, store });
+      const base = await store.create({ title: "Shared card" });
+      const claimed = await store.claim(base.id, { ownerId: "main" });
+      const handler = methods.get(`workboard.cards.${action}`)!;
+      const respond = vi.fn();
+      await handler({
+        params: {
+          id: base.id,
+          status: "blocked",
+          position: 2000,
+          archived: true,
+          expectedUpdatedAt: base.updatedAt,
         },
-      ),
-    } as unknown as OpenClawPluginApi;
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "workboard_conflict",
+          details: {
+            type: "workboard_card_conflict",
+            card: expect.objectContaining({
+              id: base.id,
+              metadata: expect.objectContaining({
+                claim: expect.objectContaining({ token: "[redacted]" }),
+              }),
+            }),
+          },
+        }),
+      );
+      expect(JSON.stringify(respond.mock.calls)).not.toContain(claimed.token);
+      await expect(store.get(base.id)).resolves.toEqual(claimed.card);
+      const invalid = vi.fn();
+      await handler({
+        params: { id: base.id, expectedUpdatedAt: "stale" },
+        respond: invalid,
+      } as never);
+      expect(invalid.mock.calls[0]?.[2]?.message).toBe(
+        "expectedUpdatedAt must be a finite number.",
+      );
+      await expect(store.get(base.id)).resolves.toEqual(claimed.card);
+    },
+  );
 
-    const store = new WorkboardStore(createMemoryStore());
+  it("registers CRUD methods with read/write scopes", async () => {
+    const { api, methods } = createGatewayMethodCapture();
+
+    const store = createWorkboardSqliteTestStore();
     registerWorkboardGatewayMethods({ api, store });
 
     expect([...methods.keys()]).toEqual([
@@ -189,12 +232,8 @@ describe("workboard gateway methods", () => {
   });
 
   it("applies connected client workspace access when accepting card paths", async () => {
-    type RegisteredMethod = {
-      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
-    };
-    const methods = new Map<string, RegisteredMethod>();
-    const store = new WorkboardStore(createMemoryStore());
+    const { methods, registerGatewayMethod } = createGatewayMethodCapture();
+    const store = createWorkboardSqliteTestStore();
     const api = {
       runtime: {
         agent: {
@@ -202,11 +241,7 @@ describe("workboard gateway methods", () => {
           resolveAgentWorkspaceDir: vi.fn(() => "/workspace"),
         },
       },
-      registerGatewayMethod: vi.fn(
-        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
-          methods.set(method, { handler, opts });
-        },
-      ),
+      registerGatewayMethod,
     } as unknown as OpenClawPluginApi;
     registerWorkboardGatewayMethods({ api, store });
     const create = methods.get("workboard.cards.create")?.handler;
@@ -308,25 +343,9 @@ describe("workboard gateway methods", () => {
   });
 
   it("stores metadata updates through dedicated card methods", async () => {
-    type RegisteredMethod = {
-      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
-    };
-    const methods = new Map<string, RegisteredMethod>();
-    const api = {
-      runtime: {
-        state: {
-          openKeyedStore: vi.fn(() => createMemoryStore()),
-        },
-      },
-      registerGatewayMethod: vi.fn(
-        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
-          methods.set(method, { handler, opts });
-        },
-      ),
-    } as unknown as OpenClawPluginApi;
+    const { api, methods } = createGatewayMethodCapture();
 
-    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
+    registerWorkboardGatewayMethods({ api, store: createWorkboardSqliteTestStore() });
 
     const createRespond = vi.fn();
     await methods.get("workboard.cards.create")?.handler({
@@ -364,25 +383,9 @@ describe("workboard gateway methods", () => {
   });
 
   it("validates labels from comma-separated gateway input", async () => {
-    type RegisteredMethod = {
-      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
-    };
-    const methods = new Map<string, RegisteredMethod>();
-    const api = {
-      runtime: {
-        state: {
-          openKeyedStore: vi.fn(() => createMemoryStore()),
-        },
-      },
-      registerGatewayMethod: vi.fn(
-        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
-          methods.set(method, { handler, opts });
-        },
-      ),
-    } as unknown as OpenClawPluginApi;
+    const { api, methods } = createGatewayMethodCapture();
 
-    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
+    registerWorkboardGatewayMethods({ api, store: createWorkboardSqliteTestStore() });
 
     const createHandler = methods.get("workboard.cards.create")?.handler;
     const respond = vi.fn();
@@ -398,26 +401,18 @@ describe("workboard gateway methods", () => {
   });
 
   it("dispatches workboard cards when gateway params are omitted", async () => {
-    type RegisteredMethod = {
-      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
-    };
-    const methods = new Map<string, RegisteredMethod>();
+    const { methods, registerGatewayMethod } = createGatewayMethodCapture();
     const run = vi.fn().mockResolvedValue({ runId: "run-card" });
     const api = {
       runtime: {
         state: {
-          openKeyedStore: vi.fn(() => createMemoryStore()),
+          openKeyedStore: vi.fn(),
         },
         subagent: { run },
       },
-      registerGatewayMethod: vi.fn(
-        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
-          methods.set(method, { handler, opts });
-        },
-      ),
+      registerGatewayMethod,
     } as unknown as OpenClawPluginApi;
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Ready worker",
       status: "ready",
@@ -442,24 +437,16 @@ describe("workboard gateway methods", () => {
   });
 
   it("returns an actionable exact-card admission failure", async () => {
-    type RegisteredMethod = {
-      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
-    };
-    const methods = new Map<string, RegisteredMethod>();
+    const { methods, registerGatewayMethod } = createGatewayMethodCapture();
     const run = vi.fn();
     const api = {
       runtime: {
-        state: { openKeyedStore: vi.fn(() => createMemoryStore()) },
+        state: { openKeyedStore: vi.fn() },
         subagent: { run },
       },
-      registerGatewayMethod: vi.fn(
-        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
-          methods.set(method, { handler, opts });
-        },
-      ),
+      registerGatewayMethod,
     } as unknown as OpenClawPluginApi;
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Blocked exact start",
       status: "blocked",
@@ -486,24 +473,18 @@ describe("workboard gateway methods", () => {
   });
 
   it("threads maxStarts while the legacy method keeps its default cap", async () => {
-    type RegisteredMethod = {
-      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
-    };
-    const methods = new Map<string, RegisteredMethod>();
-    const run = vi.fn().mockResolvedValue({ runId: "run-card" });
+    const { methods, registerGatewayMethod } = createGatewayMethodCapture();
+    const run = vi.fn(async (input: { idempotencyKey: string }) => ({
+      runId: `accepted:${input.idempotencyKey}`,
+    }));
     const api = {
       runtime: {
-        state: { openKeyedStore: vi.fn(() => createMemoryStore()) },
+        state: { openKeyedStore: vi.fn() },
         subagent: { run },
       },
-      registerGatewayMethod: vi.fn(
-        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
-          methods.set(method, { handler, opts });
-        },
-      ),
+      registerGatewayMethod,
     } as unknown as OpenClawPluginApi;
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     await Promise.all(
       Array.from({ length: 5 }, (_, index) =>
         store.create({
@@ -544,6 +525,21 @@ describe("workboard gateway methods", () => {
       ?.handler({ params: { boardId: "legacy" }, respond: defaultRespond } as never);
     expect(defaultRespond.mock.calls[0]?.[1]?.started).toHaveLength(3);
     expect(run).toHaveBeenCalledTimes(7);
+    const startedCards = (await store.list()).filter((card) => card.status === "running");
+    expect(startedCards).toHaveLength(7);
+    const expectedRunIds = run.mock.calls.map(([input]) => `accepted:${input.idempotencyKey}`);
+    expect(startedCards.map((card) => card.runId)).toEqual(expect.arrayContaining(expectedRunIds));
+    for (const card of startedCards) {
+      const runId = card.runId;
+      expect(card).toMatchObject({
+        runId,
+        execution: { runId },
+        metadata: {
+          automation: { launch: { phase: "accepted", acceptedRunId: runId } },
+          attempts: [expect.objectContaining({ id: runId, runId })],
+        },
+      });
+    }
 
     const legacyRespond = vi.fn();
     await methods
@@ -565,11 +561,7 @@ describe("workboard gateway methods", () => {
   });
 
   it("keeps write-scope worktree dispatch within configured agent workspaces", async () => {
-    type RegisteredMethod = {
-      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
-    };
-    const methods = new Map<string, RegisteredMethod>();
+    const { methods, registerGatewayMethod } = createGatewayMethodCapture();
     const run = vi.fn().mockResolvedValue({ runId: "run-card" });
     const createWorktree = vi.fn().mockResolvedValue({
       id: "managed-id",
@@ -601,13 +593,9 @@ describe("workboard gateway methods", () => {
           removeIfLossless: vi.fn(),
         },
       },
-      registerGatewayMethod: vi.fn(
-        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
-          methods.set(method, { handler, opts });
-        },
-      ),
+      registerGatewayMethod,
     } as unknown as OpenClawPluginApi;
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const denied = await store.create({
       title: "Denied checkout",
       status: "ready",
@@ -683,25 +671,9 @@ describe("workboard gateway methods", () => {
   });
 
   it("claims, heartbeats, and bulk-updates cards through gateway methods", async () => {
-    type RegisteredMethod = {
-      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
-    };
-    const methods = new Map<string, RegisteredMethod>();
-    const api = {
-      runtime: {
-        state: {
-          openKeyedStore: vi.fn(() => createMemoryStore()),
-        },
-      },
-      registerGatewayMethod: vi.fn(
-        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
-          methods.set(method, { handler, opts });
-        },
-      ),
-    } as unknown as OpenClawPluginApi;
+    const { api, methods } = createGatewayMethodCapture();
 
-    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
+    registerWorkboardGatewayMethods({ api, store: createWorkboardSqliteTestStore() });
 
     const createRespond = vi.fn();
     await methods.get("workboard.cards.create")?.handler({

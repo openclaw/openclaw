@@ -7,7 +7,6 @@ import {
   resolvePluginActivationDecisionShared,
   toPluginActivationState,
   type PluginActivationConfigSourceLike,
-  type PluginActivationSource,
   type PluginActivationStateLike,
 } from "./config-activation-shared.js";
 import {
@@ -18,7 +17,6 @@ import {
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
-export type { PluginActivationSource };
 export type PluginActivationState = PluginActivationStateLike;
 
 export type PluginActivationConfigSource = {
@@ -41,6 +39,7 @@ const RETIRED_PLUGIN_IDS = new Set([
   "google-antigravity-auth",
   "google-gemini-cli-auth",
   "skill-workshop",
+  "webhooks",
 ]);
 
 /** Normalizes user/config plugin ids into the canonical lowercase key form. */
@@ -103,7 +102,9 @@ export function normalizePluginTargetConfig(
   if (hasTargetEntry) {
     const { config: pluginConfig, ...entry } = normalized.entries[normalizedId] ?? {};
     entries[normalizedId] = {
-      ...entry,
+      // Auth/setup compares this authored candidate after it is persisted as JSON.
+      // Absent optional runtime fields must not become non-round-trippable own keys.
+      ...Object.fromEntries(Object.entries(entry).filter(([, value]) => value !== undefined)),
       ...(isRecord(pluginConfig) ? { config: pluginConfig } : {}),
     };
   }
@@ -168,27 +169,14 @@ export function applyTestPluginDefaults(
   }
   const plugins = cfg.plugins;
   const explicitConfig = hasExplicitPluginConfig(plugins);
-  if (explicitConfig) {
-    if (hasExplicitMemorySlot(plugins) || hasExplicitMemoryEntry(plugins)) {
-      return cfg;
-    }
-    return {
-      ...cfg,
-      plugins: {
-        ...plugins,
-        slots: {
-          ...plugins?.slots,
-          memory: "none",
-        },
-      },
-    };
+  if (explicitConfig && (hasExplicitMemorySlot(plugins) || hasExplicitMemoryEntry(plugins))) {
+    return cfg;
   }
-
   return {
     ...cfg,
     plugins: {
       ...plugins,
-      enabled: false,
+      ...(!explicitConfig ? { enabled: false } : {}),
       slots: {
         ...plugins?.slots,
         memory: "none",
@@ -201,17 +189,14 @@ export function isTestDefaultMemorySlotDisabled(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  if (!env.VITEST) {
-    return false;
-  }
-  const plugins = cfg.plugins;
-  if (hasExplicitMemorySlot(plugins) || hasExplicitMemoryEntry(plugins)) {
-    return false;
-  }
-  return true;
+  return (
+    Boolean(env.VITEST) &&
+    !hasExplicitMemorySlot(cfg.plugins) &&
+    !hasExplicitMemoryEntry(cfg.plugins)
+  );
 }
 
-function resolvePluginActivationState(params: {
+export function resolveEffectivePluginActivationState(params: {
   id: string;
   origin: PluginOrigin;
   config: NormalizedPluginsConfig;
@@ -224,12 +209,6 @@ function resolvePluginActivationState(params: {
   return toPluginActivationState(
     resolvePluginActivationDecisionShared({
       ...params,
-      activationSource:
-        params.activationSource ??
-        createPluginActivationSource({
-          config: params.rootConfig,
-          plugins: params.config,
-        }),
       allowBundledChannelExplicitBypassesAllowlist: true,
       resolveChannelConfigEnablement,
     }),
@@ -246,7 +225,9 @@ export const resolveEnableState = (
   config: NormalizedPluginsConfig,
   enabledByDefault?: boolean,
 ): { enabled: boolean; reason?: string } =>
-  toEnableStateResult(resolvePluginActivationState({ id, origin, config, enabledByDefault }));
+  toEnableStateResult(
+    resolveEffectivePluginActivationState({ id, origin, config, enabledByDefault }),
+  );
 
 type EffectiveActivationParams = {
   id: string;
@@ -262,19 +243,6 @@ export const resolveEffectiveEnableState = (
   params: EffectiveActivationParams,
 ): { enabled: boolean; reason?: string } =>
   toEnableStateResult(resolveEffectivePluginActivationState(params));
-
-export function resolveEffectivePluginActivationState(params: {
-  id: EffectiveActivationParams["id"];
-  origin: EffectiveActivationParams["origin"];
-  config: EffectiveActivationParams["config"];
-  rootConfig?: EffectiveActivationParams["rootConfig"];
-  enabledByDefault?: EffectiveActivationParams["enabledByDefault"];
-  activationSource?: EffectiveActivationParams["activationSource"];
-  autoEnabledReason?: string;
-  channelIds?: EffectiveActivationParams["channelIds"];
-}): PluginActivationState {
-  return resolvePluginActivationState(params);
-}
 
 export function resolveMemorySlotDecision(params: {
   id: string;

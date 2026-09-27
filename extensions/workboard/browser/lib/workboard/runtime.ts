@@ -309,13 +309,16 @@ function createDefaultState(): WorkboardUiState {
     lastDispatchSummary: null,
     dispatching: false,
     query: "",
-    priorityFilter: "all",
+    searchOpen: false,
+    priorityFilter: new Set(),
+    statusFilter: new Set(),
+    attentionFilter: new Set(),
+    donePeriod: "all",
     agentFilter: "all",
     boardFilter: "__all__",
-    viewPreset: "all",
-    activeHealthHighlight: null,
     showArchived: false,
-    layout: "compact",
+    layout: "comfortable",
+    viewMode: "board",
     emptyColumnMode: "show",
     collapsedStatuses: new Set(),
     expandedEmptyStatuses: new Set(),
@@ -332,6 +335,7 @@ function createDefaultState(): WorkboardUiState {
     lifecycleConfirmedTaskIds: new Set(),
     lifecycleTaskConfirmationStartedAt: null,
     draftOpen: false,
+    draftDiscardOpen: false,
     draftSaving: false,
     editingCardId: null,
     editingCardBase: null,
@@ -345,9 +349,17 @@ function createDefaultState(): WorkboardUiState {
     draftTemplateId: "",
     draftCommentBody: "",
     detailCardId: null,
+    detailTab: "overview",
     detailCommentBody: "",
+    detailCommentDrafts: new Map(),
     busyCardIds: new Set(),
+    selectedCardIds: new Set(),
+    bulkDialog: null,
+    bulkSaving: false,
+    bulkResult: null,
     draggedCardId: null,
+    dragOverStatus: null,
+    dragBeforeCardId: null,
     capturingSessionKeys: new Set(),
   };
 }
@@ -372,7 +384,12 @@ export function workboardMutationsReady(state: WorkboardUiState): boolean {
 }
 
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
-  return Boolean(state.draftSaving || state.busyCardIds.size || state.capturingSessionKeys.size);
+  return Boolean(
+    state.bulkSaving ||
+    state.draftSaving ||
+    state.busyCardIds.size ||
+    state.capturingSessionKeys.size,
+  );
 }
 
 function workboardHasActiveLoad(host: WorkboardHost): boolean {

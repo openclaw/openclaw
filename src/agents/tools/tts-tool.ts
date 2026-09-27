@@ -22,12 +22,6 @@ const TtsToolSchema = Type.Object({
   ),
 });
 
-function readTtsTimeoutMs(args: Record<string, unknown>): number | undefined {
-  return readPositiveIntegerParam(args, "timeoutMs", {
-    message: "timeoutMs must be a positive integer in milliseconds.",
-  });
-}
-
 /**
  * Defuse reply-directive tokens inside spoken transcripts before they flow
  * through tool-result content. Insert a zero-width word joiner so transcript
@@ -60,7 +54,9 @@ export function createTtsTool(opts?: {
       const params = args as Record<string, unknown>;
       const text = readToolStringParam(params, "text", { required: true });
       const channel = readToolStringParam(params, "channel");
-      const timeoutMs = readTtsTimeoutMs(params);
+      const timeoutMs = readPositiveIntegerParam(params, "timeoutMs", {
+        message: "timeoutMs must be a positive integer in milliseconds.",
+      });
       const cfg = opts?.config ?? getRuntimeConfig();
       const result = await textToSpeech({
         text,

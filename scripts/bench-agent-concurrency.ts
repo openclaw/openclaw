@@ -322,6 +322,7 @@ function parseWorkerProcessResult(
 function runWorker(options: Options, scenario: WorkerScenario, size: number): WorkerResult {
   return runBenchmarkWorker({
     args: [
+      "--experimental-test-module-mocks",
       "--import",
       "tsx",
       "scripts/bench-agent-concurrency-worker.ts",

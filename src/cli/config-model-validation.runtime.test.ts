@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import {
   acquireReadOnlyPreparedModelRuntime,
@@ -35,7 +36,13 @@ async function withProviderFixtures(
     config: OpenClawConfig;
     state: OpenClawTestState;
     imported: (provider: string) => boolean;
+    resolved: (provider: string) => unknown;
   }) => Promise<void>,
+  options: {
+    aliases?: Record<string, string>;
+    runtimeAliases?: Record<string, string>;
+    provider?: string;
+  } = {},
 ) {
   await withOpenClawTestState(
     {
@@ -47,12 +54,36 @@ async function withProviderFixtures(
     },
     async (state) => {
       const imported = (provider: string) => fs.existsSync(state.path(`${provider}.imported`));
-      const plugins = providerIds.map((id) => {
+      const resolved = (provider: string): unknown => {
+        const file = state.path(`${provider}.resolved`);
+        return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : undefined;
+      };
+      const normalizationProvider = options.provider ?? "pin-alpha";
+      const fixtureProviderIds = [normalizationProvider, "pin-beta", "pin-unrelated"];
+      const plugins = fixtureProviderIds.map((id) => {
+        const modelContexts =
+          id === normalizationProvider && (options.aliases || options.runtimeAliases)
+            ? {
+                "exact-supported": 65536,
+                middle: 32000,
+                final: 4096,
+                ...(options.runtimeAliases
+                  ? {
+                      entry: 12000,
+                      "runtime-selected": 48000,
+                      "middle-runtime": 64000,
+                      "final-runtime": 96000,
+                    }
+                  : {}),
+              }
+            : { "exact-supported": 32000 };
         const plugin = writePlugin({
           id,
           dir: state.path("plugins", id),
           body: `
 const fs = require("node:fs");
+const modelContexts = ${JSON.stringify(modelContexts)};
+const runtimeAliases = ${JSON.stringify(id === normalizationProvider ? options.runtimeAliases : undefined)};
 fs.writeFileSync(${JSON.stringify(state.path(`${id}.imported`))}, "loaded");
 module.exports = {
   id: ${JSON.stringify(id)},
@@ -61,11 +92,19 @@ module.exports = {
       id: ${JSON.stringify(id)},
       label: ${JSON.stringify(id)},
       auth: [],
+      ...(runtimeAliases ? { normalizeModelId({ modelId }) { return runtimeAliases[modelId]; } } : {}),
+      normalizeResolvedModel({ model }) {
+        fs.writeFileSync(${JSON.stringify(state.path(`${id}.resolved`))}, JSON.stringify({
+          provider: model.provider, id: model.id, contextWindow: model.contextWindow,
+        }));
+        return model;
+      },
       resolveDynamicModel({ modelId }) {
         if (modelId === "resolution-error") {
           throw new Error("fixture dynamic resolution failed");
         }
-        if (modelId !== "exact-supported") return undefined;
+        const contextWindow = modelContexts[modelId];
+        if (contextWindow === undefined) return undefined;
         return {
           id: modelId,
           name: modelId,
@@ -74,7 +113,7 @@ module.exports = {
           baseUrl: "https://provider.invalid/v1",
           reasoning: false,
           input: ["text"],
-          contextWindow: 32000,
+          contextWindow,
           maxTokens: 4096,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         };
@@ -90,6 +129,9 @@ module.exports = {
             configSchema: { type: "object", additionalProperties: false, properties: {} },
             providers: [id],
             modelCatalog: { providers: { [id]: { models: [{ id: "catalog-model" }] } } },
+            ...(id === normalizationProvider && options.aliases
+              ? { modelIdNormalization: { providers: { [id]: { aliases: options.aliases } } } }
+              : {}),
           }),
         );
         return plugin;
@@ -100,13 +142,13 @@ module.exports = {
           entries: { main: { default: true } },
         },
         plugins: {
-          allow: [...providerIds],
+          allow: fixtureProviderIds,
           load: { paths: plugins.map((plugin) => plugin.file) },
-          entries: Object.fromEntries(providerIds.map((id) => [id, { enabled: true }])),
+          entries: Object.fromEntries(fixtureProviderIds.map((id) => [id, { enabled: true }])),
         },
       };
       try {
-        await run({ config, state, imported });
+        await run({ config, state, imported, resolved });
       } finally {
         await clearRuntimeState();
       }
@@ -132,6 +174,126 @@ describe("config model validation with provider runtime", () => {
   });
 
   afterAll(cleanupPluginLoaderFixturesForTest);
+
+  it.each(
+    (["primary", "fallback"] as const).flatMap((kind) =>
+      [
+        { input: "entry", expected: "middle", contextWindow: 32000 },
+        { input: "middle", expected: "final", contextWindow: 4096 },
+        { input: "exact-supported", expected: "exact-supported", contextWindow: 65536 },
+      ].map((model) => Object.assign({ kind }, model)),
+    ),
+  )(
+    "materializes cold $kind input $input exactly once",
+    async ({ kind, input, expected, contextWindow }) => {
+      await withProviderFixtures(
+        async ({ config, imported, resolved }) => {
+          const value = `pin-alpha/${input}`;
+          config.agents!.defaults!.model =
+            kind === "primary" ? { primary: value } : { primary, fallbacks: [value] };
+          const original = structuredClone(config);
+          expect(providerIds.some(imported)).toBe(false);
+
+          const result = await checkTouchedTextModelRefs({
+            config,
+            touchedPaths: [
+              ["agents", "defaults", "model", kind === "primary" ? "primary" : "fallbacks"],
+            ],
+          });
+
+          expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+          expect(resolved("pin-alpha")).toEqual({
+            provider: "pin-alpha",
+            id: expected,
+            contextWindow,
+          });
+          expect(config).toEqual(original);
+          expect(imported("pin-unrelated")).toBe(false);
+        },
+        { aliases: { entry: "middle", middle: "final" } },
+      );
+    },
+  );
+
+  it.each(
+    (["primary", "fallback"] as const).flatMap((kind) =>
+      [
+        { ambient: "matching", mixed: false, expected: "runtime-selected", contextWindow: 48000 },
+        { ambient: "matching", mixed: true, expected: "middle-runtime", contextWindow: 64000 },
+        { ambient: "foreign", mixed: false, expected: "entry", contextWindow: 12000 },
+        { ambient: "foreign", mixed: true, expected: "middle", contextWindow: 32000 },
+      ].map((mode) => Object.assign({ kind }, mode)),
+    ),
+  )(
+    "applies manifest normalization before runtime hooks for $kind ($ambient, mixed: $mixed)",
+    async ({ kind, ambient, mixed, expected, contextWindow }) => {
+      await withProviderFixtures(
+        async ({ config, state, imported, resolved }) => {
+          config.agents!.defaults!.model =
+            kind === "primary"
+              ? { primary: "pin-alpha/entry" }
+              : { primary, fallbacks: ["pin-alpha/entry"] };
+          const original = structuredClone(config);
+          const ambientConfig = structuredClone(config);
+          if (ambient === "foreign") {
+            ambientConfig.plugins!.entries!["pin-alpha"] = { enabled: false };
+          }
+          loadOpenClawPlugins({
+            config: ambientConfig,
+            workspaceDir: state.workspaceDir,
+            onlyPluginIds: [ambient === "matching" ? "pin-alpha" : "pin-beta"],
+            activate: true,
+          });
+
+          const result = await checkTouchedTextModelRefs({
+            config,
+            touchedPaths: [
+              ["agents", "defaults", "model", kind === "primary" ? "primary" : "fallbacks"],
+            ],
+          });
+
+          expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+          expect(resolved("pin-alpha")).toEqual({
+            provider: "pin-alpha",
+            id: expected,
+            contextWindow,
+          });
+          expect(config).toEqual(original);
+          expect(imported("pin-unrelated")).toBe(false);
+        },
+        {
+          ...(mixed ? { aliases: { entry: "middle", middle: "final" } } : {}),
+          runtimeAliases: {
+            entry: "runtime-selected",
+            middle: "middle-runtime",
+            final: "final-runtime",
+          },
+        },
+      );
+    },
+  );
+
+  it("normalizes an unqualified primary through the default provider before validation", async () => {
+    await withProviderFixtures(
+      async ({ config, resolved, imported }) => {
+        config.agents!.defaults!.model = { primary: "entry" };
+        const original = structuredClone(config);
+        const result = await checkTouchedTextModelRefs({
+          config,
+          touchedPaths: [["agents", "defaults", "model", "primary"]],
+        });
+        expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+        expect(resolved(DEFAULT_PROVIDER)).toEqual({
+          provider: DEFAULT_PROVIDER,
+          id: "middle",
+          contextWindow: 32000,
+        });
+        expect(config).toEqual(original);
+        expect(imported("pin-unrelated")).toBe(false);
+      },
+      { provider: DEFAULT_PROVIDER, aliases: { entry: "middle", middle: "final" } },
+    );
+  });
 
   it("resolves an uncataloged fixture pin when its provider runtime is prepared", async () => {
     await withProviderFixtures(async ({ config, state, imported }) => {
@@ -166,7 +328,7 @@ describe("config model validation with provider runtime", () => {
         expect(imported("pin-beta")).toBe(false);
         expect(imported("pin-unrelated")).toBe(false);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
     });
   });

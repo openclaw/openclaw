@@ -50,7 +50,7 @@ citations.
                 id: "GEMINI_GATEWAY_TOKEN",
               },
             },
-            model: "gemini-2.5-flash", // default
+            model: "gemini-3.6-flash", // default
           },
         },
       },
@@ -127,9 +127,13 @@ query instead of a hard 24-hour range. `week`, `month`, `year`, and explicit
 
 ## Model selection
 
-The default model is `gemini-2.5-flash` (fast and cost-effective). Any Gemini
-model that supports grounding can be used via
-`plugins.entries.google.config.webSearch.model`.
+The default model is the stable `gemini-3.6-flash`. Omitting
+`plugins.entries.google.config.webSearch.model` uses this default; an explicit
+model stays pinned. You can select any Gemini model that supports grounding and
+is available to your API key.
+
+Gemini 3 grounding is billed per search query, while Gemini 2.5 grounding is
+billed per prompt. See [Google Search grounding pricing](https://ai.google.dev/gemini-api/docs/google-search#pricing).
 
 ## Base URL overrides
 
@@ -145,3 +149,4 @@ as provided after trimming trailing slashes.
 - [Web Search overview](/tools/web) -- all providers and auto-detection
 - [Brave Search](/tools/brave-search) -- structured results with snippets
 - [Perplexity Search](/tools/perplexity-search) -- structured results with domain filtering
+- [Kimi search](/tools/kimi-search) -- Kimi web search via Moonshot

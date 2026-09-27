@@ -4,12 +4,15 @@ import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
 } from "../../../config/config.js";
+import { callGateway } from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
+import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import {
@@ -22,17 +25,15 @@ import * as privateStores from "../../../infra/private-file-store.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import {
   captureActivePluginRegistrySnapshot,
+  getActivePluginRegistry,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
-import * as taskControlRuntime from "../../../tasks/task-registry-control.runtime.js";
-import {
-  resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryControlRuntimeForTests,
-} from "../../../tasks/task-registry.test-support.js";
+import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
+import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -44,16 +45,38 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
-import {
-  resetSubagentRegistryForTests,
-  testing as registryTesting,
-} from "../registry/subagent-registry.test-helpers.js";
+import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
+
+vi.mock("../../runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle:
+    vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
+}));
+vi.mock("../../../gateway/call.js", { spy: true });
+
+export async function waitForSubagentCleanupCompleted(entry: SubagentRunRecord) {
+  const completed = createDeferred();
+  const inspect = () => {
+    if (typeof entry.cleanupCompletedAt === "number") {
+      completed.resolve();
+    }
+  };
+  const unsubscribe = onSubagentRegistryPersisted(inspect);
+  try {
+    inspect();
+    await completed.promise;
+  } finally {
+    unsubscribe();
+  }
+}
 
 export function installSpawnThreadBindingFixture(
   onBound?: (binding: SessionBindingRecord) => Promise<void>,
@@ -129,13 +152,13 @@ export function installSpawnAttachmentFixture(params: {
   entered: () => void;
   release: Promise<void>;
 }) {
-  const root = path.join(params.stateDir, ".openclaw", "attachments");
+  const root = path.join(params.stateDir, "attachments", "subagents", "main");
   const lateWrites: string[] = [];
   const attachmentDirs: string[] = [];
   const mkdir = fs.mkdir;
   const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
     const result = await mkdir(...args);
-    if (typeof args[0] === "string" && path.dirname(args[0]) === root) {
+    if (typeof args[0] === "string" && path.dirname(path.dirname(args[0])) === root) {
       attachmentDirs.push(args[0]);
       if (!getAdmittedRunDelegatedAuthority(params.admitted)) {
         lateWrites.push("directory");
@@ -156,12 +179,16 @@ export function installSpawnAttachmentFixture(params: {
     return {
       ...store,
       writeText: async (...args) => {
+        const attachmentDir = path.join(rootDir, args[0].split("/")[0] ?? "");
+        if (!attachmentDirs.includes(attachmentDir)) {
+          attachmentDirs.push(attachmentDir);
+        }
         if (!getAdmittedRunDelegatedAuthority(params.admitted)) {
           lateWrites.push("content");
         }
         const result = await store.writeText(...args);
         expect(await fs.readFile(path.join(rootDir, args[0]), "utf8")).toBe("synthetic attachment");
-        if (params.pauseAt === "files") {
+        if (params.pauseAt === "directory" || params.pauseAt === "files") {
           params.entered();
           await params.release;
         }
@@ -192,8 +219,14 @@ export function installSpawnAuthorityFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
   let pluginSnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
+  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
 
   beforeEach(async () => {
+    // Failed cleanup retains the prior owner instead of replacing its live stores.
+    if (stateDir) {
+      throw new Error("Previous spawn authority fixture cleanup is incomplete");
+    }
     pluginSnapshot = captureActivePluginRegistrySnapshot();
     stateDir = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-spawn-authority-")));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -217,36 +250,61 @@ export function installSpawnAuthorityFixture() {
     resetSubagentRegistryForTests({ persist: false });
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
-    // The source test supplies the real ESM owner through the existing CJS runtime seam.
-    setTaskRegistryControlRuntimeForTests(taskControlRuntime);
-    registryTesting.setDepsForTest({
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      callGateway: async (request) => {
-        if (request.method !== "agent.wait") {
-          throw new Error(`Unexpected registry RPC ${request.method}`);
-        }
-        return await new Promise<never>(() => {});
-      },
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
+      () => getActivePluginRegistry() ?? createTestRegistry([]),
+    );
+    vi.mocked(callGateway).mockImplementation(async (request) => {
+      if (request.method !== "agent.wait") {
+        throw new Error(`Unexpected registry RPC ${request.method}`);
+      }
+      return await new Promise<never>(() => {});
     });
+    deliveries = captureTaskDeliveryWork();
   });
 
   afterEach(async () => {
-    await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    schedulerTesting.reset();
-    resetTaskRegistryControlRuntimeForTests();
-    await cleanupSessionStateForTest({ stateDir });
-    registryTesting.setDepsForTest();
-    spawnTesting.setDepsForTest();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    await flushLogger();
-    resetLogger();
-    await rm(stateDir, { recursive: true, force: true });
-    restoreActivePluginRegistrySnapshot(pluginSnapshot);
-    env.restore();
+    const failures: unknown[] = [];
+    try {
+      await settle();
+    } catch (error) {
+      failures.push(error);
+    }
+    // Settled delivery failures still permit cleanup; live roots retain their stores.
+    if (getActiveGatewayRootWorkCount() === 0) {
+      try {
+        resetSubagentRegistryForTests({ persist: false });
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        schedulerTesting.reset();
+        await cleanupSessionStateForTest({ stateDir });
+        vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+        vi.mocked(callGateway).mockReset();
+        spawnTesting.setDepsForTest();
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+        await flushLogger();
+        resetLogger();
+        // Resource cleanup finished; removal failure must not retain a retired owner.
+        try {
+          await rm(stateDir, { recursive: true, force: true });
+        } catch (error) {
+          failures.push(error);
+        }
+        restoreActivePluginRegistrySnapshot(pluginSnapshot);
+        env.restore();
+        deliveries?.[Symbol.dispose]();
+        deliveries = undefined;
+        stateDir = "";
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Spawn authority fixture cleanup failed");
+    }
   });
 
   async function createBoundParent(runtime: "embedded" | "plugin-harness" = "embedded") {
@@ -261,6 +319,18 @@ export function installSpawnAuthorityFixture() {
       getRuntimeConfig: () => cfg,
       getSessionEventSubscriberConnIds: () => new Set(),
       broadcastToConnIds: vi.fn(),
+      recoveryRuntime: {
+        waitForAgent: async () => await new Promise<never>(() => {}),
+        dispatchAgent: async () => {
+          throw new Error("Unexpected fixture recovery agent dispatch");
+        },
+        dispatchSessionMethod: async (method) => {
+          throw new Error(`Unexpected fixture recovery session method ${method}`);
+        },
+        sendRecoveryNotice: async () => {
+          throw new Error("Unexpected fixture recovery notice");
+        },
+      } satisfies GatewayRecoveryRuntime,
     });
     const admission = prepareAgentRunAdmission({
       cfg,
@@ -294,6 +364,7 @@ export function installSpawnAuthorityFixture() {
   }
 
   return {
+    settle,
     parentSessionKey,
     parentRunId,
     groupId,

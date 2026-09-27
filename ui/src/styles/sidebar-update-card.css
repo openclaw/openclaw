@@ -33,8 +33,8 @@ html.openclaw-native-web-chrome
   margin-left: 16px;
 }
 
-/* Native dashboard actions must also clear AppKit's drag strip. */
-html.openclaw-native-macos
+/* Native dashboard actions must also clear the window's titlebar. */
+html:is(.openclaw-native-macos, .openclaw-native-desktop)
   .shell:not(.shell--mobile-nav)
   .sidebar-update-card--floating
   .sidebar-update-card {

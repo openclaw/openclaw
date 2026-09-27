@@ -1,12 +1,14 @@
 // Shared root CLI failure formatting with debug stack gating and recovery hints.
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import {
   UpdateSchemaRefusalError,
   type UpdateSchemaRefusalDatabase,
 } from "../state/openclaw-update-schema-refusal.js";
 import { formatCliCommand } from "./command-format.js";
+import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
 
 type FormatCliFailureOptions = {
   title: string;
@@ -30,6 +32,7 @@ export type CliJsonFailure = {
     updaterVersion?: string;
     targetVersion?: string;
     commands?: readonly string[];
+    matches?: readonly CronCliJobMatch[];
   };
 };
 
@@ -53,18 +56,21 @@ export class ExpectedCliError extends Error {
   readonly humanOutput: string;
   readonly humanOutputWritten: boolean;
   readonly machineOutput: string;
+  readonly matches?: readonly CronCliJobMatch[];
 
   constructor(params: {
     message: string;
     humanOutput: string;
     humanOutputWritten?: boolean;
     machineOutput: string;
+    matches?: readonly CronCliJobMatch[];
   }) {
     super(params.message);
     this.name = "ExpectedCliError";
     this.humanOutput = params.humanOutput;
     this.humanOutputWritten = params.humanOutputWritten ?? false;
     this.machineOutput = params.machineOutput;
+    this.matches = params.matches;
   }
 }
 
@@ -85,36 +91,20 @@ export function isGatewayCredentialsCliError(
   );
 }
 
-function isGatewayExplicitAuthCliError(error: unknown): error is Error {
-  // Same lean structural classification as the credentials preflight above: the
-  // producer message already carries the complete --url/--token remedy.
-  return error instanceof Error && error.name === "GatewayExplicitAuthRequiredError";
-}
-
-function isAgentSelectionCliError(error: unknown): error is Error {
-  // Multi-agent selection refusals (src/agents/agent-scope-config.ts) already name
-  // the surface and its --agent remedy; crash framing would send operators to a
-  // stack trace and `openclaw doctor` for a missing flag.
-  return error instanceof Error && error.name === "AgentSelectionRequiredError";
-}
-
-function isImmutableConfigCliError(error: unknown): error is Error {
-  // Config write-guard refusals (src/config/config-write-guard.ts) already carry the
-  // redeploy remedy; crash framing would point operators at a stack trace and
-  // `openclaw doctor`, which cannot lift an externally managed config.
-  return (
-    error instanceof Error &&
-    (error.name === "ConfigReadOnlyError" || error.name === "NixModeConfigMutationError")
-  );
-}
+// These producers already supply the operator remedy. Classify by name to keep
+// their runtime modules out of the root CLI's cold startup path.
+const EXPECTED_CLI_ERROR_NAMES = new Set([
+  "GatewayExplicitAuthRequiredError",
+  "AgentSelectionRequiredError",
+  "ConfigReadOnlyError",
+  "NixModeConfigMutationError",
+]);
 
 export function isExpectedCliError(error: unknown): error is Error {
   return (
     error instanceof ExpectedCliError ||
     isGatewayCredentialsCliError(error) ||
-    isGatewayExplicitAuthCliError(error) ||
-    isImmutableConfigCliError(error) ||
-    isAgentSelectionCliError(error) ||
+    (error instanceof Error && EXPECTED_CLI_ERROR_NAMES.has(error.name)) ||
     isGatewayTransportError(error)
   );
 }
@@ -149,6 +139,7 @@ export function formatCliJsonFailure(
     error: {
       type: "cli_error",
       message,
+      ...(error instanceof ExpectedCliError && error.matches ? { matches: error.matches } : {}),
       ...(error instanceof UpdateSchemaRefusalError
         ? {
             code: error.code,
@@ -224,7 +215,13 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     lines.push("[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.");
   }
 
-  if (options.includeDoctorHint !== false) {
+  // Doctor needs the same coordinators; inspect wrappers without loading the SQLite runtime.
+  if (
+    options.includeDoctorHint !== false &&
+    !collectNestedErrorCandidates(options.error).some(
+      (error) => error instanceof Error && error.name === "StateDatabaseCoordinatorContentionError",
+    )
+  ) {
     lines.push(`[openclaw] Try: ${formatCliCommand("openclaw doctor", env)}`);
   }
   lines.push(`[openclaw] Help: ${formatCliCommand("openclaw --help", env)}`);

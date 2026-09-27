@@ -23,13 +23,15 @@ export type SessionCatalogListProviderParams = {
   limitPerHost?: number;
   hostIds?: string[];
   cursors?: Record<string, string>;
-  /** Request-owned shared entries. Providers must not mutate or retain them past `list`. */
+  /** Never mutate these entries; release after `list` settles or the list operation closes. */
   sessionEntries?: SessionCatalogEntrySnapshot;
-  /** Lazily lists Gateway nodes once per catalog request. Providers must not retain this past `list`. */
+  /** Lazily lists nodes once; release after `list` settles or the list operation closes. */
   listNodes?: () => ReturnType<PluginRuntime["nodes"]["list"]>;
   /** Publishes completed hosts without waiting for slower machines in the same list. */
   onHost?: (host: SessionCatalogHost) => void;
-  /** Register bounded host publication work before `list` settles; includes the onHost callback. */
+  /** True when the caller accepts retained/pending hosts and later authoritative onHost updates. */
+  allowPartialResults?: boolean;
+  /** Register host publication before the logical list settles; includes the onHost callback. */
   waitUntil?: (completion: Promise<void>) => void;
   /** Catalog owner retirement, independent of the requesting connection's lifetime. */
   signal?: AbortSignal;
@@ -187,8 +189,8 @@ type SessionCatalogCreateParams = {
 export type SessionCatalogProvider = {
   id: string;
   label: string;
-  /** Provider rows are Gateway-hosted artifacts visible to authenticated operators. */
-  audience?: "gateway-operators";
+  /** Gateway artifacts are shared with all operators; remote publications follow session-viewing roles. */
+  audience?: "gateway-operators" | "session-viewers";
   /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
   shareRoute?: SessionCatalogShareRoute;
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
@@ -198,6 +200,12 @@ export type SessionCatalogProvider = {
     params: SessionCatalogCreateParams,
   ) => SessionCatalogCreateTarget | undefined;
   list: (params: SessionCatalogListProviderParams) => Promise<SessionCatalogHost[]>;
+  /** Optional inert factory; each settled step leaves no foreground work running. */
+  createListOperation?: (params: SessionCatalogListProviderParams) => {
+    next: () => Promise<{ done: false } | { done: true; hosts: SessionCatalogHost[] }>;
+    /** Synchronous cleanup, called once after the last active step settles. */
+    close: () => void;
+  };
   /** Items are newest-first by source order; nextCursor continues to older items. */
   read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
   continueSession?: (
@@ -218,6 +226,7 @@ export type SessionCatalogProvider = {
     agentId?: string;
     hostId: string;
     threadId: string;
+    sourceHomeId?: string;
   }) => Promise<SessionCatalogTerminalPlan>;
   startTerminalSession?: (
     request: SessionCatalogStartTerminalProviderParams,

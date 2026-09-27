@@ -133,6 +133,10 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
         await gateway.waitForRequest("connect");
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByText("Synthetic audit session", { exact: true })
+          .waitFor({ state: "visible" });
         await gateway.emitGatewayEvent("presence", {
           presence: [
             {
@@ -175,10 +179,10 @@ suite.define(() => {
     );
   });
 
-  it.each(["click", "Enter", "tap"] as const)(
+  it.each(["click", "Enter", "tap", "tap with loaded preview"] as const)(
     "opens a person's Activity page directly on %s",
     async (action) => {
-      const touch = action === "tap";
+      const touch = action.startsWith("tap");
       await suite.withPage(
         {
           hasTouch: touch,
@@ -202,6 +206,15 @@ suite.define(() => {
               .waitFor({ state: "visible" });
             await person.press("Enter");
           } else if (touch) {
+            if (action === "tap with loaded preview") {
+              // Warm the real card before a fresh touch gesture, not during its click.
+              await page.keyboard.press("Tab");
+              await person.focus();
+              const card = page.getByRole("dialog", { name: "Activity for Alice" });
+              await card.waitFor({ state: "visible" });
+              await page.keyboard.press("Shift+Tab");
+              await expect.poll(() => card.count()).toBe(0);
+            }
             await person.tap();
           } else {
             await person.click();
@@ -420,6 +433,7 @@ suite.define(() => {
           .first()
           .click();
         const person = page.getByRole("link", { name: "Activity for Alice" });
+        await page.keyboard.press("Tab");
         await person.focus();
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
         await card.waitFor({ state: "visible" });

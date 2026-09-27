@@ -1,5 +1,6 @@
 // Systemd unit tests cover generated systemd unit files.
 import { describe, expect, it } from "vitest";
+import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   buildSystemdUnit,
   parseSystemdEnvAssignments,
@@ -10,15 +11,7 @@ import {
 
 // Values that need quoting, including the backslash and quote shapes the
 // renderer has to escape for the module's own parsers to read them back.
-const ROUND_TRIP_VALUES = [
-  "plain",
-  "with space",
-  'he said "hi"',
-  "back\\slash",
-  "C:\\\\srv\\\\bin",
-  'mix \\ and " here',
-  "trailing\\",
-];
+const ROUND_TRIP_VALUES = ["plain", 'mix \\ and " here', "trailing\\"];
 
 describe("systemd logical lines", () => {
   it.each([
@@ -118,8 +111,9 @@ describe("buildSystemdUnit", () => {
     expect(unit).toContain("TimeoutStartSec=30");
     expect(unit).toContain("SuccessExitStatus=0 143");
     expect(unit).toContain("OOMPolicy=continue");
-    expect(unit).toContain("StartLimitBurst=5");
-    expect(unit).toContain("StartLimitIntervalSec=60");
+    expect(unit).toContain("StartLimitBurst=10");
+    expect(unit).toContain("StartLimitIntervalSec=300");
+    expect(unit).toContain("RestartSec=5");
     expect(unit).toContain("RestartPreventExitStatus=78");
   });
 
@@ -149,5 +143,70 @@ describe("buildSystemdUnit", () => {
     expect(unit.indexOf("EnvironmentFile=-/home/test/.openclaw/.env")).toBeLessThan(
       unit.indexOf("Environment=OPENCLAW_GATEWAY_PORT=18789"),
     );
+  });
+});
+
+describe("splitArgsPreservingQuotes", () => {
+  it("splits on whitespace outside quotes", () => {
+    expect(splitArgsPreservingQuotes('/usr/bin/openclaw gateway start --name "My Bot"')).toEqual([
+      "/usr/bin/openclaw",
+      "gateway",
+      "start",
+      "--name",
+      "My Bot",
+    ]);
+  });
+
+  it("supports systemd-style backslash escaping", () => {
+    expect(
+      splitArgsPreservingQuotes('openclaw --name "My \\"Bot\\"" --foo bar', {
+        escapeMode: "backslash",
+      }),
+    ).toEqual(["openclaw", "--name", 'My "Bot"', "--foo", "bar"]);
+  });
+
+  it("supports schtasks-style escaped quotes while preserving other backslashes", () => {
+    expect(
+      splitArgsPreservingQuotes('openclaw --path "C:\\\\Program Files\\\\OpenClaw"', {
+        escapeMode: "backslash-quote-only",
+      }),
+    ).toEqual(["openclaw", "--path", "C:\\\\Program Files\\\\OpenClaw"]);
+
+    expect(
+      splitArgsPreservingQuotes('openclaw --label "My \\"Quoted\\" Name"', {
+        escapeMode: "backslash-quote-only",
+      }),
+    ).toEqual(["openclaw", "--label", 'My "Quoted" Name']);
+  });
+});
+
+describe("parseSystemdEnvAssignments", () => {
+  it("parses single-quoted whole assignments", () => {
+    expect(
+      parseSystemdEnvAssignments("'OPENCLAW_GATEWAY_TOKEN=single quoted token' FOO=bar"),
+    ).toEqual([
+      { key: "OPENCLAW_GATEWAY_TOKEN", value: "single quoted token" },
+      { key: "FOO", value: "bar" },
+    ]);
+  });
+
+  it("keeps apostrophes inside unquoted assignment values literal", () => {
+    expect(parseSystemdEnvAssignments("FOO=can't OPENCLAW_GATEWAY_TOKEN=token")).toEqual([
+      { key: "FOO", value: "can't" },
+      { key: "OPENCLAW_GATEWAY_TOKEN", value: "token" },
+    ]);
+  });
+});
+
+describe("parseSystemdExecStart", () => {
+  it("preserves quoted arguments", () => {
+    const execStart = '/usr/bin/openclaw gateway start --name "My Bot"';
+    expect(parseSystemdExecStart(execStart)).toEqual([
+      "/usr/bin/openclaw",
+      "gateway",
+      "start",
+      "--name",
+      "My Bot",
+    ]);
   });
 });

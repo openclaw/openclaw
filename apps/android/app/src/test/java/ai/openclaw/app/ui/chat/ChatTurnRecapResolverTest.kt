@@ -257,15 +257,6 @@ class ChatTurnRecapResolverTest {
   }
 
   @Test
-  fun freshFailedRowConsumesTheWatch() {
-    val resolver = TurnRecapResolver()
-    resolver.resolve(session, true, done(previousEndedAt))
-
-    assertNull(resolver.resolve(session, false, row(status = "failed", endedAt = runEndedAt)))
-    assertNull(resolver.resolve(session, false, done(runEndedAt + 1_000L)))
-  }
-
-  @Test
   fun leavingTheSessionAbandonsUnsettledButKeepsSettled() {
     val resolver = TurnRecapResolver()
     resolver.resolve(session, true, done(previousEndedAt))
@@ -302,11 +293,10 @@ class ChatTurnRecapResolverTest {
   private fun transcript(
     newestItemId: String?,
     completedEndedAt: Long? = null,
-    transcriptSessionKey: String? = session,
     completedNewestItemId: String? = newestItemId.takeIf { completedEndedAt != null },
   ): TurnRecapTranscriptState =
     TurnRecapTranscriptState(
-      sessionKey = transcriptSessionKey,
+      sessionKey = session,
       newestItemId = newestItemId,
       completedEndedAt = completedEndedAt,
       completedNewestItemId = completedNewestItemId,

@@ -49,7 +49,6 @@ extension DashboardWindowController {
         case let .requestPermission(id):
             if let capability = id.capability {
                 _ = await PermissionManager.ensure([capability], interactive: true)
-                await PermissionMonitor.shared.refreshNow()
             }
         case let .openSystemSettings(id):
             if let capability = id.capability {
@@ -59,8 +58,8 @@ extension DashboardWindowController {
             await self.openDeviceSettingsPanel(panel)
         case .checkForUpdates:
             if self.updater?.isAvailable == true { self.updater?.checkForUpdates(nil) }
-        case .installChromeExtension:
-            break // The queued handler returns the installer result directly.
+        case .chromeExtensionSetup, .chromeExtensionStatus, .installChromeExtension:
+            break // The queued handler returns the canonical setup result directly.
         }
         // All Gateway windows show settings for this Mac; mutations must update each open view.
         NotificationCenter.default.post(name: .openclawDeviceSettingsChanged, object: nil)
@@ -84,6 +83,7 @@ extension DashboardWindowController {
 
     private static let booleanStateSettings: [DeviceSettingKey: ReferenceWritableKeyPath<AppState, Bool>] = [
         .showDockIcon: \.showDockIcon,
+        .nativeExperienceEnabled: \.nativeExperienceEnabled,
         .iconAnimationsEnabled: \.iconAnimationsEnabled,
         .debugPaneEnabled: \.debugPaneEnabled,
         .peekabooBridgeEnabled: \.peekabooBridgeEnabled,
@@ -152,9 +152,14 @@ extension DashboardWindowController {
             if !enabled { CanvasManager.shared.hideAll() }
         case .cameraEnabled:
             defaults.set(enabled, forKey: cameraEnabledKey)
+        case .desktopSharingEnabled:
+            defaults.set(enabled, forKey: desktopSharingEnabledKey)
+            NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
         case .computerControlEnabled:
             defaults.set(enabled, forKey: computerControlEnabledKey)
             state.applyComputerControlHostState()
+        case .unattendedDesktopEnabled:
+            MacDesktopAvailabilityCoordinator.shared.setUnattendedEnabled(enabled)
         case .locationPrecise:
             defaults.set(enabled, forKey: locationPreciseKey)
         case .triggerChime:
@@ -220,6 +225,7 @@ extension DashboardWindowController {
             guard !Task.isCancelled, self.isWindowOpen else { return }
             switch outcome {
             case .offering: self.show()
+            case .superseded: break
             case let .unavailable(title, message):
                 let alert = NSAlert()
                 alert.messageText = title

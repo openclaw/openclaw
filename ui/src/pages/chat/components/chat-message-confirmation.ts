@@ -1,7 +1,10 @@
 import { html } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
+
+registerChatMessageMetadataEnglish();
 
 // Persisted preference key: renaming it would reset users' "Don't ask again" choice.
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
@@ -40,6 +43,16 @@ export function dismissConfirmedActionPopovers(owner: ParentNode): void {
       dismissConfirmedAction(popover);
     }
   }
+}
+
+export function isConfirmedActionPopoverFocused(owner: Node): boolean {
+  for (const popover of confirmedActionPopovers) {
+    const popoverOwner = confirmedActionOwners.get(popover);
+    if (popoverOwner && owner.contains(popoverOwner) && popover.contains(document.activeElement)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function resolveViewportBounds() {
@@ -104,12 +117,6 @@ type ConfirmedActionParams = {
 
 export function renderRewindButton(onRewind: () => void) {
   const label = t("chat.messages.rewind");
-  const params: ConfirmedActionParams = {
-    action: onRewind,
-    confirmLabel: label,
-    confirmText: t("chat.messages.rewindConfirm"),
-    preferenceName: SKIP_REWIND_CONFIRM_PREFERENCE,
-  };
   return html`
     <span class="chat-confirm-wrap chat-rewind-wrap">
       <openclaw-tooltip .content=${label}>
@@ -117,7 +124,7 @@ export function renderRewindButton(onRewind: () => void) {
           class="chat-group-rewind"
           aria-label=${label}
           @click=${(event: Event) =>
-            openConfirmedActionPopover(event.currentTarget as HTMLElement, params)}
+            openChatRewindConfirmation(event.currentTarget as HTMLElement, onRewind)}
         >
           ${icons.refresh}
         </button>

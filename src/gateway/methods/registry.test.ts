@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandler } from "../server-methods/types.js";
 import { isSessionProfileDependentMethod } from "../session-method-policy.js";
-import { listCoreGatewayMethodNames } from "./core-descriptors.js";
+import { listCoreGatewayMethodNames } from "./core-method-policy.js";
 import { createPluginGatewayMethodDescriptor } from "./descriptor.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -16,6 +16,42 @@ import {
 const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true });
 
 describe("gateway method registry", () => {
+  it("requires a profile for session-scoped plugin and core methods", () => {
+    const sessionAccess = {
+      mode: "write" as const,
+      allowOwnSessionScope: true,
+      requiredTool: "example",
+    };
+    const plugin = createPluginGatewayMethodDescriptor({
+      pluginId: "example",
+      name: "example.session",
+      handler,
+      scope: WRITE_SCOPE,
+      sessionAccess,
+    });
+    const registry = createGatewayMethodRegistry([
+      plugin,
+      {
+        name: "core.session",
+        handler,
+        scope: WRITE_SCOPE,
+        owner: { kind: "core", area: "test" },
+        sessionAccess,
+      },
+    ]);
+    expect(registry.requiresAuthenticatedProfile("example.session")).toBe(true);
+    expect(registry.requiresAuthenticatedProfile("core.session")).toBe(true);
+    expect(registry.getSessionAccess?.("example.session")).toEqual(sessionAccess);
+    expect(() =>
+      createGatewayMethodRegistry([{ ...plugin, profileAccess: "independent" }]),
+    ).toThrow("authenticated profile");
+    expect(() => createGatewayMethodRegistry([{ ...plugin, scope: READ_SCOPE }])).toThrow(
+      "operator.write",
+    );
+    expect(() =>
+      createGatewayMethodRegistry([{ ...plugin, scope: "operator.sessions.write" }]),
+    ).toThrow("operator.write");
+  });
   it("indexes handlers, scopes, startup state, and control-plane metadata", () => {
     const registry = createGatewayMethodRegistry([
       {
@@ -144,6 +180,8 @@ describe("gateway method registry", () => {
     // talk.config projects the caller's profile accent; a pending GitHub
     // identity sync must complete before the handler runs.
     expect(registry.requiresAuthenticatedProfile("talk.config")).toBe(true);
+    expect(registry.requiresAuthenticatedProfile("talk.voice.get")).toBe(true);
+    expect(registry.requiresAuthenticatedProfile("talk.voice.set")).toBe(true);
     for (const method of listCoreGatewayMethodNames().filter(isSessionProfileDependentMethod)) {
       expect(registry.requiresAuthenticatedProfile(method), method).toBe(true);
     }

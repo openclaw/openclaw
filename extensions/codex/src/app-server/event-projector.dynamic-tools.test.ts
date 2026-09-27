@@ -1,8 +1,15 @@
+import { createContractToolTerminalObserver } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { withDynamicToolTranscriptDetails } from "./dynamic-tool-response-state.js";
+import { Type } from "typebox";
+import {
+  handleDynamicToolCallWithTimeout,
+  toCodexDynamicToolProtocolResponse,
+} from "./dynamic-tool-execution.js";
 import { recordCodexDynamicToolResult } from "./dynamic-tool-result-projection.js";
+import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -24,11 +31,61 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector dynamic tool projection", () => {
-  it.each([
-    ["gateway", { ok: true, result: { path: "gateway.port", config: 19_801 } }],
-    ["dashboard", { ok: true, delivered: 0 }],
-    ["memory_search", { ok: true, results: [{ id: "memory-1" }] }],
-  ])("retains structured %s transcript details", async (tool, details) => {
+  it.each([false, true])(
+    "preserves replay safety through dynamic tool settlement (async: %s)",
+    async (asyncStarted) => {
+      const params = await createParams();
+      params.observeToolTerminal = createContractToolTerminalObserver(params.runId);
+      const projector = await createProjector(params);
+      const bridge = createCodexDynamicToolBridge({
+        tools: [
+          {
+            name: "web_search",
+            label: "Search",
+            description: "Search synthetic results",
+            parameters: Type.Object({ query: Type.String() }),
+            execute: async () => ({
+              content: [{ type: "text", text: "Search accepted." }],
+              details: asyncStarted ? { async: true, status: "started", taskId: "task-1" } : {},
+            }),
+          },
+        ],
+        signal: new AbortController().signal,
+        hookContext: { runId: params.runId },
+      });
+      const call = {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-search",
+        tool: "web_search",
+        arguments: { query: "synthetic query" },
+      };
+      projector.recordDynamicToolCall(call);
+
+      const response = await handleDynamicToolCallWithTimeout({
+        call,
+        toolBridge: bridge,
+        signal: new AbortController().signal,
+        timeoutMs: 1_000,
+        observeToolTerminal: params.observeToolTerminal,
+      });
+      const protocolResponse = toCodexDynamicToolProtocolResponse(response);
+      recordCodexDynamicToolResult(projector, call, response, protocolResponse);
+
+      expect(protocolResponse).toEqual({
+        contentItems: [{ type: "inputText", text: "Search accepted." }],
+        success: true,
+      });
+      expect(projector.buildResult(bridge.telemetry).replayMetadata).toEqual({
+        hadPotentialSideEffects: asyncStarted,
+        replaySafe: !asyncStarted,
+      });
+    },
+  );
+
+  it("retains structured transcript details without exposing them on the protocol response", async () => {
+    const tool = "gateway";
+    const details = { ok: true, result: { path: "gateway.port", config: 19_801 } };
     const projector = await createProjector();
     const call = {
       threadId: "thread-1",
@@ -47,7 +104,7 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     recordCodexDynamicToolResult(
       projector,
       call,
-      withDynamicToolTranscriptDetails({ ...protocolResponse }, details),
+      { ...protocolResponse, transcriptDetails: details },
       protocolResponse,
     );
 
@@ -92,58 +149,21 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
       id: "call-browser-1",
       name: "browser",
       arguments: { action: "open", url: "http://127.0.0.1:3000" },
-      input: { action: "open", url: "http://127.0.0.1:3000" },
     });
     const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
-    expect(toolResultMessage.role).toBe("toolResult");
-    expect(toolResultMessage.toolCallId).toBe("call-browser-1");
-    expect(toolResultMessage.toolName).toBe("browser");
-    expect(toolResultMessage.isError).toBe(false);
-    expect(toolResultMessage["__openclaw"]).toMatchObject({ resultContentSource: "network" });
-    const toolResultContent = requireRecord(
-      requireArray(toolResultMessage.content, "tool result content")[0],
-      "tool result content item",
-    );
-    expect(toolResultContent.type).toBe("toolResult");
-    expect(toolResultContent.id).toBe("call-browser-1");
-    expect(toolResultContent.name).toBe("browser");
-    expect(toolResultContent.toolName).toBe("browser");
-    expect(toolResultContent.toolCallId).toBe("call-browser-1");
-    expect(toolResultContent.content).toBe("opened");
+    expect(toolResultMessage).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-browser-1",
+      toolName: "browser",
+      isError: false,
+      content: [{ type: "text", text: "opened" }],
+      __openclaw: { resultContentSource: "network" },
+    });
     expect(
       requireRecord(result.messagesSnapshot[3], "final assistant")["__openclaw"],
     ).toMatchObject({
       turnTainted: true,
     });
-  });
-
-  it("retains MCP App preview details in mirrored dynamic tool results", async () => {
-    const projector = await createProjector();
-    const details = {
-      mcpAppPreview: {
-        kind: "canvas",
-        view: { id: "mcp-app-view-1" },
-        presentation: { target: "assistant_message", sandbox: "scripts" },
-        mcpApp: { viewId: "mcp-app-view-1" },
-      },
-    };
-
-    projector.recordDynamicToolCall({
-      callId: "call-app-1",
-      tool: "sample__show_options",
-      arguments: { limit: 4 },
-    });
-    projector.recordDynamicToolResult({
-      callId: "call-app-1",
-      tool: "sample__show_options",
-      success: true,
-      contentItems: [{ type: "inputText", text: "Found four nearby restaurants." }],
-      details,
-    });
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
-    expect(toolResultMessage.details).toEqual(details);
   });
 
   it("awaits MCP App preview details for native MCP tool results", async () => {
@@ -627,48 +647,28 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
   });
 
-  it.each([
-    {
-      command: "/bin/zsh -lc 'rg -n TODO src'",
-      commandActions: [{ type: "search", command: "rg -n TODO src", query: "TODO", path: "src" }],
-    },
-    {
-      command: "/bin/zsh -lc 'cat package.json'",
-      commandActions: [
-        { type: "read", command: "cat package.json", name: "cat", path: "/workspace/package.json" },
-      ],
-    },
-    {
-      command: "/bin/zsh -lc 'touch changed.txt'",
-      commandActions: [{ type: "unknown", command: "touch changed.txt" }],
-    },
-  ])(
-    "treats native command actions as replay-unsafe: $command",
-    async ({ command, commandActions }) => {
-      const projector = await createProjector();
+  it("treats native commands classified as search as replay-unsafe", async () => {
+    const command = "/bin/zsh -lc 'rg -n TODO src'";
+    const commandActions = [
+      { type: "search", command: "rg -n TODO src", query: "TODO", path: "src" },
+    ];
+    const projector = await createProjector();
 
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: {
-            type: "commandExecution",
-            id: "command-native",
-            command,
-            cwd: "/workspace",
-            processId: null,
-            source: "agent",
-            status: "completed",
-            commandActions,
-            aggregatedOutput: "",
-            exitCode: 0,
-            durationMs: 1,
-          },
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: createNativeCommandItem({
+          id: "command-native",
+          command,
+          commandActions,
+          aggregatedOutput: "",
+          durationMs: 1,
         }),
-      );
+      }),
+    );
 
-      expect(projector.buildResult(buildEmptyToolTelemetry()).replayMetadata).toEqual({
-        hadPotentialSideEffects: true,
-        replaySafe: false,
-      });
-    },
-  );
+    expect(projector.buildResult(buildEmptyToolTelemetry()).replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
 });

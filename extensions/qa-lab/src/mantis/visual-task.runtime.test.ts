@@ -1,10 +1,21 @@
-// Qa Lab tests cover visual task plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runMantisVisualDriver, runMantisVisualTask } from "./visual-task.runtime.js";
+
+vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@openclaw/crabbox-provider/cli-runtime-api.js")>();
+  return {
+    ...actual,
+    ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
+      binary,
+      version: "0.55.0",
+    })),
+  };
+});
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
@@ -202,6 +213,15 @@ describe("mantis visual task runtime", () => {
     });
 
     expect(result.status).toBe("fail");
+    expect(JSON.parse(await fs.readFile(result.summaryPath, "utf8")).crabbox).toEqual({
+      bin: "/tmp/crabbox",
+      createdLease: true,
+      id: "cbx_abc123",
+      provider: "hetzner",
+      slug: "brisk-mantis",
+      state: "active",
+      vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
+    });
     expect(result.videoPath).toBeUndefined();
     expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual([
       ["/tmp/crabbox", "warmup"],

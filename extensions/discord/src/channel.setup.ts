@@ -1,6 +1,5 @@
-// Discord plugin module implements channel.setup behavior.
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import type { ChannelPlugin } from "./channel-api.js";
 import { discordSetupWizard } from "./channel.runtime.js";
 import { discordSetupContract } from "./setup-adapter.js";
 import { createDiscordPluginBase } from "./shared.js";

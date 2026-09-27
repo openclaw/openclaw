@@ -107,7 +107,18 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       | undefined;
     expect(toolsCall?.cwd).toBe(taskRepo);
     expect(toolsCall).toMatchObject({
-      runtimeToolAllowlist: ["read", "write", "edit", "apply_patch", "exec", "process"],
+      runtimeToolAllowlist: [
+        "read",
+        "write",
+        "edit",
+        "apply_patch",
+        "exec",
+        "process",
+        "tool_search_code",
+        "tool_search",
+        "tool_describe",
+        "tool_call",
+      ],
       toolConstructionPlan: {
         includeBaseCodingTools: true,
         includeShellTools: true,
@@ -119,6 +130,7 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     expect(toolsCall).not.toMatchObject({
       runtimeToolAllowlist: expect.arrayContaining(["message", "browser", "web_search"]),
     });
+    // This small allowed catalog stays direct even when discovery is enabled by default.
     expect(readCustomToolNames(hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0])).toEqual([
       "read",
       "write",
@@ -283,6 +295,7 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
 
     expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: worktree, workspaceDir: worktree }),
+      undefined,
     );
   });
 });

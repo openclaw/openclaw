@@ -36,7 +36,7 @@ import type {
 } from "./types.ts";
 
 const WORKBOARD_ENGINE_MODELS = {
-  codex: "openai/gpt-5.6-sol",
+  codex: "openai/gpt-6-astra",
   claude: "anthropic/claude-sonnet-4-6",
 } as const;
 const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;

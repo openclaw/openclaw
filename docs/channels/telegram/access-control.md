@@ -10,6 +10,12 @@ sidebarTitle: "Access control"
 
 Who may talk to the Telegram bot, in DMs and in groups, and what they may make it do.
 
+Changes to `dmPolicy`, `allowFrom`, `groupAllowFrom`, and `groupPolicy` apply to
+new admissions without reconnecting Telegram, at both the channel root and under
+`accounts.<accountId>`. An already admitted turn keeps its captured settings.
+Account creation/removal, tokens, transport settings, and native command
+registration still refresh the channel.
+
 ## Access control and activation
 
 ### Group bot identity
@@ -175,7 +181,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
-    Group history context is always on and bounded by `historyLimit`. Set `channels.telegram.historyLimit: 0` to disable the group history window. `openclaw doctor --fix` removes the retired `includeGroupHistoryContext` key.
+    Group history context is bounded by `historyLimit` (default 50). Set `channels.telegram.historyLimit: 0` to disable the automatic window without deleting retained group messages or disabling explicit history reads. Permitted unmentioned messages are recorded without starting agent turns when mentions are required. See [Retained group history](/channels/telegram/messaging#retained-group-history). `openclaw doctor --fix` removes the retired `includeGroupHistoryContext` key.
 
     Getting the group chat ID: forward a group message to `@userinfobot` / `@getidsbot`, read `chat.id` from `openclaw logs --follow`, inspect Bot API `getUpdates`, or (once the group is allowed) run `/whoami@<bot_username>`.
 

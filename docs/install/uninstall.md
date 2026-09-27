@@ -161,3 +161,4 @@ Open a new shell and check `command -v openclaw` (PowerShell: `Get-Command openc
 
 - [Install overview](/install)
 - [Migration guide](/install/migrating)
+- [`openclaw uninstall`](/cli/uninstall) — command reference and flags

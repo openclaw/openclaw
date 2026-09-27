@@ -50,8 +50,6 @@ import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.MicNone
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -82,11 +80,9 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** Session browser for active, current, and archived chat sessions. */
 @Composable
 internal fun SessionsScreen(
   viewModel: MainViewModel,
@@ -169,19 +165,25 @@ internal fun SessionsScreen(
   }
 
   ClawScaffold(
-    contentPadding = PaddingValues(start = 16.dp, top = 10.dp, end = 16.dp, bottom = 4.dp),
+    contentPadding =
+      PaddingValues(
+        start = ClawTheme.spacing.sm,
+        top = ClawTheme.spacing.xxs,
+        end = ClawTheme.spacing.sm,
+        bottom = ClawTheme.spacing.xxxs,
+      ),
     contentWindowInsets = WindowInsets.safeDrawing,
   ) {
     LazyColumn(
       modifier = Modifier.fillMaxSize(),
-      verticalArrangement = Arrangement.spacedBy(9.dp),
-      contentPadding = PaddingValues(bottom = 4.dp),
+      verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+      contentPadding = PaddingValues(bottom = ClawTheme.spacing.xxxs),
     ) {
       item {
         Row(
           modifier = Modifier.fillMaxWidth(),
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
         ) {
           if (showSidebarButton) {
             ClawPlainIconButton(
@@ -191,7 +193,7 @@ internal fun SessionsScreen(
               modifier = Modifier.testTag("sidebar-open-sessions"),
             )
           }
-          Text(text = nativeString("Threads"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
+          Text(text = nativeString("Threads"), style = ClawTheme.type.display, color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           ClawPlainIconButton(
             icon = Icons.Default.Search,
             contentDescription = nativeString("Focus thread search"),
@@ -204,7 +206,7 @@ internal fun SessionsScreen(
       }
 
       item {
-        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
           FilterPill(text = nativeString("Recent"), icon = Icons.Outlined.AccessTime, active = filter == SessionFilter.Recent, onClick = { filter = SessionFilter.Recent })
           FilterPill(text = nativeString("Current"), icon = Icons.Outlined.MicNone, active = filter == SessionFilter.Current, showDot = sessions.any { it.key == chatSessionKey }, onClick = { filter = SessionFilter.Current })
           FilterPill(text = nativeString("Archived"), icon = Icons.Outlined.Archive, active = filter == SessionFilter.Archived, onClick = { filter = SessionFilter.Archived })
@@ -246,7 +248,7 @@ internal fun SessionsScreen(
                 Row(
                   modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
                   verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(5.dp),
+                  horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs),
                 ) {
                   val sortOrder =
                     if (recentFirst) {
@@ -528,49 +530,26 @@ internal fun SessionsScreen(
   }
 
   deleteGroupName?.let { group ->
-    AlertDialog(
-      onDismissRequest = { deleteGroupName = null },
-      containerColor = ClawTheme.colors.surfaceRaised,
-      title = { Text(nativeString("Delete group?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-      text = { Text(nativeString("Threads in \"\$group\" are kept and move back to Ungrouped.", group), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
-      confirmButton = {
-        TextButton(
-          onClick = {
-            deleteGroupName = null
-            coroutineScope.launch { viewModel.deleteChatSessionGroup(group) }
-          },
-        ) {
-          Text(nativeString("Delete"), color = ClawTheme.colors.danger)
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { deleteGroupName = null }) {
-          Text(nativeString("Cancel"))
-        }
+    SessionDeleteDialog(
+      title = nativeString("Delete group?"),
+      text = nativeString("Threads in \"\$group\" are kept and move back to Ungrouped.", group),
+      onDismiss = { deleteGroupName = null },
+      onConfirm = {
+        deleteGroupName = null
+        coroutineScope.launch { viewModel.deleteChatSessionGroup(group) }
       },
     )
   }
 
   deleteSessionTarget?.let { session ->
-    AlertDialog(
-      onDismissRequest = { deleteSessionTarget = null },
-      containerColor = ClawTheme.colors.surfaceRaised,
-      title = { Text(nativeString("Delete thread?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-      text = { Text(nativeString("This permanently deletes the thread and its transcript."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
-      confirmButton = {
-        TextButton(
-          onClick = {
-            deleteSessionTarget = null
-            if (!session.matchesGateway(activeGatewayStableId)) return@TextButton
-            coroutineScope.launch { viewModel.deleteChatSession(session.key, session.ownerAgentId) }
-          },
-        ) {
-          Text(nativeString("Delete"), color = ClawTheme.colors.danger)
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { deleteSessionTarget = null }) {
-          Text(nativeString("Cancel"))
+    SessionDeleteDialog(
+      title = nativeString("Delete thread?"),
+      text = nativeString("This permanently deletes the thread and its transcript."),
+      onDismiss = { deleteSessionTarget = null },
+      onConfirm = {
+        deleteSessionTarget = null
+        if (session.matchesGateway(activeGatewayStableId)) {
+          coroutineScope.launch { viewModel.deleteChatSession(session.key, session.ownerAgentId) }
         }
       },
     )
@@ -578,17 +557,38 @@ internal fun SessionsScreen(
 }
 
 @Composable
+private fun SessionDeleteDialog(
+  title: String,
+  text: String,
+  onDismiss: () -> Unit,
+  onConfirm: () -> Unit,
+) {
+  AppAlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = ClawTheme.colors.surfaceRaised,
+    title = { Text(title, style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+    text = { Text(text, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+    confirmButton = {
+      TextButton(onClick = onConfirm) {
+        Text(nativeString("Delete"), color = ClawTheme.colors.danger)
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) { Text(nativeString("Cancel")) }
+    },
+  )
+}
+
+@Composable
 private fun FilterPill(
   text: String,
-  icon: ImageVector? = null,
-  active: Boolean = false,
+  icon: ImageVector,
+  active: Boolean,
   showDot: Boolean = false,
-  dropdown: Boolean = false,
-  onClick: (() -> Unit)? = null,
+  onClick: () -> Unit,
 ) {
   Surface(
-    onClick = onClick ?: {},
-    enabled = onClick != null,
+    onClick = onClick,
     shape = RoundedCornerShape(7.dp),
     color = if (active) ClawTheme.colors.surfaceRaised else Color.Transparent,
     contentColor = ClawTheme.colors.text,
@@ -599,13 +599,10 @@ private fun FilterPill(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      icon?.let { Icon(imageVector = it, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.text) }
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.text)
       Text(text = text, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
       if (showDot) {
         Box(modifier = Modifier.size(4.dp).clip(CircleShape).background(ClawTheme.colors.success))
-      }
-      if (dropdown) {
-        Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(11.dp), tint = ClawTheme.colors.textMuted)
       }
     }
   }
@@ -661,7 +658,7 @@ private fun SessionRow(
               .sessionColorStripe(ClawTheme.colors.sessionColor(session.color))
               .padding(vertical = 5.dp),
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(7.dp),
+          horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
         ) {
           Box(modifier = Modifier.size(ClawTheme.spacing.touchTarget), contentAlignment = Alignment.Center) {
             if (hasChildren) {
@@ -702,7 +699,7 @@ private fun SessionRow(
             }
           }
 
-          Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.5.dp)) {
+          Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
               Text(
                 text = title,
@@ -732,7 +729,7 @@ private fun SessionRow(
               SessionDescendantSignals(collapsedDescendantState, visible = compact)
             }
             if (!compact) {
-              Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+              Text(text = subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
               Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 SessionMiniTag(text = nativeString("Workspace"))
                 SessionMiniTag(text = if (active) nativeString("Current") else nativeString("OpenClaw"))
@@ -740,14 +737,14 @@ private fun SessionRow(
             }
           }
 
-          Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+          Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
             Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
-            Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+            Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
           }
         }
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
       }
-      DropdownMenu(
+      AppDropdownMenu(
         expanded = menuExpanded,
         onDismissRequest = {
           menuExpanded = false
@@ -863,7 +860,6 @@ private fun sessionColorLabel(name: String?): String =
     else -> nativeString("Default")
   }
 
-/** Category section header; long-press opens the group management menu. */
 @Composable
 private fun SessionGroupHeader(
   title: String,
@@ -883,7 +879,7 @@ private fun SessionGroupHeader(
           onLongClick = { menuExpanded = true },
         ),
     )
-    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+    AppDropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
       SessionMenuItem(nativeString("Rename group…")) {
         menuExpanded = false
         onRename()
@@ -923,7 +919,7 @@ private fun SessionTextDialog(
 ) {
   var value by rememberSaveable(stateKey) { mutableStateOf(initialValue) }
   val canConfirm = allowEmpty || value.isNotBlank()
-  AlertDialog(
+  AppAlertDialog(
     onDismissRequest = onDismiss,
     containerColor = ClawTheme.colors.surfaceRaised,
     title = { Text(title, style = ClawTheme.type.section, color = ClawTheme.colors.text) },
@@ -976,7 +972,7 @@ private fun SessionMiniTag(text: String) {
     border = BorderStroke(1.dp, ClawTheme.colors.border),
     contentColor = ClawTheme.colors.textMuted,
   ) {
-    Text(text = text, modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.5.dp), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), maxLines = 1)
+    Text(text = text, modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.5.dp), style = ClawTheme.type.caption, maxLines = 1)
   }
 }
 
@@ -992,7 +988,6 @@ internal data class SessionBrowserSearchState(
   val loading: Boolean,
 )
 
-/** Canonical debounced, gateway-backed search state shared by session browser surfaces. */
 @Composable
 internal fun rememberSessionBrowserSearchState(
   viewModel: MainViewModel,
@@ -1034,7 +1029,6 @@ internal fun rememberSessionBrowserSearchState(
   )
 }
 
-/** Applies the canonical active/current/archived filter and chronological ordering. */
 internal fun resolveSessionBrowserEntries(
   entries: List<ChatSessionEntry>,
   currentSessionKey: String,
@@ -1210,7 +1204,6 @@ private val CollapsedSessionKeysSaver =
     restore = { keys -> keys.toSet() },
   )
 
-/** Projects a flat visible snapshot into section roots and expandable descendants. */
 internal fun buildSessionTreeSections(
   entries: List<ChatSessionEntry>,
   knownGroups: List<String> = emptyList(),
@@ -1359,7 +1352,6 @@ internal fun ChatSessionEntry.toActionTarget(gatewayStableId: String?): SessionA
     displayName = displayName,
   )
 
-/** Groups pinned sessions once, followed by alphabetical categories and remaining sessions. */
 internal fun groupSessionEntries(
   entries: List<ChatSessionEntry>,
   knownGroups: List<String> = emptyList(),
@@ -1393,7 +1385,6 @@ internal enum class SessionEmptyMode {
   SearchNoMatches,
 }
 
-/** Keeps transient search loading distinct from both filter-empty and settled no-match states. */
 internal fun sessionEmptyMode(
   query: String,
   loading: Boolean,
@@ -1404,7 +1395,6 @@ internal fun sessionEmptyMode(
     else -> SessionEmptyMode.SearchNoMatches
   }
 
-/** Empty-state title selected by the active session browser filter. */
 private fun emptySessionTitle(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> nativeString("No threads yet")
@@ -1412,7 +1402,6 @@ private fun emptySessionTitle(filter: SessionFilter): String =
     SessionFilter.Archived -> nativeString("No archived threads")
   }
 
-/** Empty-state body selected by the active session browser filter. */
 private fun emptySessionBody(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> nativeString("Start a new conversation and it will show up here.")
@@ -1420,7 +1409,6 @@ private fun emptySessionBody(filter: SessionFilter): String =
     SessionFilter.Archived -> nativeString("Archived threads will show up here.")
   }
 
-/** Formats session timestamps for compact mobile metadata. */
 internal fun relativeSessionTime(
   updatedAtMs: Long,
   nowMs: Long = System.currentTimeMillis(),

@@ -1,5 +1,7 @@
-// Tooling tests that need fresh module or process state instead of the shared serial worker.
+// Tooling tests that need fresh module or process state instead of shared workers.
 export const toolingIsolatedTestFiles = [
+  // Shipped updater composition belongs to the manual/full-release tooling tier.
+  "src/cli/update-cli/update-command-legacy-finalize.test.ts",
   "test/plugins/bundled-provider-auth-literal-parity.test.ts",
   "test/plugins/bundled-provider-auth-literal-parity.2.test.ts",
   "test/plugins/bundled-provider-auth-literal-parity.3.test.ts",

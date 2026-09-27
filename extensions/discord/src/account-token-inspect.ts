@@ -1,4 +1,3 @@
-// Discord plugin module implements account token inspect behavior.
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,

@@ -1,5 +1,5 @@
 {
-  "originHash" : "4a5551634f350ce9d428f0ffc7c06e99ccda64320adc8e5889c9c11bb6a96a11",
+  "originHash" : "8d4d1e1f45aca658adc8283df1f4701c95c1cf238e78aa712d7643e0c1c862ea",
   "pins" : [
     {
       "identity" : "axorcist",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/steipete/ElevenLabsKit",
       "state" : {
-        "revision" : "0f1e4c039bd0e22b03c0cb7f43c00c1865858f0b",
-        "version" : "0.1.1"
+        "revision" : "a1dd671d0e382d5aa869334f00f74ee22afc978a",
+        "version" : "0.1.3"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sindresorhus/KeyboardShortcuts",
       "state" : {
-        "revision" : "49c3fc04ea827f816df67843bfcc57286b47ff06",
-        "version" : "3.0.1"
+        "revision" : "772133d9dbe800fdac0473226822994c5c162c58",
+        "version" : "3.1.0"
       }
     },
     {
@@ -51,7 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/Peekaboo.git",
       "state" : {
-        "revision" : "44eff916c3330739108cc1d73683338d4250503a"
+        "revision" : "d82dbd88832688252cbed2254af6433ed9699abd",
+        "version" : "4.4.0"
       }
     },
     {
@@ -59,8 +60,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sparkle-project/Sparkle",
       "state" : {
-        "revision" : "ac2def288cbff5cfc7df3ffef6abdf45b72bcb0a",
-        "version" : "2.9.6"
+        "revision" : "eef1a539a373c1f1a320624b1130fc5de7b2e100",
+        "version" : "2.10.0"
       }
     },
     {
@@ -95,8 +96,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "3ffafb9722d5d918c614feb496c8789a3b59d222",
-        "version" : "1.15.0"
+        "revision" : "9c6fb14227f55d8f711ce3847dc2f419fb0ecacb",
+        "version" : "1.15.1"
       }
     },
     {

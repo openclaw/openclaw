@@ -23,7 +23,7 @@ function normalizeMeetKey(value?: string): string | undefined {
   }
 }
 
-const googleMeetNodeHost = MeetingPlatformAdapter.createNodeHostHandler({
+export const handleGoogleMeetNodeHostCommand = MeetingPlatformAdapter.createNodeHostHandler({
   commandName: GOOGLE_MEET_NODE_COMMAND,
   displayName: "Google Meet",
   browserLabel: "Meet",
@@ -50,7 +50,3 @@ const googleMeetNodeHost = MeetingPlatformAdapter.createNodeHostHandler({
     ],
   },
 });
-
-export async function handleGoogleMeetNodeHostCommand(paramsJSON?: string | null): Promise<string> {
-  return await googleMeetNodeHost(paramsJSON);
-}

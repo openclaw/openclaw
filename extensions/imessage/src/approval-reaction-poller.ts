@@ -1,4 +1,3 @@
-// Imessage plugin module implements approval reaction poller behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asDateTimestampMs, asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
@@ -154,10 +153,10 @@ function buildConversationKeyFromMessage(message: HistoryMessage): IMessageAppro
   };
 }
 
-function bindObservedConversation(params: {
+async function bindObservedConversation(params: {
   target: PendingIMessageApprovalReactionPollTarget;
   message: HistoryMessage;
-}): void {
+}): Promise<void> {
   const nowMs = asDateTimestampMs(Date.now());
   const expiresAtMs = asDateTimestampMs(params.target.expiresAtMs);
   if (nowMs === undefined || expiresAtMs === undefined || expiresAtMs <= nowMs) {
@@ -169,17 +168,19 @@ function bindObservedConversation(params: {
     ...enumerateMessageGuidCandidates(params.target.messageId),
     ...enumerateMessageGuidCandidates(params.message.guid ?? ""),
   ]);
-  for (const messageId of messageIds) {
-    registerIMessageApprovalReactionTarget({
-      accountId: params.target.accountId,
-      conversation,
-      messageId,
-      approvalId: params.target.approvalId,
-      approvalKind: params.target.approvalKind,
-      allowedDecisions: params.target.allowedDecisions,
-      ttlMs,
-    });
-  }
+  await Promise.all(
+    [...messageIds].map((messageId) =>
+      registerIMessageApprovalReactionTarget({
+        accountId: params.target.accountId,
+        conversation,
+        messageId,
+        approvalId: params.target.approvalId,
+        approvalKind: params.target.approvalKind,
+        allowedDecisions: params.target.allowedDecisions,
+        ttlMs,
+      }),
+    ),
+  );
 }
 
 export async function pollPendingIMessageApprovalReactions(params: {
@@ -229,7 +230,7 @@ export async function pollPendingIMessageApprovalReactions(params: {
       if (!target) {
         continue;
       }
-      bindObservedConversation({ target, message });
+      await bindObservedConversation({ target, message });
       for (const reaction of message.reactions ?? []) {
         const reactionPayload = buildReactionPayload({ targetMessage: message, reaction });
         if (!reactionPayload) {

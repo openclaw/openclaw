@@ -130,7 +130,32 @@ Happens on the free tier (no persistent disk). Upgrade to a paid plan, or regula
 If builds succeed but deploys fail, the service may be taking too long to start or `/startupz` may not be reachable. Check:
 
 - Build logs for errors
-- Whether the container runs locally with `docker build && docker run`
+- Whether the container runs locally with the same image and command Render uses
+
+Reproduce the Render container locally from a checkout of the repository:
+
+```bash
+docker build -t openclaw:local -f Dockerfile .
+docker run --rm -p 8080:8080 \
+  -e OPENCLAW_GATEWAY_PORT=8080 \
+  -e OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)" \
+  openclaw:local node openclaw.mjs gateway --allow-unconfigured
+```
+
+The token is required, not optional: in a container the Gateway selects the
+auto bind mode, and it refuses to bind a non-loopback address without a shared
+secret. `--allow-unconfigured` waives the configuration prerequisite, not that
+guard. Render supplies the value from the blueprint's `generateValue: true`; a
+throwaway one is fine locally.
+
+Leave `OPENCLAW_STATE_DIR` and `OPENCLAW_WORKSPACE_DIR` unset here. Render sets
+them to paths on its mounted disk, but the image prepares only its own
+`node`-owned directories and runs as that user, so pointing them at an unmounted
+`/data` fails when the Gateway creates its lock directory. State lands under the
+image's defaults and is discarded with the container, which is what you want for
+a health-check reproduction.
+
+See [Docker](/install/docker) for the full local container workflow.
 
 ## Next steps
 

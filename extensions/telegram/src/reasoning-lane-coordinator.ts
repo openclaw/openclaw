@@ -123,41 +123,27 @@ export function createTelegramReasoningStepState(): TelegramReasoningStepState {
   let reasoningStatus: "none" | "hinted" | "delivered" = "none";
   let bufferedFinalAnswer: ReplyPayload | undefined;
 
-  const noteReasoningHint = () => {
-    if (reasoningStatus === "none") {
-      reasoningStatus = "hinted";
-    }
-  };
-
-  const noteReasoningDelivered = () => {
-    reasoningStatus = "delivered";
-  };
-
-  const shouldBufferFinalAnswer = () => {
-    return reasoningStatus === "hinted" && !bufferedFinalAnswer;
-  };
-
-  const bufferFinalAnswer = (value: ReplyPayload) => {
-    bufferedFinalAnswer = value;
-  };
-
-  const takeBufferedFinalAnswer = (): ReplyPayload | undefined => {
-    const value = bufferedFinalAnswer;
-    bufferedFinalAnswer = undefined;
-    return value;
-  };
-
-  const resetForNextStep = () => {
-    reasoningStatus = "none";
-    bufferedFinalAnswer = undefined;
-  };
-
   return {
-    noteReasoningHint,
-    noteReasoningDelivered,
-    shouldBufferFinalAnswer,
-    bufferFinalAnswer,
-    takeBufferedFinalAnswer,
-    resetForNextStep,
+    noteReasoningHint() {
+      if (reasoningStatus === "none") {
+        reasoningStatus = "hinted";
+      }
+    },
+    noteReasoningDelivered() {
+      reasoningStatus = "delivered";
+    },
+    shouldBufferFinalAnswer: () => reasoningStatus === "hinted" && !bufferedFinalAnswer,
+    bufferFinalAnswer(value) {
+      bufferedFinalAnswer = value;
+    },
+    takeBufferedFinalAnswer() {
+      const value = bufferedFinalAnswer;
+      bufferedFinalAnswer = undefined;
+      return value;
+    },
+    resetForNextStep() {
+      reasoningStatus = "none";
+      bufferedFinalAnswer = undefined;
+    },
   };
 }

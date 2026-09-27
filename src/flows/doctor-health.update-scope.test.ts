@@ -11,7 +11,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: obs.note }));
 vi.mock("../commands/backup-health.js", () => ({ noteBackupDoctorHint: () => {} }));
 vi.mock("../state/config-machine-state-write.js", () => ({ writeConfigMachineState: () => {} }));
 vi.mock("../projects/project-registry.js", () => ({
-  listProjectRegistry: () => [
+  listProjectRegistry: async () => [
     {
       id: "synthetic-clone",
       displayName: "Synthetic clone",
@@ -37,10 +37,15 @@ vi.mock("../commands/doctor-db-bloat.js", () => ({
     obs.events.push("db-size-advice");
   },
 }));
-vi.mock("../commands/doctor/shared/active-tool-schema-warnings.js", () => ({
-  collectActiveToolSchemaProjectionWarnings: async () => {
-    obs.events.push("active-tool-schema");
-    return ["synthetic advisory"];
+vi.mock("../commands/doctor-bootstrap-size.js", () => ({
+  noteBootstrapFileSize: () => {
+    obs.events.push("bootstrap-size-advice");
+  },
+}));
+vi.mock("../gateway/github-public-api.js", () => ({
+  hasConfiguredGitHubApiCredential: () => {
+    obs.events.push("github-credential-advice");
+    return false;
   },
 }));
 vi.mock("../commands/doctor-state-integrity.js", () => ({
@@ -89,8 +94,9 @@ describe("update Doctor diagnostic scope", () => {
       const ids = new Set([
         "doctor:project-clone-shape",
         "doctor:db-bloat",
-        "doctor:active-tool-schema-warnings",
         "doctor:workspace-suggestions",
+        "doctor:github-projects",
+        "doctor:bootstrap-size",
       ]);
       const selected = resolveDoctorHealthContributions().filter((c) => ids.has(c.id));
       expect(selected).toHaveLength(ids.size);
@@ -106,18 +112,18 @@ describe("update Doctor diagnostic scope", () => {
       expect(obs.events).toEqual(
         mode === "standalone"
           ? [
-              "active-tool-schema",
               "project-git",
               "project-git",
               "project-git",
               "db-size-advice",
+              "github-credential-advice",
+              "bootstrap-size-advice",
               "workspace-suggestions",
             ]
           : [],
       );
-      expect(snapshot).toHaveBeenCalledTimes(mode === "standalone" ? 4 : 0);
+      expect(snapshot).toHaveBeenCalledTimes(mode === "standalone" ? ids.size : 0);
       if (mode === "standalone") {
-        expect(obs.note).toHaveBeenCalledWith("synthetic advisory", "Doctor warnings");
         expect(obs.note).not.toHaveBeenCalledWith(expect.anything(), "Update Doctor scope");
       } else {
         expect(obs.note).toHaveBeenCalledExactlyOnceWith(

@@ -6,10 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
-  createLegacyAuditBackupCapture,
   hasLegacyAuditBackupSources,
   isLegacyAuditMigrationBackupPath,
-} from "./state-migrations.audit-backup.js";
+} from "./backup-audit-paths.js";
+import { createLegacyAuditBackupCapture } from "./state-migrations.audit-backup.js";
 
 const TEST_SCRUB_PATTERN = Buffer.from(
   Array.from({ length: 32 }, (_, index) => (index % 2 === 0 ? 0x20 : 0x09)),
@@ -56,30 +56,52 @@ describe("legacy audit raw backup snapshots", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("recognizes only supported audit migration paths", () => {
-    const stateDir = "/opt/openclaw/state";
+  it.each([
+    ["logs/config-audit.jsonl", true],
+    ["logs/.config-audit.jsonl.doctor-importing", true],
+    ["audit/.system-agent.jsonl.doctor-importing.2", true],
+    ["audit/crestodian.jsonl.migrated.2.raw", true],
+    ["logs/config-audit.jsonl.migrated.raw", true],
+    ["audit/system-agent.jsonl.migrated.10.raw", true],
+    ["logs/config-audit.jsonl.migrated.raw.doctor-scrub-progress", true],
+    ["logs/config-audit.jsonl.migrated.10.raw.doctor-scrub-restore", true],
+    ["logs/config-audit.jsonl.migrated.raw.doctor-scrub-staging", true],
+    ["logs/config-audit.jsonl.migrated", false],
+    ["audit/system-agent.jsonl.migrated.2", false],
+    ["logs/other.jsonl.migrated.raw", false],
+    ["plugins/example/cache.jsonl.migrated.raw", false],
+    ["audit/config-audit.jsonl.migrated.raw", false],
+    ["logs/config-audit.jsonl.migrated.1.raw", false],
+  ])(
+    "keeps discovery and exclusion consistent for %s and its quarantines",
+    async (relative, expected) => {
+      await withTestDir({ prefix: "openclaw-audit-backup-family-" }, async (stateDir) => {
+        let sourcePath = path.join(stateDir, relative);
+        await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+        await fs.writeFile(sourcePath, "fixture");
+        for (const suffix of ["", ".quarantined-2026-09-17", ".quarantined-retained-copy"]) {
+          if (suffix) {
+            await fs.rename(sourcePath, sourcePath + suffix);
+            sourcePath += suffix;
+          }
+          expect(isLegacyAuditMigrationBackupPath(sourcePath, stateDir)).toBe(expected);
+          await expect(hasLegacyAuditBackupSources(stateDir)).resolves.toBe(expected);
+        }
+      });
+    },
+  );
+
+  it("rejects paths outside the audit state root", () => {
     expect(
       isLegacyAuditMigrationBackupPath(
-        `${stateDir}/logs/config-audit.jsonl.migrated.10.raw.doctor-scrub-restore`,
-        stateDir,
+        "/opt/other/logs/config-audit.jsonl.migrated.raw.quarantined-copy",
+        "/opt/state",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isLegacyAuditMigrationBackupPath(
-        `${stateDir}/audit/.system-agent.jsonl.doctor-importing.2`,
-        stateDir,
-      ),
-    ).toBe(true);
-    expect(
-      isLegacyAuditMigrationBackupPath(
-        `${stateDir}/logs/config-audit.jsonl.migrated.raw.doctor-scrub-progress`,
-        stateDir,
-      ),
-    ).toBe(true);
-    expect(
-      isLegacyAuditMigrationBackupPath(
-        `${stateDir}/plugins/example/cache.jsonl.migrated.raw`,
-        stateDir,
+        "/opt/state/logs/../../logs/config-audit.jsonl.migrated.raw.quarantined-copy",
+        "/opt/state",
       ),
     ).toBe(false);
   });

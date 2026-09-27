@@ -44,6 +44,7 @@ function resolvePluginRegistryRecordContent(
   const {
     doctorContractFile: _doctorContractFile,
     manifestFile: _manifestFile,
+    sourceAdmissions: _sourceAdmissions,
     packageBuild,
     packageJson,
     ...record
@@ -119,6 +120,20 @@ export function diffPluginRegistryRecords(
   // whole registry stale. Reporting a narrower comparison would hide the owning plugin.
   const persistedPlugins = new Map(persisted.plugins.map((plugin) => [plugin.pluginId, plugin]));
   const derivedPlugins = new Map(derived.plugins.map((plugin) => [plugin.pluginId, plugin]));
+  const groupDiagnostics = (index: InstalledPluginIndex) => {
+    const groups = new Map<
+      string | undefined,
+      Array<InstalledPluginIndex["diagnostics"][number]>
+    >();
+    for (const diagnostic of index.diagnostics) {
+      const group = groups.get(diagnostic.pluginId) ?? [];
+      group.push(diagnostic);
+      groups.set(diagnostic.pluginId, group);
+    }
+    return groups;
+  };
+  const persistedDiagnostics = groupDiagnostics(persisted);
+  const derivedDiagnostics = groupDiagnostics(derived);
   const pluginIds = new Set([
     ...persistedPlugins.keys(),
     ...derivedPlugins.keys(),
@@ -152,8 +167,8 @@ export function diffPluginRegistryRecords(
         ["install", persisted.installRecords[pluginId], derived.installRecords[pluginId]],
         [
           "diagnostics",
-          persisted.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
-          derived.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
+          persistedDiagnostics.get(pluginId) ?? [],
+          derivedDiagnostics.get(pluginId) ?? [],
         ],
       ];
       const changed = facets

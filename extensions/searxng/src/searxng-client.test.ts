@@ -226,6 +226,17 @@ describe("searxng client", () => {
     expect(result.results).toEqual([]);
   });
 
+  it.each([401, 403, 429])("preserves HTTP error status %i", async (status) => {
+    endpointMockState.responses.push(new Response("upstream rejected search", { status }));
+    await expect(
+      runSearxngSearch({
+        baseUrl: "http://127.0.0.1:8888",
+        query: `http-error-${status}`,
+        cacheTtlMinutes: 0,
+      }),
+    ).rejects.toMatchObject({ status, statusCode: status });
+  });
+
   it("rejects invalid and incomplete response bodies", async () => {
     endpointMockState.responses.push(new Response("{", { status: 200 }));
     await expect(

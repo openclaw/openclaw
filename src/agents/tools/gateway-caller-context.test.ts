@@ -3,6 +3,12 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import {
+  claimAgentRunApprovalAuthority,
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -26,6 +32,86 @@ import {
 } from "./gateway-caller-context.js";
 
 describe("gateway caller context wrapper", () => {
+  it.each(["outer", "inner"])("retains the narrower %s approval lifetime", async (narrower) => {
+    const run = { instanceId: `context-${narrower}`, runId: `context-${narrower}` };
+    const root = claimAgentRunDelegatedAuthority(run);
+    const lifetime = new AbortController();
+    const worker = claimAgentRunApprovalAuthority(root, [lifetime.signal]);
+    const caller = { agentId: "main", sessionKey: "agent:main:scope", operationalRunInstance: run };
+    try {
+      await withGatewayToolCallerIdentity(
+        { ...caller, approvalAuthority: narrower === "outer" ? worker : root },
+        () =>
+          withGatewayToolCallerIdentity(
+            { ...caller, approvalAuthority: narrower === "inner" ? worker : root },
+            () => {
+              const retained = getGatewayToolCallerIdentity()?.approvalAuthority;
+              if (!retained) {
+                throw new Error("Expected retained approval authority");
+              }
+              expect(validateAgentRunDelegatedAuthority(retained)).toBe(true);
+              lifetime.abort();
+              expect(validateAgentRunDelegatedAuthority(retained)).toBe(false);
+              expect(validateAgentRunDelegatedAuthority(root)).toBe(true);
+            },
+          ),
+      );
+    } finally {
+      releaseAgentRunDelegatedAuthority(root);
+    }
+  });
+
+  it("refuses unrelated same-run approval scopes before entering the wrapper", async () => {
+    const run = { instanceId: "context-unrelated", runId: "context-unrelated" };
+    const root = claimAgentRunDelegatedAuthority(run);
+    const first = claimAgentRunApprovalAuthority(root, [new AbortController().signal]);
+    const second = claimAgentRunApprovalAuthority(root, [new AbortController().signal]);
+    const caller = { agentId: "main", sessionKey: "agent:main:scope", operationalRunInstance: run };
+    const entered = vi.fn();
+    try {
+      await expect(
+        withGatewayToolCallerIdentity({ ...caller, approvalAuthority: first }, () =>
+          withGatewayToolCallerIdentity({ ...caller, approvalAuthority: second }, entered),
+        ),
+      ).rejects.toThrow("approval scopes do not retain the same source");
+      expect(entered).not.toHaveBeenCalled();
+    } finally {
+      releaseAgentRunDelegatedAuthority(root);
+    }
+  });
+
+  it("preserves every delegated tool restriction through same-run wrappers", async () => {
+    const identity = { agentId: "main", sessionKey: "agent:main:preview" };
+    await withGatewayToolCallerIdentity(
+      {
+        ...identity,
+        assertToolAllowed: (name) => {
+          if (name === "exec") {
+            throw new Error("exec denied");
+          }
+        },
+      },
+      () =>
+        withGatewayToolCallerIdentity(
+          {
+            ...identity,
+            assertToolAllowed: (name) => {
+              if (name === "process") {
+                throw new Error("process denied");
+              }
+            },
+          },
+          () =>
+            withGatewayToolCallerIdentity(identity, () => {
+              const caller = getGatewayToolCallerIdentity();
+              expect(() => caller?.assertToolAllowed?.("exec")).toThrow("exec denied");
+              expect(() => caller?.assertToolAllowed?.("process")).toThrow("process denied");
+              expect(() => caller?.assertToolAllowed?.("read")).not.toThrow();
+            }),
+        ),
+    );
+  });
+
   it("preserves tool metadata used by policy and presentation layers", () => {
     const tool: AnyAgentTool = {
       name: "plugin_tool",

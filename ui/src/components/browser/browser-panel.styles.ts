@@ -43,6 +43,7 @@ export const browserPanelStyles = css`
   }
   .bp-toolbar .bp-icon {
     display: inline-flex;
+    flex: none;
     width: 28px;
     height: 28px;
     align-items: center;
@@ -52,6 +53,26 @@ export const browserPanelStyles = css`
     border-radius: 6px;
     background: transparent;
     color: var(--muted, #8a919e);
+  }
+  /* Shadow-root icons need explicit dimensions in WebKit as well as Chromium. */
+  .bp-toolbar .bp-icon > svg,
+  .bp-annotatebar .bp-btn > svg {
+    width: 16px;
+    height: 16px;
+    flex: none;
+  }
+  .bp-toolbar .bp-icon[aria-busy="true"] > svg {
+    animation: bp-toolbar-spin 1s linear infinite;
+  }
+  @keyframes bp-toolbar-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bp-toolbar .bp-icon[aria-busy="true"] > svg {
+      animation: none;
+    }
   }
   .bp-toolbar .bp-icon:hover,
   .bp-toolbar .bp-icon:focus-visible {
@@ -157,6 +178,18 @@ export const browserPanelStyles = css`
   }
   .bp-overlay--annotate {
     cursor: crosshair;
+  }
+  .bp-input {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    outline: none;
+    resize: none;
+    background: transparent;
+    color: transparent;
+    caret-color: transparent;
+    cursor: default;
   }
   .bp-overlay--inspect {
     cursor: default;

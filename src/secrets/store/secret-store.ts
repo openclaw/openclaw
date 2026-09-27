@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { Selectable } from "kysely";
+import { isRedactedSecretValue } from "../../config/redact-sentinel.js";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
 import {
   executeSqliteQuerySync,
@@ -8,7 +9,9 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
+import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { ensureSecretStoreSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -17,13 +20,19 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  executeOpenClawStateWorker,
+  runOpenClawStateWorkerOperation,
+} from "../../state/openclaw-state-worker-store.js";
 import { normalizeExactAllowedHost } from "../exact-hostname.js";
 import { sealSecretSentinel } from "../sentinel.js";
+import { captureSecretStoreExpiryCutoffs } from "./secret-store-expiry.kernel.js";
 import {
   classifyHiddenGitHubStoreName,
-  GITHUB_DEVICE_STORE_MAX_AGE_MS,
   GITHUB_SETUP_HANDOFF_MAX_AGE_MS,
 } from "./secret-store-hidden-github.js";
+import { isMissingSecretStoreTableError } from "./secret-store-sqlite.js";
 import {
   SECRET_STORE_ALLOWED_HOSTS_MAX,
   SECRET_STORE_VALUE_MAX_BYTES,
@@ -51,6 +60,8 @@ export type SecretStoreWriteParams = {
   scope: SecretStoreScope;
   name: string;
   value: string;
+  /** Replace only the matching value during repair, preserving the current kind and host policy. */
+  expectedValue?: string;
   kind: SecretStoreKind;
   allowedHosts?: readonly string[];
   updatedBy: string | null;
@@ -93,7 +104,7 @@ type SecretStoreReadError =
   | { code: "SECRET_STORE_INVALID_NAME"; message: string }
   | { code: "SECRET_STORE_UNAVAILABLE"; message: string; cause: unknown };
 
-const SECRET_STORE_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const log = createSubsystemLogger("secrets/store");
 
 function normalizeScope(_scope: SecretStoreScope): { scopeKind: "team"; scopeId: "" } {
   return { scopeKind: "team", scopeId: "" };
@@ -117,7 +128,13 @@ function assertSecretStoreMutationName(name: string): void {
   }
 }
 
-export function assertSecretStoreValue(value: string, kind: SecretStoreKind): void {
+export function assertSecretStoreValue(value: string, kind: SecretStoreKind, name: string): void {
+  if (isRedactedSecretValue(value)) {
+    throw new SecretStoreValidationError(
+      "SECRET_STORE_VALUE_REDACTED",
+      `Secret store entry "${name}" contains a redaction placeholder. Supply a real value or leave the field unchanged. Run openclaw doctor --fix to repair a store-backed Gateway token.`,
+    );
+  }
   const bytes = Buffer.byteLength(value, "utf8");
   if (bytes > SECRET_STORE_VALUE_MAX_BYTES) {
     throw new SecretStoreValidationError(
@@ -173,14 +190,6 @@ function parseSecretAllowedHosts(raw: string | null | undefined): string[] {
   }
 }
 
-function isMissingSecretStoreTableError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error as NodeJS.ErrnoException).code === "ERR_SQLITE_ERROR" &&
-    error.message === "no such table: secret_store_entries"
-  );
-}
-
 function toMetadata(row: SecretStoreRow): SecretStoreEntryMetadata {
   if (row.kind === "secret") {
     registerSecretValueForRedaction(row.value);
@@ -201,6 +210,7 @@ function toMetadata(row: SecretStoreRow): SecretStoreEntryMetadata {
 export function listSecretStoreEntries(params: {
   scope: SecretStoreScope;
   includeDeleted?: boolean;
+  redactedOnly?: boolean;
   database?: OpenClawStateDatabaseOptions;
 }): SecretStoreEntryMetadata[] {
   const { scopeKind, scopeId } = normalizeScope(params.scope);
@@ -218,7 +228,11 @@ export function listSecretStoreEntries(params: {
           query = query.where("deleted_at_ms", "is", null);
         }
         return executeSqliteQuerySync(sqlite, query)
-          .rows.filter((row) => classifyHiddenGitHubStoreName(row.name) === undefined)
+          .rows.filter(
+            (row) =>
+              classifyHiddenGitHubStoreName(row.name) === undefined &&
+              (!params.redactedOnly || isRedactedSecretValue(row.value)),
+          )
           .map(toMetadata);
       }, params.database ?? {}) ?? []
     );
@@ -318,6 +332,12 @@ export function readSecretStoreExecEnvironment(params: {
           ) {
             continue;
           }
+          if (isRedactedSecretValue(row.value)) {
+            log.warn(
+              `Secret store entry "${row.name}" contains a redaction placeholder; excluded from the exec environment. Replace it with a real value, or run openclaw doctor --fix for a Gateway token.`,
+            );
+            continue;
+          }
           if (row.kind === "env") {
             env[row.name] = row.value;
             continue;
@@ -406,7 +426,7 @@ function writeSecretStoreEntryInternal(
   capturePrevious: boolean,
 ): SecretStoreWriteSnapshot | undefined {
   assertSecretStoreMutationName(params.name);
-  assertSecretStoreValue(params.value, params.kind);
+  assertSecretStoreValue(params.value, params.kind, params.name);
   if (params.kind === "env" && params.allowedHosts !== undefined) {
     throw new SecretStoreValidationError(
       "SECRET_STORE_INVALID_ALLOWED_HOST",
@@ -424,18 +444,25 @@ function writeSecretStoreEntryInternal(
     ({ db: sqlite }) => {
       ensureSecretStoreSchema(sqlite);
       const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-      const previous = capturePrevious
-        ? executeSqliteQueryTakeFirstSync(
-            sqlite,
-            db
-              .selectFrom("secret_store_entries")
-              .select(["value", "kind", "allowed_hosts", "updated_by"])
-              .where("scope_kind", "=", scopeKind)
-              .where("scope_id", "=", scopeId)
-              .where("name", "=", params.name)
-              .where("deleted_at_ms", "is", null),
-          )
-        : undefined;
+      const previous =
+        capturePrevious || params.expectedValue !== undefined
+          ? executeSqliteQueryTakeFirstSync(
+              sqlite,
+              db
+                .selectFrom("secret_store_entries")
+                .select(["value", "kind", "allowed_hosts", "updated_by"])
+                .where("scope_kind", "=", scopeKind)
+                .where("scope_id", "=", scopeId)
+                .where("name", "=", params.name)
+                .where("deleted_at_ms", "is", null),
+            )
+          : undefined;
+      if (params.expectedValue !== undefined && previous?.value !== params.expectedValue) {
+        throw new SecretStoreValidationError(
+          "SECRET_STORE_VALUE_CHANGED",
+          `Secret store entry "${params.name}" changed before repair; its current value was preserved. Run openclaw doctor again.`,
+        );
+      }
       executeSqliteQuerySync(
         sqlite,
         db
@@ -455,15 +482,14 @@ function writeSecretStoreEntryInternal(
           .onConflict((conflict) =>
             conflict.columns(["scope_kind", "scope_id", "name"]).doUpdateSet({
               value: params.value,
-              kind: params.kind,
+              ...(params.expectedValue === undefined ? { kind: params.kind } : {}),
               updated_at_ms: now,
               updated_by: params.updatedBy,
               deleted_at_ms: null,
-              ...(params.kind === "env"
-                ? { allowed_hosts: null }
-                : allowedHosts !== undefined
-                  ? { allowed_hosts: allowedHostsJson }
-                  : {}),
+              ...(params.expectedValue === undefined &&
+              (params.kind === "env" || allowedHosts !== undefined)
+                ? { allowed_hosts: allowedHostsJson }
+                : {}),
             }),
           ),
       );
@@ -563,6 +589,48 @@ export function writeSecretStoreEntryWithRollback(params: SecretStoreWriteParams
   };
 }
 
+/**
+ * Saves a secret for one config key in a fresh team-store entry through the
+ * state worker and returns the entry name. `assertCurrent` is the requester's
+ * live authority; the worker checks it again at transaction and commit
+ * admission, so a revoked request writes nothing.
+ */
+export async function writeSecretStoreEntryForConfigRef(params: {
+  baseName: string;
+  value: string;
+  updatedBy: string;
+  assertCurrent?: () => void;
+  database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+}): Promise<string> {
+  registerSecretValueForRedaction(params.value);
+  assertSecretStoreValue(params.value, "secret", params.baseName);
+  const context = captureOpenClawStateWorkerContext(params.database);
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    params.assertCurrent?.();
+  };
+  const { name } = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({
+        type: "secrets.writeForConfigRef",
+        input: {
+          baseName: params.baseName,
+          value: params.value,
+          writer: params.updatedBy,
+          now: Date.now(),
+        },
+      }),
+    {
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+        context.admission.databasePath,
+      ]),
+    },
+  );
+  return name;
+}
+
 export function updateSecretStoreAllowedHosts(params: {
   scope: SecretStoreScope;
   name: string;
@@ -644,63 +712,10 @@ export function deleteSecretStoreEntry(params: {
   }
 }
 
-export function purgeExpiredSecretStoreEntries(
-  params: {
-    database?: OpenClawStateDatabaseOptions;
-  } = {},
-): number {
-  const state = openOpenClawStateDatabase(params.database);
-  const threshold = Date.now() - SECRET_STORE_RETENTION_MS;
-  const handoffThreshold = Date.now() - GITHUB_SETUP_HANDOFF_MAX_AGE_MS;
-  const deviceThreshold = Date.now() - GITHUB_DEVICE_STORE_MAX_AGE_MS;
-  try {
-    return runOpenClawStateWriteTransaction(
-      ({ db: sqlite }) => {
-        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-        const deleted = executeSqliteQuerySync(
-          sqlite,
-          db
-            .deleteFrom("secret_store_entries")
-            .where("deleted_at_ms", "is not", null)
-            .where("deleted_at_ms", "<", threshold),
-        );
-        const hiddenRows = executeSqliteQuerySync(
-          sqlite,
-          db
-            .selectFrom("secret_store_entries")
-            .select(["scope_kind", "scope_id", "name", "created_at_ms"])
-            .where("deleted_at_ms", "is", null)
-            .where("created_at_ms", "<=", Math.max(handoffThreshold, deviceThreshold)),
-        ).rows.filter((row) => {
-          const kind = classifyHiddenGitHubStoreName(row.name);
-          const createdAtMs = normalizeSqliteNumber(row.created_at_ms);
-          return (
-            createdAtMs !== undefined &&
-            ((kind === "setup" && createdAtMs < handoffThreshold) ||
-              (kind === "device" && createdAtMs <= deviceThreshold))
-          );
-        });
-        let expiredHidden = 0;
-        for (const row of hiddenRows) {
-          const result = executeSqliteQuerySync(
-            sqlite,
-            db
-              .deleteFrom("secret_store_entries")
-              .where("scope_kind", "=", row.scope_kind)
-              .where("scope_id", "=", row.scope_id)
-              .where("name", "=", row.name),
-          );
-          expiredHidden += Number(result.numAffectedRows ?? 0n);
-        }
-        return Number(deleted.numAffectedRows ?? 0n) + expiredHidden;
-      },
-      { ...params.database, database: state },
-      { operationLabel: "secrets.store.purge" },
-    );
-  } catch (error) {
-    if (isMissingSecretStoreTableError(error)) {
-      return 0;
-    }
-    throw error;
-  }
+export async function purgeExpiredSecretStoreEntries(
+  params: { database?: Pick<OpenClawStateDatabaseOptions, "path" | "env"> } = {},
+): Promise<number> {
+  const input = captureSecretStoreExpiryCutoffs();
+  const context = captureOpenClawStateWorkerContext(params.database);
+  return await executeOpenClawStateWorker(context, { type: "secrets.purge", input });
 }

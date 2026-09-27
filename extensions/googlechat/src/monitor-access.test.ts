@@ -1,4 +1,5 @@
 // Googlechat tests cover monitor access plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const createChannelPairingController = vi.hoisted(() => vi.fn());
@@ -8,10 +9,10 @@ const resolveDefaultGroupPolicy = vi.hoisted(() => vi.fn());
 const warnMissingProviderGroupPolicyFallbackOnce = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({ createChannelPairingController }));
+vi.mock("openclaw/plugin-sdk/dangerous-name-runtime", () => ({ isDangerousNameMatchingEnabled }));
+vi.mock("openclaw/plugin-sdk/runtime-group-policy", () => ({
   GROUP_POLICY_BLOCKED_LABEL: { space: "space" },
-  createChannelPairingController,
-  isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -24,6 +25,7 @@ vi.mock("./api.js", () => ({
 function createCore() {
   return {
     channel: {
+      inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => false),
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
@@ -93,7 +95,9 @@ describe("googlechat inbound access policy", () => {
   });
 
   afterAll(() => {
-    vi.doUnmock("../runtime-api.js");
+    vi.doUnmock("openclaw/plugin-sdk/channel-pairing");
+    vi.doUnmock("openclaw/plugin-sdk/dangerous-name-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-group-policy");
     vi.doUnmock("./api.js");
     vi.resetModules();
   });

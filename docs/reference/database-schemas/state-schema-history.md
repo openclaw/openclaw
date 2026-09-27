@@ -8,6 +8,8 @@ title: "State schema history"
 
 ## State schema history
 
+Doctor completes recognized schema-1 databases that predate the audit ledger before later workspace and agent checks run. Missing ownership metadata or a missing audit ledger at schema 2 or newer still prevents repair.
+
 | Version | Change                                                                                                                                                                                                                                                                                                                          | First release       |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
 | 1       | Initial shared state database                                                                                                                                                                                                                                                                                                   | `v2026.5.30-beta.1` |
@@ -26,6 +28,149 @@ title: "State schema history"
 | 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
 | 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
 | 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | Unreleased          |
+| 17      | Prepared worker lifecycle facts and one-use node workspace bindings                                                                                                                                                                                                                                                             | Unreleased          |
+| 18      | Original requesting authority retained with shared GitHub publication receipts                                                                                                                                                                                                                                                  | Unreleased          |
+| 19      | Durable original channel-owner authorization and revocation continuity                                                                                                                                                                                                                                                          | Unreleased          |
+
+### State schema 19
+
+Schema 19 adds nullable `authorization_id TEXT` and
+`authorization_basis_json TEXT` to the existing `user_profile_identities` rows.
+The profile owner reuses an uninterrupted channel link's opaque UUID and records
+only its original access-policy grant reference (or JSON `null`). It does not
+copy channel identities into another store. A reference is versioned JSON
+`{ "version": 1, "id": "<uuid>" }`, not a credential: recovery resolves it through
+the profile read worker and rechecks current roles or identity scopes and the original plugin grant.
+Unknown versions, malformed references, missing rows, or corrupt grant facts do
+not authorize work. This schema supplies the owner contract; consumers must
+retain and revalidate their own effect authority.
+
+Profile authority mutations clear these fields in the same transaction as their
+role, alias, or ownership change. Unlinking removes the row. Restoring a role or
+link cannot restore a retired reference. The existing config machine-state store
+records the activated `gateway.roles` and `gateway.auth.identityScopes` policy
+snapshot under `operator.channelPolicy`. Identity-scope-only owners use the same
+reference contract; removing and restoring their configured scopes cannot revive
+a retired reference. Under the secrets activation lock, changes to either policy
+retire existing references durably before
+publishing the exact successor snapshot. Rollback uses the same operation with
+the merged target; publication failure reconciles the surviving active policy.
+No agent schema changes are involved.
+
+Startup and Doctor add the nullable columns without assigning authority to legacy
+rows; unused profile tables remain absent until first use. The canonical schema
+and the profile owner's lazy ensure share the table and index definitions.
+Both published schema markers normally advance to 19. During the existing
+[older-updater publication deferral](/reference/database-schemas/versioning#schema-bumps-and-older-updaters),
+content can be upgraded while older published markers remain. References cannot
+be issued or recovered until version 19 is published.
+
+Version 18 writers cannot preserve revocation history, so this is a versioned
+permission contract even though the added columns are nullable. Their normal
+worker admission checks foreign version changes under the state coordinator and
+refuses further writes, including deferred content newer than their support. Older readers also refuse schema 19.
+Create a verified, WAL-aware backup before upgrading. Downgrade requires restoring
+the matching pre-upgrade backup in a separate state directory; never lower the
+markers or remove authority columns. Restoring a backup loses later revocations
+and receipts and does not undo external effects; reconcile those with a compatible
+build before rollback.
+
+### State schema 18
+
+Schema 18 adds nullable `requester_authority_json TEXT` columns to
+`github_publication_session_lifecycles` and `github_repository_publication_requests`.
+Shared publication admission records its original requester, scope ceiling, and
+any required plugin grant identity and original alias-binding IDs in the existing request transaction. The
+snapshot survives deferral and restart; it does not replace current role, grant,
+session, or execution authority checks. Publisher selection, repository routing,
+human attribution, and receipt retention are unchanged.
+
+Startup and `openclaw doctor --fix` add the columns to existing tables without
+rebuilding or rewriting their rows. Historical values stay `NULL`: migration
+does not infer a requester from the publisher, session creator, or current
+assignee. Unproven pending requests cannot begin new effects. Terminal receipts
+remain readable, and observing an already-dispatched GitHub result does not
+authorize another operation. Unused publication tables remain absent until their
+normal first write, which creates the canonical schema.
+
+The profile schema owner adds nullable `binding_id TEXT` to the existing
+`user_profile_emails` table and initializes missing IDs in its own transaction.
+Each email-to-profile binding has an opaque UUID. Creation or an actual ownership
+change starts a new binding; same-owner refreshes retain it. Removing and later
+restoring an alias cannot restore its former ID. Publication snapshots retain
+only those original IDs, without copying email addresses or updating accepted
+receipt bytes. Initializing existing aliases does not backfill missing authority
+into historical publication requests.
+
+The publication column additions and version facts commit in one schema transaction; failure
+rolls them back together. Both published markers normally advance to 18. The
+existing [older-updater publication deferral](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
+can retain earlier published markers while recording applied content version 18.
+Reopening uses that content version and does not repeat migration.
+
+Older readers validate these optional tables exactly, so bare nullable columns
+do not make this a same-version addition. Builds supporting state schema 17 or
+earlier refuse schema 18. Stop older writers and create a verified, WAL-aware
+backup before upgrading. Rollback requires the matching build and pre-upgrade
+backup in a separate state directory, not lowered version markers or deleted
+authority fields. Keep the newer database and reconcile accepted GitHub effects
+with a compatible build before rollback: restoring a backup loses later local
+receipts and does not undo pushed commits or pull requests.
+
+### State schema 17
+
+Schema 17 adds the complete prepared-worker storage contract. The nullable
+`worker_environments` columns `preparation_key`, `preparation_demand_at_ms`,
+`preparation_expires_at_ms`, and `preparation_consumed_at_ms` form one constrained
+tuple for one-use capacity. The separate nullable `last_activated_at_ms` column
+stores successful activation time. Ready-pool admission writes the preparation
+tuple; consuming that capacity and assigning a session placement share one
+transaction. Successful placement activation records its demand time in the
+same transaction. Consumption survives failed attachment, placement retirement,
+and reopen, while terminal rows retain unexpired demand and uncertain cleanup.
+Migration leaves all five values `NULL` on existing workers and does not infer
+demand, activation, or unused capacity from historical rows.
+
+Dedicated nodes register fixed build paths in the first-use
+`node_worker_prepared_workspaces` table. It records the exact environment and
+completed `preparation_key`, a required `cache_key` identifying compatible
+project/runtime contents, and fixed workspace and HOME paths. Separate required
+`source_manifest_ref` and `prepared_manifest_ref` digests identify the clean Git
+baseline and completed setup tree. Initial binding verifies the completed tree;
+replay preserves the bound session's edits. Binding records the session and
+owner epoch once. Retirement keeps that binding until machine teardown, so
+retired paths cannot be claimed by another session.
+
+Registration creates the node-only table inside its existing synchronous write
+transaction. An aborted registration rolls back that DDL, and a later attempt
+can create it again. Ordinary database open and migration leave the table
+absent. Per-agent schemas and native companion tables do not change; native
+clients can continue validating and reading their existing owned tables at
+state schema 17 without performing migrations.
+
+Startup and `openclaw doctor --fix` apply the schema-16 Skill Workshop migration
+before the prepared-worker migration when opening a schema-15 database. A
+schema-16 database receives only the prepared-worker migration. The tuple
+constraint belongs to the last added column, so migration scans existing
+environments once and preserves the table instead of rebuilding it. Leases,
+credentials, placements, inference turns, unknown additive data, and uncertain
+cleanup remain intact. No provider operation runs in the migration transaction.
+
+Migration content and its version facts commit together; failure rolls back all
+database changes from that attempt. Both published markers normally advance to
+17 in that transaction. When an older updater still owns trailing ledger reads,
+the existing [version-publication deferral](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
+keeps the published markers at their earlier version and records applied content
+17 separately. Reopening does not repeat that content migration. Workshop
+directory relocation runs afterward, outside the schema transaction.
+
+Before upgrading, stop older writers and create a verified, WAL-aware backup.
+Builds supporting state schema 16 or earlier refuse the published schema 17.
+To roll back, complete cloud cleanup with a compatible build, stop all writers,
+then restore the pre-upgrade backup into a separate state directory. Restoring
+does not retain changes made after that backup. Do not lower either version
+marker or erase a consumed binding. Unresolved provider cleanup can continue
+incurring charges until deletion is confirmed.
 
 ### State schema 16
 
@@ -72,6 +217,8 @@ Stop older writers and create a verified, WAL-aware backup before upgrading. Bui
 ### State schema 13
 
 Schema 13 makes `cron_jobs.job_json`, `cron_jobs.state_json`, and `subagent_runs.payload_json` the canonical records. Physical columns remain only where production queries, ordering, or runtime-only updates require them. Cron jobs shrink from 75 columns to 15, and subagent runs shrink from 59 columns to six. Migration preserves failure-destination fields explicitly configured as undefined by encoding them as JSON `null`; it also normalizes legacy run-status aliases into `state_json` before removing the redundant projections.
+
+Workspace attestations merge into `workspace_setup_state`. Migration preserves attestation timestamps and generated bootstrap hashes when older databases have no `workspace_path_aliases` table. Attestation-only workspaces retain a null path until the workspace is encountered again.
 
 The shared-state `auth_profile_stores` and `auth_profile_state` singletons move into `config_machine_state` under `authProfiles.store` and `authProfiles.state`; per-agent auth tables remain unchanged. Because these rows contain credentials, secret-redacted Git backups omit the `authProfiles.` machine-state prefix.
 

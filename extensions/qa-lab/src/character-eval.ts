@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements character eval behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
@@ -8,10 +7,10 @@ import { formatDurationCompact } from "openclaw/plugin-sdk/time-runtime";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import {
-  QA_FRONTIER_CHARACTER_EVAL_MODELS,
-  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS,
-  QA_FRONTIER_CHARACTER_JUDGE_MODELS,
-  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL,
+  QA_FRONTIER_CHARACTER_EVAL_MODELS as DEFAULT_CHARACTER_EVAL_MODELS,
+  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS as DEFAULT_JUDGE_MODEL_OPTIONS,
+  QA_FRONTIER_CHARACTER_JUDGE_MODELS as DEFAULT_JUDGE_MODELS,
+  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL as DEFAULT_CHARACTER_THINKING_BY_MODEL,
 } from "./providers/live-frontier/character-eval.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import { extractQaVisibleReplyLeakText } from "./reply-failure.js";
@@ -19,16 +18,10 @@ import { readQaSuiteFailedScenarioCountFromFile } from "./suite-summary.js";
 import type { QaSuiteResult } from "./suite.js";
 
 const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
-const DEFAULT_CHARACTER_EVAL_MODELS = QA_FRONTIER_CHARACTER_EVAL_MODELS;
 const DEFAULT_CHARACTER_THINKING: QaThinkingLevel = "high";
 const DEFAULT_CHARACTER_EVAL_CONCURRENCY = 16;
-const DEFAULT_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, QaThinkingLevel>> =
-  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL;
-const DEFAULT_JUDGE_MODELS = QA_FRONTIER_CHARACTER_JUDGE_MODELS;
 const DEFAULT_JUDGE_THINKING: QaThinkingLevel = "xhigh";
 const DEFAULT_JUDGE_TIMEOUT_MS = 300_000;
-const DEFAULT_JUDGE_MODEL_OPTIONS: Readonly<Record<string, QaCharacterModelOptions>> =
-  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS;
 
 type QaCharacterRunStatus = "pass" | "fail";
 
@@ -182,10 +175,7 @@ function sanitizePathPart(value: string) {
 }
 
 function normalizeConcurrency(value: number | undefined, fallback = 1) {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isFinite(value)) {
+  if (value === undefined || !Number.isFinite(value)) {
     return fallback;
   }
   return Math.max(1, Math.floor(value));
@@ -343,8 +333,8 @@ function normalizeJudgment(value: unknown, allowedModels: Set<string>): QaCharac
       if (!allowedModels.has(model)) {
         return null;
       }
-      const rank = typeof record.rank === "number" ? record.rank : Number(record.rank);
-      const score = typeof record.score === "number" ? record.score : Number(record.score);
+      const rank = Number(record.rank);
+      const score = Number(record.score);
       const summary = typeof record.summary === "string" ? record.summary : "";
       const strengths = Array.isArray(record.strengths)
         ? record.strengths.filter((item): item is string => typeof item === "string")
@@ -385,14 +375,7 @@ function parseJudgeReply(reply: string | null, allowedModels: Set<string>) {
   return rankings;
 }
 
-async function defaultRunJudge(params: {
-  repoRoot: string;
-  judgeModel: string;
-  judgeThinkingDefault: QaThinkingLevel;
-  judgeFastMode: boolean;
-  prompt: string;
-  timeoutMs: number;
-}) {
+async function defaultRunJudge(params: Parameters<RunJudgeFn>[0]) {
   const { runQaManualLane } = await import("./manual-lane.runtime.js");
   const result = await runQaManualLane({
     repoRoot: params.repoRoot,
@@ -655,7 +638,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         });
         rankings = parseJudgeReply(rawReply, new Set(judgePrompt.labelToModel.keys())).map(
           (ranking) =>
-            Object.assign({}, ranking, {
+            Object.assign(ranking, {
               model: judgePrompt.labelToModel.get(ranking.model) ?? ranking.model,
             }),
         );

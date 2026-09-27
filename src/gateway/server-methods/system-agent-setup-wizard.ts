@@ -28,6 +28,7 @@ export async function startSetupActivationWizard(params: {
     | "kind"
     | "agentId"
     | "modelRef"
+    | "modelTarget"
     | "authChoice"
     | "apiKey"
     | "workspace"
@@ -74,6 +75,7 @@ export async function startSetupActivationWizard(params: {
           }
           runnerSession.setModelActivation({
             modelRef: result.modelRef,
+            ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
             ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
           });
         },

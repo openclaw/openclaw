@@ -6,6 +6,8 @@
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Elementy sterujące"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Rozmowa"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dźwięk na zegarku nie zadziałał"</string>
+    <string name="microphone_permission_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Wymagane uprawnienie do mikrofonu"</string>
+    <string name="open_settings" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Otwórz ustawienia"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dyktuj"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Na żywo"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wątek"</string>
@@ -26,6 +28,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Odczytaj najnowszą odpowiedź"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Odczytywanie"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nasłuchiwanie"</string>
+    <string name="stopping" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Kończenie połączenia…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Łączenie"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Myślenie"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pisanie"</string>
@@ -79,6 +82,8 @@
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Działanie nie zostało zaakceptowane"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Coś poszło nie tak"</string>
     <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Odśwież listy i spróbuj ponownie."</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Nie udało się odświeżyć niektórych modeli. Modele na liście są nadal dostępne."</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Zaktualizuj OpenClaw na telefonie oraz Gateway, aby wybierać modele dla tego czatu."</string>
     <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Spróbuj ponownie z poziomu zegarka."</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wymagana aktualizacja"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zaktualizuj OpenClaw na telefonie i zegarku."</string>
@@ -121,4 +126,14 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"W kolejce: %1$d, uruchomione: %2$d, ukończone: %3$d, nieudane: %4$d, ukryte: %5$d"</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Nie pokazano pozostałych faz"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Nieznane"</string>
+    <string name="read_full_reply" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Przeczytaj całą odpowiedź"</string>
+    <string name="reply_stream_preview" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Podgląd na żywo. Przeczytaj pełną odpowiedź po zakończeniu jej generowania."</string>
+    <string name="reply_previous_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Poprzednia część"</string>
+    <string name="reply_next_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Następna część"</string>
+    <string name="reply_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Ładowanie pełnej odpowiedzi…"</string>
+    <string name="reply_unsupported" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Zaktualizuj aplikację na telefonie i Gateway, aby czytać pełne odpowiedzi."</string>
+    <string name="reply_too_large" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Ta odpowiedź jest zbyt długa, aby można ją było tutaj przeczytać. Otwórz ją na telefonie."</string>
+    <string name="reply_changed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Odpowiedź lub połączenie uległy zmianie. Spróbuj ponownie od początku."</string>
+    <string name="reply_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pełny tekst nie jest już dostępny."</string>
+    <string name="reply_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Nie udało się wczytać pełnej odpowiedzi. Spróbuj ponownie."</string>
 </resources>

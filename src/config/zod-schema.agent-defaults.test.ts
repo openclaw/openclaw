@@ -27,6 +27,26 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
 }
 
 describe("agent defaults schema", () => {
+  it("accepts bounded explicit picker runtimes only on exact model refs", () => {
+    const models = {
+      "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" }, pickerRuntimes: ["codex"] },
+    };
+    expect(AgentDefaultsSchema.parse({ models })?.models).toEqual(models);
+    expect(AgentEntrySchema.parse({ id: "ops", models }).models).toEqual(models);
+    for (const pickerRuntimes of [["auto"], [""], ["unknown runtime"], Array(9).fill("codex")]) {
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({ models: { "openai/gpt-5.6-sol": { pickerRuntimes } } }),
+        "models.openai/gpt-5.6-sol.pickerRuntimes",
+      );
+    }
+    for (const key of ["openai/*", "model"]) {
+      expectSchemaFailurePath(
+        AgentEntrySchema.safeParse({ id: "ops", models: { [key]: { pickerRuntimes: ["codex"] } } }),
+        `models.${key}.pickerRuntimes`,
+      );
+    }
+  });
+
   it("preserves separate run directories through config validation and list projection", () => {
     const result = validateConfigObject({
       agents: {
@@ -77,7 +97,7 @@ describe("agent defaults schema", () => {
     },
   );
 
-  it.each(["auto", "true", null, { enabled: true }])(
+  it.each(["true", null, { enabled: true }])(
     "rejects non-boolean per-model Code Mode override %j",
     (codeMode) => {
       const models = { "example/model": { codeMode } };
@@ -327,7 +347,7 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("accepts experimental.localModelLean", () => {
+  it("accepts experimental agent flags", () => {
     const result = AgentDefaultsSchema.parse({
       experimental: {
         localModelLean: true,
@@ -407,15 +427,6 @@ describe("agent defaults schema", () => {
       AgentDefaultsSchema.safeParse({ skipOptionalBootstrapFiles: ["SOUL.MD"] }),
       "skipOptionalBootstrapFiles",
     );
-  });
-
-  it("accepts embeddedAgent.executionContract", () => {
-    const result = AgentDefaultsSchema.parse({
-      embeddedAgent: {
-        executionContract: "strict-agentic",
-      },
-    })!;
-    expect(result.embeddedAgent?.executionContract).toBe("strict-agentic");
   });
 
   it("rejects legacy whole-agent runtime pins outside doctor migration", () => {
@@ -536,8 +547,6 @@ describe("agent defaults schema", () => {
     });
 
     expect(defaults.heartbeat?.timeoutSeconds).toBe(45);
-    expect(defaults.heartbeat?.timeoutSeconds).toBe(45);
-    expect(agent.heartbeat?.timeoutSeconds).toBe(45);
     expect(agent.heartbeat?.timeoutSeconds).toBe(45);
   });
 
@@ -606,9 +615,8 @@ describe("agent defaults schema", () => {
         tools: {
           codeMode: {
             enabled: true,
-            runtime: "quickjs-wasi",
+            executor: "quickjs",
             timeoutMs: 5000,
-            languages: ["javascript"],
           },
         },
       }),
@@ -616,7 +624,7 @@ describe("agent defaults schema", () => {
     expectSchemaFailurePath(
       AgentEntrySchema.safeParse({
         id: "ops",
-        tools: { codeMode: { unknownKey: 1 } },
+        tools: { codeMode: { languages: ["javascript"] } },
       }),
       "tools.codeMode",
     );

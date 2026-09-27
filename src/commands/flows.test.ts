@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { createRunningTaskRunCore as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -14,11 +13,11 @@ import { markTaskLostById, markTaskTerminalById } from "../tasks/task-registry.j
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
 
 vi.mock("../config/config.js", () => ({
@@ -33,9 +32,16 @@ function jsonRoundTrip<T>(value: T): T {
 }
 
 function createManagedTaskFlow(
-  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+  params: Omit<Parameters<typeof createManagedTaskFlowOrNull>[0], "controllerId" | "ownerKey"> & {
+    controllerId?: string;
+    ownerKey?: string;
+  },
 ): TaskFlowRecord {
-  const flow = createManagedTaskFlowOrNull(params);
+  const flow = createManagedTaskFlowOrNull({
+    ownerKey: "agent:main:main",
+    controllerId: "tests/flows-command",
+    ...params,
+  });
   if (!flow) {
     throw new Error("expected managed TaskFlow creation to succeed");
   }
@@ -43,28 +49,18 @@ function createManagedTaskFlow(
 }
 
 function createRunningTaskRunCore(
-  params: Parameters<typeof createRunningTaskRunOrNull>[0],
+  params: Omit<Parameters<typeof createRunningTaskRunOrNull>[0], "ownerKey" | "scopeKind"> &
+    Partial<Pick<Parameters<typeof createRunningTaskRunOrNull>[0], "ownerKey" | "scopeKind">>,
 ): TaskRecord {
-  const task = createRunningTaskRunOrNull(params);
+  const task = createRunningTaskRunOrNull({
+    ownerKey: "agent:main:main",
+    scopeKind: "session",
+    ...params,
+  });
   if (!task) {
     throw new Error("expected running task creation to succeed");
   }
   return task;
-}
-
-type TestRuntime = RuntimeEnv & {
-  writeStdout: ReturnType<typeof vi.fn>;
-  writeJson: ReturnType<typeof vi.fn>;
-};
-
-function createRuntime(): TestRuntime {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-  };
 }
 
 async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>): Promise<void> {
@@ -74,13 +70,11 @@ async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>)
       prefix: "openclaw-flows-command-",
     },
     async (state) => {
-      resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       try {
         await run(state.stateDir);
       } finally {
-        resetTaskRegistryDeliveryRuntimeForTests();
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
       }
@@ -97,7 +91,6 @@ describe("flows commands", () => {
 
   afterEach(() => {
     envSnapshot.restore();
-    resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
   });
@@ -105,8 +98,6 @@ describe("flows commands", () => {
   it("lists TaskFlows as JSON with linked tasks and summaries", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const flow = createManagedTaskFlow({
-        ownerKey: "agent:main:main",
-        controllerId: "tests/flows-command",
         goal: "Inspect a PR cluster",
         status: "blocked",
         blockedSummary: "Waiting on child task",
@@ -116,8 +107,6 @@ describe("flows commands", () => {
 
       const childTask = createRunningTaskRunCore({
         runtime: "acp",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
         parentFlowId: flow.flowId,
         childSessionKey: "agent:main:child",
         runId: "run-child-1",
@@ -127,7 +116,7 @@ describe("flows commands", () => {
         lastEventAt: 100,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsListCommand({ json: true, status: "blocked" }, runtime);
 
       expect(runtime.log).not.toHaveBeenCalled();
@@ -165,9 +154,9 @@ describe("flows commands", () => {
         ],
       });
 
-      const emptyRuntime = createRuntime();
+      const emptyRuntime = createNonExitingRuntimeEnv();
       await flowsListCommand({ json: true, status: "waiting" }, emptyRuntime);
-      expect(jsonRoundTrip(emptyRuntime.writeJson.mock.calls[0]?.[0])).toStrictEqual({
+      expect(jsonRoundTrip(vi.mocked(emptyRuntime.writeJson).mock.calls[0]?.[0])).toStrictEqual({
         count: 0,
         status: "waiting",
         flows: [],
@@ -178,15 +167,13 @@ describe("flows commands", () => {
   it("reports blank status filters as absent in JSON output", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const flow = createManagedTaskFlow({
-        ownerKey: "agent:main:main",
-        controllerId: "tests/flows-command",
         goal: "Inspect a PR cluster",
         status: "running",
         createdAt: 100,
         updatedAt: 100,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsListCommand({ json: true, status: "   " }, runtime);
 
       expect(runtime.log).not.toHaveBeenCalled();
@@ -202,7 +189,7 @@ describe("flows commands", () => {
     const query = vi.spyOn(taskFlowRuntime, "listTaskFlowRecords").mockImplementation(() => {
       throw new Error("TaskFlow query performed");
     });
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     try {
       await runCommandWithRuntime(runtime, () => flowsListCommand({ status: "bogus" }, runtime));
@@ -220,8 +207,6 @@ describe("flows commands", () => {
   it("counts pending cancellation intent in TaskFlow pressure", async () => {
     await withTaskFlowCommandStateDir(async () => {
       createManagedTaskFlow({
-        ownerKey: "agent:main:main",
-        controllerId: "tests/flows-command",
         goal: "Cancel pending work",
         status: "running",
         cancelRequestedAt: 200,
@@ -229,7 +214,6 @@ describe("flows commands", () => {
         updatedAt: 200,
       });
       createManagedTaskFlow({
-        ownerKey: "agent:main:main",
         controllerId: "tests/flows-command-ended-blocked",
         goal: "Completed blocked work",
         status: "blocked",
@@ -239,7 +223,7 @@ describe("flows commands", () => {
         endedAt: 150,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsListCommand({}, runtime);
 
       expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toContain(
@@ -265,35 +249,29 @@ describe("flows commands", () => {
       status: "succeeded",
       pressure: "0 active · 0 blocked · 0 cancel-requested · 1 total",
     },
-    {
-      status: "cancelled",
-      pressure: "0 active · 0 blocked · 0 cancel-requested · 1 total",
-    },
   ] as const)(
     "accounts for filtered $status flows in TaskFlow pressure",
     async ({ status, pressure }) => {
       await withTaskFlowCommandStateDir(async () => {
         createManagedTaskFlow({
-          ownerKey: "agent:main:main",
           controllerId: `tests/flows-command-${status}`,
           goal: `Inspect ${status} work`,
           status,
         });
         createManagedTaskFlow({
-          ownerKey: "agent:main:main",
           controllerId: "tests/flows-command-unrelated",
           goal: "Unrelated running work",
           status: "running",
         });
 
-        const runtime = createRuntime();
+        const runtime = createNonExitingRuntimeEnv();
         await flowsListCommand({ status }, runtime);
 
         expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toContain(
           `TaskFlow pressure: ${pressure}`,
         );
 
-        const jsonRuntime = createRuntime();
+        const jsonRuntime = createNonExitingRuntimeEnv();
         await flowsListCommand({ json: true, status }, jsonRuntime);
         expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
           count: 1,
@@ -307,14 +285,13 @@ describe("flows commands", () => {
   it("keeps truncated text rows UTF-16 well-formed", async () => {
     await withTaskFlowCommandStateDir(async () => {
       createManagedTaskFlow({
-        ownerKey: "agent:main:main",
         controllerId: `${"x".repeat(18)}🚀tail`,
         goal: "Inspect a PR cluster",
         status: "running",
         createdAt: 100,
         updatedAt: 100,
       });
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
 
       await flowsListCommand({}, runtime);
 
@@ -336,7 +313,6 @@ describe("flows commands", () => {
       ];
       for (const [index, entry] of controllers.entries()) {
         createManagedTaskFlow({
-          ownerKey: "agent:main:main",
           controllerId: entry.controllerId,
           goal: entry.goal,
           status: "running",
@@ -344,7 +320,7 @@ describe("flows commands", () => {
           updatedAt: 100 + index,
         });
       }
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
 
       await flowsListCommand({}, runtime);
 
@@ -370,7 +346,7 @@ describe("flows commands", () => {
         updatedAt: 100,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId, json: true }, runtime);
 
       expect(runtime.log).not.toHaveBeenCalled();
@@ -408,14 +384,14 @@ describe("flows commands", () => {
         endedAt: 200,
       });
 
-      const showRuntime = createRuntime();
+      const showRuntime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: ownerKey, json: true }, showRuntime);
       expect(vi.mocked(showRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
         flowId: olderRunning.flowId,
         status: "running",
       });
 
-      const cancelRuntime = createRuntime();
+      const cancelRuntime = createNonExitingRuntimeEnv();
       await flowsCancelCommand({ lookup: ownerKey }, cancelRuntime);
       expect(vi.mocked(cancelRuntime.log)).toHaveBeenCalledWith(
         `Cancelled ${olderRunning.flowId} (managed) with status cancelled.`,
@@ -431,7 +407,7 @@ describe("flows commands", () => {
 
   it("keeps terminal reset bytes off stdout for JSON lookup failures", async () => {
     await withTaskFlowCommandStateDir(async () => {
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
 
       await flowsShowCommand({ lookup: "missing-flow", json: true }, runtime);
 
@@ -477,7 +453,7 @@ describe("flows commands", () => {
         lastEventAt: 100,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
 
       expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toEqual([
@@ -499,20 +475,17 @@ describe("flows commands", () => {
     });
   });
 
-  it.each(["failed", "timed_out", "lost"] as const)(
+  it.each(["failed", "lost"] as const)(
     "shows the persisted failure reason for linked %s tasks",
     async (status) => {
       await withTaskFlowCommandStateDir(async () => {
         const flow = createManagedTaskFlow({
-          ownerKey: "agent:main:main",
           controllerId: "tests/flows-command-failure-detail",
           goal: "Inspect child task failures",
           status: "running",
         });
         const task = createRunningTaskRunCore({
           runtime: "subagent",
-          ownerKey: "agent:main:main",
-          scopeKind: "session",
           parentFlowId: flow.flowId,
           childSessionKey: `agent:main:flow-child-${status}`,
           runId: `run-flow-child-${status}`,
@@ -537,7 +510,7 @@ describe("flows commands", () => {
           });
         }
 
-        const runtime = createRuntime();
+        const runtime = createNonExitingRuntimeEnv();
         await flowsShowCommand({ lookup: flow.flowId }, runtime);
 
         const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
@@ -547,7 +520,7 @@ describe("flows commands", () => {
         expect(linkedTaskLine).not.toContain("Outdated child progress");
         expect(linkedTaskLine).not.toContain("Generic child completion summary");
 
-        const jsonRuntime = createRuntime();
+        const jsonRuntime = createNonExitingRuntimeEnv();
         await flowsShowCommand({ lookup: flow.flowId, json: true }, jsonRuntime);
         expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
           tasks: [expect.objectContaining({ status, error })],
@@ -559,15 +532,12 @@ describe("flows commands", () => {
   it("includes running progress and terminal completion summaries for linked tasks", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const flow = createManagedTaskFlow({
-        ownerKey: "agent:main:main",
         controllerId: "tests/flows-command-task-progress",
         goal: "Inspect child task updates",
         status: "running",
       });
       const running = createRunningTaskRunCore({
         runtime: "subagent",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
         parentFlowId: flow.flowId,
         childSessionKey: "agent:main:flow-child-running",
         runId: "run-flow-child-running",
@@ -579,8 +549,6 @@ describe("flows commands", () => {
       });
       const completed = createRunningTaskRunCore({
         runtime: "subagent",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
         parentFlowId: flow.flowId,
         childSessionKey: "agent:main:flow-child-completed",
         runId: "run-flow-child-completed",
@@ -597,8 +565,6 @@ describe("flows commands", () => {
       });
       const blocked = createRunningTaskRunCore({
         runtime: "subagent",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
         parentFlowId: flow.flowId,
         childSessionKey: "agent:main:flow-child-blocked",
         runId: "run-flow-child-blocked",
@@ -615,7 +581,7 @@ describe("flows commands", () => {
         terminalSummary: "Required completion did not produce a final deliverable.",
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId }, runtime);
 
       const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
@@ -628,7 +594,7 @@ describe("flows commands", () => {
       );
       expect(lines.find((line) => line.startsWith(`- ${blocked.taskId} `))).toContain(" blocked ");
 
-      const jsonRuntime = createRuntime();
+      const jsonRuntime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId, json: true }, jsonRuntime);
       expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
         tasks: expect.arrayContaining([
@@ -670,7 +636,7 @@ describe("flows commands", () => {
         error: "Provider \u001b[31mrejected\nforged: yes",
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId }, runtime);
 
       const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
@@ -685,7 +651,6 @@ describe("flows commands", () => {
     await withTaskFlowCommandStateDir(async () => {
       const unsafe = "\u001b]52;c;Zm9yZ2Vk\u0007\nforged: yes";
       const flow = createManagedTaskFlow({
-        ownerKey: "agent:main:main",
         controllerId: `controller${unsafe}`,
         goal: `goal${unsafe}`,
         currentStep: `step${unsafe}`,
@@ -693,8 +658,6 @@ describe("flows commands", () => {
       });
       const task = createRunningTaskRunCore({
         runtime: "subagent",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
         parentFlowId: flow.flowId,
         childSessionKey: `agent:main:child${unsafe}`,
         runId: `run${unsafe}`,
@@ -710,7 +673,7 @@ describe("flows commands", () => {
         error: `error${unsafe}`,
       });
 
-      const humanRuntime = createRuntime();
+      const humanRuntime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId }, humanRuntime);
 
       const lines = vi.mocked(humanRuntime.log).mock.calls.map(([line]) => String(line));
@@ -723,7 +686,7 @@ describe("flows commands", () => {
         expect(line).not.toContain("\n");
       }
 
-      const jsonRuntime = createRuntime();
+      const jsonRuntime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId, json: true }, jsonRuntime);
       expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
         goal: `goal${unsafe}`,
@@ -744,12 +707,12 @@ describe("flows commands", () => {
   it("sanitizes untrusted TaskFlow filters and lookup errors", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const unsafe = "\u001b]52;c;Zm9yZ2Vk\u0007\nforged: yes";
-      const filterRuntime = createRuntime();
+      const filterRuntime = createNonExitingRuntimeEnv();
       await runCommandWithRuntime(filterRuntime, () =>
         flowsListCommand({ status: `running${unsafe}` }, filterRuntime),
       );
 
-      const lookupRuntime = createRuntime();
+      const lookupRuntime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: `missing${unsafe}` }, lookupRuntime);
 
       const lines = [
@@ -770,15 +733,13 @@ describe("flows commands", () => {
   it("shows TaskFlows with Date-invalid timestamps without crashing", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const flow = createManagedTaskFlow({
-        ownerKey: "agent:main:main",
-        controllerId: "tests/flows-command",
         goal: "Inspect malformed flow timestamp",
         status: "running",
         createdAt: 100,
         updatedAt: 8_700_000_000_000_000,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
 
       const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
@@ -793,7 +754,6 @@ describe("flows commands", () => {
       const unsafeOwnerKey = "agent:main:\u001b[31mowner";
       const flow = createManagedTaskFlow({
         ownerKey: unsafeOwnerKey,
-        controllerId: "tests/flows-command",
         goal: "Investigate\nqueue\tstate",
         status: "blocked",
         currentStep: "spawn\u001b[2K_child",
@@ -805,7 +765,6 @@ describe("flows commands", () => {
       const task = createRunningTaskRunCore({
         runtime: "subagent",
         ownerKey: unsafeOwnerKey,
-        scopeKind: "session",
         parentFlowId: flow.flowId,
         childSessionKey: "agent:main:child",
         runId: "run-child-3",
@@ -815,7 +774,7 @@ describe("flows commands", () => {
         lastEventAt: 100,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
 
       const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
@@ -842,15 +801,13 @@ describe("flows commands", () => {
   it("cancels a managed TaskFlow with no active children", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const flow = createManagedTaskFlow({
-        ownerKey: "agent:main:main",
-        controllerId: "tests/flows-command",
         goal: "Stop detached work",
         status: "running",
         createdAt: 100,
         updatedAt: 100,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsCancelCommand({ lookup: flow.flowId }, runtime);
 
       expect(vi.mocked(runtime.error)).not.toHaveBeenCalled();
@@ -859,13 +816,13 @@ describe("flows commands", () => {
         `Cancelled ${flow.flowId} (managed) with status cancelled.`,
       ]);
 
-      const listRuntime = createRuntime();
+      const listRuntime = createNonExitingRuntimeEnv();
       await flowsListCommand({}, listRuntime);
       expect(vi.mocked(listRuntime.log).mock.calls.map(([line]) => String(line))).toContain(
         "TaskFlow pressure: 0 active · 0 blocked · 0 cancel-requested · 1 total",
       );
 
-      const jsonRuntime = createRuntime();
+      const jsonRuntime = createNonExitingRuntimeEnv();
       await flowsListCommand({ json: true }, jsonRuntime);
       expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
         flows: [

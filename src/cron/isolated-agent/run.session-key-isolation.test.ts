@@ -1,5 +1,6 @@
 // Session key isolation tests cover separate keys for concurrent cron runs.
 import { describe, expect, it } from "vitest";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -386,5 +387,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
 
     expect(result.status).toBe("ok");
     expect(runCliAgentMock).toHaveBeenCalledOnce();
+    const runRequest = requireFirstMockArg(runCliAgentMock, "runCliAgentMock") as {
+      userTurnTranscriptRecorder: UserTurnTranscriptRecorder;
+    };
+    expect(runRequest.userTurnTranscriptRecorder.message?.provenance).toBeUndefined();
   });
 });

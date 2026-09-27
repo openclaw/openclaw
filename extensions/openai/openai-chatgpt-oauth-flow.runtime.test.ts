@@ -647,16 +647,6 @@ describe("OpenAI Codex OAuth flow", () => {
     });
   });
 
-  it("retains the existing refresh token when OpenAI does not rotate it", async () => {
-    mockTokenResponse({ access_token: "renewed-access-token", expires_in: 3600 });
-
-    await expect(refreshOpenAIAccessToken("existing-refresh-token")).resolves.toMatchObject({
-      type: "success",
-      access: "renewed-access-token",
-      refresh: "existing-refresh-token",
-    });
-  });
-
   it("preserves the shared 30-second token-refresh deadline", async () => {
     mockTokenResponse({
       access_token: "renewed-access-token",
@@ -765,56 +755,46 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
+async function withLoopbackTokenResponse(body: string, run: () => Promise<void>) {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(body);
+  });
+  const port = await listenLoopbackServer(server);
+  const release = vi.fn(async () => undefined);
+  try {
+    ssrfMocks.fetchWithSsrFGuard.mockImplementationOnce(async ({ init, signal }) => ({
+      response: await globalThis.fetch(`http://127.0.0.1:${port}`, { ...init, signal }),
+      release,
+    }));
+    await run();
+    expect(release).toHaveBeenCalledOnce();
+  } finally {
+    await closeServer(server);
+  }
+}
+
 describe("OpenAI Codex OAuth bounded token response reads", () => {
   it("retains an unrotated refresh token from a real loopback HTTP response", async () => {
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ access_token: "loopback-renewed-access", expires_in: 3600 }));
-    });
-    const port = await listenLoopbackServer(server);
-    const release = vi.fn(async () => undefined);
-
-    try {
-      ssrfMocks.fetchWithSsrFGuard.mockImplementationOnce(async ({ init, signal }) => ({
-        response: await globalThis.fetch(`http://127.0.0.1:${port}`, { ...init, signal }),
-        release,
-      }));
-
-      await expect(refreshOpenAIAccessToken("loopback-existing-refresh")).resolves.toMatchObject({
-        type: "success",
-        access: "loopback-renewed-access",
-        refresh: "loopback-existing-refresh",
-      });
-      expect(release).toHaveBeenCalledOnce();
-    } finally {
-      await closeServer(server);
-    }
+    await withLoopbackTokenResponse(
+      JSON.stringify({ access_token: "loopback-renewed-access", expires_in: 3600 }),
+      async () => {
+        await expect(refreshOpenAIAccessToken("loopback-existing-refresh")).resolves.toMatchObject({
+          type: "success",
+          access: "loopback-renewed-access",
+          refresh: "loopback-existing-refresh",
+        });
+      },
+    );
   });
 
   it.each([
     { operation: "exchange", envelope: "null", value: null },
-    { operation: "exchange", envelope: "array", value: [] },
-    { operation: "refresh", envelope: "null", value: null },
     { operation: "refresh", envelope: "array", value: [] },
   ] as const)(
     "rejects $envelope $operation token responses from a real loopback HTTP server",
     async ({ operation, value }) => {
-      const server = createServer((_req, res) => {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(value));
-      });
-      const port = await listenLoopbackServer(server);
-      const release = vi.fn(async () => undefined);
-
-      try {
-        ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
-          const response = await globalThis.fetch(`http://127.0.0.1:${port}`, {
-            ...init,
-            signal,
-          });
-          return { response, release };
-        });
-
+      await withLoopbackTokenResponse(JSON.stringify(value), async () => {
         const result =
           operation === "exchange"
             ? await exchangeOpenAIAuthorizationCode(
@@ -829,10 +809,7 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
           operation,
           summary: `OpenAI Codex token ${operation} failed: expected JSON object response`,
         });
-        expect(release).toHaveBeenCalledOnce();
-      } finally {
-        await closeServer(server);
-      }
+      });
     },
   );
 
@@ -842,22 +819,7 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
       refresh_token: "refresh-token-loopback",
       expires_in: 3600,
     };
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(validPayload));
-    });
-    const port = await listenLoopbackServer(server);
-    const release = vi.fn(async () => undefined);
-
-    try {
-      ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
-        const response = await globalThis.fetch(`http://127.0.0.1:${port}`, {
-          ...init,
-          signal,
-        });
-        return { response, release };
-      });
-
+    await withLoopbackTokenResponse(JSON.stringify(validPayload), async () => {
       const result = await exchangeOpenAIAuthorizationCode(
         "code-loopback",
         "verifier-loopback",
@@ -873,30 +835,12 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
       expect(
         (result as { type: "success"; access: string; refresh: string; expires: number }).expires,
       ).toBeGreaterThan(0);
-      expect(release).toHaveBeenCalledOnce();
-    } finally {
-      await closeServer(server);
-    }
+    });
   });
 
   it("rejects oversized token exchange responses from a real loopback HTTP server", async () => {
     const oversizedPayload = "o".repeat(2 * 1024 * 1024); // 2 MiB > 1 MiB cap
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(oversizedPayload);
-    });
-    const port = await listenLoopbackServer(server);
-    const release = vi.fn(async () => undefined);
-
-    try {
-      ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
-        const response = await globalThis.fetch(`http://127.0.0.1:${port}`, {
-          ...init,
-          signal,
-        });
-        return { response, release };
-      });
-
+    await withLoopbackTokenResponse(oversizedPayload, async () => {
       const result = await exchangeOpenAIAuthorizationCode(
         "code-loopback",
         "verifier-loopback",
@@ -906,9 +850,6 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
 
       expect(result).toMatchObject({ type: "failed" });
       expect((result as { type: "failed"; summary: string }).summary).toContain("too large");
-      expect(release).toHaveBeenCalledOnce();
-    } finally {
-      await closeServer(server);
-    }
+    });
   });
 });

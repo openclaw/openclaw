@@ -27,6 +27,7 @@ import type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import { resolvePluginCapabilityCatalogContext } from "./loader-runtime-load.js";
+import type { PluginManifestContracts } from "./manifest-types.js";
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
@@ -99,6 +100,7 @@ export type CapturedPluginRegistration = {
 
 export function createCapturedPluginRegistration(params?: {
   config?: OpenClawConfig;
+  contracts?: PluginManifestContracts;
   id?: string;
   name?: string;
   registrationMode?: OpenClawPluginApi["registrationMode"];
@@ -244,7 +246,10 @@ export function createCapturedPluginRegistration(params?: {
           handler: AgentToolResultMiddleware,
           options?: AgentToolResultMiddlewareOptions,
         ) {
-          const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
+          const runtimes = normalizeAgentToolResultMiddlewareRuntimes(
+            options,
+            params?.contracts?.agentToolResultMiddleware,
+          );
           const matcher = normalizePluginToolMatcher(options?.matcher);
           const scopedHandler: AgentToolResultMiddleware = (event, ctx) => {
             if (
@@ -375,7 +380,7 @@ export function createCapturedPluginRegistration(params?: {
         },
         unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
         registerTool(tool) {
-          if (typeof tool !== "function") {
+          if (typeof tool !== "function" && !("contextVersion" in tool)) {
             tools.push(tool);
           }
         },

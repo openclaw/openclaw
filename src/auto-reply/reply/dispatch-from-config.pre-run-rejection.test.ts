@@ -173,6 +173,20 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     ]);
   });
 
+  it("attributes message.processed to the ingesting agent", async () => {
+    await dispatchReplyFixture({
+      body: "hello",
+      messageId: "3",
+      reply: { text: "Agent reply." },
+    });
+
+    expect(processedEvents).toHaveLength(1);
+    expect(processedEvents[0]?.agentId).toBe("main");
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
+  });
+
   it.each<{
     label: string;
     state: ReplyOperationRunState;

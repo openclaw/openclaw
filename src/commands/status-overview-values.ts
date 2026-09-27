@@ -100,7 +100,7 @@ export function buildStatusPluginCompatibilityValue(params: {
   );
 }
 
-/** Formats active session count, default model/context, and backing store summary. */
+/** Formats stored session count, default model/context, and backing store summary. */
 export function buildStatusSessionsOverviewValue(params: {
   sessions: SummarySessionsLike;
   formatKTokens: (value: number) => string;
@@ -112,5 +112,5 @@ export function buildStatusSessionsOverviewValue(params: {
     params.sessions.paths.length > 1
       ? `${params.sessions.paths.length} stores`
       : (params.sessions.paths[0] ?? "unknown");
-  return `${params.sessions.count} active · default ${params.sessions.defaults.model ?? "unknown"}${defaultCtx} · ${storeLabel}`;
+  return `${params.sessions.count} stored · default ${params.sessions.defaults.model ?? "unknown"}${defaultCtx} · ${storeLabel}`;
 }

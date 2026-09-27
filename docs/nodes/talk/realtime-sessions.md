@@ -10,7 +10,34 @@ sidebarTitle: "Realtime sessions"
 
 ## Choose a Talk voice from chat
 
-After setting `talk.provider` and the matching `talk.providers.<provider>` configuration, use `/voice status` to inspect the active provider and voice, `/voice list [limit]` to list its available voices, and `/voice set <voiceId|name>` to save a provider-scoped selection. Discord exposes the same command natively as `/talkvoice`.
+During an active browser, iOS, or Android realtime Talk call, ask the assistant
+to list the available voices or switch to one. Browser Talk also offers a voice
+picker beside the call controls. The `talk_voice`
+tool lists the current provider, model, voice,
+and supported voice IDs for the call in the current conversation. Setting a
+voice reconnects that call while preserving its chat and captions. The replacement
+waits for finalized speech to be saved and receives bounded conversation history,
+including speech finalized while the old connection closes. Accepted agent work
+keeps running during this handoff. The assistant
+reports success only after the replacement call is ready; unsupported changes or
+connection failures return an error. **Settings → Talk** sets the voice default
+for future calls. In a Discord realtime voice channel, ask the agent to list or
+change voices using the same tool. The change applies to that connected room,
+including subsequent speakers, and leaves its saved Discord voice configuration
+unchanged. The Discord connection and agent conversation remain active while the
+provider connection is replaced.
+
+iOS supports switching in WebRTC and Gateway-relay calls. Android supports it
+in Gateway-relay calls using its supported realtime models. Native speech and
+TTS fallback calls retain their existing voice settings. Switching uses the
+current Gateway connection and conversation; ending the call or changing
+Gateways cancels a pending switch.
+
+Mobile apps enable switching when the connected Gateway advertises voice
+selection support. Calls still start on older Gateways, but switching remains
+unavailable until the Gateway is updated.
+
+For Talk TTS playback, after setting `talk.provider` and the matching `talk.providers.<provider>` configuration, use `/voice status` to inspect the active provider and voice, `/voice list [limit]` to list its available voices, and `/voice set <voiceId|name>` to save a provider-scoped selection. Discord exposes the same command natively as `/talkvoice`.
 
 Status and list are read-only. Setting a voice requires the message-channel owner or a Gateway client with `operator.admin`. Configuration, provider lookup, unknown-voice, and permission failures are returned visibly in chat. A masked API-key value in `/voice status` describes config only; it does not verify credential availability.
 
@@ -59,6 +86,11 @@ remain failures rather than being silently treated as cancellations.
 
 Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay and Gateway-controlled WebRTC sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
 
+Speech finalized while an accepted consult is starting remains visible in history
+and does not prevent the agent from adopting that consult's recorded input.
+Completed agent answers and newly admitted tasks still close the older input;
+speech records do not reopen it.
+
 Gateway-controlled native WebRTC calls receive shared-session history as quoted
 historical background in their instructions, not as the new call's own user or
 assistant messages. This background can include prior calls and backing-agent
@@ -97,6 +129,14 @@ transcriptions that omit an explicit transcription-finished flag. Partial text
 stays provisional until the provider's completion boundary.
 
 Voice-originated consult runs require a new, exact spoken confirmation before high-impact actions such as sending messages, controlling nodes, browser/computer actions, service changes, destructive shell commands, or publication. The gate applies to runs started through `talk.client.toolCall`, the Gateway relay, and GPT-Live sideband delegations. The confirmation applies only to the canonical final execution arguments and is consumed once; if a policy or hook rewrites the approved action, OpenClaw blocks it until the rewritten action is confirmed. Unrelated concurrent runs remain unaffected. When a call closes, OpenClaw can send a compact **Voice call changes** digest for mutating tools to the session's last non-WebChat delivery target.
+
+After a confirmation prompt, say **yes** to confirm the pending action or **no**
+to cancel it. Each confirmation permits one matching action; another action may
+need another confirmation. Native GPT-Live calls use the finalized user speech
+recorded for that call, so generated delegation text cannot supply confirmation.
+When a native consult is blocked by this gate, Talk returns a specific retry
+prompt. If the pending confirmation expires or is cleared before the result,
+Talk reports that the action did not run and asks for a fresh request.
 
 Transcription-only Talk emits the same Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. All Talk sessions broadcast events on the `talk.event` channel; clients subscribe to it for partial/final transcript updates (`transcript.delta`/`transcript.done`) and other session telemetry.
 

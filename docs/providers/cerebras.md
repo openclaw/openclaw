@@ -23,8 +23,10 @@ read_when:
 
 ```bash
 openclaw plugins install @openclaw/cerebras-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -70,6 +72,11 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice cerebras-api-key \
   --cerebras-api-key "$CEREBRAS_API_KEY"
 ```
+
+`--mode` defaults to `local`, so this is the same run as the **Direct flag**
+command above. Run it on the Gateway host: remote-client onboarding
+(`--mode remote`) only configures the local client connection and does not set
+up provider credentials on the server.
 
 ## Discovery and pricing
 

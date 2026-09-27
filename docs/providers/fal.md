@@ -20,6 +20,9 @@ generation.
 ## Getting started
 
 <Steps>
+  <Step title="Get an API key">
+    Create a key at [fal.ai/dashboard/keys](https://fal.ai/dashboard/keys).
+  </Step>
   <Step title="Set the API key">
     ```bash
     openclaw onboard --auth-choice fal-api-key

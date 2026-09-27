@@ -13,6 +13,7 @@ import {
   type MemoryWikiCompiledCacheSnapshot,
 } from "./src/compiled-cache.js";
 import { resolveMemoryWikiConfig } from "./src/config.js";
+import { deferred } from "./src/deferred.test-helpers.js";
 import {
   appendMemoryWikiLog,
   loadMemoryWikiValidatedVaultIdentity,
@@ -67,14 +68,6 @@ function emptyCompiledSnapshot(): MemoryWikiCompiledCacheSnapshot {
       },
     },
   };
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 describe("memory-wiki plugin", () => {

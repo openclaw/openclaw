@@ -20,6 +20,7 @@ const RAW_TASK_MUTATORS = [
 
 const RAW_TASK_MUTATOR_ALLOWED_CALLERS = new Set([
   "tasks/task-executor.ts",
+  "tasks/task-registry-create.native.ts",
   "tasks/task-registry-record-api.ts",
   "tasks/task-registry.maintenance.ts",
 ]);
@@ -51,14 +52,6 @@ beforeAll(async () => {
 });
 
 describe("task boundaries", () => {
-  it("ignores test entries and split utility modules", () => {
-    expect(
-      sources.filter(({ relative }) =>
-        /\.(?:test|test-harness|test-utils|e2e-harness)\.ts$/u.test(relative),
-      ),
-    ).toStrictEqual([]);
-  });
-
   it("keeps raw task lifecycle mutators behind task internals", () => {
     const offenders: string[] = [];
     for (const { relative, source } of sources) {

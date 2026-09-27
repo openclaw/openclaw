@@ -1,9 +1,4 @@
-/**
- * Shared channel config-write policy helpers.
- *
- * Authorizes config writes by origin/target channel and account scope.
- */
-import { resolveAccountEntry } from "../../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 
 type AccountConfigWithWrites = {
@@ -63,13 +58,6 @@ function resolveChannelConfig(
     : undefined;
 }
 
-function resolveChannelAccountConfig(
-  channelConfig: ChannelConfigWithAccounts,
-  accountId?: string | null,
-): AccountConfigWithWrites | undefined {
-  return resolveAccountEntry(channelConfig.accounts, normalizeAccountId(accountId));
-}
-
 /**
  * Resolves whether config writes are enabled for a channel/account scope.
  */
@@ -79,10 +67,14 @@ export function resolveChannelConfigWritesShared(params: {
   accountId?: string | null;
 }): boolean {
   const channelConfig = resolveChannelConfig(params.cfg, params.channelId);
-  if (!channelConfig) {
+  if (!channelConfig || !params.channelId) {
     return true;
   }
-  const accountConfig = resolveChannelAccountConfig(channelConfig, params.accountId);
+  const accountConfig = resolveChannelAccountEntry(
+    channelConfig.accounts,
+    normalizeAccountId(params.accountId),
+    params.channelId,
+  );
   const value = accountConfig?.configWrites ?? channelConfig.configWrites;
   return value !== false;
 }
@@ -148,7 +140,7 @@ export function resolveExplicitConfigWriteTargetShared<TChannelId extends string
     return { kind: "global" };
   }
   const accountId = normalizeAccountId(scope.accountId);
-  if (!accountId || accountId === DEFAULT_ACCOUNT_ID) {
+  if (accountId === DEFAULT_ACCOUNT_ID) {
     return { kind: "channel", scope: { channelId: scope.channelId } };
   }
   return { kind: "account", scope: { channelId: scope.channelId, accountId } };

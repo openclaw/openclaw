@@ -3,6 +3,8 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildUpdateRestartSentinelPayload } from "../infra/update-restart-sentinel-payload.js";
 import {
   createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
@@ -27,6 +29,25 @@ afterEach(() => {
 });
 
 describe("update restart verification ownership", () => {
+  it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
+    "does not attribute an unrelated later boot to a terminal %s update",
+    async (status) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-terminal-boot-"));
+      const run = createUpdateRun({ trigger: "cli" });
+      const terminal = finishUpdateRun(run.runId, { status, reason: "original-outcome" });
+      const payload = {
+        kind: "update" as const,
+        status: "ok" as const,
+        ts: Date.now(),
+        sessionKey: "agent:main:later-unrelated-session",
+        doctorHint: "later boot hint",
+        stats: { runId: run.runId },
+      };
+      expect(await finalizeRestartUpdateRun(payload, true)).toEqual(terminal);
+      expect(getUpdateRun(run.runId)).toEqual(terminal);
+    },
+  );
+
   it.each(["api", "chat", "control-ui", "campaign"] as const)(
     "finishes an unmanaged %s update after replacement startup",
     async (trigger) => {

@@ -70,7 +70,7 @@ struct ComputerActionServiceTests {
             self.allowed = allowed
         }
 
-        func attempt() -> Bool {
+        func attempt(_: UUID?) -> Bool {
             self.attempts += 1
             return self.allowed
         }
@@ -329,7 +329,9 @@ struct ComputerActionServiceTests {
             leftButtonDown: true)
     }
 
-    @Test func `lifecycle release retries event creation failure before returning`() async {
+    @Test(arguments: [false, true])
+    func `input release retries event creation failure before returning`(wholeRoute: Bool) async {
+        let scope = UUID()
         let flags: CGEventFlags = [.maskCommand, .maskShift]
         var attempts = 0
         var postedFlags: [CGEventFlags] = []
@@ -342,9 +344,13 @@ struct ComputerActionServiceTests {
             }
         }
         let service = ComputerActionService(screen: screen)
-        screen.holdLeftButtonForTesting(flags: flags)
+        screen.holdLeftButtonForTesting(flags: flags, inputScopeId: scope)
 
-        await service.releaseHeldInput(lifecycleGeneration: 1)
+        if wholeRoute {
+            await service.releaseHeldInput(lifecycleGeneration: 1)
+        } else {
+            await service.releaseHeldInput(inputScopeId: scope)
+        }
 
         #expect(!screen.isLeftButtonDownForTesting)
         #expect(screen.heldButtonFlagsForTesting.isEmpty)
@@ -378,6 +384,151 @@ struct ComputerActionServiceTests {
         #expect(screen.heldButtonFlagsForTesting.isEmpty)
         #expect(!screen.buttonWatchdogArmedForTesting)
         #expect(attempts == 2)
+    }
+
+    @Test func `closing a different execution preserves the owned mouse button`() async throws {
+        let owner = UUID()
+        let other = UUID()
+        var posted: [Bool] = []
+        let screen = ComputerScreenActionExecutor { down, _, _ in posted.append(down) }
+        let service = ComputerActionService(screen: screen)
+        try screen.pressLeftButton(at: .zero, flags: [.maskShift], inputScopeId: owner)
+
+        await service.releaseHeldInput(inputScopeId: other)
+        #expect(screen.isLeftButtonDownForTesting)
+        #expect(screen.heldButtonFlagsForTesting == [.maskShift])
+        #expect(posted == [true])
+
+        await service.releaseHeldInput(inputScopeId: owner)
+        #expect(!screen.isLeftButtonDownForTesting)
+        #expect(posted == [true, false])
+    }
+
+    @Test(arguments: [false, true])
+    func `typing cancellation releases only its execution input`(closeExecution: Bool) async throws {
+        let owner = UUID()
+        let other = UUID()
+        let started = AsyncSignal()
+        let resume = AsyncSignal()
+        var mouseEvents: [Bool] = []
+        var textEvents: [Character] = []
+        var releases: [UUID?] = []
+        let screen = ComputerScreenActionExecutor(
+            mouseButtonEventPoster: { down, _, _ in mouseEvents.append(down) },
+            textGraphemePoster: { grapheme in
+                textEvents.append(grapheme)
+                await started.signal()
+                await resume.wait()
+            })
+        let queue = ComputerActionExecutionQueue(onInputRelease: { scope in
+            releases.append(scope)
+            return screen.releaseCurrentHeldButton(inputScopeId: scope)
+        })
+        try screen.pressLeftButton(at: .zero, flags: [], inputScopeId: owner)
+        let typing = Task { @MainActor in
+            try await queue.perform(
+                OpenClawComputerActParams(action: .type, text: "AB"),
+                lifecycleGeneration: 0,
+                inputScopeId: other)
+            { _, generation in
+                try await screen.typeText("AB") { try queue.checkExecutionAllowed(lifecycleGeneration: generation) }
+                return OpenClawComputerActResult(ok: true)
+            }
+        }
+        await started.wait()
+        let closing: Task<Void, Never>?
+        if closeExecution {
+            closing = Task { @MainActor in await queue.releaseHeldInput(inputScopeId: other) }
+        } else {
+            closing = nil
+            typing.cancel()
+        }
+        while releases.isEmpty {
+            await Task.yield()
+        }
+        #expect(screen.isLeftButtonDownForTesting)
+        #expect(mouseEvents == [true])
+        await resume.signal()
+        do {
+            _ = try await typing.value
+            Issue.record("cancelled typing unexpectedly completed")
+        } catch {
+            #expect(error is CancellationError)
+        }
+        await closing?.value
+        #expect(textEvents == ["A"])
+        #expect(releases.allSatisfy { $0 == other })
+        #expect(screen.isLeftButtonDownForTesting)
+        await queue.releaseHeldInput(inputScopeId: owner)
+        #expect(mouseEvents == [true, false])
+    }
+
+    @Test(arguments: [false, true])
+    func `scope release preserves sibling queue while route release cancels all`(wholeRoute: Bool) async throws {
+        let owner = UUID()
+        let sibling = UUID()
+        let probe = ActionProbe()
+        var releases: [UUID?] = []
+        let queue = ComputerActionExecutionQueue(onInputRelease: { releases.append($0)
+            return true
+        })
+        let first = Task { @MainActor in
+            try await queue.perform(
+                OpenClawComputerActParams(action: .type, x: 1),
+                lifecycleGeneration: 0,
+                inputScopeId: owner,
+                operation: probe.perform)
+        }
+        await probe.firstStarted.wait()
+        let other = Task { @MainActor in
+            try await queue.perform(
+                OpenClawComputerActParams(action: .type, x: 2),
+                lifecycleGeneration: 0,
+                inputScopeId: sibling,
+                operation: probe.perform)
+        }
+        let queuedOwner = Task { @MainActor in
+            try await queue.perform(
+                OpenClawComputerActParams(action: .type, x: 3),
+                lifecycleGeneration: 0,
+                inputScopeId: owner,
+                operation: probe.perform)
+        }
+        while queue.pendingActionCountForTesting != 2 {
+            await Task.yield()
+        }
+        let release = Task { @MainActor in
+            if wholeRoute {
+                await queue.releaseHeldInput(lifecycleGeneration: 1)
+            } else {
+                await queue.releaseHeldInput(inputScopeId: owner)
+            }
+        }
+        while releases.isEmpty {
+            await Task.yield()
+        }
+        #expect(queue.pendingActionCountForTesting == (wholeRoute ? 0 : 1))
+        await probe.releaseFirst.signal()
+        await release.value
+        for task in [first, queuedOwner] {
+            do {
+                _ = try await task.value
+                Issue.record("retired execution unexpectedly completed")
+            } catch {
+                #expect(wholeRoute ? self.isLifecycleChanged(error) : error is CancellationError)
+            }
+        }
+        if wholeRoute {
+            do {
+                _ = try await other.value
+                Issue.record("retired route unexpectedly completed sibling")
+            } catch {
+                #expect(self.isLifecycleChanged(error))
+            }
+        } else {
+            _ = try await other.value
+        }
+        #expect(probe.enteredActionIDs == (wholeRoute ? [1] : [1, 2]))
     }
 
     @Test func `failed explicit release retains added modifiers for watchdog retry`() {
@@ -415,7 +566,7 @@ struct ComputerActionServiceTests {
 
     @Test func `computer actions execute in FIFO order without overlap`() async throws {
         let probe = ActionProbe()
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: { true })
+        let queue = ComputerActionExecutionQueue(onInputRelease: { _ in true })
         let firstParams = OpenClawComputerActParams(action: .leftClick, x: 1, y: 0, refWidth: 1280)
         let secondParams = OpenClawComputerActParams(action: .leftClick, x: 2, y: 0, refWidth: 1280)
 
@@ -512,7 +663,7 @@ struct ComputerActionServiceTests {
 
     @Test func `cancelled queued action never executes`() async throws {
         let probe = ActionProbe()
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: { true })
+        let queue = ComputerActionExecutionQueue(onInputRelease: { _ in true })
         let firstParams = OpenClawComputerActParams(action: .leftClick, x: 1, y: 0, refWidth: 1280)
         let cancelledParams = OpenClawComputerActParams(action: .leftClick, x: 2, y: 0, refWidth: 1280)
 
@@ -546,7 +697,7 @@ struct ComputerActionServiceTests {
     @Test func `cancelled active action releases held input before it settles`() async {
         let probe = ActionProbe()
         let releaseProbe = LifecycleReleaseProbe(allowed: true)
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: releaseProbe.attempt)
+        let queue = ComputerActionExecutionQueue(onInputRelease: releaseProbe.attempt)
         let params = OpenClawComputerActParams(action: .leftMouseDown, x: 1, y: 0, refWidth: 1280)
         let action = Task { @MainActor in
             try await queue.perform(params, lifecycleGeneration: 0, operation: probe.perform)
@@ -567,7 +718,7 @@ struct ComputerActionServiceTests {
         let cancellationHop = CancellationHopProbe()
         var releaseAttempts = 0
         let queue = ComputerActionExecutionQueue(
-            onLifecycleRelease: {
+            onInputRelease: { _ in
                 releaseAttempts += 1
                 return releaseAttempts >= 2
             },
@@ -682,7 +833,7 @@ struct ComputerActionServiceTests {
     @Test func `new lifecycle generation cancels old work before fresh action`() async throws {
         let probe = ActionProbe()
         let releaseProbe = LifecycleReleaseProbe(allowed: true)
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: releaseProbe.attempt)
+        let queue = ComputerActionExecutionQueue(onInputRelease: releaseProbe.attempt)
         let oldParams = OpenClawComputerActParams(action: .leftClick, x: 1, y: 0, refWidth: 1280)
         let freshParams = OpenClawComputerActParams(action: .leftClick, x: 2, y: 0, refWidth: 1280)
 
@@ -731,7 +882,7 @@ struct ComputerActionServiceTests {
     @Test func `failed lifecycle mouse up blocks newer generation until retry succeeds`() async throws {
         let probe = ActionProbe()
         let releaseProbe = LifecycleReleaseProbe(allowed: false)
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: releaseProbe.attempt)
+        let queue = ComputerActionExecutionQueue(onInputRelease: releaseProbe.attempt)
         let params = OpenClawComputerActParams(action: .type, x: 2, y: 0, refWidth: 1280)
 
         let action = Task { @MainActor in

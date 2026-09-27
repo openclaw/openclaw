@@ -13,12 +13,14 @@ OpenClaw provides NovitaAI through the official external
 
 ## Setup
 
-Install the plugin and restart the Gateway:
+Install the plugin:
 
 ```bash
 openclaw plugins install @openclaw/novita-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 Create an API key at [novita.ai/settings/key-management](https://novita.ai/settings/key-management), then run:
 

@@ -110,8 +110,8 @@ The previous public Matrix plugin did **not** automatically create Matrix room-k
 
 `Failed migrating legacy Matrix client storage: ...`
 
-- Meaning: the Matrix client-side fallback found file-based sidecar state, but the import into SQLite failed. OpenClaw rolls back completed moves and aborts that fallback instead of silently starting with a fresh store.
-- What to do: inspect filesystem permissions or conflicts, keep the old state intact, and retry after fixing the error.
+- Meaning: the Matrix client-side fallback failed while importing file-based sidecar state into SQLite. Startup stops. Completed SQLite imports and already archived sidecars remain in place; files not yet archived remain available for retry.
+- What to do: inspect filesystem permissions or conflicts, keep the SQLite state and source or `.migrated` files intact, and retry after fixing the error.
 
 `Matrix is installed from a custom path: ...`
 

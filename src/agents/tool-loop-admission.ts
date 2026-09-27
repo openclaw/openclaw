@@ -60,6 +60,7 @@ async function evaluateToolLoopCall(
     logToolLoopAction({
       sessionKey: ctx.sessionKey,
       sessionId: ctx.sessionId,
+      ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
       toolName,
       level: "critical",
       action: "block",
@@ -85,6 +86,7 @@ async function evaluateToolLoopCall(
     logToolLoopAction({
       sessionKey: ctx.sessionKey,
       sessionId: ctx.sessionId,
+      ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
       toolName,
       level: "warning",
       action: "warn",

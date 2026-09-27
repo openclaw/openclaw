@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
+import type { SQLInputValue } from "node:sqlite";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   copyPluginInstallRecordMap,
   createPluginInstallRecordMap,
@@ -19,132 +20,49 @@ import {
   type InstalledPluginIndex,
 } from "../plugins/installed-plugin-index.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  LEGACY_DELIVERY_QUEUE_DIRS,
+  listLegacyDeliveryQueueFiles,
+  listLegacyDeliveryQueueDeliveredMarkers,
+  resolveLegacyDeliveryQueuePath,
+} from "./delivery-queue-legacy-files.js";
 import { deliveryQueueMetadata } from "./delivery-queue-sqlite-bound.js";
 import {
   inferDeliveryQueueFailureRetention,
   projectDeliveryQueueTerminalEntry,
 } from "./delivery-queue-sqlite.types.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
-import { migrationFileExists, safeReadDir } from "./state-migrations.fs.js";
+import { migrationFileExists } from "./state-migrations.fs.js";
 import {
-  insertTaskDeliveryRowSql,
-  insertTaskRunRowSql,
-  legacyBindValue,
-  listSqliteColumns,
-  normalizeLegacySqliteInteger,
-  pickLegacyColumn,
-  readLegacyTaskDeliveryRows,
-  readLegacyTaskRows,
-  type SqliteBindRow,
-} from "./state-migrations.task-sidecar-rows.js";
+  markLegacyMigrationSourceRemoved,
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+  resolveLegacyMigrationSourceKey,
+} from "./state-migrations.receipts.js";
+import {
+  assertLegacyMigrationSourceUnchanged,
+  readLegacyMigrationSourceSnapshotSync,
+  type LegacyMigrationSourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 
-export { normalizeLegacySqliteInteger };
+type SqliteBindRow = Record<string, SQLInputValue>;
 
-export type LegacyPluginStateSidecarRow = {
-  plugin_id: string;
-  namespace: string;
-  entry_key: string;
-  value_json: string;
-  created_at: number | bigint;
-  expires_at: number | bigint | null;
-};
-
-// Move the canonical database first so a partial archive never leaves a
-// readable database separated from committed WAL rows. Pending sidecars are
-// detected and archived without reopening the migrated database.
-export const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
-export const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES;
-const LEGACY_DELIVERY_QUEUE_DIRS = [
-  { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
-  { label: "session delivery queue", queueName: "session", dirName: "session-delivery-queue" },
-] as const;
-type LegacyDeliveryQueueFile = {
-  sourcePath: string;
-  status: "pending" | "failed";
-};
-
-class LegacyTaskStateSidecarConflictError extends Error {
-  constructor(readonly conflictedKeys: string[]) {
-    super("legacy task-state sidecar conflicts with shared state");
-  }
-}
-
-export function resolveLegacyPluginStateSidecarPath(stateDir: string): string {
-  return path.join(stateDir, "plugin-state", "state.sqlite");
-}
-
-export function resolveLegacyTaskRunsSidecarPath(stateDir: string): string {
-  return path.join(stateDir, "tasks", "runs.sqlite");
-}
-
-export function resolveLegacyFlowRunsSidecarPath(stateDir: string): string {
-  return path.join(stateDir, "flows", "registry.sqlite");
-}
-
-export function readLegacyPluginStateSidecarRows(
-  sourcePath: string,
-): LegacyPluginStateSidecarRow[] {
-  const db = openNodeSqliteDatabase(sourcePath, { readOnly: true });
-  try {
-    return db
-      .prepare(
-        `
-          SELECT plugin_id, namespace, entry_key, value_json, created_at, expires_at
-          FROM plugin_state_entries
-          ORDER BY plugin_id ASC, namespace ASC, entry_key ASC
-        `,
-      )
-      .all() as LegacyPluginStateSidecarRow[];
-  } finally {
-    db.close();
-  }
-}
-
-export function legacyPluginStateRowsMatch(
-  existing: { value_json: string; created_at: number | bigint; expires_at: number | bigint | null },
-  legacy: LegacyPluginStateSidecarRow,
-): boolean {
-  return (
-    existing.value_json === legacy.value_json &&
-    normalizeLegacySqliteInteger(existing.created_at) ===
-      normalizeLegacySqliteInteger(legacy.created_at) &&
-    normalizeLegacySqliteInteger(existing.expires_at) ===
-      normalizeLegacySqliteInteger(legacy.expires_at)
-  );
-}
-
-export function isLegacyPluginStateRowExpired(
-  row: LegacyPluginStateSidecarRow,
-  now: number,
-): boolean {
-  const expiresAt = normalizeLegacySqliteInteger(row.expires_at);
-  return expiresAt !== null && expiresAt <= now;
-}
-
-export function hasPendingSqliteSidecarArchive(
-  sourcePath: string,
-  suffixes: readonly string[],
-): boolean {
-  return (
-    !migrationFileExists(sourcePath) &&
-    migrationFileExists(`${sourcePath}.migrated`) &&
-    suffixes.some((suffix) => suffix !== "" && migrationFileExists(`${sourcePath}${suffix}`))
-  );
-}
+// Only the file-to-SQLite cutover expires old intent; live queues have no age TTL.
+const LEGACY_DELIVERY_QUEUE_MAX_AGE_MS = 72 * 60 * 60_000;
 
 type LegacyArchiveResolution = {
-  sourcePath: string;
   targetPath: string;
   action: "archived" | "removed";
 };
 
-function firstFreeArchivePath(sourcePath: string): string {
-  for (let index = 2; ; index++) {
-    const candidate = `${sourcePath}.migrated.${index}`;
-    if (!fs.existsSync(candidate)) {
-      return candidate;
-    }
+function hashLegacyArchiveSource(sourcePath: string): string {
+  const fd = fs.openSync(sourcePath, "r");
+  try {
+    return hashFileDescriptorSync(fd).sha256;
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
@@ -153,87 +71,27 @@ function archiveLegacyFileSource(params: {
   label: string;
   warnings: string[];
 }): LegacyArchiveResolution | null {
-  const archivedPath = `${params.sourcePath}.migrated`;
   try {
-    if (migrationFileExists(archivedPath)) {
-      // Import has already committed before archival. Identical archive bytes
-      // preserve the same snapshot, so the leftover source can be removed.
-      if (fs.readFileSync(params.sourcePath).equals(fs.readFileSync(archivedPath))) {
-        fs.rmSync(params.sourcePath, { force: true });
-        return { sourcePath: params.sourcePath, targetPath: archivedPath, action: "removed" };
+    let sourceSha256: string | undefined;
+    // Reuse any identical archive, including a numbered collision from an earlier run.
+    for (let index = 1; ; index++) {
+      const targetPath =
+        index === 1 ? `${params.sourcePath}.migrated` : `${params.sourcePath}.migrated.${index}`;
+      if (!fs.existsSync(targetPath)) {
+        fs.renameSync(params.sourcePath, targetPath);
+        return { targetPath, action: "archived" };
       }
-      const nextArchivePath = firstFreeArchivePath(params.sourcePath);
-      fs.renameSync(params.sourcePath, nextArchivePath);
-      return { sourcePath: params.sourcePath, targetPath: nextArchivePath, action: "archived" };
+      // Legacy sources can exceed whole-file allocation limits; hash only collisions.
+      sourceSha256 ??= hashLegacyArchiveSource(params.sourcePath);
+      if (sourceSha256 === hashLegacyArchiveSource(targetPath)) {
+        fs.rmSync(params.sourcePath, { force: true });
+        return { targetPath, action: "removed" };
+      }
     }
-    fs.renameSync(params.sourcePath, archivedPath);
-    return { sourcePath: params.sourcePath, targetPath: archivedPath, action: "archived" };
   } catch (err) {
     params.warnings.push(`Failed archiving ${params.label} ${params.sourcePath}: ${String(err)}`);
     return null;
   }
-}
-
-function recordArchiveCollisionResolutions(
-  changes: string[],
-  label: string,
-  resolutions: readonly LegacyArchiveResolution[],
-): void {
-  for (const resolution of resolutions) {
-    changes.push(
-      resolution.action === "removed"
-        ? `Removed already-archived ${label} legacy source ${resolution.sourcePath}`
-        : `Archived ${label} legacy source → ${resolution.targetPath}`,
-    );
-  }
-}
-
-function archiveLegacySqliteSidecar(params: {
-  sourcePath: string;
-  label: string;
-  changes: string[];
-  warnings: string[];
-}): void {
-  const existingSources = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES.map(
-    (suffix) => `${params.sourcePath}${suffix}`,
-  ).filter(migrationFileExists);
-  if (existingSources.length === 0) {
-    return;
-  }
-
-  const resolutions: LegacyArchiveResolution[] = [];
-  for (const sourcePath of existingSources) {
-    const resolution = archiveLegacyFileSource({
-      sourcePath,
-      label: `${params.label} sidecar`,
-      warnings: params.warnings,
-    });
-    if (!resolution) {
-      return;
-    }
-    resolutions.push(resolution);
-  }
-  if (
-    resolutions.every(
-      (resolution) =>
-        resolution.action === "archived" &&
-        resolution.targetPath === `${resolution.sourcePath}.migrated`,
-    )
-  ) {
-    params.changes.push(
-      `Archived ${params.label} sidecar legacy source → ${params.sourcePath}.migrated`,
-    );
-  } else {
-    recordArchiveCollisionResolutions(params.changes, `${params.label} sidecar`, resolutions);
-  }
-}
-
-export function archiveLegacyPluginStateSidecar(params: {
-  sourcePath: string;
-  changes: string[];
-  warnings: string[];
-}): void {
-  archiveLegacySqliteSidecar({ ...params, label: "plugin-state" });
 }
 
 export function readLegacyInstalledPluginIndex(sourcePath: string): InstalledPluginIndex | null {
@@ -331,37 +189,26 @@ function readInstallRecordField(
   return (record as Partial<Record<string, unknown>>)[key];
 }
 
-function readInstallRecordStringField(
-  record: InstalledPluginIndex["installRecords"][string],
-  key: string,
-): string | undefined {
-  const value = readInstallRecordField(record, key);
-  return typeof value === "string" ? value : undefined;
-}
-
 function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   currentRecord: InstalledPluginIndex["installRecords"][string];
   legacyRecord: InstalledPluginIndex["installRecords"][string];
 }): boolean {
   const { currentRecord, legacyRecord } = params;
-  const currentResolvedSpec = readInstallRecordStringField(currentRecord, "resolvedSpec");
-  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
-  if (legacySpec) {
-    return currentResolvedSpec === legacySpec;
+  if (legacyRecord.spec) {
+    return currentRecord.resolvedSpec === legacyRecord.spec;
   }
-  const legacyResolvedSpec = readInstallRecordStringField(legacyRecord, "resolvedSpec");
-  return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
+  return Boolean(
+    legacyRecord.resolvedSpec && currentRecord.resolvedSpec === legacyRecord.resolvedSpec,
+  );
 }
 
 function readAuthoritativeCurrentNpmIdentity(
   record: InstalledPluginIndex["installRecords"][string],
 ): { name: string; version: string } | null {
-  const resolvedName = readInstallRecordStringField(record, "resolvedName");
-  const resolvedVersion = readInstallRecordStringField(record, "resolvedVersion");
+  const { resolvedName, resolvedVersion, resolvedSpec } = record;
   if (resolvedName && resolvedVersion) {
     return { name: resolvedName, version: resolvedVersion };
   }
-  const resolvedSpec = readInstallRecordStringField(record, "resolvedSpec");
   const parsed = resolvedSpec ? parseRegistryNpmSpec(resolvedSpec) : null;
   if (parsed?.selectorKind === "exact-version" && parsed.selector) {
     return { name: parsed.name, version: parsed.selector };
@@ -377,8 +224,7 @@ function legacyNpmInstallRecordSupersededByCurrent(params: {
   if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
     return false;
   }
-  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
-  const legacyParsedSpec = legacySpec ? parseRegistryNpmSpec(legacySpec) : null;
+  const legacyParsedSpec = legacyRecord.spec ? parseRegistryNpmSpec(legacyRecord.spec) : null;
   if (legacyParsedSpec?.selectorKind !== "exact-version") {
     return false;
   }
@@ -487,9 +333,9 @@ export function archiveLegacyImportSource(params: {
   label: string;
   changes: string[];
   warnings: string[];
-}): void {
+}): LegacyArchiveResolution | null {
   if (!hardenLegacyImportSource(params)) {
-    return;
+    return null;
   }
   const resolution = archiveLegacyFileSource({
     sourcePath: params.sourcePath,
@@ -497,7 +343,7 @@ export function archiveLegacyImportSource(params: {
     warnings: params.warnings,
   });
   if (!resolution) {
-    return;
+    return null;
   }
   if (resolution.action === "archived") {
     try {
@@ -513,402 +359,7 @@ export function archiveLegacyImportSource(params: {
       ? `Removed already-archived ${params.label} legacy source ${params.sourcePath}`
       : `Archived ${params.label} legacy source → ${resolution.targetPath}`,
   );
-}
-
-function legacyKeyValue(value: SQLInputValue): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return `${value}`;
-  }
-  return "";
-}
-
-function normalizeLegacyFlowRow(row: Record<string, unknown>): SqliteBindRow {
-  const syncMode =
-    row.sync_mode === "task_mirrored" || row.shape === "single_task" ? "task_mirrored" : "managed";
-  const ownerKey =
-    typeof row.owner_key === "string" && row.owner_key.trim()
-      ? row.owner_key.trim()
-      : typeof row.owner_session_key === "string"
-        ? row.owner_session_key.trim()
-        : "";
-  const controllerId =
-    syncMode === "managed"
-      ? typeof row.controller_id === "string" && row.controller_id.trim()
-        ? row.controller_id.trim()
-        : "core/legacy-restored"
-      : null;
-  return {
-    flow_id: legacyBindValue(row.flow_id ?? ""),
-    shape: legacyBindValue(row.shape),
-    sync_mode: syncMode,
-    owner_key: ownerKey,
-    requester_origin_json: legacyBindValue(row.requester_origin_json),
-    controller_id: controllerId,
-    revision: normalizeLegacySqliteInteger(row.revision as number | bigint | null) ?? 0,
-    status: legacyBindValue(row.status ?? ""),
-    notify_policy: legacyBindValue(row.notify_policy ?? ""),
-    goal: legacyBindValue(row.goal ?? ""),
-    current_step: legacyBindValue(row.current_step),
-    blocked_task_id: legacyBindValue(row.blocked_task_id),
-    blocked_summary: legacyBindValue(row.blocked_summary),
-    state_json: legacyBindValue(row.state_json),
-    wait_json: legacyBindValue(row.wait_json),
-    cancel_requested_at: normalizeLegacySqliteInteger(
-      row.cancel_requested_at as number | bigint | null,
-    ),
-    created_at: normalizeLegacySqliteInteger(row.created_at as number | bigint | null) ?? 0,
-    updated_at: normalizeLegacySqliteInteger(row.updated_at as number | bigint | null) ?? 0,
-    ended_at: normalizeLegacySqliteInteger(row.ended_at as number | bigint | null),
-  };
-}
-
-function legacyRowsMatch(
-  existing: Record<string, unknown>,
-  incoming: Record<string, unknown>,
-  columns: string[],
-): boolean {
-  return columns.every(
-    (column) =>
-      normalizeLegacySqliteInteger(existing[column] as number | bigint | null) ===
-      normalizeLegacySqliteInteger(incoming[column] as number | bigint | null),
-  );
-}
-
-function readLegacyFlowRows(sourcePath: string): SqliteBindRow[] {
-  const db = openNodeSqliteDatabase(sourcePath, { readOnly: true });
-  try {
-    const columns = listSqliteColumns(db, "flow_runs");
-    if (columns.size === 0) {
-      return [];
-    }
-    const selectColumns = [
-      "flow_id",
-      pickLegacyColumn(columns, "shape"),
-      pickLegacyColumn(columns, "sync_mode"),
-      pickLegacyColumn(columns, "owner_key"),
-      pickLegacyColumn(columns, "owner_session_key"),
-      pickLegacyColumn(columns, "requester_origin_json"),
-      pickLegacyColumn(columns, "controller_id"),
-      pickLegacyColumn(columns, "revision", "0"),
-      "status",
-      "notify_policy",
-      "goal",
-      pickLegacyColumn(columns, "current_step"),
-      pickLegacyColumn(columns, "blocked_task_id"),
-      pickLegacyColumn(columns, "blocked_summary"),
-      pickLegacyColumn(columns, "state_json"),
-      pickLegacyColumn(columns, "wait_json"),
-      pickLegacyColumn(columns, "cancel_requested_at"),
-      "created_at",
-      "updated_at",
-      pickLegacyColumn(columns, "ended_at"),
-    ];
-    return db
-      .prepare(
-        `SELECT ${selectColumns.join(", ")} FROM flow_runs ORDER BY created_at ASC, flow_id ASC`,
-      )
-      .all()
-      .map((row) => normalizeLegacyFlowRow(row as Record<string, unknown>));
-  } finally {
-    db.close();
-  }
-}
-
-function insertFlowRunRowSql(db: DatabaseSync, row: SqliteBindRow): void {
-  db.prepare(
-    `
-      INSERT INTO flow_runs (
-        flow_id, shape, sync_mode, owner_key, requester_origin_json, controller_id, revision,
-        status, notify_policy, goal, current_step, blocked_task_id, blocked_summary, state_json,
-        wait_json, cancel_requested_at, created_at, updated_at, ended_at
-      ) VALUES (
-        @flow_id, @shape, @sync_mode, @owner_key, @requester_origin_json, @controller_id,
-        @revision, @status, @notify_policy, @goal, @current_step, @blocked_task_id,
-        @blocked_summary, @state_json, @wait_json, @cancel_requested_at, @created_at,
-        @updated_at, @ended_at
-      )
-    `,
-  ).run(row);
-}
-
-async function migrateLegacyTaskRunsSidecar(params: {
-  stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const sourcePath = resolveLegacyTaskRunsSidecarPath(params.stateDir);
-  if (!migrationFileExists(sourcePath)) {
-    const changes: string[] = [];
-    const warnings: string[] = [];
-    if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
-      archiveLegacySqliteSidecar({ sourcePath, label: "task registry", changes, warnings });
-    }
-    return { changes, warnings };
-  }
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  let taskRows: SqliteBindRow[];
-  let deliveryRows: SqliteBindRow[];
-  try {
-    taskRows = readLegacyTaskRows(sourcePath);
-    deliveryRows = readLegacyTaskDeliveryRows(sourcePath);
-  } catch (err) {
-    return {
-      changes,
-      warnings: [`Failed reading task registry sidecar ${sourcePath}: ${String(err)}`],
-    };
-  }
-
-  try {
-    const conflicts: string[] = [];
-    let importedTasks = 0;
-    let importedDeliveryStates = 0;
-    let skippedOrphanDeliveryStates = 0;
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const taskColumns = [
-          "runtime",
-          "task_kind",
-          "source_id",
-          "requester_session_key",
-          "owner_key",
-          "scope_kind",
-          "child_session_key",
-          "parent_flow_id",
-          "parent_task_id",
-          "agent_id",
-          "requester_agent_id",
-          "run_id",
-          "label",
-          "task",
-          "status",
-          "delivery_status",
-          "notify_policy",
-          "created_at",
-          "started_at",
-          "ended_at",
-          "last_event_at",
-          "cleanup_after",
-          "error",
-          "progress_summary",
-          "terminal_summary",
-          "terminal_outcome",
-          "detail_json",
-        ];
-        for (const row of taskRows) {
-          const taskId = legacyKeyValue(expectDefined(row.task_id, "task migration row key"));
-          const existing = db
-            .prepare(`SELECT ${taskColumns.join(", ")} FROM task_runs WHERE task_id = ?`)
-            .get(taskId);
-          if (existing) {
-            if (!legacyRowsMatch(existing as Record<string, unknown>, row, taskColumns)) {
-              conflicts.push(taskId);
-            }
-            continue;
-          }
-          insertTaskRunRowSql(db, row);
-          importedTasks++;
-        }
-        const deliveryColumns = ["requester_origin_json", "last_notified_event_at"];
-        for (const row of deliveryRows) {
-          const taskId = legacyKeyValue(expectDefined(row.task_id, "delivery migration row key"));
-          const existing = db
-            .prepare(
-              `SELECT requester_origin_json, last_notified_event_at FROM task_delivery_state WHERE task_id = ?`,
-            )
-            .get(taskId);
-          if (existing) {
-            if (!legacyRowsMatch(existing as Record<string, unknown>, row, deliveryColumns)) {
-              conflicts.push(`${taskId}/delivery`);
-            }
-            continue;
-          }
-          const taskExists = db.prepare("SELECT 1 FROM task_runs WHERE task_id = ?").get(taskId);
-          if (!taskExists) {
-            skippedOrphanDeliveryStates++;
-            continue;
-          }
-          insertTaskDeliveryRowSql(db, row);
-          importedDeliveryStates++;
-        }
-        if (conflicts.length > 0) {
-          throw new LegacyTaskStateSidecarConflictError(conflicts);
-        }
-      },
-      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
-    );
-    if (importedTasks > 0) {
-      changes.push(
-        `Migrated ${importedTasks} task registry sidecar ${importedTasks === 1 ? "row" : "rows"} → shared SQLite state`,
-      );
-    }
-    if (importedDeliveryStates > 0) {
-      changes.push(
-        `Migrated ${importedDeliveryStates} task delivery sidecar ${importedDeliveryStates === 1 ? "row" : "rows"} → shared SQLite state`,
-      );
-    }
-    if (skippedOrphanDeliveryStates > 0) {
-      warnings.push(
-        `Skipped ${skippedOrphanDeliveryStates} orphan task delivery sidecar ${skippedOrphanDeliveryStates === 1 ? "row" : "rows"} with no task run`,
-      );
-    }
-  } catch (err) {
-    if (err instanceof LegacyTaskStateSidecarConflictError) {
-      return {
-        changes,
-        warnings: [
-          `Left task registry sidecar in place because ${err.conflictedKeys.length} ${err.conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${err.conflictedKeys[0]}`,
-        ],
-      };
-    }
-    return {
-      changes,
-      warnings: [`Failed migrating task registry sidecar ${sourcePath}: ${String(err)}`],
-    };
-  }
-
-  archiveLegacySqliteSidecar({ sourcePath, label: "task registry", changes, warnings });
-  return { changes, warnings };
-}
-
-async function migrateLegacyFlowRunsSidecar(params: {
-  stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const sourcePath = resolveLegacyFlowRunsSidecarPath(params.stateDir);
-  if (!migrationFileExists(sourcePath)) {
-    const changes: string[] = [];
-    const warnings: string[] = [];
-    if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
-      archiveLegacySqliteSidecar({ sourcePath, label: "task flow", changes, warnings });
-    }
-    return { changes, warnings };
-  }
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  let rows: SqliteBindRow[];
-  try {
-    rows = readLegacyFlowRows(sourcePath);
-  } catch (err) {
-    return {
-      changes,
-      warnings: [`Failed reading task flow sidecar ${sourcePath}: ${String(err)}`],
-    };
-  }
-
-  try {
-    const conflicts: string[] = [];
-    let imported = 0;
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const columns = [
-          "shape",
-          "sync_mode",
-          "owner_key",
-          "requester_origin_json",
-          "controller_id",
-          "revision",
-          "status",
-          "notify_policy",
-          "goal",
-          "current_step",
-          "blocked_task_id",
-          "blocked_summary",
-          "state_json",
-          "wait_json",
-          "cancel_requested_at",
-          "created_at",
-          "updated_at",
-          "ended_at",
-        ];
-        for (const row of rows) {
-          const flowId = legacyKeyValue(expectDefined(row.flow_id, "flow migration row key"));
-          const existing = db
-            .prepare(`SELECT ${columns.join(", ")} FROM flow_runs WHERE flow_id = ?`)
-            .get(flowId);
-          if (existing) {
-            if (!legacyRowsMatch(existing as Record<string, unknown>, row, columns)) {
-              conflicts.push(flowId);
-            }
-            continue;
-          }
-          insertFlowRunRowSql(db, row);
-          imported++;
-        }
-        if (conflicts.length > 0) {
-          throw new LegacyTaskStateSidecarConflictError(conflicts);
-        }
-      },
-      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
-    );
-    if (imported > 0) {
-      changes.push(
-        `Migrated ${imported} task flow sidecar ${imported === 1 ? "row" : "rows"} → shared SQLite state`,
-      );
-    }
-  } catch (err) {
-    if (err instanceof LegacyTaskStateSidecarConflictError) {
-      return {
-        changes,
-        warnings: [
-          `Left task flow sidecar in place because ${err.conflictedKeys.length} ${err.conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${err.conflictedKeys[0]}`,
-        ],
-      };
-    }
-    return {
-      changes,
-      warnings: [`Failed migrating task flow sidecar ${sourcePath}: ${String(err)}`],
-    };
-  }
-
-  archiveLegacySqliteSidecar({ sourcePath, label: "task flow", changes, warnings });
-  return { changes, warnings };
-}
-
-export async function migrateLegacyTaskStateSidecars(params: {
-  stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const taskRuns = await migrateLegacyTaskRunsSidecar(params);
-  const flowRuns = await migrateLegacyFlowRunsSidecar(params);
-  return {
-    changes: [...taskRuns.changes, ...flowRuns.changes],
-    warnings: [...taskRuns.warnings, ...flowRuns.warnings],
-  };
-}
-
-export function resolveLegacyDeliveryQueuePath(stateDir: string, dirName: string): string {
-  return path.join(stateDir, dirName);
-}
-
-export function listLegacyDeliveryQueueFiles(queueDir: string): LegacyDeliveryQueueFile[] {
-  const pending = safeReadDir(queueDir)
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => ({ sourcePath: path.join(queueDir, entry.name), status: "pending" as const }));
-  const failedDir = path.join(queueDir, "failed");
-  const failed = safeReadDir(failedDir)
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => ({
-      sourcePath: path.join(failedDir, entry.name),
-      status: "failed" as const,
-    }));
-  return [...pending, ...failed];
-}
-
-export function listLegacyDeliveryQueueDeliveredMarkers(queueDir: string): string[] {
-  return safeReadDir(queueDir)
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".delivered"))
-    .map((entry) => path.join(queueDir, entry.name));
-}
-
-function readLegacyDeliveryQueueEntry(sourcePath: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(sourcePath, "utf8")) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
+  return resolution;
 }
 
 function buildLegacyDeliveryQueueRow(params: {
@@ -917,7 +368,7 @@ function buildLegacyDeliveryQueueRow(params: {
   status: "pending" | "failed";
   entry: Record<string, unknown>;
   now: number;
-}): SqliteBindRow | null {
+}): (SqliteBindRow & { id: string }) | null {
   const originalEnqueuedAt =
     asSafeIntegerInRange(params.entry.enqueuedAt, { min: 0 }) ?? params.now;
   const retryCount = asSafeIntegerInRange(params.entry.retryCount, { min: 0 }) ?? 0;
@@ -1011,53 +462,46 @@ function legacyDeliveryQueueRowsMatch(
   ].every((column) => {
     const left = existing[column];
     const right = incoming[column];
-    if (typeof left === "bigint" || typeof right === "bigint") {
-      return (
-        normalizeLegacySqliteInteger(left as number | bigint | null) ===
-        normalizeLegacySqliteInteger(right as number | bigint | null)
-      );
-    }
-    return left === right;
+    return (
+      (typeof left === "bigint" ? Number(left) : left) ===
+      (typeof right === "bigint" ? Number(right) : right)
+    );
   });
 }
 
-function removeLegacyDeliveryQueueDir(params: {
-  queueDir: string;
-  label: string;
-  changes: string[];
-  warnings: string[];
-}): void {
-  try {
-    fs.rmSync(params.queueDir, { recursive: true });
-    params.changes.push(`Removed ${params.label} legacy source ${params.queueDir}`);
-  } catch (err) {
-    params.warnings.push(`Failed removing ${params.label} ${params.queueDir}: ${String(err)}`);
+/** Never recursively remove a queue directory containing retained archives or unknown files. */
+function removeEmptyLegacyDeliveryQueueDirs(queueDir: string): void {
+  for (const dir of [path.join(queueDir, "failed"), queueDir]) {
+    try {
+      fs.rmdirSync(dir);
+    } catch (error) {
+      if (
+        !["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")
+      ) {
+        throw error;
+      }
+    }
   }
 }
 
-function removeLegacyDeliveryQueueMarkers(
-  markerPaths: string[],
-  label: string,
-  warnings: string[],
-): number | null {
-  let removed = 0;
-  for (const markerPath of markerPaths) {
-    try {
-      fs.rmSync(markerPath, { force: true });
-      removed++;
-    } catch (err) {
-      warnings.push(`Failed removing ${label} marker ${markerPath}: ${String(err)}`);
-      return null;
-    }
-  }
-  return removed;
-}
+type LegacyDeliveryQueueImport = {
+  snapshot: LegacyMigrationSourceSnapshot;
+  sourceKey: string;
+  row: (SqliteBindRow & { id: string }) | null;
+  reason?: string;
+  mediaPaths: string[];
+  mediaBackups?: unknown;
+};
 
 export async function migrateLegacyDeliveryQueues(params: {
   stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
+}): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
+  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  // Both namespaces use the same inclusive cutoff, not the latest retry or file mtime.
+  const now = Date.now();
+  let refused = false;
   for (const queue of LEGACY_DELIVERY_QUEUE_DIRS) {
     const queueDir = resolveLegacyDeliveryQueuePath(params.stateDir, queue.dirName);
     const files = listLegacyDeliveryQueueFiles(queueDir);
@@ -1065,100 +509,311 @@ export async function migrateLegacyDeliveryQueues(params: {
     if (files.length === 0 && markerPaths.length === 0) {
       continue;
     }
-    let imported = 0;
-    let skipped = 0;
+    const imports: LegacyDeliveryQueueImport[] = [];
+    const sourceIds = new Map<string, string>();
+    const unresolvedPendingIds = new Set<string | undefined>();
     const conflicts: string[] = [];
-    try {
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          const insert = db.prepare(
-            `
-            INSERT INTO delivery_queue_entries (
-              queue_name, id, status, entry_kind, session_key, channel, target, account_id,
-              retry_count, last_attempt_at, last_error, recovery_state,
-              platform_send_started_at, entry_json, enqueued_at, updated_at, failed_at
-            ) VALUES (
-              @queue_name, @id, @status, @entry_kind, @session_key, @channel, @target,
-              @account_id, @retry_count, @last_attempt_at, @last_error, @recovery_state,
-              @platform_send_started_at, @entry_json, @enqueued_at, @updated_at, @failed_at
-            )
-          `,
-          );
-          const now = Date.now();
-          for (const file of files) {
-            const entry = readLegacyDeliveryQueueEntry(file.sourcePath);
-            const id =
-              typeof entry?.id === "string" ? entry.id : path.basename(file.sourcePath, ".json");
-            if (!entry || !id) {
-              skipped++;
-              continue;
+    let imported = 0;
+    const deliveredNames = new Set(markerPaths.map((file) => path.basename(file, ".delivered")));
+    const deliveredIds = new Set(deliveredNames);
+    const markerIds = new Map([...deliveredNames].map((name) => [name, new Set([name])]));
+    // Snapshot markers before any retirement. A leftover .json twin is already delivered.
+    for (const file of [
+      ...files,
+      ...markerPaths.map((sourcePath) => ({ sourcePath, status: "delivered" as const })),
+    ]) {
+      try {
+        const snapshot = readLegacyMigrationSourceSnapshotSync({
+          sourcePath: file.sourcePath,
+          label: queue.label,
+        });
+        let reason: string | undefined;
+        let mediaPaths: string[] = [];
+        let row: (SqliteBindRow & { id: string }) | null = null;
+        if (file.status === "delivered") {
+          reason = "delivered";
+          try {
+            const id = asNullableRecord(JSON.parse(snapshot.raw))?.id;
+            if (typeof id === "string" && id) {
+              deliveredIds.add(id);
+              markerIds.get(path.basename(file.sourcePath, ".delivered"))?.add(id);
             }
-            const row = buildLegacyDeliveryQueueRow({
+          } catch {
+            // The delivered filename remains terminal evidence for opaque older markers.
+          }
+        } else {
+          const parsed: unknown = JSON.parse(snapshot.raw);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("expected a queue entry object");
+          }
+          const entry = parsed as Record<string, unknown>;
+          const id =
+            typeof entry.id === "string" ? entry.id : path.basename(file.sourcePath, ".json");
+          if (!id) {
+            throw new Error("missing queue entry id");
+          }
+          const enqueuedAt = asSafeIntegerInRange(entry.enqueuedAt, { min: 0 });
+          if (file.status === "pending") {
+            sourceIds.set(file.sourcePath, id);
+            if (
+              deliveredNames.has(path.basename(file.sourcePath, ".json")) ||
+              deliveredNames.has(id)
+            ) {
+              reason = "delivered";
+            } else if (enqueuedAt === undefined || enqueuedAt > now) {
+              reason = "unverified enqueue time";
+            } else if (now - enqueuedAt >= LEGACY_DELIVERY_QUEUE_MAX_AGE_MS) {
+              reason = "at least 72 hours old";
+            }
+          }
+          if ((reason && reason !== "delivered") || file.status === "failed") {
+            mediaPaths = (
+              await import("./state-migrations.delivery-queue-media.js")
+            ).resolveLegacyDeliveryQueueMediaPaths(entry, params.stateDir);
+          }
+          if (!reason) {
+            row = buildLegacyDeliveryQueueRow({
               queueName: queue.queueName,
               id,
               status: file.status,
               entry,
               now,
             });
-            if (!row) {
-              continue;
-            }
-            const existing = db
-              .prepare(
-                `
-                SELECT status, entry_kind, session_key, channel, target, account_id,
-                       retry_count, last_attempt_at, last_error, recovery_state,
-                       platform_send_started_at, entry_json, enqueued_at, failed_at
-                  FROM delivery_queue_entries
-                 WHERE queue_name = ? AND id = ?
-              `,
-              )
-              .get(queue.queueName, id);
-            if (existing) {
-              if (!legacyDeliveryQueueRowsMatch(existing as Record<string, unknown>, row)) {
-                conflicts.push(id);
+          }
+        }
+        imports.push({
+          snapshot,
+          sourceKey: resolveLegacyMigrationSourceKey(
+            "delivery-queue",
+            file.sourcePath,
+            snapshot.sha256,
+          ),
+          row,
+          reason,
+          mediaPaths,
+        });
+      } catch (error) {
+        if (file.status === "pending") {
+          unresolvedPendingIds.add(sourceIds.get(file.sourcePath));
+        }
+        refused = true;
+        warnings.push(
+          `Left malformed ${queue.label} source ${file.sourcePath} in place: ${String(error)}`,
+        );
+      }
+    }
+    // A marker settles a queue identity, not merely one filename. Resolve aliases
+    // before inserting anything so a second legacy copy cannot replay the same ID.
+    for (const [sourcePath, id] of sourceIds) {
+      if (deliveredNames.has(path.basename(sourcePath, ".json"))) {
+        deliveredIds.add(id);
+        markerIds.get(path.basename(sourcePath, ".json"))?.add(id);
+      }
+    }
+    for (const item of imports) {
+      const id = sourceIds.get(item.snapshot.sourcePath);
+      if (id !== undefined && deliveredIds.has(id)) {
+        item.row = null;
+        item.reason = "delivered";
+        item.mediaPaths = [];
+      }
+    }
+    const committed: LegacyDeliveryQueueImport[] = [];
+    try {
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          const insert = db.prepare(
+            `INSERT INTO delivery_queue_entries (queue_name, id, status, entry_kind, session_key, channel, target, account_id, retry_count, last_attempt_at, last_error, recovery_state, platform_send_started_at, entry_json, enqueued_at, updated_at, failed_at) VALUES (@queue_name, @id, @status, @entry_kind, @session_key, @channel, @target, @account_id, @retry_count, @last_attempt_at, @last_error, @recovery_state, @platform_send_started_at, @entry_json, @enqueued_at, @updated_at, @failed_at)`,
+          );
+          for (const item of imports) {
+            const { snapshot, sourceKey, row } = item;
+            assertLegacyMigrationSourceUnchanged({
+              sourcePath: snapshot.sourcePath,
+              snapshot,
+              label: queue.label,
+            });
+            // Import receipts outlive queue consumption and payload-free terminal compaction.
+            // Retrying cleanup must never recreate an already-delivered row.
+            const receipt = readLegacyMigrationReceiptFromDatabase(db, sourceKey);
+            if (receipt) {
+              const report = asNullableRecord(JSON.parse(receipt.reportJson));
+              const reason = report?.reason;
+              const mediaPaths = report?.mediaPaths;
+              if (
+                typeof reason !== "string" ||
+                !Array.isArray(mediaPaths) ||
+                !mediaPaths.every((value) => typeof value === "string")
+              ) {
+                throw new Error("Legacy delivery import receipt has no verified disposition");
               }
+              committed.push({
+                ...item,
+                reason: reason === "imported" ? undefined : reason,
+                mediaPaths,
+                mediaBackups: report?.mediaBackups,
+              });
               continue;
             }
-            insert.run(row);
-            imported++;
+            if (row) {
+              const existing = db
+                .prepare("SELECT * FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+                .get(queue.queueName, row.id);
+              if (existing && !legacyDeliveryQueueRowsMatch(existing, row)) {
+                conflicts.push(row.id);
+                continue;
+              }
+              if (!existing) {
+                insert.run(row);
+                imported++;
+              }
+            }
+            recordLegacyMigrationReceipt(db, {
+              sourceKey,
+              migrationKind: "delivery-queues",
+              sourcePath: snapshot.sourcePath,
+              targetTable: "delivery_queue_entries",
+              sourceSha256: snapshot.sha256,
+              sourceSizeBytes: snapshot.size,
+              sourceRecordCount: 1,
+              runId: randomUUID(),
+              now,
+              reportJson: JSON.stringify({
+                queueName: queue.queueName,
+                reason: item.reason ?? "imported",
+                mediaPaths: item.mediaPaths,
+                mediaPreserved: item.mediaPaths.length === 0,
+              }),
+            });
+            committed.push(item);
           }
         },
-        { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
+        { env },
       );
-    } catch (err) {
-      warnings.push(`Failed migrating ${queue.label} ${queueDir}: ${String(err)}`);
+    } catch (error) {
+      refused = true;
+      warnings.push(`Failed migrating ${queue.label} ${queueDir}: ${String(error)}`);
       continue;
-    }
-    const removedMarkers = removeLegacyDeliveryQueueMarkers(markerPaths, queue.label, warnings);
-    if (removedMarkers === null) {
-      continue;
-    }
-    if (removedMarkers > 0) {
-      changes.push(
-        `Removed ${removedMarkers} ${queue.label} delivered ${removedMarkers === 1 ? "marker" : "markers"}`,
-      );
     }
     if (imported > 0) {
       changes.push(
         `Migrated ${imported} ${queue.label} ${imported === 1 ? "entry" : "entries"} → shared SQLite state`,
       );
     }
-    if (skipped > 0) {
-      warnings.push(
-        `Skipped ${skipped} malformed ${queue.label} ${skipped === 1 ? "entry" : "entries"}`,
-      );
-      warnings.push(`Left ${queue.label} in place because malformed entries need manual cleanup`);
-      continue;
-    }
     if (conflicts.length > 0) {
+      refused = true;
       warnings.push(
         `Left ${queue.label} in place because ${conflicts.length} ${conflicts.length === 1 ? "entry" : "entries"} already existed in shared state: ${conflicts[0]}`,
       );
-      continue;
     }
-    removeLegacyDeliveryQueueDir({ queueDir, label: queue.label, changes, warnings });
+    for (const { snapshot, sourceKey, reason, mediaPaths, mediaBackups } of committed) {
+      // Keep delivered evidence while its pending twin could still need repair.
+      // Unrelated conflicts must not retain already-settled markers.
+      const ids = markerIds.get(path.basename(snapshot.sourcePath, ".delivered"));
+      // Opaque markers need their JSON twin's ID until malformed duplicates are resolved.
+      if (
+        reason === "delivered" &&
+        [...unresolvedPendingIds].some(
+          (id) => id === undefined || id === sourceIds.get(snapshot.sourcePath) || ids?.has(id),
+        )
+      ) {
+        continue;
+      }
+      if (
+        snapshot.sourcePath.endsWith(".delivered") &&
+        ids &&
+        files.some(
+          (file) =>
+            file.status === "pending" &&
+            (ids.has(path.basename(file.sourcePath, ".json")) ||
+              ids.has(sourceIds.get(file.sourcePath) ?? "")) &&
+            migrationFileExists(file.sourcePath),
+        )
+      ) {
+        continue;
+      }
+      const recordMediaPreservation = (preserved: boolean, copies: unknown) => {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            // This exact source is present again; reopen custody before any awaited backup check.
+            db.prepare(
+              "UPDATE migration_sources SET report_json = ?, removed_source = 0 WHERE source_key = ?",
+            ).run(
+              JSON.stringify({
+                queueName: queue.queueName,
+                reason: reason ?? "imported",
+                mediaPaths,
+                mediaPreserved: preserved,
+                mediaBackups: copies,
+              }),
+              sourceKey,
+            );
+          },
+          { env },
+        );
+      };
+      try {
+        assertLegacyMigrationSourceUnchanged({
+          sourcePath: snapshot.sourcePath,
+          snapshot,
+          label: queue.label,
+        });
+        if (mediaPaths.length > 0) {
+          recordMediaPreservation(false, mediaBackups);
+        }
+        // Failed-row projection deliberately strips content. Keep the original file as
+        // an ordinary private migration backup, never as another runtime queue/store.
+        const mediaArchive =
+          mediaPaths.length > 0
+            ? await (
+                await import("./state-migrations.delivery-queue-media.js")
+              ).preserveLegacyDeliveryQueueMedia({
+                mediaPaths,
+                previousBackups: mediaBackups,
+                sourcePath: snapshot.sourcePath,
+                stateDir: params.stateDir,
+              })
+            : undefined;
+        if (mediaArchive) {
+          // Publish backup identities before releasing spool custody or retiring JSON.
+          recordMediaPreservation(true, mediaArchive.copies);
+        }
+        assertLegacyMigrationSourceUnchanged({
+          sourcePath: snapshot.sourcePath,
+          snapshot,
+          label: queue.label,
+        });
+        const archive = archiveLegacyImportSource({
+          sourcePath: snapshot.sourcePath,
+          label: queue.label,
+          changes,
+          warnings,
+        });
+        if (archive) {
+          markLegacyMigrationSourceRemoved(sourceKey, env);
+        }
+        if (reason && reason !== "delivered") {
+          warnings.push(
+            `Did not replay ${queue.label} source ${snapshot.sourcePath}: ${reason}. Original content is retained at ${archive?.targetPath ?? snapshot.sourcePath}${mediaArchive ? `; queue-owned media copies: ${mediaArchive.directory}` : ""}; review it before explicitly sending a new message. Do not restore it to the queue.`,
+          );
+        }
+      } catch (error) {
+        // COMMIT recorded the non-replayable source identity; safely retained leftovers
+        // need cleanup, not a failed upgrade or another attempt to send them.
+        warnings.push(
+          `Retained ${queue.label} source or archive ${snapshot.sourcePath}; run openclaw doctor --fix to retry cleanup: ${String(error)}`,
+        );
+      }
+    }
+    try {
+      removeEmptyLegacyDeliveryQueueDirs(queueDir);
+    } catch (error) {
+      warnings.push(`Failed cleaning empty ${queue.label} directory ${queueDir}: ${String(error)}`);
+    }
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    ...(!refused && warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

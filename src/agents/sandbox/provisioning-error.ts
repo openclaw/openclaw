@@ -1,3 +1,4 @@
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   isTrustedSecretSurfaceUnavailableError,
@@ -5,6 +6,14 @@ import {
 } from "../../secrets/runtime-degraded-state.js";
 
 const SANDBOX_PROVISIONING_ERROR_CODE = "sandbox_provisioning";
+
+/** A provider has confirmed that this exact runtime can never be resumed. */
+export class SandboxRuntimeRetiredError extends Error {
+  constructor(readonly runtimeId: string) {
+    super(`Sandbox runtime "${runtimeId}" has been permanently released.`);
+    this.name = "SandboxRuntimeRetiredError";
+  }
+}
 
 /** Model-independent sandbox setup failure that must not consume model fallbacks. */
 class SandboxProvisioningError extends Error {
@@ -30,31 +39,22 @@ export function toSandboxProvisioningError(error: unknown, backendId: string) {
   return new SandboxProvisioningError(message, { backendId, cause: error });
 }
 
-/** Recognize the provisioning marker through ordinary error-wrapper cause chains. */
-export function isSandboxProvisioningError(error: unknown, seen: Set<object> = new Set()): boolean {
-  if (error instanceof SandboxProvisioningError) {
-    return true;
-  }
-  if (!error || typeof error !== "object" || seen.has(error)) {
-    return false;
-  }
-  seen.add(error);
-  const candidate = error as {
-    name?: unknown;
-    code?: unknown;
-    cause?: unknown;
-    error?: unknown;
-    errors?: unknown;
-  };
-  if (
-    candidate.name === "SandboxProvisioningError" &&
-    candidate.code === SANDBOX_PROVISIONING_ERROR_CODE
-  ) {
-    return true;
-  }
-  return [
-    candidate.cause,
-    candidate.error,
-    ...(Array.isArray(candidate.errors) ? candidate.errors : []),
-  ].some((nested) => isSandboxProvisioningError(nested, seen));
+/** Recognize the provisioning marker through the shared error-wrapper graph. */
+export function isSandboxProvisioningError(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some((candidate) => {
+    try {
+      return (
+        candidate instanceof SandboxProvisioningError ||
+        (candidate !== null &&
+          typeof candidate === "object" &&
+          "name" in candidate &&
+          candidate.name === "SandboxProvisioningError" &&
+          "code" in candidate &&
+          candidate.code === SANDBOX_PROVISIONING_ERROR_CODE)
+      );
+    } catch {
+      // Opaque marker fields must not hide an accessible sibling error.
+      return false;
+    }
+  });
 }

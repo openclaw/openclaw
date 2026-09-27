@@ -10,6 +10,10 @@ import { readLoggingConfig } from "../logging/config.js";
 import { resetLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import {
+  getSkillsSnapshotVersion,
+  resetSkillsRefreshStateForTest,
+} from "../skills/runtime/refresh-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 
@@ -23,6 +27,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   resetConfigRuntimeState();
   clearPluginMetadataLifecycleCaches();
+  resetSkillsRefreshStateForTest();
 });
 
 describe("gateway minimal boot smoke", () => {
@@ -79,61 +84,77 @@ describe("gateway minimal boot smoke", () => {
     }
   });
 
-  it("boots a minimal test gateway within budget", { timeout: BOOT_BUDGET_MS }, async () => {
-    const port = await getFreePort();
-    const state = await createOpenClawTestState({
-      label: "gateway-minimal-boot-smoke",
-      layout: "home",
-      env: {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
-    });
-    const token = "gateway-minimal-boot-smoke-token";
-    const timelinePath = state.path("gateway-startup.jsonl");
-    state.envVars.OPENCLAW_DIAGNOSTICS = "1";
-    state.envVars.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
-    await state.writeConfig({
-      gateway: {
-        auth: { mode: "token", token },
-        controlUi: { enabled: false },
-        port,
-      },
-    });
-    state.applyEnv();
-    try {
-      const { startGatewayServer } = await import("./server.js");
-      const server = await startGatewayServer(port, {
-        auth: { mode: "token", token },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
+  it(
+    "boots and refreshes skill snapshots on each start",
+    { timeout: BOOT_BUDGET_MS * 2 },
+    async () => {
+      const port = await getFreePort();
+      const state = await createOpenClawTestState({
+        label: "gateway-minimal-boot-smoke",
+        layout: "home",
+        env: {
+          OPENCLAW_GATEWAY_PASSWORD: undefined,
+          OPENCLAW_GATEWAY_TOKEN: undefined,
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+          OPENCLAW_SKIP_PROVIDERS: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          VITEST: "1",
+        },
       });
-      expect(server).toBeTruthy();
-      const startupMeasures = (await fs.readFile(timelinePath, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .filter((event) => event.type === "span.start" && event.phase === "startup")
-        .map((event) => {
-          const attributes = event.attributes as { traceName?: string } | undefined;
-          return attributes?.traceName ?? event.name;
-        });
-      expect(startupMeasures.indexOf("http.listen")).toBeGreaterThan(-1);
-      expect(startupMeasures.indexOf("runtime.early")).toBeGreaterThan(
-        startupMeasures.indexOf("http.listen"),
-      );
-      await server.close({ reason: "minimal boot smoke complete" });
-    } finally {
-      await state.cleanup();
-    }
-  });
+      const token = "gateway-minimal-boot-smoke-token";
+      const timelinePath = state.path("gateway-startup.jsonl");
+      state.envVars.OPENCLAW_DIAGNOSTICS = "1";
+      state.envVars.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
+      await state.writeConfig({
+        gateway: {
+          auth: { mode: "token", token },
+          controlUi: { enabled: false },
+          port,
+        },
+      });
+      state.applyEnv();
+      try {
+        const { startGatewayServer } = await import("./server.js");
+        let snapshotVersion = getSkillsSnapshotVersion();
+        for (const startup of [1, 2]) {
+          await fs.writeFile(timelinePath, "");
+          const server = await startGatewayServer(port, {
+            auth: { mode: "token", token },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+          });
+          try {
+            const nextVersion = getSkillsSnapshotVersion();
+            expect(
+              nextVersion,
+              `startup ${startup} must invalidate restored skills`,
+            ).toBeGreaterThan(snapshotVersion);
+            snapshotVersion = nextVersion;
+            const startupMeasures = (await fs.readFile(timelinePath, "utf8"))
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line) as Record<string, unknown>)
+              .filter((event) => event.type === "span.start" && event.phase === "startup")
+              .map((event) => {
+                const attributes = event.attributes as { traceName?: string } | undefined;
+                return attributes?.traceName ?? event.name;
+              });
+            expect(startupMeasures.indexOf("http.listen")).toBeGreaterThan(-1);
+            expect(startupMeasures.indexOf("runtime.early")).toBeGreaterThan(
+              startupMeasures.indexOf("http.listen"),
+            );
+          } finally {
+            await server.close({ reason: "minimal boot smoke complete" });
+          }
+        }
+      } finally {
+        await state.cleanup();
+      }
+    },
+  );
 });

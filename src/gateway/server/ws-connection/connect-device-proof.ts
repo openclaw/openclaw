@@ -6,7 +6,7 @@ import {
   normalizeDevicePublicKeyBase64Url,
 } from "../../../infra/device-identity.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
-import type { GatewayRole } from "../../role-policy.js";
+import type { GatewayRole } from "../../role-policy.types.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
 import { resolveDeviceSignaturePayloadVersion } from "./handshake-auth-helpers.js";
 import type { GatewayConnectPhaseContext } from "./message-handler-types.js";

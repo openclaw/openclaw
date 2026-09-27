@@ -1,14 +1,16 @@
 import { backup, DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { setSqliteBusyTimeout } from "../src/infra/sqlite-busy-timeout.js";
 import { withStateSchemaFence } from "../src/infra/state-database-coordinator.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "../src/infra/update-run-driver.js";
 import { createUpdateRun, finishUpdateRun } from "../src/infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../src/infra/update-run-timeouts.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../src/state/openclaw-state-db-contract.js";
+import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../src/state/openclaw-state-db.js";
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../src/state/openclaw-state-db-contract.js";
+import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
 import { withEnv } from "../src/test-utils/env.js";
 import {
   createOpenClawTestInstance,
@@ -202,7 +204,18 @@ describe("Gateway external shared-state ownership", () => {
         status: "ok",
         mode: "repair",
         restart: false,
-        reconciledRuns: [],
+        reconciledRuns: [runId],
+      });
+      const repaired = database
+        .prepare("SELECT steps_json FROM update_runs WHERE run_id = ?")
+        .get(runId);
+      expect(JSON.parse(String(repaired?.steps_json))).toContainEqual(
+        expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+      );
+      expect(readUpdateOutcome(database, runId)).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        reason: "abandoned",
       });
       await expectGatewayStillServing(instance, child);
       expectGatewayOwnsState(instance, databasePath);
@@ -237,7 +250,15 @@ describe("Gateway external shared-state ownership", () => {
       }
       const refused = await instance.cli(["update", "repair", "--json"]);
       expect(refused.code).not.toBe(0);
-      expect(`${refused.stderr}\n${refused.stdout}`).toMatch(/still in progress/u);
+      expect(JSON.parse(refused.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining(
+            `Update ${recent.runId} remains recorded as running (requested); driver PID and host not recorded, liveness: not observed;`,
+          ),
+        },
+      });
       for (const run of [inactive, live, recent]) {
         expect(readUpdateOutcome(observer, run.runId)).toMatchObject({
           status: "running",
@@ -387,6 +408,7 @@ describe("Gateway external shared-state ownership", () => {
       const finishedAtMs = publishAfterMs - publicationGraceMs;
       const writer = new DatabaseSync(databasePath);
       try {
+        setSqliteBusyTimeout(writer, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
         // Deliver an aged terminal fixture through a separate connection, like the old CLI.
         writer
           .prepare(`UPDATE update_runs SET status = 'succeeded', phase = 'finished',

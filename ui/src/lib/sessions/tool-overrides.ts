@@ -6,16 +6,9 @@ function copyDynamicKeyRecord<T>(
   values: Record<string, T> | undefined,
   copyValue: (value: T) => T = (value) => value,
 ): Record<string, T> {
-  const copy: Record<string, T> = {};
-  for (const [name, value] of Object.entries(values ?? {})) {
-    Object.defineProperty(copy, name, {
-      configurable: true,
-      enumerable: true,
-      value: copyValue(value),
-      writable: true,
-    });
-  }
-  return copy;
+  return Object.fromEntries(
+    Object.entries(values ?? {}).map(([name, value]) => [name, copyValue(value)]),
+  );
 }
 
 export function readOwnEntry<T>(
@@ -51,6 +44,21 @@ export function resolveToolOverrideState(baseEnabled: boolean, override: boolean
   return override ?? baseEnabled;
 }
 
+/**
+ * Effective web-search state for the session capability toggle.
+ * Global `tools.web.search.enabled: false` is a kill switch: a session
+ * `webSearch: true` override cannot re-enable search.
+ */
+export function resolveWebSearchToolOverrideState(
+  baseEnabled: boolean,
+  override: boolean | undefined,
+) {
+  if (!baseEnabled) {
+    return false;
+  }
+  return override ?? baseEnabled;
+}
+
 export function nextBooleanToolOverrides(
   current: SessionToolOverrides | null | undefined,
   group: BooleanOverrideGroup,
@@ -59,7 +67,7 @@ export function nextBooleanToolOverrides(
   baseEnabled: boolean,
 ): SessionToolOverrides {
   const next = copyOverrides(current);
-  const values = copyDynamicKeyRecord(Object.hasOwn(next, group) ? next[group] : undefined);
+  const values = (Object.hasOwn(next, group) ? next[group] : undefined) ?? {};
   if (nextEnabled === baseEnabled) {
     delete values[name];
   } else {
@@ -79,6 +87,13 @@ export function nextWebSearchToolOverrides(
   baseEnabled = true,
 ): SessionToolOverrides {
   const next = copyOverrides(current);
+  // Clear stale enablement without discarding an explicit session suppression.
+  if (!baseEnabled) {
+    if (next.webSearch === true) {
+      delete next.webSearch;
+    }
+    return next;
+  }
   if (nextEnabled === baseEnabled) {
     delete next.webSearch;
   } else {
@@ -101,7 +116,7 @@ export function nextMcpToolsDenyOverrides(
   } else {
     deniedTools.delete(rawToolName);
   }
-  const mcpToolsDeny = copyDynamicKeyRecord(currentDeny, (tools) => [...tools]);
+  const mcpToolsDeny = currentDeny ?? {};
   if (deniedTools.size > 0) {
     setOwnValue(mcpToolsDeny, server, [...deniedTools].toSorted());
   } else {

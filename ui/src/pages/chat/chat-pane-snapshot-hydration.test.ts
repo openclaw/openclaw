@@ -179,14 +179,19 @@ describe("stored chat snapshot hydration", () => {
         // jsdom has no decoder; deliver the loaded-preview boundary before custody.
         Object.defineProperty(displayed, "naturalWidth", { value: 1 });
         displayed.dispatchEvent(new Event("load"));
-        const expectRenderedInput = (text: string, author: string) => {
+        const expectRenderedInput = (text: string, author: string | undefined) => {
           expect(container.querySelectorAll(".chat-bubble")).toHaveLength(1);
           expect(container.querySelectorAll(".chat-message-image")).toHaveLength(1);
           expect(container.querySelector(".chat-message-image")).toBe(displayed);
           expect(displayed.getAttribute("src")).toBe(dataUrl);
           expect(container.querySelector('[aria-busy="true"]')).toBeNull();
           expect(container.textContent).toContain(text);
-          expect(container.querySelector(".chat-sender-name")?.textContent?.trim()).toBe(author);
+          const sender = container.querySelector(".chat-sender-name");
+          if (author === undefined) {
+            expect(sender).toBeNull();
+          } else {
+            expect(sender?.textContent?.trim()).toBe(author);
+          }
         };
         expectRenderedInput("Keep the attributed initial image", "Local Author");
         const metadata = {
@@ -211,7 +216,7 @@ describe("stored chat snapshot hydration", () => {
         expect(
           getChatPendingInputs(remounted.state)?.page.items.map((item) => item.message),
         ).toEqual([custodyMessage]);
-        expectRenderedInput(custodyMessage.content, senderName ?? "You");
+        expectRenderedInput(custodyMessage.content, senderName);
         expect(container.textContent).not.toContain("Keep the attributed initial image");
         expect(custodyMessage["__openclaw"]).toBe(metadata);
         const canonicalMessage = {
@@ -233,7 +238,7 @@ describe("stored chat snapshot hydration", () => {
         await loadChatHistory(remounted.state);
         renderPane();
         expect(remounted.state.chatMessages).toEqual([canonicalMessage]);
-        expectRenderedInput(canonicalMessage.content, senderName ?? "You");
+        expectRenderedInput(canonicalMessage.content, senderName);
         expect(container.textContent).not.toContain(custodyMessage.content);
         expect(request.mock.calls.every(([method]) => method === "chat.history")).toBe(true);
       } finally {
@@ -278,6 +283,7 @@ describe("stored chat snapshot hydration", () => {
       expect(request).toHaveBeenCalledWith(
         "chat.history",
         expect.objectContaining({ sessionKey: targetSessionKey }),
+        { signal: expect.any(AbortSignal) },
       );
       await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(cachedMessages));
 

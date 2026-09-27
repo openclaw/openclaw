@@ -55,7 +55,7 @@ To request Codex for embedded runs:
   },
   "agents": {
     "defaults": {
-      "model": "openai/gpt-5.6-sol"
+      "model": "openai/gpt-6-astra"
     }
   }
 }
@@ -89,9 +89,9 @@ Per-agent overrides use the same model-scoped shape:
     "entries": {
       "codex-only": {
         "default": true,
-        "model": "openai/gpt-5.6-sol",
+        "model": "openai/gpt-6-astra",
         "models": {
-          "openai/gpt-5.6-sol": {
+          "openai/gpt-6-astra": {
             "agentRuntime": { "id": "codex" }
           }
         }

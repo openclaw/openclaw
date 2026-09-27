@@ -186,6 +186,7 @@ ui/src/ui/theme-variants.browser.test.ts
 ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
+ui/.vitest/
 
 # Generated docs baseline artifacts (locally generated, only drift detectors tracked)
 docs/.generated/*.json

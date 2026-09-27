@@ -11,7 +11,7 @@ import type { ToolProfileId } from "../config/types.tools.js";
 import { resolveUserPath } from "../utils.js";
 
 /** Default tool profile selected during local onboarding. */
-const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "coding";
+const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "full";
 
 export type OnboardingWorkspaceConflict = {
   currentWorkspaceDir: string;

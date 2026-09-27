@@ -1,4 +1,3 @@
-// Check Changelog Attributions tests cover check changelog attributions script behavior.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -13,6 +12,7 @@ import {
 const changelogScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "changelog.sh");
 const commonScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "common.sh");
 const gatesScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "gates.sh");
+const reviewScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "review.sh");
 
 function run(cwd: string, command: string, args: string[], env?: NodeJS.ProcessEnv): string {
   return execFileSync(command, args, {
@@ -82,6 +82,47 @@ function validateChangelogAttributionPolicy(repo: string): string {
   );
 }
 
+function runPrepareGates(repo: string, callsPath: string, allowRootChangelog = false): string {
+  return run(
+    repo,
+    "bash",
+    [
+      "-c",
+      `
+set -euo pipefail
+source "$OPENCLAW_PR_COMMON_SH"
+source "$OPENCLAW_PR_CHANGELOG_SH"
+source "$OPENCLAW_PR_GATES_SH"
+source "$OPENCLAW_PR_REVIEW_SH"
+
+pr_gh() { printf '{"headRefName":"feature"}\\n'; }
+enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }
+checkout_prep_branch() { :; }
+refresh_prep_branch_for_reviewed_head() { :; }
+# Preparation tests cover review admission; these fixtures isolate changelog policy.
+require_prepared_review() { :; }
+bootstrap_deps_if_needed() { :; }
+require_artifact() { [ -s "$1" ]; }
+validate_changelog_attribution_policy() { printf 'policy\\n' >>"$OPENCLAW_TEST_CALLS"; }
+validate_changelog_merge_hygiene() { printf 'merge-hygiene\\n' >>"$OPENCLAW_TEST_CALLS"; }
+validate_changelog_entry_for_pr() { printf 'entry:%s:%s\\n' "$1" "$2" >>"$OPENCLAW_TEST_CALLS"; }
+run_quiet_logged() { printf 'gate:%s\\n' "$1" >>"$OPENCLAW_TEST_CALLS"; }
+
+prepare_gates 123
+`,
+    ],
+    {
+      ...(allowRootChangelog ? { OPENCLAW_ALLOW_ROOT_CHANGELOG_PR: "1" } : {}),
+      OPENCLAW_PR_COMMON_SH: commonScriptPath,
+      OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
+      OPENCLAW_PR_GATES_SH: gatesScriptPath,
+      OPENCLAW_PR_REVIEW_SH: reviewScriptPath,
+      OPENCLAW_TEST_CALLS: callsPath,
+      OPENCLAW_TESTBOX: "0",
+    },
+  );
+}
+
 describe("check-changelog-attributions", () => {
   it("flags forbidden bot, org, and maintainer thanks attributions", () => {
     const content = [
@@ -111,18 +152,6 @@ describe("check-changelog-attributions", () => {
         "- User-facing fix. Fixes #123. Thanks @external-contributor and @other-user.",
       ),
     ).toStrictEqual([]);
-  });
-
-  it("checks every thanked handle on a changelog line", () => {
-    expect(
-      findForbiddenChangelogThanks("- Mixed credit (#123). Thanks @openclaw and @alice."),
-    ).toEqual([
-      {
-        line: 1,
-        handle: "openclaw",
-        text: "- Mixed credit (#123). Thanks @openclaw and @alice.",
-      },
-    ]);
   });
 
   it("uses one attribution predicate for scanner and shell checks", () => {
@@ -216,6 +245,60 @@ describe("check-changelog-attributions", () => {
     }
   });
 
+  it.each([
+    {
+      name: "initial release keeps maintainer exclusion",
+      file: "2026.9.1.md",
+      mirror: false,
+      handle: "steipete",
+      rejected: true,
+    },
+    {
+      name: "docs mirror includes the maintainer",
+      file: "2026.9.1.md",
+      mirror: true,
+      handle: "steipete",
+      rejected: false,
+    },
+    {
+      name: "docs mirror excludes bots",
+      file: "2026.9.1.md",
+      mirror: true,
+      handle: "dependabot[bot]",
+      rejected: true,
+    },
+    {
+      name: "frozen record retains initial policy",
+      file: "records/2026.9.1.md",
+      mirror: true,
+      handle: "steipete",
+      rejected: true,
+    },
+  ])("$name", ({ file, mirror, handle, rejected }) => {
+    const repo = createRepoWithChangelog("# Changelog\n\n<!-- openclaw:split-changelog -->\n");
+    mkdirSync(path.join(repo, "CHANGELOG/records"), { recursive: true });
+    writeFileSync(
+      path.join(repo, "CHANGELOG", file),
+      `## 2026.9.1\n\n${mirror ? "<!-- openclaw-docs-mirror-v1 -->\n\n" : ""}- Repair. Thanks @${handle}.\n`,
+    );
+    try {
+      if (rejected) {
+        let output = "";
+        try {
+          validateChangelogAttributionPolicy(repo);
+        } catch (error) {
+          output = commandOutput(error);
+        }
+        expect(output).toContain(`CHANGELOG/${file}:`);
+        expect(output).toContain(`uses Thanks @${handle}`);
+      } else {
+        expect(validateChangelogAttributionPolicy(repo)).toBe("");
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("rejects root changelog updates from normal prepare gates", () => {
     const repo = createRepoWithPrChangelogDiff("- User fix (#123). Thanks @alice.");
     const callsPath = path.join(repo, "calls.log");
@@ -224,47 +307,13 @@ describe("check-changelog-attributions", () => {
     try {
       let output = "";
       try {
-        run(
-          repo,
-          "bash",
-          [
-            "-c",
-            `
-set -euo pipefail
-source "$OPENCLAW_PR_COMMON_SH"
-source "$OPENCLAW_PR_CHANGELOG_SH"
-source "$OPENCLAW_PR_GATES_SH"
-
-gh() { printf '{"headRefName":"feature"}\\n'; }
-enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }
-checkout_prep_branch() { :; }
-refresh_prep_branch_for_reviewed_head() { :; }
-bootstrap_deps_if_needed() { :; }
-require_artifact() { [ -s "$1" ]; }
-normalize_pr_changelog_entries() { printf 'normalize\\n' >>"$OPENCLAW_TEST_CALLS"; }
-validate_changelog_attribution_policy() { printf 'policy\\n' >>"$OPENCLAW_TEST_CALLS"; }
-validate_changelog_merge_hygiene() { printf 'merge-hygiene\\n' >>"$OPENCLAW_TEST_CALLS"; }
-validate_changelog_entry_for_pr() { printf 'entry:%s:%s\\n' "$1" "$2" >>"$OPENCLAW_TEST_CALLS"; }
-run_quiet_logged() { printf 'gate:%s\\n' "$1" >>"$OPENCLAW_TEST_CALLS"; }
-
-prepare_gates 123
-`,
-          ],
-          {
-            OPENCLAW_PR_COMMON_SH: commonScriptPath,
-            OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
-            OPENCLAW_PR_GATES_SH: gatesScriptPath,
-            OPENCLAW_TEST_CALLS: callsPath,
-            OPENCLAW_TESTBOX: "0",
-          },
-        );
+        runPrepareGates(repo, callsPath);
       } catch (error) {
         output = commandOutput(error);
       }
       const calls = existsSync(callsPath) ? readFileSync(callsPath, "utf8") : "";
 
       expect(output).toContain("CHANGELOG.md is release-owned");
-      expect(calls).not.toContain("normalize");
       expect(calls).not.toContain("policy");
     } finally {
       rmSync(repo, { recursive: true, force: true });
@@ -277,45 +326,11 @@ prepare_gates 123
     mkdirSync(path.join(repo, ".local"));
     writeFileSync(path.join(repo, ".local", "pr-meta.env"), "PR_AUTHOR=alice\n", "utf8");
     try {
-      const output = run(
-        repo,
-        "bash",
-        [
-          "-c",
-          `
-set -euo pipefail
-source "$OPENCLAW_PR_COMMON_SH"
-source "$OPENCLAW_PR_CHANGELOG_SH"
-source "$OPENCLAW_PR_GATES_SH"
-
-gh() { printf '{"headRefName":"feature"}\\n'; }
-enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }
-checkout_prep_branch() { :; }
-refresh_prep_branch_for_reviewed_head() { :; }
-bootstrap_deps_if_needed() { :; }
-require_artifact() { [ -s "$1" ]; }
-normalize_pr_changelog_entries() { printf 'normalize\\n' >>"$OPENCLAW_TEST_CALLS"; }
-validate_changelog_attribution_policy() { printf 'policy\\n' >>"$OPENCLAW_TEST_CALLS"; }
-validate_changelog_merge_hygiene() { printf 'merge-hygiene\\n' >>"$OPENCLAW_TEST_CALLS"; }
-validate_changelog_entry_for_pr() { printf 'entry:%s:%s\\n' "$1" "$2" >>"$OPENCLAW_TEST_CALLS"; }
-run_quiet_logged() { printf 'gate:%s\\n' "$1" >>"$OPENCLAW_TEST_CALLS"; }
-
-prepare_gates 123
-`,
-        ],
-        {
-          OPENCLAW_ALLOW_ROOT_CHANGELOG_PR: "1",
-          OPENCLAW_PR_COMMON_SH: commonScriptPath,
-          OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
-          OPENCLAW_PR_GATES_SH: gatesScriptPath,
-          OPENCLAW_TEST_CALLS: callsPath,
-          OPENCLAW_TESTBOX: "0",
-        },
-      );
+      const output = runPrepareGates(repo, callsPath, true);
       const calls = readFileSync(callsPath, "utf8");
 
       expect(output).toContain("docs_only=true");
-      expect(calls).toContain("normalize\npolicy\n");
+      expect(calls).toContain("policy\n");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

@@ -1,16 +1,18 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { captureDirectEmbeddedMessageInjectionTarget } from "../../agents/embedded-agent-runner/message-injection-target.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
+import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { hasGatewayContextOwner } from "../../plugins/runtime/gateway-request-scope.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  replyMessageInjectionTargetOperation,
+  replyMessageInjectionTargetOwner,
   replyRunInterruptTargetOperation,
   type ReplyOperation,
   type ReplyRunInterruptTarget,
@@ -24,16 +26,17 @@ import {
   expireStaleReplyOperation,
   forceClearReplyOperation,
   getAttachedBackend,
+  hasReplyOperationExecutionStarted,
   isReplyOperationPreBackendPhase,
   isReplyRunCompacting,
   isReplyRunEvidenceStale,
-  markReplyRunDiagnosticProgress,
   mergeReplyRunAdmissionSource,
   replyRunState,
   resolveReplyRunForCurrentSessionId,
   resolveReplyRunWaitKey,
   type ReplyRunAdmissionBarrier,
   type ReplyRunAdmissionSource,
+  type ReplyRunWaiter,
 } from "./reply-run-registry.state.js";
 
 type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
@@ -41,11 +44,6 @@ type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
 type ReplyRunAdmissionSettlement = {
   settled: boolean;
   sources?: ReplyRunAdmissionSource[];
-};
-
-type ReplyRunWaiter = {
-  finish: (ended: boolean) => void;
-  timer?: NodeJS.Timeout;
 };
 
 export async function waitForReplyOperationOwnerSettlement(
@@ -80,13 +78,11 @@ export function expireStaleReplyRunBySessionId(
   return operation ? expireStaleReplyOperation(operation, reason, options) : false;
 }
 
-// lastActivityAtMs is refreshed by agent events only; timers and user-message
-
 export function markReplyOperationGlobalLaneWaitProgress(operation: ReplyOperation): void {
   if (operation.result || operation.phase !== "waiting_for_global_lane") {
     return;
   }
-  markReplyRunDiagnosticProgress({
+  markDiagnosticRunProgress({
     sessionKey: operation.key,
     sessionId: operation.sessionId,
     reason: "global_lane:waiting",
@@ -96,6 +92,18 @@ export function markReplyOperationGlobalLaneWaitProgress(operation: ReplyOperati
 export function isReplyRunEvidenceStaleBySessionId(sessionId: string): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   return operation ? isReplyRunEvidenceStale(operation) : false;
+}
+
+function allowsDirectMessageInjectionOwner(sessionKey: string): boolean {
+  const operation = replyRunState.activeRunsByKey.get(sessionKey);
+  return (
+    !operation ||
+    (!operation.result &&
+      !operation.abortSignal.aborted &&
+      isReplyOperationPreBackendPhase(operation.phase) &&
+      !hasReplyOperationExecutionStarted(operation) &&
+      !getAttachedBackend(operation))
+  );
 }
 
 export const replyRunRegistry: ReplyRunRegistry = {
@@ -116,17 +124,55 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return replyRunState.activeRunsByKey.has(normalizedSessionKey);
   },
+  bindSourceTurnId(operation, sourceTurnId) {
+    // Durable admission can finish after reset has replaced this operation.
+    if (
+      replyRunState.activeRunsByKey.get(operation.key) !== operation ||
+      operation.result ||
+      operation.abortSignal.aborted
+    ) {
+      return;
+    }
+    replyRunState.sourceTurnByKey.set(operation.key, sourceTurnId);
+  },
+  getSourceTurnId(sessionKey) {
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
+    if (!normalizedSessionKey) {
+      return undefined;
+    }
+    return replyRunState.sourceTurnByKey.get(normalizedSessionKey);
+  },
   resolveCurrentMessageInjectionTarget(sessionKey) {
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
     const operation = this.get(sessionKey);
     const resolved = resolveReplyMessageInjectionRejection({
       operation,
     });
-    if (!operation || !("injection" in resolved)) {
+    const backend = "injection" in resolved ? resolved.backend : undefined;
+    if (!normalizedSessionKey) {
       return undefined;
     }
+    if (!operation || !backend) {
+      return captureDirectEmbeddedMessageInjectionTarget(normalizedSessionKey, () =>
+        allowsDirectMessageInjectionOwner(normalizedSessionKey),
+      );
+    }
+    const sourceTurnId = replyRunState.sourceTurnByKey.get(normalizedSessionKey);
     return {
-      [replyMessageInjectionTargetOperation]: operation,
-      ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
+      [replyMessageInjectionTargetOwner]: {
+        projectToolAuthorityFingerprint: (overlay) =>
+          operation.projectToolAuthorityFingerprint(overlay),
+        resolve: (params) => resolveReplyMessageInjectionRejection({ ...params, operation }),
+        recordAccepted: (options) => {
+          operation.recordActivity();
+          if (options?.inboundAudio) {
+            operation.markAcceptedSteeredInboundAudio();
+          }
+        },
+        abort: () => operation.abortByUser(),
+      },
+      ...(backend.runId ? { runId: backend.runId } : {}),
+      ...(sourceTurnId ? { sourceTurnId } : {}),
     };
   },
   resolveCurrentInterruptTarget(sessionKey) {
@@ -406,10 +452,10 @@ function abortReplyRuns(
     if (isCurrent && !isCurrent(operation)) {
       continue;
     }
-    if (opts.mode === "compacting" && !isReplyRunCompacting(operation)) {
-      continue;
-    }
     try {
+      if (opts.mode === "compacting" && !isReplyRunCompacting(operation)) {
+        continue;
+      }
       if (operation.abortForRestart()) {
         aborted += 1;
       }
@@ -520,7 +566,7 @@ registerAgentEventLifecycleRotationHandler("reply-runs", evictPriorLifecycleRepl
 const replyRunRegistryTestApi = {
   resetReplyRunRegistry(): void {
     for (const [sessionKey, sessionId] of replyRunState.activeSessionIdsByKey) {
-      markReplyRunDiagnosticProgress({
+      markDiagnosticRunProgress({
         sessionKey,
         sessionId,
         reason: "reply_operation:registry_reset",
@@ -530,6 +576,8 @@ const replyRunRegistryTestApi = {
     replyRunState.activeSessionIdsByKey.clear();
     replyRunState.activeKeysBySessionId.clear();
     replyRunState.waitKeysBySessionId.clear();
+    replyRunState.sourceTurnByKey.clear();
+    replyRunState.completionObservationsByKey?.clear();
     replyRunSettle.resetReplyRunSettleTimersForTesting();
     for (const waiters of replyRunState.waitersByKey.values()) {
       for (const waiter of waiters) {

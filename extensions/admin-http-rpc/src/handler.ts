@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readJsonBodyWithLimit,
@@ -272,6 +273,7 @@ export async function handleAdminHttpRpcRequest(
     return true;
   }
 
+  await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
   const response = await dispatchAdminRpc(parsed.request);
   sendJson(res, rpcHttpStatus(response), response);
   return true;

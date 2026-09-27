@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { loadCronStore } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-stream-trigger-" });
 
@@ -17,6 +19,8 @@ async function createHarness(fire: boolean) {
     async (): Promise<{ status: "ok" | "error"; error?: string }> => ({ status: "ok" }),
   );
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: true,
     cronConfig: { triggers: { enabled: true } },
@@ -101,6 +105,8 @@ describe("cron stream trigger composition", () => {
     const { storePath } = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
@@ -143,6 +149,8 @@ describe("cron stream trigger composition", () => {
     const { storePath } = await makeStorePath();
     const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
@@ -199,6 +207,8 @@ describe("cron stream trigger composition", () => {
       async () => undefined,
     );
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       cronConfig: {
@@ -250,7 +260,9 @@ describe("cron stream trigger composition", () => {
           'Automation "failing stream payload" failed 1 times\n' +
           "Check automation history for details.",
       });
-      expect(alert?.job.state.lastError).toBe("boom");
+      expect(
+        (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)?.state.lastError,
+      ).toBe("boom");
     } finally {
       cron.stop();
     }
@@ -260,6 +272,8 @@ describe("cron stream trigger composition", () => {
     const { storePath } = await makeStorePath();
     const onTriggerDisposition = vi.fn();
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },

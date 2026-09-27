@@ -37,7 +37,7 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
   },
   supportsAction: ({ action }) => ZALO_ACTIONS.has(action),
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
-  handleAction: async ({ action, params, cfg, accountId }) => {
+  handleAction: async ({ action, params, cfg, accountId, assertDirectAdapterHandoff }) => {
     if (action === "send") {
       const to = readStringParam(params, "to", { required: true });
       const content = readStringParam(params, "message", {
@@ -51,6 +51,7 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
         accountId: accountId ?? undefined,
         mediaUrl: mediaUrl ?? undefined,
         cfg,
+        assertDirectAdapterHandoff,
       });
 
       if (!result.ok) {

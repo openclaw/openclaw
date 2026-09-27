@@ -7,7 +7,7 @@ import {
   GatewayCredentialsRequiredError,
   GatewayExplicitAuthRequiredError,
   isGatewayTransportError,
-  callGateway as defaultCallGateway,
+  type callGateway as defaultCallGateway,
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
@@ -350,7 +350,12 @@ export async function listSpawnedSessionKeysWithResult(params: {
       ? Math.max(1, Math.floor(params.limit))
       : undefined;
   try {
-    const list = await (params.callGateway ?? defaultCallGateway)<{
+    const callGateway =
+      params.callGateway ??
+      (await import("../agents/tools/in-process-gateway.js")).bindAgentToolGatewayRequest({
+        hostedOnly: true,
+      });
+    const list = await callGateway<{
       sessions: Array<{ key?: unknown }>;
     }>({
       method: "sessions.list",

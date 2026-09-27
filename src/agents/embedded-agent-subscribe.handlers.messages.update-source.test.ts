@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-subscribe.handlers.messages.stream.js";
+import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
 import {
   createMessageUpdateContext,
   updateMessage,

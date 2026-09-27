@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 
 type DeliveryCall = {
   channel?: string;
@@ -35,7 +36,7 @@ vi.mock("../utils/message-channel.js", () => ({
   normalizeMessageChannel: mocks.normalizeMessageChannel,
   isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
 }));
-vi.mock("../utils/delivery-context.shared.js", () => ({
+vi.mock("../utils/delivery-context.read.js", () => ({
   deliveryContextFromSession: mocks.deliveryContextFromSession,
 }));
 vi.mock("./outbound/deliver-runtime.js", () => ({
@@ -55,6 +56,7 @@ function createParams(
   const sessionKey = overrides.sessionKey ?? `agent:${randomUUID()}:main`;
   return {
     cfg: {},
+    agentId: parseAgentSessionKey(sessionKey)?.agentId ?? "main",
     sessionKey,
     entry: {} as never,
     warning: {

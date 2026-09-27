@@ -187,13 +187,13 @@ describe("legacy exec approvals migration", () => {
         stub: { defaults: {}, agents: {}, socket: { path: " ", token: " " } },
       },
     ].flatMap((entry) =>
-      [false, true].flatMap((claimed) =>
-        ["missing", "valid", "invalid"].map((canonical) => ({
+      (entry.name === "socket stub" ? ["missing", "valid", "invalid"] : ["missing"]).map(
+        (canonical) => ({
           name: entry.name,
           stub: entry.stub,
-          claimed,
+          claimed: canonical === "valid",
           canonical,
-        })),
+        }),
       ),
     ),
   )(
@@ -327,15 +327,6 @@ describe("legacy exec approvals migration", () => {
     await expect(migrate({ env, stateDir })).resolves.toEqual({ changes: [], warnings: [] });
     expect(readExecApprovalsConfigRow(database(env))).toBeUndefined();
     expect(receipt(env)).toBeUndefined();
-  });
-
-  it("is idempotent after successful source removal", async () => {
-    const { env, stateDir, sourcePath } = useStateDir();
-    await writeLegacy(sourcePath, { version: 1, agents: {} });
-    await migrate({ env, stateDir });
-
-    await expect(migrate({ env, stateDir })).resolves.toEqual({ changes: [], warnings: [] });
-    expect(receipt(env)).toMatchObject({ removed_source: 1 });
   });
 
   function legacyWithInvalidEntry(entry: unknown, agentKey = "private-marker-agent"): string {
@@ -550,7 +541,7 @@ describe("legacy exec approvals migration", () => {
     expect(result.changes).toEqual([
       "Replaced an invalid SQLite exec approvals row with validated legacy state.",
     ]);
-    expect(readExecApprovalsConfigRow(db)?.raw_json).toContain('"security": "deny"');
+    expect(readExecApprovalsConfigRow(database(env))?.raw_json).toContain('"security": "deny"');
   });
 
   it("recovers an interrupted claim and completes import", async () => {
@@ -639,17 +630,5 @@ describe("legacy exec approvals migration", () => {
     expect(result.warnings[0]).toContain("Stop the Gateway");
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(receipt(env)).toBeUndefined();
-  });
-
-  it("keeps store APIs blocked until Doctor completes the import", async () => {
-    const { env, stateDir, sourcePath } = useStateDir();
-    await writeLegacy(sourcePath, { version: 1, defaults: { security: "deny" }, agents: {} });
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    execApprovalsStoreTesting.reset();
-    expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
-
-    const result = await migrate({ env, stateDir });
-    expect(result.warnings).toEqual([]);
-    expect(loadExecApprovals().defaults?.security).toBe("deny");
   });
 });

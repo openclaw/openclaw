@@ -14,6 +14,79 @@ afterEach(() => {
 
 describe("resolveAgentHarnessBeforePromptBuildResult", () => {
   it.each([false, true])(
+    "preserves the admitted request through projected prompts (authorized=%s)",
+    async (authorized) => {
+      const handler = vi.fn(async (_event: unknown) => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            ...(authorized ? { requiresToolAuthority: true as const } : {}),
+            handler,
+          },
+        ]),
+      );
+      const result = await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "Current message: hello",
+        currentInboundContext: {
+          text: "Prior conversation: remember my preference",
+          promptJoiner: "\n",
+        },
+        currentUserMessage: "hello",
+        currentUserMessageId: "message-1",
+        messages: [],
+        developerInstructions: "base",
+        ctx: {},
+        toolAuthority: {
+          fingerprint: "synthetic",
+          activeToolNames: () => ["memory_search"],
+          assertActive: () => undefined,
+        },
+      });
+      expect(result.prompt).toBe(
+        "Prior conversation: remember my preference\nCurrent message: hello",
+      );
+      expect(result.promptInputRange).toEqual({ start: 0, end: result.prompt.length });
+      expect(handler).toHaveBeenCalledOnce();
+      expect(handler.mock.calls[0]?.[0]).toMatchObject({
+        currentUserMessage: "hello",
+        currentUserMessageId: "message-1",
+        prompt: expect.stringContaining("Prior conversation:"),
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "does not synthesize an admitted request when the harness omits it (authorized=%s)",
+    async (authorized) => {
+      const handler = vi.fn(async (_event: unknown) => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            ...(authorized ? { requiresToolAuthority: true as const } : {}),
+            handler,
+          },
+        ]),
+      );
+      await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "projected prompt envelope",
+        messages: [],
+        developerInstructions: "base",
+        ctx: {},
+        toolAuthority: {
+          fingerprint: "synthetic",
+          activeToolNames: () => ["memory_search"],
+          assertActive: () => undefined,
+        },
+      });
+      expect(handler).toHaveBeenCalledOnce();
+      expect(handler.mock.calls[0]?.[0]).not.toHaveProperty("currentUserMessage");
+      expect(handler.mock.calls[0]?.[0]).not.toHaveProperty("currentUserMessageId");
+    },
+  );
+
+  it.each([false, true])(
     "isolates nested prompt history across rebuilds (authorized=%s)",
     async (authorized) => {
       const messages = [

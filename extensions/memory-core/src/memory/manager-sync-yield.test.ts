@@ -101,6 +101,12 @@ function createDb(): DatabaseSync {
 }
 
 class SessionSyncYieldHarness extends MemoryManagerSyncOps {
+  protected readonly createProvider = (): never => {
+    throw new Error("Sync yield harness does not acquire embedding providers");
+  };
+  protected releaseProvider(): never {
+    throw new Error("Sync yield harness does not own embedding providers");
+  }
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
@@ -131,6 +137,7 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   constructor(
     db: DatabaseSync,
     private readonly onIndexFile: (count: number) => void,
+    private readonly indexConcurrency: number,
   ) {
     super();
     this.publishedDatabase = new MemoryIndexDatabase(db);
@@ -172,7 +179,7 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   }
 
   protected getIndexConcurrency(): number {
-    return 1;
+    return this.indexConcurrency;
   }
 
   protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
@@ -187,18 +194,6 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   ): Promise<void> {
     this.indexedPaths.push(entry.path);
     this.onIndexFile(this.indexedPaths.length);
-  }
-}
-
-class EmbeddingCacheSeedHarness extends SessionSyncYieldHarness {
-  protected override readonly cache = { enabled: true };
-
-  constructor(db: DatabaseSync) {
-    super(db, () => {});
-  }
-
-  async seedCache(sourceDb: DatabaseSync): Promise<void> {
-    await this.seedEmbeddingCache(sourceDb);
   }
 }
 
@@ -223,111 +218,51 @@ describe("session sync responsiveness", () => {
     vi.clearAllMocks();
   });
 
-  it("yields to the event loop between session file batches", async () => {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    const files = Array.from({ length: 11 }, (_value, index) =>
-      path.join(sessionsDir, `session-${index}.jsonl.deleted.2026-07-11T00-00-00.000Z`),
-    );
-    let immediateRan = false;
-    const immediate = new Promise<void>((resolve) => {
-      setImmediate(() => {
-        immediateRan = true;
-        resolve();
-      });
-    });
-    const observedBeforeLastFile: boolean[] = [];
-    const db = createDb();
-    const harness = new SessionSyncYieldHarness(db, (count) => {
-      if (count === 11) {
-        observedBeforeLastFile.push(immediateRan);
-      }
-    });
-
-    try {
-      await harness.syncTargetArchiveFiles(files);
-      expect(harness.indexedPaths).toHaveLength(files.length);
-      expect(observedBeforeLastFile).toEqual([true]);
-      await immediate;
-    } finally {
-      db.close();
-    }
-  });
-});
-
-describe("embedding cache seed responsiveness", () => {
-  function countCacheRows(db: DatabaseSync): number {
-    const row = db.prepare("SELECT count(*) AS count FROM memory_embedding_cache").get() as {
-      count: number;
-    };
-    return row.count;
-  }
-
-  it("commits each materialized page before yielding", async () => {
-    const sourceDb = createDb();
-    const targetDb = createDb();
-    const { StatementSync } = requireNodeSqlite();
-    const prepare = vi.spyOn(targetDb, "prepare");
-    const columns = vi.spyOn(StatementSync.prototype, "columns");
-    try {
-      const insert = sourceDb.prepare(
-        `INSERT INTO memory_embedding_cache
-           (provider, model, provider_key, hash, embedding, dims, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  it.each([
+    { concurrency: 1, fileCount: 4 },
+    { concurrency: 4, fileCount: 40 },
+  ])(
+    "serves queued work during slow session indexing with $concurrency workers",
+    async ({ concurrency, fileCount }) => {
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      const files = Array.from({ length: fileCount }, (_value, index) =>
+        path.join(sessionsDir, `session-${index}.jsonl.deleted.2026-07-11T00-00-00.000Z`),
       );
-      const rawLargeEmbedding = ` ${JSON.stringify(Array.from({ length: 4096 }, () => 0.1234567890123456))}\n`;
-      sourceDb.exec("BEGIN");
-      for (let index = 0; index < 101; index += 1) {
-        insert.run(
-          "test",
-          "model",
-          "key",
-          `hash-${index}`,
-          index === 0 ? " malformed JSON \n" : index === 1 ? rawLargeEmbedding : "[ 0.5 ]",
-          index === 0 ? null : index === 1 ? 4096 : 1,
-          index - 1,
-        );
-      }
-      sourceDb.exec("COMMIT");
-
-      let duringYield: {
-        sourceInTransaction: boolean;
-        targetInTransaction: boolean;
-        rows: number;
-      } | null = null;
-      const observedYield = new Promise<void>((resolve, reject) => {
+      let immediateRan = false;
+      const immediate = new Promise<void>((resolve) => {
         setImmediate(() => {
-          try {
-            duringYield = {
-              sourceInTransaction: sourceDb.isTransaction,
-              targetInTransaction: targetDb.isTransaction,
-              rows: countCacheRows(targetDb),
-            };
-            resolve();
-          } catch (error) {
-            reject(error instanceof Error ? error : new Error(String(error)));
-          }
+          immediateRan = true;
+          resolve();
         });
       });
+      const observedBeforeNextWave: boolean[] = [];
+      const db = createDb();
+      let elapsedMs = 0;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      const harness = new SessionSyncYieldHarness(
+        db,
+        (count) => {
+          // Model expensive synchronous indexing without sleeping or a timing-sensitive assertion.
+          elapsedMs += 20;
+          if (count === concurrency + 1) {
+            observedBeforeNextWave.push(immediateRan);
+          }
+        },
+        concurrency,
+      );
 
-      await new EmbeddingCacheSeedHarness(targetDb).seedCache(sourceDb);
-      await observedYield;
-
-      expect(duringYield).toEqual({
-        sourceInTransaction: false,
-        targetInTransaction: false,
-        rows: 100,
-      });
-      expect(countCacheRows(targetDb)).toBe(101);
-      expect(prepare.mock.calls.filter(([sql]) => /^insert/i.test(sql))).toHaveLength(1);
-      expect(columns).not.toHaveBeenCalled();
-      const readCache = (db: DatabaseSync) =>
-        db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
-      expect(readCache(targetDb)).toEqual(readCache(sourceDb));
-    } finally {
-      prepare.mockRestore();
-      columns.mockRestore();
-      sourceDb.close();
-      targetDb.close();
-    }
-  });
+      try {
+        await harness.syncTargetArchiveFiles(files);
+        expect(harness.indexedPaths).toEqual(
+          files.map((file) => `sessions/${path.basename(file)}`),
+        );
+        expect(observedBeforeNextWave).toEqual([true]);
+        await immediate;
+      } finally {
+        clock.mockRestore();
+        await immediate;
+        db.close();
+      }
+    },
+  );
 });

@@ -55,7 +55,7 @@ const xiaomiTokenPlanPresetAppliers = createDefaultModelsPresetAppliers<[]>({
         return [
           {
             modelRef: XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_REF,
-            alias: defaultModel?.name ?? "MiMo V2.5 Pro",
+            alias: defaultModel?.name ?? "Xiaomi MiMo V2.6 Pro",
           },
         ];
       })(),

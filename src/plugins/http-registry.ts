@@ -1,11 +1,27 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
+import {
+  getPluginHttpRouteViews,
+  isPluginHttpRouteVisible,
+  notifyPluginHttpRoutesChanged,
+  replacePluginHttpRoutes,
+  respondPluginHttpRouteHandoff,
+} from "./http-route-owner.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import {
+  getPluginInstanceOwner,
+  pluginInstanceState,
+  resolvePluginInstanceOwner,
+  wrapCurrentPluginInstance,
+} from "./plugin-instance-scope.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "./registry.js";
-import { requireActivePluginHttpRouteRegistry } from "./runtime.js";
+import { requireActivePluginRegistry } from "./runtime.js";
 
 type PluginHttpRouteHandler = (
   req: IncomingMessage,
@@ -13,48 +29,60 @@ type PluginHttpRouteHandler = (
 ) => Promise<boolean | void> | boolean | void;
 
 type PluginHttpRouteRegistrationLease = Pick<PluginRuntimeCapabilityLease, "isActive" | "retain">;
+type LegacyListener = NonNullable<PluginHttpRouteRegistration["legacyListeners"]>[number];
 type RouteOwner = {
   entry: PluginHttpRouteRegistration;
-  routes: PluginHttpRouteRegistration[];
-  holders: Set<() => void>;
-  handoffs: Set<Set<RouteOwner>>;
+  registry: PluginRegistry;
+  removeRoute: () => void;
+  holders: Map<() => void, LegacyListener | undefined>;
+  handoffs: Map<Set<RouteOwner>, readonly LegacyListener[]>;
 };
-type RouteRetention = { owner: RouteOwner };
+type RouteRetention = { owner: RouteOwner; legacyListener?: LegacyListener };
 export type PluginHttpRouteHandoff = {
   park: (lease: PluginHttpRouteRegistrationLease) => void;
   release: () => void;
 };
 
-const pluginHttpRouteRegistryScope = new AsyncLocalStorage<{
-  registry: PluginRegistry;
-  leases: readonly PluginHttpRouteRegistrationLease[];
-}>();
-const routeOwners = new WeakMap<PluginHttpRouteRegistration, RouteOwner>();
-const leasedRoutes = new WeakMap<PluginHttpRouteRegistrationLease, Set<RouteRetention>>();
+// Source SDK and built Gateway imports must share route leases and handoff ownership.
+const pluginHttpRouteRegistryScope = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginHttpRouteRegistryScope"),
+  () =>
+    new AsyncLocalStorage<{
+      registry: PluginRegistry;
+      leases: readonly PluginHttpRouteRegistrationLease[];
+    }>(),
+);
+const routeOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginHttpRouteRetentionOwners"),
+  () => new WeakMap<PluginHttpRouteRegistration, RouteOwner>(),
+);
+const leasedRoutes = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginHttpRouteLeaseRetentions"),
+  () => new WeakMap<PluginHttpRouteRegistrationLease, Set<RouteRetention>>(),
+);
 const noopUnregister = () => {};
 
 function removeOwnedRoute(owner: RouteOwner, successor?: RouteOwner): void {
-  const index = owner.routes.indexOf(owner.entry);
-  if (index >= 0) {
-    owner.routes.splice(index, 1);
-  }
-  for (const handoff of owner.handoffs) {
+  owner.removeRoute();
+  for (const [handoff, endpoints] of owner.handoffs) {
     handoff.delete(owner);
     if (successor) {
       handoff.add(successor);
-      successor.handoffs.add(handoff);
+      successor.handoffs.set(handoff, endpoints);
     }
   }
   owner.handoffs.clear();
   routeOwners.delete(owner.entry);
+  if (successor) {
+    updateLegacyListeners(successor);
+  }
 }
 
 function retireUnheldRoute(owner: RouteOwner): void {
   if (owner.holders.size > 0) {
     return;
   }
-  const index = owner.routes.indexOf(owner.entry);
-  if (owner.handoffs.size === 0 || index < 0) {
+  if (owner.handoffs.size === 0 || !isPluginHttpRouteVisible(owner.entry)) {
     removeOwnedRoute(owner);
   } else if (!owner.entry.handoff) {
     // Shared ingress serves live holders, then stays retryable while any
@@ -64,15 +92,9 @@ function retireUnheldRoute(owner: RouteOwner): void {
       ...previous,
       handoff: true,
       handleUpgrade: undefined,
-      handler: (_req, res) => {
-        res.statusCode = 503;
-        res.setHeader("Retry-After", "1");
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("plugin route is restarting; retry");
-        return true;
-      },
+      handler: respondPluginHttpRouteHandoff,
     };
-    owner.routes.splice(index, 1, owner.entry);
+    owner.removeRoute = replacePluginHttpRoutes(owner.registry, owner.entry, [previous], true);
     routeOwners.delete(previous);
     routeOwners.set(owner.entry, owner);
   }
@@ -83,21 +105,57 @@ export function createPluginHttpRouteHandoff(): PluginHttpRouteHandoff {
   const routes = new Set<RouteOwner>();
   return {
     park(lease) {
-      for (const { owner } of leasedRoutes.get(lease) ?? []) {
-        if (owner.routes.includes(owner.entry)) {
+      for (const { owner, legacyListener } of leasedRoutes.get(lease) ?? []) {
+        if (isPluginHttpRouteVisible(owner.entry)) {
           routes.add(owner);
-          owner.handoffs.add(routes);
+          const endpoints = owner.handoffs.get(routes) ?? [];
+          owner.handoffs.set(
+            routes,
+            legacyListener && !endpoints.includes(legacyListener)
+              ? [...endpoints, legacyListener]
+              : endpoints,
+          );
         }
       }
     },
     release() {
       for (const owner of routes) {
         owner.handoffs.delete(routes);
+        updateLegacyListeners(owner);
         retireUnheldRoute(owner);
       }
       routes.clear();
     },
   };
+}
+
+function updateLegacyListeners(owner: RouteOwner): void {
+  const handoffs = new Map<string, LegacyListener>(
+    [...owner.handoffs.values()]
+      .flat()
+      .map(
+        (endpoint) => [`${endpoint.host ?? "<unspecified>"}:${endpoint.port}`, endpoint] as const,
+      ),
+  );
+  const listeners = new Map(handoffs);
+  for (const endpoint of owner.holders.values()) {
+    if (endpoint) {
+      const key = `${endpoint.host ?? "<unspecified>"}:${endpoint.port}`;
+      listeners.set(key, endpoint);
+      handoffs.delete(key);
+    }
+  }
+  if (listeners.size) {
+    owner.entry.legacyListeners = [...listeners.values()];
+  } else {
+    delete owner.entry.legacyListeners;
+  }
+  if (handoffs.size) {
+    owner.entry.legacyListenerHandoffs = [...handoffs.values()];
+  } else {
+    delete owner.entry.legacyListenerHandoffs;
+  }
+  notifyPluginHttpRoutesChanged();
 }
 
 function hasSameRouteOwner(
@@ -131,12 +189,16 @@ export function adoptPluginHttpRouteHandoffs(previous: PluginRegistry, next: Plu
   });
   // Validate the complete incoming registry before changing either serving array.
   for (const { owner, replacement } of transfers) {
+    // Retained projections already share this owner; removing it would erase both routes.
+    if (replacement === owner.entry) {
+      continue;
+    }
     if (replacement) {
       removeOwnedRoute(owner, routeOwners.get(replacement));
     } else {
-      previous.httpRoutes.splice(previous.httpRoutes.indexOf(owner.entry), 1);
-      next.httpRoutes.push(owner.entry);
-      owner.routes = next.httpRoutes;
+      owner.removeRoute();
+      owner.registry = next;
+      owner.removeRoute = replacePluginHttpRoutes(next, owner.entry);
     }
   }
 }
@@ -146,6 +208,7 @@ export function adoptPluginHttpRouteHandoffs(previous: PluginRegistry, next: Plu
 function retainPluginHttpRoute(params: {
   entry: PluginHttpRouteRegistration;
   leases: readonly PluginHttpRouteRegistrationLease[];
+  legacyListener?: LegacyListener;
 }): () => void {
   const owner = routeOwners.get(params.entry);
   // Static API routes belong to the registry; borrowing one cannot give a
@@ -153,7 +216,7 @@ function retainPluginHttpRoute(params: {
   if (!owner) {
     return noopUnregister;
   }
-  const retention = { owner };
+  const retention = { owner, legacyListener: params.legacyListener };
   const leaseReleases: Array<() => void> = [];
   const release = () => {
     if (!owner.holders.delete(release)) {
@@ -165,9 +228,11 @@ function retainPluginHttpRoute(params: {
     for (const releaseLease of leaseReleases.splice(0)) {
       releaseLease();
     }
+    updateLegacyListeners(owner);
     retireUnheldRoute(owner);
   };
-  owner.holders.add(release);
+  owner.holders.set(release, params.legacyListener);
+  updateLegacyListeners(owner);
   for (const lease of params.leases) {
     let retentions = leasedRoutes.get(lease);
     if (!retentions) {
@@ -203,6 +268,8 @@ export function registerPluginHttpRoute(params: {
   reuseExistingSameOwner?: boolean;
   /** Throw when the route cannot be registered instead of returning a no-op cleanup. */
   throwOnFailure?: boolean;
+  /** Compatibility endpoint forwarding into this plugin-authenticated route. */
+  legacyListener?: LegacyListener;
   pluginId?: string;
   /** Stable same-plugin sub-owner for replacement; omit consistently for legacy behavior. */
   source?: string;
@@ -211,7 +278,17 @@ export function registerPluginHttpRoute(params: {
   registry?: PluginRegistry;
 }): () => void {
   const scope = pluginHttpRouteRegistryScope.getStore();
-  const registry = params.registry ?? scope?.registry ?? requireActivePluginHttpRouteRegistry();
+  let registry = params.registry ?? scope?.registry ?? requireActivePluginRegistry();
+  const instance =
+    pluginInstanceInvocation.getStore()?.instance ?? pluginInstanceState.values.get(params.handler);
+  // A supplied registry cannot replace a retained callback's original lifetime.
+  const record = instance
+    ? getPluginInstanceOwner(instance)?.record
+    : registry.plugins.find((entry) => entry.id === params.pluginId);
+  const instanceOwner = record ? resolvePluginInstanceOwner(record, registry) : undefined;
+  if (instanceOwner) {
+    registry = instanceOwner.registry;
+  }
   const suffix = params.accountId ? ` for account "${params.accountId}"` : "";
   const rejectRegistration = (message: string): (() => void) => {
     params.log?.(message);
@@ -220,14 +297,25 @@ export function registerPluginHttpRoute(params: {
     }
     return noopUnregister;
   };
+  if (params.legacyListener && params.auth !== "plugin") {
+    return rejectRegistration("legacy webhook listeners require plugin authentication");
+  }
   // AsyncLocalStorage survives timed-out lifecycle callbacks; expired continuations must not
   // regain route authority, even when they retained an explicit registry reference.
   if (scope?.leases.some((lease) => !lease.isActive())) {
     return rejectRegistration("plugin runtime HTTP route lease is no longer active");
   }
 
-  const routes = registry.httpRoutes ?? [];
-  registry.httpRoutes = routes;
+  if (instanceOwner?.revoked || isPluginRegistryRetired(registry)) {
+    return rejectRegistration("plugin HTTP route owner is no longer active");
+  }
+  const routes = [
+    ...new Set(
+      getPluginHttpRouteViews(registry, params.pluginId, instance).flatMap(
+        (view) => view.httpRoutes,
+      ),
+    ),
+  ];
   const normalizedPath = normalizePluginHttpPath(params.path, params.fallbackPath);
   if (!normalizedPath) {
     return rejectRegistration(`plugin: webhook path missing${suffix}`);
@@ -249,9 +337,33 @@ export function registerPluginHttpRoute(params: {
         `owned by ${authOverlap.pluginId ?? "unknown-plugin"} (${authOverlap.source ?? "unknown-source"})`,
     );
   }
+  const listener = params.legacyListener;
+  if (listener) {
+    for (const route of routes) {
+      if (params.replaceExisting && canonicalMatches.includes(route)) {
+        continue;
+      }
+      const conflict = route.legacyListeners?.find(
+        (existing) =>
+          existing.port === listener.port &&
+          existing.host === listener.host &&
+          !route.legacyListenerHandoffs?.includes(existing) &&
+          (existing.health?.path !== listener.health?.path ||
+            existing.health?.contentType !== listener.health?.contentType ||
+            existing.timeouts?.headers !== listener.timeouts?.headers ||
+            existing.timeouts?.request !== listener.timeouts?.request ||
+            existing.timeouts?.socket !== listener.timeouts?.socket),
+      );
+      if (conflict) {
+        return rejectRegistration(
+          `plugin: conflicting legacy webhook health or timeout profile at ${listener.host ?? "<unspecified>"}:${listener.port}${suffix}; registrations sharing a port must use the same profile`,
+        );
+      }
+    }
+  }
   const entry: PluginHttpRouteRegistration = {
     path: normalizedPath,
-    handler: params.handler,
+    handler: wrapCurrentPluginInstance(params.handler),
     auth: params.auth,
     match: routeMatch,
     ...(params.gatewayRuntimeScopeSurface
@@ -260,17 +372,10 @@ export function registerPluginHttpRoute(params: {
     pluginId: params.pluginId,
     source: params.source,
   };
-  const successor: RouteOwner = { entry, routes, holders: new Set(), handoffs: new Set() };
   // Canonical aliases occupy one Gateway route even when their configured
   // bytes differ. Nested same-auth prefix chains remain separate routes.
-  const existingIndex = canonicalMatches[0] ? routes.indexOf(canonicalMatches[0]) : -1;
-  if (existingIndex >= 0) {
-    const existing = routes[existingIndex];
-    if (!existing) {
-      return rejectRegistration(
-        `plugin: route conflict at ${normalizedPath} (${routeMatch})${suffix}`,
-      );
-    }
+  const existing = canonicalMatches[0];
+  if (existing) {
     const requestedOwner = normalizeOptionalString(params.pluginId);
     const requestedSource = normalizeOptionalString(params.source);
     const mismatchedOwner = canonicalMatches.find((route) => !hasSameRouteOwner(route, params));
@@ -285,6 +390,7 @@ export function registerPluginHttpRoute(params: {
         return retainPluginHttpRoute({
           entry: existing,
           leases: scope?.leases ?? [],
+          legacyListener: params.legacyListener,
         });
       }
       const conflictingOwner = mismatchedOwner ?? existing;
@@ -313,24 +419,26 @@ export function registerPluginHttpRoute(params: {
     params.log?.(
       `plugin: replacing stale webhook path ${normalizedPath} (${routeMatch})${suffix}${pluginHint}`,
     );
-    for (const route of canonicalMatches.toReversed()) {
-      const owner = routeOwners.get(route);
-      if (owner) {
-        // The first replacement may stop while a shared sibling is still
-        // starting. Transfer its pending handoffs, not its retired live holders.
-        removeOwnedRoute(owner, successor);
-      }
-      const index = routes.indexOf(route);
-      if (index >= 0) {
-        routes.splice(index, 1);
-      }
-    }
   }
 
+  const successor: RouteOwner = {
+    entry,
+    registry,
+    removeRoute: replacePluginHttpRoutes(registry, entry, canonicalMatches),
+    holders: new Map(),
+    handoffs: new Map(),
+  };
+  for (const route of canonicalMatches.toReversed()) {
+    const owner = routeOwners.get(route);
+    if (owner) {
+      // Transfer pending handoffs, never the previous registration's live holders.
+      removeOwnedRoute(owner, successor);
+    }
+  }
   routeOwners.set(entry, successor);
-  routes.push(entry);
   return retainPluginHttpRoute({
     entry,
     leases: scope?.leases ?? [],
+    legacyListener: params.legacyListener,
   });
 }

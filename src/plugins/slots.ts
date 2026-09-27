@@ -148,13 +148,6 @@ export function applyExclusiveSlotSelection(params: {
       slots[slotKey] = nextSlot;
     }
 
-    const inferredPrevSlot = prevSlot ?? defaultSlotIdForKey(slotKey);
-    if (inferredPrevSlot && inferredPrevSlot !== params.selectedId) {
-      warnings.push(
-        `Exclusive slot "${slotKey}" switched from "${inferredPrevSlot}" to "${params.selectedId}".`,
-      );
-    }
-
     const disabledIds: string[] = [];
     if (params.registry) {
       for (const plugin of params.registry.plugins) {

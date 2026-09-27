@@ -1,9 +1,15 @@
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 // Bash tool helper tests cover conversion from model-facing timeout seconds to
 // timer-safe millisecond values.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../../test/helpers/promise.js";
+import { runWithSpawnBroker } from "../../../process/spawn-broker/context.js";
+import { createSpawnBrokerHost } from "../../../process/spawn-broker/host.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { isPidDefinitelyDead } from "../../../shared/pid-alive.js";
 import { buildShellCommandInvocation } from "../../shell-utils.js";
 import {
   expectNativeBashSpill,
@@ -58,6 +64,76 @@ describe("bash tool timeout helpers", () => {
       stdin: "pipe",
     });
   });
+});
+
+describe("bash tool startup cancellation", () => {
+  it.runIf(process.platform !== "win32").each(["abort", "timeout"] as const)(
+    "settles %s while broker readiness is stalled and cancels the late command",
+    async (reason) => {
+      const host = createSpawnBrokerHost();
+      const controller = new AbortController();
+      const admitted = createDeferredCore<ReturnType<typeof host.spawnExeca>>();
+      const spawnExeca = host.spawnExeca.bind(host);
+      const observeSpawn = vi.spyOn(host, "spawnExeca").mockImplementation((...args) => {
+        const command = spawnExeca(...args);
+        admitted.resolve(command);
+        return command;
+      });
+      let paused = false;
+      let remote: ReturnType<typeof host.spawnExeca> | undefined;
+      try {
+        await host.ready();
+        process.kill(host.pid!, "SIGSTOP");
+        paused = true;
+        const tool = createBashTool(process.cwd(), { shellPath: "/bin/bash" });
+        const execution = runWithSpawnBroker(host, () =>
+          tool.execute(
+            `startup-${reason}`,
+            { command: "sleep 30", ...(reason === "timeout" ? { timeout: 0.05 } : {}) },
+            controller.signal,
+          ),
+        );
+        const settled = execution.then(
+          () => ({ status: "success" as const }),
+          (error: unknown) => ({ status: "error" as const, error }),
+        );
+        remote = await withTestTimeout(admitted.promise, 1000, "Bash did not request a process");
+        if (reason === "abort") {
+          controller.abort();
+        }
+        const outcome = await Promise.race([
+          settled,
+          delay(500).then(() => ({ status: "pending" as const })),
+        ]);
+        expect(outcome.status).toBe("error");
+        if (outcome.status !== "error") {
+          throw new Error("Bash startup did not settle");
+        }
+        expect(outcome.error).toBeInstanceOf(Error);
+        expect(String(outcome.error)).toContain(
+          reason === "abort" ? "Command aborted" : "Command timed out after 0.05 seconds",
+        );
+        process.kill(host.pid!, "SIGCONT");
+        paused = false;
+        await withTestTimeout(remote.result, 2000, "Late Bash command did not settle");
+        if (remote.child.pid) {
+          expect(isPidDefinitelyDead(remote.child.pid)).toBe(true);
+        }
+      } finally {
+        if (paused) {
+          process.kill(host.pid!, "SIGCONT");
+        }
+        try {
+          if (remote) {
+            await withTestTimeout(remote.result, 2000, "Bash cleanup did not settle");
+          }
+        } finally {
+          await host.close();
+          observeSpawn.mockRestore();
+        }
+      }
+    },
+  );
 });
 
 describe("bash tool output lifecycle", () => {

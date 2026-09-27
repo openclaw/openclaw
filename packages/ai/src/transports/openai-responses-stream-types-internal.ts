@@ -67,6 +67,7 @@ export type OpenAIResponsesStreamEvent =
   | AzureResponsesTextDeltaEvent;
 
 export type ResponsesStreamOptions = FirstStreamEventInternalOptions & {
+  canRetryIdentityConflict?: () => boolean;
   asyncToolExecution?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   resolveServiceTier?: (
@@ -79,4 +80,5 @@ export type ResponsesStreamOptions = FirstStreamEventInternalOptions & {
   ) => void;
   signal?: AbortSignal;
   reasoningReplayMetadata?: OpenAIResponsesReasoningReplayMetadata;
+  resolveResponseModel?: () => string | undefined;
 };

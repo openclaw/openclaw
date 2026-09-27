@@ -3,8 +3,15 @@
 // Verifies extension packages compile through their package-local TypeScript boundary.
 import type { ChildProcess } from "node:child_process";
 import type { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import { dirname, join, resolve } from "node:path";
 import pMap from "p-map";
@@ -12,6 +19,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
+import { collectFilesSync } from "./check-file-utils.ts";
 import { appendBoundedTail } from "./lib/bounded-output-tail.mjs";
 import {
   portableRelativePath,
@@ -25,6 +33,8 @@ import {
 } from "./lib/dist-artifact-ownership.mts";
 import { toErrorObject } from "./lib/error-format.mts";
 import { BOUNDARY_CACHE_ROOT, BoundaryInputSnapshot } from "./lib/extension-boundary-inputs.mts";
+import { prepareExtensionBoundaryProjects } from "./lib/extension-boundary-projects.mts";
+import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mts";
 import {
   runManagedCommand,
   signalExitCode,
@@ -57,6 +67,7 @@ type StepFailureParams = {
 };
 type StepResult = { stdout: string; stderr: string; elapsedMs: number };
 type RunNodeStepParams = {
+  env?: NodeJS.ProcessEnv;
   abortController?: AbortController;
   onFailure?: (error: ReturnType<typeof attachStepFailureMetadata>) => void;
 };
@@ -64,20 +75,13 @@ type BoundaryStep = {
   label: string;
   args: string[];
   timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
   onStart?: () => void;
   onSuccess?: (result: StepResult) => void;
 };
 type BoundaryCheckParams = { rootDir?: string; processObject?: Pick<EventEmitter, "on" | "off"> };
-const require = createRequire(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
-const tscBin = require.resolve("typescript/bin/tsc");
-const nativePreviewPackageJsonPath = require.resolve("@typescript/native-preview/package.json");
-const nativePreviewPackageJson = JSON.parse(readFileSync(nativePreviewPackageJsonPath, "utf8"));
-const nativePreviewBin = nativePreviewPackageJson.bin?.tsgo;
-if (typeof nativePreviewBin !== "string") {
-  throw new Error("@typescript/native-preview does not declare the tsgo binary");
-}
-const tsgoBin = resolve(dirname(nativePreviewPackageJsonPath), nativePreviewBin);
+const compilerWorker = resolve(repoRoot, "scripts/compile-extension-boundary.mts");
 const prepareBoundaryArtifactsArgs = distArtifactEntryArgs(
   resolve(repoRoot, "scripts/prepare-extension-package-boundary-artifacts.mts"),
 );
@@ -99,17 +103,17 @@ function parseMode(argv: string[]): BoundaryMode {
 }
 
 /**
- * Resolves the compile worker count from CLI/env/default settings.
+ * Reserve at least two CPU slots per compiler, including explicit CI requests.
  */
 export function resolveCompileConcurrency(
   env: NodeJS.ProcessEnv = process.env,
   availableParallelism = os.availableParallelism(),
 ) {
   const raw = env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY?.trim();
-  if (raw) {
-    return parsePositiveInt(raw, "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY");
-  }
-  return Math.max(1, Math.min(6, Math.floor(availableParallelism / 2)));
+  const capacity = Math.max(1, Math.floor(availableParallelism / 2));
+  return raw
+    ? Math.min(capacity, parsePositiveInt(raw, "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY"))
+    : capacity;
 }
 
 function readJsonFile(filePath: string): unknown {
@@ -318,7 +322,7 @@ export async function runNodeStepAsync(
       bin: process.execPath,
       args,
       cwd: repoRoot,
-      env: process.env,
+      env: params.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
       timeoutMs: resolvedTimeoutMs,
@@ -410,6 +414,7 @@ export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurr
       try {
         step.onStart?.();
         const result = await runNodeStepAsync(step.label, step.args, step.timeoutMs, {
+          env: step.env,
           abortController,
           onFailure(error) {
             firstFailure ??= error;
@@ -454,12 +459,13 @@ function cleanupCanaryArtifacts(extensionId: string, rootDir = repoRoot) {
   const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId, rootDir);
   rmSync(canaryPath, { force: true });
   rmSync(tsconfigPath, { force: true });
+  rmSync(resolveBoundaryInputReceiptPath(`${extensionId}-canary`, rootDir), { force: true });
 }
 
 /**
  * Removes canary artifacts for multiple extensions.
  */
-export function cleanupCanaryArtifactsForExtensions(extensionIds: string[], rootDir = repoRoot) {
+function cleanupCanaryArtifactsForExtensions(extensionIds: string[], rootDir = repoRoot) {
   for (const extensionId of extensionIds) {
     cleanupCanaryArtifacts(extensionId, rootDir);
   }
@@ -483,8 +489,8 @@ export function installCanaryArtifactCleanup(
   };
 }
 
-function resolveBoundaryTsBuildInfoPath(extensionId: string) {
-  return resolve(repoRoot, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.tsbuildinfo`);
+function resolveBoundaryInputReceiptPath(extensionId: string, rootDir = repoRoot) {
+  return resolve(rootDir, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.inputs.json`);
 }
 function resolveBoundaryTsStampPath(extensionId: string, rootDir = repoRoot) {
   return resolve(rootDir, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.json`);
@@ -496,11 +502,21 @@ async function runCompileCheck(extensionIds: string[]) {
   );
   await runNodeStepAsync("plugin-sdk boundary prep", prepareBoundaryArtifactsArgs, 420_000);
   const prepElapsedMs = Date.now() - prepStartedAt;
-  const concurrency = resolveCompileConcurrency();
-  const verboseFreshLogs = process.env.OPENCLAW_EXTENSION_BOUNDARY_VERBOSE_FRESH === "1";
-  const before = new BoundaryInputSnapshot(repoRoot);
-  process.stdout.write(`compile concurrency ${concurrency}\n`);
   const compileStartedAt = Date.now();
+  const availableParallelism = os.availableParallelism();
+  const concurrency = resolveCompileConcurrency(process.env, availableParallelism);
+  const cpuShare = Math.max(1, Math.floor(availableParallelism / concurrency));
+  const compilerThreads = process.env.GOMAXPROCS?.trim()
+    ? Math.min(cpuShare, parsePositiveInt(process.env.GOMAXPROCS.trim(), "GOMAXPROCS"))
+    : cpuShare;
+  const compilerEnv = { ...process.env, GOMAXPROCS: String(compilerThreads) };
+  const verboseFreshLogs = process.env.OPENCLAW_EXTENSION_BOUNDARY_VERBOSE_FRESH === "1";
+  const projects = prepareExtensionBoundaryProjects(repoRoot, extensionIds);
+  const metadataInputs = projects.flatMap((project) => project.metadataInputs);
+  const before = new BoundaryInputSnapshot(repoRoot, metadataInputs);
+  process.stdout.write(
+    `compile concurrency ${concurrency}; CPUs per compiler ${compilerThreads}\n`,
+  );
   let skippedCompileCount = 0;
   const compileTimings: CompileTiming[] = [];
   const completed: {
@@ -508,27 +524,36 @@ async function runCompileCheck(extensionIds: string[]) {
     config: string;
     args: string[];
     startedAt: number;
-    tsBuildInfoPath: string;
+    inputReceipt: string;
   }[] = [];
-  const steps = extensionIds
-    .map((extensionId, index) => {
-      const tsBuildInfoPath = resolveBoundaryTsBuildInfoPath(extensionId);
-      const config = `extensions/${extensionId}/tsconfig.json`;
+  // Source bytes are a cold-cache scheduling hint, never a coverage selector.
+  // Include the package's implementation even when its config starts at public barrels.
+  const orderedExtensions = projects
+    .map((project) =>
+      Object.assign(project, {
+        sourceBytes: collectFilesSync(join(repoRoot, "extensions", project.extensionId), {
+          includeFile: (file) => classifyBundledExtensionSourcePath(file).isProductionSource,
+        }).reduce((total, file) => total + statSync(file).size, 0),
+      }),
+    )
+    .toSorted((left, right) => right.sourceBytes - left.sourceBytes);
+  const steps = orderedExtensions
+    .map(({ extensionId, config }, index) => {
+      const inputReceipt = resolveBoundaryInputReceiptPath(extensionId);
       const args = [
-        tsgoBin,
-        "-p",
-        resolve(repoRoot, config),
-        "--noEmit",
-        "--incremental",
-        "--tsBuildInfoFile",
-        tsBuildInfoPath,
+        compilerWorker,
+        JSON.stringify({
+          configFile: config,
+          inputReceipt: portableRelativePath(repoRoot, inputReceipt),
+          emit: false,
+        }),
       ];
       before.signature(config, args, []);
       const recordPath = resolveBoundaryTsStampPath(extensionId);
-      mkdirSync(dirname(tsBuildInfoPath), { recursive: true });
+      mkdirSync(dirname(inputReceipt), { recursive: true });
       if (
         before.matches(readArtifactRecord(recordPath), config, args, [
-          portableRelativePath(repoRoot, tsBuildInfoPath),
+          portableRelativePath(repoRoot, inputReceipt),
         ])
       ) {
         skippedCompileCount += 1;
@@ -540,7 +565,7 @@ async function runCompileCheck(extensionIds: string[]) {
         return null;
       }
       rmSync(recordPath, { force: true });
-      rmSync(tsBuildInfoPath, { force: true });
+      rmSync(inputReceipt, { force: true });
       let startedAt = 0;
       return {
         label: extensionId,
@@ -549,13 +574,17 @@ async function runCompileCheck(extensionIds: string[]) {
           process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
         },
         onSuccess(result) {
-          completed.push({ recordPath, config, args, startedAt, tsBuildInfoPath });
+          process.stdout.write(
+            `[${index + 1}/${extensionIds.length}] ${extensionId} (${result.elapsedMs}ms)\n`,
+          );
+          completed.push({ recordPath, config, args, startedAt, inputReceipt });
           compileTimings.push({
             extensionId,
             elapsedMs: result.elapsedMs,
           });
         },
         args,
+        env: compilerEnv,
         timeoutMs: 120_000,
       } satisfies BoundaryStep;
     })
@@ -570,20 +599,21 @@ async function runCompileCheck(extensionIds: string[]) {
   }
   if (steps.length > 0) {
     await runNodeStepsWithConcurrency(steps, concurrency);
-    const after = new BoundaryInputSnapshot(repoRoot);
+    const after = new BoundaryInputSnapshot(repoRoot, metadataInputs);
     const records = completed.map((unit) =>
       Object.assign(unit, {
         record: after.record(
           unit.config,
           unit.args,
-          unit.tsBuildInfoPath,
-          [portableRelativePath(repoRoot, unit.tsBuildInfoPath)],
+          unit.inputReceipt,
+          [portableRelativePath(repoRoot, unit.inputReceipt)],
           before,
           unit.startedAt,
         ),
       }),
     );
     for (const unit of records) {
+      rmSync(unit.inputReceipt.replace(/\.inputs\.json$/u, ".tsbuildinfo"), { force: true });
       writeArtifactRecord(unit.recordPath, unit.record);
     }
   }
@@ -631,7 +661,14 @@ async function runCanaryCheck(extensionIds: string[]) {
 
         const result = await runNodeStepAsync(
           `${extensionId} canary`,
-          [tscBin, "-p", tsconfigPath, "--noEmit"],
+          [
+            compilerWorker,
+            JSON.stringify({
+              configFile: tsconfigPath,
+              inputReceipt: resolveBoundaryInputReceiptPath(`${extensionId}-canary`),
+              emit: false,
+            }),
+          ],
           120_000,
         );
         throw new Error(

@@ -1,5 +1,6 @@
 {
   "id": "slack",
+  "categories": ["channels"],
   "doctorContract": {
     "configRepair": true
   },

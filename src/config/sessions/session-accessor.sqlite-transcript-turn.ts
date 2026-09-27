@@ -1,8 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import {
   applySessionGoalOperation,
+  lookupSessionGoalOperation,
   readSessionGoalOperationReceipt,
   writeSessionGoalOperationReceipt,
 } from "./goals-operations.js";
@@ -17,6 +19,7 @@ import type {
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
 import { runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction } from "./session-accessor.sqlite-deletion.js";
+import { readQualifiedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
   collectSessionEntryLookupKeys,
   readSessionEntryRow,
@@ -37,6 +40,8 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { rememberCommittedTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
+import type { SessionTranscriptTurnPersistOptions } from "./session-accessor.types.js";
+import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
@@ -61,14 +66,18 @@ export async function appendExpectedSessionTranscriptTurn(
   scope: SessionTranscriptWriteScope,
   options: {
     atomicGroup?: boolean;
+    keyFormat?: "agent-qualified";
     config?: import("../types.openclaw.js").OpenClawConfig;
     cwd?: string;
     expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
     expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     expectedSessionId: string;
+    selectedSessionId?: string | null;
+    selectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
     initialSessionEntry?: SessionEntry;
     messages: readonly SessionTranscriptTurnMessageAppend[];
+    onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
     sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
     sessionTurnMutation?: SessionTranscriptTurnMutation;
     sessionFile: string;
@@ -90,6 +99,13 @@ export async function appendExpectedSessionTranscriptTurn(
     );
   }
   const resolveExpectedEntry = (selected: ResolvedSessionEntryRow | undefined) => {
+    if (
+      options.selectedSessionId !== undefined &&
+      ((selected?.entry.sessionId ?? null) !== options.selectedSessionId ||
+        selected?.entry.lifecycleRevision !== (options.selectedLifecycleRevision ?? undefined))
+    ) {
+      return undefined;
+    }
     // A prepared creation cannot adopt a row that appeared while admission was awaiting work.
     if (initialEntry) {
       return selected ? undefined : initialEntry;
@@ -100,213 +116,283 @@ export async function appendExpectedSessionTranscriptTurn(
     ...scope,
     sessionId: options.expectedSessionId,
   });
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const mutation = options.sessionTurnMutation;
-    mutation?.assertCurrent?.();
-    const preparedDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    if (mutation) {
-      ensureSessionGoalOperationsSchema(preparedDatabase.db);
-    }
-    // openclaw-agent-db.ts cache rule: LRU can close idle handles during shouldAppend awaits.
-    const preparedEntry = readSessionEntryRow(preparedDatabase, resolved.sessionKey);
-    const preparedReplay = mutation
-      ? readSessionGoalOperationReceipt(
-          preparedDatabase.db,
-          resolved.sessionKey,
-          options.expectedSessionId,
-          mutation.operation,
-        )
-      : undefined;
-    if (preparedReplay) {
-      if (preparedEntry?.entry.sessionId !== options.expectedSessionId) {
-        return sqliteSessionTranscriptTurnRebound(preparedEntry, options.sessionFile);
-      }
-      return {
-        appendedMessages: [],
-        sessionEntry: preparedEntry.entry,
-        sessionFile: options.sessionFile,
-        sessionTurnMutationResult: { result: preparedReplay, replayed: true },
-      };
-    }
-    if (!resolveExpectedEntry(preparedEntry)) {
-      return sqliteSessionTranscriptTurnRebound(preparedEntry, options.sessionFile);
-    }
-    const messages = await selectAppendableSqliteTranscriptTurnMessages(
-      {
-        agentId: resolved.agentId,
-        sessionId: options.expectedSessionId,
-        sessionKey: resolved.sessionKey,
-        ...(scope.storePath ? { storePath: scope.storePath } : {}),
-      },
-      options.messages,
+  const readEntry = (database: Parameters<typeof readSessionEntryRow>[0]) => {
+    const selected =
+      options.keyFormat === "agent-qualified"
+        ? readQualifiedSessionEntryRow(database, resolved.agentId, resolved.sessionKey)
+        : readSessionEntryRow(database, resolved.sessionKey);
+    return selected?.entry ? { entry: selected.entry, row: selected.row } : undefined;
+  };
+  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+  const rebound = new Error("Session changed before cold transcript restoration");
+  let restoreEntry: ResolvedSessionEntryRow | undefined;
+  try {
+    await restoreSessionColdTranscript(
+      { ...scope, sessionId: options.expectedSessionId },
+      options.keyFormat === "agent-qualified"
+        ? () => {
+            options.sessionTurnMutation?.assertCurrent?.();
+            const current = withOpenClawAgentDatabaseReadOnly(
+              (database) => readWithCanonicalSessionAdmission(database, () => readEntry(database)),
+              toDatabaseOptions(resolved),
+            );
+            restoreEntry = current.found ? current.value : undefined;
+            if (resolveExpectedEntry(restoreEntry)) {
+              return;
+            }
+            if (
+              restoreEntry?.entry.sessionId === options.expectedSessionId &&
+              options.sessionTurnMutation &&
+              lookupSessionGoalOperation({
+                ...scope,
+                sessionKey: resolved.sessionKey,
+                expectedSessionId: options.expectedSessionId,
+                operation: options.sessionTurnMutation.operation,
+              })
+            ) {
+              return;
+            }
+            throw rebound;
+          }
+        : undefined,
     );
-    let result: SqliteExpectedSessionTranscriptTurnResult = sqliteSessionTranscriptTurnRebound(
-      preparedEntry,
-      options.sessionFile,
-    );
-    const publish = runOpenClawAgentWriteTransaction((transactionDb) => {
+  } catch (error) {
+    if (error !== rebound) {
+      throw error;
+    }
+    return sqliteSessionTranscriptTurnRebound(restoreEntry, options.sessionFile);
+  }
+  return await runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      const mutation = options.sessionTurnMutation;
       mutation?.assertCurrent?.();
-      const fresh = readSessionEntryRow(transactionDb, resolved.sessionKey);
-      const replay = mutation
+      const preparedDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+      if (mutation) {
+        ensureSessionGoalOperationsSchema(preparedDatabase.db);
+      }
+      // openclaw-agent-db.ts cache rule: LRU can close idle handles during shouldAppend awaits.
+      const preparedEntry = readEntry(preparedDatabase);
+      const preparedReplay = mutation
         ? readSessionGoalOperationReceipt(
-            transactionDb.db,
+            preparedDatabase.db,
             resolved.sessionKey,
             options.expectedSessionId,
             mutation.operation,
           )
         : undefined;
-      if (replay) {
-        if (fresh?.entry.sessionId !== options.expectedSessionId) {
-          result = sqliteSessionTranscriptTurnRebound(fresh, options.sessionFile);
-          return undefined;
+      if (preparedReplay) {
+        if (preparedEntry?.entry.sessionId !== options.expectedSessionId) {
+          return sqliteSessionTranscriptTurnRebound(preparedEntry, options.sessionFile);
         }
-        result = {
+        return {
           appendedMessages: [],
-          sessionEntry: fresh.entry,
+          sessionEntry: preparedEntry.entry,
           sessionFile: options.sessionFile,
-          sessionTurnMutationResult: { result: replay, replayed: true },
+          sessionTurnMutationResult: { result: preparedReplay, replayed: true },
         };
-        return undefined;
       }
-      const currentEntry = resolveExpectedEntry(fresh);
-      if (!currentEntry) {
-        result = sqliteSessionTranscriptTurnRebound(fresh, options.sessionFile);
-        return undefined;
+      if (!resolveExpectedEntry(preparedEntry)) {
+        return sqliteSessionTranscriptTurnRebound(preparedEntry, options.sessionFile);
       }
-      const goal = mutation
-        ? applySessionGoalOperation(currentEntry, mutation.operation, Date.now())
-        : undefined;
-      const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
-      for (const append of messages) {
-        const { shouldAppend: _shouldAppend, shouldAppendInTransaction, ...appendOptions } = append;
-        if (shouldAppendInTransaction) {
-          const latestAssistant = findTranscriptEventInDatabase(
-            transactionDb,
-            resolved.sessionId,
-            (event) => readTranscriptEventMessage(event)?.role === "assistant",
-          );
-          const latestAssistantMessage = latestAssistant
-            ? readTranscriptEventMessage(latestAssistant.event)
-            : undefined;
-          if (!shouldAppendInTransaction(latestAssistantMessage)) {
-            continue;
-          }
-        }
-        let message = appendOptions.message;
-        if (mutation && goal && isRecord(message) && message.role === "user") {
-          message = {
-            ...message,
-            __openclaw: {
-              ...(isRecord(message["__openclaw"]) ? message["__openclaw"] : {}),
-              intent: {
-                kind:
-                  mutation.operation.action === "start"
-                    ? "session-goal-start"
-                    : "session-goal-resume",
-                version: 1,
-                goalId: goal.id,
-                operationId: mutation.operation.operationId,
-              },
-            },
-          };
-        }
-        const appended = appendTranscriptMessageInTransaction(transactionDb, resolved, {
-          ...appendOptions,
-          message,
-          messageAlreadyRedacted: options.atomicGroup === true,
-          ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
-          ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
-        });
-        if (appended) {
-          appendedMessages.push(appended);
-        }
-      }
-      if (
-        options.atomicGroup &&
-        (appendedMessages.length !== messages.length ||
-          appendedMessages.some((message) => message.appended) !==
-            appendedMessages.every((message) => message.appended))
-      ) {
-        throw new Error("SQLite transcript batch was not wholly inserted or replayed");
-      }
-
-      if (
-        (mutation || initialEntry) &&
-        (appendedMessages.length === 0 ||
-          appendedMessages.length !== messages.length ||
-          appendedMessages.some((message) => !message.appended))
-      ) {
-        throw new Error(
-          mutation
-            ? "Goal admission requires a new transcript turn in the same transaction."
-            : "Session initialization requires a new transcript turn in the same transaction.",
-        );
-      }
-
-      // Later explicit parents can abandon earlier rows. Capture every cursor
-      // from the final active projection before this atomic transaction commits.
-      rememberCommittedTranscriptMessageSequencesInTransaction(
-        transactionDb,
-        resolved.sessionId,
-        appendedMessages,
+      const messages = await selectAppendableSqliteTranscriptTurnMessages(
+        {
+          agentId: resolved.agentId,
+          sessionId: options.expectedSessionId,
+          sessionKey: resolved.sessionKey,
+          ...(scope.storePath ? { storePath: scope.storePath } : {}),
+        },
+        options.messages,
       );
-
-      // Append-owned metadata (including history coverage) is part of this same
-      // transaction. Do not overwrite it with the pre-append entry snapshot.
-      const appendedEntry =
-        readSessionEntryRow(transactionDb, resolved.sessionKey)?.entry ?? currentEntry;
-      const sessionPatch = buildExpectedTranscriptTurnSessionPatch({
-        appendedMessages,
-        currentEntry: appendedEntry,
-        expectedSessionState: options.expectedSessionState,
-        sessionFile: options.sessionFile,
-        sessionLifecyclePatch: options.sessionLifecyclePatch,
-        touchSessionEntry: options.touchSessionEntry,
-      });
-      if (mutation) {
-        sessionPatch.goal = goal;
-      }
-      const next =
-        Object.keys(sessionPatch).length > 0
-          ? mergeSessionEntry(appendedEntry, sessionPatch)
-          : appendedEntry;
-      let publishIdentity: (() => void) | undefined;
-      if (initialEntry || next !== appendedEntry) {
-        const identityKeys = collectSessionEntryLookupKeys(transactionDb, resolved.sessionKey);
-        const previousIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
-        writeSessionEntry(transactionDb, resolved.sessionKey, next);
-        const currentIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
-        publishIdentity = prepareSessionIdentityPublication(
-          transactionDb,
-          resolved.agentId,
-          previousIdentity,
-          currentIdentity,
-        );
-      }
-      const sessionTurnMutationResult = mutation
-        ? {
-            result: writeSessionGoalOperationReceipt(
+      let result: SqliteExpectedSessionTranscriptTurnResult = sqliteSessionTranscriptTurnRebound(
+        preparedEntry,
+        options.sessionFile,
+      );
+      const publish = runOpenClawAgentWriteTransaction((transactionDb) => {
+        mutation?.assertCurrent?.();
+        const fresh = readEntry(transactionDb);
+        const replay = mutation
+          ? readSessionGoalOperationReceipt(
               transactionDb.db,
               resolved.sessionKey,
               options.expectedSessionId,
               mutation.operation,
-              goal,
-              mutation.runId,
-            ),
-            replayed: false,
+            )
+          : undefined;
+        if (replay) {
+          if (fresh?.entry.sessionId !== options.expectedSessionId) {
+            result = sqliteSessionTranscriptTurnRebound(fresh, options.sessionFile);
+            return undefined;
           }
-        : undefined;
-      result = {
-        sessionTurnMutationResult,
-        appendedMessages,
-        sessionEntry: cloneSessionEntry(next),
-        sessionFile: options.sessionFile,
-      };
-      return publishIdentity;
-    }, toDatabaseOptions(resolved));
-    publish?.();
-    return result;
-  });
+          result = {
+            appendedMessages: [],
+            sessionEntry: fresh.entry,
+            sessionFile: options.sessionFile,
+            sessionTurnMutationResult: { result: replay, replayed: true },
+          };
+          return undefined;
+        }
+        const currentEntry = resolveExpectedEntry(fresh);
+        if (!currentEntry) {
+          result = sqliteSessionTranscriptTurnRebound(fresh, options.sessionFile);
+          return undefined;
+        }
+        const goal = mutation
+          ? applySessionGoalOperation(currentEntry, mutation.operation, Date.now())
+          : undefined;
+        const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
+        for (const append of messages) {
+          const {
+            shouldAppend: _shouldAppend,
+            shouldAppendInTransaction,
+            ...appendOptions
+          } = append;
+          if (shouldAppendInTransaction) {
+            const latestAssistant = findTranscriptEventInDatabase(
+              transactionDb,
+              resolved.sessionId,
+              (event) => readTranscriptEventMessage(event)?.role === "assistant",
+            );
+            const latestAssistantMessage = latestAssistant
+              ? readTranscriptEventMessage(latestAssistant.event)
+              : undefined;
+            if (!shouldAppendInTransaction(latestAssistantMessage)) {
+              continue;
+            }
+          }
+          let message = appendOptions.message;
+          if (mutation && goal && isRecord(message) && message.role === "user") {
+            message = {
+              ...message,
+              __openclaw: {
+                ...(isRecord(message["__openclaw"]) ? message["__openclaw"] : {}),
+                intent: {
+                  kind:
+                    mutation.operation.action === "start"
+                      ? "session-goal-start"
+                      : "session-goal-resume",
+                  version: 1,
+                  goalId: goal.id,
+                  operationId: mutation.operation.operationId,
+                },
+              },
+            };
+          }
+          const appended = appendTranscriptMessageInTransaction(transactionDb, resolved, {
+            ...appendOptions,
+            message,
+            messageAlreadyRedacted: options.atomicGroup === true,
+            ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
+            ...((append.config ?? options.config)
+              ? { config: append.config ?? options.config }
+              : {}),
+          });
+          if (appended) {
+            appendedMessages.push(appended);
+          }
+        }
+        if (
+          options.atomicGroup &&
+          (appendedMessages.length !== messages.length ||
+            appendedMessages.some((message) => message.appended) !==
+              appendedMessages.every((message) => message.appended))
+        ) {
+          throw new Error("SQLite transcript batch was not wholly inserted or replayed");
+        }
+
+        if (
+          (mutation || initialEntry) &&
+          (appendedMessages.length === 0 ||
+            appendedMessages.length !== messages.length ||
+            appendedMessages.some((message) => !message.appended))
+        ) {
+          throw new Error(
+            mutation
+              ? "Goal admission requires a new transcript turn in the same transaction."
+              : "Session initialization requires a new transcript turn in the same transaction.",
+          );
+        }
+
+        // Later explicit parents can abandon earlier rows. Capture every cursor
+        // from the final active projection before this atomic transaction commits.
+        rememberCommittedTranscriptMessageSequencesInTransaction(
+          transactionDb,
+          resolved.sessionId,
+          appendedMessages,
+        );
+
+        // Append-owned metadata (including history coverage) is part of this same
+        // transaction. Do not overwrite it with the pre-append entry snapshot.
+        const appended = readEntry(transactionDb);
+        const appendedEntry = appended?.entry ?? currentEntry;
+        const sessionPatch = buildExpectedTranscriptTurnSessionPatch({
+          appendedMessages,
+          currentEntry: appendedEntry,
+          expectedSessionState: options.expectedSessionState,
+          sessionFile: options.sessionFile,
+          sessionLifecyclePatch: options.sessionLifecyclePatch,
+          touchSessionEntry: options.touchSessionEntry,
+        });
+        if (mutation) {
+          sessionPatch.goal = goal;
+        }
+        const next =
+          Object.keys(sessionPatch).length > 0
+            ? mergeSessionEntry(appendedEntry, sessionPatch)
+            : appendedEntry;
+        let publishIdentity: (() => void) | undefined;
+        if (initialEntry || next !== appendedEntry) {
+          const identityKeys = collectSessionEntryLookupKeys(transactionDb, resolved.sessionKey);
+          const previousIdentity = readSessionIdentitySnapshot(
+            transactionDb,
+            identityKeys.filter((key) => key !== resolved.sessionKey),
+          );
+          // The selected row is still current in this write reservation; read only its siblings.
+          if (appended) {
+            previousIdentity.set(resolved.sessionKey, appended.entry);
+          }
+          const persisted = writeSessionEntry(transactionDb, resolved.sessionKey, next, {
+            canonicalPreviousEntry: previousIdentity.get(resolved.sessionKey) ?? null,
+          });
+          const currentIdentity = new Map(previousIdentity);
+          currentIdentity.set(resolved.sessionKey, persisted);
+          publishIdentity = prepareSessionIdentityPublication(
+            transactionDb,
+            resolved.agentId,
+            previousIdentity,
+            currentIdentity,
+          );
+        }
+        const sessionTurnMutationResult = mutation
+          ? {
+              result: writeSessionGoalOperationReceipt(
+                transactionDb.db,
+                resolved.sessionKey,
+                options.expectedSessionId,
+                mutation.operation,
+                goal,
+                mutation.runId,
+              ),
+              replayed: false,
+            }
+          : undefined;
+        result = {
+          sessionTurnMutationResult,
+          appendedMessages,
+          sessionEntry: cloneSessionEntry(next),
+          sessionFile: options.sessionFile,
+        };
+        return publishIdentity;
+      }, toDatabaseOptions(resolved));
+      publish?.();
+      // Complete committed custody before cancellation can run at an async return.
+      for (const message of result.appendedMessages) {
+        options.onMessageCommitted?.(message);
+      }
+      return result;
+    },
+    "session.transcript.turn",
+  );
 }
 
 function sqliteSessionTranscriptTurnRebound(

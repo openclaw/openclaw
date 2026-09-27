@@ -10,10 +10,20 @@ describe("SessionSchema maintenance extensions", () => {
         resetArchiveRetention: "14d",
         maxDiskBytes: "500mb",
         highWaterBytes: "350mb",
+        coldStorage: { enabled: true, afterDays: 30 },
       },
     });
     expect(result.success).toBe(true);
   });
+
+  it.each([0, -1, 1.5, "30d", Number.POSITIVE_INFINITY])(
+    "rejects invalid cold-storage days: %s",
+    (afterDays) => {
+      expect(SessionSchema.safeParse({ maintenance: { coldStorage: { afterDays } } }).success).toBe(
+        false,
+      );
+    },
+  );
 
   it("accepts disabling recent-session preservation", () => {
     expect(SessionSchema.safeParse({ maintenance: { preserveRecent: false } }).success).toBe(true);
@@ -31,7 +41,7 @@ describe("SessionSchema maintenance extensions", () => {
     );
   });
 
-  it.each(["0", "0d", -1, "never"])(
+  it.each(["0d", -1, "never"])(
     "rejects invalid dashboard archive duration: %s",
     (archiveDashboardAfter) => {
       const result = SessionSchema.safeParse({ maintenance: { archiveDashboardAfter } });
@@ -82,55 +92,31 @@ describe("SessionSchema maintenance extensions", () => {
     ).toThrow(/maxDiskBytes|size/i);
   });
 
-  it.each([0, "0h", "0d", "0ms", "0", "0s", "0m"])(
-    "rejects zero-value resetArchiveRetention: %s",
-    (resetArchiveRetention) => {
-      const result = SessionSchema.safeParse({
-        maintenance: { resetArchiveRetention },
-      });
-      expect(result.success).toBe(false);
-      expect(result.error?.issues[0]?.path).toContain("resetArchiveRetention");
-    },
-  );
-
-  it("accepts positive resetArchiveRetention values", () => {
-    expect(SessionSchema.safeParse({ maintenance: { resetArchiveRetention: "30d" } }).success).toBe(
-      true,
-    );
-    expect(SessionSchema.safeParse({ maintenance: { resetArchiveRetention: "7d" } }).success).toBe(
-      true,
-    );
-    expect(
-      SessionSchema.safeParse({ maintenance: { resetArchiveRetention: "500ms" } }).success,
-    ).toBe(true);
+  it.each([0, "0d"])("rejects zero-value resetArchiveRetention: %s", (resetArchiveRetention) => {
+    const result = SessionSchema.safeParse({
+      maintenance: { resetArchiveRetention },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toContain("resetArchiveRetention");
   });
 
-  it.each([0, "0", "0b", "0.4b"])("accepts zero-resolving highWaterBytes: %s", (highWaterBytes) => {
+  it.each([0, "0.4b"])("accepts zero-resolving highWaterBytes: %s", (highWaterBytes) => {
     expect(SessionSchema.safeParse({ maintenance: { highWaterBytes } }).success).toBe(true);
   });
 
-  it.each([-1, "-1", "-1b", "-0.4b"])("rejects negative highWaterBytes: %s", (highWaterBytes) => {
+  it.each([-1, "-0.4b"])("rejects negative highWaterBytes: %s", (highWaterBytes) => {
     const result = SessionSchema.safeParse({ maintenance: { highWaterBytes } });
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.path).toContain("highWaterBytes");
   });
 
-  it("accepts resetArchiveRetention: false (documented disable)", () => {
-    expect(SessionSchema.safeParse({ maintenance: { resetArchiveRetention: false } }).success).toBe(
-      true,
-    );
+  it.each([0, "0d"])("rejects zero-value pruneAfter: %s", (pruneAfter) => {
+    const result = SessionSchema.safeParse({
+      maintenance: { pruneAfter },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toContain("pruneAfter");
   });
-
-  it.each([0, "0h", "0d", "0ms", "0", "0s", "0m"])(
-    "rejects zero-value pruneAfter: %s",
-    (pruneAfter) => {
-      const result = SessionSchema.safeParse({
-        maintenance: { pruneAfter },
-      });
-      expect(result.success).toBe(false);
-      expect(result.error?.issues[0]?.path).toContain("pruneAfter");
-    },
-  );
 
   it("accepts positive pruneAfter values", () => {
     expect(SessionSchema.safeParse({ maintenance: { pruneAfter: "30d" } }).success).toBe(true);

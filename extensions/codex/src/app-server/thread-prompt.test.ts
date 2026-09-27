@@ -1,7 +1,9 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it } from "vitest";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
@@ -156,8 +158,14 @@ describe("buildDeveloperInstructions delegation guidance", () => {
 
     expect(instructions).toContain("## Delegation");
     expect(instructions).toContain("delegate via native `spawn_agent`");
+    expect(instructions).toContain(
+      "For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.",
+    );
     expect(instructions).toContain("spawn `sessions_spawn` with `visible=true`");
     expect(instructions).toContain("Announcing spawns notify when the run ends");
+    expect(instructions).toContain(
+      "When a kept OpenClaw session stops before the requested outcome, continue it with `sessions_send`",
+    );
     expect(instructions).toContain("Collectors require explicit result collection instead.");
     expect(instructions.indexOf("## Delegation")).toBeGreaterThan(
       instructions.indexOf("When a native child's result belongs in a later turn"),
@@ -191,14 +199,13 @@ describe("buildDeveloperInstructions delegation guidance", () => {
 });
 
 describe("buildDeveloperInstructions UI presentation guidance", () => {
-  const uiTools = ["show_widget", "dashboard", "portal"].map(
-    (name) =>
-      ({
-        type: "function",
-        name,
-        description: `Use ${name}`,
-        inputSchema: { type: "object" },
-      }) satisfies CodexDynamicToolSpec,
+  const uiTools = ["screen", "show_widget", "dashboard", "portal", "message"].map(
+    (name): CodexDynamicToolFunctionSpec => ({
+      type: "function",
+      name,
+      description: `Use ${name}`,
+      inputSchema: { type: "object", properties: name === "message" ? { clawhub: {} } : {} },
+    }),
   );
 
   it.each([
@@ -226,19 +233,32 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       const instructions = buildDeveloperInstructions(createParams(), { dynamicTools });
 
       expect(instructions).toContain("## UI Presentation");
+      expect(instructions).toContain(`\`${prefix}screen(action="browser_show")\``);
+      expect(instructions).toContain("Do not create or expand a dashboard to open a panel");
       for (const tool of uiTools) {
         expect(instructions).toContain(`\`${prefix}${tool.name}\``);
       }
       expect(instructions).toContain("pin=true");
       expect(instructions).toContain("publicUrl");
       expect(instructions).toContain("result.presentation");
-      expect(instructions).toContain("inline support varies by surface");
+      expect(instructions).toContain("this turn's schema");
+      expect(instructions).toContain("status=pinned means the widget is on the session dashboard");
+      expect(instructions).toContain('action="focus_tab" with its tabId');
+      expect(instructions).toContain("do not open hosting URLs as browser pages");
+      expect(instructions).toContain(
+        `\`${prefix}message(action="send", clawhub={query:"capability"})\``,
+      );
+      expect(instructions).toContain("Tools/skills first");
+      expect(instructions).toContain(
+        "For explicit plugin/skill search/install or missing capability, use ClawHub",
+      );
+      expect(instructions).toContain("Skip routine tasks, tool errors, permissions");
     },
   );
 
   it("distinguishes unavailable custom authoring from dashboard and portal support", () => {
     const instructions = buildDeveloperInstructions(createParams(), {
-      dynamicTools: uiTools.filter((tool) => tool.name !== "show_widget"),
+      dynamicTools: uiTools.filter((tool) => tool.name !== "show_widget" && tool.name !== "screen"),
     });
 
     expect(instructions).toContain("`dashboard`");
@@ -247,6 +267,22 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       "Custom authoring is unavailable this turn, not unsupported by dashboards.",
     );
     expect(instructions).not.toContain("`show_widget`");
+    expect(instructions).not.toContain('action="browser_show"');
+  });
+
+  it("does not advertise ClawHub for a message schema without that capability", () => {
+    const instructions = buildDeveloperInstructions(createParams(), {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "message",
+          description: "Reply to source",
+          inputSchema: { type: "object", properties: { message: { type: "string" } } },
+        },
+      ],
+    });
+
+    expect(instructions).not.toContain("ClawHub");
   });
 
   it.each([
@@ -289,4 +325,35 @@ describe("buildDeveloperInstructions delivery-mode stability", () => {
       expect(instructions[0]).not.toContain("message(action=send)");
     }
   });
+});
+
+it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
+  try {
+    registerPluginCommand("demo-plugin", {
+      name: "codex_demo",
+      description: "Codex demo command",
+      agentPromptGuidance: [
+        "Legacy global command guidance.",
+        {
+          text: "Codex app-server command guidance.",
+          surfaces: ["codex_app_server"],
+        },
+        {
+          text: "Unscoped structured command guidance.",
+        },
+        {
+          text: "OpenClaw main command guidance.",
+          surfaces: ["openclaw_main"],
+        },
+      ],
+      handler: async () => ({ text: "ok" }),
+    });
+    const instructions = buildDeveloperInstructions(createParams());
+    expect(instructions).toContain("Codex app-server command guidance.");
+    expect(instructions).not.toContain("Legacy global command guidance.");
+    expect(instructions).not.toContain("Unscoped structured command guidance.");
+    expect(instructions).not.toContain("OpenClaw main command guidance.");
+  } finally {
+    clearPluginCommands();
+  }
 });

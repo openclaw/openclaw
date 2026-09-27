@@ -22,6 +22,7 @@ import {
 } from "../../tasks/task-owner-access.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { PluginRuntimeTaskFlow } from "./runtime-taskflow.types.js";
+import { createRuntimeAsyncTasks } from "./runtime-tasks-async.js";
 import type {
   BoundTaskFlowsRuntime,
   BoundTaskRunsRuntime,
@@ -140,11 +141,7 @@ function createBoundTaskFlowsRuntime(params: {
       return undefined;
     }
     const tasks = listTasksForFlowId(flow.flowId);
-    return mapTaskFlowDetail({
-      flow,
-      tasks,
-      summary: getFlowTaskSummary(flow.flowId),
-    });
+    return mapTaskFlowDetail({ flow, tasks });
   };
 
   return {
@@ -220,6 +217,7 @@ export function createRuntimeTasks(params: {
   managedTaskFlow: PluginRuntimeTaskFlow;
 }): PluginRuntimeTasks {
   return {
+    async: createRuntimeAsyncTasks(),
     runs: createRuntimeTaskRuns(),
     flows: createRuntimeTaskFlows(),
     managedFlows: params.managedTaskFlow,

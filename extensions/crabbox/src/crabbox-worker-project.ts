@@ -16,17 +16,23 @@ export async function prepareCrabboxProjectFiles(params: {
   runCommand: CrabboxCommandRunner;
   timeoutMs: () => number;
   signal?: AbortSignal;
-}): Promise<void> {
-  const run = async (args: string[], signal: AbortSignal, input?: string) => {
+  inspectPrepared?: true;
+}) {
+  const run = async (
+    args: string[],
+    signal: AbortSignal,
+    createScript?: (timeoutMs: number) => string,
+  ) => {
     params.project.assertCurrent();
+    const timeoutMs = params.timeoutMs();
     const result = await runCrabboxCommand({
       action: "project preparation",
       args,
       binary: params.binary,
       runCommand: params.runCommand,
       signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
-      input,
-      timeoutMs: params.timeoutMs(),
+      input: createScript?.(timeoutMs),
+      timeoutMs,
     });
     params.project.assertCurrent();
     if (result.termination !== "exit" || result.code !== 0) {
@@ -34,8 +40,18 @@ export async function prepareCrabboxProjectFiles(params: {
     }
     return result.stdout;
   };
-  await params.project.prepare({
-    runScript: (input, signal) => run(params.runArgs, signal, input),
+  if (params.inspectPrepared) {
+    if (!params.project.inspectPreparedWorkspace) {
+      throw new Error("Enrolled project cannot verify its completed workspace");
+    }
+    await params.project.inspectPreparedWorkspace({
+      runScript: (input, signal) => run(params.runArgs, signal, () => input),
+    });
+    return undefined;
+  }
+  return await params.project.prepare({
+    runScript: (input, signal) => run(params.runArgs, signal, () => input),
+    runScriptWithBudget: (createScript, signal) => run(params.runArgs, signal, createScript),
     upload: async (localPath, remotePath, signal) => {
       await run(
         [

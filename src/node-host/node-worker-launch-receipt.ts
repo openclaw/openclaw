@@ -12,6 +12,16 @@ type NodeWorkerLaunchState =
   | "cancelled";
 export type NodeWorkerTerminalState = Exclude<NodeWorkerLaunchState, "pending" | "running">;
 
+export type NodeWorkerCleanupMode = "process-group" | "owned-anchor";
+
+export type NodeWorkerCleanupBinding = {
+  databasePath: string;
+  externallySupervised: boolean;
+  launchId: string;
+  planHash: string;
+  supervisor: NodeWorkerProcessIdentity;
+};
+
 export type NodeWorkerContainerIdentity = {
   engine: "docker" | "podman";
   containerId: string;
@@ -20,6 +30,8 @@ export type NodeWorkerContainerIdentity = {
 
 export type NodeWorkerLaunchRow = Selectable<OpenClawStateDatabase["node_worker_launches"]> & {
   container_json?: string | null;
+  cleanup_mode?: string | null;
+  lineage_settled?: number | null;
 };
 
 export type NodeWorkerLaunchReceipt = {
@@ -34,6 +46,8 @@ export type NodeWorkerLaunchReceipt = {
   state: NodeWorkerLaunchState;
   supervisor: NodeWorkerProcessIdentity;
   worker: NodeWorkerProcessIdentity | null;
+  workerCleanupMode: NodeWorkerCleanupMode | null;
+  workerLineageSettled: boolean;
   container?: NodeWorkerContainerIdentity;
   resultJson: string | null;
   errorText: string | null;
@@ -97,6 +111,10 @@ export function nodeWorkerLaunchReceiptFromRow(row: NodeWorkerLaunchRow): NodeWo
     throw new Error(`invalid node worker launch state ${row.state}`);
   }
   const container = containerIdentity(row.container_json);
+  const cleanupMode = row.cleanup_mode ?? null;
+  if (cleanupMode !== null && cleanupMode !== "process-group" && cleanupMode !== "owned-anchor") {
+    throw new Error("invalid node worker cleanup mode");
+  }
   return {
     launchId: row.launch_id,
     planHash: row.plan_hash,
@@ -112,6 +130,8 @@ export function nodeWorkerLaunchReceiptFromRow(row: NodeWorkerLaunchRow): NodeWo
       row.worker_pid === null || row.worker_start_time === null
         ? null
         : { pid: row.worker_pid, startTime: row.worker_start_time },
+    workerCleanupMode: cleanupMode,
+    workerLineageSettled: row.lineage_settled === 1,
     ...(container ? { container } : {}),
     resultJson: row.result_json,
     errorText: row.error_text,

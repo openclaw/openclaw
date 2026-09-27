@@ -86,8 +86,19 @@ describe("legacy media persistence NUL-tail recovery", () => {
 
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Skipped archived transcript media migration");
+    expect(result.warningDisposition).toBe("recoverable");
     expect(replacements).toBe(0);
     expect(fs.readFileSync(archivePath)).toEqual(bytes);
+  });
+
+  it("keeps all-NUL archive refusal recoverable through the receipt path", async () => {
+    const { archivePath, env } = createArchiveFixture(Buffer.alloc(284));
+
+    const result = await migrateLegacyMediaPersistence({ env });
+
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(fs.readFileSync(archivePath)).toEqual(Buffer.alloc(284));
   });
 
   it.each([

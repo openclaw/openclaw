@@ -2,6 +2,10 @@ package ai.openclaw.wear
 
 import android.content.Intent
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.wear.compose.material3.AppScaffold
 
 internal const val extraWearScreenshotMode = "openclaw.screenshotMode"
@@ -30,7 +34,6 @@ internal object WearScreenshotFixture {
   val snapshot =
     WearConversationSnapshot(
       gatewayState = WearGatewayState.CONNECTED,
-      activeAgentId = "main",
       agents =
         listOf(
           WearAgentSummary(
@@ -43,13 +46,13 @@ internal object WearScreenshotFixture {
       agentControlsSupported = true,
       gatewayControlsSupported = true,
       activeSessionId = "release-planning",
+      activeSessionTitle = "Release planning",
       sessions =
         listOf(
           WearSessionSummary(
             id = "release-planning",
             title = "Release planning",
-            updatedAtEpochMillis = 1_783_555_320_000,
-            selected = true,
+            openOnWatch = true,
           ),
         ),
       models =
@@ -61,6 +64,7 @@ internal object WearScreenshotFixture {
           ),
         ),
       modelControlsSupported = true,
+      sessionModelCatalogSupported = true,
       messages =
         listOf(
           WearChatMessage(
@@ -82,7 +86,8 @@ internal object WearScreenshotFixture {
 
 @Composable
 internal fun OpenClawWearScreenshotApp(scene: WearScreenshotScene) {
-  OpenClawWearTheme(themeMode = WearThemeMode.Dark) {
+  var themeMode by remember { mutableStateOf(WearThemeMode.Dark) }
+  OpenClawWearTheme(themeMode = themeMode) {
     AppScaffold {
       OpenClawWearScreens(
         snapshot = WearScreenshotFixture.snapshot,
@@ -98,7 +103,7 @@ internal fun OpenClawWearScreenshotApp(scene: WearScreenshotScene) {
         actionBusy = false,
         inputEnabled = true,
         canAbort = false,
-        themeMode = WearThemeMode.Dark,
+        themeMode = themeMode,
         autoSpeak = false,
         notificationsGranted = true,
         initialPage = scene.initialPage,
@@ -112,7 +117,7 @@ internal fun OpenClawWearScreenshotApp(scene: WearScreenshotScene) {
         onSelectModel = {},
         onRefresh = {},
         onGatewayEnabledChange = {},
-        onThemeModeChange = {},
+        onThemeModeChange = { themeMode = it },
         onAutoSpeakChange = {},
         onRequestNotifications = {},
         onOpenNotificationSettings = {},

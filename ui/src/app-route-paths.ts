@@ -16,9 +16,11 @@ import { takeGraphemes } from "./lib/graphemes.ts";
 
 export const INTERNAL_AGENT_PATH_PARAM = "__openclawAgentPath";
 export const INTERNAL_ACTIVITY_PATH_PARAM = "__openclawActivityPath";
+export const INTERNAL_TERMINAL_PATH_PARAM = "__openclawTerminalPath";
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
 export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
+export const INTERNAL_PLUGIN_SETTINGS_PATH_PARAM = "__openclawPluginSettingsPath";
 export const INTERNAL_WORKBOARD_PATH_PARAM = "__openclawWorkboardPath";
 export const CONTROL_UI_DOCUMENT_ROUTE_PATHS = {
   approval: "/approve",
@@ -26,7 +28,6 @@ export const CONTROL_UI_DOCUMENT_ROUTE_PATHS = {
 } as const;
 
 export type MemoryRouteTab = "overview" | "memories" | "dreams" | "settings";
-export type PluginsHubRouteTab = "installed" | "discover";
 
 type AgentRoutePath = {
   agentId: string;
@@ -38,6 +39,7 @@ type AgentRoutePath = {
 const APP_ROUTE_DEFINITIONS = {
   settings: { path: "/settings" },
   chat: { path: "/chat" },
+  terminal: { path: "/terminal" },
   dashboard: { path: "/dashboard" },
   dashboards: { path: "/dashboards" },
   custodian: { path: "/custodian" },
@@ -46,7 +48,8 @@ const APP_ROUTE_DEFINITIONS = {
   meetings: { path: "/meetings" },
   apps: { path: "/apps" },
   portals: { path: "/portals" },
-  agents: { path: "/settings/agents", aliases: ["/agents"] },
+  "agents-home": { path: "/agents" },
+  agents: { path: "/settings/agents" },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },
   config: { path: "/settings/general", aliases: ["/config"] },
@@ -64,6 +67,7 @@ const APP_ROUTE_DEFINITIONS = {
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
   memory: { path: "/settings/memory" },
+  search: { path: "/settings/search" },
   talk: { path: "/settings/talk" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   labs: { path: "/settings/labs" },
@@ -78,16 +82,18 @@ const APP_ROUTE_DEFINITIONS = {
   workboard: { path: "/workboard" },
   worktrees: { path: "/worktrees", aliases: ["/settings/worktrees"] },
   sessions: { path: "/sessions", aliases: ["/settings/sessions"] },
+  systems: { path: "/systems" },
   usage: { path: "/usage" },
   debug: { path: "/debug" },
   logs: { path: "/logs" },
   "skill-workshop": { path: "/skills/workshop" },
   skills: { path: "/skills" },
-  plugins: { path: "/settings/plugins" },
+  "skill-settings": { path: "/settings/skills" },
+  plugins: { path: "/plugins" },
+  "plugin-settings": { path: "/settings/plugins" },
   // Automations is the product name; /cron stays as a legacy alias for
   // pre-rename bookmarks and deep links.
   cron: { path: "/automations", aliases: ["/cron"] },
-  tasks: { path: "/tasks" },
   devices: { path: "/settings/devices", aliases: ["/nodes"] },
   "cloud-workers": { path: "/settings/cloud-workers" },
   plugin: { path: "/plugin" },
@@ -332,14 +338,59 @@ export function memoryTabFromPath(pathname: string, basePath = ""): MemoryRouteT
   return segment === "memories" || segment === "dreams" || segment === "settings" ? segment : null;
 }
 
-export function pathForPluginsHubTab(tab: PluginsHubRouteTab, basePath = ""): string {
-  const pluginsPath = pathForRoute("plugins", basePath);
-  return tab === "installed" ? pluginsPath : `${pluginsPath}/discover`;
+function isLegacyPluginsDiscoveryPath(pathname: string, basePath = ""): boolean {
+  const normalizedPath = normalizePath(pathname);
+  return normalizedPath === `${pathForRoute("plugin-settings", basePath)}/discover`;
 }
 
-export function pluginsHubTabFromPath(pathname: string, basePath = ""): PluginsHubRouteTab | null {
-  const segment = routePathSuffix(pathname, "plugins", basePath);
-  return segment === "" ? "installed" : segment === "discover" ? "discover" : null;
+function isPluginCatalogId(id: string): boolean {
+  return /^[A-Za-z0-9_-]+$/u.test(id);
+}
+
+export function pathForPluginCatalogEntry(id: string, basePath = ""): string {
+  if (!isPluginCatalogId(id)) {
+    throw new Error("Invalid plugin catalog id for a route path.");
+  }
+  return `${pathForRoute("plugins", basePath)}/${id}`;
+}
+
+export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string | null {
+  const normalizedPath = normalizePath(pathname);
+  const prefix = `${pathForRoute("plugins", basePath)}/`;
+  if (!normalizedPath.startsWith(prefix)) {
+    return null;
+  }
+  const id = normalizedPath.slice(prefix.length);
+  return isPluginCatalogId(id) ? id : null;
+}
+
+export function pathForPluginSettings(pluginId: string, basePath = ""): string {
+  if (!pluginId || pluginId === "." || pluginId === "..") {
+    throw new Error("Invalid plugin id for a route path.");
+  }
+  const encodedPluginId =
+    pluginId === "discover" ? "%64iscover" : encodeURIComponent(pluginId).replaceAll(".", "%2E");
+  return `${pathForRoute("plugin-settings", basePath)}/${encodedPluginId}`;
+}
+
+export function pluginSettingsIdFromPath(pathname: string, basePath = ""): string | null {
+  const normalizedPath = normalizePath(pathname);
+  const settingsPath = pathForRoute("plugin-settings", basePath);
+  const prefix = `${settingsPath}/`;
+  if (!normalizedPath.startsWith(prefix)) {
+    return null;
+  }
+  const encodedPluginId = normalizedPath.slice(prefix.length);
+  // This exact retired discovery route belongs to the Plugins workspace.
+  if (!encodedPluginId || encodedPluginId.includes("/") || encodedPluginId === "discover") {
+    return null;
+  }
+  try {
+    const pluginId = decodeURIComponent(encodedPluginId);
+    return pluginId && pluginId !== "." && pluginId !== ".." ? pluginId : null;
+  } catch {
+    return null;
+  }
 }
 
 export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {
@@ -371,20 +422,55 @@ export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): 
   return catalogShare ? "chat" : null;
 }
 
-export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
-  const encodedBoardId = routePathSuffix(pathname, "workboard", basePath);
-  if (!encodedBoardId || encodedBoardId.includes("/")) {
+export function pathForTerminalSession(sessionId: string, basePath = ""): string {
+  return `${pathForRoute("terminal", basePath)}/${encodeURIComponent(sessionId)}`;
+}
+
+function singleSegmentIdFromPath(
+  pathname: string,
+  routeId: RouteId,
+  basePath: string,
+): string | null {
+  const encoded = routePathSuffix(pathname, routeId, basePath);
+  if (!encoded || encoded.includes("/")) {
     return null;
   }
   try {
-    const boardId = decodeURIComponent(encodedBoardId);
-    return isValidWorkboardBoardId(boardId) ? boardId : null;
+    return decodeURIComponent(encoded);
   } catch {
     return null;
   }
 }
 
-function dynamicRouteIdFromPath(pathname: string, basePath = ""): RouteId | null {
+export function terminalSessionIdFromPath(pathname: string, basePath = ""): string | null {
+  return singleSegmentIdFromPath(pathname, "terminal", basePath)?.trim() || null;
+}
+
+export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
+  const boardId = singleSegmentIdFromPath(pathname, "workboard", basePath);
+  return isValidWorkboardBoardId(boardId) ? boardId : null;
+}
+
+const DYNAMIC_ROUTE_PATH_PARAMS = {
+  terminal: INTERNAL_TERMINAL_PATH_PARAM,
+  plugin: INTERNAL_PLUGIN_PATH_PARAM,
+  agents: INTERNAL_AGENT_PATH_PARAM,
+  activity: INTERNAL_ACTIVITY_PATH_PARAM,
+  workboard: INTERNAL_WORKBOARD_PATH_PARAM,
+  memory: INTERNAL_MEMORY_PATH_PARAM,
+  plugins: INTERNAL_PLUGINS_PATH_PARAM,
+  "plugin-settings": INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
+  chat: INTERNAL_SESSION_PATH_PARAM,
+  dashboard: INTERNAL_SESSION_PATH_PARAM,
+} as const;
+
+function dynamicRouteIdFromPath(
+  pathname: string,
+  basePath = "",
+): keyof typeof DYNAMIC_ROUTE_PATH_PARAMS | null {
+  if (terminalSessionIdFromPath(pathname, basePath)) {
+    return "terminal";
+  }
   if (pluginTabSlugFromPath(pathname, basePath)) {
     return "plugin";
   }
@@ -400,10 +486,23 @@ function dynamicRouteIdFromPath(pathname: string, basePath = ""): RouteId | null
   if (memoryTabFromPath(pathname, basePath)) {
     return "memory";
   }
-  if (pluginsHubTabFromPath(pathname, basePath)) {
+  if (isLegacyPluginsDiscoveryPath(pathname, basePath)) {
     return "plugins";
   }
+  if (pluginSettingsIdFromPath(pathname, basePath)) {
+    return "plugin-settings";
+  }
   return sessionRouteNamespaceFromPath(pathname, basePath);
+}
+
+export function dynamicRouteFromPath(pathname: string, basePath: string) {
+  const routeId = pluginCatalogIdFromPath(pathname, basePath)
+    ? "plugins"
+    : dynamicRouteIdFromPath(pathname, basePath);
+  // The overview is a static route; only its subpages need the pathname bridge.
+  return routeId && !(routeId === "memory" && memoryTabFromPath(pathname, basePath) === "overview")
+    ? ([routeId, DYNAMIC_ROUTE_PATH_PARAMS[routeId], pathname] as const)
+    : null;
 }
 
 export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null {
@@ -419,6 +518,9 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   const routePath = normalizedBasePath
     ? normalizedPath.slice(normalizedBasePath.length) || "/"
     : normalizedPath;
+  if (pluginCatalogIdFromPath(normalizedPath, normalizedBasePath)) {
+    return "plugins";
+  }
   // uirouter matches static paths case-insensitively (pathKey lowercases), so
   // this pre-gate must too — otherwise /Usage is rewritten to /chat before the
   // router, which would have matched it, ever starts.
@@ -515,4 +617,15 @@ export function restoreBridgedRouteLocation(
     search: search ? `?${search}` : "",
     hash: location.hash,
   };
+}
+
+export function sameRouteLocation(
+  left: RouteLocation | undefined,
+  right: RouteLocation | undefined,
+): boolean {
+  return (
+    left?.pathname === right?.pathname &&
+    left?.search === right?.search &&
+    left?.hash === right?.hash
+  );
 }

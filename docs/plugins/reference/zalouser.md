@@ -15,7 +15,7 @@ OpenClaw Zalo Personal Account plugin via native zca-js integration.
 ## Distribution
 
 - Package: `@openclaw/zalouser`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/zalouser`
 
 ## Surface
 

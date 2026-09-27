@@ -87,26 +87,24 @@ describe("openrouter image generation provider", () => {
 
   it("preserves chat-completion image requests for configured custom bases", async () => {
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          choices: [
-            {
-              message: {
-                images: [
-                  {
-                    imageUrl: {
-                      url: `data:image/png;base64,${Buffer.from("png-one").toString("base64")}`,
-                    },
+    postJsonRequestMock.mockImplementation(async () => ({
+      response: Response.json({
+        choices: [
+          {
+            message: {
+              images: [
+                {
+                  imageUrl: {
+                    url: `data:image/png;base64,${Buffer.from("png-one").toString("base64")}`,
                   },
-                ],
-              },
+                },
+              ],
             },
-          ],
-        }),
-      },
+          },
+        ],
+      }),
       release,
-    });
+    }));
 
     const provider = buildOpenRouterImageGenerationProvider();
     const result = await provider.generateImage({
@@ -210,7 +208,7 @@ describe("openrouter image generation provider", () => {
       };
     });
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: Response.json({
         choices: [
           {
@@ -221,7 +219,7 @@ describe("openrouter image generation provider", () => {
         ],
       }),
       release,
-    });
+    }));
 
     const result = await buildOpenRouterImageGenerationProvider().generateImage({
       provider: "openrouter",
@@ -262,12 +260,12 @@ describe("openrouter image generation provider", () => {
 
   it("uses a 180s default timeout when no request timeout is provided", async () => {
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: Response.json({
         data: [{ b64_json: Buffer.from("png-one").toString("base64") }],
       }),
       release,
-    });
+    }));
 
     const provider = buildOpenRouterImageGenerationProvider();
     await provider.generateImage({
@@ -286,12 +284,12 @@ describe("openrouter image generation provider", () => {
   });
 
   it("normalizes the official legacy base before selecting the dedicated route", async () => {
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: Response.json({
         data: [{ b64_json: Buffer.from("png-one").toString("base64") }],
       }),
       release: vi.fn(async () => {}),
-    });
+    }));
 
     await buildOpenRouterImageGenerationProvider().generateImage({
       provider: "openrouter",
@@ -313,7 +311,7 @@ describe("openrouter image generation provider", () => {
   });
 
   it("sends canonical reference images as input_references", async () => {
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: Response.json({
         data: [
           {
@@ -323,7 +321,7 @@ describe("openrouter image generation provider", () => {
         ],
       }),
       release: vi.fn(async () => {}),
-    });
+    }));
 
     const provider = buildOpenRouterImageGenerationProvider();
     const result = await provider.generateImage({
@@ -424,10 +422,10 @@ describe("openrouter image generation provider", () => {
   });
 
   it("wraps wrong-shape successful dedicated image responses", async () => {
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: Response.json({ data: { b64_json: "bad-shape" } }),
       release: vi.fn(async () => {}),
-    });
+    }));
 
     const provider = buildOpenRouterImageGenerationProvider();
     await expect(
@@ -443,25 +441,23 @@ describe("openrouter image generation provider", () => {
   it("extracts image fallbacks from string content and raw b64 parts", async () => {
     const png = Buffer.from("png-inline").toString("base64");
     const raw = Buffer.from("raw-inline").toString("base64");
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          choices: [
-            {
-              message: {
-                content: `done data:image/png;base64,${png}`,
-              },
+    postJsonRequestMock.mockImplementation(async () => ({
+      response: Response.json({
+        choices: [
+          {
+            message: {
+              content: `done data:image/png;base64,${png}`,
             },
-            {
-              message: {
-                content: [{ b64_json: raw }],
-              },
+          },
+          {
+            message: {
+              content: [{ b64_json: raw }],
             },
-          ],
-        }),
-      },
+          },
+        ],
+      }),
       release: vi.fn(async () => {}),
-    });
+    }));
 
     const result = await buildOpenRouterImageGenerationProvider().generateImage({
       provider: "openrouter",
@@ -477,20 +473,18 @@ describe("openrouter image generation provider", () => {
   });
 
   it("rejects invalid raw image parts in strict extraction mode", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          choices: [
-            {
-              message: {
-                content: [{ b64_json: "not-base64!" }],
-              },
+    postJsonRequestMock.mockImplementation(async () => ({
+      response: Response.json({
+        choices: [
+          {
+            message: {
+              content: [{ b64_json: "not-base64!" }],
             },
-          ],
-        }),
-      },
+          },
+        ],
+      }),
       release: vi.fn(async () => {}),
-    });
+    }));
 
     await expect(
       buildOpenRouterImageGenerationProvider().generateImage({

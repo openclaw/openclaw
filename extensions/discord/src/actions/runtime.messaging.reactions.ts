@@ -1,11 +1,10 @@
-// Discord plugin module implements runtime.messaging.reactions behavior.
 import {
   jsonResult,
   readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
-import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
+import * as discordMessagingActionRuntime from "../send.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 
 export async function handleDiscordReactionMessagingAction(ctx: DiscordMessagingActionContext) {

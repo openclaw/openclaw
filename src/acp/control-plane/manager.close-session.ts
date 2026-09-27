@@ -5,6 +5,7 @@ import {
 } from "@openclaw/acp-core/runtime/session-identity";
 import { toAcpRuntimeError } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import {
   discardPersistedManagerRuntimeState,
@@ -31,8 +32,13 @@ export async function runManagerCloseSession(params: {
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<AcpCloseSessionResult> {
   const { input, sessionKey, agentId } = params;
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(sessionKey);
+  }
+  input.assertActive?.();
   const resolution = params.resolveSession({
     cfg: input.cfg,
     sessionKey,
@@ -58,6 +64,7 @@ export async function runManagerCloseSession(params: {
   let runtimeClosed = false;
   let runtimeNotice: string | undefined;
   if (shouldSkipRuntimeClose) {
+    input.assertActive?.();
     await tryPrepareFreshManagerRuntimeSession({
       deps: params.deps,
       cfg: input.cfg,
@@ -66,21 +73,33 @@ export async function runManagerCloseSession(params: {
       agentId,
       logPrefix: "acp close fast-reset",
     });
+    if (!params.isCurrentActor()) {
+      throw createSupersededActorError(sessionKey);
+    }
     params.runtimeHandles.clear(params);
   } else {
     try {
       const { runtime: ensuredRuntime, handle } = await params.ensureRuntimeHandle({
+        assertActive: input.assertActive,
         cfg: input.cfg,
         sessionKey,
         agentId,
         meta,
+        isCurrentActor: params.isCurrentActor,
       });
+      if (!params.isCurrentActor()) {
+        throw createSupersededActorError(sessionKey);
+      }
+      input.assertActive?.();
       await ensuredRuntime.close({
         handle,
         reason: input.reason,
         discardPersistentState: input.discardPersistentState,
       });
       runtimeClosed = true;
+      if (!params.isCurrentActor()) {
+        throw createSupersededActorError(sessionKey);
+      }
       params.runtimeHandles.clear(params);
     } catch (error) {
       const acpError = toAcpRuntimeError({
@@ -88,6 +107,10 @@ export async function runManagerCloseSession(params: {
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "ACP close failed before completion.",
       });
+      if (!params.isCurrentActor()) {
+        throw acpError;
+      }
+      input.assertActive?.();
       if (
         !isAcpOwnerRepairRequired(acpError) &&
         input.allowBackendUnavailable &&
@@ -98,6 +121,7 @@ export async function runManagerCloseSession(params: {
           isRecoverableManagerAcpxExitError(acpError.message))
       ) {
         if (input.discardPersistentState) {
+          input.assertActive?.();
           await tryPrepareFreshManagerRuntimeSession({
             deps: params.deps,
             cfg: input.cfg,
@@ -107,9 +131,15 @@ export async function runManagerCloseSession(params: {
             logPrefix: "acp close recovery",
             missingBackendError: acpError,
           });
+          if (!params.isCurrentActor()) {
+            throw acpError;
+          }
         }
         // Treat unavailable backends as terminal for this cached handle so a
         // later operation cannot reuse an unusable runtime.
+        if (!params.isCurrentActor()) {
+          throw createSupersededActorError(sessionKey);
+        }
         params.runtimeHandles.clear(params);
         runtimeNotice = acpError.message;
       } else {
@@ -124,15 +154,20 @@ export async function runManagerCloseSession(params: {
       sessionKey,
       agentId,
       writeSessionMeta: params.writeSessionMeta,
+      isCurrentActor: params.isCurrentActor,
     });
   }
 
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(sessionKey);
+  }
   const metaCleared = Boolean(input.clearMeta);
   if (metaCleared) {
     await params.writeSessionMeta({
       cfg: input.cfg,
       sessionKey,
       agentId,
+      isCurrentActor: params.isCurrentActor,
       mutate: () => null,
       failOnError: true,
     });

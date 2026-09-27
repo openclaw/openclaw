@@ -15,8 +15,8 @@ jsonl, yaml/yml/lobster). Self-hosters, plugin authors, and editor extensions
 use it to read, find, or update a narrow location without hand-rolling a
 per-file parser.
 
-`path` is provided by the bundled optional `oc-path` plugin. Enable it before
-first use:
+`path` is provided by the bundled optional [`oc-path` plugin](/plugins/oc-path).
+Enable it before first use:
 
 ```bash
 openclaw plugins enable oc-path
@@ -484,8 +484,8 @@ valid: oc://AGENTS.md/tools/gh
   item:    gh
 ```
 
-Exits `0` when valid, `1` when invalid (with a structured `code` and
-`message`), `2` on argument errors.
+Exits `0` when valid and `1` when invalid (with a structured `code` and
+`message`). Missing required arguments are rejected by Commander with exit `1`.
 
 ### `emit <file>`
 
@@ -501,11 +501,11 @@ openclaw path emit ./gateway.jsonc --json
 
 ## Exit codes
 
-| Code | Meaning                                                                    |
-| ---- | -------------------------------------------------------------------------- |
-| `0`  | Success. (`resolve` / `find`: at least one match. `set`: write succeeded.) |
-| `1`  | No match, or `set` rejected by the substrate (no system-level error).      |
-| `2`  | Argument or parse error.                                                   |
+| Code | Meaning                                                                                             |
+| ---- | --------------------------------------------------------------------------------------------------- |
+| `0`  | Success. (`resolve` / `find`: at least one match. `set`: write succeeded.)                          |
+| `1`  | No match, invalid `validate` input, missing required arguments, or `set` rejected by the substrate. |
+| `2`  | Path or file parse error, refused pattern, or invalid mutation options.                             |
 
 ## Output mode
 
@@ -531,3 +531,4 @@ auto-detection.
 ## Related
 
 - [CLI reference](/cli)
+- [OC Path plugin](/plugins/oc-path)

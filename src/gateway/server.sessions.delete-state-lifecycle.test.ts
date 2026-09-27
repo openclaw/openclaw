@@ -18,9 +18,17 @@ import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
 } from "../sessions/session-lifecycle-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import type { SessionCompanionAskDeps } from "./session-companion-ask.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
@@ -34,14 +42,14 @@ import {
   writeSingleLineSession,
 } from "./test/server-sessions.test-helpers.js";
 
-function afterSessionStateMaterialization(after: () => void) {
+function afterSessionStateMaterialization(after: () => void | Promise<void>) {
   const materialize = sessionArchive.materializeSessionStateDeletePlans;
   // Earlier files can load the owner in this non-isolated shard. Observe its
   // real export instead of replacing a module after that owner has captured it.
   vi.spyOn(sessionArchive, "materializeSessionStateDeletePlans").mockImplementation(
     async (...args) => {
       const result = await materialize(...args);
-      after();
+      await after();
       return result;
     },
   );
@@ -54,13 +62,16 @@ const {
 } = setupGatewaySessionsHandlerTestHarness();
 const companions = new Set<SessionCompanionService>();
 
-afterEach(() => {
+afterEach(async () => {
   for (const companion of companions) {
     companion.dispose();
   }
   companions.clear();
+  await disposeSessionReadContexts();
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -182,7 +193,7 @@ test("sessions.delete removes the session board from its agent database", async 
     }),
     env: process.env,
   });
-  store.putWidget({
+  await store.putWidget({
     sessionKey,
     name: "status",
     content: { kind: "html", html: "ok" },
@@ -194,7 +205,7 @@ test("sessions.delete removes the session board from its agent database", async 
 
   expect(deleted.ok).toBe(true);
   expect(deleted.payload?.deleted).toBe(true);
-  expect(store.getSnapshot({ sessionKey })).toEqual({
+  expect(await store.getSnapshot({ sessionKey })).toEqual({
     sessionKey,
     revision: 0,
     tabs: [],
@@ -259,11 +270,11 @@ test.each(["authorization", "placement"] as const)(
     await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     let authorized = true;
-    afterSessionStateMaterialization(() => {
+    afterSessionStateMaterialization(async () => {
       if (change === "authorization") {
         authorized = false;
       } else {
-        placementStore.startDispatch({ sessionId, sessionKey, agentId: "main" });
+        await placementStore.startDispatch({ sessionId, sessionKey, agentId: "main" });
       }
     });
     await expect(
@@ -298,7 +309,7 @@ test("sessions.delete accepts placement retirement by the absent-session reconci
   const sessionId = "postcommit-retirement-session";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const claim = placementStore.claimTurn({
+  const claim = await placementStore.claimTurn({
     sessionId,
     sessionKey,
     agentId: "main",
@@ -306,7 +317,7 @@ test("sessions.delete accepts placement retirement by the absent-session reconci
     claimId: "postcommit-claim",
     runId: "postcommit-run",
   });
-  placementStore.releaseTurn(claim);
+  await placementStore.releaseTurn(claim);
   let retired = false;
   const publish = sessionArchiveStore.publishSessionStateArchives;
   vi.spyOn(sessionArchiveStore, "publishSessionStateArchives").mockImplementation(
@@ -339,6 +350,7 @@ async function createCompanion(runModel?: SessionCompanionAskDeps["run"]) {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const run = vi.fn(runModel ?? (async () => "Synthetic answer from the selected session."));
   const service = createSessionCompanion({
+    scheduler: createTestGatewayScheduler(),
     getConfig: getRuntimeConfig,
     contextReader: defaultSessionCompanionContextReader,
     sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },

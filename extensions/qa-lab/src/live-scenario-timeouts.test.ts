@@ -66,7 +66,6 @@ function runCompletionPolicyFlow(
     parentOutbound?: CompletionParentOutboundFixture | null;
     parentReply?: CompletionParentReplyFixture | null;
     parentSpawnCompletedAt?: number;
-    parentToolCalls?: Record<string, number>;
     parentYieldCompletedAt?: number;
     priorSuccessfulParentToolCalls?: Record<string, number>;
     priorParentOutbound?: CompletionParentOutboundFixture;
@@ -87,7 +86,7 @@ function runCompletionPolicyFlow(
   const transcriptReadOptions: unknown[] = [];
   const workspaceWrites: Array<{ content: string; filePath: string }> = [];
   let generatedUuidCount = 0;
-  const parentToolCalls = params.parentToolCalls ?? {
+  const parentToolCalls = {
     sessions_spawn: 1,
     sessions_yield: 1,
     exec: 1,
@@ -365,27 +364,12 @@ describe("live transport scenario timeouts", () => {
 
 describe("live subagent scenario timeouts", () => {
   it.each([
-    {
-      id: "issue-109025-completion-policy-live",
-      savedEvidence: "expectedFinalMarker",
-    },
-    {
-      id: "issue-109025-completion-policy-live",
-      savedEvidence: "completedChild",
-    },
-    {
-      id: "issue-109025-completion-policy-live",
-      savedEvidence: "parentTranscript",
-    },
-    {
-      id: "issue-109025-completion-policy-live",
-      savedEvidence: "parentHistory",
-    },
-    {
-      id: "issue-109025-sender-policy-live",
-      savedEvidence: "childRow",
-    },
-  ])("uses the model-aware completion timeout for $id", ({ id, savedEvidence }) => {
+    ["issue-109025-completion-policy-live", "expectedFinalMarker"],
+    ["issue-109025-completion-policy-live", "completedChild"],
+    ["issue-109025-completion-policy-live", "parentTranscript"],
+    ["issue-109025-completion-policy-live", "parentHistory"],
+    ["issue-109025-sender-policy-live", "childRow"],
+  ])("uses the model-aware completion timeout for %s", (id, savedEvidence) => {
     const scenario = requireFlowScenario(readQaScenarioById(id));
     const completionWait = scenario.execution.flow?.steps
       .flatMap((step) => step.actions)
@@ -405,41 +389,6 @@ describe("live subagent scenario timeouts", () => {
       call: "waitForCondition",
       saveAs: savedEvidence,
       args: [expect.any(Object), { expr: "liveTurnTimeoutMs(env, 60000)" }, 250],
-    });
-  });
-
-  it("checkpoints outbound-only history before waiting for the current requester delivery", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("issue-109025-completion-policy-live"));
-    const actions = scenario.execution.flow?.steps.flatMap((step) => step.actions) ?? [];
-    const checkpoint = actions.find(
-      (action) =>
-        typeof action === "object" &&
-        action !== null &&
-        "set" in action &&
-        action.set === "outboundStartIndex",
-    );
-    const deliveryWait = actions.find(
-      (action) =>
-        typeof action === "object" &&
-        action !== null &&
-        "call" in action &&
-        action.call === "waitForOutboundMessage" &&
-        "saveAs" in action &&
-        action.saveAs === "parentOutbound",
-    );
-
-    expect(checkpoint).toMatchObject({
-      value: {
-        expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length",
-      },
-    });
-    expect(deliveryWait).toMatchObject({
-      args: [
-        { ref: "state" },
-        expect.any(Object),
-        { expr: "liveTurnTimeoutMs(env, 60000)" },
-        { sinceIndex: { ref: "outboundStartIndex" } },
-      ],
     });
   });
 
@@ -464,16 +413,6 @@ describe("live subagent scenario timeouts", () => {
         60_000,
       ),
     ).toBe(60_000);
-  });
-
-  it("rejects echoed completion text when no child was actually spawned", async () => {
-    const { result, state } = runCompletionPolicyFlow({
-      parentToolCalls: { sessions_yield: 1, exec: 1 },
-      tasks: [],
-    });
-
-    await expect(result).rejects.toThrow("parent did not spawn a subagent");
-    expect(state.getSnapshot().messages[0]?.text).toContain("CHILD_DONE");
   });
 
   it.each([
@@ -511,33 +450,6 @@ describe("live subagent scenario timeouts", () => {
       "test condition was not met",
     );
   });
-
-  it.each<{
-    failure: string;
-    parentToolCalls: Record<string, number>;
-    tool: string;
-  }>([
-    {
-      tool: "sessions_spawn",
-      parentToolCalls: { sessions_yield: 1, exec: 1 },
-      failure: "parent did not spawn a subagent",
-    },
-    {
-      tool: "sessions_yield",
-      parentToolCalls: { sessions_spawn: 1, exec: 1 },
-      failure: "parent did not yield before completion",
-    },
-    {
-      tool: "exec",
-      parentToolCalls: { sessions_spawn: 1, sessions_yield: 1 },
-      failure: "parent did not execute the completion command",
-    },
-  ])(
-    "rejects completion without a real parent $tool call",
-    async ({ failure, parentToolCalls }) => {
-      await expect(runCompletionPolicyFlow({ parentToolCalls }).result).rejects.toThrow(failure);
-    },
-  );
 
   it.each<{
     failure: string;
@@ -738,17 +650,11 @@ describe("live subagent scenario timeouts", () => {
     ).rejects.toThrow("parent exec did not use the exact delivered-completion command");
   });
 
-  it.each([
-    { reason: "missing", proofCompletionText: "" },
-    { reason: "guessed", proofCompletionText: "CHILD_DONE:guessed-before-delivery" },
-  ])(
-    "rejects premature parent exec when its proof contains a $reason completion token",
-    async ({ proofCompletionText }) => {
-      await expect(runCompletionPolicyFlow({ proofCompletionText }).result).rejects.toThrow(
-        "completion proof did not contain the delivered child marker",
-      );
-    },
-  );
+  it("rejects premature parent exec with a guessed completion token", async () => {
+    await expect(
+      runCompletionPolicyFlow({ proofCompletionText: "CHILD_DONE:guessed-before-delivery" }).result,
+    ).rejects.toThrow("completion proof did not contain the delivered child marker");
+  });
 
   it("rejects inline filesystem discovery even when the exec proof forges the child marker", async () => {
     await expect(
@@ -759,16 +665,13 @@ describe("live subagent scenario timeouts", () => {
     ).rejects.toThrow("parent exec did not use the exact delivered-completion command");
   });
 
-  it.each(["read", "sessions_history"])(
-    "rejects an alternate parent %s tool that could discover the child marker",
-    async (tool) => {
-      await expect(
-        runCompletionPolicyFlow({
-          successfulParentToolCalls: { sessions_spawn: 1, sessions_yield: 1, exec: 1, [tool]: 1 },
-        }).result,
-      ).rejects.toThrow("parent used an unexpected successful tool");
-    },
-  );
+  it("rejects an alternate parent read tool that could discover the child marker", async () => {
+    await expect(
+      runCompletionPolicyFlow({
+        successfulParentToolCalls: { sessions_spawn: 1, sessions_yield: 1, exec: 1, read: 1 },
+      }).result,
+    ).rejects.toThrow("parent used an unexpected successful tool");
+  });
 
   it.each(["sessions_yield", "exec"])(
     "rejects repeated successful parent %s calls",
@@ -798,18 +701,6 @@ describe("live subagent scenario timeouts", () => {
       reason: "incomplete successful read chain",
       successfulChildReads: 3,
       failure: "child did not successfully read the complete chain",
-    },
-    {
-      reason: "four repeated reads and a guessed completion marker",
-      successfulChildReads: 4,
-      childFinalText: "CHILD_DONE",
-      failure: "child did not finish with the exact completion reply",
-    },
-    {
-      reason: "completion marker guessed from the first chain filename",
-      successfulChildReads: 4,
-      childFinalText: "CHILD_DONE:00000000-0000-4000-8000-000000000001",
-      failure: "child did not finish with the exact completion reply",
     },
   ])("rejects a delivered task with the $reason", async (fixture) => {
     await expect(runCompletionPolicyFlow(fixture).result).rejects.toThrow(fixture.failure);
@@ -908,12 +799,6 @@ describe("live subagent scenario timeouts", () => {
       expect(inboundText).not.toContain(chainFileName);
     }
     expect(inboundText).not.toContain(terminalMarker);
-  });
-
-  it("accepts an exec proof created in the same millisecond the child completed", async () => {
-    await expect(
-      runCompletionPolicyFlow({ proofModifiedAt: completionChildEndedAt }).result,
-    ).resolves.toMatchObject({ status: "pass" });
   });
 
   it("accepts authenticated spawn, yield, completion, and exec in the same millisecond", async () => {

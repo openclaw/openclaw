@@ -23,6 +23,12 @@ export type CodexPluginSummary = {
   mustShowInstallationInterstitial?: boolean | null;
   authPolicy?: string;
   availability?: string;
+  disabledReason?:
+    | "disabled_by_admin"
+    | "plan_not_eligible"
+    | "required_app_unavailable"
+    | "unknown"
+    | null;
   interface?: JsonValue;
 };
 
@@ -181,11 +187,6 @@ export type CodexAppsReadResponse = {
   missingAppIds: string[];
 };
 
-export type CodexSkillsListParams = {
-  cwds: string[];
-  forceReload?: boolean;
-};
-
 type CodexSkillScope = "user" | "repo" | "system" | "admin";
 
 type CodexSkillMetadata = {
@@ -212,10 +213,6 @@ type CodexSkillsListEntry = {
 
 export type CodexSkillsListResponse = {
   data: CodexSkillsListEntry[];
-};
-
-export type CodexHooksListParams = {
-  cwds: string[];
 };
 
 export type CodexHooksListResponse = {

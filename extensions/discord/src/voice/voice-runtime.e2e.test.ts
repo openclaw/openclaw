@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough, type Readable } from "node:stream";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
@@ -14,7 +15,6 @@ defineDiscordVoiceTests(
     createConnectionMock,
     joinVoiceChannelMock,
     entersStateMock,
-    createAudioPlayerMock,
     agentCommandMock,
     resolveVoiceIngressWithParticipantsMock,
     transcribeAudioFileMock,
@@ -38,7 +38,6 @@ defineDiscordVoiceTests(
     getLastAudioPlayer,
     beginSpeakerTurn,
     lastAgentCommandArgs,
-    lastAgentCommandToolNames,
     lastRealtimeBridgeParams,
     createJoinedAgentProxyFixture,
     lastTtsArgs,
@@ -48,6 +47,20 @@ defineDiscordVoiceTests(
     handleSpeakingStart,
     receiveRecordedSpeech,
   }) => {
+    const lastAgentCommandToolNames = () => {
+      const args = lastAgentCommandArgs();
+      if (typeof args.senderIsOwner !== "boolean") {
+        throw new Error("expected agent command owner identity");
+      }
+      return createOpenClawCodingTools({
+        config: {},
+        senderIsOwner: args.senderIsOwner,
+        messageProvider: "discord",
+        workspaceDir: "/tmp/openclaw-discord-voice-tools",
+        agentDir: "/tmp/openclaw-discord-voice-agent",
+      }).map((tool) => tool.name);
+    };
+
     it("composes join, audio ingress, agent dispatch, playback, and leave", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
@@ -220,6 +233,7 @@ defineDiscordVoiceTests(
       await entry.playbackQueue;
 
       expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+        getToolAuthorityOverlay: expect.any(Function),
         sessionKey: entry.route?.sessionKey,
         text: "use the smaller implementation",
       });
@@ -702,7 +716,7 @@ defineDiscordVoiceTests(
             resolveConnect = () => resolve(undefined);
           }),
       );
-      const player = createAudioPlayerMock();
+      const audio = { on: vi.fn(), off: vi.fn(), send: vi.fn() };
       const session = new realtimeModule.DiscordRealtimeVoiceSession({
         accountId: "default",
         cfg: {},
@@ -712,7 +726,7 @@ defineDiscordVoiceTests(
           channelId: "1001",
           voiceSessionKey: "discord:g1:1001",
           route: { agentId: "agent-1", sessionKey: "discord:g1:1001" },
-          player,
+          audio,
         },
         mode: "agent-proxy",
         onTerminalError: vi.fn(),
@@ -722,14 +736,16 @@ defineDiscordVoiceTests(
       const connect = session.connect();
       await vi.waitFor(() => expect(realtimeSessionMock.connect).toHaveBeenCalledOnce());
       const provider = lastRealtimeBridgeParams();
-      session.close();
+      const closed = session.close();
       expect(provider.audioSink.isOpen?.()).toBe(false);
       resolveConnect();
       await connect;
+      await closed;
 
       provider.onReady?.();
       expect(provider.audioSink.isOpen?.()).toBe(false);
       expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
+      expect(audio.send).toHaveBeenCalledExactlyOnceWith({ type: "output-shutdown" });
     });
 
     it("provider reset fences tool, playback, and consult completions", async () => {

@@ -3,7 +3,6 @@ import type { ActionResult } from "@trycua/cua-driver";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ClickButton,
-  EscalationReason,
   ScrollDirection,
   type CuaDriverSession,
   type CuaToolResult,
@@ -227,6 +226,7 @@ function sessionState(value: CuaToolResult): import("@trycua/cua-driver").Sessio
       ["window", "desktop"],
       "effective scope",
     ),
+    desktopCaptureAuthorized: structured.desktop_capture_authorized === true,
     desktopUnlocked: structured.desktop_unlocked === true,
     ...(typeof structured.escalation_reason === "string"
       ? {
@@ -280,7 +280,7 @@ class McpCuaDriverSession implements CuaDriverSession {
     return await this.sessionTool("get_cursor_position", {}, signal);
   }
 
-  async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
+  async getSessionState(signal?: AbortSignal) {
     const result = await this.sessionTool("get_session_state", {}, signal);
     return sessionState(result);
   }

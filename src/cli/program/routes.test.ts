@@ -1,6 +1,10 @@
 // Program route tests cover CLI route table registration and dispatch.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  applyCliExecutionStartupPresentation,
+  ensureCliExecutionBootstrap,
+} from "../command-execution-startup.js";
 import { tryRouteCli } from "../route.js";
 
 const runConfigGetMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -246,8 +250,29 @@ describe("program routes", () => {
       argv: routeArgv("agents list --wat"),
     },
     { path: ["agents"], argv: routeArgv("agents --wat") },
-  ])("returns false instead of handling unknown routed option for $path", async ({ argv }) => {
+    {
+      path: ["config", "get"],
+      argv: ["node", "openclaw", "config", "get", "gateway.port", ""],
+    },
+    {
+      path: ["config", "get"],
+      argv: ["node", "openclaw", "config", "get", "gateway.port", "", "--unknown"],
+    },
+    {
+      path: ["config", "unset"],
+      argv: ["node", "openclaw", "config", "unset", "gateway.port", "", "--dry-run"],
+    },
+    {
+      path: ["agents", "list"],
+      argv: ["node", "openclaw", "agents", "list", ""],
+    },
+  ])("defers unsupported routed arguments before startup for $path", async ({ argv }) => {
     await expectRunFalse(argv);
+    expect(applyCliExecutionStartupPresentation).not.toHaveBeenCalled();
+    expect(ensureCliExecutionBootstrap).not.toHaveBeenCalled();
+    expect(runConfigGetMock).not.toHaveBeenCalled();
+    expect(runConfigUnsetMock).not.toHaveBeenCalled();
+    expect(agentsListCommandMock).not.toHaveBeenCalled();
   });
 
   it("routes status --json through the lean JSON command", async () => {

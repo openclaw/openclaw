@@ -217,6 +217,46 @@ describe("resolveAllowAlwaysPatterns", () => {
     }
   }
 
+  function registerStaleAllowAlwaysCases(
+    cases: Array<{ name: string; command: string; packageManagers: string[] }>,
+    extraExecutables: string[],
+  ) {
+    for (const { name, command, packageManagers } of cases) {
+      it(name, async () => {
+        if (process.platform === "win32") {
+          return;
+        }
+        const dir = makeExecApprovalsTempDir();
+        const allowlist = packageManagers.map((executable) => ({
+          pattern: makeExecutable(dir, executable),
+          source: "allow-always" as const,
+        }));
+        for (const executable of extraExecutables) {
+          makeExecutable(dir, executable);
+        }
+        const result = await evaluateShellAllowlistWithAuthorization({
+          command,
+          allowlist,
+          safeBins: resolveSafeBins(undefined),
+          cwd: dir,
+          env: makePathEnv(dir),
+          platform: process.platform,
+        });
+
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(
+          requiresExecApproval({
+            ask: "on-miss",
+            security: "allowlist",
+            analysisOk: result.analysisOk,
+            allowlistSatisfied: result.allowlistSatisfied,
+          }),
+        ).toBe(true);
+      });
+    }
+  }
+
   it("returns direct executable paths for non-shell segments", () => {
     const exe = path.join("/tmp", "openclaw-tool");
     const patterns = resolveAllowAlwaysPatterns({
@@ -503,6 +543,37 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(
       buildCwdBoundHashedArgPattern(["/usr/bin/printf", "hello world", ""], "/workspace", "linux"),
     ).toBe("sha256:cwd-argv:v1:2b4f4aed226aa1fd771c852b8f74e4c162d440aafaf60bfef19746f3b2ee5890");
+  });
+
+  it("keeps argument grant precedence and rechecks mutable argv on each call", () => {
+    const tool = "/usr/bin/tool";
+    const cwd = "/workspace";
+    const argv = [tool, "allowed"];
+    const resolution = makeMockExecutableResolution({
+      rawExecutable: tool,
+      resolvedPath: tool,
+      executableName: "tool",
+    });
+    const fallback = { pattern: tool };
+    const previous = Array.from({ length: 16 }, (_, index) => ({
+      pattern: tool,
+      source: "allow-always" as const,
+      argPattern: buildCwdBoundHashedArgPattern([tool, `previous-${index}`], cwd, "linux"),
+    }));
+    const allowed = {
+      pattern: tool,
+      source: "allow-always" as const,
+      argPattern: buildCwdBoundHashedArgPattern(argv, cwd, "linux"),
+    };
+    const entries = [fallback, ...previous, allowed, { ...allowed }];
+
+    expect(matchAllowlist(entries, resolution, argv, "linux", cwd)).toBe(allowed);
+    argv[1] = "changed";
+    expect(matchAllowlist(entries, resolution, argv, "linux", cwd)).toBe(fallback);
+    argv[1] = "previous-0";
+    expect(matchAllowlist(entries, resolution, argv, "linux", cwd)).toBe(previous[0]);
+    expect(matchAllowlist(entries, resolution, argv, "linux", "/other")).toBe(fallback);
+    expect(matchAllowlist(entries, resolution, argv, "linux")).toBe(fallback);
   });
 
   it.each([
@@ -1399,204 +1470,41 @@ $0 \\"$1\\"" touch {marker}`,
     });
   });
 
-  it("rejects stale package-manager allow-always entries for shell carriers", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeExecApprovalsTempDir();
-    const pnpmPath = makeExecutable(dir, "pnpm");
-    makeExecutable(dir, "sh");
-    makeExecutable(dir, "id");
-    const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-
-    const result = await evaluateShellAllowlistWithAuthorization({
-      command: "pnpm exec sh -c 'id > marker'",
-      allowlist: [{ pattern: pnpmPath, source: "allow-always" }],
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentAllowlistEntries).toEqual([null]);
-    expect(
-      requiresExecApproval({
-        ask: "on-miss",
-        security: "allowlist",
-        analysisOk: result.analysisOk,
-        allowlistSatisfied: result.allowlistSatisfied,
-      }),
-    ).toBe(true);
-  });
-
-  it.each(["exec", "x"])(
-    "rejects stale npm allow-always entries when unknown options hide %s",
-    async (subcommand) => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const dir = makeExecApprovalsTempDir();
-      const npmPath = makeExecutable(dir, "npm");
-      makeExecutable(dir, "sh");
-      makeExecutable(dir, "id");
-      const env = makePathEnv(dir);
-      const safeBins = resolveSafeBins(undefined);
-
-      const result = await evaluateShellAllowlistWithAuthorization({
+  registerStaleAllowAlwaysCases(
+    [
+      {
+        name: "rejects stale package-manager allow-always entries for shell carriers",
+        command: "pnpm exec sh -c 'id > marker'",
+        packageManagers: ["pnpm"],
+      },
+      ...["exec", "x"].map((subcommand) => ({
+        name: `rejects stale npm allow-always entries when unknown options hide ${subcommand}`,
         command: `npm --unknown-global-option ${subcommand} sh -c 'id > marker'`,
-        allowlist: [{ pattern: npmPath, source: "allow-always" }],
-        safeBins,
-        cwd: dir,
-        env,
-        platform: process.platform,
-      });
-
-      expect(result.allowlistSatisfied).toBe(false);
-      expect(result.segmentAllowlistEntries).toEqual([null]);
-      expect(
-        requiresExecApproval({
-          ask: "on-miss",
-          security: "allowlist",
-          analysisOk: result.analysisOk,
-          allowlistSatisfied: result.allowlistSatisfied,
-        }),
-      ).toBe(true);
-    },
+        packageManagers: ["npm"],
+      })),
+      {
+        name: "rejects stale pnpm allow-always entries when unknown options hide exec",
+        command: "pnpm --unknown-global-option exec sh -c 'id > marker'",
+        packageManagers: ["pnpm"],
+      },
+      {
+        name: "rejects stale npm allow-always entries for x shell carriers",
+        command: "npm x sh -c 'id > marker'",
+        packageManagers: ["npm"],
+      },
+      {
+        name: "rejects stale package-manager allow-always entries for chained shell carriers",
+        command: "pnpm exec -- npm x sh -c 'id > marker'",
+        packageManagers: ["pnpm", "npm"],
+      },
+      {
+        name: "rejects stale yarn allow-always entries for exec-like carriers",
+        command: "yarn exec -- sh -c 'id > marker'",
+        packageManagers: ["yarn"],
+      },
+    ],
+    ["sh", "id"],
   );
-
-  it("rejects stale pnpm allow-always entries when unknown options hide exec", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeExecApprovalsTempDir();
-    const pnpmPath = makeExecutable(dir, "pnpm");
-    makeExecutable(dir, "sh");
-    makeExecutable(dir, "id");
-    const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-
-    const result = await evaluateShellAllowlistWithAuthorization({
-      command: "pnpm --unknown-global-option exec sh -c 'id > marker'",
-      allowlist: [{ pattern: pnpmPath, source: "allow-always" }],
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentAllowlistEntries).toEqual([null]);
-    expect(
-      requiresExecApproval({
-        ask: "on-miss",
-        security: "allowlist",
-        analysisOk: result.analysisOk,
-        allowlistSatisfied: result.allowlistSatisfied,
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects stale npm allow-always entries for x shell carriers", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeExecApprovalsTempDir();
-    const npmPath = makeExecutable(dir, "npm");
-    makeExecutable(dir, "sh");
-    makeExecutable(dir, "id");
-    const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-
-    const result = await evaluateShellAllowlistWithAuthorization({
-      command: "npm x sh -c 'id > marker'",
-      allowlist: [{ pattern: npmPath, source: "allow-always" }],
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentAllowlistEntries).toEqual([null]);
-    expect(
-      requiresExecApproval({
-        ask: "on-miss",
-        security: "allowlist",
-        analysisOk: result.analysisOk,
-        allowlistSatisfied: result.allowlistSatisfied,
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects stale package-manager allow-always entries for chained shell carriers", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeExecApprovalsTempDir();
-    const pnpmPath = makeExecutable(dir, "pnpm");
-    const npmPath = makeExecutable(dir, "npm");
-    makeExecutable(dir, "sh");
-    makeExecutable(dir, "id");
-    const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-
-    const result = await evaluateShellAllowlistWithAuthorization({
-      command: "pnpm exec -- npm x sh -c 'id > marker'",
-      allowlist: [
-        { pattern: pnpmPath, source: "allow-always" },
-        { pattern: npmPath, source: "allow-always" },
-      ],
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentAllowlistEntries).toEqual([null]);
-    expect(
-      requiresExecApproval({
-        ask: "on-miss",
-        security: "allowlist",
-        analysisOk: result.analysisOk,
-        allowlistSatisfied: result.allowlistSatisfied,
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects stale yarn allow-always entries for exec-like carriers", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeExecApprovalsTempDir();
-    const yarnPath = makeExecutable(dir, "yarn");
-    makeExecutable(dir, "sh");
-    makeExecutable(dir, "id");
-    const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-
-    const result = await evaluateShellAllowlistWithAuthorization({
-      command: "yarn exec -- sh -c 'id > marker'",
-      allowlist: [{ pattern: yarnPath, source: "allow-always" }],
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentAllowlistEntries).toEqual([null]);
-    expect(
-      requiresExecApproval({
-        ask: "on-miss",
-        security: "allowlist",
-        analysisOk: result.analysisOk,
-        allowlistSatisfied: result.allowlistSatisfied,
-      }),
-    ).toBe(true);
-  });
 
   it.each([
     { command: "npm run test -- x", executable: "npm" },
@@ -1650,100 +1558,25 @@ $0 \\"$1\\"" touch {marker}`,
     },
   );
 
-  it("rejects stale pnpm allow-always entries for implicit exec shorthands", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeExecApprovalsTempDir();
-    const pnpmPath = makeExecutable(dir, "pnpm");
-    makeExecutable(dir, "eslint");
-    const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-
-    const result = await evaluateShellAllowlistWithAuthorization({
-      command: "pnpm eslint .",
-      allowlist: [{ pattern: pnpmPath, source: "allow-always" }],
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentAllowlistEntries).toEqual([null]);
-    expect(
-      requiresExecApproval({
-        ask: "on-miss",
-        security: "allowlist",
-        analysisOk: result.analysisOk,
-        allowlistSatisfied: result.allowlistSatisfied,
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects stale pnpm allow-always entries for cwd implicit exec shorthands", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeExecApprovalsTempDir();
-    const pnpmPath = makeExecutable(dir, "pnpm");
-    makeExecutable(dir, "eslint");
-    const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-
-    const result = await evaluateShellAllowlistWithAuthorization({
-      command: "pnpm -C ./package eslint .",
-      allowlist: [{ pattern: pnpmPath, source: "allow-always" }],
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentAllowlistEntries).toEqual([null]);
-    expect(
-      requiresExecApproval({
-        ask: "on-miss",
-        security: "allowlist",
-        analysisOk: result.analysisOk,
-        allowlistSatisfied: result.allowlistSatisfied,
-      }),
-    ).toBe(true);
-  });
-
-  it.each(["yarn run eslint .", "yarn eslint ."])(
-    "rejects stale yarn allow-always entries for script or bin fallback: %s",
-    async (command) => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const dir = makeExecApprovalsTempDir();
-      const yarnPath = makeExecutable(dir, "yarn");
-      makeExecutable(dir, "eslint");
-      const env = makePathEnv(dir);
-      const safeBins = resolveSafeBins(undefined);
-
-      const result = await evaluateShellAllowlistWithAuthorization({
+  registerStaleAllowAlwaysCases(
+    [
+      {
+        name: "rejects stale pnpm allow-always entries for implicit exec shorthands",
+        command: "pnpm eslint .",
+        packageManagers: ["pnpm"],
+      },
+      {
+        name: "rejects stale pnpm allow-always entries for cwd implicit exec shorthands",
+        command: "pnpm -C ./package eslint .",
+        packageManagers: ["pnpm"],
+      },
+      ...["yarn run eslint .", "yarn eslint ."].map((command) => ({
+        name: `rejects stale yarn allow-always entries for script or bin fallback: ${command}`,
         command,
-        allowlist: [{ pattern: yarnPath, source: "allow-always" }],
-        safeBins,
-        cwd: dir,
-        env,
-        platform: process.platform,
-      });
-
-      expect(result.allowlistSatisfied).toBe(false);
-      expect(result.segmentAllowlistEntries).toEqual([null]);
-      expect(
-        requiresExecApproval({
-          ask: "on-miss",
-          security: "allowlist",
-          analysisOk: result.analysisOk,
-          allowlistSatisfied: result.allowlistSatisfied,
-        }),
-      ).toBe(true);
-    },
+        packageManagers: ["yarn"],
+      })),
+    ],
+    ["eslint"],
   );
 
   it("requires bound args for package-manager shell script carriers", async () => {
@@ -2208,38 +2041,8 @@ $0 \\"$1\\"" touch {marker}`,
     },
     {
       executable: "elixir",
-      first: "elixir -e 'IO.puts(:ok)'",
-      second: 'elixir -e \'System.cmd("sh", ["-c", "id > {marker}"])\'',
-    },
-    {
-      executable: "elixir",
       first: "elixir --rpc-eval worker@127.0.0.1 'IO.puts(:ok)'",
       second: 'elixir --rpc-eval worker@127.0.0.1 \'System.cmd("sh", ["-c", "id > {marker}"])\'',
-    },
-    {
-      executable: "iex",
-      first: "iex -e 'IO.puts(:ok)'",
-      second: 'iex -e \'System.cmd("sh", ["-c", "id > {marker}"])\'',
-    },
-    {
-      executable: "guile",
-      first: "guile -c '(display 1)'",
-      second: "guile -c '(system \"id > {marker}\")'",
-    },
-    {
-      executable: "guile",
-      first: "guile -e main /dev/null",
-      second: "guile -e '(lambda args (system \"id > {marker}\"))' /dev/null",
-    },
-    {
-      executable: "groovy",
-      first: "groovy -e 'println 1'",
-      second: "groovy -e '\"sh -c id > {marker}\".execute()'",
-    },
-    {
-      executable: "groovy",
-      first: "groovy '-eprintln 1'",
-      second: "groovy '-e\"sh -c id > {marker}\".execute()'",
     },
     {
       executable: "groovy",
@@ -2252,114 +2055,9 @@ $0 \\"$1\\"" touch {marker}`,
       second: 'groovy -pe \'["sh", "-c", "id > {marker}"].execute()\'',
     },
     {
-      executable: "scala",
-      first: "scala -e 'println(1)'",
-      second: "scala -e 'sys.process.Process(\"sh -c id > {marker}\").!'",
-    },
-    {
-      executable: "scala",
-      first: "scala --execute-script 'println(1)'",
-      second: "scala --script-snippet 'sys.process.Process(\"sh -c id > {marker}\").!'",
-    },
-    {
-      executable: "scala-cli",
-      first: "scala-cli --execute-script 'println(1)'",
-      second: "scala-cli --script-snippet 'sys.process.Process(\"sh -c id > {marker}\").!'",
-    },
-    {
-      executable: "clojure",
-      first: "clojure -e '(println 1)'",
-      second: 'clojure -e \'(clojure.java.shell/sh "sh" "-c" "id > {marker}")\'',
-    },
-    {
-      executable: "clj",
-      first: "clj -e '(println 1)'",
-      second: 'clj -e \'(clojure.java.shell/sh "sh" "-c" "id > {marker}")\'',
-    },
-    {
-      executable: "raku",
-      first: "raku -e 'say 1'",
-      second: 'raku -e \'run "sh", "-c", "id > {marker}"\'',
-    },
-    {
-      executable: "raku",
-      first: "raku '-esay 1'",
-      second: 'raku \'-erun "sh", "-c", "id > {marker}"\'',
-    },
-    {
-      executable: "raku",
-      first: "raku -ne 'say $_'",
-      second: 'raku -ne \'run "sh", "-c", "id > {marker}"\'',
-    },
-    {
-      executable: "perl6",
-      first: "perl6 -e 'say 1'",
-      second: 'perl6 -e \'run "sh", "-c", "id > {marker}"\'',
-    },
-    {
-      executable: "perl6",
-      first: "perl6 -pe 'say $_'",
-      second: 'perl6 -pe \'run "sh", "-c", "id > {marker}"\'',
-    },
-    {
-      executable: "ghc",
-      first: "ghc -e '1 + 1'",
-      second: "ghc -e 'System.Process.system \"id > {marker}\"'",
-    },
-    {
-      executable: "ghci",
-      first: "ghci -e '1 + 1'",
-      second: "ghci -e 'System.Process.system \"id > {marker}\"'",
-    },
-    {
-      executable: "erl",
-      first: "erl -eval 'erlang:display(ok).' -noshell -s init stop",
-      second: "erl -eval 'os:cmd(\"id > {marker}\").' -noshell -s init stop",
-    },
-    {
-      executable: "erl",
-      first: "erl -noshell -run init stop",
-      second: "erl -noshell -run os cmd 'id > {marker}' -s init stop",
-    },
-    {
-      executable: "erl",
-      first: "erl -noshell -s init stop",
-      second: "erl -noshell -s os cmd 'id > {marker}' -s init stop",
-    },
-    {
-      executable: "gdb",
-      first: "gdb -ex 'print 1' -ex quit",
-      second: "gdb -ex 'shell id > {marker}' -ex quit",
-    },
-    {
-      executable: "gdb",
-      first: "gdb -iex 'print 1'",
-      second: "gdb -iex 'shell id > {marker}'",
-    },
-    {
-      executable: "gdb",
-      first: "gdb -eval-c 'print 1'",
-      second: "gdb -eval-c 'shell id > {marker}'",
-    },
-    {
       executable: "gdb",
       first: "gdb -ev 'print 1'",
       second: "gdb --ev 'shell id > {marker}'",
-    },
-    {
-      executable: "gdb",
-      first: "gdb -eiex 'print 1'",
-      second: "gdb -early-init-eval 'shell id > {marker}'",
-    },
-    {
-      executable: "expect",
-      first: "expect -c 'puts ok'",
-      second: "expect -c 'exec sh -c \"id > {marker}\"'",
-    },
-    {
-      executable: "expect",
-      first: "expect '-cputs ok'",
-      second: "expect '-cexec sh -c \"id > {marker}\"'",
     },
   ] as const)(
     "prevents allow-always bypass for additional inline-eval interpreter: $executable",

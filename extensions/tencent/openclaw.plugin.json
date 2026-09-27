@@ -1,5 +1,6 @@
 {
   "id": "tencent",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

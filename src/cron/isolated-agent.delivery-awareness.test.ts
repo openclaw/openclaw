@@ -5,7 +5,6 @@ import "./isolated-agent.mocks.js";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions.js";
-import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
 import {
   peekSystemEventEntries,
   peekSystemEvents,
@@ -176,10 +175,9 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
 
       expect(result.status).toBe("ok");
       expect(result.delivered).toBe(true);
-      expect(peekSystemEvents("global")).toEqual(["global cron digest"]);
-      const globalEvents = peekSystemEventEntries("global");
-      expect(selectAgentSystemEvents(globalEvents, "main")).toHaveLength(1);
-      expect(selectAgentSystemEvents(globalEvents, "other")).toEqual([]);
+      expect(peekSystemEvents("agent:main:global")).toEqual(["global cron digest"]);
+      expect(peekSystemEventEntries("agent:main:global")).toHaveLength(1);
+      expect(peekSystemEventEntries("agent:other:global")).toEqual([]);
     });
   });
 

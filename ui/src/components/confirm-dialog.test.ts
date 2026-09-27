@@ -58,6 +58,29 @@ describe("showConfirmDialog", () => {
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
+  it("requires an acknowledgement even when an old skip preference is set", async () => {
+    const result = showConfirmDialog({
+      message: "Recover capture?",
+      requiredAcknowledgement: "Provider cleanup is complete",
+      skipPreference: { skipped: true, remember: vi.fn() },
+    });
+    await getRenderedModalDialog(document.body);
+    expect(findButton("Confirm").disabled).toBe(true);
+    expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
+    const checkbox = document.body.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (!checkbox) {
+      throw new Error("Expected required acknowledgement");
+    }
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change"));
+    expect(findButton("Confirm").disabled).toBe(false);
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new Event("change"));
+    expect(findButton("Confirm").disabled).toBe(true);
+    findButton("Cancel").click();
+    await expect(result).resolves.toBe(false);
+  });
+
   it("treats modal dismissal as cancellation", async () => {
     const result = showConfirmDialog({ message: "Continue?" });
     const { modal } = await getRenderedModalDialog(document.body);

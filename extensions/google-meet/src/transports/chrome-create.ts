@@ -1,15 +1,13 @@
-// Google Meet plugin module implements chrome create behavior.
+import {
+  asMeetingBrowserTabs,
+  readMeetingBrowserTab,
+  type MeetingBrowserCandidateTab,
+} from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { GoogleMeetBrowserManualActionError } from "../browser-manual-action-error.js";
 import type { GoogleMeetConfig } from "../config.js";
-import {
-  asBrowserTabs,
-  callBrowserProxyOnNode,
-  readBrowserTab,
-  resolveChromeNode,
-  type BrowserTab,
-} from "./chrome-browser-proxy.js";
+import { callBrowserProxyOnNode, resolveChromeNode } from "./chrome-browser-proxy.js";
 import { forceMeetEnglishUi } from "./google-meet-urls.js";
 import type { GoogleMeetChromeHealth } from "./types.js";
 
@@ -58,7 +56,7 @@ function isBrowserNavigationInterruption(error: unknown): boolean {
   );
 }
 
-function isGoogleMeetCreateTab(tab: BrowserTab): boolean {
+function isGoogleMeetCreateTab(tab: MeetingBrowserCandidateTab): boolean {
   const url = tab.url ?? "";
   if (/^https:\/\/meet\.google\.com\/(?:new|[a-z]{3}-[a-z]{4}-[a-z]{3})(?:$|[/?#])/i.test(url)) {
     return true;
@@ -73,8 +71,8 @@ async function findGoogleMeetCreateTab(params: {
   runtime: PluginRuntime;
   nodeId: string;
   timeoutMs: number;
-}): Promise<BrowserTab | undefined> {
-  const tabs = asBrowserTabs(
+}): Promise<MeetingBrowserCandidateTab | undefined> {
+  const tabs = asMeetingBrowserTabs(
     await callBrowserProxyOnNode({
       runtime: params.runtime,
       nodeId: params.nodeId,
@@ -270,7 +268,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     const englishUrl = isCreatePage && reusedUrl ? forceMeetEnglishUi(reusedUrl) : undefined;
     if (englishUrl && englishUrl !== reusedUrl) {
       tab =
-        readBrowserTab(
+        readMeetingBrowserTab(
           await callBrowserProxyOnNode({
             runtime: params.runtime,
             nodeId,
@@ -282,7 +280,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
         ) ?? tab;
     }
   } else {
-    tab = readBrowserTab(
+    tab = readMeetingBrowserTab(
       await callBrowserProxyOnNode({
         runtime: params.runtime,
         nodeId,

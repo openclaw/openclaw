@@ -22,7 +22,7 @@ openclaw reset --scope full --yes --non-interactive
 
 - `--scope <scope>`: `config`, `config+creds+sessions`, or `full`
 - `--yes`: skip confirmation prompts
-- `--non-interactive`: disable prompts; requires `--scope` and `--yes`
+- `--non-interactive`: disable prompts. Requires `--scope` and `--yes`.
 - `--dry-run`: print actions without removing files
 
 ## Scopes
@@ -39,7 +39,7 @@ openclaw reset --scope full --yes --non-interactive
 
 - Run `openclaw backup create` first for a restorable snapshot before removing local state.
 - Before removing the state directory, `full` requires exclusive state ownership. If an unmanaged or externally supervised Gateway is still running, reset refuses and asks you to stop it first.
-- Workspace setup state and attestations are rows in the shared SQLite database, so `full` removes them with the state directory; there are no current attestation sidecar files to remove separately.
+- Workspace setup state and attestations are rows in the shared SQLite database. `full` removes them with the state directory. There are no current attestation sidecar files to remove separately.
 - Without `--scope`, `openclaw reset` prompts interactively for the scope to remove.
 - `--non-interactive` is only valid when both `--scope` and `--yes` are set.
 - `config+creds+sessions` and `full` print `Next: openclaw onboard --install-daemon` when done.
@@ -47,3 +47,6 @@ openclaw reset --scope full --yes --non-interactive
 ## Related
 
 - [CLI reference](/cli)
+- [`openclaw backup`](/cli/backup) — archive state before resetting it
+- [`openclaw onboard`](/cli/onboard) — set the install up again after a reset
+- [`openclaw uninstall`](/cli/uninstall) — remove the install instead of resetting it

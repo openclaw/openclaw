@@ -320,6 +320,7 @@ describe("runEmbeddedAgent usage reporting", () => {
 
   it("reports the resolved model provider when OpenClaw marks the assistant message as the native runtime", async () => {
     mockedResolveModelAsync.mockResolvedValueOnce({
+      logicalRef: { provider: "openrouter", model: "openai/gpt-5.4" },
       model: {
         id: "openai/gpt-5.4",
         provider: "openrouter",
@@ -332,14 +333,17 @@ describe("runEmbeddedAgent usage reporting", () => {
       },
       modelRegistry: {},
     });
+    const assistant = makeAssistantMessage({
+      provider: "openclaw",
+      model: "openclaw",
+      content: [{ type: "text", text: "Response 1" }],
+      usage: { input: 100, output: 50, total: 150 } as unknown as AssistantMessage["usage"],
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Response 1"],
-        lastAssistant: makeAssistantMessage({
-          provider: "openclaw",
-          model: "openclaw",
-          usage: { input: 100, output: 50, total: 150 } as unknown as AssistantMessage["usage"],
-        }),
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
         attemptUsage: { input: 100, output: 50, total: 150 },
       }),
     );

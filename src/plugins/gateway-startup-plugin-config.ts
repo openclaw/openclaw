@@ -25,10 +25,7 @@ import {
   resolveSelectedContextEnginePluginIdFromConfig,
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import type {
-  ManifestRegistryLookup,
-  NormalizedPluginsConfig,
-} from "./gateway-startup-plugin-contracts.js";
+import type { NormalizedPluginsConfig } from "./gateway-startup-plugin-contracts.js";
 import { sortUniquePluginIds } from "./gateway-startup-plugin-contracts.js";
 import {
   collectConfiguredGenerationProviderIds,
@@ -42,7 +39,7 @@ import type {
   InstalledPluginIndexRecord,
   InstalledPluginIndexScopeLookup,
 } from "./installed-plugin-index-types.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { normalizePluginsConfigWithRegistry } from "./plugin-registry-contributions.js";
 
 export function readStartupBundledDiscoveryMode(
@@ -259,36 +256,6 @@ export function shouldConsiderForGatewayStartup(params: {
     return true;
   }
   return params.memorySlotStartupPluginId === params.plugin.pluginId;
-}
-
-export function hasConfiguredStartupChannel(params: {
-  plugin: InstalledPluginIndexRecord;
-  manifestLookup: ManifestRegistryLookup;
-  configuredChannelIds: ReadonlySet<string>;
-}): boolean {
-  return listManifestChannelIds(params.manifestLookup, params.plugin.pluginId).some((channelId) =>
-    params.configuredChannelIds.has(channelId),
-  );
-}
-
-export function createManifestRegistryLookup(
-  manifestRegistry: PluginManifestRegistry,
-): ManifestRegistryLookup {
-  return new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
-}
-
-export function listManifestChannelIds(
-  manifestLookup: ManifestRegistryLookup,
-  pluginId: string,
-): readonly string[] {
-  return manifestLookup.get(pluginId)?.channels ?? [];
-}
-
-export function findManifestPlugin(
-  manifestLookup: ManifestRegistryLookup,
-  pluginId: string,
-): PluginManifestRecord | undefined {
-  return manifestLookup.get(pluginId);
 }
 
 export function hasConfiguredActivationPath(params: {

@@ -1,18 +1,15 @@
-/**
- * Browser agent tool registration.
- *
- * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
- * maps high-level actions onto browser control client calls.
- */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { assertBrowserDashboardTargetCurrent } from "./browser-dashboard.js";
+import type { BrowserDashboardResponse } from "./browser-dashboard.types.js";
 import {
   createBrowserNodeProxyRequest,
   createBrowserNodeSessionTabRoute,
+  type BrowserProxyRequest,
 } from "./browser-node-proxy.js";
-import { applyBrowserTabToolBinding, parseBrowserTabToolBinding } from "./browser-tool-binding.js";
-import { describeBrowserTool } from "./browser-tool-description.js";
+import { applyBrowserTabToolBinding } from "./browser-tool-binding.js";
+import { createBrowserToolDefinition } from "./browser-tool-description.js";
 import { executeBrowserTabAction } from "./browser-tool-dispatch.js";
 import { createBrowserToolSessionTabs } from "./browser-tool-session-tabs.js";
 import { executeBrowserLifecycleAction } from "./browser-tool.lifecycle.js";
@@ -25,9 +22,6 @@ import {
 import {
   type AnyAgentTool,
   type browserAct,
-  BrowserToolOutputSchema,
-  createBrowserToolSchema,
-  resolveBrowserToolCapabilities,
   type BrowserToolCapabilities,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
@@ -39,8 +33,12 @@ import {
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
+  jsonResult,
+  callGatewayTool,
+  readGatewayToolOperatorScopes,
 } from "./browser-tool.runtime.js";
 import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
+import { withBrowserRequestScope } from "./browser/request-scope.js";
 
 type BrowserTabIdentity = { targetId: string; profile: string } & (
   | { target: "host" }
@@ -146,41 +144,27 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "timeoutMs",
 ] as const;
 
-const LEGACY_BROWSER_ACT_SHARED_REQUEST_KEYS = new Set<
-  (typeof LEGACY_BROWSER_ACT_REQUEST_KEYS)[number]
->(["targetId"]);
-
 function readActRequestParam(params: Record<string, unknown>) {
   const requestParam = params.request;
-  if (requestParam && typeof requestParam === "object") {
-    const request = { ...(requestParam as Record<string, unknown>) };
-    const hasMismatchedKind =
-      typeof request.kind === "string" &&
-      typeof params.kind === "string" &&
-      request.kind !== params.kind;
-    for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
-      if (Object.hasOwn(request, key) || !Object.hasOwn(params, key)) {
-        continue;
-      }
-      // Flattened act fields are legacy shape repair. Only the tab scope is
-      // safe across kind mismatches; action-specific fields can corrupt the
-      // explicit nested request.
-      if (hasMismatchedKind && !LEGACY_BROWSER_ACT_SHARED_REQUEST_KEYS.has(key)) {
-        continue;
-      }
-      request[key] = params[key];
-    }
-    return request as Parameters<typeof browserAct>[1];
-  }
-
-  const kind = readStringParam(params, "kind");
-  if (!kind) {
+  const nestedRequest =
+    requestParam && typeof requestParam === "object"
+      ? { ...(requestParam as Record<string, unknown>) }
+      : undefined;
+  if (!nestedRequest && !readStringParam(params, "kind")) {
     return undefined;
   }
-
-  const request: Record<string, unknown> = {};
+  const request = nestedRequest ?? {};
+  const hasMismatchedKind =
+    typeof request.kind === "string" &&
+    typeof params.kind === "string" &&
+    request.kind !== params.kind;
   for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
-    if (!Object.hasOwn(params, key)) {
+    if (Object.hasOwn(request, key) || !Object.hasOwn(params, key)) {
+      continue;
+    }
+    // Only tab scope can cross mismatched kinds; action-specific flattened
+    // fields would corrupt an explicit nested request.
+    if (hasMismatchedKind && key !== "targetId") {
       continue;
     }
     request[key] = params[key];
@@ -194,61 +178,174 @@ function readToolTimeoutMs(params: Record<string, unknown>) {
   });
 }
 
-/** Create the Browser tool exposed to agents. */
 export function createBrowserTool(
   opts?: BrowserScreenshotOptions & {
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
     agentSessionKey?: string;
+    agentId?: string;
     runToolBinding?: unknown;
     toolCapabilities?: BrowserToolCapabilities;
   },
 ): AnyAgentTool {
-  const bindingResult =
-    opts?.runToolBinding === undefined
-      ? undefined
-      : parseBrowserTabToolBinding(opts.runToolBinding);
-  if (bindingResult && !bindingResult.ok) {
-    throw new Error(`invalid browser run binding: ${bindingResult.error}`);
-  }
-  const capabilities =
-    opts?.toolCapabilities ??
-    (() => {
-      const config = getRuntimeConfig();
-      const boundProfile =
-        bindingResult?.ok && bindingResult.binding.target === "host"
-          ? resolveProfile(
-              resolveBrowserConfig(config.browser, config),
-              bindingResult.binding.profile,
-            )
-          : undefined;
-      return resolveBrowserToolCapabilities({
-        tabBound: bindingResult?.ok,
-        evaluateEnabled: config.browser?.evaluateEnabled !== false,
-        ...(boundProfile
-          ? { profileCapabilities: getBrowserProfileCapabilities(boundProfile) }
-          : {}),
-      });
-    })();
-  const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
-  const hostHint =
-    opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
+  const { binding, capabilities, metadata } = createBrowserToolDefinition(opts, getRuntimeConfig);
   return {
-    label: "Browser",
-    name: "browser",
-    resultContentSource: "network",
-    description: describeBrowserTool({ targetDefault, hostHint, capabilities }),
-    parameters: createBrowserToolSchema(capabilities),
-    outputSchema: BrowserToolOutputSchema,
+    ...metadata,
     execute: async (_toolCallId, args, signal) => {
-      const params = bindingResult?.ok
-        ? applyBrowserTabToolBinding(args as Record<string, unknown>, bindingResult.binding)
+      let params = binding
+        ? applyBrowserTabToolBinding(args as Record<string, unknown>, binding)
         : (args as Record<string, unknown>);
       const action = readStringParam(params, "action", { required: true });
       if (!capabilities.actions.some((candidate) => candidate === action)) {
         throw new Error(
           `browser action ${JSON.stringify(action)} is unavailable for this run; use an available action such as snapshot, or select a managed browser profile in an unbound run.`,
         );
+      }
+      const dashboardName = readStringParam(params, "dashboard");
+      let browserDashboard: BrowserDashboardResponse | undefined;
+      if (dashboardName) {
+        const operatorScopes = readGatewayToolOperatorScopes();
+        const sessionScoped =
+          operatorScopes !== undefined && !operatorScopes.includes("operator.admin");
+        const dashboardScopes = sessionScoped
+          ? operatorScopes.includes("operator.write")
+            ? ["operator.write" as const]
+            : ["operator.sessions.write" as const]
+          : ["operator.admin" as const];
+        if (
+          binding ||
+          !opts?.agentSessionKey ||
+          opts.allowHostControl === false ||
+          (params.target && params.target !== "host") ||
+          params.node
+        ) {
+          throw new Error(
+            "Browser dashboard requires this session's unbound host-browser capability",
+          );
+        }
+        const request = {
+          sessionKey: opts.agentSessionKey,
+          agentId: opts.agentId,
+          name: dashboardName,
+        };
+        if (params.profile !== undefined || params.targetId !== undefined) {
+          throw new Error(
+            "A dashboard selector owns its browser profile and tab. Omit profile and targetId.",
+          );
+        }
+        const callDashboard = async (method: "POST" | "DELETE", resume = false) => {
+          signal?.throwIfAborted();
+          // UI and model tools must enter the same Gateway-owned materialization lifetime.
+          const dashboard = await callGatewayTool<BrowserDashboardResponse>(
+            sessionScoped ? "browser.dashboard.request" : "browser.request",
+            { timeoutMs: readToolTimeoutMs(params) },
+            {
+              ...(sessionScoped
+                ? { sessionKey: request.sessionKey, agentId: request.agentId }
+                : { target: "host" }),
+              method,
+              path: "/dashboard",
+              body: { ...request, ...(resume ? { resume: true } : {}) },
+            },
+            { scopes: dashboardScopes, signal },
+          );
+          signal?.throwIfAborted();
+          return dashboard;
+        };
+        if (action === "close") {
+          return jsonResult({ browserDashboard: await callDashboard("DELETE") });
+        }
+        if (action === "open") {
+          if (params.targetUrl !== undefined || params.url !== undefined) {
+            throw new Error(
+              "Update the dashboard widget URL with dashboard widget_put before opening it",
+            );
+          }
+          return jsonResult({
+            browserDashboard: await callDashboard("POST", true),
+          });
+        }
+        if (["doctor", "status", "start", "stop", "profiles", "importprofile"].includes(action)) {
+          throw new Error(
+            "Use browser tab actions with a dashboard selector; open resumes it and close pauses it",
+          );
+        }
+        const dashboard = await callDashboard("POST");
+        browserDashboard = dashboard;
+        if (!dashboard.browserTab) {
+          throw new Error(
+            `Dashboard ${dashboardName} is paused. Use action=open with dashboard=${dashboardName} to resume it.`,
+          );
+        }
+        params = applyBrowserTabToolBinding(params, {
+          kind: "tab",
+          tabId: 0,
+          ...dashboard.browserTab,
+        });
+        if (sessionScoped) {
+          if (!["tabs", "focus", "navigate", "snapshot", "screenshot", "act"].includes(action)) {
+            throw new Error(
+              "Session dashboards support tabs, focus, navigate, snapshot, screenshot and act; open resumes and close pauses them.",
+            );
+          }
+          const stripSelectors = (input: Record<string, unknown> | undefined) => {
+            if (!input) {
+              return undefined;
+            }
+            const {
+              targetId: _targetId,
+              profile: _profile,
+              target: _target,
+              node: _node,
+              ...rest
+            } = input;
+            return rest;
+          };
+          const proxyRequest: BrowserProxyRequest = Object.assign(
+            async (call: Parameters<BrowserProxyRequest>[0]) => {
+              return callGatewayTool(
+                "browser.dashboard.request",
+                { timeoutMs: call.timeoutMs },
+                {
+                  sessionKey: request.sessionKey,
+                  agentId: request.agentId,
+                  dashboard: { name: dashboardName, instanceId: dashboard.instanceId },
+                  method: call.method,
+                  path: call.path,
+                  query: stripSelectors(call.query),
+                  body: stripSelectors(asNullableRecord(call.body) ?? undefined),
+                },
+                { scopes: dashboardScopes, signal: call.signal ?? signal },
+              );
+            },
+            { isHostFallbackActive: () => false, route: () => undefined },
+          );
+          const result = await executeBrowserTabAction({
+            action,
+            params,
+            actRequest: action === "act" ? readActRequestParam(params) : undefined,
+            profile: dashboard.browserTab.profile,
+            proxyRequest,
+            capabilities,
+            isUserBrowserProfile: false,
+            boundTargetId: dashboard.browserTab.targetId,
+            requestedTimeoutMs: readToolTimeoutMs(params),
+            signal,
+            opts,
+            sessionTabs: {
+              touch: () => {},
+              untrack: () => {},
+              trackOpened: async () => {
+                throw new Error("Dashboard owns its context.");
+              },
+            },
+            onTabActivity: () => {},
+          });
+          return {
+            ...result,
+            details: { ...asNullableRecord(result.details), browserDashboard: dashboard },
+          };
+        }
       }
       const requestedProfile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
@@ -294,6 +391,7 @@ export function createBrowserTool(
       try {
         nodeTarget = await resolveBrowserToolNodeTarget({
           requestedNode: requestedNode ?? undefined,
+          profile: requestedProfile,
           target,
           sandboxBridgeUrl: opts?.sandboxBridgeUrl,
           allowHostControl: opts?.allowHostControl,
@@ -388,40 +486,68 @@ export function createBrowserTool(
           break;
       }
       let tabIdentity: BrowserTabIdentity | undefined;
-      const result = await executeBrowserTabAction({
-        action,
-        actRequest: action === "act" ? readActRequestParam(params) : undefined,
-        params,
-        baseUrl,
-        profile,
-        proxyRequest,
-        nodeRoute,
-        sessionTabs,
-        capabilities,
-        isUserBrowserProfile,
-        toolTimeoutMs,
-        requestedTimeoutMs,
-        signal,
-        opts,
-        boundTargetId: bindingResult?.ok ? bindingResult.binding.targetId : undefined,
-        onTabActivity: (targetId, openedProfile) => {
-          // Record the executed tab before follow-up observation adds page state.
-          const route = proxyRequest?.route();
-          const onNode = proxyRequest && !proxyRequest.isHostFallbackActive();
-          const routeProfile = onNode
-            ? route?.status === "resolved"
-              ? route.profile
-              : undefined
-            : (profile ?? resolvedBrowser.defaultProfile);
-          tabIdentity = resolveBrowserTabIdentity({
-            targetId,
-            baseUrl,
-            profile: openedProfile ?? routeProfile,
-            target: onNode ? "node" : "host",
-            node: onNode && route?.status === "resolved" ? nodeTarget?.nodeId : undefined,
-          });
-        },
-      });
+      if (browserDashboard) {
+        await assertBrowserDashboardTargetCurrent(browserDashboard, opts?.agentId, { signal });
+      }
+      const dispatchTabAction = () =>
+        executeBrowserTabAction({
+          action,
+          actRequest: action === "act" ? readActRequestParam(params) : undefined,
+          params,
+          baseUrl,
+          profile,
+          proxyRequest,
+          nodeRoute,
+          sessionTabs,
+          capabilities,
+          isUserBrowserProfile,
+          toolTimeoutMs,
+          requestedTimeoutMs,
+          signal,
+          opts,
+          boundTargetId: binding
+            ? binding.targetId
+            : dashboardName
+              ? readStringParam(params, "targetId")
+              : undefined,
+          onTabActivity: (targetId, openedProfile) => {
+            // Record the executed tab before follow-up observation adds page state.
+            const route = proxyRequest?.route();
+            const onNode = proxyRequest && !proxyRequest.isHostFallbackActive();
+            const routeProfile = onNode
+              ? route?.status === "resolved"
+                ? route.profile
+                : undefined
+              : (profile ?? resolvedBrowser.defaultProfile);
+            tabIdentity = resolveBrowserTabIdentity({
+              targetId,
+              baseUrl,
+              profile: openedProfile ?? routeProfile,
+              target: onNode ? "node" : "host",
+              node: onNode && route?.status === "resolved" ? nodeTarget?.nodeId : undefined,
+            });
+          },
+        });
+      const dashboardTarget = browserDashboard;
+      const result = dashboardTarget
+        ? await withBrowserRequestScope(
+            {
+              managedOnly: true,
+              assertCurrent: (admittedProfile) =>
+                assertBrowserDashboardTargetCurrent(
+                  dashboardTarget,
+                  opts?.agentId,
+                  { signal },
+                  admittedProfile,
+                ),
+            },
+            dispatchTabAction,
+          )
+        : await dispatchTabAction();
+      if (browserDashboard) {
+        // Dashboard presentation owns this tab; ordinary preview metadata would steal its panel.
+        return { ...result, details: { ...asNullableRecord(result.details), browserDashboard } };
+      }
       return [
         "open",
         "focus",

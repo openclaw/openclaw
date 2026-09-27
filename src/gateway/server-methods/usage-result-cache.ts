@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getSessionCostUsageUpdatedAt } from "../../infra/session-cost-usage-events.js";
 import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
@@ -13,100 +14,15 @@ import {
   type UsageDailyBucket,
 } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import { readUserProfileVersion } from "../../state/user-profile-events.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
+import { loadUsageResultCached, type UsageCacheEntry } from "./usage-cache.js";
 import { mergeUsageCacheStatus, runUsageAgentTasks } from "./usage-session-loading.js";
 import type { UsageGroupingMode } from "./usage-session-selection.js";
 
-const USAGE_CACHE_TTL_MS = 30_000;
-const USAGE_CACHE_MAX = 256;
-
-type UsageCacheEntry<T extends object> = {
-  configRef: object;
-  value?: T;
-  updatedAt?: number;
-  inFlight?: Promise<T>;
-};
-
-export const costUsageCache = new Map<string, UsageCacheEntry<CostUsageSummary>>();
-export const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageResult>>();
-
-function setUsageCache<T extends object>(
-  cache: Map<string, UsageCacheEntry<T>>,
-  cacheKey: string,
-  entry: UsageCacheEntry<T>,
-): void {
-  if (!cache.has(cacheKey) && cache.size >= USAGE_CACHE_MAX) {
-    let evictionKey = cache.keys().next().value;
-    // Preserve active loads whenever a settled entry can be evicted instead.
-    for (const [key, candidate] of cache) {
-      if (!candidate.inFlight) {
-        evictionKey = key;
-        break;
-      }
-    }
-    if (evictionKey !== undefined) {
-      cache.delete(evictionKey);
-    }
-  }
-  cache.set(cacheKey, entry);
-}
-
-async function loadUsageResultCached<T extends object>(params: {
-  cache: Map<string, UsageCacheEntry<T>>;
-  cacheKey: string;
-  configRef: object;
-  load: () => Promise<T>;
-  isComplete?: (value: T) => boolean;
-}): Promise<T> {
-  const { cache, cacheKey, configRef } = params;
-  const candidate = cache.get(cacheKey);
-  const cached = candidate?.configRef === configRef ? candidate : undefined;
-  if (cached?.value && cached.updatedAt && Date.now() - cached.updatedAt < USAGE_CACHE_TTL_MS) {
-    return cached.value;
-  }
-  if (cached?.inFlight) {
-    return cached.value && cached.updatedAt ? cached.value : await cached.inFlight;
-  }
-
-  const entry: UsageCacheEntry<T> = cached ?? { configRef };
-  // Stale responses and cache eviction do not release the initiating owner's work.
-  const inFlight = trackAsyncWork(() =>
-    params
-      .load()
-      .then((value) => {
-        if (cache.get(cacheKey) !== entry) {
-          return value;
-        }
-        if (params.isComplete?.(value) ?? true) {
-          entry.value = value;
-          entry.updatedAt = Date.now();
-        } else if (!entry.value) {
-          // Partial snapshots serve cold callers without masking the next refresh.
-          entry.value = value;
-          delete entry.updatedAt;
-        }
-        return value;
-      })
-      .catch((error: unknown) => {
-        if (entry.value) {
-          return entry.value;
-        }
-        throw error;
-      })
-      .finally(() => {
-        const current = cache.get(cacheKey);
-        if (current === entry && current.inFlight === inFlight) {
-          current.inFlight = undefined;
-        }
-      }),
-  );
-
-  entry.inFlight = inFlight;
-  setUsageCache(cache, cacheKey, entry);
-  return entry.value && entry.updatedAt ? entry.value : await inFlight;
-}
+const costUsageCache = new Map<string, UsageCacheEntry<CostUsageSummary>>();
+const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageResult>>();
 
 function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string {
   return dayBucket
@@ -119,6 +35,7 @@ function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string
 type SessionsUsageCacheKeyParams = {
   configRef: object;
   visibilityIdentity?: string;
+  creatorKey?: string;
   agentId?: string;
   agentScope?: "all";
   startMs: number;
@@ -144,6 +61,9 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.groupingMode,
     params.specificKey,
     params.includeContextWeight,
+    params.creatorKey,
+    readUserProfileVersion(),
+    getSessionCostUsageUpdatedAt(),
     ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }
@@ -176,7 +96,7 @@ export async function loadCostUsageSummaryCached(params: {
     ? undefined
     : normalizeAgentId(params.agentId ?? resolveSessionAgentId({ config: params.config }));
   const dayBucketKey = usageDayBucketCacheKey(params.dayBucket);
-  const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
+  const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}:${getSessionCostUsageUpdatedAt()}`;
   return await loadUsageResultCached({
     cache: costUsageCache,
     cacheKey,
@@ -209,7 +129,7 @@ async function loadAllAgentCostUsageSummary(params: {
 }): Promise<CostUsageSummary> {
   // Same agent universe as discoverAllSessionsForUsage: enumerating configured
   // ids only would list system-agent sessions whose cost never reaches totals.
-  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
+  const agentIds = (await listGatewayAgentsBasic(params.config)).agents.map((agent) =>
     normalizeAgentId(agent.id),
   );
   const summaries = await runUsageAgentTasks(

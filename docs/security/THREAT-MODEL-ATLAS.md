@@ -111,299 +111,18 @@ Out-of-scope reports and false-positive patterns (public internet exposure, prom
 
 ## 3. Threat analysis by ATLAS tactic
 
-### 3.1 Reconnaissance (AML.TA0002)
+The threat catalog is split by ATLAS tactic. Each page below holds the full attribute table for every threat in that tactic. The risk matrix in section 5 and the recommendations summary in section 6 index across all of them, and the ATLAS technique mapping in section 7.1 lists which threats implement each technique.
 
-#### T-RECON-001: Agent endpoint discovery
-
-| Attribute               | Value                                                                |
-| ----------------------- | -------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0006 - Active Scanning                                          |
-| **Description**         | Attacker scans for exposed OpenClaw gateway endpoints                |
-| **Attack vector**       | Network scanning, Shodan queries, DNS enumeration                    |
-| **Affected components** | Gateway, exposed API endpoints                                       |
-| **Current mitigations** | Tailscale auth option, bind to loopback by default                   |
-| **Residual risk**       | Medium - public gateways discoverable                                |
-| **Recommendations**     | Document secure deployment, add rate limiting on discovery endpoints |
-
-#### T-RECON-002: Channel integration probing
-
-| Attribute               | Value                                                              |
-| ----------------------- | ------------------------------------------------------------------ |
-| **ATLAS ID**            | AML.T0006 - Active Scanning                                        |
-| **Description**         | Attacker probes messaging channels to identify AI-managed accounts |
-| **Attack vector**       | Sending test messages, observing response patterns                 |
-| **Affected components** | All channel integrations                                           |
-| **Current mitigations** | None specific                                                      |
-| **Residual risk**       | Low - limited value from discovery alone                           |
-| **Recommendations**     | Consider response timing randomization                             |
-
----
-
-### 3.2 Initial access (AML.TA0004)
-
-#### T-ACCESS-001: Pairing code interception
-
-| Attribute               | Value                                                                                                 |
-| ----------------------- | ----------------------------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                                                             |
-| **Description**         | Attacker intercepts a pairing code during the pairing window (1h DM/generic pairing, 5m node pairing) |
-| **Attack vector**       | Shoulder surfing, network sniffing, social engineering                                                |
-| **Affected components** | Device pairing system                                                                                 |
-| **Current mitigations** | 1h TTL (DM/generic pairing), 5m TTL (node pairing); codes sent via the existing channel               |
-| **Residual risk**       | Medium - pairing window exploitable                                                                   |
-| **Recommendations**     | Reduce pairing window, add a confirmation step                                                        |
-
-#### T-ACCESS-002: AllowFrom spoofing
-
-| Attribute               | Value                                                                                                                                                                                                                                                                                                                                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                                                                                                                                                                                                                                                                                                   |
-| **Description**         | Attacker spoofs an allowed sender identity on a channel                                                                                                                                                                                                                                                                                     |
-| **Attack vector**       | Channel-dependent - phone number spoofing, username impersonation                                                                                                                                                                                                                                                                           |
-| **Affected components** | Per-channel AllowFrom validation                                                                                                                                                                                                                                                                                                            |
-| **Current mitigations** | Channel-specific identity verification; graded identifier-authentication gate uses `min(entry, subject)` over `verified > asserted > unverified > mutable` with exact match provenance and default minimum `asserted` (#123782/#123793). Channels declare per-identifier strength; security audit warns on inert mutable entries (#131129). |
-| **Residual risk**       | Medium - some channels remain vulnerable to spoofing                                                                                                                                                                                                                                                                                        |
-| **Recommendations**     | Continue per-channel `verified` adoption and downstream strength mappers; document channel-specific risks                                                                                                                                                                                                                                   |
-
-#### T-ACCESS-003: Token theft
-
-| Attribute               | Value                                                              |
-| ----------------------- | ------------------------------------------------------------------ |
-| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                          |
-| **Description**         | Attacker steals authentication tokens from config/credential files |
-| **Attack vector**       | Malware, unauthorized device access, config backup exposure        |
-| **Affected components** | Channel/provider credential storage, config storage                |
-| **Current mitigations** | File permissions                                                   |
-| **Residual risk**       | High - tokens stored in plaintext on disk                          |
-| **Recommendations**     | Implement token encryption at rest, add token rotation             |
-
----
-
-### 3.3 Execution (AML.TA0005)
-
-#### T-EXEC-001: Direct prompt injection
-
-| Attribute               | Value                                                                                                                                                                                                                                                                                            |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **ATLAS ID**            | AML.T0051.000 - LLM Prompt Injection: Direct                                                                                                                                                                                                                                                     |
-| **Description**         | Attacker sends crafted prompts to manipulate agent behavior                                                                                                                                                                                                                                      |
-| **Attack vector**       | Channel messages containing adversarial instructions                                                                                                                                                                                                                                             |
-| **Affected components** | Agent LLM, all input surfaces                                                                                                                                                                                                                                                                    |
-| **Current mitigations** | Pattern detection, external content wrapping, and frontier-model robustness (2026 crowdsourced arena: 0.5% ASR on Claude Opus 4.5, 8.5% on Gemini 2.5 Pro, scored on execution plus concealment); treated as out-of-scope for vulnerability reports absent a boundary bypass (see `SECURITY.md`) |
-| **Residual risk**       | Model-tier dependent - low single-digit ASR against organic attacks on recommended frontier models, but adaptive attackers still exceed 80% against state-of-the-art defenses, and smaller/older models remain markedly easier to steer                                                          |
-| **Recommendations**     | Output validation and user confirmation for sensitive actions, layered on top of existing detection                                                                                                                                                                                              |
-
-#### T-EXEC-002: Indirect prompt injection
-
-| Attribute               | Value                                                                                                                                                                                                              |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **ATLAS ID**            | AML.T0051.001 - LLM Prompt Injection: Indirect                                                                                                                                                                     |
-| **Description**         | Attacker embeds malicious instructions in fetched content                                                                                                                                                          |
-| **Attack vector**       | Malicious URLs, poisoned emails, compromised webhooks                                                                                                                                                              |
-| **Affected components** | `web_fetch`, email ingestion, external data sources                                                                                                                                                                |
-| **Current mitigations** | Content wrapping with random-boundary XML-style markers, homoglyph/special-token normalization, a security notice, and frontier-model robustness (see T-EXEC-001)                                                  |
-| **Residual risk**       | Model-tier dependent - recommended frontier models largely hold the wrapper boundary, but it remains soft guidance an adaptive attacker can erode; scope tool policy and sandboxing to the blast radius you accept |
-| **Recommendations**     | Separate execution contexts for wrapped content                                                                                                                                                                    |
-
-#### T-EXEC-003: Tool argument injection
-
-| Attribute               | Value                                                        |
-| ----------------------- | ------------------------------------------------------------ |
-| **ATLAS ID**            | AML.T0051.000 - LLM Prompt Injection: Direct                 |
-| **Description**         | Attacker manipulates tool arguments through prompt injection |
-| **Attack vector**       | Crafted prompts that influence tool parameter values         |
-| **Affected components** | All tool invocations                                         |
-| **Current mitigations** | Exec approvals for dangerous commands                        |
-| **Residual risk**       | High - relies on user judgment                               |
-| **Recommendations**     | Argument validation, parameterized tool calls                |
-
-#### T-EXEC-004: Exec approval bypass
-
-| Attribute               | Value                                                                                                                                                                             |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0043 - Craft Adversarial Data                                                                                                                                                |
-| **Description**         | Attacker crafts commands that bypass the approval allowlist                                                                                                                       |
-| **Attack vector**       | Command obfuscation, alias exploitation, path manipulation                                                                                                                        |
-| **Affected components** | `src/infra/exec-approvals*.ts`, command allowlist                                                                                                                                 |
-| **Current mitigations** | Allowlist + ask mode, plus command normalization (dispatch-wrapper unwrapping, inline-eval detection, shell-chain analysis)                                                       |
-| **Residual risk**       | High - normalization narrows but does not eliminate obfuscation bypass; parity-only findings between exec paths are treated as hardening, not vulnerabilities (see `SECURITY.md`) |
-| **Recommendations**     | Continue expanding command-normalization coverage against new obfuscation techniques                                                                                              |
-
----
-
-### 3.4 Persistence (AML.TA0006)
-
-#### T-PERSIST-001: Malicious skill installation
-
-| Attribute               | Value                                                                                                                     |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0010.001 - Supply Chain Compromise: AI Software                                                                      |
-| **Description**         | Attacker publishes a malicious skill to ClawHub                                                                           |
-| **Attack vector**       | Create account, publish skill with hidden malicious code                                                                  |
-| **Affected components** | ClawHub, skill loading, agent execution                                                                                   |
-| **Current mitigations** | GitHub account age verification, static pattern/AST-adjacent scanning, LLM-based agentic risk review, VirusTotal scanning |
-| **Residual risk**       | High - detection layers exist but skills still run with agent privileges and no execution sandboxing                      |
-| **Recommendations**     | Skill execution sandboxing, expanded community review                                                                     |
-
-#### T-PERSIST-002: Skill update poisoning
-
-| Attribute               | Value                                                                   |
-| ----------------------- | ----------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0010.001 - Supply Chain Compromise: AI Software                    |
-| **Description**         | Attacker compromises a popular skill and pushes a malicious update      |
-| **Attack vector**       | Account compromise, social engineering of skill owner                   |
-| **Affected components** | ClawHub versioning, auto-update flows                                   |
-| **Current mitigations** | Version fingerprinting, moderation/scanning re-run on new versions      |
-| **Residual risk**       | High - auto-updates may pull malicious versions before review completes |
-| **Recommendations**     | Update signing, rollback capability, version pinning                    |
-
-#### T-PERSIST-003: Agent configuration tampering
-
-| Attribute               | Value                                                           |
-| ----------------------- | --------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0010.002 - Supply Chain Compromise: Data                   |
-| **Description**         | Attacker modifies agent configuration to persist access         |
-| **Attack vector**       | Config file modification, settings injection                    |
-| **Affected components** | Agent config, tool policies                                     |
-| **Current mitigations** | File permissions                                                |
-| **Residual risk**       | Medium - requires local access                                  |
-| **Recommendations**     | Config integrity verification, audit logging for config changes |
-
----
-
-### 3.5 Defense evasion (AML.TA0007)
-
-#### T-EVADE-001: Moderation pattern bypass
-
-| Attribute               | Value                                                                                 |
-| ----------------------- | ------------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0043 - Craft Adversarial Data                                                    |
-| **Description**         | Attacker crafts skill content to evade ClawHub moderation checks                      |
-| **Attack vector**       | Unicode homoglyphs, encoding tricks, dynamic loading                                  |
-| **Affected components** | ClawHub moderation/scanning pipeline                                                  |
-| **Current mitigations** | Static pattern rules, AST-adjacent code scanning, LLM agentic-risk review, VirusTotal |
-| **Residual risk**       | Medium - novel obfuscation can still slip past layered heuristics                     |
-| **Recommendations**     | Continue expanding the pattern/behavioral corpus as new evasions are found            |
-
-#### T-EVADE-002: Content wrapper escape
-
-| Attribute               | Value                                                                                                         |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0043 - Craft Adversarial Data                                                                            |
-| **Description**         | Attacker crafts content that escapes the external-content wrapper context                                     |
-| **Attack vector**       | Tag manipulation, context confusion, instruction override                                                     |
-| **Affected components** | External content wrapping                                                                                     |
-| **Current mitigations** | Random-boundary XML-style markers + security notice, plus homoglyph/whitespace-variant marker-spoof detection |
-| **Residual risk**       | Medium - novel escapes discovered regularly                                                                   |
-| **Recommendations**     | Output-side validation in addition to input-side wrapping                                                     |
-
----
-
-### 3.6 Discovery (AML.TA0008)
-
-#### T-DISC-001: Tool enumeration
-
-| Attribute               | Value                                                 |
-| ----------------------- | ----------------------------------------------------- |
-| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access             |
-| **Description**         | Attacker enumerates available tools through prompting |
-| **Attack vector**       | "What tools do you have?" style queries               |
-| **Affected components** | Agent tool registry                                   |
-| **Current mitigations** | None specific                                         |
-| **Residual risk**       | Low - tools are generally documented                  |
-| **Recommendations**     | Consider tool visibility controls                     |
-
-#### T-DISC-002: Session data extraction
-
-| Attribute               | Value                                                   |
-| ----------------------- | ------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access               |
-| **Description**         | Attacker extracts sensitive data from session context   |
-| **Attack vector**       | "What did we discuss?" queries, context probing         |
-| **Affected components** | Session transcripts, context window                     |
-| **Current mitigations** | Session isolation per sender (`agent:channel:peer` key) |
-| **Residual risk**       | Medium - within-session data is accessible by design    |
-| **Recommendations**     | Sensitive-data redaction in context                     |
-
----
-
-### 3.7 Collection and exfiltration (AML.TA0009, AML.TA0010)
-
-#### T-EXFIL-001: Data theft via web_fetch
-
-| Attribute               | Value                                                                            |
-| ----------------------- | -------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0009 - Collection                                                           |
-| **Description**         | Attacker exfiltrates data by instructing the agent to send it to an external URL |
-| **Attack vector**       | Prompt injection causing the agent to POST data to an attacker server            |
-| **Affected components** | `web_fetch` tool                                                                 |
-| **Current mitigations** | SSRF blocking for internal/private networks (DNS pinning + IP blocking)          |
-| **Residual risk**       | High - arbitrary external URLs remain permitted                                  |
-| **Recommendations**     | URL allowlisting, data-classification awareness                                  |
-
-#### T-EXFIL-002: Unauthorized message sending
-
-| Attribute               | Value                                                                |
-| ----------------------- | -------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0009 - Collection                                               |
-| **Description**         | Attacker causes the agent to send messages containing sensitive data |
-| **Attack vector**       | Prompt injection causing the agent to message the attacker           |
-| **Affected components** | Message tool, channel integrations                                   |
-| **Current mitigations** | Outbound messaging gating                                            |
-| **Residual risk**       | Medium - gating may be bypassed                                      |
-| **Recommendations**     | Explicit confirmation for new recipients                             |
-
-#### T-EXFIL-003: Credential harvesting
-
-| Attribute               | Value                                                                                                                                                   |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0009 - Collection                                                                                                                                  |
-| **Description**         | Malicious skill harvests credentials from the agent context                                                                                             |
-| **Attack vector**       | Skill code reads environment variables, config files                                                                                                    |
-| **Affected components** | Skill execution environment                                                                                                                             |
-| **Current mitigations** | ClawHub credential-pattern scanning (hardcoded secrets, credential env access paired with network sends); no execution sandboxing for skills at runtime |
-| **Residual risk**       | Critical - skills run with agent privileges                                                                                                             |
-| **Recommendations**     | Skill execution sandboxing, credential isolation                                                                                                        |
-
----
-
-### 3.8 Impact (AML.TA0011)
-
-#### T-IMPACT-001: Unauthorized command execution
-
-| Attribute               | Value                                                                                                |
-| ----------------------- | ---------------------------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0031 - Erode AI Model Integrity                                                                 |
-| **Description**         | Attacker executes arbitrary commands on the user system                                              |
-| **Attack vector**       | Prompt injection combined with exec approval bypass                                                  |
-| **Affected components** | Bash tool, command execution                                                                         |
-| **Current mitigations** | Exec approvals, Docker sandbox option (default runtime backend)                                      |
-| **Residual risk**       | Critical - host execution possible when sandbox is disabled                                          |
-| **Recommendations**     | Improve approval UX; sandbox-off deployments remain a deliberate operator choice, documented as such |
-
-#### T-IMPACT-002: Resource exhaustion (DoS)
-
-| Attribute               | Value                                              |
-| ----------------------- | -------------------------------------------------- |
-| **ATLAS ID**            | AML.T0031 - Erode AI Model Integrity               |
-| **Description**         | Attacker exhausts API credits or compute resources |
-| **Attack vector**       | Automated message flooding, expensive tool calls   |
-| **Affected components** | Gateway, agent sessions, API provider              |
-| **Current mitigations** | None                                               |
-| **Residual risk**       | High - no per-sender rate limiting                 |
-| **Recommendations**     | Per-sender rate limits, cost budgets               |
-
-#### T-IMPACT-003: Reputation damage
-
-| Attribute               | Value                                                       |
-| ----------------------- | ----------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0031 - Erode AI Model Integrity                        |
-| **Description**         | Attacker causes the agent to send harmful/offensive content |
-| **Attack vector**       | Prompt injection causing inappropriate responses            |
-| **Affected components** | Output generation, channel messaging                        |
-| **Current mitigations** | LLM provider content policies                               |
-| **Residual risk**       | Medium - provider filters are imperfect                     |
-| **Recommendations**     | Output filtering layer, user controls                       |
+| ATLAS tactic                                         | Threats                                        | Page                                                                                    |
+| ---------------------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Reconnaissance (AML.TA0002)                          | T-RECON-001, T-RECON-002                       | [Reconnaissance](/security/THREAT-MODEL-ATLAS/reconnaissance)                           |
+| Initial access (AML.TA0004)                          | T-ACCESS-001, T-ACCESS-002, T-ACCESS-003       | [Initial access](/security/THREAT-MODEL-ATLAS/initial-access)                           |
+| Execution (AML.TA0005)                               | T-EXEC-001, T-EXEC-002, T-EXEC-003, T-EXEC-004 | [Execution](/security/THREAT-MODEL-ATLAS/execution)                                     |
+| Persistence (AML.TA0006)                             | T-PERSIST-001, T-PERSIST-002, T-PERSIST-003    | [Persistence](/security/THREAT-MODEL-ATLAS/persistence)                                 |
+| Defense evasion (AML.TA0007)                         | T-EVADE-001, T-EVADE-002                       | [Defense evasion](/security/THREAT-MODEL-ATLAS/defense-evasion)                         |
+| Discovery (AML.TA0008)                               | T-DISC-001, T-DISC-002                         | [Discovery](/security/THREAT-MODEL-ATLAS/discovery)                                     |
+| Collection and exfiltration (AML.TA0009, AML.TA0010) | T-EXFIL-001, T-EXFIL-002, T-EXFIL-003          | [Collection and exfiltration](/security/THREAT-MODEL-ATLAS/collection-and-exfiltration) |
+| Impact (AML.TA0011)                                  | T-IMPACT-001, T-IMPACT-002, T-IMPACT-003       | [Impact](/security/THREAT-MODEL-ATLAS/impact)                                           |
 
 ---
 
@@ -552,6 +271,41 @@ T-EXEC-002 → T-EXFIL-001 → External exfiltration
 ---
 
 _This threat model is a living document. Report security issues to `security@openclaw.ai` or see the [Trust page](https://trust.openclaw.ai)._
+
+## Where each section moved
+
+Every heading from the previous single-page version keeps its anchor here, so an existing link such as `/security/THREAT-MODEL-ATLAS#t-exec-002-indirect-prompt-injection` still resolves. Each entry points at the page that now holds the content.
+
+- <a id="3.1-reconnaissance-(aml.ta0002)" /><a id="3-1-reconnaissance-aml-ta0002" />[3.1 Reconnaissance (AML.TA0002)](/security/THREAT-MODEL-ATLAS/reconnaissance)
+- <a id="t-recon-001%3A-agent-endpoint-discovery" /><a id="t-recon-001-agent-endpoint-discovery" />[T-RECON-001: Agent endpoint discovery](/security/THREAT-MODEL-ATLAS/reconnaissance#t-recon-001-agent-endpoint-discovery)
+- <a id="t-recon-002%3A-channel-integration-probing" /><a id="t-recon-002-channel-integration-probing" />[T-RECON-002: Channel integration probing](/security/THREAT-MODEL-ATLAS/reconnaissance#t-recon-002-channel-integration-probing)
+- <a id="3.2-initial-access-(aml.ta0004)" /><a id="3-2-initial-access-aml-ta0004" />[3.2 Initial access (AML.TA0004)](/security/THREAT-MODEL-ATLAS/initial-access)
+- <a id="t-access-001%3A-pairing-code-interception" /><a id="t-access-001-pairing-code-interception" />[T-ACCESS-001: Pairing code interception](/security/THREAT-MODEL-ATLAS/initial-access#t-access-001-pairing-code-interception)
+- <a id="t-access-002%3A-allowfrom-spoofing" /><a id="t-access-002-allowfrom-spoofing" />[T-ACCESS-002: AllowFrom spoofing](/security/THREAT-MODEL-ATLAS/initial-access#t-access-002-allowfrom-spoofing)
+- <a id="t-access-003%3A-token-theft" /><a id="t-access-003-token-theft" />[T-ACCESS-003: Token theft](/security/THREAT-MODEL-ATLAS/initial-access#t-access-003-token-theft)
+- <a id="3.3-execution-(aml.ta0005)" /><a id="3-3-execution-aml-ta0005" />[3.3 Execution (AML.TA0005)](/security/THREAT-MODEL-ATLAS/execution)
+- <a id="t-exec-001%3A-direct-prompt-injection" /><a id="t-exec-001-direct-prompt-injection" />[T-EXEC-001: Direct prompt injection](/security/THREAT-MODEL-ATLAS/execution#t-exec-001-direct-prompt-injection)
+- <a id="t-exec-002%3A-indirect-prompt-injection" /><a id="t-exec-002-indirect-prompt-injection" />[T-EXEC-002: Indirect prompt injection](/security/THREAT-MODEL-ATLAS/execution#t-exec-002-indirect-prompt-injection)
+- <a id="t-exec-003%3A-tool-argument-injection" /><a id="t-exec-003-tool-argument-injection" />[T-EXEC-003: Tool argument injection](/security/THREAT-MODEL-ATLAS/execution#t-exec-003-tool-argument-injection)
+- <a id="t-exec-004%3A-exec-approval-bypass" /><a id="t-exec-004-exec-approval-bypass" />[T-EXEC-004: Exec approval bypass](/security/THREAT-MODEL-ATLAS/execution#t-exec-004-exec-approval-bypass)
+- <a id="3.4-persistence-(aml.ta0006)" /><a id="3-4-persistence-aml-ta0006" />[3.4 Persistence (AML.TA0006)](/security/THREAT-MODEL-ATLAS/persistence)
+- <a id="t-persist-001%3A-malicious-skill-installation" /><a id="t-persist-001-malicious-skill-installation" />[T-PERSIST-001: Malicious skill installation](/security/THREAT-MODEL-ATLAS/persistence#t-persist-001-malicious-skill-installation)
+- <a id="t-persist-002%3A-skill-update-poisoning" /><a id="t-persist-002-skill-update-poisoning" />[T-PERSIST-002: Skill update poisoning](/security/THREAT-MODEL-ATLAS/persistence#t-persist-002-skill-update-poisoning)
+- <a id="t-persist-003%3A-agent-configuration-tampering" /><a id="t-persist-003-agent-configuration-tampering" />[T-PERSIST-003: Agent configuration tampering](/security/THREAT-MODEL-ATLAS/persistence#t-persist-003-agent-configuration-tampering)
+- <a id="3.5-defense-evasion-(aml.ta0007)" /><a id="3-5-defense-evasion-aml-ta0007" />[3.5 Defense evasion (AML.TA0007)](/security/THREAT-MODEL-ATLAS/defense-evasion)
+- <a id="t-evade-001%3A-moderation-pattern-bypass" /><a id="t-evade-001-moderation-pattern-bypass" />[T-EVADE-001: Moderation pattern bypass](/security/THREAT-MODEL-ATLAS/defense-evasion#t-evade-001-moderation-pattern-bypass)
+- <a id="t-evade-002%3A-content-wrapper-escape" /><a id="t-evade-002-content-wrapper-escape" />[T-EVADE-002: Content wrapper escape](/security/THREAT-MODEL-ATLAS/defense-evasion#t-evade-002-content-wrapper-escape)
+- <a id="3.6-discovery-(aml.ta0008)" /><a id="3-6-discovery-aml-ta0008" />[3.6 Discovery (AML.TA0008)](/security/THREAT-MODEL-ATLAS/discovery)
+- <a id="t-disc-001%3A-tool-enumeration" /><a id="t-disc-001-tool-enumeration" />[T-DISC-001: Tool enumeration](/security/THREAT-MODEL-ATLAS/discovery#t-disc-001-tool-enumeration)
+- <a id="t-disc-002%3A-session-data-extraction" /><a id="t-disc-002-session-data-extraction" />[T-DISC-002: Session data extraction](/security/THREAT-MODEL-ATLAS/discovery#t-disc-002-session-data-extraction)
+- <a id="3.7-collection-and-exfiltration-(aml.ta0009%2C-aml.ta0010)" /><a id="3-7-collection-and-exfiltration-aml-ta0009-aml-ta0010" />[3.7 Collection and exfiltration (AML.TA0009, AML.TA0010)](/security/THREAT-MODEL-ATLAS/collection-and-exfiltration)
+- <a id="t-exfil-001%3A-data-theft-via-web_fetch" /><a id="t-exfil-001-data-theft-via-web_fetch" />[T-EXFIL-001: Data theft via web_fetch](/security/THREAT-MODEL-ATLAS/collection-and-exfiltration#t-exfil-001-data-theft-via-web_fetch)
+- <a id="t-exfil-002%3A-unauthorized-message-sending" /><a id="t-exfil-002-unauthorized-message-sending" />[T-EXFIL-002: Unauthorized message sending](/security/THREAT-MODEL-ATLAS/collection-and-exfiltration#t-exfil-002-unauthorized-message-sending)
+- <a id="t-exfil-003%3A-credential-harvesting" /><a id="t-exfil-003-credential-harvesting" />[T-EXFIL-003: Credential harvesting](/security/THREAT-MODEL-ATLAS/collection-and-exfiltration#t-exfil-003-credential-harvesting)
+- <a id="3.8-impact-(aml.ta0011)" /><a id="3-8-impact-aml-ta0011" />[3.8 Impact (AML.TA0011)](/security/THREAT-MODEL-ATLAS/impact)
+- <a id="t-impact-001%3A-unauthorized-command-execution" /><a id="t-impact-001-unauthorized-command-execution" />[T-IMPACT-001: Unauthorized command execution](/security/THREAT-MODEL-ATLAS/impact#t-impact-001-unauthorized-command-execution)
+- <a id="t-impact-002%3A-resource-exhaustion-(dos)" /><a id="t-impact-002-resource-exhaustion-dos" />[T-IMPACT-002: Resource exhaustion (DoS)](/security/THREAT-MODEL-ATLAS/impact#t-impact-002-resource-exhaustion-dos)
+- <a id="t-impact-003%3A-reputation-damage" /><a id="t-impact-003-reputation-damage" />[T-IMPACT-003: Reputation damage](/security/THREAT-MODEL-ATLAS/impact#t-impact-003-reputation-damage)
 
 ## Related
 

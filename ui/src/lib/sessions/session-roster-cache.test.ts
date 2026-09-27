@@ -77,6 +77,7 @@ afterEach(async () => {
 
 describe("persistent session roster", () => {
   it("round-trips durable sidebar fields while excluding live run state and avatars", async () => {
+    const writes = vi.spyOn(IDBObjectStore.prototype, "put");
     const row: GatewaySessionRow = {
       key: "agent:main:one",
       kind: "direct",
@@ -93,9 +94,14 @@ describe("persistent session roster", () => {
       owner: { actor: { type: "human", id: "profile-one", avatarUrl: "/avatar" } },
       hasActiveRun: true,
       activeRunIds: ["run"],
+      model: "primary",
+      modelProvider: "example",
+      activeModel: "fallback",
+      activeModelProvider: "example",
       status: "running",
       runtimeMs: 30,
       runtimeSampledAt: 40,
+      snapshotAt: 50,
       agentStatus: undefined,
       observerDigest: undefined,
       swarmPhase: "working",
@@ -110,6 +116,8 @@ describe("persistent session roster", () => {
     const source = record("gateway-one", [row]);
     persistSessionRoster(source);
     await flushSessionRosters();
+    expect(writes).toHaveBeenCalledOnce();
+    expect(JSON.stringify(writes.mock.calls[0]?.[0])).not.toMatch(/activeModel|snapshotAt/u);
     const saved = await sessionRosterCache.read(source.scope, expected);
     expect(saved).toMatchObject({
       groups: ["Work"],
@@ -128,16 +136,28 @@ describe("persistent session roster", () => {
             category: "Work",
             boardFace: "chat",
             thinkingLevel: "high",
+            model: "primary",
+            modelProvider: "example",
             owner: { actor: { type: "human", id: "profile-one" } },
           },
         ],
       },
     });
     expect(JSON.stringify(saved)).not.toMatch(
-      /hasActiveRun|activeRunIds|runtimeMs|runtimeSampledAt|swarmPhase|swarmLog|subagentRunState|hasActiveSubagentRun|avatarUrl|channelAvatarUrl|"status"/u,
+      /hasActiveRun|activeRunIds|activeModel|runtimeMs|runtimeSampledAt|snapshotAt|swarmPhase|swarmLog|subagentRunState|hasActiveSubagentRun|avatarUrl|channelAvatarUrl|"status"/u,
     );
     expect(row.hasActiveRun).toBe(true);
+    expect(row.snapshotAt).toBe(50);
     expect(await sessionRosterCache.read("gateway-two", expected)).toBeNull();
+    await putRaw(source);
+    const oldWriter = await sessionRosterCache.read(source.scope, expected);
+    expect(oldWriter?.result.sessions[0]).toMatchObject({
+      model: "primary",
+      modelProvider: "example",
+    });
+    expect(oldWriter?.result.sessions[0]).not.toHaveProperty("activeModel");
+    expect(oldWriter?.result.sessions[0]).not.toHaveProperty("activeModelProvider");
+    expect(oldWriter?.result.sessions[0]).not.toHaveProperty("snapshotAt");
   });
 
   it("never persists Incognito rows and drops them from an older stored record", async () => {
@@ -252,14 +272,15 @@ describe("persistent session roster", () => {
       persistSessionRoster(record());
       await flushSessionRosters();
       if (method === "get") {
-        const aborted = vi
-          .spyOn(IDBObjectStore.prototype, "get")
-          .mockImplementationOnce(function (this: IDBObjectStore, key) {
-            aborted.mockRestore();
-            const request = this.get(key);
-            this.transaction.abort();
-            return request;
-          });
+        const aborted = vi.spyOn(IDBObjectStore.prototype, "get").mockImplementationOnce(function (
+          this: IDBObjectStore,
+          key,
+        ) {
+          aborted.mockRestore();
+          const request = this.get(key);
+          this.transaction.abort();
+          return request;
+        });
         expect(await sessionRosterCache.read("gateway-one", expected)).toBeNull();
         aborted.mockRestore();
       } else {

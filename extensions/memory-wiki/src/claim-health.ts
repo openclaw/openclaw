@@ -1,5 +1,4 @@
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-// Memory Wiki plugin module implements claim health behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WikiClaim, WikiPageSummary } from "./markdown.js";
 
@@ -54,10 +53,6 @@ function parseTimestamp(value?: string): number | null {
   return parseDateStringTimestampMs(value) ?? null;
 }
 
-function clampDaysSinceTouch(daysSinceTouch: number): number {
-  return Math.max(0, daysSinceTouch);
-}
-
 function normalizeClaimTextKey(text: string): string {
   return normalizeLowercaseStringOrEmpty(text.replace(/\s+/g, " "));
 }
@@ -77,25 +72,15 @@ function buildFreshnessFromTimestamp(params: { timestamp?: string; now?: Date })
       reason: "missing updatedAt",
     };
   }
-  const daysSinceTouch = clampDaysSinceTouch(Math.floor((now.getTime() - timestampMs) / DAY_MS));
-  if (daysSinceTouch >= WIKI_STALE_DAYS) {
-    return {
-      level: "stale",
-      reason: `last touched ${params.timestamp}`,
-      daysSinceTouch,
-      lastTouchedAt: params.timestamp,
-    };
-  }
-  if (daysSinceTouch >= WIKI_AGING_DAYS) {
-    return {
-      level: "aging",
-      reason: `last touched ${params.timestamp}`,
-      daysSinceTouch,
-      lastTouchedAt: params.timestamp,
-    };
-  }
+  const daysSinceTouch = Math.max(0, Math.floor((now.getTime() - timestampMs) / DAY_MS));
+  const level =
+    daysSinceTouch >= WIKI_STALE_DAYS
+      ? "stale"
+      : daysSinceTouch >= WIKI_AGING_DAYS
+        ? "aging"
+        : "fresh";
   return {
-    level: "fresh",
+    level,
     reason: `last touched ${params.timestamp}`,
     daysSinceTouch,
     lastTouchedAt: params.timestamp,
@@ -133,21 +118,14 @@ export function assessClaimFreshness(params: {
   claim: WikiClaim;
   now?: Date;
 }): WikiFreshness {
-  let hasClaimTimestamp =
-    typeof params.claim.updatedAt === "string" && params.claim.updatedAt.trim().length > 0;
-  let latestTimestamp = resolveLatestTimestamp([params.claim.updatedAt]);
-  let latestMs = parseTimestamp(latestTimestamp) ?? -1;
-  for (const evidence of params.claim.evidence) {
-    if (typeof evidence.updatedAt === "string" && evidence.updatedAt.trim().length > 0) {
-      hasClaimTimestamp = true;
-    }
-    const evidenceMs = parseTimestamp(evidence.updatedAt);
-    if (evidenceMs === null || !evidence.updatedAt || evidenceMs <= latestMs) {
-      continue;
-    }
-    latestMs = evidenceMs;
-    latestTimestamp = evidence.updatedAt;
-  }
+  const candidates = [
+    params.claim.updatedAt,
+    ...params.claim.evidence.map((entry) => entry.updatedAt),
+  ];
+  const hasClaimTimestamp = candidates.some(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
+  const latestTimestamp = resolveLatestTimestamp(candidates);
   return buildFreshnessFromTimestamp({
     timestamp: latestTimestamp ?? (hasClaimTimestamp ? undefined : params.page.updatedAt),
     now: params.now,
@@ -211,9 +189,7 @@ export function buildClaimContradictionClusters(params: {
         {
           key: claimId,
           label: claimId,
-          entries: [...entries].toSorted((left, right) =>
-            left.pagePath.localeCompare(right.pagePath),
-          ),
+          entries: entries.toSorted((left, right) => left.pagePath.localeCompare(right.pagePath)),
         },
       ];
     })
@@ -244,7 +220,7 @@ export function buildPageContradictionClusters(
     .map(([key, entries]) => ({
       key,
       label: entries[0]?.note ?? key,
-      entries: [...entries].toSorted((left, right) => left.pagePath.localeCompare(right.pagePath)),
+      entries: entries.toSorted((left, right) => left.pagePath.localeCompare(right.pagePath)),
     }))
     .toSorted((left, right) => left.label.localeCompare(right.label));
 }

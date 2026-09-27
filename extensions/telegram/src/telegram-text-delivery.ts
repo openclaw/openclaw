@@ -1,5 +1,5 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import { chunkByParagraph, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   escapeTelegramHtml,
   markdownToTelegramChunks,
@@ -141,7 +141,7 @@ export function planTelegramTextDeliveryPages(
   }
   const markdownParts =
     params.chunkMode === "newline"
-      ? chunkMarkdownTextWithMode(params.text, maxChars, params.chunkMode)
+      ? chunkByParagraph(params.text, maxChars, { splitLongParagraphs: false })
       : [params.text];
   const pages: TelegramTextDeliveryPage[] = [];
   for (const markdown of markdownParts) {

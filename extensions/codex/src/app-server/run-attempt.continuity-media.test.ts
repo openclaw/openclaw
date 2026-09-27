@@ -277,7 +277,7 @@ describe("Codex attachment continuity", () => {
         message: historical,
         now: cutoff + 1,
       });
-      params.prompt = "Read this image.";
+      params.prompt = mode === "current" ? "Read this image." : "Can you hear me?";
       if (mode === "current") {
         const currentImage = { ...image, data: green.toString("base64") };
         params.images = [currentImage];
@@ -345,11 +345,19 @@ describe("Codex attachment continuity", () => {
           const request = harness.requests.find((entry) => entry.method === "turn/start");
           const input = asOptionalRecord(request?.params)?.input;
           expect(Array.isArray(input)).toBe(true);
-          const images = Array.isArray(input)
-            ? input.filter((part) => asOptionalRecord(part)?.type === "image")
-            : [];
-          expect(images).toEqual([
+          expect(input).toEqual([
+            expect.objectContaining({
+              type: "text",
+              text: expect.stringContaining("<conversation_context>\n[user]\nRead this image."),
+            }),
             { type: "image", url: `data:image/png;base64,${blue.toString("base64")}` },
+            {
+              type: "text",
+              text: expect.stringContaining(
+                `</conversation_context>\n\nCurrent user request:\n${params.prompt}`,
+              ),
+              text_elements: [],
+            },
             ...(mode === "current"
               ? [{ type: "image", url: `data:image/png;base64,${green.toString("base64")}` }]
               : []),

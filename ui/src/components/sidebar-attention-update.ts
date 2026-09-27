@@ -53,13 +53,13 @@ export function resolveSidebarUpdateAttention(
   );
   const campaignPendingHydration =
     campaign && !snapshot.updateCampaignStatusHydrated && canHydrateCampaign;
-  const present =
+  const actionable = isUpdateActionable(snapshot.updateAvailable, snapshot.updateSchedule, busy);
+  const present = Boolean(
     runVisible ||
-    (snapshot.updateReconciliationPending
-      ? true
-      : campaignPendingHydration
-        ? Boolean(snapshot.updateRunning || statusBanner)
-        : Boolean(snapshot.updateRunning || statusBanner || snapshot.updateAvailable || campaign));
+    snapshot.updateReconciliationPending ||
+    statusBanner ||
+    (campaignPendingHydration ? snapshot.updateRunning : actionable),
+  );
   const dismissal =
     runVisible && run?.status !== "running"
       ? { kind: "updateAvailable" as const, signature: JSON.stringify(["run", run?.runId]) }
@@ -74,7 +74,7 @@ export function resolveSidebarUpdateAttention(
     campaign?.state === "applying" ||
     isUpdateAttentionForced(statusBanner?.tone);
   return {
-    actionable: isUpdateActionable(snapshot.updateAvailable, snapshot.updateSchedule, busy),
+    actionable,
     busy,
     canUpdate,
     dismissal,

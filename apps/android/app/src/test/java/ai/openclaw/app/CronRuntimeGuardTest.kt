@@ -16,7 +16,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
-import java.lang.reflect.Field
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
@@ -344,7 +343,7 @@ class CronRuntimeGuardTest {
     name: String,
     value: Any?,
   ) {
-    findField(target, name).set(target, value)
+    findTestField(target, name).set(target, value)
   }
 
   private fun <T> readField(
@@ -352,22 +351,7 @@ class CronRuntimeGuardTest {
     name: String,
   ): T {
     @Suppress("UNCHECKED_CAST")
-    return findField(target, name).get(target) as T
-  }
-
-  private fun findField(
-    target: Any,
-    name: String,
-  ): Field {
-    var type: Class<*>? = target.javaClass
-    while (type != null) {
-      try {
-        return type.getDeclaredField(name).apply { isAccessible = true }
-      } catch (_: NoSuchFieldException) {
-        type = type.superclass
-      }
-    }
-    error("Field $name not found on ${target.javaClass.name}")
+    return findTestField(target, name).get(target) as T
   }
 
   private fun invokeStringMethod(

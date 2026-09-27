@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -14,12 +15,16 @@ const suite = createChatFlowE2eSuite();
 const sessionKey = "agent:main:cloud-reconciliation";
 const now = Date.now();
 
-function placement(state: "active" | "failed", workspaceResultReconciling = false) {
+function placement(
+  state: "active" | "failed",
+  updatedAt: number,
+  workspaceResultReconciling = false,
+) {
   const timing = {
     createdAtMs: now - 180_000,
     generation: state === "failed" ? 3 : 2,
     stateChangedAtMs: now - 138_000,
-    updatedAtMs: now,
+    updatedAtMs: updatedAt,
   };
   if (state === "failed") {
     return {
@@ -49,16 +54,18 @@ function session(
   workspaceResultReconciling = false,
   runId = "follow-up-run",
 ) {
+  // The mock run owner advances updatedAt on ACK/final; later states must stay current.
+  const updatedAt = Date.now();
   return {
     activeRunIds: queuedFollowUp ? [runId] : [],
     hasActiveRun: queuedFollowUp,
     key: sessionKey,
     kind: "direct",
     label: "Cloud reconciliation proof",
-    placement: placement(state, workspaceResultReconciling),
+    placement: placement(state, updatedAt, workspaceResultReconciling),
     sessionId: "cloud-reconciliation-session",
     status: queuedFollowUp ? "running" : "done",
-    updatedAt: now,
+    updatedAt,
   };
 }
 
@@ -142,6 +149,7 @@ suite.define(() => {
           sessionInfo: queued,
         };
         await gateway.setMethodResponse("chat.history", queuedHistory);
+        await gateway.setMethodResponse("chat.startup", queuedHistory);
         await gateway.setSessionsListResponse(chatSessionListResponse([queued]));
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
@@ -161,7 +169,14 @@ suite.define(() => {
         }
 
         const active = session("active");
-        await gateway.setMethodResponse("chat.history", {
+        // The persisted event and later history reads describe the same reply.
+        const resumedReplyId = "automatic-follow-up-result";
+        const resumedReply = {
+          role: "assistant",
+          content: "The queued follow-up started automatically.",
+          __openclaw: { id: resumedReplyId, seq: 3, runId },
+        };
+        const activeHistory = {
           inFlightRun: null,
           messages: [
             { role: "assistant", content: "Cloud edits are ready to apply." },
@@ -169,20 +184,28 @@ suite.define(() => {
               ...pendingInput.message,
               __openclaw: { id: "persisted-follow-up", idempotencyKey: `${runId}:user` },
             },
+            resumedReply,
           ],
           pendingInputs: { items: [], total: 0 },
           sessionId: active.sessionId,
           sessionInfo: active,
           thinkingLevel: null,
-        });
+        };
+        await gateway.setMethodResponse("chat.history", activeHistory);
+        await gateway.setMethodResponse("chat.startup", activeHistory);
         await gateway.setSessionsListResponse(chatSessionListResponse([active]));
-        await gateway.emitGatewayEvent("sessions.changed", { reason: "placement" });
+        await gateway.emitGatewayEvent("sessions.changed", {
+          agentId: "main",
+          reason: "placement",
+          sessionKey,
+        });
         await gateway.emitGatewayEvent("session.message", {
           activeRunIds: [],
           hasActiveRun: false,
-          message: { role: "assistant", content: "The queued follow-up started automatically." },
-          messageId: "automatic-follow-up-result",
-          messageSeq: 3,
+          message: resumedReply,
+          messageId: resumedReplyId,
+          messageSeq: resumedReply["__openclaw"].seq,
+          runId,
           session: active,
           sessionKey,
         });
@@ -206,9 +229,30 @@ suite.define(() => {
           });
         }
 
+        const completedUpdatedAt = await page.evaluate(async (key) => {
+          const app = document.querySelector("openclaw-app") as HTMLElement & {
+            runtime?: { context: ApplicationContext };
+          };
+          const sessions = app.runtime?.context.sessions;
+          if (!sessions) {
+            throw new Error("session capability unavailable");
+          }
+          await sessions.refresh({ agentId: "main", force: true });
+          return sessions.state.result?.sessions.find((row) => row.key === key)?.updatedAt;
+        }, sessionKey);
+        expect(completedUpdatedAt).toBeGreaterThan(active.updatedAt);
+
         const failed = session("failed");
+        expect(completedUpdatedAt).toBeLessThanOrEqual(failed.updatedAt);
+        const failedHistory = { ...activeHistory, sessionInfo: failed };
+        await gateway.setMethodResponse("chat.history", failedHistory);
+        await gateway.setMethodResponse("chat.startup", failedHistory);
         await gateway.setSessionsListResponse(chatSessionListResponse([failed]));
-        await gateway.emitGatewayEvent("sessions.changed", { reason: "placement" });
+        await gateway.emitGatewayEvent("sessions.changed", {
+          agentId: "main",
+          reason: "placement",
+          sessionKey,
+        });
         await page.getByText("Runner failed", { exact: true }).waitFor();
         await page
           .getByText("Workspace reconciliation failed: local worktree is locked.", { exact: false })

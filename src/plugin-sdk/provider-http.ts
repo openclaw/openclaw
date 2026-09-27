@@ -11,6 +11,7 @@ export {
   assertOkOrThrowProviderError,
   assertProviderBinaryResponseContent,
   createProviderHttpError,
+  ProviderHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
   formatProviderErrorPayload,
@@ -36,17 +37,20 @@ export {
   fetchWithTimeout,
   fetchWithTimeoutGuarded,
   normalizeBaseUrl,
+  pollProviderOperation,
   pollProviderOperationJson,
   postJsonRequest,
   postMultipartRequest,
   postTranscriptionRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  resolveProviderHttpRequestConfigWithOriginTrust,
   resolveAudioTranscriptionUploadFileName,
   requireTranscriptionText,
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
+export { openProviderWebSocket } from "../infra/net/provider-websocket.js";
 export type {
   ProviderOperationDeadline,
   ProviderOperationTimeoutMs,

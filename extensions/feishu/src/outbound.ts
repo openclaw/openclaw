@@ -1,4 +1,3 @@
-// Feishu plugin module implements outbound behavior.
 import path from "node:path";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -26,13 +25,12 @@ import {
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
-import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
+import { sendCommentThreadReply } from "./comment-send.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
-import { deliverCommentThreadText } from "./drive.js";
 import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
 import {
   chunkFeishuMarkdown,
+  shouldUseFeishuCard,
   chunkFeishuPostMarkdown,
   materializeFeishuPostMarkdownSoftBreaks,
 } from "./markdown.js";
@@ -61,6 +59,7 @@ import {
   createFeishuReplyDeliveryResult,
   type FeishuReplyDeliverySource,
 } from "./reply-delivery-result.js";
+import { withFeishuSendContext } from "./send-context.js";
 import {
   chunkFeishuCardMarkdown,
   sendCardFeishu,
@@ -69,14 +68,7 @@ import {
   type CardHeaderConfig,
 } from "./send.js";
 
-// Carries the direct-send upload-failure policy through the presentation
-// fallback delivery path. The normal `sendMedia` branch sets
-// `propagateMediaUploadFailure` directly; the presentation-fallback branch
-// routes through `sendPayload` (whose shared signature cannot carry the flag),
-// so the direct `send` action stamps this marker on `channelData.feishu` and
-// `sendFeishuFallbackPayload` reads it before calling `sendMedia`. This keeps
-// a direct-send attachment failure visible instead of degrading to a
-// fallback-text `ok:true` receipt (issue #112244, ClawSweeper P1).
+// Preserve direct-send upload failures through the shared payload fallback contract.
 export const FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER = "__openclawPropagateMediaUploadFailure";
 const FEISHU_TEXT_CHUNK_LIMIT = 4000;
 
@@ -130,27 +122,13 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   return raw;
 }
 
-function shouldUseCard(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
-}
-
 type FeishuOutboundPayload = Parameters<
   NonNullable<ChannelOutboundAdapter["sendPayload"]>
 >[0]["payload"];
 type FeishuSendPayloadContext = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
 type FeishuSendTextContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
 
-// The Feishu sendMedia implementation accepts an optional flag the shared
-// ChannelOutboundAdapter contract does not: when true, a media-upload failure
-// is re-thrown to the caller instead of being converted to a fallback text
-// success. The direct `send` action sets this so an agent that requested an
-// attachment receives a visible failure when it cannot be delivered, rather
-// than an `ok:true` receipt for a text-only fallback (issue #112244).
-//
-// The return type mirrors the shared contract exactly — `ReturnType<...>` is
-// already `Promise<OutboundDeliveryResult>`, so wrapping it in another
-// `Promise` would produce `Promise<Promise<...>>` and break the `async`
-// implementation's single-Promise return (ClawSweeper P1).
+// Direct sends surface upload failure; normal replies may deliver a text fallback.
 export type FeishuOutboundSendMedia = (
   params: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0] & {
     propagateMediaUploadFailure?: boolean;
@@ -232,45 +210,14 @@ export function resolveFeishuReplyMode(params: {
       };
 }
 
-async function sendCommentThreadReply(params: {
-  cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
-  to: string;
-  text: string;
-  replyId?: string;
-  accountId?: string;
-}) {
-  const target = parseFeishuCommentTarget(params.to);
-  if (!target) {
-    return null;
-  }
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  const client = createFeishuClient(account);
-  const replyId = params.replyId?.trim();
-  try {
-    const result = await deliverCommentThreadText(client, {
-      file_token: target.fileToken,
-      file_type: target.fileType,
-      comment_id: target.commentId,
-      content: params.text,
-    });
-    return {
-      messageId:
-        (result.delivery_mode === "reply_comment" ? result.reply_id : result.comment_id) ?? "",
-      chatId: target.commentId,
-      result,
-    };
-  } finally {
-    if (replyId) {
-      void cleanupAmbientCommentTypingReaction({
-        client,
-        deliveryContext: {
-          channel: "feishu",
-          to: params.to,
-          threadId: replyId,
-        },
-      });
-    }
-  }
+function createFeishuReplyFanout(
+  ctx: Pick<FeishuSendTextContext, "replyToId" | "threadId" | "replyToIdSource" | "replyToMode">,
+) {
+  return createReplyToFanout({
+    replyToId: resolveFeishuReplyMode(ctx).normalizedReplyToId,
+    replyToIdSource: ctx.replyToIdSource,
+    replyToMode: ctx.replyToMode,
+  });
 }
 
 async function sendOutboundText(params: {
@@ -304,7 +251,7 @@ async function sendOutboundText(params: {
   // modified by post-md newline normalization. Only the post path below
   // materializes CommonMark soft breaks for Feishu rendering.
   const useCard =
-    (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) &&
+    (renderMode === "card" || (renderMode === "auto" && shouldUseFeishuCard(text))) &&
     withinCardTableLimit(text);
 
   // Tables need contiguous source rows, so convert them before the parser
@@ -363,13 +310,6 @@ async function sendFeishuFallbackPayload(params: {
   payload: FeishuOutboundPayload;
   separateMediaAndText?: boolean;
 }) {
-  // The direct `send` action stamps this marker when it routes an attachment
-  // through the presentation-fallback path; honor it so an upload failure is
-  // re-thrown instead of degrading to a fallback-text `ok:true` receipt
-  // (issue #112244, ClawSweeper P1). The shared `sendTextMediaPayload` helper
-  // cannot carry the flag, so when propagation is requested and there is media
-  // to deliver, force the explicit fan-out path that calls `sendMedia` with
-  // the flag set.
   const propagateMediaUploadFailure = readFeishuPropagateMediaUploadFailure(params.payload);
   const ctx = { ...params.ctx, payload: params.payload };
   const mediaUrls = normalizeStringEntries(resolvePayloadMediaUrls(params.payload));
@@ -386,19 +326,7 @@ async function sendFeishuFallbackPayload(params: {
     });
   }
 
-  const { normalizedReplyToId } = resolveFeishuReplyMode({
-    replyToId: ctx.replyToId,
-    threadId: ctx.threadId,
-  });
-  const nextReplyToId = createReplyToFanout({
-    replyToId: normalizedReplyToId,
-    replyToIdSource: ctx.replyToIdSource,
-    replyToMode: ctx.replyToMode,
-  });
-  // Narrow the optional shared `sendMedia` to the Feishu-specific contract so
-  // the `propagateMediaUploadFailure` flag can be carried on direct-send
-  // fallback delivery (the shared `ChannelOutboundAdapter["sendMedia"]`
-  // signature does not declare it).
+  const nextReplyToId = createFeishuReplyFanout(ctx);
   const sendMedia: FeishuOutboundSendMedia | undefined = feishuOutbound.sendMedia;
   const sendText = feishuOutbound.sendText;
   if (!sendMedia || !sendText) {
@@ -443,15 +371,7 @@ async function sendFeishuTtsSupplementPayload(params: {
     throw new Error("Feishu TTS supplement delivery is not available.");
   }
 
-  const { normalizedReplyToId } = resolveFeishuReplyMode({
-    replyToId: params.ctx.replyToId,
-    threadId: params.ctx.threadId,
-  });
-  const nextReplyToId = createReplyToFanout({
-    replyToId: normalizedReplyToId,
-    replyToIdSource: params.ctx.replyToIdSource,
-    replyToMode: params.ctx.replyToMode,
-  });
+  const nextReplyToId = createFeishuReplyFanout(params.ctx);
   const ctx = { ...params.ctx, payload: params.payload };
   let lastResult: Awaited<ReturnType<typeof sendText>> | undefined;
 
@@ -486,15 +406,23 @@ async function sendFeishuTtsSupplementPayload(params: {
   return lastResult ?? { channel: "feishu", messageId: "" };
 }
 
-// `feishuOutbound` keeps the shared `ChannelOutboundAdapter` shape (whose
-// `sendMedia` is optional) so the object literal — which spreads
-// `createAttachedChannelResultAdapter` (returning `sendMedia?: ... | undefined`)
-// — type-checks without a `sendMedia: ... | undefined` mismatch. Callers that
-// need the Feishu-specific `propagateMediaUploadFailure` flag narrow the
-// optional `sendMedia` to `FeishuOutboundSendMedia` at the use site
-// (channel.ts direct-send branch, sendFeishuFallbackPayload) instead of
-// forcing a required property here (ClawSweeper P1).
-export const feishuOutbound: ChannelOutboundAdapter = {
+function withFeishuOutboundSendContext(adapter: ChannelOutboundAdapter): ChannelOutboundAdapter {
+  const { sendText, sendMedia, sendPayload } = adapter;
+  return {
+    ...adapter,
+    ...(sendText
+      ? { sendText: async (ctx) => withFeishuSendContext(ctx, () => sendText(ctx)) }
+      : {}),
+    ...(sendMedia
+      ? { sendMedia: async (ctx) => withFeishuSendContext(ctx, () => sendMedia(ctx)) }
+      : {}),
+    ...(sendPayload
+      ? { sendPayload: async (ctx) => withFeishuSendContext(ctx, () => sendPayload(ctx)) }
+      : {}),
+  };
+}
+
+export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendContext({
   deliveryMode: "direct",
   chunker: chunkFeishuMarkdown,
   chunkerMode: "markdown",
@@ -606,17 +534,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       });
     }
 
-    const { normalizedReplyToId } = resolveFeishuReplyMode({
-      replyToId: ctx.replyToId,
-      threadId: ctx.threadId,
-    });
-    // Media and the final card are separate payloads: consume an implicit
-    // first-reply id once, while an explicit thread remains sticky for both.
-    const nextReplyToId = createReplyToFanout({
-      replyToId: normalizedReplyToId,
-      replyToIdSource: ctx.replyToIdSource,
-      replyToMode: ctx.replyToMode,
-    });
+    // The card and media share implicit first-reply consumption; native threads stay sticky.
+    const nextReplyToId = createFeishuReplyFanout(ctx);
     const nextReplyMode = () =>
       resolveFeishuReplyMode({
         replyToId: nextReplyToId(),
@@ -794,20 +713,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       threadId,
       onDeliveryResult,
       propagateMediaUploadFailure = false,
-    }: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0] & {
-      /** When true, a media-upload failure is re-thrown to the caller instead of
-       * being converted to a fallback text success. The direct `send` action
-       * sets this so an agent that requested an attachment receives a visible
-       * failure when the attachment cannot be delivered, rather than an `ok:true`
-       * receipt for a text-only fallback (issue #112244). */
-      propagateMediaUploadFailure?: boolean;
-    }) => {
-      const { normalizedReplyToId } = resolveFeishuReplyMode({
+    }: Parameters<FeishuOutboundSendMedia>[0]) => {
+      const nextReplyToId = createFeishuReplyFanout({
         replyToId,
         threadId,
-      });
-      const nextReplyToId = createReplyToFanout({
-        replyToId: normalizedReplyToId,
         replyToIdSource,
         replyToMode,
       });
@@ -893,14 +802,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           throw partialFeishuSendError(err, results);
         }
         if (propagateMediaUploadFailure) {
-          // The direct `send` action requested a controlled failure when the
-          // attachment cannot be delivered, so the agent receives a visible
-          // error instead of an `ok:true` receipt for a text-only fallback
-          // (issue #112244). When the caption was already delivered, preserve
-          // its receipt as the existing partial-delivery outcome so the caller
-          // knows the text is visible and does not retry it (which would
-          // duplicate the caption); only a send with no delivered caption is a
-          // wholly failed send.
+          // Preserve an accepted caption so recovery cannot send it again.
           if (captionResult) {
             throw partialFeishuSendError(err, results);
           }
@@ -956,5 +858,5 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       return toFeishuOutboundResult(aggregateFeishuSendResult(mediaResult, results));
     },
   }),
-};
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

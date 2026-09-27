@@ -1,7 +1,5 @@
 package ai.openclaw.app.chat
 
-import ai.openclaw.app.ui.chat.formatContextUsageTokens
-import ai.openclaw.app.ui.chat.latestChatMessageUsage
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -18,13 +16,7 @@ class ChatControllerMessageIdentityTest {
   @Test
   fun reconcileMessageIdsKeepsCanonicalEntryIdentityFromReload() {
     val previous =
-      ChatMessage(
-        id = "stable-compose-id",
-        role = "user",
-        content = listOf(ChatMessageContent(text = "hello")),
-        timestampMs = 10,
-        entryId = "old-entry",
-      )
+      textMessage(id = "stable-compose-id", role = "user", text = "hello", timestampMs = 10, entryId = "old-entry")
     val incoming = previous.copy(id = "temporary-id", entryId = "canonical-entry")
 
     val reconciled = reconcileMessageIds(listOf(previous), listOf(incoming)).single()
@@ -130,11 +122,6 @@ class ChatControllerMessageIdentityTest {
       advanceUntilIdle()
 
       assertEquals(cases.map { it.second }, controller.messages.value.map { it.usage })
-      controller.messages.value.forEachIndexed { index, message ->
-        val expected = cases[index].second
-        assertEquals(expected, latestChatMessageUsage(listOf(message)))
-        if (expected.input == null) assertEquals("\u2014", formatContextUsageTokens(expected.input))
-      }
     }
 
   @Test
@@ -210,10 +197,14 @@ class ChatControllerMessageIdentityTest {
                   { "role": "user", "content": "boolean sender", "senderLabel": true, "runId": 42, "__openclaw": { "steerTargetRunId": true } },
                   { "role": "user", "content": "blank sender", "senderLabel": "  " },
                   { "role": "user", "content": "null sender", "senderLabel": null },
-                  { "role": "toolResult", "tool_use_id": "call-1", "toolName": "read", "content": "bounded tool output" },
+                  { "role": "toolResult", "__openclaw": { "id": "tool-result" }, "tool_use_id": "call-1", "toolName": "read", "content": "bounded tool output" },
                   { "role": "internal", "text": "private reasoning" },
                   { "role": "custom", "content": "visible plugin notice" },
-                  { "role": "Assistant", "content": "reply", "senderLabel": "Spoofed sender" }
+                  { "role": "Assistant", "__openclaw": { "id": "answer" }, "content": "reply", "senderLabel": "Spoofed sender" }
+                ],
+                "activity": [
+                  { "messageId": "tool-result", "items": [] },
+                  { "messageId": "answer", "items": [{ "itemId": "tool:read", "kind": "tool", "phase": "end", "title": "Read", "status": "blocked" }] }
                 ]
               }
               """.trimIndent()
@@ -233,6 +224,16 @@ class ChatControllerMessageIdentityTest {
       assertEquals(
         listOf("hello", "numeric sender", "boolean sender", "blank sender", "null sender", null, "visible plugin notice", "reply"),
         controller.messages.value.map { it.content.single().text },
+      )
+      assertEquals(null, controller.messages.value[0].activity)
+      assertEquals(emptyList<Any>(), controller.messages.value[5].activity)
+      assertEquals(
+        "blocked",
+        controller.messages.value
+          .last()
+          .activity
+          ?.single()
+          ?.status,
       )
       assertEquals("canonical", controller.messages.value[0].runId)
       assertEquals("active-run", controller.messages.value[0].steerTargetRunId)
@@ -333,7 +334,7 @@ class ChatControllerMessageIdentityTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun markerOnlyDeliveryMirrorDoesNotReplaceLatestRunUsage() =
+  fun liveHistoryKeepsDeliveryMirrorAndUsageMetadataSeparate() =
     runTest {
       val controller =
         ChatController(
@@ -375,41 +376,24 @@ class ChatControllerMessageIdentityTest {
           .last()
           .deliveryMirror,
       )
-      assertEquals(ChatMessageUsage(input = 12_000, output = 300), latestChatMessageUsage(controller.messages.value))
+      assertEquals(
+        listOf(ChatMessageUsage(input = 12_000, output = 300), ChatMessageUsage(input = 0, output = 0)),
+        controller.messages.value.map { it.usage },
+      )
     }
 
   @Test
   fun reconcileMessageIdsReusesMatchingIdsAcrossHistoryReload() {
     val previous =
       listOf(
-        ChatMessage(
-          id = "msg-1",
-          role = "assistant",
-          content = listOf(ChatMessageContent(type = "text", text = "hello")),
-          timestampMs = 1000L,
-        ),
-        ChatMessage(
-          id = "msg-2",
-          role = "user",
-          content = listOf(ChatMessageContent(type = "text", text = "hi")),
-          timestampMs = 2000L,
-        ),
+        textMessage(id = "msg-1", role = "assistant", text = "hello", timestampMs = 1000L),
+        textMessage(id = "msg-2", role = "user", text = "hi", timestampMs = 2000L),
       )
 
     val incoming =
       listOf(
-        ChatMessage(
-          id = "new-1",
-          role = "assistant",
-          content = listOf(ChatMessageContent(type = "text", text = "hello")),
-          timestampMs = 1000L,
-        ),
-        ChatMessage(
-          id = "new-2",
-          role = "user",
-          content = listOf(ChatMessageContent(type = "text", text = "hi")),
-          timestampMs = 2000L,
-        ),
+        textMessage(id = "new-1", role = "assistant", text = "hello", timestampMs = 1000L),
+        textMessage(id = "new-2", role = "user", text = "hi", timestampMs = 2000L),
       )
 
     val reconciled = reconcileMessageIds(previous = previous, incoming = incoming)
@@ -421,28 +405,13 @@ class ChatControllerMessageIdentityTest {
   fun reconcileMessageIdsLeavesNewMessagesUntouched() {
     val previous =
       listOf(
-        ChatMessage(
-          id = "msg-1",
-          role = "assistant",
-          content = listOf(ChatMessageContent(type = "text", text = "hello")),
-          timestampMs = 1000L,
-        ),
+        textMessage(id = "msg-1", role = "assistant", text = "hello", timestampMs = 1000L),
       )
 
     val incoming =
       listOf(
-        ChatMessage(
-          id = "new-1",
-          role = "assistant",
-          content = listOf(ChatMessageContent(type = "text", text = "hello")),
-          timestampMs = 1000L,
-        ),
-        ChatMessage(
-          id = "new-2",
-          role = "assistant",
-          content = listOf(ChatMessageContent(type = "text", text = "new reply")),
-          timestampMs = 3000L,
-        ),
+        textMessage(id = "new-1", role = "assistant", text = "hello", timestampMs = 1000L),
+        textMessage(id = "new-2", role = "assistant", text = "new reply", timestampMs = 3000L),
       )
 
     val reconciled = reconcileMessageIds(previous = previous, incoming = incoming)
@@ -512,19 +481,9 @@ class ChatControllerMessageIdentityTest {
   @Test
   fun mergeOptimisticMessagesKeepsOutgoingUserTurnWhenHistoryOmitsIt() {
     val optimistic =
-      ChatMessage(
-        id = "local-user",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "Testing testing 1 2 3")),
-        timestampMs = 1000L,
-      )
+      textMessage(id = "local-user", role = "user", text = "Testing testing 1 2 3", timestampMs = 1000L)
     val assistant =
-      ChatMessage(
-        id = "remote-assistant",
-        role = "assistant",
-        content = listOf(ChatMessageContent(type = "text", text = "Received.")),
-        timestampMs = 2000L,
-      )
+      textMessage(id = "remote-assistant", role = "assistant", text = "Received.", timestampMs = 2000L)
 
     val merged = mergeOptimisticMessages(incoming = listOf(assistant), optimistic = listOf(optimistic))
 
@@ -534,19 +493,9 @@ class ChatControllerMessageIdentityTest {
   @Test
   fun retainUnmatchedOptimisticMessagesKeepsOutgoingUserTurnWhenHistoryOmitsIt() {
     val optimistic =
-      ChatMessage(
-        id = "local-user",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "Testing testing 1 2 3")),
-        timestampMs = 1000L,
-      )
+      textMessage(id = "local-user", role = "user", text = "Testing testing 1 2 3", timestampMs = 1000L)
     val assistant =
-      ChatMessage(
-        id = "remote-assistant",
-        role = "assistant",
-        content = listOf(ChatMessageContent(type = "text", text = "Received.")),
-        timestampMs = 2000L,
-      )
+      textMessage(id = "remote-assistant", role = "assistant", text = "Received.", timestampMs = 2000L)
 
     val retained = retainUnmatchedOptimisticMessages(incoming = listOf(assistant), optimistic = listOf(optimistic))
 
@@ -556,13 +505,7 @@ class ChatControllerMessageIdentityTest {
   @Test
   fun retainUnmatchedOptimisticMessagesDropsGatewayPersistedUserTurn() {
     val optimistic =
-      ChatMessage(
-        id = "local-user",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "hello")),
-        timestampMs = 1000L,
-        idempotencyKey = "run-1:user",
-      )
+      textMessage(id = "local-user", role = "user", text = "hello", timestampMs = 1000L, idempotencyKey = "run-1:user")
     val remoteUser = optimistic.copy(id = "remote-user", timestampMs = 500L)
 
     val retained = retainUnmatchedOptimisticMessages(incoming = listOf(remoteUser), optimistic = listOf(optimistic))
@@ -573,13 +516,7 @@ class ChatControllerMessageIdentityTest {
   @Test
   fun retainUnmatchedOptimisticMessagesKeepsDistinctIdempotencyKey() {
     val optimistic =
-      ChatMessage(
-        id = "local-user",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "hello")),
-        timestampMs = 1000L,
-        idempotencyKey = "run-2:user",
-      )
+      textMessage(id = "local-user", role = "user", text = "hello", timestampMs = 1000L, idempotencyKey = "run-2:user")
     val remoteUser = optimistic.copy(id = "remote-user", timestampMs = 2000L, idempotencyKey = "run-1:user")
 
     val retained = retainUnmatchedOptimisticMessages(incoming = listOf(remoteUser), optimistic = listOf(optimistic))
@@ -590,12 +527,7 @@ class ChatControllerMessageIdentityTest {
   @Test
   fun mergeOptimisticMessagesDoesNotDuplicateHistoryTurns() {
     val user =
-      ChatMessage(
-        id = "local-user",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "hello")),
-        timestampMs = 1000L,
-      )
+      textMessage(id = "local-user", role = "user", text = "hello", timestampMs = 1000L)
     val remoteUser = user.copy(id = "remote-user")
 
     val merged = mergeOptimisticMessages(incoming = listOf(remoteUser), optimistic = listOf(user))
@@ -606,12 +538,7 @@ class ChatControllerMessageIdentityTest {
   @Test
   fun mergeOptimisticMessagesDoesNotDuplicateGatewayPersistedUserTurnWithDifferentTimestamp() {
     val optimistic =
-      ChatMessage(
-        id = "local-user",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "hello")),
-        timestampMs = 1000L,
-      )
+      textMessage(id = "local-user", role = "user", text = "hello", timestampMs = 1000L)
     val remoteUser = optimistic.copy(id = "remote-user", timestampMs = 2000L)
 
     val merged = mergeOptimisticMessages(incoming = listOf(remoteUser), optimistic = listOf(optimistic))
@@ -622,12 +549,7 @@ class ChatControllerMessageIdentityTest {
   @Test
   fun mergeOptimisticMessagesKeepsRepeatedOptimisticTurnWhenHistoryOnlyHasOneMatch() {
     val first =
-      ChatMessage(
-        id = "local-user-1",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "hello")),
-        timestampMs = 1000L,
-      )
+      textMessage(id = "local-user-1", role = "user", text = "hello", timestampMs = 1000L)
     val second = first.copy(id = "local-user-2", timestampMs = 1100L)
     val remoteUser = first.copy(id = "remote-user", timestampMs = 2000L)
 
@@ -639,16 +561,28 @@ class ChatControllerMessageIdentityTest {
   @Test
   fun mergeOptimisticMessagesDoesNotConsumeOlderIdenticalHistoryTurn() {
     val optimistic =
-      ChatMessage(
-        id = "local-user",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "ok")),
-        timestampMs = 2000L,
-      )
+      textMessage(id = "local-user", role = "user", text = "ok", timestampMs = 2000L)
     val oldHistoryUser = optimistic.copy(id = "remote-old-user", timestampMs = 1000L)
 
     val merged = mergeOptimisticMessages(incoming = listOf(oldHistoryUser), optimistic = listOf(optimistic))
 
     assertEquals(listOf("remote-old-user", "local-user"), merged.map { it.id })
   }
+
+  private fun textMessage(
+    id: String,
+    role: String,
+    text: String,
+    timestampMs: Long?,
+    idempotencyKey: String? = null,
+    entryId: String? = null,
+  ): ChatMessage =
+    ChatMessage(
+      id = id,
+      role = role,
+      content = listOf(ChatMessageContent(text = text)),
+      timestampMs = timestampMs,
+      idempotencyKey = idempotencyKey,
+      entryId = entryId,
+    )
 }

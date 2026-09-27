@@ -35,7 +35,7 @@ export async function invokeNativeHookRelayBridge(
   let lastError: unknown = new Error("native hook relay bridge not found");
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const record = readNativeHookRelayClientBridgeRecord({
+      const record = await readNativeHookRelayClientBridgeRecord({
         relayId,
         stateDbPath: params.stateDbPath,
       });
@@ -50,9 +50,13 @@ export async function invokeNativeHookRelayBridge(
       if (Date.now() > record.expiresAtMs) {
         throw new Error("native hook relay bridge expired");
       }
+      const remainingMs = timeoutMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
+        throw new Error("native hook relay bridge timed out");
+      }
       return await postNativeHookRelayBridgeRecord({
         record,
-        timeoutMs: Math.max(1, timeoutMs - (Date.now() - startedAt)),
+        timeoutMs: remainingMs,
         payload: {
           provider,
           relayId,

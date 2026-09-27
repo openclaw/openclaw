@@ -16,13 +16,6 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}${route}`);
         const input = page.locator(".agent-chat__file-input").first();
         await input.waitFor({ state: "attached" });
-        await page.locator(".shell, .card.chat").evaluateAll(async (elements) => {
-          await Promise.all(
-            elements.flatMap((element) =>
-              element.getAnimations().map((animation) => animation.finished),
-            ),
-          );
-        });
         const resources = await page.evaluateHandle(() => {
           const urls = new Set<string>();
           const media = new Set<HTMLMediaElement>();

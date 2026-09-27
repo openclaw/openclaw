@@ -3,10 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { lockState, unlockWorktree } from "./git-lock.js";
+import * as registryRead from "./registry-read.js";
 import {
   admitWorktreeRunLeaseRow,
   getRegistryWorktree,
@@ -44,7 +49,10 @@ async function initializeRepository(root: string): Promise<string> {
 describe("worktree run lease", () => {
   const templateTempDirs = useAutoCleanupTempDirTracker(afterAll);
   const caseTempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
+    afterEach(async () => {
+      vi.useRealTimers();
+      await closeOpenClawStateDatabaseAsync();
+      vi.restoreAllMocks();
       runLeaseTesting.resetForTest();
       closeOpenClawStateDatabaseForTest();
       cleanup();
@@ -94,7 +102,10 @@ describe("worktree run lease", () => {
     expect(await lockState(record!)).toEqual({ kind: "live", pid: process.pid });
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
 
+    const sql = observeMainThreadSql();
     await parent.release();
+    sql.expectIdle();
+    sql.restore();
     expect(await lockState(record!)).toEqual({ kind: "live", pid: process.pid });
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
 
@@ -146,6 +157,24 @@ describe("worktree run lease", () => {
     const nextRun = await acquireWorktreeRunLease(created.id, { env });
     await nextRun.release();
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+  });
+
+  it("acquires a Git guard after a previous acquisition failed to read the registry", async () => {
+    const created = await createSessionWorktree();
+    const record = getRegistryWorktree(env, created.id)!;
+    vi.spyOn(registryRead, "readRegistryWorktree").mockImplementationOnce(async () => {
+      throw new Error("simulated registry read failure");
+    });
+
+    await expect(acquireWorktreeRunLease(created.id, { env })).rejects.toThrow(
+      "simulated registry read failure",
+    );
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+    await lease.release();
+    expect(await lockState(record)).toEqual({ kind: "none" });
   });
 
   it("resolves the worktree id for a nested workspace path with no session binding", async () => {
@@ -249,7 +278,7 @@ describe("worktree run lease", () => {
     const record = getRegistryWorktree(env, created.id)!;
 
     let attempts = 0;
-    runLeaseTesting.setReleaseRowImplForTest((rowEnv, id, token) => {
+    runLeaseTesting.setReleaseRowImplForTest(async (rowEnv, id, token) => {
       attempts += 1;
       if (attempts === 1) {
         throw new Error("simulated state database failure");
@@ -257,8 +286,22 @@ describe("worktree run lease", () => {
       releaseWorktreeRunLeaseRow(rowEnv, id, token);
     });
 
-    await lease.release();
-    expect(attempts).toBeGreaterThanOrEqual(2);
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const release = lease.release();
+    let concurrentReleaseSettled = false;
+    const concurrentRelease = lease.release().then(() => {
+      concurrentReleaseSettled = true;
+    });
+    await Promise.resolve();
+    expect(attempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(24);
+    expect(attempts).toBe(1);
+    expect(concurrentReleaseSettled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await release;
+    await concurrentRelease;
+    vi.useRealTimers();
+    expect(attempts).toBe(2);
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
     expect(await lockState(record)).toEqual({ kind: "none" });
   });
@@ -269,14 +312,18 @@ describe("worktree run lease", () => {
     const record = getRegistryWorktree(env, created.id)!;
 
     let fail = true;
-    runLeaseTesting.setReleaseRowImplForTest((rowEnv, id, token) => {
+    runLeaseTesting.setReleaseRowImplForTest(async (rowEnv, id, token) => {
       if (fail) {
         throw new Error("simulated state database failure");
       }
       releaseWorktreeRunLeaseRow(rowEnv, id, token);
     });
 
-    await lease.release();
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const release = lease.release();
+    await vi.advanceTimersByTimeAsync(75);
+    await release;
+    vi.useRealTimers();
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
     expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
     expect(() => claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" })).toThrow(
@@ -308,27 +355,40 @@ describe("worktree run lease", () => {
     expect(await lockState(record)).toEqual({ kind: "none" });
   });
 
-  it("retains the git guard when unlock fails, releasing it on a lifecycle retry", async () => {
-    const created = await createSessionWorktree();
-    const lease = await acquireWorktreeRunLease(created.id, { env });
-    const record = getRegistryWorktree(env, created.id)!;
+  it.each(["unlock", "registry read"])(
+    "retains the Git guard when %s fails, releasing it on a lifecycle retry",
+    async (failure) => {
+      const created = await createSessionWorktree();
+      const lease = await acquireWorktreeRunLease(created.id, { env });
+      const record = getRegistryWorktree(env, created.id)!;
 
-    let failUnlock = true;
-    runLeaseTesting.setUnlockImplForTest(async (rec) => {
-      if (failUnlock) {
-        throw new Error("simulated git unlock failure");
+      let fail = true;
+      if (failure === "unlock") {
+        runLeaseTesting.setUnlockImplForTest(async (rec) => {
+          if (fail) {
+            throw new Error("simulated git unlock failure");
+          }
+          await unlockWorktree(rec);
+        });
+      } else {
+        const readWorktree = registryRead.readRegistryWorktree;
+        vi.spyOn(registryRead, "readRegistryWorktree").mockImplementation(async (...args) => {
+          if (fail) {
+            throw new Error("simulated registry read failure");
+          }
+          return readWorktree(...args);
+        });
       }
-      await unlockWorktree(rec);
-    });
 
-    await lease.release();
-    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
-    expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+      await lease.release();
+      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+      expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
 
-    failUnlock = false;
-    await runLeaseTesting.drainPendingCleanupsForTest();
-    expect(await lockState(record)).toEqual({ kind: "none" });
-  });
+      fail = false;
+      await runLeaseTesting.drainPendingCleanupsForTest();
+      expect(await lockState(record)).toEqual({ kind: "none" });
+    },
+  );
 
   it("does not let a failed cleanup unlock a newer holder generation", async () => {
     const created = await createSessionWorktree();

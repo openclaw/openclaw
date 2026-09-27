@@ -118,10 +118,17 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}workboard/ops?agent=main`);
       expect(response?.status()).toBe(200);
       await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
-      const headerGlyph = page.locator(".workboard-board-glyph--header");
-      await expect.poll(() => headerGlyph.textContent()).toContain("⚙");
-      await expect.poll(() => headerGlyph.getAttribute("style")).toContain("#22c55e");
-      await page.locator(".workboard-select--toolbar-board").waitFor();
+      const headerGlyph = page.locator(".workboard-board-glyph--header openclaw-appearance-glyph");
+      await expect
+        .poll(() => headerGlyph.evaluate((element) => element.shadowRoot?.textContent ?? ""))
+        .toContain("⚙");
+      await expect
+        .poll(() => headerGlyph.evaluate((element) => getComputedStyle(element).color))
+        .toBe("rgb(34, 197, 94)");
+      const filterTrigger = page.locator(".workboard-filter-trigger");
+      await filterTrigger.click();
+      await page.getByRole("button", { name: /^Filter by board:/u }).waitFor();
+      await filterTrigger.click();
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(artifactDir, "01-board-route.png"),
@@ -227,7 +234,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}workboard`);
         await gateway.waitForRequest("agents.list");
 
-        const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+        const agentScope = page.locator(".workboard-agent-filter openclaw-agent-select");
         await agentScope.locator(".agent-select__trigger").click();
         await expect
           .poll(() =>

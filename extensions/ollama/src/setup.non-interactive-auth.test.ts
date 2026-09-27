@@ -1,6 +1,7 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { configureOllamaNonInteractive } from "./setup.js";
 
 const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => {}));
@@ -64,45 +65,34 @@ function createOllamaFetchMock(params: {
   });
 }
 
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } as unknown as RuntimeEnv;
-}
-
 describe("Ollama non-interactive onboarding", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     upsertAuthProfileWithLock.mockClear();
   });
 
-  it.each([{ capabilities: ["embedding"] }, { capabilities: ["embedding", "tools"] }])(
-    "rejects an explicitly selected embedding-only model with capabilities $capabilities",
-    async ({ capabilities }) => {
-      vi.stubGlobal(
-        "fetch",
-        createOllamaFetchMock({
-          tags: ["embedding-model"],
-          capabilities: { "embedding-model": capabilities },
-        }),
-      );
-      const runtime = createRuntime();
-      const nextConfig = { agents: { defaults: { model: { primary: "ollama/qwen3:1.7b" } } } };
-      const result = await configureOllamaNonInteractive({
-        nextConfig,
-        opts: { customBaseUrl: "http://127.0.0.1:11434", customModelId: "embedding-model" },
-        runtime,
-      });
-      expect(result).toBe(nextConfig);
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.error).toHaveBeenCalledWith(
-        "Ollama model embedding-model only supports embeddings. Choose a chat model instead.",
-      );
-      expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects an explicitly selected embedding-only model despite advertised tools", async () => {
+    vi.stubGlobal(
+      "fetch",
+      createOllamaFetchMock({
+        tags: ["embedding-model"],
+        capabilities: { "embedding-model": ["embedding", "tools"] },
+      }),
+    );
+    const runtime: RuntimeEnv = createRuntimeSpies();
+    const nextConfig = { agents: { defaults: { model: { primary: "ollama/qwen3:1.7b" } } } };
+    const result = await configureOllamaNonInteractive({
+      nextConfig,
+      opts: { customBaseUrl: "http://127.0.0.1:11434", customModelId: "embedding-model" },
+      runtime,
+    });
+    expect(result).toBe(nextConfig);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Ollama model embedding-model only supports embeddings. Choose a chat model instead.",
+    );
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+  });
 
   it.each([
     {
@@ -121,7 +111,7 @@ describe("Ollama non-interactive onboarding", () => {
       pullResponse: new Response(body, { status: 200 }),
     });
     vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
+    const runtime: RuntimeEnv = createRuntimeSpies();
     const nextConfig = {};
 
     const result = await configureOllamaNonInteractive({
@@ -134,6 +124,7 @@ describe("Ollama non-interactive onboarding", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledWith(error);
+    expect(runtime.log).not.toHaveBeenCalledWith("Downloaded missing-model");
     expect(runtime.error).toHaveBeenCalledWith(
       [
         "No Ollama chat models are available at http://127.0.0.1:11434.",
@@ -160,7 +151,7 @@ describe("Ollama non-interactive onboarding", () => {
       pullResponse: new Response('{"error":"disk full"}\n', { status: 200 }),
     });
     vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
+    const runtime: RuntimeEnv = createRuntimeSpies();
 
     const nextConfig = {
       agents: {
@@ -202,7 +193,7 @@ describe("Ollama non-interactive onboarding", () => {
       capabilities: { "qwen3:1.7b": ["completion", "embedding"] },
     });
     vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
+    const runtime: RuntimeEnv = createRuntimeSpies();
 
     const result = await configureOllamaNonInteractive({
       nextConfig: {},
@@ -227,7 +218,7 @@ describe("Ollama non-interactive onboarding", () => {
   it("keeps an installed suggested local model first in non-interactive setup", async () => {
     const fetchMock = createOllamaFetchMock({ tags: ["qwen3:1.7b", "gemma4"] });
     vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
+    const runtime: RuntimeEnv = createRuntimeSpies();
 
     const result = await configureOllamaNonInteractive({
       nextConfig: {},
@@ -270,7 +261,7 @@ describe("Ollama non-interactive onboarding", () => {
       },
     });
     vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
+    const runtime: RuntimeEnv = createRuntimeSpies();
 
     const result = await configureOllamaNonInteractive({
       nextConfig: {},
@@ -300,7 +291,7 @@ describe("Ollama non-interactive onboarding", () => {
         customBaseUrl: "http://127.0.0.1:11434",
         customModelId: modelId,
       },
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
     });
 
     expect(result.agents?.defaults?.model).toEqual({ primary: `ollama/${modelId}` });
@@ -345,7 +336,7 @@ describe("Ollama non-interactive onboarding", () => {
           customBaseUrl: "http://127.0.0.1:11434",
           customModelId: modelId,
         },
-        runtime: createRuntime(),
+        runtime: createRuntimeSpies(),
       });
 
       expect(result.agents?.defaults?.model).toEqual({ primary: `ollama/${modelId}` });

@@ -1,9 +1,12 @@
 import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayService } from "../../daemon/service.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { formatCliCommand } from "../command-format.js";
+import { createGatewayRestartDeadline } from "./restart-health-deadline.js";
 import {
   DEFAULT_RESTART_HEALTH_DELAY_MS,
+  formatGatewayRestartFailure,
   renderRestartDiagnostics,
   waitForGatewayHttpReadiness,
   waitForGatewayHealthyRestart,
@@ -11,7 +14,7 @@ import {
 
 export async function verifyGatewayStartReadiness(params: {
   expectedPort?: number;
-  fail: (message: string, hints?: string[]) => void;
+  fail: (message: string, hints?: string[], result?: "still-starting") => void;
   resolveContext: () => Promise<{ config?: OpenClawConfig; env: NodeJS.ProcessEnv; port: number }>;
   service: GatewayService;
   warnings: string[];
@@ -21,16 +24,23 @@ export async function verifyGatewayStartReadiness(params: {
   const port = params.expectedPort ?? context.port;
   const deadlineAt = Date.now() + deadlineMs;
   const attempts = Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS);
+  const healthDeadline = createGatewayRestartDeadline({ timeoutMs: deadlineMs });
   const [health, readiness] = await Promise.all([
-    waitForGatewayHealthyRestart({
-      service: params.service,
-      port,
-      attempts,
-      delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
-      env: context.env,
-      includeUnknownListenersAsStale: process.platform === "win32",
-      supervisorKeepsAlive: process.platform === "darwin",
-    }),
+    withCommandProcessScope(
+      () =>
+        waitForGatewayHealthyRestart({
+          service: params.service,
+          port,
+          attempts,
+          delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+          timeoutMs: deadlineMs,
+          deadline: healthDeadline,
+          deadlineOutcome: "snapshot",
+          env: context.env,
+          supervisorKeepsAlive: process.platform === "darwin",
+        }),
+      healthDeadline.signal,
+    ).finally(() => healthDeadline.dispose()),
     waitForGatewayHttpReadiness({
       config: context.config,
       port,
@@ -47,6 +57,18 @@ export async function verifyGatewayStartReadiness(params: {
     `Gateway HTTP readiness: /healthz=${readiness.healthz ?? "unreachable"}; ` +
       `/readyz=${readiness.readyz ?? "unreachable"}.`,
   );
+  if (health.waitOutcome === "still-starting") {
+    params.fail(
+      formatGatewayRestartFailure({
+        health,
+        port,
+        defaultTimeoutSeconds: Math.round(deadlineMs / 1000),
+      }).failMessage,
+      [formatCliCommand("openclaw gateway status --deep")],
+      "still-starting",
+    );
+    return;
+  }
   params.fail(
     `Gateway start timed out after ${Math.round(deadlineMs / 1000)}s waiting for /healthz and /readyz.`,
     [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],

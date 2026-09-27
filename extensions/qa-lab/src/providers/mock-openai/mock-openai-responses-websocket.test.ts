@@ -373,7 +373,7 @@ describe("QA mock OpenAI Responses WebSocket", () => {
       type: "response.create",
       model: "gpt-5.6-sol",
       stream: true,
-      instructions: "Runtime: codex | sessionId=compaction-websocket",
+      client_metadata: { session_id: "compaction-websocket" },
       input: [
         {
           role: "user",

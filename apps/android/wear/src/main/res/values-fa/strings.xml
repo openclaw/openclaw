@@ -6,6 +6,8 @@
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"کنترل‌ها"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گفتگو"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"صدای ساعت با خطا مواجه شد"</string>
+    <string name="microphone_permission_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"مجوز دسترسی به میکروفون لازم است"</string>
+    <string name="open_settings" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"باز کردن تنظیمات"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تایپ صوتی"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"زنده"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رشته گفتگو"</string>
@@ -26,6 +28,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خواندن آخرین پاسخ با صدا"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال صحبت"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال گوش دادن"</string>
+    <string name="stopping" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"در حال پایان دادن به تماس…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال اتصال"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال فکر کردن"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال تایپ"</string>
@@ -79,6 +82,8 @@
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اقدام پذیرفته نشد"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مشکلی پیش آمد"</string>
     <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فهرست‌ها را تازه‌سازی کنید و دوباره تلاش کنید."</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"اطلاعات برخی مدل‌ها بازخوانی نشد. مدل‌های فهرست‌شده همچنان در دسترس هستند."</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"برای انتخاب مدل‌ها در این گفتگو، OpenClaw روی گوشی خود و Gateway را به‌روزرسانی کنید."</string>
     <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"دوباره از طریق ساعت امتحان کنید."</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"به‌روزرسانی لازم است"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw را هم در تلفن و هم در ساعت به‌روزرسانی کنید."</string>
@@ -121,4 +126,14 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"در صف %1$d, در حال اجرا %2$d, انجام‌شده %3$d, ناموفق %4$d, پنهان %5$d"</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"مراحل بیشتری نمایش داده نشده‌اند"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"نامشخص"</string>
+    <string name="read_full_reply" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"خواندن پاسخ کامل"</string>
+    <string name="reply_stream_preview" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"پیش‌نمایش زنده. پس از تکمیل پاسخ، متن کامل آن را بخوانید."</string>
+    <string name="reply_previous_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"بخش قبلی"</string>
+    <string name="reply_next_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"بخش بعدی"</string>
+    <string name="reply_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"در حال بارگذاری پاسخ کامل…"</string>
+    <string name="reply_unsupported" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"برای خواندن پاسخ‌های کامل، برنامهٔ گوشی و Gateway را به‌روزرسانی کنید."</string>
+    <string name="reply_too_large" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"این پاسخ برای خواندن در اینجا بیش از حد طولانی است. آن را در گوشی خود باز کنید."</string>
+    <string name="reply_changed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"پاسخ یا اتصال تغییر کرده است. دوباره از ابتدا تلاش کنید."</string>
+    <string name="reply_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"متن کامل دیگر در دسترس نیست."</string>
+    <string name="reply_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"بارگیری پاسخ کامل ممکن نشد. دوباره تلاش کنید."</string>
 </resources>

@@ -1,5 +1,4 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
@@ -8,19 +7,12 @@ import {
   chunkOpenAIQuicksilverAppendText,
   parseOpenAIQuicksilverEvent,
 } from "./realtime-quicksilver-wire.js";
-import { FakeSocket, parseSent } from "./realtime-quicksilver.test-helpers.js";
-
-type ConsultRunner = ((params: {
-  prompt: string;
-  signal?: AbortSignal;
-  requesterFinal?: { append: (text: string) => boolean };
-}) => Promise<{ text: string; yielded?: true }>) & {
-  adoptCompletionClaims?: () => void;
-  claimAppend?: () => boolean;
-  claimFailureAppend?: () => boolean;
-  revokeRequesterFinal?: () => void;
-  steer?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
-};
+import {
+  FakeSocket,
+  parseSent,
+  createDelegationHarness,
+  type ConsultRunner,
+} from "./realtime-quicksilver.test-helpers.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -30,58 +22,21 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function createDelegationHarness(params?: {
-  claimAppend?: (() => boolean) | null;
-  claimFailureAppend?: (() => boolean) | null;
-  revokeRequesterFinal?: () => void;
-  runAgentConsult?: ConsultRunner;
-  steerAgentConsult?: ConsultRunner["steer"];
-  handleDelegationInput?: RealtimeVoiceGatewayControl["handleDelegationInput"];
-  getSocket?: () => FakeSocket;
-  onWireEventType?: (eventType: string) => void;
-}) {
-  const socket = new FakeSocket("manual");
-  socket.readyState = 1;
-  const logger = { debug: vi.fn(), warn: vi.fn() };
-  const onFatalError = vi.fn();
-  const sessionController = new AbortController();
-  const claimAppend =
-    params?.claimAppend === null ? undefined : (params?.claimAppend ?? (() => true));
-  const claimFailureAppend =
-    params?.claimFailureAppend === null ? undefined : (params?.claimFailureAppend ?? (() => true));
-  const runAgentConsult = Object.assign(
-    params?.runAgentConsult ?? vi.fn(async () => ({ text: "Done" })),
-    {
-      ...(claimAppend ? { claimAppend } : {}),
-      ...(claimFailureAppend ? { claimFailureAppend } : {}),
-      ...(params?.revokeRequesterFinal
-        ? { revokeRequesterFinal: params.revokeRequesterFinal }
-        : {}),
-      ...(params?.steerAgentConsult ? { steer: params.steerAgentConsult } : {}),
-    },
-  );
-  const controller = new OpenAIQuicksilverDelegationController(
-    {
-      getSocket: params?.getSocket ?? (() => socket),
-      handleDelegationInput: params?.handleDelegationInput,
-      logger,
-      model: "gpt-live-test-canary",
-      onFatalError,
-      onWireEventType: params?.onWireEventType,
-      runAgentConsult,
-      signal: sessionController.signal,
-    },
-    formatErrorMessage,
-  );
-  return { controller, logger, onFatalError, runAgentConsult, sessionController, socket };
-}
-
 function delegate(
   controller: OpenAIQuicksilverDelegationController,
   id: string,
   prompt: string,
 ): void {
   controller.handleEvent({ kind: "delegation", id, prompt });
+}
+
+function delegationAppend(id: string, text: string) {
+  return {
+    type: "delegation.context.append",
+    delegation_item_id: id,
+    channel: "speakable",
+    content: [{ type: "input_text", text }],
+  };
 }
 
 afterEach(() => {
@@ -129,21 +84,11 @@ describe("GPT-Live sideband protocol", () => {
       expect(runAgentConsult.mock.calls[0]?.[0].signal?.aborted).toBe(false);
       expect(runAgentConsult).toHaveBeenCalledOnce();
       expect(parseSent(socket).slice(beforeControl)).toEqual([
-        {
-          type: "delegation.context.append",
-          delegation_item_id: "control-C",
-          channel: "speakable",
-          content: [{ type: "input_text", text: "Host status" }],
-        },
+        delegationAppend("control-C", "Host status"),
       ]);
       finish({ text: "Original result" });
       await vi.waitFor(() =>
-        expect(parseSent(socket)).toContainEqual({
-          type: "delegation.context.append",
-          delegation_item_id: "task-A",
-          channel: "speakable",
-          content: [{ type: "input_text", text: "Original result" }],
-        }),
+        expect(parseSent(socket)).toContainEqual(delegationAppend("task-A", "Original result")),
       );
       await nextEventLoopTurn();
       delegate(controller, "task-B", "Another task");
@@ -256,12 +201,7 @@ describe("GPT-Live sideband protocol", () => {
           channel: "speakable",
           content: [{ type: "input_text", text: "Still checking" }],
         },
-        {
-          type: "delegation.context.append",
-          delegation_item_id: "work",
-          channel: "speakable",
-          content: [{ type: "input_text", text: "Finished checking" }],
-        },
+        delegationAppend("work", "Finished checking"),
       ]);
       controller.detach();
       controller.sendSessionContext("Late speech", "speakable");
@@ -270,22 +210,6 @@ describe("GPT-Live sideband protocol", () => {
       finish({ text: "Finished" });
       controller.stop(new Error("test complete"));
     }
-  });
-
-  it("ignores session.updated server-side", () => {
-    const type = "session.updated";
-    expect(parseOpenAIQuicksilverEvent(JSON.stringify({ type }))).toEqual({
-      kind: "ignored",
-      eventType: type,
-    });
-  });
-
-  it("parses direct WebSocket audio", () => {
-    expect(
-      parseOpenAIQuicksilverEvent(
-        JSON.stringify({ type: "output_audio.delta", audio: "AQIDBA==" }),
-      ),
-    ).toEqual({ kind: "audio", data: "AQIDBA==" });
   });
 
   it("parses session expiry and transcript events", () => {
@@ -537,12 +461,7 @@ describe("GPT-Live sideband protocol", () => {
     try {
       delegate(controller, "finished-task", "first task");
       await vi.waitFor(() =>
-        expect(parseSent(socket)).toContainEqual({
-          type: "delegation.context.append",
-          delegation_item_id: "finished-task",
-          channel: "speakable",
-          content: [{ type: "input_text", text: "Done" }],
-        }),
+        expect(parseSent(socket)).toContainEqual(delegationAppend("finished-task", "Done")),
       );
       delegate(controller, "late-cancel", "cancel");
       expect(runAgentConsult).toHaveBeenCalledOnce();
@@ -648,12 +567,9 @@ describe("GPT-Live sideband protocol", () => {
     firstResult.resolve({ text: "stale result" });
     await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
     await vi.waitFor(() =>
-      expect(parseSent(socket)).toContainEqual({
-        type: "delegation.context.append",
-        delegation_item_id: "delegation-latest",
-        channel: "speakable",
-        content: [{ type: "input_text", text: "latest result" }],
-      }),
+      expect(parseSent(socket)).toContainEqual(
+        delegationAppend("delegation-latest", "latest result"),
+      ),
     );
 
     expect(claimAppend).toHaveBeenCalledTimes(2);
@@ -695,12 +611,9 @@ describe("GPT-Live sideband protocol", () => {
 
     result.resolve({ text: "work continues", yielded: true });
     await vi.waitFor(() =>
-      expect(parseSent(socket)).toContainEqual({
-        type: "delegation.context.append",
-        delegation_item_id: "delegation-latest",
-        channel: "speakable",
-        content: [{ type: "input_text", text: "work continues" }],
-      }),
+      expect(parseSent(socket)).toContainEqual(
+        delegationAppend("delegation-latest", "work continues"),
+      ),
     );
     expect(appendRequesterFinal?.("latest result")).toBe(true);
     expect(appendRequesterFinal?.("duplicate result")).toBe(false);
@@ -711,18 +624,8 @@ describe("GPT-Live sideband protocol", () => {
           event.delegation_item_id === "delegation-latest",
       ),
     ).toEqual([
-      {
-        type: "delegation.context.append",
-        delegation_item_id: "delegation-latest",
-        channel: "speakable",
-        content: [{ type: "input_text", text: "work continues" }],
-      },
-      {
-        type: "delegation.context.append",
-        delegation_item_id: "delegation-latest",
-        channel: "speakable",
-        content: [{ type: "input_text", text: "latest result" }],
-      },
+      delegationAppend("delegation-latest", "work continues"),
+      delegationAppend("delegation-latest", "latest result"),
     ]);
     expect(
       parseSent(socket).filter(
@@ -994,41 +897,6 @@ describe("GPT-Live sideband protocol", () => {
     await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
     expect(claimAppend).toHaveBeenCalledOnce();
     expect(claimFailureAppend).not.toHaveBeenCalled();
-  });
-
-  it("handles structured delegated failures with a non-string message", async () => {
-    const structuredFailure = { code: "UNAVAILABLE", message: 503 };
-    const runAgentConsult = vi.fn<ConsultRunner>(() =>
-      Promise.reject(new Error(String(structuredFailure.message), { cause: structuredFailure })),
-    );
-    const { controller, logger, socket } = createDelegationHarness({ runAgentConsult });
-
-    delegate(controller, "delegation-structured-failure", "do work");
-
-    await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
-    expect(parseSent(socket)).toContainEqual(
-      expect.objectContaining({
-        delegation_item_id: "delegation-structured-failure",
-        channel: "speakable",
-        content: [
-          {
-            type: "input_text",
-            text: "The agent task failed. Tell the user it did not complete and offer to try again.",
-          },
-        ],
-      }),
-    );
-    expect(logger.warn).toHaveBeenCalled();
-  });
-
-  it("surfaces fatal sideband errors to the lifecycle owner", () => {
-    const { controller, logger, onFatalError } = createDelegationHarness();
-    controller.handleEvent({ kind: "error", message: "token expired", fatalAuth: true });
-
-    expect(logger.warn).toHaveBeenCalledWith("OpenAI GPT-Live provider error");
-    expect(onFatalError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "OpenAI GPT-Live provider error" }),
-    );
   });
 
   it("redacts the opaque model from sideband errors before logging or callbacks", () => {

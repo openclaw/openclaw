@@ -4,17 +4,20 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { assertProposalId, parseSkillProposalRollback } from "./store-record.js";
 import { parseJson } from "./store-sqlite-record.js";
-import {
-  databaseOptions,
-  ensureSkillWorkshopSchema,
-  openSkillWorkshopStore,
-  type SkillWorkshopDatabase,
-  type SkillWorkshopStoreOptions,
-} from "./store-sqlite-schema.js";
+import type { SkillWorkshopDatabase } from "./store-sqlite-schema.js";
 import { SKILL_WORKSHOP_ROLLBACK_SCHEMA, type SkillProposalRollback } from "./types.js";
+
+export type WriteSkillProposalRollbackInput = {
+  proposalId: string;
+  rollback: SkillProposalRollback;
+};
+
+export type ClearSkillProposalRollbackInput = {
+  proposalId: string;
+  expectedRecordJson: string;
+};
 
 function removeOtherPendingTargetRollbacks(
   database: DatabaseSync,
@@ -45,77 +48,67 @@ function removeOtherPendingTargetRollbacks(
   }
 }
 
-export async function writeSkillProposalRollback(params: {
-  proposalId: string;
-  rollback: SkillProposalRollback;
-  store?: SkillWorkshopStoreOptions;
-}): Promise<void> {
+export function writeSkillProposalRollbackInDatabase(
+  db: DatabaseSync,
+  params: WriteSkillProposalRollbackInput,
+): void {
   assertProposalId(params.proposalId);
-  ensureSkillWorkshopSchema(params.store);
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
-      const proposal = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("skill_workshop_proposals")
-          .select(["proposal_id", "kind", "status"])
-          .where("proposal_id", "=", params.proposalId),
-      );
-      if (!proposal) {
-        throw new Error(`Skill proposal not found: ${params.proposalId}`);
-      }
-      if (proposal.status !== "pending") {
-        throw new Error(
-          `Only pending proposals can be applied. Current status: ${proposal.status}.`,
-        );
-      }
-      removeOtherPendingTargetRollbacks(db, {
-        proposalId: params.proposalId,
-        targetSkillFile: params.rollback.targetSkillFile,
-      });
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .insertInto("skill_workshop_proposal_rollbacks")
-          .values({
-            proposal_id: params.proposalId,
-            written_at: params.rollback.writtenAt,
-            target_skill_file: params.rollback.targetSkillFile,
-            action: params.rollback.action,
-            previous_content_hash: params.rollback.previousContentHash ?? null,
-            previous_content: params.rollback.previousContent ?? null,
-            support_files_json: params.rollback.supportFiles
-              ? JSON.stringify(params.rollback.supportFiles)
-              : null,
-          })
-          .onConflict((conflict) =>
-            conflict.column("proposal_id").doUpdateSet({
-              written_at: params.rollback.writtenAt,
-              target_skill_file: params.rollback.targetSkillFile,
-              action: params.rollback.action,
-              previous_content_hash: params.rollback.previousContentHash ?? null,
-              previous_content: params.rollback.previousContent ?? null,
-              support_files_json: params.rollback.supportFiles
-                ? JSON.stringify(params.rollback.supportFiles)
-                : null,
-            }),
-          ),
-      );
-    },
-    databaseOptions(params.store),
-    { operationLabel: "skill-workshop.rollback.write" },
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
+  const proposal = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("skill_workshop_proposals")
+      .select(["proposal_id", "kind", "status"])
+      .where("proposal_id", "=", params.proposalId),
+  );
+  if (!proposal) {
+    throw new Error(`Skill proposal not found: ${params.proposalId}`);
+  }
+  if (proposal.status !== "pending") {
+    throw new Error(`Only pending proposals can be applied. Current status: ${proposal.status}.`);
+  }
+  removeOtherPendingTargetRollbacks(db, {
+    proposalId: params.proposalId,
+    targetSkillFile: params.rollback.targetSkillFile,
+  });
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .insertInto("skill_workshop_proposal_rollbacks")
+      .values({
+        proposal_id: params.proposalId,
+        written_at: params.rollback.writtenAt,
+        target_skill_file: params.rollback.targetSkillFile,
+        action: params.rollback.action,
+        previous_content_hash: params.rollback.previousContentHash ?? null,
+        previous_content: params.rollback.previousContent ?? null,
+        support_files_json: params.rollback.supportFiles
+          ? JSON.stringify(params.rollback.supportFiles)
+          : null,
+      })
+      .onConflict((conflict) =>
+        conflict.column("proposal_id").doUpdateSet({
+          written_at: params.rollback.writtenAt,
+          target_skill_file: params.rollback.targetSkillFile,
+          action: params.rollback.action,
+          previous_content_hash: params.rollback.previousContentHash ?? null,
+          previous_content: params.rollback.previousContent ?? null,
+          support_files_json: params.rollback.supportFiles
+            ? JSON.stringify(params.rollback.supportFiles)
+            : null,
+        }),
+      ),
   );
 }
 
-export async function readSkillProposalRollback(
+export function readSkillProposalRollbackInDatabase(
+  database: DatabaseSync,
   proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-): Promise<SkillProposalRollback | null> {
+): SkillProposalRollback | null {
   assertProposalId(proposalId);
-  const { database, kysely } = openSkillWorkshopStore(options);
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const row = executeSqliteQueryTakeFirstSync(
-    database.db,
+    database,
     kysely
       .selectFrom("skill_workshop_proposal_rollbacks")
       .selectAll()
@@ -136,39 +129,31 @@ export async function readSkillProposalRollback(
   });
 }
 
-export async function clearSkillProposalRollback(params: {
-  proposalId: string;
-  expectedRecordJson: string;
-  store?: SkillWorkshopStoreOptions;
-}): Promise<boolean> {
+export function clearSkillProposalRollbackInDatabase(
+  db: DatabaseSync,
+  params: ClearSkillProposalRollbackInput,
+): boolean {
   assertProposalId(params.proposalId);
-  ensureSkillWorkshopSchema(params.store);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
-      const proposal = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("skill_workshop_proposals")
-          .select(["record_json", "status"])
-          .where("proposal_id", "=", params.proposalId),
-      );
-      if (
-        !proposal ||
-        proposal.status !== "pending" ||
-        proposal.record_json !== params.expectedRecordJson
-      ) {
-        return false;
-      }
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .deleteFrom("skill_workshop_proposal_rollbacks")
-          .where("proposal_id", "=", params.proposalId),
-      );
-      return true;
-    },
-    databaseOptions(params.store),
-    { operationLabel: "skill-workshop.rollback.clear" },
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
+  const proposal = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("skill_workshop_proposals")
+      .select(["record_json", "status"])
+      .where("proposal_id", "=", params.proposalId),
   );
+  if (
+    !proposal ||
+    proposal.status !== "pending" ||
+    proposal.record_json !== params.expectedRecordJson
+  ) {
+    return false;
+  }
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .deleteFrom("skill_workshop_proposal_rollbacks")
+      .where("proposal_id", "=", params.proposalId),
+  );
+  return true;
 }

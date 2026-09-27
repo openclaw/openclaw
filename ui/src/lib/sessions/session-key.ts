@@ -1,4 +1,3 @@
-// Control UI module implements session key behavior.
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -31,13 +30,23 @@ type UiSessionDefaults = {
 
 export { normalizeAgentId };
 
+export function resolveUiSessionRowAgentId(
+  row: { key: string; agentId?: string },
+  fallbackAgentId: string,
+): string {
+  return parseAgentSessionKey(row.key)?.agentId ?? row.agentId ?? fallbackAgentId;
+}
+
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
   // Display ownership historically tolerates empty segments and folds the tail.
   // Store identities and URL literals apply their own stricter policies.
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   return parseAgentSessionKeyParts(
-    normalizeLowercaseStringOrEmpty(sessionKey).split(":").filter(Boolean).join(":"),
+    normalized.startsWith(":") || normalized.endsWith(":") || normalized.includes("::")
+      ? normalized.split(":").filter(Boolean).join(":")
+      : normalized,
   );
 }
 
@@ -57,12 +66,25 @@ export function resolveUiSessionNavigationParentKey(
 }
 
 // Mirrors the Gateway policy in src/config/sessions/session-pin-policy.ts.
+// Durable dashboard sessions auto-parent to the agent main root for flow-up
+// notices and sidebar threads; that lineage does not make them nested children.
 export function isPinnableUiSessionRow(row: {
   key: string;
   parentSessionKey?: string | null;
   spawnedBy?: string | null;
 }): boolean {
-  return resolveUiSessionNavigationParentKey(row) == null && !isSubagentSessionKey(row.key);
+  if (isSubagentSessionKey(row.key) || normalizeOptionalString(row.spawnedBy)) {
+    return false;
+  }
+  const parentSessionKey = normalizeOptionalString(row.parentSessionKey);
+  if (!parentSessionKey) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(row.key);
+  if (!parsed?.agentId) {
+    return false;
+  }
+  return parentSessionKey === buildAgentMainSessionKey({ agentId: parsed.agentId });
 }
 
 export function normalizeSessionKeyForUiComparison(sessionKey: string | undefined | null): string {
@@ -254,19 +276,22 @@ export function uiConversationMatches(
   selectedKey: string | undefined | null,
   candidateKey: string | undefined | null,
   candidateAgentId?: string | null,
+  selectedAgentId?: string | null,
 ): boolean {
   const selected = normalizeOptionalString(selectedKey);
   const candidate = normalizeOptionalString(candidateKey);
   if (!selected || !candidate) {
     return false;
   }
-  const current = resolveUiConversationIdentity(host, selected);
+  const explicitSelectedAgent = normalizeOptionalString(selectedAgentId);
+  const current = resolveUiConversationIdentity(host, selected, explicitSelectedAgent);
   const explicitAgent = normalizeOptionalString(candidateAgentId);
   const defaultAgent = resolveUiDefaultAgentId(host);
   const other = resolveUiConversationIdentity(host, candidate, explicitAgent ?? defaultAgent);
   const currentAgent = current.agentId ?? defaultAgent;
   const otherAgent = other.agentId ?? defaultAgent;
   return (
+    (!explicitSelectedAgent || normalizeAgentId(explicitSelectedAgent) === currentAgent) &&
     (!explicitAgent || normalizeAgentId(explicitAgent) === otherAgent) &&
     current.sessionKey === other.sessionKey &&
     currentAgent === otherAgent
@@ -402,27 +427,19 @@ export function isSessionKeyTiedToAgent(
   return normalizedAgentId === normalizeAgentId(defaultAgentId);
 }
 
+function hasSessionKeyPrefix(sessionKey: string | undefined | null, prefix: string): boolean {
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
+  return (
+    raw.startsWith(prefix) ||
+    normalizeLowercaseStringOrEmpty(parseAgentSessionKey(raw)?.rest).startsWith(prefix)
+  );
+}
+
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
-  const raw = normalizeOptionalString(sessionKey) ?? "";
-  if (!raw) {
-    return false;
-  }
-  if (normalizeLowercaseStringOrEmpty(raw).startsWith("subagent:")) {
-    return true;
-  }
-  const parsed = parseAgentSessionKey(raw);
-  return normalizeLowercaseStringOrEmpty(parsed?.rest).startsWith("subagent:");
+  return hasSessionKeyPrefix(sessionKey, "subagent:");
 }
 
 /** ACP-backed sessions (`agent:<id>:acp:<uuid>`) belong to the Coding zone, not chat threads. */
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
-  const raw = normalizeOptionalString(sessionKey) ?? "";
-  if (!raw) {
-    return false;
-  }
-  if (normalizeLowercaseStringOrEmpty(raw).startsWith("acp:")) {
-    return true;
-  }
-  const parsed = parseAgentSessionKey(raw);
-  return normalizeLowercaseStringOrEmpty(parsed?.rest).startsWith("acp:");
+  return hasSessionKeyPrefix(sessionKey, "acp:");
 }

@@ -6,7 +6,7 @@ import { STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
-import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
+import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status-state.js";
 import { getGatewaySuspendAdmissionPhase } from "../../process/gateway-work-admission.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAgentSelectionState } from "../agent-list.js";
@@ -14,11 +14,11 @@ import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import { projectUpdateAvailable } from "../events.js";
-import { collectGatewayHealthSnapshot } from "../health/collector.js";
 import type { HealthSummary } from "../health/types.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayClient } from "../server-methods/types.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 let presenceVersion = 1;
@@ -56,6 +56,7 @@ export function buildGatewaySnapshot(opts: {
   includeSensitive?: boolean;
   includeUpdateDetails?: boolean;
   revisionProjector: GatewayConfigRevisionProjector;
+  sessionRowProjection?: SessionRowProjection;
 }): Snapshot {
   const cfg = getRuntimeConfig();
   const selection = resolveGatewayAgentSelectionState(cfg);
@@ -64,9 +65,11 @@ export function buildGatewaySnapshot(opts: {
   const scope = cfg.session?.scope ?? "per-sender";
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: defaultAgentId });
-  const presence = createPresenceRecipientProjection({ cfg, presence: listSystemPresence() })(
-    opts.client,
-  );
+  const presence = createPresenceRecipientProjection({
+    cfg,
+    presence: listSystemPresence(),
+    projection: opts.sessionRowProjection,
+  })(opts.client);
   const uptimeMs = Math.round(process.uptime() * 1000);
   const includeUpdateDetails = opts?.includeUpdateDetails === true;
   const updateAvailable =
@@ -133,6 +136,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   getRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
   const includeSensitive = opts?.includeSensitive === true;
   const audience: HealthAudience = includeSensitive ? "admin" : "public";
@@ -151,21 +155,29 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   const generation = state.nextGeneration + 1;
   state.nextGeneration = generation;
   const promise = (async () => {
+    const { collectGatewayHealthSnapshot } = await import("../health/collector.js");
     let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
     try {
       runtimeSnapshot = opts?.getRuntimeSnapshot?.();
     } catch {
       runtimeSnapshot = undefined;
     }
-    const eventLoop = opts?.getEventLoopHealth?.();
     const configReloadHotReloadStatus = opts?.getConfigReloaderHotReloadStatus?.();
     const snap = await collectGatewayHealthSnapshot({
       audience,
       probe: strength === "probe",
       runtimeSnapshot,
-      ...(eventLoop ? { eventLoop } : {}),
       ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
+      ...(opts?.getSessionRowProjection
+        ? { sessionRowProjection: opts.getSessionRowProjection() }
+        : {}),
     });
+    // Channel collection can outlive several sampling windows. Read diagnostics
+    // only when this new snapshot is ready to return, cache, or broadcast.
+    const eventLoop = opts?.getEventLoopHealth?.();
+    if (eventLoop) {
+      snap.eventLoop = eventLoop;
+    }
     if (
       strength === "probe" &&
       state.inFlight.passive &&

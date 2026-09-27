@@ -5,13 +5,11 @@ import {
   execApprovalsPolicyShapeFinding,
   ingressPolicyShapeFinding,
   scopedDataHandlingPolicyShapeFinding,
-  scopedToolsPolicyShapeFinding,
 } from "./access-shapes.js";
-import { agentWorkspacePolicyShapeFinding } from "./agent-tool-shapes.js";
+import { createOrderedPolicyShape, firstPolicyShapeFinding } from "./ordered-shape.js";
 import { normalizePolicyChannelId } from "./policy-runtime.js";
 import { duplicateScopedPolicyFieldFinding } from "./policy-scope.js";
-import { sandboxPolicyShapeFinding } from "./sandbox-gateway-shapes.js";
-import { policyShapeFinding, policyStringArrayPropertyShapeFinding } from "./shape-helpers.js";
+import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { ocPathSegment } from "./utils.js";
 
 export function scopedPolicyShapeFinding(
@@ -25,251 +23,163 @@ export function scopedPolicyShapeFinding(
   if (value === undefined) {
     return undefined;
   }
-  if (!isRecord(value)) {
-    return policyShapeFinding(
-      params.policyPath,
-      `oc://${params.policyDocName}/scopes`,
-      `${params.policyPath} scopes must be an object.`,
-      `Fix ${params.policyPath} so scopes maps scope names to policy overlays with selectors such as agentIds.`,
-    );
-  }
-  for (const [scopeName, overlay] of Object.entries(value)) {
-    const targetPrefix = `scopes/${ocPathSegment(scopeName)}`;
-    if (!isRecord(overlay)) {
-      return policyShapeFinding(
-        params.policyPath,
-        `oc://${params.policyDocName}/${targetPrefix}`,
-        `${params.policyPath} scopes.${scopeName} must be an object.`,
-        `Fix ${params.policyPath} so the named policy scope is an object.`,
-      );
-    }
-    const hasAgentIds = overlay.agentIds !== undefined;
-    const hasChannelIds = overlay.channelIds !== undefined;
-    if (!hasAgentIds && !hasChannelIds) {
-      return policyShapeFinding(
-        params.policyPath,
-        `oc://${params.policyDocName}/${targetPrefix}`,
-        `${params.policyPath} scopes.${scopeName} must define at least one selector.`,
-        `List agentIds for agent-scoped policy or channelIds for channel-scoped ingress policy.`,
-      );
-    }
-    const agentIdsFinding = scopedSelectorShapeFinding(overlay.agentIds, {
-      policyDocName: params.policyDocName,
-      policyPath: params.policyPath,
-      property: `scopes.${scopeName}.agentIds`,
-      target: `${targetPrefix}/agentIds`,
-      valueName: "agent id",
-      normalize: normalizeAgentId,
-    });
-    if (agentIdsFinding !== undefined) {
-      return agentIdsFinding;
-    }
-    const channelIdsFinding = scopedSelectorShapeFinding(overlay.channelIds, {
-      policyDocName: params.policyDocName,
-      policyPath: params.policyPath,
-      property: `scopes.${scopeName}.channelIds`,
-      target: `${targetPrefix}/channelIds`,
-      valueName: "channel id",
-      normalize: normalizePolicyChannelId,
-    });
-    if (channelIdsFinding !== undefined) {
-      return channelIdsFinding;
-    }
-    if (overlay.ingress !== undefined && !hasChannelIds) {
-      return policyShapeFinding(
-        params.policyPath,
-        `oc://${params.policyDocName}/${targetPrefix}/ingress`,
-        `${params.policyPath} scopes.${scopeName}.ingress requires the channelIds selector.`,
-        `Move global ingress rules to top-level ingress, or list channelIds for channel-scoped ingress policy.`,
-      );
-    }
-    if (
-      (overlay.agents !== undefined ||
-        overlay.dataHandling !== undefined ||
-        overlay.execApprovals !== undefined ||
-        overlay.tools !== undefined ||
-        overlay.sandbox !== undefined) &&
-      !hasAgentIds
-    ) {
-      return policyShapeFinding(
-        params.policyPath,
-        `oc://${params.policyDocName}/${targetPrefix}`,
-        `${params.policyPath} scopes.${scopeName} uses agent-scoped sections without agentIds.`,
-        `List agentIds for agents.workspace, dataHandling.memory, tools, or sandbox policy sections.`,
-      );
-    }
-    const unsupportedKey = Object.keys(overlay).find(
-      (key) =>
-        key !== "agentIds" &&
-        key !== "channelIds" &&
-        key !== "agents" &&
-        key !== "dataHandling" &&
-        key !== "execApprovals" &&
-        key !== "tools" &&
-        key !== "sandbox" &&
-        key !== "ingress",
-    );
-    if (unsupportedKey !== undefined) {
-      return policyShapeFinding(
-        params.policyPath,
-        `oc://${params.policyDocName}/${targetPrefix}/${ocPathSegment(unsupportedKey)}`,
-        `${params.policyPath} scopes.${scopeName}.${unsupportedKey} is not a supported scoped policy section.`,
-        `Use agentIds with agents.workspace, dataHandling.memory, execApprovals, tools, or sandbox, and channelIds with ingress.channels.`,
-      );
-    }
-    if (overlay.dataHandling !== undefined && !isRecord(overlay.dataHandling)) {
-      return policyShapeFinding(
-        params.policyPath,
-        `oc://${params.policyDocName}/${targetPrefix}/dataHandling`,
-        `${params.policyPath} scopes.${scopeName}.dataHandling must be an object.`,
-        `Fix ${params.policyPath} so the scoped dataHandling policy section is an object.`,
-      );
-    }
-    if (isRecord(overlay.dataHandling)) {
-      const scopedDataHandlingFinding = scopedDataHandlingPolicyShapeFinding(overlay.dataHandling, {
-        policyPath: params.policyPath,
-        policyDocName: params.policyDocName,
-        targetPrefix,
-        scopeName,
-      });
-      if (scopedDataHandlingFinding !== undefined) {
-        return scopedDataHandlingFinding;
-      }
-    }
-    if (overlay.agents !== undefined && !isRecord(overlay.agents)) {
-      return policyShapeFinding(
-        params.policyPath,
-        `oc://${params.policyDocName}/${targetPrefix}/agents`,
-        `${params.policyPath} scopes.${scopeName}.agents must be an object.`,
-        `Fix ${params.policyPath} so the scoped agents policy section is an object.`,
-      );
-    }
-    const scopedAgents = isRecord(overlay.agents) ? overlay.agents : {};
-    const unsupportedAgentKey = Object.keys(scopedAgents).find((key) => key !== "workspace");
-    if (unsupportedAgentKey !== undefined) {
-      return policyShapeFinding(
-        params.policyPath,
-        `oc://${params.policyDocName}/${targetPrefix}/agents/${ocPathSegment(unsupportedAgentKey)}`,
-        `${params.policyPath} scopes.${scopeName}.agents.${unsupportedAgentKey} is not supported by the agentIds selector.`,
-        `Move the rule under agents.workspace or a supported scoped top-level section.`,
-      );
-    }
-    const workspaceFinding = agentWorkspacePolicyShapeFinding(scopedAgents.workspace, {
-      policyDocName: params.policyDocName,
-      policyPath: params.policyPath,
-      targetPrefix: `${targetPrefix}/agents/workspace`,
-      propertyPrefix: `scopes.${scopeName}.agents.workspace`,
-    });
-    if (workspaceFinding !== undefined) {
-      return workspaceFinding;
-    }
-
-    const scopedExecApprovalsFinding = execApprovalsPolicyShapeFinding(overlay.execApprovals, {
-      policyDocName: params.policyDocName,
-      policyPath: params.policyPath,
-      targetPrefix: `${targetPrefix}/execApprovals`,
-      propertyPrefix: `scopes.${scopeName}.execApprovals`,
-      allowDefaults: false,
-    });
-    if (scopedExecApprovalsFinding !== undefined) {
-      return scopedExecApprovalsFinding;
-    }
-    if (overlay.tools !== undefined && !isRecord(overlay.tools)) {
-      return policyShapeFinding(
-        params.policyPath,
-        `oc://${params.policyDocName}/${targetPrefix}/tools`,
-        `${params.policyPath} scopes.${scopeName}.tools must be an object.`,
-        `Fix ${params.policyPath} so the scoped tools policy overlay is an object.`,
-      );
-    }
-    if (isRecord(overlay.tools)) {
-      const toolsFinding = scopedToolsPolicyShapeFinding(overlay.tools, {
-        policyDocName: params.policyDocName,
-        policyPath: params.policyPath,
-        targetPrefix: `${targetPrefix}/tools`,
-        propertyPrefix: `scopes.${scopeName}.tools`,
-      });
-      if (toolsFinding !== undefined) {
-        return toolsFinding;
-      }
-    }
-    const sandboxFinding = sandboxPolicyShapeFinding(overlay.sandbox, {
-      policyDocName: params.policyDocName,
-      policyPath: params.policyPath,
-      targetPrefix: `${targetPrefix}/sandbox`,
-      propertyPrefix: `scopes.${scopeName}.sandbox`,
-    });
-    if (sandboxFinding !== undefined) {
-      return sandboxFinding;
-    }
-    const ingressFindingLocal = ingressPolicyShapeFinding(overlay.ingress, {
-      policyDocName: params.policyDocName,
-      policyPath: params.policyPath,
-      targetPrefix: `${targetPrefix}/ingress`,
-      propertyPrefix: `scopes.${scopeName}.ingress`,
-      allowSession: false,
-    });
-    if (ingressFindingLocal !== undefined) {
-      return ingressFindingLocal;
-    }
-  }
-  return duplicateScopedPolicyFieldFinding(value, {
-    policyDocName: params.policyDocName,
-    policyPath: params.policyPath,
-    policy: params.policy,
+  const root = createOrderedPolicyShape(value, {
+    ...params,
+    propertyPrefix: "scopes",
+    targetPrefix: "scopes",
   });
+  if (!isRecord(value)) {
+    return root.object(
+      "",
+      "Fix {policy} so scopes maps scope names to policy overlays with selectors such as agentIds.",
+    );
+  }
+  const scopes = value;
+  function* findings() {
+    for (const [scopeName, overlay] of Object.entries(scopes)) {
+      const targetPrefix = "scopes/" + ocPathSegment(scopeName);
+      const propertyPrefix = "scopes." + scopeName;
+      const shape = createOrderedPolicyShape(overlay, { ...params, propertyPrefix, targetPrefix });
+      yield shape.object("", "Fix {policy} so the named policy scope is an object.", true);
+      const hasAgentIds = shape.value("agentIds") !== undefined;
+      const hasChannelIds = shape.value("channelIds") !== undefined;
+      if (!hasAgentIds && !hasChannelIds) {
+        yield shape.finding("", {
+          message: "{policy} {property} must define at least one selector.",
+          hint: "List agentIds for agent-scoped policy or channelIds for channel-scoped ingress policy.",
+        });
+      }
+      yield scopedSelectorShapeFinding(shape, "agentIds", "agent");
+      yield scopedSelectorShapeFinding(shape, "channelIds", "channel");
+      if (shape.value("ingress") !== undefined && !hasChannelIds) {
+        yield shape.finding("ingress", {
+          message: "{policy} {property} requires the channelIds selector.",
+          hint: "Move global ingress rules to top-level ingress, or list channelIds for channel-scoped ingress policy.",
+        });
+      }
+      if (
+        ["agents", "dataHandling", "execApprovals", "tools", "sandbox"].some(
+          (section) => shape.value(section) !== undefined,
+        ) &&
+        !hasAgentIds
+      ) {
+        yield shape.finding("", {
+          message: "{policy} {property} uses agent-scoped sections without agentIds.",
+          hint: "List agentIds for agents.workspace, dataHandling.memory, tools, or sandbox policy sections.",
+        });
+      }
+      yield shape.keys(
+        "",
+        [
+          "agentIds",
+          "channelIds",
+          "agents",
+          "dataHandling",
+          "execApprovals",
+          "tools",
+          "sandbox",
+          "ingress",
+        ],
+        "",
+        "Use agentIds with agents.workspace, dataHandling.memory, execApprovals, tools, or sandbox, and channelIds with ingress.channels.",
+        "{policy} {unsupported} is not a supported scoped policy section.",
+      );
+      yield shape.object(
+        "dataHandling",
+        "Fix {policy} so the scoped dataHandling policy section is an object.",
+      );
+      const dataHandling = shape.value("dataHandling");
+      if (isRecord(dataHandling)) {
+        yield scopedDataHandlingPolicyShapeFinding(dataHandling, {
+          ...params,
+          targetPrefix,
+          scopeName,
+        });
+      }
+      yield shape.object(
+        "agents",
+        "Fix {policy} so the scoped agents policy section is an object.",
+      );
+      yield shape.keys(
+        "agents",
+        ["workspace"],
+        "",
+        "Move the rule under agents.workspace or a supported scoped top-level section.",
+        "{policy} {unsupported} is not supported by the agentIds selector.",
+      );
+      const sectionParams = (section: string) => ({
+        ...params,
+        targetPrefix: targetPrefix + "/" + section.replaceAll(".", "/"),
+        propertyPrefix: propertyPrefix + "." + section,
+      });
+      yield posturePolicyShapeFinding(
+        "workspace",
+        shape.value("agents.workspace"),
+        sectionParams("agents.workspace"),
+      );
+      yield execApprovalsPolicyShapeFinding(shape.value("execApprovals"), {
+        ...sectionParams("execApprovals"),
+        allowDefaults: false,
+      });
+      yield shape.object("tools", "Fix {policy} so the scoped tools policy overlay is an object.");
+      yield posturePolicyShapeFinding("scoped-tools", shape.value("tools"), sectionParams("tools"));
+      yield posturePolicyShapeFinding("sandbox", shape.value("sandbox"), sectionParams("sandbox"));
+      yield ingressPolicyShapeFinding(shape.value("ingress"), {
+        ...sectionParams("ingress"),
+        allowSession: false,
+      });
+    }
+    yield duplicateScopedPolicyFieldFinding(scopes, params);
+  }
+  return firstPolicyShapeFinding(findings());
 }
 
 function scopedSelectorShapeFinding(
-  value: unknown,
-  params: {
-    readonly policyDocName: string;
-    readonly policyPath: string;
-    readonly property: string;
-    readonly target: string;
-    readonly valueName: string;
-    readonly normalize: (value: string) => string;
-  },
+  shape: ReturnType<typeof createOrderedPolicyShape>,
+  path: string,
+  kind: "agent" | "channel",
 ): HealthFinding | undefined {
-  const selectorFinding = policyStringArrayPropertyShapeFinding(value, {
-    policyDocName: params.policyDocName,
-    policyPath: params.policyPath,
-    property: params.property,
-    target: params.target,
-    valueName: params.valueName,
-  });
-  if (selectorFinding !== undefined) {
-    return selectorFinding;
+  const valueName = kind + " id";
+  const finding = shape.list(path, { valueName });
+  if (finding !== undefined) {
+    return finding;
   }
-  if (value === undefined) {
+  const value = shape.value(path);
+  if (!Array.isArray(value)) {
     return undefined;
   }
-  if (Array.isArray(value) && value.length === 0) {
-    return policyShapeFinding(
-      params.policyPath,
-      `oc://${params.policyDocName}/${params.target}`,
-      `${params.policyPath} ${params.property} must include at least one ${params.valueName}.`,
-      `Add one or more ${params.valueName}s to ${params.policyPath} ${params.property}.`,
+  if (value.length === 0) {
+    return shape.finding(
+      path,
+      {
+        message: "{policy} {property} must include at least one {valueName}.",
+        hint: "Add one or more {valueName}s to {policy} {property}.",
+      },
+      { valueName },
     );
   }
-  if (Array.isArray(value)) {
-    const seen = new Map<string, number>();
-    for (const [index, rawValue] of value.entries()) {
-      if (typeof rawValue !== "string") {
-        continue;
-      }
-      const normalized = params.normalize(rawValue);
-      const previous = seen.get(normalized);
-      if (previous !== undefined) {
-        return policyShapeFinding(
-          params.policyPath,
-          `oc://${params.policyDocName}/${params.target}/#${index}`,
-          `${params.policyPath} ${params.property}[${index}] duplicates ${params.property}[${previous}] after normalization.`,
-          `List each ${params.valueName} only once per named policy scope.`,
-        );
-      }
-      seen.set(normalized, index);
+  const seen = new Map<string, number>();
+  for (const [index, rawValue] of value.entries()) {
+    if (typeof rawValue !== "string") {
+      continue;
     }
+    const normalized =
+      kind === "agent" ? normalizeAgentId(rawValue) : normalizePolicyChannelId(rawValue);
+    const previous = seen.get(normalized);
+    if (previous !== undefined) {
+      return shape.finding(
+        path,
+        {
+          message:
+            "{policy} {property}[{index}] duplicates {property}[" +
+            previous +
+            "] after normalization.",
+          hint: "List each {valueName} only once per named policy scope.",
+        },
+        { index, valueName },
+      );
+    }
+    seen.set(normalized, index);
   }
   return undefined;
 }

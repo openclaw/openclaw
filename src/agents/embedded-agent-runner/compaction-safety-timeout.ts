@@ -7,6 +7,7 @@ import { isRuntimeCompactionDelegate } from "../../context-engine/delegate.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { runAbortableTimeout } from "../../node-host/with-timeout.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 
 const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
 
@@ -93,7 +94,7 @@ export async function compactWithSafetyTimeout<T>(
 
       try {
         return await raceCompactionWithAbortSignal(
-          () => compact(composedAbortSignal, resetTimeout),
+          () => trackAsyncWork(() => compact(composedAbortSignal, resetTimeout)),
           abortSignal,
           cancel,
         );

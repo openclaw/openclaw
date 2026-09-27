@@ -12,12 +12,9 @@ import type {
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
-  ensureApiKeyFromOptionEnvOrPrompt,
-  normalizeApiKeyInput,
+  captureProviderApiKey,
   normalizeOptionalSecretInput,
-  type SecretInput,
-  upsertAuthProfileWithLockOrThrow,
-  validateApiKeyInput,
+  persistProviderApiKey,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
@@ -103,29 +100,18 @@ function resolveGlm5ForwardCompatModel(ctx: ProviderResolveDynamicModelContext) 
   });
 }
 
-function isTrueParam(value: unknown): boolean {
-  return value === true;
-}
-
-function shouldPreserveZaiThinking(extraParams?: Record<string, unknown>): boolean {
-  return isTrueParam(extraParams?.preserveThinking) || isTrueParam(extraParams?.preserve_thinking);
-}
-
-function isDisabledThinkingLevel(thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"]) {
-  return thinkingLevel === "off";
-}
-
 function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
-  let streamFn = createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false);
-  const preserveThinking = shouldPreserveZaiThinking(ctx.extraParams);
+  const streamFn = createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false);
+  const preserveThinking =
+    ctx.extraParams?.preserveThinking === true || ctx.extraParams?.preserve_thinking === true;
   const reasoningEffort = resolveZaiReasoningEffort(ctx.modelId, ctx.thinkingLevel);
-  const disableThinking = isDisabledThinkingLevel(ctx.thinkingLevel) && !reasoningEffort;
+  const disableThinking = ctx.thinkingLevel === "off" && !reasoningEffort;
 
   if (!disableThinking && !preserveThinking && !reasoningEffort) {
     return streamFn;
   }
 
-  streamFn = createPayloadPatchStreamWrapper(streamFn, ({ payload, model }) => {
+  return createPayloadPatchStreamWrapper(streamFn, ({ payload, model }) => {
     if (model.api !== "openai-completions" || model.provider !== PROVIDER_ID) {
       return;
     }
@@ -143,8 +129,6 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
       payload.thinking = { type: "enabled", clear_thinking: false };
     }
   });
-
-  return streamFn;
 }
 
 async function promptForZaiEndpoint(ctx: ProviderAuthContext): Promise<ZaiEndpointId> {
@@ -177,39 +161,19 @@ async function runZaiApiKeyAuth(
   defaultModel: string;
   notes?: string[];
 }> {
-  let capturedSecretInput: SecretInput | undefined;
-  let capturedCredential = false;
-  let capturedMode: "plaintext" | "ref" | undefined;
-  const apiKey = await ensureApiKeyFromOptionEnvOrPrompt({
+  const { apiKey, input, mode } = await captureProviderApiKey(ctx, {
     token:
       normalizeOptionalSecretInput(ctx.opts?.zaiApiKey) ??
       normalizeOptionalSecretInput(ctx.opts?.token),
     tokenProvider: normalizeOptionalSecretInput(ctx.opts?.zaiApiKey)
       ? PROVIDER_ID
       : normalizeOptionalSecretInput(ctx.opts?.tokenProvider),
-    secretInputMode:
-      ctx.allowSecretRefPrompt === false
-        ? (ctx.secretInputMode ?? "plaintext")
-        : ctx.secretInputMode,
-    config: ctx.config,
-    workspaceDir: ctx.workspaceDir,
     expectedProviders: [PROVIDER_ID, "z-ai"],
     provider: PROVIDER_ID,
     envLabel: "ZAI_API_KEY",
     promptMessage: "Enter Z.AI API key",
-    normalize: normalizeApiKeyInput,
-    validate: validateApiKeyInput,
-    prompter: ctx.prompter,
-    setCredential: async (key, mode) => {
-      capturedSecretInput = key;
-      capturedCredential = true;
-      capturedMode = mode;
-    },
+    missingInputMessage: "Missing Z.AI API key.",
   });
-  if (!capturedCredential) {
-    throw new Error("Missing Z.AI API key.");
-  }
-  const credentialInput = capturedSecretInput ?? "";
 
   const detected = await detectZaiEndpoint({ apiKey, ...(endpoint ? { endpoint } : {}) });
   const modelIdOverride = detected?.modelId;
@@ -224,9 +188,9 @@ async function runZaiApiKeyAuth(
         profileId: PROFILE_ID,
         credential: buildApiKeyCredential(
           PROVIDER_ID,
-          credentialInput,
+          input,
           undefined,
-          capturedMode ? { secretInputMode: capturedMode } : undefined,
+          mode ? { secretInputMode: mode } : undefined,
         ),
       },
     ],
@@ -256,19 +220,13 @@ async function runZaiApiKeyAuthNonInteractive(
   const modelIdOverride = detected?.modelId;
   const nextEndpoint = detected?.endpoint ?? endpoint;
 
-  if (resolved.source !== "profile") {
-    const credential = ctx.toApiKeyCredential({
+  if (
+    !(await persistProviderApiKey(ctx, PROFILE_ID, {
       provider: PROVIDER_ID,
       resolved,
-    });
-    if (!credential) {
-      return null;
-    }
-    await upsertAuthProfileWithLockOrThrow({
-      profileId: PROFILE_ID,
-      credential,
-      agentDir: ctx.agentDir,
-    });
+    }))
+  ) {
+    return null;
   }
 
   const next = applyAuthProfileConfig(ctx.config, {
@@ -354,7 +312,7 @@ export default defineSingleProviderPluginEntry({
       }),
     ],
     catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true, discoveryMode: "strict" },
-    resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
+    resolveDynamicModel: resolveGlm5ForwardCompatModel,
     matchesContextOverflowError: ({ errorMessage }) =>
       /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(
         errorMessage,
@@ -364,16 +322,11 @@ export default defineSingleProviderPluginEntry({
       dropReasoningFromHistory: false,
     }),
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
-    wrapStreamFn: (ctx) => wrapZaiStreamFn(ctx),
+    wrapStreamFn: wrapZaiStreamFn,
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => {
       const lower = normalizeLowercaseStringOrEmpty(modelId);
-      return (
-        lower.startsWith("glm-5") ||
-        lower.startsWith("glm-4.7") ||
-        lower.startsWith("glm-4.7-flash") ||
-        lower.startsWith("glm-4.7-flashx")
-      );
+      return lower.startsWith("glm-5") || lower.startsWith("glm-4.7");
     },
     resolveUsageAuth: async (ctx) => {
       const apiKey = ctx.resolveApiKeyFromConfigAndStore({

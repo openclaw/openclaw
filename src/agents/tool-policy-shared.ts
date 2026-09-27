@@ -24,7 +24,7 @@ const TOOL_NAME_ALIASES = new Map<string, string>([
 ]);
 
 const TOOL_ALLOWLIST_INTERSECTION = Symbol.for("openclaw.toolAllowlistIntersection");
-type ToolAllowlistWithIntersection = string[] & {
+type ToolAllowlistWithIntersection = readonly string[] & {
   [TOOL_ALLOWLIST_INTERSECTION]?: readonly string[][];
 };
 
@@ -49,7 +49,7 @@ export function attachToolAllowlistIntersection(
 
 /** Reads independent restrictions attached by a modifying-hook merger. */
 export function readToolAllowlistIntersection(
-  toolsAllow: string[],
+  toolsAllow: readonly string[],
 ): readonly string[][] | undefined {
   return (toolsAllow as ToolAllowlistWithIntersection)[TOOL_ALLOWLIST_INTERSECTION];
 }

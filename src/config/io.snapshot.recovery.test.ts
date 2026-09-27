@@ -3,21 +3,33 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { acquireStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { acquireStartupMigrationLeaseWithWait } from "../infra/startup-migration-checkpoint.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { createConfigIO } from "./io.factory.js";
+import {
+  captureConfigHealthStateStore,
+  patchConfigHealthEntryToStore,
+  readConfigHealthStateFromStore,
+} from "./io.health-state.js";
+import * as healthOwner from "./io.health-state.js";
+import { observeConfigSnapshot, observeConfigSnapshotSync } from "./io.observe.js";
+import { normalizeConfigIoDeps } from "./io.read-helpers.js";
 import type { ConfigIoFactoryOptions } from "./io.types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  clearPluginMetadataLifecycleCaches();
-  closeOpenClawStateDatabaseForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    clearPluginMetadataLifecycleCaches();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 function manifest(root: string) {
   return fs
@@ -69,6 +81,167 @@ async function prepare(io: ReturnType<typeof createConfigIO>) {
 }
 
 describe("prepared config recovery", () => {
+  it("leaves a newer live observation current when an older prepared recovery is applied", async () => {
+    const { root, configPath, original, env, io } = fixture();
+    const plan = await prepare(io);
+    if (!plan) {
+      throw new Error("Expected a prepared recovery");
+    }
+    const deps = normalizeConfigIoDeps({
+      env,
+      homedir: () => root,
+      logger: { warn: vi.fn(), error: vi.fn() },
+    });
+    using newer = captureConfigHealthStateStore(deps, configPath);
+    const snapshot = await newer.read();
+    if (!snapshot) {
+      throw new Error("Expected the newer observation to be current");
+    }
+
+    await expect(plan.apply()).rejects.toMatchObject({
+      name: "ConfigMutationConflictError",
+      retryable: false,
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    expect(
+      fs.readdirSync(root).filter((name) => name.startsWith("openclaw.json.clobbered.")),
+    ).toEqual([]);
+    expect(newer.isCurrent()).toBe(true);
+    await newer.update({ lastObservedSuspiciousSignature: "newer-observation" }, snapshot);
+    expect(
+      readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastObservedSuspiciousSignature,
+    ).toBe("newer-observation");
+  });
+
+  it.each(["sync", "async"] as const)(
+    "refuses recovery declined after a completed %s observation between prepare and apply",
+    async (mode) => {
+      const { root, configPath, original, env, io } = fixture();
+      const plan = await prepare(io);
+      if (!plan) {
+        throw new Error("Expected a prepared recovery");
+      }
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      const deps = normalizeConfigIoDeps({ env, homedir: () => root, logger });
+      const current = await io.readConfigFileSnapshot();
+      if (mode === "sync") {
+        observeConfigSnapshotSync(deps, current);
+      } else {
+        await observeConfigSnapshot(deps, current);
+      }
+      const health = readConfigHealthStateFromStore(deps);
+      expect(health.entries?.[configPath]?.lastObservedSuspiciousSignature).toBeTruthy();
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+
+      await expect(plan.apply()).rejects.toMatchObject({
+        name: "ConfigMutationConflictError",
+        retryable: false,
+      });
+      expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+      expect(
+        fs.readdirSync(root).filter((name) => name.startsWith("openclaw.json.clobbered.")),
+      ).toEqual([]);
+      expect(readConfigHealthStateFromStore(deps)).toEqual(health);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["async", "sync"] as const)(
+    "%s recovery tolerates an unreadable backup stat",
+    async (mode) => {
+      const { root, configPath, backup, env } = fixture();
+      const backupPath = `${configPath}.bak`;
+      const statError = Object.assign(new Error("EACCES: stat denied"), { code: "EACCES" });
+      const io = createConfigIO({
+        env,
+        configPath,
+        homedir: () => root,
+        logger: { warn: vi.fn(), error: vi.fn() },
+        fs: {
+          ...fs,
+          promises: {
+            ...fs.promises,
+            stat: ((target: fs.PathLike) =>
+              target === backupPath
+                ? Promise.reject(statError)
+                : fs.promises.stat(target)) as typeof fs.promises.stat,
+          },
+          statSync: ((target: fs.PathLike, options?: { throwIfNoEntry?: boolean }) => {
+            if (target === backupPath) {
+              throw statError;
+            }
+            return fs.statSync(target, options);
+          }) as typeof fs.statSync,
+        },
+      });
+
+      const recovered =
+        mode === "async"
+          ? (await io.readConfigFileSnapshot({ recoverSuspicious: true })).config
+          : io.loadConfig();
+
+      expect(recovered.gateway?.mode).toBe("local");
+      expect(fs.readFileSync(configPath, "utf8")).toBe(backup);
+    },
+  );
+
+  it("keeps backup-based prepared recovery available when health reads are unavailable", async () => {
+    const capture = healthOwner.captureConfigHealthStateStore;
+    const unavailable = (store: ReturnType<typeof capture>): ReturnType<typeof capture> => ({
+      ...store,
+      read: async () => ({ state: {}, basis: null }),
+      captureContinuation: () => unavailable(store.captureContinuation()),
+    });
+    const spy = vi
+      .spyOn(healthOwner, "captureConfigHealthStateStore")
+      .mockImplementation((...args) => unavailable(capture(...args)));
+    try {
+      const { root, configPath, original, backup, env, io } = fixture();
+      const plan = await prepare(io);
+      if (!plan) {
+        throw new Error("Expected recovery from the readable backup");
+      }
+      await plan.apply();
+      expect(fs.readFileSync(configPath, "utf8")).toBe(backup);
+      const clobbered = fs
+        .readdirSync(root)
+        .filter((name) => name.startsWith("openclaw.json.clobbered."));
+      expect(clobbered).toHaveLength(1);
+      expect(fs.readFileSync(path.join(root, clobbered[0]!), "utf8")).toBe(original);
+      const health = readConfigHealthStateFromStore({
+        env,
+        homedir: () => root,
+        logger: { warn: vi.fn() },
+      });
+      expect(health.entries?.[configPath]).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("rejects a superseded explicit apply without claiming a file commit", async () => {
+    const { root, configPath, original, env, io } = fixture();
+    const plan = await prepare(io);
+    if (!plan) {
+      throw new Error("Expected a prepared recovery");
+    }
+    const deps = { env, homedir: () => root, logger: { warn: vi.fn() } };
+    await expect(
+      plan.apply(() => {
+        patchConfigHealthEntryToStore(deps, configPath, {
+          lastObservedSuspiciousSignature: "newer-observation",
+        });
+      }),
+    ).rejects.toMatchObject({ name: "ConfigMutationConflictError", retryable: false });
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    expect(
+      fs.readdirSync(root).filter((name) => name.startsWith("openclaw.json.clobbered.")),
+    ).toEqual([]);
+    expect(
+      readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastObservedSuspiciousSignature,
+    ).toBe("newer-observation");
+  });
+
   it.each(["OPENCLAW_CONFIG_READONLY", "OPENCLAW_NIX_MODE"])(
     "%s does not prepare a recovery that would replace externally owned config",
     async (mode) => {
@@ -147,7 +320,10 @@ describe("prepared config recovery", () => {
     "refuses %s changes while archiving the clobbered config",
     async (changedSource) => {
       const { root, configPath, original, env } = fixture();
-      const lease = changedSource === "lease" ? acquireStartupMigrationLease({ env }) : undefined;
+      const lease =
+        changedSource === "lease"
+          ? await acquireStartupMigrationLeaseWithWait({ env, timeoutMs: 0 })
+          : undefined;
       const changedPath = changedSource === "config" ? configPath : `${configPath}.bak`;
       const concurrentRaw = '{ "gateway": { "mode": "local", "port": 18721 } }\n';
       const io = createConfigIO({

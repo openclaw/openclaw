@@ -22,6 +22,27 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
+    @Test func `file attachment controls use branded typography`() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatFileAttachment.swift"),
+            encoding: .utf8)
+        #expect(source.contains(".font(OpenClawChatTypography.footnote)"))
+        #expect(source.contains(".font(OpenClawChatTypography.caption)"))
+        #expect(source.contains(".font(OpenClawChatTypography.body)"))
+        #expect(!source.contains(".font(."))
+    }
+
+    @Test func `gateway picker uses branded typography`() throws {
+        let source = try String(
+            contentsOf: Self.sourceURL("RootSidebarGatewayControl.swift"),
+            encoding: .utf8)
+        #expect(source.contains(".font(OpenClawType.subheadSemiBold)"))
+        #expect(source.contains(".font(OpenClawType.captionMedium)"))
+        #expect(!source.contains(".font(."))
+    }
+
     @Test func `thread controls use branded typography`() throws {
         let support = try String(
             contentsOf: Self.sourceURL("Design/CommandCenterSupport.swift"),
@@ -617,6 +638,7 @@ struct OpenClawTypographyTests {
         let fontTokens = ["OpenClawType", "OpenClawChatTypography", "WatchClawType", "typography."]
         let sourceBytes = Array(source.utf8)
         let code = self.maskedSwiftCode(source)
+        guard !self.isCompleteMacOSSourceEnvelope(code) else { return [] }
         let imageFontRanges = Set(self.directImageFontModifierRanges(in: code))
         var offenders: [String] = []
 
@@ -884,5 +906,64 @@ struct OpenClawTypographyTests {
         let tail = source[startRange.lowerBound...]
         let endRange = try #require(tail.range(of: end))
         return String(tail[..<endRange.lowerBound])
+    }
+}
+
+extension OpenClawTypographyTests {
+    @Test func `font boundary scanner excludes only complete macOS source envelopes`() {
+        let macOnly = """
+        // A shared directory can contain a macOS-only view.
+        #if os(macOS)
+        #if DEBUG
+        let example = "#endif"
+        #else
+        /* #endif */
+        #endif
+        Text("Mac").font(.system(size: 12))
+        #endif
+        """
+        #expect(Self.unbrandedTextCallOffenders(in: macOnly, relativePath: "Mac.swift").isEmpty)
+
+        for condition in ["os(iOS)", "os(watchOS)", "os(macOS) || os(iOS)"] {
+            let source = "#if \(condition)\nText(\"Visible\").font(.body)\n#endif"
+            #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "Visible.swift") == [
+                "Visible.swift:2: .font(.body)",
+            ])
+        }
+        for alternate in ["#else", "#elseif os(iOS)"] {
+            let source = "#if os(macOS)\n\(alternate)\nText(\"Visible\").font(.caption)\n#endif"
+            #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "Mixed.swift") == [
+                "Mixed.swift:3: .font(.caption)",
+            ])
+        }
+        let shared = macOnly + "\nText(\"Shared\").font(.body)"
+        #expect(Self.unbrandedTextCallOffenders(in: shared, relativePath: "Shared.swift").last ==
+            "Shared.swift:10: .font(.body)")
+    }
+
+    private static func isCompleteMacOSSourceEnvelope(_ code: [UInt8]) -> Bool {
+        guard let source = String(bytes: code, encoding: .utf8) else { return false }
+        let lines = source.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard lines.first?.filter({ !$0.isWhitespace }) == "#ifos(macOS)" else { return false }
+
+        // Only a whole-file Mac envelope is outside this audit. Mixed-platform
+        // branches remain audited without interpreting arbitrary Swift conditions.
+        var depth = 0
+        for (index, line) in lines.enumerated() {
+            switch line.split(whereSeparator: \.isWhitespace).first {
+            case "#if":
+                depth += 1
+            case "#else", "#elseif":
+                if depth == 1 { return false }
+            case "#endif":
+                depth -= 1
+                if depth == 0 { return index == lines.count - 1 }
+            default:
+                break
+            }
+        }
+        return false
     }
 }

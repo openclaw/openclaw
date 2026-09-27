@@ -48,6 +48,8 @@ flowchart TD
 | Execute code on every tool call           | Plugin hooks                               | Typed `api.on(...)` handlers can intercept tool calls  |
 | Always check compliance before replying   | Standing Orders                            | Injected into every session automatically              |
 
+<a id="scheduled-tasks-cron-vs-heartbeat" />
+
 ### Automations vs Heartbeat
 
 | Dimension       | User-authored automations                   | Heartbeat monitor automation            |

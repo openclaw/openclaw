@@ -1,6 +1,11 @@
-// Deepinfra provider module implements model/runtime integration.
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import {
+  detectMime,
+  extensionForMime,
+  mediaKindFromMime,
+  normalizeMimeType,
+} from "openclaw/plugin-sdk/media-mime";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -24,14 +29,15 @@ import type {
 } from "openclaw/plugin-sdk/video-generation";
 import {
   DEEPINFRA_BASE_URL,
-  DEEPINFRA_VIDEO_ASPECT_RATIOS,
-  DEEPINFRA_VIDEO_DURATIONS,
   DEEPINFRA_VIDEO_FALLBACK_MODELS,
   normalizeDeepInfraBaseUrl,
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
 import type { DeepInfraSurfaceModel } from "./media-models.js";
-import { resolveDeepInfraVideoModelCapabilities } from "./surface-model-catalogs.js";
+import {
+  buildDeepInfraVideoModelCapabilities,
+  resolveDeepInfraVideoModelCapabilities,
+} from "./surface-model-catalogs.js";
 
 // Per-poll request budget; the total operation budget comes from req.timeoutMs.
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
@@ -57,21 +63,45 @@ function normalizeDeepInfraVideoUrl(url: string, baseUrl: string): string {
   return new URL(url, baseUrl).href;
 }
 
-function parseVideoDataUrl(url: string): GeneratedVideoAsset | undefined {
-  const match = /^data:([^;,]+);base64,(.+)$/u.exec(url);
-  if (!match) {
+async function parseVideoDataUrl(
+  url: string,
+  maxBytes: number,
+): Promise<GeneratedVideoAsset | undefined> {
+  if (!url.startsWith("data:")) {
     return undefined;
   }
-  const mimeType = match[1] ?? "video/mp4";
-  const ext = extensionForMime(mimeType)?.slice(1) ?? "mp4";
-  const canonicalBase64 = canonicalizeBase64(match[2] ?? "");
+  const match = /^data:([^;,]+);base64,(.*)$/su.exec(url);
+  if (!match) {
+    throw new Error("DeepInfra video response: malformed video response");
+  }
+  const mimeType = normalizeMimeType(match[1]);
+  if (
+    !mimeType ||
+    (mediaKindFromMime(mimeType) !== "video" && mimeType !== "application/octet-stream")
+  ) {
+    throw new Error("DeepInfra video response: malformed video response");
+  }
+  const base64 = match[2] ?? "";
+  if (!base64) {
+    throw new Error("DeepInfra video response: malformed video response");
+  }
+  if (estimateBase64DecodedBytes(base64) > maxBytes) {
+    throw new Error(`DeepInfra generated video exceeds ${maxBytes} bytes`);
+  }
+  const canonicalBase64 = canonicalizeBase64(base64);
   if (!canonicalBase64) {
     throw new Error("DeepInfra video response returned malformed data URL base64");
   }
+  const buffer = Buffer.from(canonicalBase64, "base64");
+  // The provider label is untrusted: sniff only bytes, without filename or MIME hints.
+  const detectedMime = await detectMime({ buffer });
+  if (!detectedMime || mediaKindFromMime(detectedMime) !== "video") {
+    throw new Error("DeepInfra video response: malformed video response");
+  }
   return {
-    buffer: Buffer.from(canonicalBase64, "base64"),
-    mimeType,
-    fileName: `video-1.${ext}`,
+    buffer,
+    mimeType: detectedMime,
+    fileName: `video-1.${extensionForMime(detectedMime)?.slice(1) ?? "mp4"}`,
   };
 }
 
@@ -80,10 +110,6 @@ function resolveDurationSeconds(value: number | undefined): number | undefined {
     return undefined;
   }
   return value <= 6.5 ? 5 : 8;
-}
-
-function resolveSeed(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0, max: 4_294_967_295 });
 }
 
 function buildDeepInfraVideoBody(
@@ -104,7 +130,7 @@ function buildDeepInfraVideoBody(
     // /v1/openai/videos names the duration field `seconds` (VideoGenerationIn).
     body.seconds = duration;
   }
-  const seed = resolveSeed(options.seed);
+  const seed = asSafeIntegerInRange(options.seed, { min: 0, max: 4_294_967_295 });
   if (seed != null) {
     body.seed = seed;
   }
@@ -123,7 +149,7 @@ function buildDeepInfraVideoBody(
 
 function firstDeepInfraVideoUrl(job: DeepInfraVideoJob): string | undefined {
   for (const entry of job.data ?? []) {
-    const videoUrl = entry ? normalizeOptionalString((entry as { url?: unknown }).url) : undefined;
+    const videoUrl = entry ? normalizeOptionalString(entry.url) : undefined;
     if (videoUrl) {
       return videoUrl;
     }
@@ -131,14 +157,18 @@ function firstDeepInfraVideoUrl(job: DeepInfraVideoJob): string | undefined {
   return undefined;
 }
 
-function extractDeepInfraVideoAsset(job: DeepInfraVideoJob, baseUrl: string): GeneratedVideoAsset {
+async function extractDeepInfraVideoAsset(
+  job: DeepInfraVideoJob,
+  baseUrl: string,
+  maxBytes: number,
+): Promise<GeneratedVideoAsset> {
   const videoUrl = firstDeepInfraVideoUrl(job);
   if (!videoUrl) {
     throw new Error("DeepInfra video response missing video URL");
   }
   const normalizedUrl = normalizeDeepInfraVideoUrl(videoUrl, baseUrl);
   // Some models return the MP4 inline as a data: URL, others a hosted https URL.
-  const dataAsset = parseVideoDataUrl(normalizedUrl);
+  const dataAsset = await parseVideoDataUrl(normalizedUrl, maxBytes);
   if (dataAsset) {
     return dataAsset;
   }
@@ -150,9 +180,7 @@ function extractDeepInfraVideoAsset(job: DeepInfraVideoJob, baseUrl: string): Ge
 }
 
 function resolveDeepInfraVideoBaseUrl(req: VideoGenerationRequest): string {
-  const providerConfig = req.cfg?.models?.providers?.deepinfra as
-    | (Record<string, unknown> & { baseUrl?: unknown })
-    | undefined;
+  const providerConfig = req.cfg?.models?.providers?.deepinfra;
   // Canonical `baseUrl` only; legacy `nativeBaseUrl`/`/v1/inference` values are
   // migrated by `openclaw doctor --fix` (doctor-contract-api.ts), never remapped here.
   const baseUrl = normalizeDeepInfraBaseUrl(providerConfig?.baseUrl, DEEPINFRA_BASE_URL);
@@ -177,6 +205,7 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
       ? options.videoGenModels.map((model) => model.id)
       : [...DEEPINFRA_VIDEO_FALLBACK_MODELS];
   const defaultModel = ids[0] ?? DEEPINFRA_VIDEO_FALLBACK_MODELS[0];
+  const { providerOptions, ...capabilities } = buildDeepInfraVideoModelCapabilities();
   return {
     id: "deepinfra",
     label: "DeepInfra",
@@ -185,24 +214,10 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
     resolveModelCapabilities: resolveDeepInfraVideoModelCapabilities,
     isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "deepinfra", ...ctx }),
     capabilities: {
+      ...capabilities,
       generate: {
-        maxVideos: 1,
-        maxDurationSeconds: 8,
-        supportedDurationSeconds: [...DEEPINFRA_VIDEO_DURATIONS],
-        supportsAspectRatio: true,
-        aspectRatios: [...DEEPINFRA_VIDEO_ASPECT_RATIOS],
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          style: "string",
-        },
-      },
-      imageToVideo: {
-        enabled: false,
-      },
-      videoToVideo: {
-        enabled: false,
+        ...capabilities.generate,
+        providerOptions,
       },
     },
     async generateVideo(req) {
@@ -299,7 +314,11 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
                   : undefined,
             });
 
-      const video = extractDeepInfraVideoAsset(completed, baseUrl);
+      const video = await extractDeepInfraVideoAsset(
+        completed,
+        baseUrl,
+        resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+      );
       return {
         videos: [video],
         model: normalizeOptionalString(completed.model) ?? model,

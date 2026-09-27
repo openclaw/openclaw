@@ -159,6 +159,13 @@ describe("OpenClaw interactive activation protocol", () => {
 });
 
 describe("OpenClaw setup detection protocol", () => {
+  it.each([
+    ["saved-auth:openai%3Adefault", true],
+    ["saved-auth:", false],
+  ])("validates saved sign-in choice %s", (kind, valid) => {
+    expect(validateSystemAgentSetupActivateParams({ kind })).toBe(valid);
+  });
+
   it("accepts an explicit owner across the structured setup family", () => {
     expect(validateSystemAgentSetupDetectParams({ agentId: "research" })).toBe(true);
     expect(validateSystemAgentSetupVerifyParams({ agentId: "research" })).toBe(true);

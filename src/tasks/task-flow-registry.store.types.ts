@@ -1,7 +1,34 @@
 // Defines storage contracts for managed task-flow records.
+import type { FlowRecordPatch } from "./task-flow-registry.records.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
-/** Full task-flow registry snapshot used for persistence restore and replacement writes. */
+export type TaskFlowRegistryMirroredSync =
+  | { changed: false; flow: TaskFlowRecord | null }
+  | { changed: true; flow: TaskFlowRecord; previous: TaskFlowRecord };
+
+export type TaskFlowRegistryUpdate = {
+  flowId: string;
+  expectedRevision: number;
+  patch: FlowRecordPatch;
+};
+
+export type TaskFlowRegistryObservedUpdate =
+  | { applied: true; previous: TaskFlowRecord; flow: TaskFlowRecord }
+  | { applied: false; reason: "not_found" }
+  | { applied: false; reason: "revision_conflict"; current: TaskFlowRecord };
+
+export type TaskFlowRegistryUpdateResult =
+  | TaskFlowRegistryObservedUpdate
+  | { applied: false; reason: "invalid_patch"; error: unknown };
+
+/** Stage read-your-writes state and settle it with the owning transaction. */
+export type TaskFlowRegistryUpdatePublication = {
+  stage: () => void;
+  rollback: () => void;
+  commit: () => void;
+};
+
+/** Task-flow rows for a full restore or an explicitly scoped projection refresh. */
 export type TaskFlowRegistryStoreSnapshot = {
   flows: Map<string, TaskFlowRecord>;
 };

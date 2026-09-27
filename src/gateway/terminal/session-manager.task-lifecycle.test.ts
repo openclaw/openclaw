@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { TerminalSessionManager } from "./session-manager.js";
 import {
   agentTerminalOwner,
@@ -12,10 +13,8 @@ const TERMINAL_EVENT_EXIT = "terminal.exit";
 
 describe("TerminalSessionManager task lifecycle", () => {
   it("aborts a matching pending task open and kills its late backend", async () => {
-    let resolveSpawn!: (pty: ReturnType<typeof makeFakePty>) => void;
-    const spawn = new Promise<ReturnType<typeof makeFakePty>>((resolve) => {
-      resolveSpawn = resolve;
-    });
+    const { promise: spawn, resolve: resolveSpawn } =
+      createDeferred<ReturnType<typeof makeFakePty>>();
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: () => spawn });
     const opening = manager.open(
       baseOpenRequest({
@@ -117,10 +116,8 @@ describe("TerminalSessionManager task lifecycle", () => {
   it("drains one agent incarnation while admitting its same-key replacement", async () => {
     const oldPty = makeFakePty();
     const pendingPty = makeFakePty();
-    let resolvePending!: (pty: ReturnType<typeof makeFakePty>) => void;
-    const pendingBackend = new Promise<ReturnType<typeof makeFakePty>>((resolve) => {
-      resolvePending = resolve;
-    });
+    const { promise: pendingBackend, resolve: resolvePending } =
+      createDeferred<ReturnType<typeof makeFakePty>>();
     const replacementPtys = [makeFakePty(), makeFakePty()];
     let spawnIndex = 0;
     const manager = new TerminalSessionManager({

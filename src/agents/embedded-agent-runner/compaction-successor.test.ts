@@ -250,7 +250,7 @@ describe("acceptCompactionSuccessor", () => {
     "owns MCP predecessor cleanup after %s",
     async (kind) => {
       await withAcceptanceFixture({}, async (fixture) => {
-        const { getOrCreateSessionMcpRuntime } =
+        const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
           await import("../agent-bundle-mcp-manager.test-support.js");
         const { getSessionMcpRuntimeManagerForTesting } =
           await import("../agent-bundle-mcp-manager-api.js");
@@ -260,7 +260,7 @@ describe("acceptCompactionSuccessor", () => {
             sessionId,
             sessionKey: fixture.target.sessionKey,
             workspaceDir: path.dirname(fixture.target.storePath),
-            cfg: { mcp: { servers: {} } },
+            cfg: unopenedMcpConfig,
             manifestRegistry: { plugins: [] },
           });
         try {

@@ -274,14 +274,14 @@ struct ChatGatewayRequestTests {
         let request = OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: "global",
             agentID: "reviewer",
-            model: .some("openai/gpt-5.6-sol"),
+            model: .some("openai/gpt-5.6-luna"),
             thinkingLevel: .some("ultra"),
             verboseLevel: .some("full"))
 
         #expect(request.method == "sessions.patch")
         #expect(request.params["key"]?.value as? String == "global")
         #expect(request.params["agentId"]?.value as? String == "reviewer")
-        #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-sol")
+        #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-luna")
         #expect(request.params["thinkingLevel"]?.value as? String == "ultra")
         #expect(request.params["verboseLevel"]?.value as? String == "full")
     }
@@ -744,6 +744,18 @@ struct ChatGatewayRequestTests {
 }
 
 struct ChatGatewayPayloadCodecTests {
+    @Test func `published catalog hello enables direct session model choices`() throws {
+        let data = Data("""
+        {"type":"hello-ok","protocol":4,"server":{},
+         "features":{"capabilities":["published-model-catalog"]},
+         "snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},
+         "auth":{},"policy":{}}
+        """.utf8)
+        let hello = try JSONDecoder().decode(HelloOk.self, from: data)
+
+        #expect(hello.supportsServerCapability(.publishedModelCatalog))
+    }
+
     @Test func `hello operator scopes preserve the exact advertised authorization`() {
         let snapshot = Snapshot(
             presence: [],
@@ -789,6 +801,26 @@ struct ChatGatewayPayloadCodecTests {
             with: JSONEncoder().encode(payload)) as? [String: Any])
 
         #expect(encoded["inputConsumptions"] as? [[String: String]] == consumptions)
+    }
+
+    @Test(arguments: [nil, "running", "completed", "failed", "blocked"] as [String?])
+    func `history activity decodes quiet and optional terminal states`(status: String?) throws {
+        var item: [String: Any] = ["itemId": "tool:work", "kind": "tool", "phase": "end", "title": "Read"]
+        item["status"] = status
+        let object: [String: Any] = [
+            "sessionKey": "main", "messages": [],
+            "activity": [["messageId": "quiet", "items": []], ["messageId": "work", "items": [item]]],
+        ]
+        let payload = try JSONDecoder().decode(OpenClawChatHistoryPayload.self,
+                                             from: JSONSerialization.data(withJSONObject: object))
+        #expect(payload.activity?.first?.items.isEmpty == true)
+        #expect(payload.activity?.last?.items.first?.status == status)
+        let roundTrip = try JSONDecoder().decode(OpenClawChatHistoryPayload.self,
+                                               from: JSONEncoder().encode(payload))
+        #expect(roundTrip.activity?.last?.items == payload.activity?.last?.items)
+        let legacy = try JSONDecoder().decode(OpenClawChatHistoryPayload.self,
+                                            from: Data(#"{"sessionKey":"main","messages":[]}"#.utf8))
+        #expect(legacy.activity == nil)
     }
 
     @Test func `session row decodes permission and every tool override family`() throws {
@@ -842,7 +874,6 @@ struct ChatGatewayPayloadCodecTests {
             #"{"models":[{"id":"gpt-5","name":"  ","provider":"openai","available":false,"unavailableReason":"missing-auth","unavailableUntil":1234,"contextWindow":200000,"reasoning":true}]}"#
                 .utf8)
         let choices = try OpenClawChatGatewayPayloadCodec.decodeModelChoices(payload)
-        let metadataChoices = try OpenClawChatGatewayPayloadCodec.decodeChatMetadataModelChoices(payload)
 
         #expect(choices == [OpenClawChatModelChoice(
             modelID: "gpt-5",
@@ -853,7 +884,6 @@ struct ChatGatewayPayloadCodecTests {
             unavailableUntil: 1234,
             contextWindow: 200_000,
             reasoning: true)])
-        #expect(metadataChoices == choices)
     }
 
     @Test func `command choice normalizes source aliases and identity`() {
@@ -1027,6 +1057,17 @@ struct ChatGatewayPayloadCodecTests {
         else {
             Issue.record("expected chatMetadataChanged")
             return
+        }
+
+        for eventName in ["chat.metadata.changed", "config.changed"] {
+            guard case .modelSelectionChanged = OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
+                type: "event",
+                event: eventName,
+                payload: eventName == "chat.metadata.changed" ? AnyCodable(["modelSelectionChanged": true]) : nil))
+            else {
+                Issue.record("expected modelSelectionChanged for \(eventName)")
+                return
+            }
         }
 
         #expect(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(

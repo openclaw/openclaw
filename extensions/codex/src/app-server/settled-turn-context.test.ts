@@ -32,7 +32,7 @@ function message(value: unknown, identity: string): AgentMessage {
   return attachCodexMirrorIdentity(value as AgentMessage, identity);
 }
 
-function settledTurn() {
+function settledTurn(): [AgentMessage, AgentMessage, AgentMessage] {
   return [
     message({ role: "user", content: "Send it." }, "turn-2:prompt"),
     message(
@@ -202,6 +202,195 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
       expect(Object.isFrozen(context?.selection)).toBe(true);
     },
   );
+
+  it("recovers after a long history without splitting the recent tool exchange", async () => {
+    const prior = Array.from({ length: 201 }, (_, index) =>
+      message({ role: "user", content: `old-${index}` }, `old-${index}:prompt`),
+    );
+    const recent = [
+      message({ role: "user", content: "Alice is the recipient." }, "recent:prompt"),
+      message(
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "lookup", name: "lookup", arguments: {} }],
+        },
+        "recent:call",
+      ),
+      message(
+        {
+          role: "toolResult",
+          toolCallId: "lookup",
+          toolName: "lookup",
+          content: [{ type: "text", text: "Alice verified." }],
+        },
+        "recent:result",
+      ),
+    ];
+    const settledMessages = settledTurn();
+    const historyMessages = [...prior, ...recent, ...settledMessages];
+    const before = structuredClone(historyMessages);
+    const context = await captureContext({
+      historyMessages,
+      mirroredMessages: settledMessages,
+      settledMessages,
+    });
+    expect(context?.data).toHaveLength(200);
+    expect(context?.data[0]).toMatchObject({
+      content: [{ text: expect.stringContaining("Earlier conversation was omitted") }],
+    });
+    expect(context?.data.slice(-6)).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Alice is the recipient." }],
+      },
+      { type: "function_call", call_id: "lookup", name: "lookup", arguments: "{}" },
+      { type: "function_call_output", call_id: "lookup", output: "Alice verified." },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "Send it." }] },
+      { type: "function_call", call_id: "call-2", name: "message", arguments: "{}" },
+      { type: "function_call_output", call_id: "call-2", output: "sent" },
+    ]);
+    expect(historyMessages).toEqual(before);
+  });
+
+  it.each([
+    { budget: "items", overflow: -1, notice: true },
+    { budget: "items", overflow: 0, notice: false },
+    { budget: "items", overflow: 1, notice: false },
+    { budget: "bytes", overflow: -285, notice: true },
+    { budget: "bytes", overflow: -284, notice: false },
+    { budget: "bytes", overflow: 0, notice: false },
+    { budget: "bytes", overflow: 1, notice: false },
+  ])(
+    "preserves current evidence at the $budget limit (overflow=$overflow)",
+    async ({ budget, overflow, notice }) => {
+      const settledMessages = settledTurn();
+      const expected = [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "Send it." }] },
+        { type: "function_call", call_id: "call-2", name: "message", arguments: "{}" },
+        { type: "function_call_output", call_id: "call-2", output: "sent" },
+      ];
+      if (budget === "items") {
+        for (let index = 0; index < 197 + overflow; index += 1) {
+          settledMessages.splice(
+            -1,
+            0,
+            message(
+              { role: "assistant", content: [{ type: "text", text: "Working." }] },
+              `turn-2:text-${index}`,
+            ),
+          );
+          expected.splice(-1, 0, {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Working." }],
+          });
+        }
+      } else {
+        const bytes = expected.reduce(
+          (sum, item) => sum + Buffer.byteLength(JSON.stringify(item)),
+          0,
+        );
+        const prompt = "Send it." + "x".repeat(512 * 1024 - bytes + overflow);
+        settledMessages[0] = attachUpstreamUserText(settledMessages[0], prompt);
+        expected[0] = {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: prompt }],
+        };
+      }
+      const historyMessages = [
+        message(
+          { role: "user", content: overflow < 0 ? "x".repeat(65537) : "Older context." },
+          "older:prompt",
+        ),
+        ...settledMessages,
+      ];
+      const before = structuredClone(historyMessages);
+      const context = await captureContext({
+        historyMessages,
+        mirroredMessages: settledMessages,
+        settledMessages,
+      });
+      if (overflow > 0) {
+        expect(context).toBeUndefined();
+      } else {
+        expect(context).toBeDefined();
+        expect(context?.data.slice(notice ? 1 : 0)).toEqual(expected);
+        if (notice) {
+          expect(context?.data[0]).toMatchObject({
+            content: [{ text: expect.stringContaining("Do not infer missing earlier facts") }],
+          });
+        }
+      }
+      expect(historyMessages).toEqual(before);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps tool pairs atomic across steering (oversized=%s)",
+    async (oversized) => {
+      const prior = [
+        message({ role: "user", content: "Look up Alice." }, "prior:prompt"),
+        message(
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "lookup", name: "lookup", arguments: {} }],
+          },
+          "prior:call",
+        ),
+        message(
+          { role: "user", content: oversized ? "x".repeat(65537) : "Use the work address." },
+          "steering:prompt",
+        ),
+        message(
+          {
+            role: "toolResult",
+            toolCallId: "lookup",
+            toolName: "lookup",
+            content: [{ type: "text", text: "Alice verified." }],
+          },
+          "prior:result",
+        ),
+        message({ role: "user", content: "Alice is the recipient." }, "recent:prompt"),
+      ];
+      const settledMessages = settledTurn();
+      const captured = await captureContext({
+        historyMessages: [...prior, ...settledMessages],
+        mirroredMessages: settledMessages,
+        settledMessages,
+      });
+      expect(captured?.data).toBeDefined();
+      expect(captured?.data).toContainEqual({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Alice is the recipient." }],
+      });
+      const serialized = JSON.stringify(captured?.data);
+      if (oversized) {
+        expect(serialized).toContain("Earlier conversation was omitted");
+        expect(serialized).not.toContain('"call_id":"lookup"');
+      } else {
+        expect(captured?.data).toHaveLength(8);
+        expect(serialized).toContain('"call_id":"lookup"');
+        expect(serialized).not.toContain("Earlier conversation was omitted");
+      }
+    },
+  );
+
+  it("still rejects duplicate identities in omitted history", async () => {
+    const prior = Array.from({ length: 201 }, (_, index) =>
+      message({ role: "user", content: "prior" }, `old-${index}:prompt`),
+    );
+    const settledMessages = settledTurn();
+    await expect(
+      captureContext({
+        historyMessages: [...prior, prior[0]!, ...settledMessages],
+        mirroredMessages: settledMessages,
+        settledMessages,
+      }),
+    ).resolves.toBeUndefined();
+  });
 
   it.each([undefined, ""])(
     "refuses missing model %j without reading transcript evidence",

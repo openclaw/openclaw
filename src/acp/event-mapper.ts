@@ -66,37 +66,11 @@ const INLINE_CONTROL_ESCAPE_MAP: Readonly<Record<string, string>> = {
 };
 
 function escapeInlineControlChars(value: string): string {
-  let escaped = "";
-  for (const char of value) {
-    const codePoint = char.codePointAt(0);
-    if (codePoint === undefined) {
-      escaped += char;
-      continue;
-    }
-
-    const isInlineControl =
-      codePoint <= 0x1f ||
-      (codePoint >= 0x7f && codePoint <= 0x9f) ||
-      codePoint === 0x2028 ||
-      codePoint === 0x2029;
-    if (!isInlineControl) {
-      escaped += char;
-      continue;
-    }
-
-    const mapped = INLINE_CONTROL_ESCAPE_MAP[char];
-    if (mapped) {
-      escaped += mapped;
-      continue;
-    }
-
-    // Keep escaped control bytes readable and stable in logs/prompts.
-    escaped +=
-      codePoint <= 0xff
-        ? `\\x${codePoint.toString(16).padStart(2, "0")}`
-        : `\\u${codePoint.toString(16).padStart(4, "0")}`;
-  }
-  return escaped;
+  return value.replace(
+    /[\p{Cc}\u2028\u2029]/gu,
+    (char) =>
+      INLINE_CONTROL_ESCAPE_MAP[char] || `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  );
 }
 
 function escapeResourceTitle(value: string): string {
@@ -345,62 +319,34 @@ export function inferToolKind(name?: string): ToolKind {
 
 /** Extracts textual ACP tool-call content from unknown runtime payloads. */
 export function extractToolCallContent(value: unknown): ToolCallContent[] | undefined {
+  const texts: string[] = [];
   if (hasNonEmptyString(value)) {
-    return value.trim()
-      ? [
-          {
-            type: "content",
-            content: {
-              type: "text",
-              text: value,
-            },
-          },
-        ]
-      : undefined;
-  }
-
-  const record = asRecord(value);
-  if (!record) {
-    return undefined;
-  }
-
-  const contents: ToolCallContent[] = [];
-  const blocks = Array.isArray(record.content) ? record.content : [];
-  for (const block of blocks) {
-    const entry = asRecord(block);
-    if (entry?.type === "text" && hasNonEmptyString(entry.text)) {
-      contents.push({
-        type: "content",
-        content: {
-          type: "text",
-          text: entry.text,
-        },
-      });
+    texts.push(value);
+  } else {
+    const record = asRecord(value);
+    if (!record) {
+      return undefined;
+    }
+    const blocks = Array.isArray(record.content) ? record.content : [];
+    for (const block of blocks) {
+      const entry = asRecord(block);
+      if (entry?.type === "text" && hasNonEmptyString(entry.text)) {
+        texts.push(entry.text);
+      }
+    }
+    if (texts.length === 0) {
+      const fallbackText =
+        readStringValue(record.text) ??
+        readStringValue(record.message) ??
+        readStringValue(record.error);
+      if (hasNonEmptyString(fallbackText)) {
+        texts.push(fallbackText);
+      }
     }
   }
-
-  if (contents.length > 0) {
-    return contents;
-  }
-
-  const fallbackText =
-    readStringValue(record.text) ??
-    readStringValue(record.message) ??
-    readStringValue(record.error);
-
-  if (!hasNonEmptyString(fallbackText)) {
-    return undefined;
-  }
-
-  return [
-    {
-      type: "content",
-      content: {
-        type: "text",
-        text: fallbackText,
-      },
-    },
-  ];
+  return texts.length > 0
+    ? texts.map((text) => ({ type: "content", content: { type: "text", text } }))
+    : undefined;
 }
 
 /** Extracts bounded file locations from nested tool-call payloads. */

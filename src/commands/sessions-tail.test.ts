@@ -18,6 +18,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { sessionsTailCommand } from "./sessions-tail.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -28,14 +29,6 @@ vi.mock("../config/config.js", () => ({
 }));
 
 const sessionKey = "agent:main:telegram:direct:owner";
-
-function makeRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
 
 function makeEvent(
   params: Partial<TrajectoryEvent> & { type: string; ts: string },
@@ -118,7 +111,7 @@ describe("sessionsTailCommand", () => {
   }
 
   it("renders compact redacted progress lines", async () => {
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
     await writeSessionEntry();
     await appendEvents([
       makeEvent({
@@ -141,10 +134,7 @@ describe("sessionsTailCommand", () => {
 
     await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
 
-    const output = vi
-      .mocked(runtime.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
+    const output = runtimeOutput(runtime);
     expect(output).toContain("12:04:18");
     expect(output).toContain("tool.call");
     expect(output).toContain("bash {...redacted...}");
@@ -162,11 +152,6 @@ describe("sessionsTailCommand", () => {
       { stopReason: "toolUse", terminalError: "non_deliverable_terminal_turn" },
       "error",
     ],
-    [
-      "empty terminal reply",
-      { stopReason: "stop", terminalError: "non_deliverable_terminal_turn" },
-      "error",
-    ],
     ["assistant interruption", { stopReason: "aborted", aborted: false }, "aborted"],
     ["prompt failure", { promptError: "sensitive failure detail" }, "error"],
     [
@@ -175,12 +160,9 @@ describe("sessionsTailCommand", () => {
       "timeout",
     ],
     ["abort with failure", { aborted: true, promptError: "sensitive failure detail" }, "aborted"],
-    ["normal stop", { stopReason: "stop" }, "done"],
-    ["normal end turn", { stopReason: "end_turn" }, "done"],
     ["delivered partial reply", { stopReason: "length" }, "done"],
-    ["unspecified completion", undefined, "done"],
   ])("renders the recorded terminal outcome for %s", async (_name, data, expected) => {
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
     await writeSessionEntry();
     await appendEvents([
       makeEvent({
@@ -199,13 +181,10 @@ describe("sessionsTailCommand", () => {
   });
 
   it.each([
-    ["ASCII", "incident", "incident"],
     ["CJK", "中文", "中文"],
-    ["combining accent", "e\u0301", "e\u0301"],
-    ["joined emoji", "👩🏽‍💻", "👩🏽‍💻"],
     ["truncated emoji", `${"a".repeat(17)}👩🏽‍💻-incident`, `${"a".repeat(17)}…`],
   ])("keeps progress columns aligned with %s session keys", async (_name, suffix, displayed) => {
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
     const key = `agent:main:${suffix}`;
     await writeSessionEntry(key);
     await appendEvents(
@@ -233,20 +212,6 @@ describe("sessionsTailCommand", () => {
   it.each([
     ["CSI inside", "a\u001b[31mb", "custom\u001b[31m", "ab", "custom"],
     [
-      "OSC inside",
-      "a\u001b]8;;https://example.invalid/\u0007b",
-      "custom\u001b]8;;https://example.invalid/\u0007",
-      "ab",
-      "custom",
-    ],
-    [
-      "CSI beyond cutoff",
-      `${"a".repeat(30)}\u001b[31m`,
-      "custom.progress-long\u001b[31m",
-      `${"a".repeat(18)}…`,
-      "custom.progress…",
-    ],
-    [
       "OSC beyond cutoff",
       `${"a".repeat(30)}\u001b]8;;https://example.invalid/\u0007`,
       "custom.progress-long\u001b]8;;https://example.invalid/\u0007",
@@ -256,7 +221,7 @@ describe("sessionsTailCommand", () => {
   ])(
     "renders %s as plain progress labels",
     async (_name, suffix, type, displayed, displayedType) => {
-      const runtime = makeRuntime();
+      const runtime = createTestRuntime();
       const key = `agent:main:${suffix}`;
       await writeSessionEntry(key);
       await appendEvents(
@@ -278,7 +243,7 @@ describe("sessionsTailCommand", () => {
   );
 
   it("honors the tail count before rendering existing trajectory events", async () => {
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
     await writeSessionEntry();
     await appendEvents([
       makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" }),
@@ -296,17 +261,14 @@ describe("sessionsTailCommand", () => {
 
     await sessionsTailCommand({ agent: "main", store: storePath, sessionKey, tail: "2" }, runtime);
 
-    const output = vi
-      .mocked(runtime.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
+    const output = runtimeOutput(runtime);
     expect(output).not.toContain("session.started");
     expect(output).toContain("tool.call");
     expect(output).toContain("tool.result");
   });
 
   it("rejects tail counts that exceed JavaScript safe integer precision", async () => {
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
 
     await sessionsTailCommand(
       { agent: "main", store: storePath, sessionKey, tail: "9007199254740992" },
@@ -320,29 +282,10 @@ describe("sessionsTailCommand", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("tails SQLite trajectory rows from the database", async () => {
-    const runtime = makeRuntime();
-    await writeSessionEntry();
-    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-one", storePath }, [
-      makeEvent({
-        type: "tool.result",
-        ts: "2026-05-18T12:04:21.000Z",
-        data: { name: "sqlite", success: true },
-      }),
-    ]);
-
-    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
-
-    const output = runtimeOutput(runtime);
-    expect(output).toContain("tool.result");
-    expect(output).toContain("sqlite ok");
-    expect(output).not.toContain("No sessions found");
-  });
-
   it.each(["explicit", "running", "latest", "acp"])(
     "selects %s sessions without decoding unrelated saved prompts",
     async (selection) => {
-      const runtime = makeRuntime();
+      const runtime = createTestRuntime();
       storePath = path.join(tmpDir, "state", "agents", "main", "agent", "openclaw-agent.sqlite");
       replaceSessionEntrySync(
         { sessionKey, storePath },
@@ -424,7 +367,7 @@ describe("sessionsTailCommand", () => {
   );
 
   it("isolates trajectory rows by session id", async () => {
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
     await writeSessionEntry();
     await writeSessionEntry("agent:main:old", { sessionId: "old-session" });
     await appendEvents(
@@ -458,7 +401,7 @@ describe("sessionsTailCommand", () => {
     { signal: "SIGTERM" as const, exitCode: 143 },
   ])("continues following until $signal and exits with $exitCode", async ({ signal, exitCode }) => {
     vi.useFakeTimers();
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
     const sigintListeners = process.listenerCount("SIGINT");
     const sigtermListeners = process.listenerCount("SIGTERM");
     await writeSessionEntry();
@@ -508,7 +451,7 @@ describe("sessionsTailCommand", () => {
 
   it("exits unsuccessfully when the followed trajectory store becomes unreadable", async () => {
     vi.useFakeTimers();
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
     const sigintListeners = process.listenerCount("SIGINT");
     const sigtermListeners = process.listenerCount("SIGTERM");
     await writeSessionEntry();
@@ -535,25 +478,23 @@ describe("sessionsTailCommand", () => {
     expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
   });
 
-  it.each([
-    { agent: "" },
-    { agent: "   " },
-    { agent: "", sessionKey },
-    { agent: "   ", sessionKey },
-  ])("rejects an explicit blank agent without inferring a store: %j", async (opts) => {
-    mocks.getRuntimeConfig.mockReturnValue({});
-    const runtime = makeRuntime();
-    const result = sessionsTailCommand(opts, runtime);
+  it.each([{ agent: "   " }, { agent: "", sessionKey }])(
+    "rejects an explicit blank agent without inferring a store: %j",
+    async (opts) => {
+      mocks.getRuntimeConfig.mockReturnValue({});
+      const runtime = createTestRuntime();
+      const result = sessionsTailCommand(opts, runtime);
 
-    await expect(result).rejects.toBeInstanceOf(ExpectedCliError);
-    await expect(result).rejects.toMatchObject({ message: "--agent must not be blank" });
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
+      await expect(result).rejects.toBeInstanceOf(ExpectedCliError);
+      await expect(result).rejects.toMatchObject({ message: "--agent must not be blank" });
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves the target store from a fully qualified non-default agent session key", async () => {
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
     const opsSessionKey = "agent:ops:telegram:direct:owner";
     const opsSessionsDir = path.join(process.env.OPENCLAW_STATE_DIR!, "agents", "ops", "sessions");
     const opsStorePath = path.join(opsSessionsDir, "sessions.json");

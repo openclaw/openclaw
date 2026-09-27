@@ -36,9 +36,11 @@ describe("config write metadata stamping", () => {
     expect(AUTO_MANAGED_CONFIG_META_PATHS).toEqual([
       ["meta", "lastTouchedVersion"],
       ["meta", "migrations", "modelPolicyAllowlist"],
+      ["meta", "migrations", "utilityModelSeparation"],
     ]);
     expect(typeof stamped.meta?.lastTouchedVersion).toBe("string");
     expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
+    expect(stamped.meta?.migrations?.utilityModelSeparation).toBe(true);
   });
 
   const cases: Array<

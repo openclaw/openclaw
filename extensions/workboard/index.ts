@@ -10,6 +10,7 @@ import {
   syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./src/lifecycle-sync.js";
+import { resolveWorkboardSqliteWorkerModuleUrl } from "./src/sqlite-store-paths.js";
 import { registerWorkboardStoreLifecycle } from "./src/store-lifecycle.js";
 import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
@@ -23,18 +24,17 @@ export default definePluginEntry({
   name: "Workboard",
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
-    const store = WorkboardStore.openSqlite();
-    const resourceServices: Array<{ stop(): void }> = [];
-    registerWorkboardStoreLifecycle(api, store, () => {
-      for (const service of resourceServices) {
-        service.stop();
-      }
+    const store = WorkboardStore.openSqlite(
+      resolveWorkboardSqliteWorkerModuleUrl(api.runtimeSource),
+    );
+    const resourceServices: Array<{ stop(): void | Promise<void> }> = [];
+    registerWorkboardStoreLifecycle(api, store, async () => {
+      await Promise.all(resourceServices.map(async (service) => await service.stop()));
     });
     const changeEvents = createWorkboardChangeEventService(store);
     resourceServices.push(changeEvents);
     const automationNudge = createWorkboardAutomationNudgeService({
       store,
-      gateway: api.runtime.gateway,
     });
     resourceServices.push(automationNudge);
     const lifecycleSync = createWorkboardLifecycleService({
@@ -76,7 +76,7 @@ export default definePluginEntry({
     api.registerService(changeEvents);
     api.registerService(automationNudge);
     api.registerService(lifecycleSync);
-    api.on("gateway_start", () => lifecycleSync.onGatewayStart());
+    api.on("gateway_start", (_event, context) => lifecycleSync.onGatewayStart(context.abortSignal));
     api.on("gateway_stop", () => lifecycleSync.onGatewayStop());
     api.on("subagent_ended", (event) =>
       store.runOperation(async () => {

@@ -5,6 +5,8 @@
  * the same handlers can run through HTTP and in-process dispatch.
  */
 /** Request shape consumed by browser route handlers. */
+import type { ResolvedBrowserProfile } from "../config.js";
+
 export type BrowserRequest = {
   params: Record<string, string>;
   query: Record<string, unknown>;
@@ -16,6 +18,14 @@ export type BrowserRequest = {
   signal?: AbortSignal;
   /** Gateway authority, including invalidation before transport retirement; independent of request timeout. */
   requester?: { connId?: string; signal: AbortSignal; isCurrent: () => boolean };
+  /** In-process owner assertion rerun after profile admission and before tab actions. */
+  assertCurrent?: (profile?: ResolvedBrowserProfile) => void | Promise<void>;
+  /** Resource identity survives the RPC; each viewer separately owns its original actor borrow. */
+  screencastAuthority?: {
+    signal: AbortSignal;
+    assertCurrent: () => void;
+    retainRequester: () => { signal: AbortSignal; isCurrent: () => boolean; release: () => void };
+  };
 };
 
 /** Response shape used by browser route handlers. */

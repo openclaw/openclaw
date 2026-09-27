@@ -3,24 +3,28 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import { normalizeSqliteNonNegativeInteger } from "../infra/sqlite-busy-timeout.js";
 import {
   createSqliteLifecycleAggregateError,
   runWithSqliteCoordinator,
 } from "../infra/sqlite-coordinator.js";
+import { isSqliteLockError, withSqliteNativeOpen } from "../infra/sqlite-error-diagnostics.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
-} from "../infra/sqlite-readonly-location.js";
-import { isSqliteLockError } from "../infra/sqlite-transaction.js";
+} from "../infra/sqlite-snapshot-source.js";
 import {
   acquireStateDatabaseCoordinator,
   StateDatabaseCoordinatorContentionError,
 } from "../infra/state-database-coordinator.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
+import {
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  type OpenClawStateSchemaReadAdmission,
+} from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 
 export const STATE_SUPERVISION_KEY = "gateway.supervision";
 const MAX_OWNERSHIP_TIMESTAMP_MS = 8_640_000_000_000_000;
@@ -52,7 +56,7 @@ export class OpenClawStateOwnershipMetadataError extends OpenClawStateOwnershipE
   }
 }
 
-class OpenClawStateExternalOwnershipError extends OpenClawStateOwnershipError {
+export class OpenClawStateExternalOwnershipError extends OpenClawStateOwnershipError {
   constructor(
     readonly databasePath: string,
     readonly managerId: string,
@@ -119,33 +123,48 @@ export function inspectOpenClawStateOwnershipFromDatabase(
   databasePath: string,
   configMachineStateTableReady = false,
 ): OpenClawExternalStateOwnership | null {
-  if (!configMachineStateTableReady && !tableExists(database, "config_machine_state")) {
-    return null;
+  try {
+    if (!configMachineStateTableReady && !tableExists(database, "config_machine_state")) {
+      return null;
+    }
+    // Raw admission must not mistake a damaged ownership index for an unclaimed store.
+    const ownershipSql = configMachineStateTableReady
+      ? "SELECT value_json FROM config_machine_state WHERE state_key = ? LIMIT 1"
+      : "SELECT value_json FROM config_machine_state NOT INDEXED WHERE state_key = ? LIMIT 1";
+    const row = database.prepare(ownershipSql).get(STATE_SUPERVISION_KEY) as
+      | { value_json?: unknown }
+      | undefined;
+    if (!row) {
+      return null;
+    }
+    if (typeof row.value_json !== "string") {
+      throw new OpenClawStateOwnershipMetadataError(databasePath, "reserved value is not text");
+    }
+    return parseExternalOwnership(row.value_json, databasePath);
+  } catch (error) {
+    throw normalizeOpenClawStateSchemaReadError(error, databasePath);
   }
-  const row = database
-    .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ? LIMIT 1")
-    .get(STATE_SUPERVISION_KEY) as { value_json?: unknown } | undefined;
-  if (!row) {
-    return null;
-  }
-  if (typeof row.value_json !== "string") {
-    throw new OpenClawStateOwnershipMetadataError(databasePath, "reserved value is not text");
-  }
-  return parseExternalOwnership(row.value_json, databasePath);
 }
 
 function inspectOwnershipThroughConnection(
   location: string,
   databasePath: string,
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): OpenClawExternalStateOwnership | null {
-  const database = openNodeSqliteDatabase(location, { readOnly: true });
+  const database = withSqliteNativeOpen(() => openNodeSqliteDatabase(location, { readOnly: true }));
+  let closeAdmission: (() => void) | undefined;
   try {
+    closeAdmission = openStateSchemaReadAdmission?.(database);
     database.exec(
       `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
     );
     return inspectOpenClawStateOwnershipFromDatabase(database, databasePath);
   } finally {
-    database.close();
+    try {
+      closeAdmission?.();
+    } finally {
+      database.close();
+    }
   }
 }
 
@@ -160,19 +179,30 @@ function inspectJournalAwarePublicOwnership(
   }
 }
 
-function inspectOwnershipWhileCoordinatorHeld(databasePath: string, busyTimeoutMs: number) {
+function inspectOwnershipWhileCoordinatorHeld(
+  databasePath: string,
+  busyTimeoutMs: number,
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
+) {
   const resolvedPath = path.resolve(databasePath);
   if (!existsSync(resolvedPath)) {
     return null;
   }
   // Write admission owns locking and recovery while the coordinator is held.
   // Inspect the live committed view without cloning a potentially busy family.
-  const database = openNodeSqliteDatabase(resolvedPath);
+  const location = resolveExistingSqliteFileUri(resolvedPath);
+  const database = withSqliteNativeOpen(() => openNodeSqliteDatabase(location));
+  let closeAdmission: (() => void) | undefined;
   try {
+    closeAdmission = openStateSchemaReadAdmission?.(database);
     database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; PRAGMA trusted_schema = OFF;`);
     return inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
   } finally {
-    database.close();
+    try {
+      closeAdmission?.();
+    } finally {
+      database.close();
+    }
   }
 }
 
@@ -221,6 +251,7 @@ function acquireOpenClawStateWriteAccess(options: {
   databasePath: string;
   busyTimeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
 }): { release: () => void } {
   const resolvedPath = path.resolve(options.databasePath);
   const busyTimeoutMs = normalizeSqliteNonNegativeInteger(
@@ -231,7 +262,11 @@ function acquireOpenClawStateWriteAccess(options: {
   try {
     quarantineOrphanedSqliteSidecars(resolvedPath);
     assertOwnershipAllowsWrite(
-      inspectOwnershipWhileCoordinatorHeld(resolvedPath, busyTimeoutMs),
+      inspectOwnershipWhileCoordinatorHeld(
+        resolvedPath,
+        busyTimeoutMs,
+        options.openStateSchemaReadAdmission,
+      ),
       resolvedPath,
       options.env ?? process.env,
     );
@@ -257,7 +292,12 @@ function acquireOpenClawStateWriteAccess(options: {
 }
 
 export function runWithOpenClawStateWriteAccess<T>(
-  options: { databasePath: string; busyTimeoutMs?: number; env?: NodeJS.ProcessEnv },
+  options: {
+    databasePath: string;
+    busyTimeoutMs?: number;
+    env?: NodeJS.ProcessEnv;
+    openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
+  },
   operationLabel: string,
   operation: () => T,
 ): T {
@@ -274,6 +314,7 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
   env?: NodeJS.ProcessEnv;
   recoverOrphanedSidecars?: boolean;
   signal?: AbortSignal;
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
 }): Promise<void> {
   options.signal?.throwIfAborted();
   const databasePath = path.resolve(options.databasePath);
@@ -293,16 +334,23 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     );
     return;
   }
-  const prepared = await prepareSqliteReadOnlyLocation(databasePath, { signal: options.signal });
+  const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
+    preserveSourceArtifacts: true,
+    signal: options.signal,
+  });
   try {
     options.signal?.throwIfAborted();
     assertOwnershipAllowsWrite(
-      inspectOwnershipThroughConnection(prepared.location, databasePath),
+      inspectOwnershipThroughConnection(
+        prepared.location,
+        databasePath,
+        options.openStateSchemaReadAdmission,
+      ),
       databasePath,
       env,
     );
   } finally {
-    prepared.cleanup();
+    await prepared.cleanupAsync();
   }
 }
 

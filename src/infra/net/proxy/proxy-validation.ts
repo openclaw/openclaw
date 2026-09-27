@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { probeApnsHttp2ReachabilityViaProxy } from "../../push-apns-http2.js";
 import { fetchWithRuntimeDispatcher } from "../runtime-fetch.js";
@@ -111,11 +112,6 @@ type RunProxyValidationOptions = ResolveProxyValidationConfigOptions & {
   apnsCheck?: ProxyValidationApnsCheck;
 };
 
-function normalizeProxyUrl(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function validateProxyUrl(value: string | undefined): string[] {
   if (!value) {
     return ["proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL"];
@@ -130,56 +126,25 @@ function validateProxyUrl(value: string | undefined): string[] {
 function resolveProxyValidationConfig(
   options: ResolveProxyValidationConfigOptions,
 ): ProxyValidationResolvedConfig {
-  const overrideUrl = normalizeProxyUrl(options.proxyUrlOverride);
-  if (overrideUrl) {
+  const overrideUrl = normalizeOptionalString(options.proxyUrlOverride);
+  const configUrl = normalizeOptionalString(options.config?.proxyUrl);
+  const proxyUrl =
+    overrideUrl ?? configUrl ?? normalizeOptionalString(options.env?.OPENCLAW_PROXY_URL);
+  if (proxyUrl) {
+    const enabled = Boolean(overrideUrl) || options.config?.enabled !== false;
     const proxyCaFile = resolveManagedProxyCaFileForUrl({
-      proxyUrl: overrideUrl,
+      proxyUrl,
+      config: overrideUrl ? undefined : options.config,
       caFileOverride: options.proxyCaFileOverride,
     });
     return {
-      enabled: true,
-      proxyUrl: overrideUrl,
+      enabled,
+      proxyUrl,
       ...(proxyCaFile ? { proxyCaFile } : {}),
-      source: "override",
-      errors: validateProxyUrl(overrideUrl),
-    };
-  }
-
-  const configUrl = normalizeProxyUrl(options.config?.proxyUrl);
-  if (configUrl) {
-    const proxyCaFile = resolveManagedProxyCaFileForUrl({
-      proxyUrl: configUrl,
-      config: options.config,
-      caFileOverride: options.proxyCaFileOverride,
-    });
-    return {
-      enabled: options.config?.enabled !== false,
-      proxyUrl: configUrl,
-      ...(proxyCaFile ? { proxyCaFile } : {}),
-      source: "config",
-      errors:
-        options.config?.enabled === false
-          ? ["proxy validation is disabled by proxy.enabled=false"]
-          : validateProxyUrl(configUrl),
-    };
-  }
-
-  const envUrl = normalizeProxyUrl(options.env?.OPENCLAW_PROXY_URL);
-  if (envUrl) {
-    const proxyCaFile = resolveManagedProxyCaFileForUrl({
-      proxyUrl: envUrl,
-      config: options.config,
-      caFileOverride: options.proxyCaFileOverride,
-    });
-    return {
-      enabled: options.config?.enabled !== false,
-      proxyUrl: envUrl,
-      ...(proxyCaFile ? { proxyCaFile } : {}),
-      source: "env",
-      errors:
-        options.config?.enabled === false
-          ? ["proxy validation is disabled by proxy.enabled=false"]
-          : validateProxyUrl(envUrl),
+      source: overrideUrl ? "override" : configUrl ? "config" : "env",
+      errors: enabled
+        ? validateProxyUrl(proxyUrl)
+        : ["proxy validation is disabled by proxy.enabled=false"],
     };
   }
 
@@ -281,8 +246,9 @@ type ProxyValidationDeniedTarget = {
   transportErrorMeansBlocked: boolean;
 };
 
-type DeniedCanary = {
-  target: ProxyValidationDeniedTarget;
+type LoopbackValidationCanary = {
+  url: string;
+  token: string;
   close: () => Promise<void>;
 };
 
@@ -298,10 +264,9 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
-async function createLoopbackDeniedCanary(): Promise<DeniedCanary> {
+async function createLoopbackValidationCanary(): Promise<LoopbackValidationCanary> {
   const token = randomUUID();
-  // The default denied probe targets loopback and expects the proxy to block it.
-  // If a proxy returns this token, it forwarded a destination it should deny.
+  // Only the per-probe token distinguishes our listener from a proxy response.
   const server = createServer((_request, response) => {
     response.writeHead(204, {
       [DENIED_CANARY_HEADER]: token,
@@ -325,13 +290,33 @@ async function createLoopbackDeniedCanary(): Promise<DeniedCanary> {
   }
 
   return {
-    target: {
-      url: `http://127.0.0.1:${address.port}/`,
-      expectedCanaryToken: token,
-      transportErrorMeansBlocked: true,
-    },
+    url: `http://127.0.0.1:${address.port}/`,
+    token,
     close: () => closeServer(server),
   };
+}
+
+/** Probes the active runtime route, independently of explicit proxy-denial checks. */
+export async function probeManagedProxyLoopback(
+  options: ResolveProxyValidationConfigOptions,
+): Promise<boolean | null> {
+  const config = resolveProxyValidationConfig(options);
+  if (!config.enabled || !config.proxyUrl || config.errors.length > 0) {
+    return null;
+  }
+  const canary = await createLoopbackValidationCanary();
+  try {
+    const response = await fetchWithRuntimeDispatcher(canary.url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(DEFAULT_PROXY_VALIDATION_TIMEOUT_MS),
+    });
+    void response.body?.cancel().catch(() => undefined);
+    return response.ok && response.headers.get(DENIED_CANARY_HEADER) === canary.token;
+  } catch {
+    return false;
+  } finally {
+    await canary.close();
+  }
 }
 
 async function resolveDeniedTargets(
@@ -347,9 +332,15 @@ async function resolveDeniedTargets(
     };
   }
 
-  const canary = await createLoopbackDeniedCanary();
+  const canary = await createLoopbackValidationCanary();
   return {
-    targets: [canary.target],
+    targets: [
+      {
+        url: canary.url,
+        expectedCanaryToken: canary.token,
+        transportErrorMeansBlocked: true,
+      },
+    ],
     close: canary.close,
   };
 }

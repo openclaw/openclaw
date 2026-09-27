@@ -6,6 +6,8 @@
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"제어"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"음성 대화"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"워치 오디오 실패"</string>
+    <string name="microphone_permission_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"마이크 권한 필요"</string>
+    <string name="open_settings" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"설정 열기"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"받아쓰기"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"실시간"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"스레드"</string>
@@ -26,6 +28,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"최근 답변 읽어주기"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"말하는 중"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"듣는 중"</string>
+    <string name="stopping" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"통화 종료 중…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연결 중"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"생각 중"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"입력 중"</string>
@@ -79,6 +82,8 @@
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"작업이 수락되지 않음"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"문제가 발생했습니다"</string>
     <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"목록을 새로고침하고 다시 시도하세요."</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"일부 모델을 새로고침하지 못했습니다. 목록에 있는 모델은 계속 사용할 수 있습니다."</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"이 채팅에서 모델을 선택하려면 휴대전화의 OpenClaw와 Gateway를 업데이트하세요."</string>
     <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"워치에서 다시 시도하세요."</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"업데이트 필요"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대전화와 워치 모두에서 OpenClaw를 업데이트하세요."</string>
@@ -121,4 +126,14 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"대기 중 %1$d, 실행 중 %2$d, 완료 %3$d, 실패 %4$d, 숨김 %5$d"</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"표시되지 않은 단계 더 있음"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"알 수 없음"</string>
+    <string name="read_full_reply" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"전체 답변 읽기"</string>
+    <string name="reply_stream_preview" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"실시간 미리보기입니다. 답변이 완료되면 전체 내용을 읽어보세요."</string>
+    <string name="reply_previous_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"이전 부분"</string>
+    <string name="reply_next_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"다음 부분"</string>
+    <string name="reply_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"전체 답변 불러오는 중…"</string>
+    <string name="reply_unsupported" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"전체 답변을 읽으려면 휴대전화 앱과 Gateway를 업데이트하세요."</string>
+    <string name="reply_too_large" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"이 답변은 너무 길어서 여기에서 읽을 수 없습니다. 휴대전화에서 열어 보세요."</string>
+    <string name="reply_changed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"답변 또는 연결이 변경되었습니다. 처음부터 다시 시도하세요."</string>
+    <string name="reply_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"전체 텍스트를 더 이상 볼 수 없습니다."</string>
+    <string name="reply_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"전체 답변을 불러오지 못했습니다. 다시 시도하세요."</string>
 </resources>

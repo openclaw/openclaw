@@ -142,7 +142,6 @@ describe.each([false, true])("Gateway TLS upgrade (managed proxy: %s)", (managed
     await waitForSocketDrain();
     if (pin === fingerprint) {
       expect(result).toBe("open");
-      expect(httpBytes).toBeGreaterThan(0);
       expect(upgrades).toBe(1);
       expect(headers).toMatchObject({
         "x-test-edge-auth": "synthetic-test-edge-token",

@@ -17,12 +17,17 @@ export function resolveOpencodeSessionHeaders(
   if (!options?.sessionId || !isOpencodeEndpoint(model.baseUrl)) {
     return options?.headers;
   }
-  if (
-    [model.headers, options.headers].some((headers) =>
-      Object.keys(headers ?? {}).some((name) => name.toLowerCase() === "x-opencode-session"),
-    )
-  ) {
+  if (hasOpencodeSessionHeader(model, options)) {
     return options.headers;
   }
   return { ...options.headers, "x-opencode-session": options.sessionId };
+}
+
+export function hasOpencodeSessionHeader(
+  model: Pick<Model, "headers">,
+  options?: Pick<StreamOptions, "headers">,
+): boolean {
+  return [model.headers, options?.headers].some((headers) =>
+    Object.keys(headers ?? {}).some((name) => name.toLowerCase() === "x-opencode-session"),
+  );
 }

@@ -21,6 +21,8 @@ import {
 } from "../active-turn-thread-route.js";
 import { coerceDiscordComponentParam } from "../components.js";
 import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
+import { withDiscordRequestAuthority } from "../internal/request-authority.js";
+import { matchesDiscordToolContextTarget } from "../normalize.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
   isDiscordComponentSpecWithinMessageLimit,
@@ -58,25 +60,38 @@ function readCurrentDiscordTarget(
   return target || undefined;
 }
 
+type DiscordMessageActionContext = Pick<
+  ChannelMessageActionContext,
+  | "action"
+  | "params"
+  | "cfg"
+  | "accountId"
+  | "requesterAccountId"
+  | "requesterSenderId"
+  | "senderIsOwner"
+  | "toolContext"
+  | "mediaAccess"
+  | "mediaLocalRoots"
+  | "mediaReadFile"
+  | "sessionKey"
+  | "inboundEventKind"
+  | "conversationReadOrigin"
+  | "reply"
+  | "progressSnapshot"
+  | "assertDirectAdapterHandoff"
+>;
+
 export async function handleDiscordMessageAction(
-  ctx: Pick<
-    ChannelMessageActionContext,
-    | "action"
-    | "params"
-    | "cfg"
-    | "accountId"
-    | "requesterAccountId"
-    | "requesterSenderId"
-    | "senderIsOwner"
-    | "toolContext"
-    | "mediaAccess"
-    | "mediaLocalRoots"
-    | "mediaReadFile"
-    | "sessionKey"
-    | "inboundEventKind"
-    | "conversationReadOrigin"
-    | "reply"
-  >,
+  ctx: DiscordMessageActionContext,
+): Promise<AgentToolResult<unknown>> {
+  ctx.assertDirectAdapterHandoff?.();
+  return await withDiscordRequestAuthority(ctx.assertDirectAdapterHandoff, () =>
+    dispatchDiscordMessageAction(ctx),
+  );
+}
+
+async function dispatchDiscordMessageAction(
+  ctx: DiscordMessageActionContext,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
@@ -88,6 +103,8 @@ export async function handleDiscordMessageAction(
           requesterAccountId: ctx.requesterAccountId,
           currentChannelProvider: ctx.toolContext.currentChannelProvider,
           currentChannelId: ctx.toolContext.currentChannelId,
+          currentChatType: ctx.toolContext.currentChatType,
+          currentMessagingTarget: ctx.toolContext.currentMessagingTarget,
         }
       : undefined;
   const readPolicyOptions: DiscordMessagingActionOptions | undefined =
@@ -104,6 +121,7 @@ export async function handleDiscordMessageAction(
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
     ...(ctx.reply ? { reply: ctx.reply } : {}),
+    ...(ctx.progressSnapshot ? { progressSnapshot: ctx.progressSnapshot } : {}),
     ...readPolicyOptions,
   } as const;
   const notifyVisibleOutbound = (
@@ -365,6 +383,7 @@ export async function handleDiscordMessageAction(
         before: readStringParam(params, "before"),
         after: readStringParam(params, "after"),
         around: readStringParam(params, "around"),
+        messageId: readStringParam(params, "messageId"),
       },
       cfg,
       actionOptions,
@@ -373,11 +392,20 @@ export async function handleDiscordMessageAction(
 
   if (action === "edit" || action === "delete") {
     const messageId = readStringParam(params, "messageId", { required: true });
+    const target = readTarget();
+    const currentDmChannel =
+      action === "edit" &&
+      ctx.progressSnapshot &&
+      ctx.toolContext?.currentChatType === "direct" &&
+      parseDiscordTarget(target, { defaultKind: "channel" })?.kind === "user" &&
+      matchesDiscordToolContextTarget({ target, toolContext: ctx.toolContext })
+        ? readCurrentDiscordTarget(ctx.toolContext)
+        : undefined;
     return await handleDiscordAction(
       {
         action: action === "edit" ? "editMessage" : "deleteMessage",
         accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
+        channelId: resolveDiscordChannelId(currentDmChannel ?? target),
         messageId,
         ...(action === "edit" ? { content: params.message } : {}),
       },

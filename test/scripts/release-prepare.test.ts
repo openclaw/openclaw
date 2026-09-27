@@ -12,6 +12,9 @@ import {
   readWorktreeState,
   runReleasePrepareSteps,
 } from "../../scripts/release-prepare.ts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 function worktreeState(
   overrides: Partial<{
@@ -141,7 +144,7 @@ describe("release preparation plan", () => {
       process.exitCode = status;
     `;
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       ["--import", "tsx", "--input-type=module", "-e", harness],
       {
         cwd: process.cwd(),

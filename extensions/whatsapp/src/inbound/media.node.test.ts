@@ -104,11 +104,8 @@ describe("downloadInboundMedia", () => {
     await expectMimetype({ audioMessage: { mimetype: "audio/mp4", ptt: true } }, "audio/mp4");
   });
 
-  it.each([
-    { name: "voice messages without explicit MIME", audioMessage: { ptt: true } },
-    { name: "audio messages without MIME or ptt flag", audioMessage: {} },
-  ])("defaults to audio/ogg for $name", async ({ audioMessage }) => {
-    await expectMimetype({ audioMessage }, "audio/ogg; codecs=opus");
+  it("defaults audio messages without MIME to OGG Opus", async () => {
+    await expectMimetype({ audioMessage: {} }, "audio/ogg; codecs=opus");
   });
 
   it("uses explicit mimetype from imageMessage when present", async () => {

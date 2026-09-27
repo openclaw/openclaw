@@ -19,8 +19,11 @@ type PostUpdateLaunchAgentRecoveryDeps = {
 export async function recoverInstalledLaunchAgentAfterUpdate(params: {
   service?: GatewayService;
   env?: NodeJS.ProcessEnv;
+  assertCurrent?: () => void;
+  onGatewayStartAttempted?: () => void;
   deps?: PostUpdateLaunchAgentRecoveryDeps;
 }): Promise<PostUpdateLaunchAgentRecoveryResult> {
+  params.assertCurrent?.();
   const platform = params.deps?.platform ?? process.platform;
   if (platform !== "darwin") {
     return { attempted: false, recovered: false };
@@ -30,14 +33,18 @@ export async function recoverInstalledLaunchAgentAfterUpdate(params: {
   const readState = params.deps?.readState ?? readGatewayServiceState;
   const recover = params.deps?.recover ?? recoverInstalledLaunchAgent;
   const state = await readState(service, { env: params.env }).catch(() => null);
+  params.assertCurrent?.();
   if (!state || state.loadState.status !== "not-loaded" || !state.installed) {
     return { attempted: false, recovered: false };
   }
 
   let recovered: Awaited<ReturnType<typeof recover>>;
   try {
+    params.onGatewayStartAttempted?.();
     recovered = await recover({ result: "restarted", env: state.env });
+    params.assertCurrent?.();
   } catch (error) {
+    params.assertCurrent?.();
     return {
       attempted: true,
       recovered: false,

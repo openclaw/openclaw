@@ -3,12 +3,22 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatQuestionStatus
 import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.gateway.QuestionRecord
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ChatTimelineQuestionTest {
+  private fun buildChatTimeline(
+    messages: List<ChatMessage>,
+    pendingRunCount: Int,
+    pendingToolCalls: List<ai.openclaw.app.chat.ChatPendingToolCall>,
+    stream: String?,
+    questions: List<ChatQuestionPrompt>,
+  ) = prepareChatHistory(messages, "agent:main:telegram:direct:question-test", "agent:main:main", questions.filter { it.status() !in setOf(ChatQuestionStatus.Pending, ChatQuestionStatus.Submitting) })
+    .buildTimeline(pendingRunCount, pendingToolCalls, stream, questions = questions)
+
   private fun message(
     id: String,
     role: String,
@@ -38,15 +48,15 @@ class ChatTimelineQuestionTest {
   }
 
   @Test
-  fun completedQuestionSeparatesOlderAndNewerToolRows() {
+  fun completedQuestionFollowsOlderToolRow() {
     fun tool(
       id: String,
       time: Long,
     ) = ChatMessage(id, "toolresult", listOf(ChatMessageContent(type = "toolResult", toolActivity = ChatToolActivity(id, "read", null, "done", false))), time)
-    val history = listOf(message("original", "user", 10), tool("older-tool", 30), tool("newer-tool", 45), message("reply", "assistant", 50))
+    val history = listOf(message("original", "user", 10), tool("older-tool", 30), message("reply", "assistant", 50))
     val timeline = buildChatTimeline(history, 0, emptyList(), null, questions = listOf(question("done", "answered", 40)))
     assertEquals(
-      listOf("message:reply", "completed-tools:newer-tool", "question:done", "completed-tools:older-tool", "message:original"),
+      listOf("message:reply", "question:done", "tools:original", "message:original"),
       timeline.items.map(::chatTimelineItemKey),
     )
   }

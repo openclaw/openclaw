@@ -317,25 +317,6 @@ openclaw-custodian-page {
   min-height: 44px;
 }
 
-.custodian__wizard-step .btn:disabled:hover {
-  border-color: var(--border);
-  background: var(--bg-elevated);
-  box-shadow: none;
-}
-
-.custodian__wizard-step .btn.primary:disabled:hover {
-  border-color: var(--accent);
-  background: var(--primary);
-  box-shadow: 0 1px 3px var(--accent-subtle);
-}
-
-.custodian__wizard-step .custodian__wizard-cancel:disabled:hover {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-  color: var(--muted);
-}
-
 .custodian__wizard-cancel:not(:disabled) {
   color: var(--text);
 }
@@ -366,6 +347,42 @@ openclaw-custodian-page {
   width: 100%;
   max-width: none;
   margin: 8px 0 0;
+}
+
+.custodian-surface .agent-chat__input {
+  --chat-composer-min-height: 0px;
+}
+
+.custodian-surface .agent-chat__composer-input-row {
+  padding-bottom: var(--chat-composer-editor-inset-block);
+}
+
+.custodian__plugin-intro {
+  display: grid;
+  gap: 20px;
+  margin-block: auto;
+  padding: 24px 12px;
+}
+
+.custodian__plugin-intro h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 20px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.custodian__plugin-starters {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.custodian__plugin-starters .btn {
+  min-height: 44px;
+  max-width: 100%;
+  text-align: start;
+  white-space: normal;
 }
 
 .custodian__thinking > span:not(.sr-only) {

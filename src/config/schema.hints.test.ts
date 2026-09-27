@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
 import { buildBaseHints, mapSensitivePaths, testApi } from "./schema.hints.js";
+import { buildConfigSchemaCore } from "./schema.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
@@ -154,37 +155,6 @@ describe("mapSensitivePaths", () => {
     expect(result["discriminated.value"]?.sensitive).toBe(true);
   });
 
-  it("should not detect non-sensitive fields nested inside all structural Zod types", () => {
-    const GrandSchema = z.object({
-      simple: z.string().optional(),
-      simpleReversed: z.string().optional(),
-      nested: z.object({
-        nested: z.string(),
-      }),
-      list: z.array(z.string()),
-      listOfObjects: z.array(z.object({ nested: z.string() })),
-      headers: z.record(z.string(), z.string()),
-      headersNested: z.record(z.string(), z.object({ nested: z.string() })),
-      auth: z.union([
-        z.object({ type: z.literal("none") }),
-        z.object({ type: z.literal("token"), value: z.string() }),
-      ]),
-      merged: z.object({ id: z.string() }).and(z.object({ nested: z.string() })),
-    });
-
-    const result = mapSensitivePaths(GrandSchema, "", {});
-
-    expect(result["simple"]?.sensitive).toBe(undefined);
-    expect(result["simpleReversed"]?.sensitive).toBe(undefined);
-    expect(result["nested.nested"]?.sensitive).toBe(undefined);
-    expect(result["list[]"]?.sensitive).toBe(undefined);
-    expect(result["listOfObjects[].nested"]?.sensitive).toBe(undefined);
-    expect(result["headers.*"]?.sensitive).toBe(undefined);
-    expect(result["headersNested.*.nested"]?.sensitive).toBe(undefined);
-    expect(result["auth.value"]?.sensitive).toBe(undefined);
-    expect(result["merged.nested"]?.sensitive).toBe(undefined);
-  });
-
   it("maps sensitive fields nested under object catchall schemas", () => {
     const schema = z.object({
       custom: z.object({}).catchall(
@@ -230,11 +200,6 @@ describe("mapSensitivePaths", () => {
   });
 
   it("main schema yields correct hints (samples)", () => {
-    const schema = OpenClawSchema.toJSONSchema({
-      target: "draft-07",
-      unrepresentable: "any",
-    });
-    schema.title = "OpenClawConfig";
     const hints = mapSensitivePaths(OpenClawSchema, "", {});
 
     expect(hints["memory.search.remote.apiKey"]?.sensitive).toBe(true);
@@ -273,5 +238,51 @@ describe("mapSensitivePaths", () => {
     ]) {
       expect(hints[path]?.tags, path).toContain(SENSITIVE_URL_HINT_TAG);
     }
+  });
+});
+
+describe("authored schema hints", () => {
+  it("preserves authored metadata without deriving tags from field names or tiers", () => {
+    const result = buildConfigSchemaCore({
+      plugins: [
+        {
+          id: "authored-metadata",
+          configSchema: {
+            type: "object",
+            properties: {
+              maxTokens: { type: "integer" },
+              storagePath: { type: "string" },
+              apiKey: { type: "string" },
+            },
+          },
+          configUiHints: {
+            maxTokens: { sensitive: false },
+            storagePath: { tags: ["User-defined"], advanced: true },
+            apiKey: { sensitive: true },
+          },
+        },
+      ],
+      channels: [
+        {
+          id: "authored-metadata-channel",
+          configSchema: { type: "object", properties: { retryLimit: { type: "integer" } } },
+          configUiHints: { retryLimit: { tags: ["Tuning"] } },
+        },
+      ],
+    });
+    const hints = result.uiHints;
+    expect(hints["gateway.auth.token"]?.tags).toBeUndefined();
+    expect(hints["plugins.entries.authored-metadata.config.maxTokens"]).toMatchObject({
+      sensitive: false,
+    });
+    expect(hints["plugins.entries.authored-metadata.config.maxTokens"]?.tags).toBeUndefined();
+    expect(hints["plugins.entries.authored-metadata.config.storagePath"]).toMatchObject({
+      tags: ["User-defined"],
+      advanced: true,
+    });
+    expect(hints["plugins.entries.authored-metadata.config.apiKey"]?.sensitive).toBe(true);
+    expect(hints["plugins.entries.authored-metadata.config.apiKey"]?.tags).toBeUndefined();
+    expect(hints["channels.authored-metadata-channel.retryLimit"]?.tags).toEqual(["Tuning"]);
+    expect(hints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
   });
 });

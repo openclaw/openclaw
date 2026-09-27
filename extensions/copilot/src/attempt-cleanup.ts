@@ -55,13 +55,14 @@ export function deferBackgroundCompactionCleanup(params: {
   cleanupByokProxy?: () => Promise<void>;
   cleanupToolBridge?: () => void;
   deleteSessionOnIncompleteCleanup: boolean;
-  finalizeNativeSubagents?: () => void;
+  finalizeNativeSubagents?: () => void | Promise<void>;
   sdkSessionId?: string;
   session: SessionLike;
   timeoutMs: number;
 }): Promise<"aborted" | "completed" | "deadline"> {
   return (async () => {
     let outcome: "aborted" | "completed" | "deadline" = "deadline";
+    let finalizationError: Error | undefined;
     try {
       outcome = await awaitDeferredCleanupBeforeDeadline({
         abortSignal: params.abortSignal,
@@ -75,8 +76,13 @@ export function deferBackgroundCompactionCleanup(params: {
         await cancelBackgroundCompactionBeforeTeardown(params.session);
         params.bridge.settleCompactionWait();
       }
-      params.finalizeNativeSubagents?.();
       params.bridge.detach();
+      await params.bridge.awaitAgentEventChain();
+      try {
+        await params.finalizeNativeSubagents?.();
+      } catch (error) {
+        finalizationError = toCopilotError(error);
+      }
       try {
         await params.session.disconnect();
       } catch {}
@@ -94,6 +100,9 @@ export function deferBackgroundCompactionCleanup(params: {
       try {
         await params.pool.release(params.handle);
       } catch {}
+    }
+    if (finalizationError) {
+      throw finalizationError;
     }
     return outcome;
   })();

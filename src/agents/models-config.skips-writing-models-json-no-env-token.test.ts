@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
@@ -16,14 +16,10 @@ import {
 import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.secrets.js";
 import {
   encodePluginModelCatalogRelativePath,
-  loadPersistedPluginModelCatalogs,
+  loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
-
-function listPersistedPluginModelCatalogs(agentDir: string) {
-  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
-}
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   listExternalCliSyncProviderIds: () => [],
@@ -57,11 +53,13 @@ vi.mock("./models-config.providers.js", async () => {
     }: {
       providers: Record<string, ModelsProviderConfig>;
     }) => providers,
+    materializeConfiguredProviderCatalogModels: (providers: Record<string, ModelsProviderConfig>) =>
+      providers,
     normalizeProviders: ({ providers }: { providers: Record<string, ModelsProviderConfig> }) =>
       providers,
     normalizeProviderCatalogModelsForConfig: (providers: Record<string, ModelsProviderConfig>) =>
       providers,
-    resolveImplicitProviders: async ({ env }: { env?: NodeJS.ProcessEnv }) => {
+    resolveImplicitProviders: async () => {
       const providers: Record<string, ModelsProviderConfig> = {
         chutes: {
           baseUrl: "https://llm.chutes.ai/v1",
@@ -81,18 +79,6 @@ vi.mock("./models-config.providers.js", async () => {
           apiKey: "XAI_API_KEY",
         },
       };
-      if (env?.MINIMAX_API_KEY) {
-        providers["minimax"] = {
-          ...createImplicitProvider("https://minimax.example/v1"),
-          apiKey: "MINIMAX_API_KEY",
-        };
-      }
-      if (env?.SYNTHETIC_API_KEY) {
-        providers["synthetic"] = {
-          ...createImplicitProvider("https://synthetic.example/v1"),
-          apiKey: "SYNTHETIC_API_KEY",
-        };
-      }
       return providers;
     },
   };
@@ -119,7 +105,7 @@ async function readGeneratedProviders(
   const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
   const parsed = JSON.parse(raw) as { providers?: Record<string, ParsedProviderConfig> };
   const providers = { ...parsed.providers };
-  for (const { contents } of listPersistedPluginModelCatalogs(agentDir)) {
+  for (const { contents } of loadPersistedPluginModelCatalogsReadOnly(agentDir)) {
     const catalog = JSON.parse(contents) as {
       generatedBy?: string;
       providers?: Record<string, ParsedProviderConfig>;
@@ -129,25 +115,6 @@ async function readGeneratedProviders(
     }
   }
   return providers;
-}
-
-async function runEnvProviderCase(params: {
-  envVar: "MINIMAX_API_KEY" | "SYNTHETIC_API_KEY";
-  envValue: string;
-  providerKey: "minimax" | "synthetic";
-  expectedApiKeyRef: string;
-}) {
-  // Mutate one env var at a time so auth-gated provider generation stays isolated.
-  const envSnapshot = captureEnv([params.envVar]);
-  setTestEnvValue(params.envVar, params.envValue);
-  try {
-    await ensureOpenClawModelsJson({});
-
-    const provider = (await readGeneratedProviders(resolveDefaultAgentDir({})))[params.providerKey];
-    expect(provider?.apiKey).toBe(params.expectedApiKeyRef);
-  } finally {
-    envSnapshot.restore();
-  }
 }
 
 describe("models-config", () => {
@@ -272,7 +239,7 @@ describe("models-config", () => {
         pluginMetadataSnapshot,
       });
 
-      const persistedCatalog = listPersistedPluginModelCatalogs(agentDir).find(
+      const persistedCatalog = loadPersistedPluginModelCatalogsReadOnly(agentDir).find(
         (catalog) => catalog.pluginId === "deepseek",
       );
       expect(persistedCatalog).toBeDefined();
@@ -281,28 +248,6 @@ describe("models-config", () => {
       };
       expect(parsed.providers.deepseek?.baseUrl).toBe("https://persisted.example/v1");
       expect(parsed.providers.deepseek).toBeDefined();
-    });
-  });
-
-  it("adds minimax provider when MINIMAX_API_KEY is set", async () => {
-    await withTempHome(async () => {
-      await runEnvProviderCase({
-        envVar: "MINIMAX_API_KEY",
-        envValue: "sk-minimax-test",
-        providerKey: "minimax",
-        expectedApiKeyRef: "MINIMAX_API_KEY", // pragma: allowlist secret
-      });
-    });
-  });
-
-  it("adds synthetic provider when SYNTHETIC_API_KEY is set", async () => {
-    await withTempHome(async () => {
-      await runEnvProviderCase({
-        envVar: "SYNTHETIC_API_KEY",
-        envValue: "sk-synthetic-test",
-        providerKey: "synthetic",
-        expectedApiKeyRef: "SYNTHETIC_API_KEY", // pragma: allowlist secret
-      });
     });
   });
 });

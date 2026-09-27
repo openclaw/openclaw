@@ -1,15 +1,15 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
+import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
+import { sha256Base64Url } from "../../infra/crypto-digest.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -30,6 +30,8 @@ import {
 import { dropThinkingBlocks } from "./thinking.js";
 import {
   estimateToolResultTextChars,
+  isToolResultTextBlock,
+  readPreparedToolResultTextChars,
   sliceToolResultTextTailToBudget,
   sliceToolResultTextToBudget,
 } from "./tool-result-text-budget.js";
@@ -544,9 +546,16 @@ export function truncateToolResultMessage(
     return msg;
   }
 
-  const blockTextChars = content.map((block) =>
-    isToolResultTextBlock(block) ? estimateToolResultTextChars(block.text, budgetOptions) : 0,
-  );
+  const blockTextChars = content.map((block) => {
+    if (!isToolResultTextBlock(block)) {
+      return 0;
+    }
+    const text = block.text;
+    return (
+      readPreparedToolResultTextChars(block, text, budgetOptions.minimumRawWeight ?? 1) ??
+      estimateToolResultTextChars(text, budgetOptions)
+    );
+  });
   const totalTextChars = blockTextChars.reduce((sum, chars) => sum + chars, 0);
   if (totalTextChars <= maxChars) {
     return msg;
@@ -612,19 +621,6 @@ export function truncateToolResultMessage(
   });
 
   return { ...msg, content: newContent } as AgentMessage;
-}
-
-function isToolResultTextBlock(
-  block: unknown,
-): block is TextContent & { content?: unknown; type: "text" | "toolResult" } {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const type = (block as { type?: unknown }).type;
-  return (
-    (type === "text" || type === "toolResult") &&
-    typeof (block as { text?: unknown }).text === "string"
-  );
 }
 
 function getToolResultSpillDetails(message: AgentMessage) {
@@ -1141,7 +1137,7 @@ function getToolResultTextBlocks(message: AgentMessage): string[] {
 
 function hashToolResultText(texts: string[]): string {
   // JSON framing preserves block boundaries and lone surrogates, including persisted fallback keys.
-  return createHash("sha256").update(JSON.stringify(texts)).digest("base64url");
+  return sha256Base64Url(JSON.stringify(texts));
 }
 
 function buildAggregateToolResultReplacements(params: {
@@ -1507,7 +1503,7 @@ export function estimateToolResultReductionPotential(params: {
   };
 }
 
-function truncateOversizedToolResultsInExistingSessionManager(params: {
+export async function truncateOversizedToolResultsInSessionManager(params: {
   sessionManager: SessionManager;
   contextWindowTokens: number;
   maxCharsOverride?: number;
@@ -1519,94 +1515,82 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   sessionKey?: string;
   agentId?: string;
   storePath?: string;
-}): { truncated: boolean; truncatedCount: number; reason?: string } {
-  const { sessionManager, contextWindowTokens } = params;
-  const branch = sessionManager.getBranch() as ToolResultBranchEntry[];
-
-  if (branch.length === 0) {
-    return { truncated: false, truncatedCount: 0, reason: "empty session" };
-  }
-
-  const { maxChars, aggregateBudgetChars, plan } = buildRecoveryToolResultReplacementPlan({
-    branch,
-    contextWindowTokens,
-    maxCharsOverride: params.maxCharsOverride,
-    aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
-    protectTrailingToolResults: params.protectTrailingToolResults,
-    projectionState: params.projectionState,
-  });
-  if (plan.replacements.length === 0) {
-    return {
-      truncated: false,
-      truncatedCount: 0,
-      reason: "no oversized or aggregate tool results",
-    };
-  }
-  const rewriteResult = rewriteTranscriptEntriesInSessionManager({
-    sessionManager,
-    replacements: plan.replacements,
-  });
-  if (rewriteResult.changed && params.projectionState) {
-    // Recovery changed canonical bytes; keeping their former source would undo the next TTL edit.
-    reconcileToolResultPromptProjectionState(
-      sessionManager.buildSessionContext().messages,
-      params.projectionState,
-    );
-  }
-  const hasRuntimeTarget = Boolean(
-    params.sessionId && params.sessionKey && params.agentId && params.storePath,
-  );
-  if (rewriteResult.changed && (params.sessionFile || hasRuntimeTarget)) {
-    emitSessionTranscriptUpdate({
-      ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
-      sessionKey: params.sessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.sessionId && params.sessionKey && params.agentId && params.storePath
-        ? {
-            target: {
-              agentId: params.agentId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              storePath: params.storePath,
-            },
-          }
-        : {}),
-    });
-  }
-
-  logToolResultSessionTruncation({
-    rewrittenEntries: rewriteResult.rewrittenEntries,
-    contextWindowTokens,
-    maxChars,
-    aggregateBudgetChars,
-    oversizedReplacementCount: plan.oversizedReplacementCount,
-    aggregateReplacementCount: plan.aggregateReplacementCount,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-  });
-
-  return {
-    truncated: rewriteResult.changed,
-    truncatedCount: rewriteResult.rewrittenEntries,
-    reason: rewriteResult.reason,
-  };
-}
-
-export function truncateOversizedToolResultsInSessionManager(params: {
-  sessionManager: SessionManager;
-  contextWindowTokens: number;
-  maxCharsOverride?: number;
-  aggregateMaxCharsOverride?: number;
-  protectTrailingToolResults?: boolean;
-  projectionState?: ToolResultPromptProjectionState;
-  sessionFile?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  storePath?: string;
-}): { truncated: boolean; truncatedCount: number; reason?: string } {
+}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   try {
-    return truncateOversizedToolResultsInExistingSessionManager(params);
+    const { sessionManager, contextWindowTokens } = params;
+    const branch = Array.from(
+      iterateSessionContextEntries(sessionManager.getBranch()),
+      ({ entry }) => entry,
+    );
+
+    if (branch.length === 0) {
+      return { truncated: false, truncatedCount: 0, reason: "empty session" };
+    }
+
+    const { maxChars, aggregateBudgetChars, plan } = buildRecoveryToolResultReplacementPlan({
+      branch,
+      contextWindowTokens,
+      maxCharsOverride: params.maxCharsOverride,
+      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
+      protectTrailingToolResults: params.protectTrailingToolResults,
+      projectionState: params.projectionState,
+    });
+    if (plan.replacements.length === 0) {
+      return {
+        truncated: false,
+        truncatedCount: 0,
+        reason: "no oversized or aggregate tool results",
+      };
+    }
+    const rewriteResult = await rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: plan.replacements,
+    });
+    if (rewriteResult.changed && params.projectionState) {
+      // Recovery changed canonical bytes; keeping their former source would undo the next TTL edit.
+      reconcileToolResultPromptProjectionState(
+        sessionManager.buildSessionContext().messages,
+        params.projectionState,
+      );
+    }
+    const target =
+      sessionManager.getSessionTarget() ??
+      (params.sessionId && params.sessionKey && params.agentId && params.storePath
+        ? {
+            agentId: params.agentId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          }
+        : undefined);
+    if (rewriteResult.changed && (params.sessionFile || target)) {
+      emitSessionTranscriptUpdate({
+        ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+        ...(target
+          ? { target }
+          : {
+              sessionKey: params.sessionKey,
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+            }),
+      });
+    }
+
+    logToolResultSessionTruncation({
+      rewrittenEntries: rewriteResult.rewrittenEntries,
+      contextWindowTokens,
+      maxChars,
+      aggregateBudgetChars,
+      oversizedReplacementCount: plan.oversizedReplacementCount,
+      aggregateReplacementCount: plan.aggregateReplacementCount,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    });
+
+    return {
+      truncated: rewriteResult.changed,
+      truncatedCount: rewriteResult.rewrittenEntries,
+      reason: rewriteResult.reason,
+    };
   } catch (err) {
     const errMsg = formatErrorMessage(err);
     log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);

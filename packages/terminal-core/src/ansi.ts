@@ -74,11 +74,11 @@ function stripAnsiInternal(
     }
 
     const csi = scanAnsiCsiAt(input, index);
+    ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
+    const compatibilityMatch = options.compatibilityGrammar
+      ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
+      : null;
     if (!csi) {
-      ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
-      const compatibilityMatch = options.compatibilityGrammar
-        ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
-        : null;
       if (compatibilityMatch) {
         output.push(input.slice(copyStart, index));
         index += compatibilityMatch[0].length;
@@ -89,10 +89,6 @@ function stripAnsiInternal(
       continue;
     }
 
-    ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
-    const compatibilityMatch = options.compatibilityGrammar
-      ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
-      : null;
     if (!csi.ended && options.preserveIncompleteCsi) {
       break;
     }

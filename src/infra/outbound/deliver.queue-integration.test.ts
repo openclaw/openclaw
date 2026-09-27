@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -537,10 +538,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   it("holds one live claim while concurrent producers reuse a stable pending intent", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     let resolveSend!: (value: { messageId: string }) => void;
-    let notifySendStarted!: () => void;
-    const sendStarted = new Promise<void>((resolve) => {
-      notifySendStarted = resolve;
-    });
+    const { promise: sendStarted, resolve: notifySendStarted } = createDeferred();
     const sendMatrix = vi.fn(
       () =>
         new Promise<{ messageId: string }>((resolve) => {

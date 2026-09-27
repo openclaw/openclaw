@@ -1,4 +1,3 @@
-// Discord plugin module implements model picker preferences behavior.
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   MAX_DATE_TIMESTAMP_MS,

@@ -1,12 +1,15 @@
 // Qa Lab type declarations define plugin contracts.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { QaThinkingLevel } from "../../qa-thinking.js";
+import type { QaTerminalRequesterSettlement } from "../mock-openai/terminal-requester-settlement.js";
 
 export type QaProviderMode = "mock-openai" | "aimock" | "live-frontier";
 export type QaProviderModeInput = QaProviderMode;
 
 export type QaMockProviderServer = {
   baseUrl: string;
+  sessionObserverUrl?: string;
+  terminalRequesters?: QaTerminalRequesterSettlement;
   stop(): Promise<void>;
 };
 

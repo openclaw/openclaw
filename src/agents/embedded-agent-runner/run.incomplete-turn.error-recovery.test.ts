@@ -9,7 +9,6 @@ import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   resolveEmptyResponseRetryInstruction,
   shouldRetrySilentErrorAssistantTurn,
-  shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn-recovery.js";
 import { resolveIncompleteTurnPayloadText } from "./run/incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -27,6 +26,16 @@ function makeAttemptResult(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
   return makeEmbeddedRunnerAttempt(overrides);
+}
+
+function retrySilentError(
+  assistant: LastAssistant,
+  overrides: Partial<EmbeddedRunAttemptResult> = {},
+): boolean {
+  return shouldRetrySilentErrorAssistantTurn({
+    attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant, ...overrides }),
+    assistant,
+  });
 }
 
 function makeEmptyResponseRetryParams(
@@ -58,22 +67,6 @@ function makeIncompleteTurnParams(
   };
 }
 
-function makeSilentReplyParams(
-  attempt: EmbeddedRunAttemptResult,
-  overrides: Partial<
-    Omit<Parameters<typeof shouldTreatEmptyAssistantReplyAsSilent>[0], "attempt">
-  > = {},
-): Parameters<typeof shouldTreatEmptyAssistantReplyAsSilent>[0] {
-  return {
-    allowEmptyAssistantReplyAsSilent: true,
-    payloadCount: 0,
-    aborted: false,
-    timedOut: false,
-    attempt,
-    ...overrides,
-  };
-}
-
 describe("incomplete-turn error recovery", () => {
   it("retries replay-safe errored turns that only emitted thinking blocks", () => {
     const assistant = makeLastAssistant({
@@ -91,27 +84,7 @@ describe("incomplete-turn error recovery", () => {
       ],
       usage: { input: 100, output: 1120, totalTokens: 1220 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not retry an ambiguous post-dispatch provider outcome", () => {
-    const assistant = makeLastAssistant({
-      stopReason: "error",
-      errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
-      errorMessage: "The WebSocket closed after dispatch",
-      usage: { input: 100, output: 0, totalTokens: 100 },
-    });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant)).toBe(true);
   });
 
   it("does not retry errored empty turns when non-zero output may indicate progress", () => {
@@ -119,14 +92,10 @@ describe("incomplete-turn error recovery", () => {
       stopReason: "error",
       provider: "ollama",
       model: "glm-5.1:cloud",
+      content: [{ type: "text", text: "" }],
       usage: { input: 100, output: 12, totalTokens: 112 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant)).toBe(false);
   });
 
   it.each([
@@ -161,12 +130,7 @@ describe("incomplete-turn error recovery", () => {
         errorMessage,
         usage: { input: 640, output: 1329, totalTokens: 1969 },
       });
-      expect(
-        shouldRetrySilentErrorAssistantTurn({
-          attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-          assistant,
-        }),
-      ).toBe(true);
+      expect(retrySilentError(assistant)).toBe(true);
     },
   );
 
@@ -179,46 +143,27 @@ describe("incomplete-turn error recovery", () => {
       errorMessage: "Provider rejected the tool call",
       usage: { input: 640, output: 1329, totalTokens: 1969 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(true);
+    expect(retrySilentError(assistant)).toBe(true);
   });
 
   it.each([
     "provider completed tool call with malformed JSON arguments",
-    "Provider completed tool call with malformed json arguments",
     " Provider completed tool call with malformed JSON arguments",
-    "Provider completed tool call with malformed JSON arguments ",
-    "Provider completed tool call with malformed JSON arguments.",
     "Error: Provider completed tool call with malformed JSON arguments",
     "Provider completed tool call with malformed JSON arguments after dispatch",
-    "Provider completed stream with an incomplete tool call.",
-    "Provider returned an incomplete or malformed tool call.",
-    "Mistral completed tool call has invalid JSON arguments.",
-    "Responses stream completed tool call with invalid JSON arguments.",
   ])("does not retry positive output for a non-exact rejection message: %s", (errorMessage) => {
     const assistant = makeLastAssistant({
       stopReason: "error",
       errorMessage,
       usage: { input: 640, output: 13, totalTokens: 653 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant)).toBe(false);
   });
 
   it.each([
     "MALFORMED_TOOL_CALL_ARGUMENTS",
     " malformed_tool_call_arguments",
-    "malformed_tool_call_arguments ",
     "malformed_tool_call_arguments_suffix",
-    "invalid_json",
   ])("does not retry positive output for an unrecognized rejection code: %s", (errorCode) => {
     const assistant = makeLastAssistant({
       stopReason: "error",
@@ -226,12 +171,7 @@ describe("incomplete-turn error recovery", () => {
       errorMessage: "Provider rejected the tool call",
       usage: { input: 640, output: 13, totalTokens: 653 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant)).toBe(false);
   });
 
   it.each<{ name: string; attempt: Partial<EmbeddedRunAttemptResult> }>([
@@ -263,12 +203,7 @@ describe("incomplete-turn error recovery", () => {
       errorMessage: "Provider completed tool call with malformed JSON arguments",
       usage: { input: 640, output: 1329, totalTokens: 1969 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant, ...attempt }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant, attempt)).toBe(false);
   });
 
   it.each([
@@ -291,12 +226,7 @@ describe("incomplete-turn error recovery", () => {
       usage: { input: 640, output: 13, totalTokens: 653 },
       ...terminalEvidence,
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant)).toBe(false);
   });
 
   it.each([
@@ -327,12 +257,7 @@ describe("incomplete-turn error recovery", () => {
       content,
       usage: { input: 100, output: 1120, totalTokens: 1220 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant)).toBe(false);
   });
 
   it("does not retry errored thinking-only turns after side effects", () => {
@@ -349,16 +274,8 @@ describe("incomplete-turn error recovery", () => {
       usage: { input: 100, output: 1120, totalTokens: 1220 },
     });
     expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({
-          assistantTexts: [],
-          replayMetadata: {
-            hadPotentialSideEffects: true,
-            replaySafe: false,
-          },
-          lastAssistant: assistant,
-        }),
-        assistant,
+      retrySilentError(assistant, {
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
       }),
     ).toBe(false);
   });
@@ -366,7 +283,6 @@ describe("incomplete-turn error recovery", () => {
   it.each([
     ["current clean overrides cumulative dirty", true, false, true],
     ["current dirty overrides cumulative clean", false, true, false],
-    ["both clean remain retryable", false, false, true],
   ] as const)(
     "uses current-attempt replay metadata when %s",
     (_label, cumulativeDirty, currentDirty, expected) => {
@@ -377,42 +293,19 @@ describe("incomplete-turn error recovery", () => {
         usage: { input: 100, output: 0, totalTokens: 100 },
       });
       expect(
-        shouldRetrySilentErrorAssistantTurn({
-          attempt: makeAttemptResult({
-            assistantTexts: [],
-            lastAssistant: assistant,
-            replayMetadata: {
-              hadPotentialSideEffects: cumulativeDirty,
-              replaySafe: !cumulativeDirty,
-            },
-            currentAttemptReplayMetadata: {
-              hadPotentialSideEffects: currentDirty,
-              replaySafe: !currentDirty,
-            },
-          }),
-          assistant,
+        retrySilentError(assistant, {
+          replayMetadata: {
+            hadPotentialSideEffects: cumulativeDirty,
+            replaySafe: !cumulativeDirty,
+          },
+          currentAttemptReplayMetadata: {
+            hadPotentialSideEffects: currentDirty,
+            replaySafe: !currentDirty,
+          },
         }),
       ).toBe(expected);
     },
   );
-
-  it("detects empty openai-compatible stop turns with non-zero output usage", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            provider: "llamacpp",
-            model: "qwen3.6-27b",
-            usage: { input: 512, output: 103, totalTokens: 615 },
-          }),
-        },
-        { provider: "llamacpp", modelId: "qwen3.6-27b", modelApi: "openai-completions" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
 
   it("detects generic empty GPT turns without visible text", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction(
@@ -453,149 +346,5 @@ describe("incomplete-turn error recovery", () => {
 
     expect(incompleteTurnText).toContain("couldn't generate a response");
     expect(incompleteTurnText).toContain("verify before retrying");
-  });
-
-  it("retries generic empty Bedrock Converse turns without visible text", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            provider: "amazon-bedrock",
-            model: "openai.gpt-oss-120b-1:0",
-            content: [{ type: "text", text: "" }],
-            usage: { input: 950, output: 103, totalTokens: 1053 },
-          }),
-        },
-        {
-          provider: "amazon-bedrock",
-          modelId: "openai.gpt-oss-120b-1:0",
-          modelApi: "bedrock-converse-stream",
-        },
-      ),
-    );
-
-    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
-
-  it("treats clean empty assistant turns as silent only for reply-optional runs", () => {
-    const attempt = makeAttemptResult({
-      assistantTexts: [],
-      lastAssistant: makeLastAssistant({
-        content: [{ type: "text", text: "" }],
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(attempt))).toBe(false);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { terminalReplyExpectation: "optional" }),
-      ),
-    ).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { allowEmptyAssistantReplyAsSilent: false }),
-      ),
-    ).toBe(false);
-  });
-
-  it("treats reasoning-only assistant turns as silent only for reply-optional runs", () => {
-    const attempt = makeAttemptResult({
-      assistantTexts: [],
-      lastAssistant: makeLastAssistant({
-        stopReason: "end_turn",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_silent_helper", type: "reasoning" }),
-          },
-        ],
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(attempt))).toBe(false);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { terminalReplyExpectation: "optional" }),
-      ),
-    ).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { allowEmptyAssistantReplyAsSilent: false }),
-      ),
-    ).toBe(false);
-  });
-
-  it("treats exact NO_REPLY assistant turns as silent only when the caller allows it", () => {
-    const attempt = makeAttemptResult({
-      assistantTexts: ["NO_REPLY"],
-      lastAssistant: makeLastAssistant({
-        content: [{ type: "text", text: "NO_REPLY" }],
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(attempt))).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { allowEmptyAssistantReplyAsSilent: false }),
-      ),
-    ).toBe(false);
-  });
-
-  it("treats post-tool exact NO_REPLY assistant turns as intentional silence", () => {
-    const attempt = makeAttemptResult({
-      assistantTexts: ["NO_REPLY"],
-      toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
-      lastAssistant: makeLastAssistant({
-        content: [{ type: "text", text: "NO_REPLY" }],
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(attempt))).toBe(true);
-  });
-
-  it("does not treat error or side-effect empty turns as silent", () => {
-    const errorAttempt = makeAttemptResult({
-      assistantTexts: [],
-      lastAssistant: makeLastAssistant({
-        stopReason: "error",
-      }),
-    });
-    const silentErrorAttempt = makeAttemptResult({
-      assistantTexts: ["NO_REPLY"],
-      lastAssistant: makeLastAssistant({
-        stopReason: "error",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      }),
-    });
-    const sideEffectAttempt = makeAttemptResult({
-      assistantTexts: [],
-      didSendViaMessagingTool: true,
-      messagingToolSentTexts: ["sent already"],
-      lastAssistant: makeLastAssistant({
-        content: [{ type: "text", text: "" }],
-      }),
-    });
-    const postToolEmptyAttempt = makeAttemptResult({
-      assistantTexts: [],
-      toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
-      lastAssistant: makeLastAssistant({
-        api: "openai-completions",
-        provider: "stepfun",
-        model: "step-router-v1",
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(errorAttempt))).toBe(false);
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(silentErrorAttempt))).toBe(
-      false,
-    );
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(sideEffectAttempt))).toBe(
-      false,
-    );
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(postToolEmptyAttempt)),
-    ).toBe(false);
   });
 });

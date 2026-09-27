@@ -1,25 +1,15 @@
-/**
- * Session tracking for tabs created through the browser tool.
- */
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserTabOwnership } from "./browser/client.types.js";
+import type * as sessionTabRegistry from "./browser/session-tab-registry.js";
 import type { BrowserSessionTabRoute } from "./browser/session-tab-route.js";
 
-type SessionTabParams = {
-  sessionKey?: string;
-  targetId?: string;
-  route?: BrowserSessionTabRoute;
-  profile?: string;
-  profileAliases?: Array<string | undefined>;
-  ownership?: BrowserTabOwnership;
-  aliases?: Array<string | undefined>;
-};
-
-type SessionTabRegistry = {
-  trackSessionBrowserTab: (params: SessionTabParams) => void;
-  touchSessionBrowserTab: (params: SessionTabParams) => void;
-  untrackSessionBrowserTab: (params: SessionTabParams) => void;
-};
+type SessionTabRegistry = Pick<
+  typeof sessionTabRegistry,
+  "trackSessionBrowserTab" | "touchSessionBrowserTab" | "untrackSessionBrowserTab"
+>;
 
 function readOpenedTab(result: unknown): {
   targetId?: string;
@@ -27,10 +17,10 @@ function readOpenedTab(result: unknown): {
   profile?: string;
   ownership?: BrowserTabOwnership;
 } {
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
+  const opened = asNullableRecord(result);
+  if (!opened) {
     return { aliases: [] };
   }
-  const opened = result as Record<string, unknown>;
   const targetId = normalizeOptionalString(opened.targetId);
   const aliases = [
     targetId,
@@ -50,14 +40,11 @@ function readOpenedTab(result: unknown): {
 }
 
 export function stripBrowserOpenInternalMetadata(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = asNullableRecord(value);
+  if (!record) {
     return value;
   }
-  const {
-    ownership: _ownership,
-    resolvedProfile: _resolvedProfile,
-    ...agentVisible
-  } = value as Record<string, unknown>;
+  const { ownership: _ownership, resolvedProfile: _resolvedProfile, ...agentVisible } = record;
   return agentVisible;
 }
 

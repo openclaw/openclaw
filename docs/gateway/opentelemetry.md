@@ -79,3 +79,5 @@ points at the page that now holds the content.
 - [Diagnostics flags](/diagnostics/flags) - targeted debug-log flags
 - [Diagnostics export](/gateway/diagnostics) - operator support-bundle tool (separate from OTEL export)
 - [Configuration reference](/gateway/config-observability#diagnostics) - full `diagnostics.*` field reference
+- [Prometheus metrics](/gateway/prometheus) - expose diagnostics as Prometheus text metrics through the diagnostics-prometheus plugin
+- [Audit history](/gateway/audit) - the audit ledger alongside these traces

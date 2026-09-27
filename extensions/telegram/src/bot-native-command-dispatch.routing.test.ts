@@ -1,447 +1,545 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { BotCommand } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  createConfiguredAcpTopicBinding,
-  createConfiguredBindingRoute,
-} from "./bot-native-command-dispatch.test-support.js";
+  getSessionBindingService,
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  type SessionBindingAdapter,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  activePluginRegistry,
-  dispatchChannelInboundTurnMock,
-  executorTestMocks,
-  expectRecordFields,
-  expectSendMessageCall,
-  expectUnauthorizedNewCommandBlocked,
-  firstMockArg,
-  registerAndResolveCommandHandler,
-  registerAndResolveStatusHandler,
-  requireRecord,
-  resetSessionMetaMocks,
-  runWithTelegramUpdateProcessingFrame,
-} from "./bot-native-command-executors.test-support.js";
+  addChannelAllowFromStoreEntry,
+  createPluginStateKeyedStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
+import { writeSkill } from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it, vi } from "vitest";
 import {
-  createTelegramGroupCommandContext,
-  createTelegramPrivateCommandContext,
-  createTelegramTopicCommandContext,
-} from "./bot-native-commands.fixture-test-support.js";
+  enqueueTelegramMenuSync,
+  resolveTelegramMenuRemoteOwner,
+} from "./bot-native-command-menu-state.js";
+import {
+  apiCalls,
+  apiResponses,
+  commandMessage,
+  createBot,
+  from,
+  harness,
+} from "./bot.create-telegram-bot.native-pipeline.test-support.js";
+import { beginTelegramPollRegistration } from "./poll-answer-context.js";
+import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
+import { getTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import {
+  resolveStoredBindingKey,
+  TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
+  TELEGRAM_THREAD_BINDINGS_NAMESPACE,
+  type TelegramThreadBindingRecord,
+} from "./thread-bindings-store.js";
 
-const { persistentBindingMocks, replyMocks, sessionBindingMocks, sessionMocks } = executorTestMocks;
+const groupChat = { id: -42001, type: "supergroup", title: "Project", is_forum: true } as const;
 
-describe("Telegram native command dispatch routing", () => {
-  beforeEach(resetSessionMetaMocks);
-
-  it("keeps the owning Gateway dispatcher on a native slash turn", async () => {
-    const dispatchReplyFromConfig = vi.fn();
-    const { handler } = registerAndResolveStatusHandler({ cfg: {}, dispatchReplyFromConfig });
-
-    await handler(createTelegramPrivateCommandContext());
-
-    expect(dispatchChannelInboundTurnMock.mock.calls[0]?.[0].dispatchReplyFromConfig).toBe(
-      dispatchReplyFromConfig,
-    );
-  });
-
-  it("calls recordSessionMetaFromInbound after a native slash command", async () => {
-    const shadowHandler = vi.fn(async () => ({ text: "wrong plugin" }));
-    activePluginRegistry.commands.push({
-      pluginId: "shadow-plugin",
-      source: "test",
-      command: {
-        name: "status",
-        description: "Shadow status",
-        channels: ["telegram"],
-        requireAuth: false,
-        handler: shadowHandler,
-      },
+describe("registered native command routing through the message pipeline", () => {
+  it("authorizes paired DMs without marking the sender as an owner", async () => {
+    await addChannelAllowFromStoreEntry({
+      channel: "telegram",
+      entry: from.id,
+      accountId: "default",
     });
-    const cfg: OpenClawConfig = {};
-    const { handler } = registerAndResolveStatusHandler({ cfg });
-    await handler(createTelegramPrivateCommandContext());
-
-    expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(1);
-    expect(shadowHandler).not.toHaveBeenCalled();
-    const turnPlan = dispatchChannelInboundTurnMock.mock.calls[0]?.[0];
-    expect(turnPlan?.replyOptions?.[Symbol.for("openclaw.pluginCommandDispatch") as never]).toEqual(
-      { kind: "non-plugin" },
-    );
-    const call = (
-      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
-        [{ sessionKey?: string; ctx?: { OriginatingChannel?: string; Provider?: string } }]
-      >
-    )[0]?.[0];
-    expect(call?.ctx?.OriginatingChannel).toBe("telegram");
-    expect(call?.ctx?.Provider).toBe("telegram");
-    expect(call?.sessionKey).toBe(turnPlan?.ctxPayload.CommandTargetSessionKey);
-    expect(turnPlan?.record?.sessionKey).toBe(turnPlan?.ctxPayload.CommandTargetSessionKey);
-  });
-
-  it("leaves native-command outcomes to the update middleware owner", async () => {
-    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
-
-    const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
-      await handler(createTelegramPrivateCommandContext());
+    const bot = await createBot(true, true, {
+      commands: { native: true },
+      channels: { telegram: { dmPolicy: "pairing", allowFrom: [], streaming: { mode: "off" } } },
     });
 
-    expect(result).toBeUndefined();
-  });
+    await bot.handleUpdate({ update_id: 1001, message: commandMessage("/status") });
 
-  it("preserves every argument on native queue command turns", async () => {
-    const { handler } = registerAndResolveCommandHandler({
-      commandName: "queue",
-      cfg: {},
-      allowFrom: ["*"],
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    const context = harness.replySpy.mock.calls[0]?.[0];
+    expect(context).toMatchObject({
+      CommandAuthorized: true,
+      CommandTurn: { kind: "native", body: "/status", authorized: true },
     });
-
-    await handler(createTelegramPrivateCommandContext({ match: "Can you diagnose this?" }));
-
-    expect(dispatchChannelInboundTurnMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctxPayload: expect.objectContaining({
-          Body: "/queue Can you diagnose this?",
-          CommandBody: "/queue Can you diagnose this?",
-          CommandTurn: expect.objectContaining({
-            kind: "native",
-            body: "/queue Can you diagnose this?",
-          }),
-        }),
-      }),
-    );
+    expect(context).not.toHaveProperty("OwnerAllowFrom");
   });
 
-  it("keeps one live config snapshot through native command execution", async () => {
-    const startupCfg: OpenClawConfig = { session: { store: "/tmp/startup-sessions.json" } };
-    const runtimeCfg: OpenClawConfig = { session: { store: "/tmp/runtime-sessions.json" } };
-    const { handler } = registerAndResolveStatusHandler({ cfg: startupCfg, runtimeCfg });
-
-    await handler(createTelegramPrivateCommandContext());
-
-    const dispatchCall = requireRecord(
-      firstMockArg(
-        replyMocks.dispatchReplyWithBufferedBlockDispatcher,
-        "dispatchReplyWithBufferedBlockDispatcher",
-      ),
-      "dispatch call",
-    );
-    expect(dispatchCall.cfg).toBe(runtimeCfg);
-  });
-
-  it.each([
-    { blockStreamingEnabled: false, expectedDisableBlockStreaming: true },
-    { blockStreamingEnabled: true, expectedDisableBlockStreaming: false },
-  ])(
-    "uses nested streaming.block.enabled=$blockStreamingEnabled for native command dispatch",
-    async ({ blockStreamingEnabled, expectedDisableBlockStreaming }) => {
-      const cfg = {
+  it.each(["/status", "/new", "/reset"])(
+    "routes %s to the topic agent and chat session",
+    async (text) => {
+      const cfg: OpenClawConfig = {
+        commands: { native: true },
+        agents: { list: [{ id: "main", default: true }, { id: "topic-agent" }] },
         channels: {
           telegram: {
-            streaming: { block: { enabled: blockStreamingEnabled } },
+            groupPolicy: "open",
+            groupAllowFrom: ["42001"],
+            groups: {
+              "-42001": { requireMention: false, topics: { "42": { agentId: "topic-agent" } } },
+            },
           },
         },
-      } satisfies OpenClawConfig;
-      const { handler } = registerAndResolveStatusHandler({ cfg });
-
-      await handler(createTelegramPrivateCommandContext());
-
-      const dispatchCall = requireRecord(
-        firstMockArg(
-          replyMocks.dispatchReplyWithBufferedBlockDispatcher,
-          "dispatchReplyWithBufferedBlockDispatcher",
-        ),
-        "dispatch call",
-      );
-      expect(dispatchCall.replyOptions).toMatchObject({
-        disableBlockStreaming: expectedDisableBlockStreaming,
+      };
+      const bot = await createBot(true, true, cfg);
+      await bot.handleUpdate({
+        update_id: 1001,
+        message: {
+          ...commandMessage(text),
+          chat: groupChat,
+          message_thread_id: 42,
+          is_topic_message: true,
+        },
+      });
+      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+        CommandSource: "native",
+        SessionKey: "agent:topic-agent:telegram:group:-42001:topic:42",
+        From: "telegram:group:-42001:topic:42",
+        ChatType: "group",
+        ConversationRoutePeerId: "-42001:topic:42",
+        MessageThreadId: 42,
+        OriginatingTo: "telegram:-42001:topic:42",
+        ThreadParentId: "-42001",
       });
     },
   );
 
-  it("routes Telegram native commands through configured ACP topic bindings", async () => {
-    const boundSessionKey = "agent:codex:acp:binding:telegram:default:feedface";
-    persistentBindingMocks.resolveConfiguredBindingRoute.mockImplementation(({ route }) =>
-      createConfiguredBindingRoute(
-        {
-          ...route,
-          sessionKey: boundSessionKey,
-          agentId: "codex",
-          matchedBy: "binding.channel",
+  it.each([
+    { name: "forum topic", threadId: 42, conversationId: "-42001:topic:42" },
+    { name: "top-level group", threadId: undefined, conversationId: "-42002" },
+  ])(
+    "routes native commands through a bound $name session with a synchronous external adapter",
+    async ({ threadId, conversationId }) => {
+      const bot = await createBot(true, true, {
+        commands: { native: true },
+        agents: { list: [{ id: "main", default: true }, { id: "bound-agent" }] },
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groupAllowFrom: [String(from.id)],
+            groups: { "*": { requireMention: false } },
+            streaming: { mode: "off" },
+          },
         },
-        createConfiguredAcpTopicBinding(boundSessionKey),
-      ),
-    );
-    persistentBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({ ok: true });
+      });
+      const bindingId = `binding:${conversationId}`;
+      const sessionKey = `agent:bound-agent:session:${conversationId}`;
+      const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>(
+        (conversation) =>
+          conversation.conversationId === conversationId
+            ? {
+                bindingId,
+                targetSessionKey: sessionKey,
+                targetKind: "session",
+                conversation,
+                status: "active",
+                boundAt: 1,
+              }
+            : null,
+      );
+      const touch = vi.fn<NonNullable<SessionBindingAdapter["touch"]>>();
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "default",
+        listBySession: () => [],
+        resolveByConversation,
+        touch,
+      };
+      registerSessionBindingAdapter(adapter);
+      try {
+        await bot.handleUpdate({
+          update_id: 1001,
+          message: {
+            ...commandMessage("/status"),
+            chat:
+              threadId !== undefined ? groupChat : { id: -42002, type: "group", title: "Project" },
+            ...(threadId !== undefined
+              ? { message_thread_id: threadId, is_topic_message: true as const }
+              : {}),
+          },
+        });
 
-    const { handler } = registerAndResolveStatusHandler({
-      cfg: {},
-      allowFrom: ["200"],
-      groupAllowFrom: ["200"],
-    });
-    await handler(createTelegramTopicCommandContext());
+        expect(resolveByConversation).toHaveBeenCalledWith({
+          channel: "telegram",
+          accountId: "default",
+          conversationId,
+        });
+        expect(touch).toHaveBeenCalledWith(bindingId, undefined);
+        expect(harness.replySpy).toHaveBeenCalledOnce();
+        expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+          CommandSource: "native",
+          SessionKey: sessionKey,
+          OriginatingTo: `telegram:${conversationId}`,
+          ConversationRoutePeerId: conversationId,
+        });
+      } finally {
+        unregisterSessionBindingAdapter({ channel: "telegram", accountId: "default", adapter });
+      }
+    },
+  );
 
-    expect(persistentBindingMocks.resolveConfiguredBindingRoute).toHaveBeenCalledTimes(1);
-    expect(persistentBindingMocks.ensureConfiguredBindingRouteReady).toHaveBeenCalledTimes(1);
-    const dispatchCall = (
-      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
-        [{ ctx?: { CommandTargetSessionKey?: string } }]
-      >
-    )[0]?.[0];
-    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(boundSessionKey);
-    const sessionMetaCall = (
-      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
-        [{ sessionKey?: string }]
-      >
-    )[0]?.[0];
-    expect(sessionMetaCall?.sessionKey).toBe(boundSessionKey);
-  });
-
-  it("routes Telegram native commands through topic-specific agent sessions", async () => {
-    const { handler } = registerAndResolveStatusHandler({
-      cfg: {},
-      allowFrom: ["200"],
-      groupAllowFrom: ["200"],
-      resolveTelegramGroupConfig: () => ({
-        groupConfig: { requireMention: false },
-        topicConfig: { agentId: "zu" },
-      }),
-    });
-    await handler(createTelegramTopicCommandContext());
-
-    const dispatchCall = (
-      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
-        [{ ctx?: { CommandTargetSessionKey?: string } }]
-      >
-    )[0]?.[0];
-    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(
-      "agent:zu:telegram:group:-1001234567890:topic:42",
-    );
-    const sessionMetaCall = (
-      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
-        [{ sessionKey?: string; ctx?: { From?: string; ChatType?: string } }]
-      >
-    )[0]?.[0];
-    expect(sessionMetaCall?.sessionKey).toBe("agent:zu:telegram:group:-1001234567890:topic:42");
-    expect(sessionMetaCall?.ctx?.From).toBe("telegram:group:-1001234567890:topic:42");
-    expect(sessionMetaCall?.ctx?.ChatType).toBe("group");
-  });
-
-  it("does not mark paired Telegram DM allowlist entries as native group command owners", async () => {
-    const { handler, sendMessage } = registerAndResolveStatusHandler({
-      cfg: {},
-      allowFrom: [],
-      groupAllowFrom: [],
-      storeAllowFrom: ["200"],
-    });
-    await handler(createTelegramTopicCommandContext());
-
-    expectUnauthorizedNewCommandBlocked(sendMessage);
-  });
-
-  it("authorizes paired Telegram DMs without marking them as owners", async () => {
-    const { handler } = registerAndResolveStatusHandler({
-      cfg: {},
-      allowFrom: [],
-      groupAllowFrom: [],
-      storeAllowFrom: ["200"],
-    });
-    await handler(createTelegramPrivateCommandContext());
-
-    const dispatchCall = (
-      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
-        [
-          {
-            ctx?: {
-              CommandAuthorized?: boolean;
+  it.for(["ordinary message", "native command"] as const)(
+    "awaits durable worker activity before dispatching a bound %s",
+    async (kind, { signal }) => {
+      const runtime = getTelegramRuntime();
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      let holdNextWrite = false;
+      const syncBindingOpen = vi.fn();
+      setTelegramRuntime({
+        ...runtime,
+        state: {
+          ...runtime.state,
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
+            const store = runtime.state.openKeyedStore<T>(options);
+            if (options.namespace !== TELEGRAM_THREAD_BINDINGS_NAMESPACE) {
+              return store;
+            }
+            return {
+              ...store,
+              register: async (...args: Parameters<typeof store.register>) => {
+                if (holdNextWrite) {
+                  holdNextWrite = false;
+                  entered.resolve();
+                  await release.promise;
+                }
+                await store.register(...args);
+              },
             };
           },
-        ]
-      >
-    )[0]?.[0];
-    expect(dispatchCall?.ctx?.CommandAuthorized).toBe(true);
-    expect(dispatchCall?.ctx).not.toHaveProperty("OwnerAllowFrom");
-  });
-
-  it("routes Telegram native commands through bound topic sessions", async () => {
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
-      bindingId: "default:-1001234567890:topic:42",
-      targetSessionKey: "agent:codex-acp:session-1",
-    });
-
-    const { handler } = registerAndResolveStatusHandler({
-      cfg: {},
-      allowFrom: ["200"],
-      groupAllowFrom: ["200"],
-    });
-    await handler(createTelegramTopicCommandContext());
-
-    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
-      channel: "telegram",
-      accountId: "default",
-      conversationId: "-1001234567890:topic:42",
-    });
-    const dispatchCall = (
-      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
-        [{ ctx?: { CommandTargetSessionKey?: string } }]
-      >
-    )[0]?.[0];
-    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:codex-acp:session-1");
-    const sessionMetaCall = (
-      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
-        [{ sessionKey?: string }]
-      >
-    )[0]?.[0];
-    expect(sessionMetaCall?.sessionKey).toBe("agent:codex-acp:session-1");
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
-      "default:-1001234567890:topic:42",
-      undefined,
-    );
-  });
-
-  it("routes Telegram native commands through bound top-level group sessions", async () => {
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
-      bindingId: "default:-1001234567890",
-      targetSessionKey: "agent:codex-acp:session-group",
-    });
-
-    const { handler } = registerAndResolveStatusHandler({
-      cfg: {},
-      allowFrom: ["200"],
-      groupAllowFrom: ["200"],
-    });
-    await handler(createTelegramGroupCommandContext());
-
-    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
-      channel: "telegram",
-      accountId: "default",
-      conversationId: "-1001234567890",
-    });
-    const dispatchCall = (
-      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
-        [{ ctx?: { CommandTargetSessionKey?: string; OriginatingTo?: string } }]
-      >
-    )[0]?.[0];
-    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:codex-acp:session-group");
-    expect(dispatchCall?.ctx?.OriginatingTo).toBe("telegram:-1001234567890");
-    const sessionMetaCall = (
-      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
-        [{ sessionKey?: string }]
-      >
-    )[0]?.[0];
-    expect(sessionMetaCall?.sessionKey).toBe("agent:codex-acp:session-group");
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("default:-1001234567890", undefined);
-  });
-
-  it.each(["new", "reset"] as const)(
-    "preserves the topic-qualified origin target for native /%s in forum topics",
-    async (commandName) => {
-      const { handler } = registerAndResolveCommandHandler({
-        commandName,
-        cfg: {},
-        allowFrom: ["200"],
-        groupAllowFrom: ["200"],
-      });
-      await handler(createTelegramTopicCommandContext());
-
-      const dispatchCall = (
-        replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
-          [
-            {
-              ctx?: {
-                CommandTargetSessionKey?: string;
-                ConversationRoutePeerId?: string;
-                MessageThreadId?: number;
-                OriginatingTo?: string;
-                ThreadParentId?: string;
-              };
-            },
-          ]
-        >
-      )[0]?.[0];
-      expectRecordFields(
-        dispatchCall?.ctx,
-        {
-          CommandTargetSessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
-          ConversationRoutePeerId: "-1001234567890:topic:42",
-          MessageThreadId: 42,
-          OriginatingTo: "telegram:-1001234567890:topic:42",
-          ThreadParentId: "-1001234567890",
+          openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+            if (options.namespace === TELEGRAM_THREAD_BINDINGS_NAMESPACE) {
+              syncBindingOpen();
+              throw new Error("Bundled routing must not open synchronous binding storage");
+            }
+            return runtime.state.openSyncKeyedStore<T>(options);
+          },
         },
-        "topic dispatch context",
-      );
+      });
+      const onAbort = () => release.resolve();
+      signal.addEventListener("abort", onAbort, { once: true });
+      let receiving: Promise<void> | undefined;
+      const clock = vi.spyOn(Date, "now");
+      try {
+        const bot = await createBot(true, true, {
+          commands: { native: true },
+          channels: {
+            telegram: {
+              threadBindings: { enabled: true },
+              groupPolicy: "open",
+              groupAllowFrom: [String(from.id)],
+              groups: { "*": { requireMention: false } },
+              streaming: { mode: "off" },
+            },
+          },
+        });
+        const conversation = {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-42001:topic:42",
+        };
+        const sessionKey = "agent:main:subagent:worker-touch";
+        await getSessionBindingService().bind({
+          conversation,
+          targetKind: "subagent",
+          targetSessionKey: sessionKey,
+        });
+        const store = createPluginStateKeyedStoreForTests<TelegramThreadBindingRecord>("telegram", {
+          namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
+          maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
+        });
+        const key = resolveStoredBindingKey(conversation);
+        const initial = await store.lookup(key);
+        if (!initial) {
+          throw new Error("Expected the real manager to persist the topic binding");
+        }
+        const activityAt = initial.lastActivityAt + 1_000;
+        clock.mockReturnValue(activityAt);
+        const durableAtAdmission: Array<TelegramThreadBindingRecord | undefined> = [];
+        harness.replySpy.mockImplementation(async () => {
+          durableAtAdmission.push(await store.lookup(key));
+          return { text: "Bound response" };
+        });
+        holdNextWrite = true;
+        receiving = bot.handleUpdate({
+          update_id: 17001,
+          message: {
+            ...commandMessage(kind === "native command" ? "/status" : "Continue this topic"),
+            ...(kind === "ordinary message" ? { entities: [] } : {}),
+            chat: groupChat,
+            message_thread_id: 42,
+            is_topic_message: true,
+          },
+        });
+        expect(
+          await Promise.race([
+            entered.promise.then(() => "worker write"),
+            receiving.then(() => "update completed"),
+          ]),
+        ).toBe("worker write");
+        expect(syncBindingOpen).not.toHaveBeenCalled();
+        expect(harness.replySpy).not.toHaveBeenCalled();
+        expect((await store.lookup(key))?.lastActivityAt).toBe(initial.lastActivityAt);
+        release.resolve();
+        await receiving;
+        expect(syncBindingOpen).not.toHaveBeenCalled();
+        expect(harness.replySpy).toHaveBeenCalledOnce();
+        expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({ SessionKey: sessionKey });
+        expect(durableAtAdmission).toEqual([
+          expect.objectContaining({ targetSessionKey: sessionKey, lastActivityAt: activityAt }),
+        ]);
+      } finally {
+        release.resolve();
+        try {
+          await receiving;
+        } finally {
+          signal.removeEventListener("abort", onAbort);
+          clock.mockRestore();
+          setTelegramRuntime(runtime);
+        }
+      }
     },
   );
 
-  it("aborts native command dispatch when configured ACP topic binding cannot initialize", async () => {
-    const boundSessionKey = "agent:codex:acp:binding:telegram:default:feedface";
-    persistentBindingMocks.resolveConfiguredBindingRoute.mockImplementation(({ route }) =>
-      createConfiguredBindingRoute(
-        {
-          ...route,
-          sessionKey: boundSessionKey,
-          agentId: "codex",
-          matchedBy: "binding.channel",
+  it("treats an authorized native command as a mention even with unsupported arguments", async () => {
+    const bot = await createBot(true, true, {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groupAllowFrom: [String(from.id)],
+          groups: { "*": { requireMention: true } },
         },
-        createConfiguredAcpTopicBinding(boundSessionKey),
-      ),
-    );
-    persistentBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({
-      ok: false,
-      error: "gateway unavailable",
+      },
     });
-
-    const { handler, sendMessage } = registerAndResolveStatusHandler({
-      cfg: {},
-      allowFrom: ["200"],
-      groupAllowFrom: ["200"],
+    await bot.handleUpdate({
+      update_id: 1001,
+      message: { ...commandMessage("/stop later"), chat: groupChat },
     });
-    await handler(createTelegramTopicCommandContext());
-
-    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-    expectSendMessageCall({
-      sendMessage,
-      chatId: -1001234567890,
-      text: "Configured ACP binding is unavailable right now. Please try again.",
-      optionFields: { message_thread_id: 42 },
-      label: "unavailable ACP binding",
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+      CommandSource: "native",
+      CommandBody: "/stop later",
+      WasMentioned: true,
     });
   });
 
-  it("keeps /new blocked in ACP-bound Telegram topics when sender is unauthorized", async () => {
-    const boundSessionKey = "agent:codex:acp:binding:telegram:default:feedface";
-    persistentBindingMocks.resolveConfiguredBindingRoute.mockImplementation(({ route }) =>
-      createConfiguredBindingRoute(
-        {
-          ...route,
-          sessionKey: boundSessionKey,
-          agentId: "codex",
-          matchedBy: "binding.channel",
+  it("silently blocks unauthorized /new in an unbound forum topic", async () => {
+    const bot = await createBot(true, true, {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groupAllowFrom: ["99999"],
+          groups: { "*": { requireMention: false } },
         },
-        createConfiguredAcpTopicBinding(boundSessionKey),
-      ),
-    );
-    persistentBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({ ok: true });
-
-    const { handler, sendMessage } = registerAndResolveCommandHandler({
-      commandName: "new",
-      cfg: {},
-      allowFrom: [],
-      groupAllowFrom: [],
+      },
     });
-    await handler(createTelegramTopicCommandContext());
 
-    expectUnauthorizedNewCommandBlocked(sendMessage);
+    await bot.handleUpdate({
+      update_id: 1001,
+      message: {
+        ...commandMessage("/new"),
+        chat: groupChat,
+        message_thread_id: 42,
+        is_topic_message: true,
+      },
+    });
+
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toEqual([]);
   });
 
-  it("keeps /new blocked for unbound Telegram topics when sender is unauthorized", async () => {
-    persistentBindingMocks.resolveConfiguredBindingRoute.mockImplementation(({ route }) =>
-      createConfiguredBindingRoute(route, null),
-    );
-
-    const { handler, sendMessage } = registerAndResolveCommandHandler({
-      commandName: "new",
-      cfg: {},
-      allowFrom: [],
-      groupAllowFrom: [],
-    });
-    await handler(createTelegramTopicCommandContext());
-
-    expectUnauthorizedNewCommandBlocked(sendMessage);
+  it("does not dispatch the same update twice", async () => {
+    const bot = await createBot();
+    const update = { update_id: 1001, message: commandMessage("/status") };
+    await bot.handleUpdate(update);
+    await bot.handleUpdate(update);
+    expect(harness.replySpy).toHaveBeenCalledTimes(1);
   });
+  it("publishes account-scoped skills and keeps omitted bound skills callable", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-native-skills-"));
+    try {
+      for (const name of ["alpha", "beta"]) {
+        await writeSkill({
+          dir: path.join(workspace, "skills", `${name}-skill`),
+          name: `${name}-skill`,
+          description: `${name} skill`,
+        });
+      }
+      const cfg: OpenClawConfig = {
+        commands: { native: true, nativeSkills: true },
+        agents: {
+          entries: {
+            alpha: { default: true, workspace, skills: ["alpha-skill"] },
+            beta: { workspace, skills: ["beta-skill"] },
+          },
+        },
+        bindings: [{ agentId: "beta", match: { channel: "telegram", accountId: "bot-a" } }],
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            streaming: { mode: "off" },
+            accounts: { "bot-a": {}, "bot-b": {} },
+          },
+        },
+      };
+      harness.listSkillCommandsForAgents.mockImplementation((params) => {
+        const commands = listSkillCommandsForAgents(params);
+        const beta = commands.find(({ skillName }) => skillName === "beta-skill");
+        if (beta) {
+          beta.descriptionLocalizations = { ko: "베타 스킬" };
+        }
+        return commands;
+      });
+      const publishMenu = async (config: OpenClawConfig, accountId: string) => {
+        apiCalls.mockClear();
+        const bot = await createBot(true, true, config, false, accountId);
+        await new Promise<void>((resolve, reject) => {
+          enqueueTelegramMenuSync({
+            ownerKey: resolveTelegramMenuRemoteOwner({ botId: bot.botInfo.id }).queueKey,
+            sync: async () => resolve(),
+            onError: reject,
+          });
+        });
+        const menus = apiCalls.mock.calls
+          .filter(([method]) => method === "setMyCommands")
+          .map(([, payload]) => payload as { commands: BotCommand[]; language_code?: string });
+        return {
+          bot,
+          menus,
+          commands:
+            menus.find((menu) => !menu.language_code)?.commands.map(({ command }) => command) ?? [],
+        };
+      };
+      const bound = await publishMenu(cfg, "bot-a");
+      expect(bound.commands).toContain("beta_skill");
+      expect(bound.commands).not.toContain("alpha_skill");
+      expect(bound.menus).toContainEqual(
+        expect.objectContaining({
+          language_code: "ko",
+          commands: expect.arrayContaining([{ command: "beta_skill", description: "베타 스킬" }]),
+        }),
+      );
+      const fallback = await publishMenu(cfg, "bot-b");
+      expect(fallback.commands).toContain("alpha_skill");
+      expect(fallback.commands).not.toContain("beta_skill");
+      const pressure = await publishMenu(
+        {
+          ...cfg,
+          channels: {
+            telegram: {
+              ...cfg.channels?.telegram,
+              customCommands: Array.from({ length: 100 }, (_, index) => ({
+                command: `custom_${index}`,
+                description: `Custom ${index}`,
+              })),
+            },
+          },
+        },
+        "bot-a",
+      );
+      expect(pressure.commands).toHaveLength(100);
+      expect(pressure.commands).toContain("custom_0");
+      expect(pressure.commands).not.toContain("beta_skill");
+      harness.replySpy.mockResolvedValue({ text: "Hidden skill reached the agent." });
+      await pressure.bot.handleUpdate({
+        update_id: 15599,
+        message: commandMessage("/beta_skill run"),
+      });
+      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+        CommandSource: "native",
+        CommandTurn: { kind: "native", body: "/beta_skill run", authorized: true },
+        SessionKey: "agent:beta:main",
+      });
+      expect(apiCalls).toHaveBeenCalledWith(
+        "sendMessage",
+        expect.objectContaining({ text: "Hidden skill reached the agent." }),
+      );
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("registered poll-answer lane admission", () => {
+  it.each([true, false])(
+    "holds only the pending poll topic until registration settles (accepted: %s)",
+    async (accepted) => {
+      const bot = await createBot(false, true, {
+        commands: { native: false },
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+            streaming: { mode: "off" },
+          },
+        },
+      });
+      apiResponses.set("getChatMember", { ok: true, result: { status: "member", user: from } });
+      const entry = {
+        pollId: "pending-topic-poll",
+        messageId: 500,
+        chat: groupChat,
+        threadSpec: { scope: "forum" as const, id: 99 },
+        question: "Ready?",
+        options: ["Yes", "No"],
+      };
+      const registration = beginTelegramPollRegistration({ accountId: "default", entry });
+      let pollSettled = false;
+      const poll = bot
+        .handleUpdate({
+          update_id: 16000,
+          poll_answer: {
+            poll_id: entry.pollId,
+            option_ids: [0],
+            option_persistent_ids: ["yes"],
+            user: from,
+          },
+        })
+        .then(() => {
+          pollSettled = true;
+        });
+      const sameTopic = bot.handleUpdate({
+        update_id: 16001,
+        message: {
+          ...commandMessage("same topic follows"),
+          entities: [],
+          chat: groupChat,
+          message_thread_id: 99,
+          is_topic_message: true,
+        },
+      });
+      const pending = Promise.allSettled([poll, sameTopic]);
+      try {
+        await bot.handleUpdate({
+          update_id: 16002,
+          message: {
+            ...commandMessage("independent topic"),
+            entities: [],
+            chat: groupChat,
+            message_thread_id: 100,
+            is_topic_message: true,
+          },
+        });
+        expect(pollSettled).toBe(false);
+        expect(harness.replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
+          "independent topic",
+        ]);
+        registration.complete(accepted ? await recordTelegramPollRegistryEntry(entry) : null);
+        expect((await pending).map(({ status }) => status)).toEqual(["fulfilled", "fulfilled"]);
+        expect(harness.replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
+          "independent topic",
+          ...(accepted ? ['Poll response to "Ready?": Yes'] : []),
+          "same topic follows",
+        ]);
+      } finally {
+        registration.complete(null);
+        await pending;
+      }
+    },
+  );
 });

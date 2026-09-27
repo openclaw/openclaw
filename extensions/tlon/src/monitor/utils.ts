@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveChannelImplicitMentions,
-  resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -15,6 +14,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Tlon helper module supports utils behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getTlonRuntime } from "../runtime.js";
 import { normalizeShip } from "../targets.js";
 
 export interface ParsedCite {
@@ -174,7 +174,7 @@ export async function resolveTlonMessageIngress(params: {
   groupPolicy?: "open" | "allowlist";
   contextBinding?: ChannelIngressContextBinding;
 }) {
-  return await resolveStableChannelMessageIngress({
+  return await getTlonRuntime().channel.inbound.ingress.resolveStable({
     channelId: "tlon",
     accountId: params.accountId ?? "default",
     identity: tlonIngressIdentity,
@@ -194,7 +194,7 @@ export async function resolveTlonCommandAuthorizationWithIngress(params: {
   useAccessGroups: boolean;
 }) {
   const normalizedOwner = params.ownerShip ? normalizeShip(params.ownerShip) : null;
-  return await resolveStableChannelMessageIngress({
+  return await getTlonRuntime().channel.inbound.ingress.resolveStable({
     channelId: "tlon",
     accountId: "default",
     identity: tlonIngressIdentity,

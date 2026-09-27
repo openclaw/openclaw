@@ -1,10 +1,8 @@
-// Feishu plugin module implements comment handler behavior.
 import { resolveInboundReplyDispatchCounts } from "openclaw/plugin-sdk/channel-inbound";
 import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig as ClawdbotConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -29,24 +27,6 @@ type HandleFeishuCommentEventParams = {
   abortSignal?: AbortSignal;
   turnAdoptionLifecycle?: FeishuIngressLifecycle;
 };
-
-function buildCommentSessionKey(params: {
-  core: ReturnType<typeof getFeishuRuntime>;
-  route: ResolvedAgentRoute;
-  fileType: string;
-  fileToken: string;
-}): string {
-  return params.core.channel.routing.buildAgentSessionKey({
-    agentId: params.route.agentId,
-    channel: "feishu",
-    accountId: params.route.accountId,
-    peer: {
-      kind: "direct",
-      id: `comment-doc:${params.fileType}:${params.fileToken}`,
-    },
-    dmScope: "per-account-channel-peer",
-  });
-}
 
 function parseTimestampMs(value: string | undefined): number {
   return parseStrictNonNegativeInteger(value) ?? Date.now();
@@ -182,7 +162,7 @@ export async function handleFeishuCommentEvent(
         const authorization = await resolveCommentAuthorization(candidateCfg, false);
         return authorization.ingress.ingress.admission === "dispatch";
       },
-      log: (message) => log(message),
+      log,
     });
     if (dynamicResult.created || dynamicResult.updatedCfg !== effectiveCfg) {
       const refreshedAuthorization = await resolveCommentAuthorization(
@@ -214,11 +194,12 @@ export async function handleFeishuCommentEvent(
     }
   }
 
-  const commentSessionKey = buildCommentSessionKey({
-    core,
-    route,
-    fileType: turn.fileType,
-    fileToken: turn.fileToken,
+  const commentSessionKey = core.channel.routing.buildAgentSessionKey({
+    agentId: route.agentId,
+    channel: "feishu",
+    accountId: route.accountId,
+    peer: { kind: "direct", id: `comment-doc:${turn.fileType}:${turn.fileToken}` },
+    dmScope: "per-account-channel-peer",
   });
   const bodyForAgent = `[message_id: ${turn.messageId}]\n${turn.prompt}`;
   const rawBody = turn.targetReplyText ?? turn.rootCommentText ?? turn.prompt;

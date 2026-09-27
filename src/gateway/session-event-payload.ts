@@ -1,5 +1,6 @@
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { deriveSessionUnread } from "../shared/session-unread.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isStaleLifecycleEventForSession,
@@ -11,7 +12,7 @@ import type { GatewaySessionRow } from "./session-utils.js";
  * Picker metadata comes from catalog-backed list/patch responses; emitting a
  * locally reconstructed subset here would replace richer client state.
  */
-export function buildGatewaySessionEventFields(params: {
+function buildGatewaySessionEventFields(params: {
   sessionRow: GatewaySessionRow;
   agentId?: string;
   label?: string;
@@ -51,6 +52,7 @@ export function buildGatewaySessionEventFields(params: {
     markedUnreadAt: sessionRow.markedUnreadAt ?? null,
     agentStatus: sessionRow.agentStatus ?? null,
     observerDigest: sessionRow.observerDigest ?? null,
+    ...(sessionRow.activitySummary ? { activitySummary: sessionRow.activitySummary } : {}),
     lastActivityAt: sessionRow.lastActivityAt,
     spawnedBy: sessionRow.spawnedBy,
     controlOwnerSessionKey: sessionRow.controlOwnerSessionKey ?? null,
@@ -88,6 +90,8 @@ export function buildGatewaySessionEventFields(params: {
     channelAvatarUrl: sessionRow.channelAvatarUrl ?? null,
     // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
     category: sessionRow.category ?? null,
+    // Explicit null removes a cleared shared default from subscribed session metadata.
+    boardPresentation: sessionRow.boardPresentation ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
@@ -127,9 +131,11 @@ export function buildGatewaySessionEventFields(params: {
     activeModel: sessionRow.activeModel ?? null,
     modelOverrideSource: sessionRow.modelOverrideSource,
     agentRuntime: sessionRow.agentRuntime,
+    runtimeSelectionLocked: sessionRow.runtimeSelectionLocked,
     status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.
     lastRunError: sessionRow.lastRunError ?? null,
+    providerReview: sessionRow.providerReview ?? null,
     // Explicit null lets a newer start evict the previous terminal run identity.
     lastRunId: sessionRow.lastRunId ?? null,
     // Explicit false lets subscribed clients drop the flag during merge-reconcile.
@@ -139,8 +145,6 @@ export function buildGatewaySessionEventFields(params: {
     startedAt: sessionRow.startedAt,
     endedAt: sessionRow.endedAt ?? null,
     runtimeMs: sessionRow.runtimeMs ?? null,
-    compactionCheckpointCount: sessionRow.compactionCheckpointCount,
-    latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
     pluginExtensions: sessionRow.pluginExtensions,
   };
 }
@@ -150,7 +154,7 @@ export function buildGatewaySessionSnapshot(params: {
   agentId?: string;
   includeSession?: boolean;
   lifecycle?: boolean;
-  event?: AgentEventPayload;
+  event?: AgentEventRuntimePayload;
   lifecycleRunId?: string;
   label?: string;
   displayName?: string;
@@ -178,6 +182,9 @@ export function buildGatewaySessionSnapshot(params: {
       ? deriveGatewaySessionLifecycleProjectionPatch({ entry: lifecycleRow, event })
       : {};
   const sessionRow = { ...storedRow, ...patch };
+  if (Object.hasOwn(patch, "lastActivityAt")) {
+    sessionRow.unread = deriveSessionUnread(sessionRow);
+  }
   for (const key of ["thinkingLevels", "thinkingOptions", "thinkingDefault"] as const) {
     delete sessionRow[key];
   }
@@ -213,6 +220,7 @@ export function buildGatewaySessionSnapshot(params: {
       "activeModel",
       "modelOverrideSource",
       "agentRuntime",
+      "runtimeSelectionLocked",
     ] as const) {
       delete sessionRow[field];
       delete eventFields[field];

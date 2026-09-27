@@ -4,7 +4,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { readTranscriptCaptureSnapshot } from "./capture.js";
 import { resolveTranscriptsConfig } from "./config.js";
 import { readConfiguredTranscriptStarts } from "./configured-start-status.js";
@@ -25,7 +25,7 @@ export async function readTranscriptLibraryStatus(
     config: cfg,
     allowWorkspaceScopedSnapshot: true,
   });
-  const registry = getActivePluginRegistry();
+  const registry = getPluginRegistryForContext();
   const providers = new Map<string, ProviderStatus>();
   const installed = new Map(metadata?.index.plugins.map((plugin) => [plugin.pluginId, plugin]));
   const runtime = new Map(registry?.plugins.map((plugin) => [plugin.id, plugin]));
@@ -110,7 +110,7 @@ export async function readTranscriptLibraryStatus(
   let activeBytes = 0;
   // Project each bounded row before reading the next to avoid retaining private descriptors.
   for (const capture of selectedCaptures) {
-    const entry = store.readEntry(transcriptSessionSelector(capture.session));
+    const entry = await store.readEntry(transcriptSessionSelector(capture.session));
     if (entry) {
       const projected = projectTranscriptSession(entry, undefined, undefined, captures);
       activeBytes += Buffer.byteLength(JSON.stringify(projected), "utf8");
@@ -191,7 +191,7 @@ export async function readTranscriptLibraryStatus(
       }
       return result;
     });
-  const latest = store.readLatestEntry();
+  const latest = await store.readLatestEntry();
   const result: TranscriptsStatusResult = {
     enabled: config.enabled,
     providers: allProviders.slice(0, TRANSCRIPTS_PAGE_MAX),

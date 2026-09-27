@@ -5,7 +5,7 @@ import JSON5 from "json5";
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readExecApprovalAllowlistRequirements } from "./doctor/exec-approval-rules.js";
+import { policyRuleValueIsValid } from "./doctor/ordered-shape.js";
 import {
   isPolicyValueAtLeastAsStrict,
   policyContainerShapeFindings,
@@ -341,66 +341,6 @@ function baselineRuleIsNoOp(metadata: PolicyRuleMetadata, baseline: unknown): bo
       return policyRuleListIsEmpty(baseline);
   }
   return false;
-}
-
-function policyRuleValueIsValid(metadata: PolicyRuleMetadata, value: unknown): boolean {
-  switch (metadata.valueType) {
-    case "boolean":
-      return typeof value === "boolean";
-    case "channel-provider-deny-rules":
-      return (
-        Array.isArray(value) &&
-        value.every((entry) => {
-          if (!isRecord(entry)) {
-            return false;
-          }
-          const when = entry.when;
-          return isRecord(when) && typeof when.provider === "string" && when.provider.trim() !== "";
-        })
-      );
-    case "string":
-      return typeof value === "string" && policyStringIsAllowed(metadata, value);
-    case "string-list":
-      if (!Array.isArray(value)) {
-        return false;
-      }
-      if (isExecApprovalAllowlistExpectedRule(metadata)) {
-        return readExecApprovalAllowlistRequirements(value, []) !== undefined;
-      }
-      return value.every(
-        (entry) =>
-          typeof entry === "string" &&
-          entry.trim() !== "" &&
-          policyStringIsAllowed(metadata, entry),
-      );
-    case "routing-probes":
-      return Array.isArray(value);
-  }
-  return false;
-}
-
-function isExecApprovalAllowlistExpectedRule(metadata: PolicyRuleMetadata): boolean {
-  return metadata.policyPath.join(".") === "execApprovals.agents.allowlist.expected";
-}
-
-function policyStringIsAllowed(metadata: PolicyRuleMetadata, value: string): boolean {
-  const normalized = metadata.caseSensitive === true ? value.trim() : value.trim().toLowerCase();
-  if (normalized === "") {
-    return false;
-  }
-  if (metadata.allowedValues !== undefined) {
-    const allowed = metadata.allowedValues.map((entry) =>
-      metadata.caseSensitive === true ? entry : entry.toLowerCase(),
-    );
-    return allowed.includes(normalized);
-  }
-  if (metadata.orderedValues === undefined) {
-    return true;
-  }
-  const allowed = metadata.orderedValues.map((entry) =>
-    metadata.caseSensitive === true ? entry : entry.toLowerCase(),
-  );
-  return allowed.includes(normalized);
 }
 
 function policyRuleListIsEmpty(value: unknown): boolean {

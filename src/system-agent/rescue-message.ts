@@ -5,6 +5,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentRoles } from "../agents/agent-roles.js";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
@@ -178,10 +179,23 @@ function parsePendingOperation(value: unknown): SystemAgentOperation | null {
       break;
     case "create-agent":
       if (
-        !hasExactKeys(operation, ["kind", "agentId"], ["workspace", "model"]) ||
+        !hasExactKeys(operation, ["kind", "agentId"], ["name", "workspace", "model", "role"]) ||
         !isNonEmptyString(operation.agentId) ||
+        !hasOptionalString(operation, "name") ||
+        (operation.role !== undefined &&
+          !listAgentRoles().some((role) => role === operation.role)) ||
         !hasOptionalString(operation, "workspace") ||
         !hasOptionalString(operation, "model")
+      ) {
+        return null;
+      }
+      break;
+    case "create-team":
+      if (
+        !hasExactKeys(operation, ["kind"], ["coordinatorId", "prefix", "workspaceRoot"]) ||
+        !hasOptionalString(operation, "coordinatorId") ||
+        !hasOptionalString(operation, "prefix") ||
+        !hasOptionalString(operation, "workspaceRoot")
       ) {
         return null;
       }
@@ -231,10 +245,10 @@ function formatUnsupportedRemoteOperation(operation: SystemAgentOperation): stri
       "Run `openclaw setup` locally and say `connect " + operation.channel + "` instead.",
     ].join(" ");
   }
-  if (operation.kind === "model-setup") {
+  if (operation.kind === "config-unset") {
     return [
-      "OpenClaw rescue cannot host model-provider credential setup from a message channel.",
-      "Run `openclaw onboard` locally; it live-tests the candidate route before saving it.",
+      "OpenClaw rescue cannot remove configuration settings.",
+      "Ask your regular agent to remove the setting, or run `openclaw config unset <path>` locally.",
     ].join(" ");
   }
   if (operation.kind === "doctor-fix") {

@@ -34,6 +34,13 @@ explicit runtime-discovery invalidation clears that lookup rather than leaving
 another provider cache holding old hooks. Attempt-prepared provider handles
 retain their selected plugin, while each hook receives the current call context.
 
+Synthetic-auth lookup includes auth-only discovery entries from the declared
+provider or CLI backend owner. Static model-catalog rows do not replace those
+auth implementations. If the owner supplies no synthetic-auth hook, lookup
+returns no synthetic result without loading unrelated discovery entries. A
+lightweight entry fallback remains available for aliases with no declared owner.
+External-auth captures still prepare fresh outcomes before read-only worker work.
+
 Use manifest `setup.providers[].envVars` when the provider has env-based
 credentials that generic auth/status/model-picker paths should see without
 loading plugin runtime. Use manifest `providerAuthAliases`
@@ -153,6 +160,9 @@ Declare organization or billing credentials in manifest
 surfaces recognize them without making them inference auth candidates.
 
 ### Provider example
+
+`example-proxy`, `exchangeToken`, and `fetchExampleProxyUsage` are placeholders
+for your own provider id and vendor API calls, not exported OpenClaw helpers.
 
 ```ts
 api.registerProvider({
@@ -281,8 +291,10 @@ static catalog rows automatically from `defaultModel`, `models`, and
 
 Compatibility:
 
-- `discovery` still works as a legacy alias, but emits a deprecation warning
-- if both `catalog` and `discovery` are registered, OpenClaw uses `catalog`
-  and emits a warning
+- `discovery` was a legacy alias for `catalog`. OpenClaw removed the alias and
+  its deprecation warnings in 2026.4.26
+- rename `discovery` to `catalog`. A provider plugin that still registers
+  `discovery` publishes no catalog rows
 - `augmentModelCatalog` is deprecated; bundled providers should publish
-  supplemental rows through `registerModelCatalogProvider`
+  supplemental rows through `registerModelCatalogProvider`. Its removal gate is
+  2026-10-01

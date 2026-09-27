@@ -31,6 +31,34 @@ the command again later. The **Session** total is loaded separately. The CLI
 `openclaw gateway usage-cost` also reports the recorded cache state before its
 totals.
 
+The Control UI checks incomplete usage totals again after 5, 10, and 20 seconds.
+These spaced checks give large histories time to load while keeping refresh
+traffic bounded. Until a cold cache has any usage data, the page shows a
+loading placeholder instead of zero totals. Available partial totals stay visible;
+if automatic checks finish without complete data, select **Refresh** to try again.
+
+Usage opens with the last 30 calendar days selected. **Today**, **7d**, **30d**,
+**90d**, **1y**, **All**, or the date inputs change the reporting range. Historical
+lineage includes retained earlier instances of a session; the date range still
+controls which activity appears in the chart. Totals and daily charts come from
+the same session report, including sessions beyond the visible list limit.
+
+A recorded zero-dollar cost is valid cost data. The average-cost hint warns
+about missing prices only when the selected report contains unpriced usage;
+filtering to sessions with known zero cost clears that warning.
+
+**Started by** groups usage by the recorded session creator. Select an identity
+to filter the full report, including its history and totals. Human profiles,
+agents, and system-created sessions remain distinct; historical sessions without
+a recorded creator appear as **Unattributed**. This attributes the whole session
+to its creator, not individual turns to participants or charges to provider API
+accounts. Current account settings are not used to guess historical attribution.
+
+Selecting chart days narrows creator totals and session counts across the full
+report, including sessions beyond the visible list limit. A session active on
+several selected days counts once. Session, text, and hour filters use the loaded
+session rows instead.
+
 ## Usage date ranges
 
 The Gateway methods `usage.cost` and `sessions.usage` interpret date ranges in
@@ -117,9 +145,12 @@ With no config the prior behavior holds (footer off until `/usage`). Use
 
 ## Custom `/usage full` footer
 
-`/usage tokens` always renders a plain `Usage: X in / Y out` line (plus cache and
-estimated-cost suffixes when available). Only `/usage full` renders the richer
-footer described below.
+`/usage tokens` renders a plain `Usage: X in / Y out` line with cache counters
+when available. Missing input or output counts stay `?`; OpenClaw does not infer
+the split from a total. When neither direction is reported, a known total appears
+as `Usage: 1.3k total`. Cache counters remain visible even when input, output, and
+total counts are unavailable. This mode never estimates cost. Only `/usage full`
+renders the richer footer described below.
 
 `/usage full` shows a built-in compact footer with model, reasoning, fast/slow,
 context window, and cost when those fields are available. No template file is

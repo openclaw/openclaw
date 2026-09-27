@@ -6,13 +6,19 @@ inputs:
     required: false
     default: "off"
   install-screenshot-emulators:
-    description: Install the pinned phone and Wear OS emulator images used by release screenshots.
+    description: Install the pinned screenshot emulator images and enable Linux KVM access.
     required: false
     default: "false"
 outputs:
   cache-mode:
     description: Validated cache authority for downstream save gates.
     value: ${{ inputs.cache-mode }}
+  gradle-java-home:
+    description: Pinned Java installation for Gradle invocations.
+    value: ${{ steps.gradle-java.outputs.path }}
+  gradle-java-version:
+    description: Resolved Java version for Gradle invocations.
+    value: ${{ steps.gradle-java.outputs.version }}
 runs:
   using: composite
   steps:
@@ -38,11 +44,20 @@ runs:
         esac
 
     - name: Setup Java
-      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+      uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
       with:
         distribution: temurin
         # Keep sdkmanager on the stable JDK path for Linux CI runners.
         java-version: 17
+
+    - name: Setup Gradle Java
+      id: gradle-java
+      uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      with:
+        distribution: temurin
+        # Pin Gradle's runtime without changing later SDK tool invocations.
+        java-version: "21.0.12+101.0.LTS"
+        set-default: false
 
     - name: Setup Gradle cache
       if: inputs.cache-mode != 'off'
@@ -58,8 +73,11 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.android-sdk
-        key: ${{ runner.os }}-android-sdk-v1-cmdline-15859902-platform-37.0-build-tools-36.0.0
+        key: ${{ runner.os }}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-36.0.0-${{ inputs.install-screenshot-emulators == 'true' && 'screenshot-emulators' || 'base' }}
+        # Emulator archives may seed from base; base runs must never restore the larger payload.
         restore-keys: |
+          ${{ inputs.install-screenshot-emulators == 'true' && format('{0}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-36.0.0-base', runner.os) || '' }}
+          ${{ runner.os }}-android-sdk-v1-cmdline-15859902-platform-37.0-build-tools-36.0.0
           ${{ runner.os }}-android-sdk-v1-cmdline-15859902-
 
     - name: Setup Android SDK command-line tools
@@ -137,6 +155,57 @@ runs:
           )
         fi
         sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install "${packages[@]}"
+
+    - name: Configure Linux KVM acceleration
+      if: runner.os == 'Linux' && inputs.install-screenshot-emulators == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        verify_kvm_acceleration() {
+          local output_file="$1"
+          local raw_output="${output_file}.raw"
+          local accel_status
+          local accel_timed_out=false
+
+          if /usr/bin/timeout --signal=TERM --kill-after=2s 15s \
+            emulator -accel-check >"$raw_output" 2>&1; then
+            accel_status=0
+          else
+            accel_status=$?
+          fi
+          if [[ "$accel_status" == "124" || "$accel_status" == "137" ]]; then
+            accel_timed_out=true
+          fi
+          head -c 16384 "$raw_output" >"$output_file"
+          rm -f "$raw_output"
+          {
+            printf '\nexit_status=%s\n' "$accel_status"
+            printf 'timed_out=%s\n' "$accel_timed_out"
+          } >>"$output_file"
+          cat "$output_file"
+          if [[ "$accel_status" -ne 0 || "$accel_timed_out" != "false" ]]; then
+            echo "::error::Android emulator acceleration check failed"
+            return 1
+          fi
+          if ! grep -Eiq '\bKVM\b.*\b(available|usable)\b' "$output_file"; then
+            echo "::error::Android emulator did not confirm usable KVM acceleration"
+            return 1
+          fi
+        }
+
+        test "$RUNNER_OS/$RUNNER_ARCH" = "Linux/X64"
+        test -c /dev/kvm
+        current_uid="$(/usr/bin/id -u)"
+        # uaccess can clear named ACLs between phone and Wear; device ownership survives it.
+        printf 'SUBSYSTEM=="misc", KERNEL=="kvm", OWNER="%s", GROUP="kvm", MODE="0660"\n' "$current_uid" | \
+          /usr/bin/sudo /usr/bin/tee /etc/udev/rules.d/99-openclaw-android-kvm.rules >/dev/null
+        /usr/bin/sudo /usr/bin/udevadm control --reload-rules
+        /usr/bin/sudo /usr/bin/udevadm trigger --action=change --subsystem-match=misc --sysname-match=kvm
+        /usr/bin/sudo /usr/bin/udevadm settle --timeout=15
+        test "$(/usr/bin/stat -c '%u:%G:%a' /dev/kvm)" = "${current_uid}:kvm:660"
+        KVM_DEVICE=/dev/kvm /bin/bash -c \
+          'test -c "$KVM_DEVICE" && test -r "$KVM_DEVICE" && test -w "$KVM_DEVICE"'
+        verify_kvm_acceleration "$RUNNER_TEMP/android-emulator-kvm-check.txt"
 
     - name: Save Android SDK cache
       if: inputs.cache-mode == 'read-write' && steps.android-sdk-cache.outputs.cache-hit != 'true'

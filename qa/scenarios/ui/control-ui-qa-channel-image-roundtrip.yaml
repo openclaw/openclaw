@@ -165,6 +165,25 @@ flow:
         - set: uiAckPageId
           value:
             expr: "uiAckTab.pageId"
+        # Read the transcript before truncation; shell text can exhaust the diagnostic snapshot.
+        - set: uiAckTranscriptExpression
+          value:
+            expr: |
+              `(() => {
+                const pane = document.querySelector('openclaw-chat-pane.chat-pane-cache__pane--active[aria-hidden="false"]');
+                const thread = pane?.querySelector('.chat-thread[role="log"]');
+                const users = Array.from(thread?.querySelectorAll('.chat-group.user .chat-text') ?? []);
+                const assistants = Array.from(thread?.querySelectorAll('.chat-group.assistant .chat-text') ?? []);
+                return {
+                  panePresent: Boolean(pane),
+                  threadPresent: Boolean(thread),
+                  transcriptLoading: pane?.transcriptLoading ?? null,
+                  userMessageCount: users.length,
+                  assistantMessageCount: assistants.length,
+                  hasPrompt: users.some((node) => (node.textContent ?? '').toLowerCase().includes('control ui bridge check')),
+                  hasReply: assistants.some((node) => (node.textContent ?? '').toLowerCase().includes(${JSON.stringify(config.uiExpectedNeedle)}))
+                };
+              })()`
         - call: webWait
           args:
             - pageId:
@@ -175,11 +194,11 @@ flow:
         - try:
             actions:
               - call: waitForCondition
-                saveAs: uiAckSnapshot
+                saveAs: uiAckTranscript
                 args:
                   - lambda:
                       async: true
-                      expr: "await (async () => { const snapshot = await webSnapshot({ pageId: uiAckPageId, maxChars: 12000, timeoutMs: liveTurnTimeoutMs(env, 30000) }); const text = normalizeLowercaseStringOrEmpty(snapshot.text); return text.includes(config.uiExpectedNeedle) && text.includes('control ui bridge check') ? snapshot : undefined; })()"
+                      expr: "await (async () => { const transcript = await webEvaluate({ pageId: uiAckPageId, expression: uiAckTranscriptExpression, timeoutMs: liveTurnTimeoutMs(env, 30000) }); return transcript.hasPrompt && transcript.hasReply ? transcript : undefined; })()"
                   - expr: liveTurnTimeoutMs(env, 45000)
                   - 500
             catch:
@@ -196,12 +215,13 @@ flow:
                 args:
                   - pageId:
                       ref: uiAckPageId
-                    expression: "(() => { const app = document.querySelector('openclaw-app'); return app ? { sessionKey: app.sessionKey, settingsSessionKey: app.settings?.sessionKey, lastActiveSessionKey: app.settings?.lastActiveSessionKey, chatMessages: Array.isArray(app.chatMessages) ? app.chatMessages.length : null, chatLoading: app.chatLoading, lastError: app.lastError, connected: app.connected } : null; })()"
+                    expression:
+                      ref: uiAckTranscriptExpression
                     timeoutMs:
                       expr: liveTurnTimeoutMs(env, 15000)
               - throw:
                   expr: "`control ui text transcript missing after fresh load. state=${JSON.stringify(uiAckFailureState)} snapshot: ${uiAckFailureSnapshot.text}`"
-      detailsExpr: "uiAckSnapshot.text"
+      detailsExpr: "JSON.stringify(uiAckTranscript)"
     - name: image injected through qa-channel gets a correct transport reply
       actions:
         - set: secondOutboundStartIndex
@@ -264,6 +284,26 @@ flow:
         - set: uiImagePageId
           value:
             expr: "uiImageTab.pageId"
+        - set: uiImageTranscriptExpression
+          value:
+            expr: |
+              `(() => {
+                const pane = document.querySelector('openclaw-chat-pane.chat-pane-cache__pane--active[aria-hidden="false"]');
+                const thread = pane?.querySelector('.chat-thread[role="log"]');
+                const users = Array.from(thread?.querySelectorAll('.chat-group.user .chat-text') ?? []);
+                const assistants = Array.from(thread?.querySelectorAll('.chat-group.assistant .chat-text') ?? []);
+                const hasColors = ${JSON.stringify(config.requiredColorGroups)}.every((group) =>
+                  group.some((color) => assistants.some((node) => (node.textContent ?? '').toLowerCase().includes(color))));
+                return {
+                  panePresent: Boolean(pane),
+                  threadPresent: Boolean(thread),
+                  transcriptLoading: pane?.transcriptLoading ?? null,
+                  userMessageCount: users.length,
+                  assistantMessageCount: assistants.length,
+                  hasPrompt: users.some((node) => (node.textContent ?? '').toLowerCase().includes(${JSON.stringify(config.imagePromptNeedle)})),
+                  hasColors
+                };
+              })()`
         - call: webWait
           args:
             - pageId:
@@ -274,11 +314,11 @@ flow:
         - try:
             actions:
               - call: waitForCondition
-                saveAs: uiImageSnapshot
+                saveAs: uiImageTranscript
                 args:
                   - lambda:
                       async: true
-                      expr: "await (async () => { const snapshot = await webSnapshot({ pageId: uiImagePageId, maxChars: 12000, timeoutMs: liveTurnTimeoutMs(env, 30000) }); const text = normalizeLowercaseStringOrEmpty(snapshot.text); const hasPrompt = text.includes(config.imagePromptNeedle); const hasColors = config.requiredColorGroups.every((group) => group.some((color) => text.includes(color))); return hasPrompt && hasColors ? snapshot : undefined; })()"
+                      expr: "await (async () => { const transcript = await webEvaluate({ pageId: uiImagePageId, expression: uiImageTranscriptExpression, timeoutMs: liveTurnTimeoutMs(env, 30000) }); return transcript.hasPrompt && transcript.hasColors ? transcript : undefined; })()"
                   - expr: liveTurnTimeoutMs(env, 90000)
                   - 500
             catch:
@@ -295,9 +335,10 @@ flow:
                 args:
                   - pageId:
                       ref: uiImagePageId
-                    expression: "(() => { const app = document.querySelector('openclaw-app'); return app ? { sessionKey: app.sessionKey, settingsSessionKey: app.settings?.sessionKey, lastActiveSessionKey: app.settings?.lastActiveSessionKey, chatMessages: Array.isArray(app.chatMessages) ? app.chatMessages.length : null, chatLoading: app.chatLoading, lastError: app.lastError, connected: app.connected } : null; })()"
+                    expression:
+                      ref: uiImageTranscriptExpression
                     timeoutMs:
                       expr: liveTurnTimeoutMs(env, 15000)
               - throw:
                   expr: "`control ui image transcript missing after fresh load. state=${JSON.stringify(uiImageFailureState)} snapshot: ${uiImageFailureSnapshot.text}`"
-      detailsExpr: "uiImageSnapshot.text"
+      detailsExpr: "JSON.stringify(uiImageTranscript)"

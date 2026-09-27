@@ -1,14 +1,20 @@
-// Builds complete read-only Claw add plans without mutating local state.
 import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
+import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { stableStringify } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
-import { findClawExtensionPackageCollisions, planClawExtensions } from "./application-plan.js";
+import {
+  clawAddCapabilityChange,
+  clawAgentCapabilityChange,
+  clawAgentConfigurationNotices,
+  findClawExtensionPackageCollisions,
+  planClawExtensions,
+} from "./application-plan.js";
 import { digestClawMcpServer } from "./mcp.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
@@ -32,18 +38,8 @@ import {
 
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 
-function capabilityChange(
-  change: Omit<ClawAddCapabilityChange, "classification" | "requiresDistinctConsent" | "digest">,
-): ClawAddCapabilityChange {
-  return {
-    ...change,
-    classification: "escalation",
-    requiresDistinctConsent: true,
-    digest: `sha256:${createHash("sha256").update(stableStringify(change.effect)).digest("hex")}`,
-  };
-}
-
 export type ClawAddPlanContext = {
+  config?: OpenClawConfig;
   agentId?: string;
   workspace?: string;
   resumableWorkspace?: string;
@@ -74,23 +70,6 @@ type PendingWorkspaceFileAction = {
   byteLength: number;
   content?: Buffer;
 };
-
-function blockedWorkspaceFileAction(params: {
-  id: string;
-  source: string;
-  target: string;
-  reason: string;
-}): ClawAddPlanAction {
-  return {
-    kind: "workspaceFile",
-    id: params.id,
-    action: "write",
-    target: params.target,
-    source: params.source,
-    blocked: true,
-    reason: params.reason,
-  };
-}
 
 function workspaceSourceErrorCode(
   error: unknown,
@@ -176,12 +155,15 @@ async function inspectWorkspaceFileAction(params: {
     const message = workspaceSourceMessage(code, params.sourcePath);
     const diagnostic = blocker(code, params.manifestPath, message);
     return {
-      action: blockedWorkspaceFileAction({
+      action: {
+        kind: "workspaceFile",
         id: params.id,
+        action: "write",
         target: requestedTarget,
         source: requestedSource,
+        blocked: true,
         reason: diagnostic.message,
-      }),
+      },
       blocker: diagnostic,
     };
   }
@@ -264,24 +246,9 @@ export async function buildClawAddPlan(params: {
     details: { ...agentConfig, expectedState: "absent" },
     blocked: agentBlocked || !AGENT_ID_PATTERN.test(finalId),
   });
-  const agentCapabilityEffect = {
-    ...(openClawAgentSettings.sandbox ? { sandbox: openClawAgentSettings.sandbox } : {}),
-    ...(openClawAgentSettings.tools ? { tools: openClawAgentSettings.tools } : {}),
-    ...(openClawAgentSettings.memory ? { memory: openClawAgentSettings.memory } : {}),
-    ...(openClawAgentSettings.heartbeat ? { heartbeat: openClawAgentSettings.heartbeat } : {}),
-  };
-  if (Object.keys(agentCapabilityEffect).length > 0) {
-    capabilityChanges.push(
-      capabilityChange({
-        kind: "agent",
-        id: finalId,
-        path: "agent",
-        action: "create",
-        reason:
-          "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
-        effect: agentCapabilityEffect,
-      }),
-    );
+  const agentCapability = clawAgentCapabilityChange(finalId, openClawAgentSettings);
+  if (agentCapability) {
+    capabilityChanges.push(agentCapability);
   }
 
   const configuredWorkspacePaths = new Set(
@@ -349,10 +316,7 @@ export async function buildClawAddPlan(params: {
       sourceRoot,
       source,
       workspace,
-      sourcePath: fileParams.sourcePath,
-      targetPath: fileParams.targetPath,
-      id: fileParams.id,
-      manifestPath: fileParams.manifestPath,
+      ...fileParams,
     });
     const action = result.pending?.action ?? result.action;
     if (!action) {
@@ -532,7 +496,7 @@ export async function buildClawAddPlan(params: {
       ...(diagnostic ? { reason: diagnostic.message } : {}),
     });
     capabilityChanges.push(
-      capabilityChange({
+      clawAddCapabilityChange({
         kind: "package",
         id: `${pkg.kind}:${pkg.ref}`,
         path: `packages.${pkg.kind}.${pkg.ref}`,
@@ -620,7 +584,7 @@ export async function buildClawAddPlan(params: {
       blocked,
     });
     capabilityChanges.push(
-      capabilityChange({
+      clawAddCapabilityChange({
         kind: "mcpServer",
         id: name,
         path: `mcpServers.${name}`,
@@ -652,7 +616,7 @@ export async function buildClawAddPlan(params: {
       blocked: false,
     });
     capabilityChanges.push(
-      capabilityChange({
+      clawAddCapabilityChange({
         kind: "cronJob",
         id: job.id,
         path: `cronJobs.${job.id}`,
@@ -667,6 +631,11 @@ export async function buildClawAddPlan(params: {
     `${left.kind}:${left.id}:${left.path}`.localeCompare(`${right.kind}:${right.id}:${right.path}`),
   );
 
+  const notices = clawAgentConfigurationNotices(
+    openClawAgentSettings,
+    context.config ?? {},
+    new Set([...existingAgentIds, finalId]),
+  );
   const planIntegrity = `sha256:${createHash("sha256")
     .update(
       stableStringify({
@@ -678,6 +647,7 @@ export async function buildClawAddPlan(params: {
         capabilityChanges,
         blockers,
         extensions,
+        ...(notices.length > 0 ? { notices } : {}),
       }),
     )
     .digest("hex")}`;
@@ -719,6 +689,6 @@ export async function buildClawAddPlan(params: {
     },
     extensions,
     blockers,
-    diagnostics: params.diagnostics ?? [],
+    diagnostics: [...(params.diagnostics ?? []), ...notices],
   };
 }

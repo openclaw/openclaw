@@ -23,6 +23,25 @@ describe("catalog model identity", () => {
     expect(findModelCatalogEntry(catalog, { modelId: "READER" })).toBeUndefined();
   });
 
+  it.each([false, true])(
+    "prefers a literal catalog row over provider equivalence (reversed=%s)",
+    (reverse) => {
+      const rows = [
+        {
+          provider: "arcee",
+          id: "arcee-ai/trinity-large-thinking",
+          name: "Wire",
+          contextWindow: 32_000,
+        },
+        { provider: "arcee", id: "trinity-large-thinking", name: "Logical", contextWindow: 64_000 },
+      ];
+      const catalog = reverse ? rows.toReversed() : rows;
+      for (const row of rows) {
+        expect(findModelInCatalog(catalog, row.provider, row.id)).toBe(row);
+      }
+    },
+  );
+
   it("keeps unique case-insensitive SDK matches and providerless ambiguity", () => {
     const other = { ...lower, provider: "other" };
     expect(findModelInCatalog([upper], "CUSTOM", " reader ")).toBe(upper);
@@ -42,6 +61,16 @@ describe("catalog model identity", () => {
     expect(findModelInCatalog([upper, duplicate], "custom", "Reader")).toBe(upper);
     expect(findModelCatalogEntry([upper, duplicate], { modelId: "Reader" })).toBeUndefined();
     expect(findModelCatalogEntry([upper], { modelId: " " })).toBeUndefined();
+  });
+
+  it("skips sparse catalog holes for literal and fallback matches", () => {
+    const catalog: ModelCatalogEntry[] = [];
+    catalog.length = 5;
+    catalog[2] = upper;
+
+    expect(findModelInCatalog(catalog, "custom", "Reader")).toBe(upper);
+    expect(findModelInCatalog(catalog, "custom", "reader")).toBe(upper);
+    expect(findModelInCatalog(catalog, "custom", "missing")).toBeUndefined();
   });
 
   it("uses provider-owned canonical aliases without applying them to other providers", () => {
@@ -82,10 +111,10 @@ describe("prepared thinking disablement ownership", () => {
       expected: ["none"],
     },
     {
-      name: "preserves nullable unknown metadata",
+      name: "normalizes nullable unknown metadata for the runtime",
       selected: undefined,
       prepared: null,
-      expected: null,
+      expected: undefined,
     },
     {
       name: "leaves an absent effort overlay absent",
@@ -104,7 +133,7 @@ describe("prepared thinking disablement ownership", () => {
       name: "accepts nullable metadata from the exact physical route",
       selected: ["none", "high"],
       prepared: null,
-      expected: null,
+      expected: undefined,
       routeBound: true,
     },
   ])("$name", ({ selected, prepared, expected, routeBound }) => {
@@ -128,5 +157,8 @@ describe("prepared thinking disablement ownership", () => {
     });
 
     expect(result).toEqual({ thinkingFormat: "openai", supportedReasoningEfforts: expected });
+    expect({ ...model.compat, ...result }.supportedReasoningEfforts).toEqual(
+      prepared === undefined ? selected : expected,
+    );
   });
 });

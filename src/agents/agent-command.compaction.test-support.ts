@@ -19,11 +19,13 @@ import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/sessio
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import type { runAgentAttempt } from "./command/attempt-execution.runtime.js";
 import { acceptCompactionSuccessor } from "./embedded-agent-runner/compaction-successor.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
 import type { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
 import { waitForSessionMaintenance } from "./session-maintenance/coordinator.js";
 
@@ -111,10 +113,15 @@ vi.mock("./agent-scope.js", async () => {
   };
 });
 
-vi.mock("./model-catalog.js", () => ({
-  loadManifestModelCatalog: (params: LoadManifestModelCatalogParams) =>
-    compactionTestState.loadManifestModelCatalogMock(params),
-}));
+vi.mock("./model-catalog.js", async () => {
+  const { buildPreparedModelCatalogSnapshot } =
+    await vi.importActual<typeof import("./model-catalog.js")>("./model-catalog.js");
+  return {
+    buildPreparedModelCatalogSnapshot,
+    loadManifestModelCatalog: (params: LoadManifestModelCatalogParams) =>
+      compactionTestState.loadManifestModelCatalogMock(params),
+  };
+});
 
 vi.mock("./model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
@@ -135,9 +142,17 @@ vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
 
-vi.mock("./runtime-plugins.js", () => ({
-  withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
-}));
+vi.mock("./runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
+  return {
+    withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
+    loadAgentRuntimePluginRegistryHandle: () => createEmptyPluginRegistry(),
+    acquireAgentRuntimePluginRegistry: async () => {
+      const registry = createEmptyPluginRegistry();
+      return { registry, primaryRegistry: registry };
+    },
+  };
+});
 
 vi.mock("./workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async () => undefined),
@@ -308,6 +323,8 @@ export function registerAgentCommandCompactionTestHooks(): void {
           waitForSessionMaintenance(sessionKey),
         ),
       );
+      await resetPreparedModelRuntimeSnapshotsForTest();
+      await cleanupSessionStateForTest({ stateDir: path.dirname(storePath) });
     }
     compactionTestState.cfg = undefined;
     compactionTestState.workspaceDir = undefined;

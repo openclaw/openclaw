@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
 import { makeSnapshot } from "../config/redact-snapshot.test-helpers.js";
 import { buildRuntimeConfigSchemaFromRegistry } from "../config/runtime-schema.js";
+import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
@@ -63,6 +64,60 @@ afterEach(() => {
 });
 
 describe("config.get response cache", () => {
+  it("keeps applied revision equality for valid fresh-install defaults", async () => {
+    const snapshot = { ...makeSnapshot({ gateway: { port: 19_001 } }), exists: false, raw: null };
+    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot);
+    mocks.appliedConfigHash = hashRuntimeConfigValue(snapshot.sourceConfig);
+
+    const response = await readConfigGetResponse({ loadUiHints: () => undefined });
+
+    expect(response.configRevisionHash).toEqual(expect.any(String));
+    expect(response.configRevisionHash).toBe(response.appliedConfigHash);
+  });
+
+  it.each([true, false])(
+    "omits private provenance from cold, cached, and uncached responses (valid=%s)",
+    async (valid) => {
+      const config = { gateway: { auth: { token: "synthetic-runtime-token-canary" } } };
+      const snapshot = {
+        ...makeSnapshot(config),
+        valid,
+        authoredConfig: {
+          gateway: { auth: { token: "synthetic-authored-only-token-canary" } },
+        },
+        sourceConfigBeforeMigrations: makeSnapshot({
+          gateway: { auth: { token: "synthetic-resolved-only-token-canary" } },
+        }).sourceConfig,
+      };
+      const before = structuredClone(snapshot);
+      mocks.readConfigFileSnapshot.mockResolvedValue(snapshot);
+      const loadUiHints = () => undefined;
+      const cold = await readConfigGetResponse({
+        getHotReloadStatus: activeWatcher,
+        loadUiHints,
+      });
+      const cached = await readConfigGetResponse({
+        getHotReloadStatus: activeWatcher,
+        loadUiHints,
+      });
+      expect(cached).toBe(cold);
+      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
+      const uncached = await readConfigGetResponse({
+        getHotReloadStatus: disabledWatcher,
+        loadUiHints,
+      });
+      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
+
+      for (const response of [cold, cached, uncached]) {
+        expect(response.valid).toBe(valid);
+        expect(response).not.toHaveProperty("authoredConfig");
+        expect(response).not.toHaveProperty("sourceConfigBeforeMigrations");
+        expect(JSON.stringify(response)).not.toContain("token-canary");
+      }
+      expect(snapshot).toEqual(before);
+    },
+  );
+
   it("round-trips wildcard plugin SecretRefs through an unrelated form save", async () => {
     const secretRef = {
       source: "store" as const,

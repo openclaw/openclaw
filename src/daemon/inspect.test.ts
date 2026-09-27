@@ -18,6 +18,26 @@ vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: (...args: unknown[]) => execSchtasksMock(...args),
 }));
 
+const nativePlistHost = vi.hoisted(() => process.platform === "darwin");
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/exec.js")>();
+  const { decodeLaunchAgentPlistFixture } = await import("./launchd-plist.test-support.js");
+  return {
+    ...actual,
+    runExec: vi.fn(async (...args: Parameters<typeof actual.runExec>) => {
+      if (nativePlistHost) {
+        return actual.runExec(...args);
+      }
+      const options = args[2];
+      const input = typeof options === "object" ? options.input : undefined;
+      if (input === undefined) {
+        throw new Error("Native parser requires captured plist bytes");
+      }
+      return decodeLaunchAgentPlistFixture(input, args[1][1]);
+    }),
+  };
+});
+
 // File-scope cleanup cannot prevent the nested platform-restoration hooks from running.
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -101,15 +121,8 @@ describe("detectMarkerLineWithGateway", () => {
     expect(detectMarkerLineWithGateway(`[Service]\n${command}\n`)).toBe("openclaw");
   });
 
-  it.each(["After", "Requires", "Description", "Environment"])(
-    "ignores gateway mentions in %s instead of an executable directive",
-    (key) => {
-      expect(detectMarkerLineWithGateway(`${key}=openclaw gateway\n`)).toBeNull();
-    },
-  );
-
-  it("ignores dependency-only references to the gateway unit", () => {
-    expect(detectMarkerLineWithGateway(COMPANION_SERVICE_CONTENTS)).toBeNull();
+  it("ignores gateway mentions in environment values instead of an executable directive", () => {
+    expect(detectMarkerLineWithGateway("Environment=openclaw gateway\n")).toBeNull();
   });
 
   it("ignores non-gateway ExecStart commands that only pass gateway-named options", () => {
@@ -130,8 +143,8 @@ describe("renderGatewayServiceCleanupHints", () => {
       serviceName: "com.example.openclaw-gateway",
       source: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
       scope: "user",
-      stopCommand: "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      removeCommand: "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+      firstHint: "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+      secondHint: "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
     },
     {
       title: "uses the system domain for a detected macOS LaunchDaemon",
@@ -139,8 +152,8 @@ describe("renderGatewayServiceCleanupHints", () => {
       serviceName: "com.example.openclaw-gateway",
       source: "plist: /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
       scope: "system",
-      stopCommand: "sudo launchctl bootout system/com.example.openclaw-gateway",
-      removeCommand: "sudo rm /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
+      firstHint: "sudo launchctl bootout system/com.example.openclaw-gateway",
+      secondHint: "sudo rm /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
     },
     {
       title: "keeps global macOS LaunchAgents in the GUI domain",
@@ -148,26 +161,26 @@ describe("renderGatewayServiceCleanupHints", () => {
       serviceName: "com.example.openclaw-gateway",
       source: "plist: /Library/LaunchAgents/com.example.openclaw-gateway.plist",
       scope: "system",
-      stopCommand: "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      removeCommand: "sudo rm /Library/LaunchAgents/com.example.openclaw-gateway.plist",
+      firstHint: "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+      secondHint: "sudo rm /Library/LaunchAgents/com.example.openclaw-gateway.plist",
     },
     {
-      title: "targets the detected user-level systemd unit",
+      title: "inspects the detected user-level systemd unit without removing it",
       platform: "linux",
       serviceName: "custom-gateway.service",
       source: "unit: /home/test/.config/systemd/user/custom-gateway.service",
       scope: "user",
-      stopCommand: "systemctl --user disable --now -- custom-gateway.service",
-      removeCommand: "rm /home/test/.config/systemd/user/custom-gateway.service",
+      firstHint: "systemctl --user status -- custom-gateway.service",
+      secondHint: "systemctl --user cat -- custom-gateway.service",
     },
     {
-      title: "targets the detected system-level systemd unit",
+      title: "inspects the detected system-level systemd unit without removing it",
       platform: "linux",
       serviceName: "custom-gateway.service",
       source: "unit: /etc/systemd/system/custom-gateway.service",
       scope: "system",
-      stopCommand: "sudo systemctl disable --now -- custom-gateway.service",
-      removeCommand: "sudo rm /etc/systemd/system/custom-gateway.service",
+      firstHint: "systemctl --system status -- custom-gateway.service",
+      secondHint: "systemctl --system cat -- custom-gateway.service",
     },
     {
       title: "terminates systemctl options before a detected unit that begins with a dash",
@@ -175,8 +188,8 @@ describe("renderGatewayServiceCleanupHints", () => {
       serviceName: "-custom-gateway.service",
       source: "unit: /home/test/.config/systemd/user/-custom-gateway.service",
       scope: "user",
-      stopCommand: "systemctl --user disable --now -- -custom-gateway.service",
-      removeCommand: "rm /home/test/.config/systemd/user/-custom-gateway.service",
+      firstHint: "systemctl --user status -- -custom-gateway.service",
+      secondHint: "systemctl --user cat -- -custom-gateway.service",
     },
     {
       title: "shell-quotes detected POSIX service labels and paths",
@@ -184,10 +197,10 @@ describe("renderGatewayServiceCleanupHints", () => {
       serviceName: "com.example.gateway; touch injected",
       source: "plist: /Users/test/Launch Agents/example's gateway.plist",
       scope: "user",
-      stopCommand: "launchctl bootout gui/$UID/'com.example.gateway; touch injected'",
-      removeCommand: "rm '/Users/test/Launch Agents/example'\\''s gateway.plist'",
+      firstHint: "launchctl bootout gui/$UID/'com.example.gateway; touch injected'",
+      secondHint: "rm '/Users/test/Launch Agents/example'\\''s gateway.plist'",
     },
-  ] as const)("$title", ({ platform, serviceName, source, scope, stopCommand, removeCommand }) => {
+  ] as const)("$title", ({ platform, serviceName, source, scope, firstHint, secondHint }) => {
     expect(
       renderGatewayServiceCleanupHints([
         {
@@ -197,7 +210,7 @@ describe("renderGatewayServiceCleanupHints", () => {
           scope,
         },
       ]),
-    ).toEqual([stopCommand, removeCommand]);
+    ).toEqual([firstHint, secondHint]);
   });
 
   it("targets the detected Windows scheduled task", () => {

@@ -17,6 +17,7 @@ export function renderChatTranscriptLayout<T>({
   scrollElementRef,
   captureInteractionResize,
   measureRowRefFor,
+  measureRows,
 }: {
   rows: readonly TranscriptRow<T>[];
   renderRow: (row: TranscriptRow<T>) => unknown;
@@ -26,11 +27,13 @@ export function renderChatTranscriptLayout<T>({
   scrollElementRef: (element?: Element) => void;
   captureInteractionResize: (event: Event) => void;
   measureRowRefFor: (key: string) => (element?: Element) => void;
+  measureRows: boolean;
 }): TemplateResult {
   const virtualRows = virtualizer.getVirtualItems();
   return html`
     <div
       class="chat-thread-inner chat-thread-inner--virtual"
+      ?data-measuring-rows=${measureRows}
       ${ref(scrollElementRef)}
       @click=${{ handleEvent: captureInteractionResize, capture: true }}
     >
@@ -72,8 +75,9 @@ export function renderChatTranscriptLayout<T>({
                     virtualRow.index === 0 ? "chat-virtual-row--first" : ""
                   }"
                   style=${styleMap({
-                    // Keep skipped overscan rows at the virtualizer's known size.
-                    containIntrinsicBlockSize: `auto ${virtualRow.size}px`,
+                    // The virtualizer owns measured sizes. Browser-remembered auto
+                    // sizes can lag reflow when a measured row becomes skipped again.
+                    containIntrinsicBlockSize: `${virtualRow.size}px`,
                   })}
                   data-index=${String(virtualRow.index)}
                   data-virtual-row-key=${row.key}

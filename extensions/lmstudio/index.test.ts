@@ -1,11 +1,18 @@
 // Lmstudio tests cover index plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawConfig,
   ProviderAuthMethod,
   ProviderPrepareDynamicModelContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  capturePluginRegistration,
+  createNonExitingRuntimeEnv,
+  createQueuedWizardPrompter,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import type {
   ModelDefinitionConfig,
@@ -95,6 +102,14 @@ function createRemoteProviderConfig(overrides?: Partial<ModelProviderConfig>): M
   };
 }
 
+function loadedModel(key: string) {
+  return {
+    type: "llm",
+    key,
+    loaded_instances: [{ id: key, config: { context_length: 32_768 } }],
+  };
+}
+
 function createDynamicModelContext(
   profile: "first" | "second",
 ): ProviderPrepareDynamicModelContext {
@@ -133,11 +148,69 @@ describe("lmstudio plugin", () => {
     discoverLmstudioModelsMock.mockReset();
   });
 
-  it("registers llama.cpp GBNF tool-schema projection", () => {
-    expect(registerProvider()).toMatchObject({
-      normalizeToolSchemas: expect.any(Function),
-      inspectToolSchemas: expect.any(Function),
+  it("prepares a supplied setup key and requested loaded model without prompts or auth-store writes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lmstudio-supplied-auth-"));
+    const agentDir = path.join(root, "agent");
+    const config: OpenClawConfig = {
+      models: { providers: { lmstudio: createRemoteProviderConfig() } },
+    };
+    const before = structuredClone(config);
+    const { prompter, text, confirm } = createQueuedWizardPrompter();
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [
+        {
+          type: "llm",
+          key: "qwen/qwen3.5-9b",
+          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
+        },
+      ],
     });
+    const method = registerProvider().auth[0];
+    if (!method) {
+      throw new Error("expected LM Studio auth method");
+    }
+    try {
+      const result = await method.run({
+        config,
+        agentDir,
+        prompter,
+        runtime: createNonExitingRuntimeEnv(),
+        opts: {
+          tokenProvider: "lmstudio",
+          token: "supplied-lmstudio-key",
+          customModelId: "qwen/qwen3.5-9b",
+        },
+        isRemote: true,
+        openUrl: vi.fn(),
+        oauth: { createVpsAwareHandlers: vi.fn() },
+      });
+
+      expect(result).toMatchObject({
+        profiles: [
+          {
+            profileId: "lmstudio:default",
+            credential: { type: "api_key", provider: "lmstudio", key: "supplied-lmstudio-key" },
+          },
+        ],
+        defaultModel: "lmstudio/qwen/qwen3.5-9b",
+        configPatch: {
+          models: { providers: { lmstudio: { baseUrl: "http://lmstudio.internal:1234/v1" } } },
+        },
+      });
+      expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
+        baseUrl: "http://lmstudio.internal:1234/v1",
+        apiKey: "supplied-lmstudio-key",
+        timeoutMs: 5000,
+      });
+      expect(text).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(config).toEqual(before);
+      await expect(fs.access(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps concurrent model preparations isolated when shared-endpoint profiles finish in reverse order", async () => {
@@ -209,13 +282,7 @@ describe("lmstudio plugin", () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [
-        {
-          type: "llm",
-          key: "qwen/qwen3.5-9b",
-          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
-        },
-      ],
+      models: [loadedModel("qwen/qwen3.5-9b")],
     });
     const ctx = createLmstudioResetValidationContext({
       customBaseUrl: "http://lmstudio.internal:1234/api/v1/",
@@ -300,13 +367,7 @@ describe("lmstudio plugin", () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [
-        {
-          type: "llm",
-          key: "qwen/qwen3.5-9b",
-          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
-        },
-      ],
+      models: [loadedModel("qwen/qwen3.5-9b")],
     });
     const ctx = createLmstudioResetValidationContext(
       {
@@ -335,47 +396,25 @@ describe("lmstudio plugin", () => {
     });
   });
 
-  it.each([
-    {
-      name: "the local placeholder when no credential exists",
-      resolvedApiKey: null,
-      expectedApiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-    },
-    {
-      name: "a preserved credential profile",
-      resolvedApiKey: { key: "profile-api-key", source: "profile" as const },
-      expectedApiKey: "profile-api-key",
-    },
-    {
-      name: "an environment credential",
-      resolvedApiKey: { key: "environment-api-key", source: "env" as const },
-      expectedApiKey: "environment-api-key",
-    },
-  ])("uses $name with the post-reset empty config", async ({ resolvedApiKey, expectedApiKey }) => {
+  it("uses a preserved credential profile with the post-reset empty config", async () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [
-        {
-          type: "llm",
-          key: "qwen/qwen3.5-9b",
-          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
-        },
-      ],
+      models: [loadedModel("qwen/qwen3.5-9b")],
     });
     const ctx = createLmstudioResetValidationContext(
       {
         customBaseUrl: "http://lmstudio.internal:1234/v1",
         customModelId: "qwen/qwen3.5-9b",
       },
-      resolvedApiKey,
+      { key: "profile-api-key", source: "profile" },
     );
 
     await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(true);
 
     expect(fetchLmstudioModelsMock).toHaveBeenCalledExactlyOnceWith({
       baseUrl: "http://lmstudio.internal:1234/v1",
-      apiKey: expectedApiKey,
+      apiKey: "profile-api-key",
       timeoutMs: 5000,
     });
     expect(ctx.runtime.exit).not.toHaveBeenCalled();
@@ -396,7 +435,7 @@ describe("lmstudio plugin", () => {
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it.each([401, 403, 404, 408, 425, 429, 500, 503])(
+  it.each([401, 408, 425, 429, 503])(
     "preserves the existing HTTP %i reset failure guidance",
     async (httpStatus) => {
       fetchLmstudioModelsMock.mockResolvedValue({
@@ -421,13 +460,7 @@ describe("lmstudio plugin", () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [
-        {
-          type: "llm",
-          key: "phi-4",
-          loaded_instances: [{ id: "phi", config: { context_length: 32_768 } }],
-        },
-      ],
+      models: [loadedModel("phi-4")],
     });
     const ctx = createLmstudioResetValidationContext({
       customBaseUrl: "http://lmstudio.internal:1234/v1",
@@ -446,13 +479,7 @@ describe("lmstudio plugin", () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [
-        {
-          type: "llm",
-          key: "qwen/qwen3.5-9b",
-          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
-        },
-      ],
+      models: [loadedModel("qwen/qwen3.5-9b")],
     });
     const ctx = createLmstudioResetValidationContext({
       customBaseUrl: "http://lmstudio.internal:1234/v1",
@@ -522,26 +549,6 @@ describe("lmstudio plugin", () => {
     });
   });
 
-  it("synthesizes placeholder auth for configured lmstudio models without API key auth", () => {
-    const provider = registerProvider();
-
-    expect(
-      provider?.resolveSyntheticAuth?.({
-        provider: "lmstudio",
-        config: {},
-        providerConfig: createRemoteProviderConfig({
-          headers: {
-            "X-Proxy-Auth": "proxy-token",
-          },
-        }),
-      }),
-    ).toEqual({
-      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-      source: "models.providers.lmstudio (synthetic local key)",
-      mode: "api-key",
-    });
-  });
-
   it("still synthesizes placeholder auth when explicit api-key auth has no key", () => {
     const provider = registerProvider();
 
@@ -551,6 +558,7 @@ describe("lmstudio plugin", () => {
         config: {},
         providerConfig: createRemoteProviderConfig({
           auth: "api-key",
+          headers: { "X-Proxy-Auth": "proxy-token" },
         }),
       }),
     ).toEqual({

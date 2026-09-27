@@ -6,12 +6,12 @@
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
+import { type ModelRef, normalizeProviderId } from "./model-ref-shared.js";
 import {
   buildModelAliasIndex,
   getModelRefStatus,
   resolveAllowedModelRefFromAliasIndex,
+  resolveModelRefFromString,
 } from "./model-selection-shared.js";
 
 export {
@@ -20,9 +20,35 @@ export {
   normalizeModelSelection,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
-  resolveModelAliasFromPair,
   resolveModelRefFromString,
 } from "./model-selection-shared.js";
+
+/** Resolves legacy provider/model pairs whose model field may still contain an alias. */
+export function resolveModelAliasFromPair(
+  params: Omit<Parameters<typeof resolveModelRefFromString>[0], "raw"> & {
+    provider: string;
+    model: string;
+  },
+): ModelRef | null {
+  const bareAlias = resolveModelRefFromString({
+    ...params,
+    raw: params.model,
+    defaultProvider: params.provider,
+  });
+  const providerAlias = resolveModelRefFromString({
+    ...params,
+    raw: `${params.provider}/${params.model}`,
+  });
+  if (providerAlias?.alias) {
+    return providerAlias.ref;
+  }
+  const provider = normalizeProviderId(params.provider);
+  return bareAlias?.alias &&
+    (normalizeProviderId(bareAlias.ref.provider) === provider ||
+      provider === normalizeProviderId(params.defaultProvider))
+    ? bareAlias.ref
+    : null;
+}
 
 /** Resolve agent-owned fallback overrides without loading the full selection facade. */
 export function resolveConfiguredModelFallbacks(params: {
@@ -40,19 +66,8 @@ export function resolveConfiguredModelFallbacks(params: {
 
 /** Resolves a raw model string into an allowed model ref or an explanatory error. */
 export function resolveAllowedModelRefCore(
-  params: {
-    cfg: OpenClawConfig;
-    catalog: ModelCatalogEntry[];
-    raw: string;
-    defaultProvider: string;
-    defaultModel?: string;
-    agentId?: string;
-  } & ModelManifestNormalizationContext,
-):
-  | { ref: ModelRef; key: string }
-  | {
-      error: string;
-    } {
+  params: Omit<Parameters<typeof getModelRefStatus>[0], "ref"> & { raw: string },
+): ReturnType<typeof resolveAllowedModelRefFromAliasIndex> {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,

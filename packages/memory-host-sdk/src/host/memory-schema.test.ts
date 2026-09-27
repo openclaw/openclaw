@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { encodeMemoryEmbedding } from "./embedding-vector.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
@@ -179,7 +180,18 @@ describe("memory index schema", () => {
         `INSERT INTO memory_index_chunks
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run("chunk-2", "MEMORY.md", "memory", 3, 3, "hash-2", "fts-only", "next", "[]", 50);
+      ).run(
+        "chunk-2",
+        "MEMORY.md",
+        "memory",
+        3,
+        3,
+        "hash-2",
+        "fts-only",
+        "next",
+        encodeMemoryEmbedding([]),
+        50,
+      );
       expect(
         db
           .prepare(
@@ -206,6 +218,7 @@ describe("memory index schema", () => {
       ).toEqual({ origin_class: "untrusted", session_kind: "unknown", observed_at: 50 });
       expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([
         { id: "chunk-1", text: "remember this" },
+        { id: "chunk-2", text: "next" },
       ]);
       expect(db.prepare("SELECT provider, hash FROM memory_embedding_cache").all()).toEqual([
         { provider: "openai", hash: "chunk-hash" },
@@ -350,11 +363,8 @@ describe("memory index schema", () => {
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES (
           'chunk-before', 'before.md', 'memory', 1, 1, 'before-hash', 'fts-only',
-          'before body', '[]', 1
+          'before body', X'', 1
         );
-        INSERT INTO memory_index_chunks_fts
-          (text, id, path, source, model, start_line, end_line)
-        VALUES ('before body', 'chunk-before', 'before.md', 'memory', 'fts-only', 1, 1);
       `);
 
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
@@ -370,7 +380,7 @@ describe("memory index schema", () => {
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES (
           'chunk-disabled', 'disabled.md', 'memory', 1, 1, 'disabled-hash', 'fts-only',
-          'disabled body', '[]', 2
+          'disabled body', X'', 2
         );
       `);
 
@@ -397,8 +407,8 @@ describe("memory index schema", () => {
         INSERT INTO memory_index_chunks
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES
-          ('chunk-a', 'shared-notes.md', 'memory', 1, 1, 'a', 'model', 'alpha body', '[]', 1),
-          ('chunk-b', 'shared-notes.md', 'memory', 2, 2, 'b', 'model', 'beta body', '[]', 1);
+          ('chunk-a', 'shared-notes.md', 'memory', 1, 1, 'a', 'model', 'alpha body', X'', 1),
+          ('chunk-b', 'shared-notes.md', 'memory', 2, 2, 'b', 'model', 'beta body', X'', 1);
       `);
 
       const result = ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });

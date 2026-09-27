@@ -1,7 +1,12 @@
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import { claimUnprocessedFeishuMessage, type FeishuMessageProcessingClaim } from "./dedup.js";
+import type { handleFeishuMessage } from "./bot.js";
+import {
+  claimUnprocessedFeishuMessage,
+  type FeishuMessageProcessingClaim,
+  type hasProcessedFeishuMessage,
+} from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import {
@@ -10,8 +15,10 @@ import {
   type FeishuIngressLifecycle,
 } from "./feishu-ingress.js";
 import { isMentionForwardRequest } from "./mention.js";
+import { parsePostContent } from "./post.js";
+import type { getFeishuSequentialKey } from "./sequential-key.js";
 import { createSequentialQueue } from "./sequential-queue.js";
-import type { FeishuChatType } from "./types.js";
+import { normalizeFeishuEventChatType } from "./types.js";
 
 type FeishuMessageReceiveHandlerContext = {
   cfg: ClawdbotConfig;
@@ -20,39 +27,18 @@ type FeishuMessageReceiveHandlerContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
-  handleMessage: (params: {
-    cfg: ClawdbotConfig;
-    event: FeishuMessageEvent;
-    preparedContent?: string;
-    botOpenId?: string;
-    botName?: string;
-    runtime?: RuntimeEnv;
-    channelRuntime?: PluginRuntime["channel"];
-    chatHistories?: Map<string, HistoryEntry[]>;
-    accountId?: string;
-    processingClaim?: FeishuMessageProcessingClaim;
-    messageDedupeKey?: string;
-    turnAdoptionLifecycle?: FeishuIngressLifecycle;
-  }) => Promise<void>;
+  isAccountActive?: () => boolean;
+  trackTask?: (task: Promise<void>) => void;
+  handleMessage: typeof handleFeishuMessage;
   resolveDebounceText: (params: {
     event: FeishuMessageEvent;
     botOpenId?: string;
     botName?: string;
   }) => string;
-  hasProcessedMessage: (
-    messageId: string | undefined | null,
-    namespace: string,
-    log?: (...args: unknown[]) => void,
-  ) => Promise<boolean>;
+  hasProcessedMessage: typeof hasProcessedFeishuMessage;
   getBotOpenId?: (accountId: string) => string | undefined;
   getBotName?: (accountId: string) => string | undefined;
-  resolveSequentialKey?: (params: {
-    accountId: string;
-    event: FeishuMessageEvent;
-    preparedContent?: string;
-    botOpenId?: string;
-    botName?: string;
-  }) => string;
+  resolveSequentialKey?: typeof getFeishuSequentialKey;
   /**
    * Optional status sink. When provided, the handler will publish `lastEventAt`
    * on every inbound message for message recency. Transport liveness is
@@ -61,12 +47,6 @@ type FeishuMessageReceiveHandlerContext = {
   statusSink?: import("./monitor.js").FeishuStatusSink;
   resolveIngressLifecycle?: (data: unknown) => FeishuIngressLifecycle | undefined;
 };
-
-function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
-  return value === "group" || value === "topic_group" || value === "private" || value === "p2p"
-    ? value
-    : undefined;
-}
 
 function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | null {
   if (!isRecord(value)) {
@@ -83,7 +63,7 @@ function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | nu
   }
   const messageId = readString(message.message_id);
   const chatId = readString(message.chat_id);
-  const chatType = normalizeFeishuChatType(message.chat_type);
+  const chatType = normalizeFeishuEventChatType(message.chat_type);
   const messageType = readString(message.message_type);
   // Feishu can deliver a legitimately empty message body; keep absent or
   // non-string bodies malformed instead of inventing fallback content.
@@ -117,6 +97,7 @@ function mergeFeishuDebounceMentions(
 
 type FeishuMessageDebounceEntry = {
   event: FeishuMessageEvent;
+  messageDedupeKey: string | undefined;
   processingClaim?: FeishuMessageProcessingClaim;
   turnAdoptionLifecycle?: FeishuIngressLifecycle;
   abandoned?: boolean;
@@ -128,7 +109,7 @@ function dedupeFeishuDebounceEntriesByDedupeKey(
   const seen = new Set<string>();
   const deduped: FeishuMessageDebounceEntry[] = [];
   for (const entry of entries) {
-    const dedupeKey = resolveFeishuMessageDedupeKey(entry.event);
+    const dedupeKey = entry.messageDedupeKey;
     if (!dedupeKey) {
       deduped.push(entry);
       continue;
@@ -176,6 +157,8 @@ export function createFeishuMessageReceiveHandler({
   runtime,
   chatHistories,
   fireAndForget,
+  isAccountActive = () => true,
+  trackTask,
   handleMessage,
   resolveDebounceText: resolveText,
   hasProcessedMessage,
@@ -220,7 +203,8 @@ export function createFeishuMessageReceiveHandler({
         await turnAdoptionLifecycle.onAbandoned();
         return;
       }
-      await handleMessage({
+      const handling = handleMessage({
+        trackTask,
         cfg,
         event,
         preparedContent,
@@ -234,6 +218,8 @@ export function createFeishuMessageReceiveHandler({
         messageDedupeKey,
         turnAdoptionLifecycle,
       });
+      trackTask?.(handling);
+      await handling;
     };
     await enqueue(sequentialKey, task);
   };
@@ -257,20 +243,15 @@ export function createFeishuMessageReceiveHandler({
     dispatchDedupeKey?: string,
   ) => {
     const keepDedupeKey = dispatchDedupeKey?.trim();
-    const suppressedIds = new Set(
-      entries
-        .map((entry) => ({
-          id: resolveFeishuMessageDedupeKey(entry.event),
-          claim: entry.processingClaim,
-        }))
-        .filter(({ id }) => Boolean(id) && (!keepDedupeKey || id !== keepDedupeKey)),
-    );
-    for (const suppressed of suppressedIds) {
+    for (const { messageDedupeKey, processingClaim } of entries) {
+      if (!messageDedupeKey || messageDedupeKey === keepDedupeKey) {
+        continue;
+      }
       try {
-        await suppressed.claim?.commit();
+        await processingClaim?.commit();
       } catch (err) {
         error(
-          `feishu[${accountId}]: failed to record merged dedupe id ${suppressed.id}: ${String(err)}`,
+          `feishu[${accountId}]: failed to record merged dedupe id ${messageDedupeKey}: ${String(err)}`,
         );
       }
     }
@@ -306,6 +287,7 @@ export function createFeishuMessageReceiveHandler({
             replayClaim: entry.processingClaim,
           })),
           {
+            trackTask,
             onReplayCommitError: (err) =>
               error(`feishu[${accountId}]: failed to commit logical replay guard: ${String(err)}`),
           },
@@ -324,7 +306,7 @@ export function createFeishuMessageReceiveHandler({
               if (activeEntries.length === 1) {
                 await dispatchFeishuMessage(
                   last.event,
-                  resolveFeishuMessageDedupeKey(last.event),
+                  last.messageDedupeKey,
                   last.processingClaim,
                   admissionLifecycle,
                 );
@@ -334,13 +316,7 @@ export function createFeishuMessageReceiveHandler({
               const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(activeEntries);
               const freshEntries: FeishuMessageDebounceEntry[] = [];
               for (const entry of dedupedEntries) {
-                if (
-                  !(await hasProcessedMessage(
-                    resolveFeishuMessageDedupeKey(entry.event),
-                    accountId,
-                    log,
-                  ))
-                ) {
+                if (!(await hasProcessedMessage(entry.messageDedupeKey, accountId, log))) {
                   freshEntries.push(entry);
                 }
               }
@@ -349,7 +325,7 @@ export function createFeishuMessageReceiveHandler({
                 await settle();
                 return;
               }
-              const dispatchDedupeKey = resolveFeishuMessageDedupeKey(dispatchEntry.event);
+              const dispatchDedupeKey = dispatchEntry.messageDedupeKey;
               if (!lifecycle) {
                 await recordSuppressedMessageIds(dedupedEntries, dispatchDedupeKey);
               }
@@ -405,6 +381,10 @@ export function createFeishuMessageReceiveHandler({
 
   return async (data) => {
     const turnAdoptionLifecycle = resolveIngressLifecycle?.(data);
+    if (!isAccountActive() || turnAdoptionLifecycle?.abortSignal.aborted) {
+      await turnAdoptionLifecycle?.onAbandoned();
+      return undefined;
+    }
     const completeSuppressedIngress = async () => {
       if (!turnAdoptionLifecycle) {
         return;
@@ -441,11 +421,31 @@ export function createFeishuMessageReceiveHandler({
       return undefined;
     }
     const messageDedupeKey = resolveFeishuMessageDedupeKey(event);
+    // Attachment-free posts used their raw message ID before retry-stable keys.
+    // Honor retained records until their normal replay TTL expires.
+    if (
+      event.message.message_type.trim() === "post" &&
+      messageDedupeKey !== messageId &&
+      (await hasProcessedMessage(messageId, accountId, log)) &&
+      parsePostContent(event.message.content).attachments.length === 0
+    ) {
+      log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
+      await completeSuppressedIngress();
+      return undefined;
+    }
     const claim = await claimUnprocessedFeishuMessage({
       messageId: messageDedupeKey,
       namespace: accountId,
       log,
     });
+    if (!isAccountActive() || turnAdoptionLifecycle?.abortSignal.aborted) {
+      const stoppedError = new Error("feishu account stopped before message admission");
+      if (claim.kind === "claimed") {
+        claim.handle.release({ error: stoppedError });
+      }
+      await turnAdoptionLifecycle?.onAbandoned();
+      return { kind: "failed-retryable", error: stoppedError };
+    }
     if (claim.kind === "duplicate" || claim.kind === "inflight") {
       log(`feishu[${accountId}]: dropping ${claim.kind} event for message ${messageId}`);
       await completeSuppressedIngress();
@@ -453,6 +453,7 @@ export function createFeishuMessageReceiveHandler({
     }
     const debounceEntry: FeishuMessageDebounceEntry = {
       event,
+      messageDedupeKey,
       ...(claim.kind === "claimed" ? { processingClaim: claim.handle } : {}),
       ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
     };

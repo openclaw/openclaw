@@ -3,7 +3,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { isChangedLaneTestPath } from "./changed-lanes.mts";
 import {
   booleanFlag,
@@ -11,6 +11,7 @@ import {
   parseFlagArgs,
   stringFlag,
 } from "./lib/arg-utils.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 type AddedLine = {
@@ -72,7 +73,7 @@ Description:
   classification instead of maintaining a separate test-helper heuristic.
 
 Options:
-  --base <ref>       Base ref for branch diffs. Default: ${DEFAULT_BASE_REF}
+  --base <ref>       Base ref. Default: HEAD with --staged, otherwise ${DEFAULT_BASE_REF}
   --head <ref>       Head ref for branch diffs. Default: ${DEFAULT_HEAD_REF}
   --no-merge-base    Use a two-dot base..head diff for shallow CI checkouts.
   --staged           Inspect staged changes instead of a branch diff.
@@ -102,7 +103,11 @@ function shouldInspectFile(filePath: string): boolean {
 
 function shouldInspectManualHelperUsage(filePath: string): boolean {
   const normalizedPath = normalizePath(filePath);
-  return normalizedPath !== TEMP_DIR_HELPER_TEST_PATH && shouldInspectFile(normalizedPath);
+  return (
+    /\.(?:[cm]?[jt]s|[jt]sx)$/u.test(normalizedPath) &&
+    normalizedPath !== TEMP_DIR_HELPER_TEST_PATH &&
+    shouldInspectFile(normalizedPath)
+  );
 }
 
 function escapeGithubCommandValue(value: unknown): string {
@@ -133,8 +138,15 @@ export function formatGithubWarning(finding: TempCreationFinding): string {
 }
 
 function parseArgs(argv: readonly string[]) {
-  const args = {
-    base: DEFAULT_BASE_REF,
+  const args: {
+    base?: string;
+    failOnFindings: boolean;
+    head: string;
+    help: boolean;
+    json: boolean;
+    noMergeBase: boolean;
+    staged: boolean;
+  } = {
     failOnFindings: false,
     head: DEFAULT_HEAD_REF,
     help: false,
@@ -155,9 +167,10 @@ function parseArgs(argv: readonly string[]) {
 }
 
 function readDiff(args: ReturnType<typeof parseArgs>, cwd = process.cwd()): string {
+  const base = args.base ?? DEFAULT_BASE_REF;
   let useMergeBase = !args.noMergeBase;
   if (useMergeBase && !args.staged) {
-    const mergeBase = spawnSync("git", ["merge-base", args.base, args.head], {
+    const mergeBase = spawnSync("git", ["merge-base", base, args.head], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "ignore", "pipe"],
@@ -173,8 +186,12 @@ function readDiff(args: ReturnType<typeof parseArgs>, cwd = process.cwd()): stri
       throw new Error(mergeBase.stderr.trim() || "git merge-base failed");
     }
   }
-  const range = useMergeBase ? `${args.base}...${args.head}` : `${args.base}..${args.head}`;
-  const diffArgs = ["diff", ...(args.staged ? ["--cached"] : [range]), "--diff-filter=ACMR"];
+  const range = useMergeBase ? `${base}...${args.head}` : `${base}..${args.head}`;
+  const diffArgs = [
+    "diff",
+    ...(args.staged ? ["--cached", ...(args.base ? [args.base] : [])] : [range]),
+    "--diff-filter=ACMR",
+  ];
   const readGitDiff = (...options: string[]) =>
     execFileSync("git", ["--literal-pathspecs", ...diffArgs, ...options], {
       cwd,
@@ -242,10 +259,6 @@ function isTempDirHelperImportSpec(filePath: string, specifier: string): boolean
     ? path.posix.normalize(path.posix.join(path.posix.dirname(filePath), normalizedSpecifier))
     : normalizedSpecifier;
   return stripKnownExtension(resolvedPath) === stripKnownExtension(TEMP_DIR_HELPER_PATH);
-}
-
-function createSourceFile(filePath: string, sourceText: string): ts.SourceFile {
-  return ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
 }
 
 function lineForNode(sourceFile: ts.SourceFile, node: ts.Node): number {
@@ -343,11 +356,10 @@ function collectManualTempDirHelperImports(
 
 function findManualHelperUsageFindings(
   filePath: string,
-  sourceText: string,
+  sourceFile: ts.SourceFile,
   addedLines: AddedLine[],
 ): TempCreationFinding[] {
   const addedLineNumbers = new Set(addedLines.map((line) => line.line));
-  const sourceFile = createSourceFile(filePath, sourceText);
   const { imports, localNames } = collectManualTempDirHelperImports(
     sourceFile,
     filePath,
@@ -376,7 +388,7 @@ function findManualHelperUsageFindings(
         source: sourceLineText(sourceFile, lineForNode(sourceFile, node.expression)),
       });
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return findings;
@@ -498,15 +510,21 @@ export function collectTempCreationFindingsFromDiff(
     }
   }
 
-  for (const [file, addedLines] of addedLinesByFile) {
-    if (!shouldInspectManualHelperUsage(file)) {
-      continue;
+  const parser = createNativeTypeScriptParser();
+  try {
+    for (const [file, addedLines] of addedLinesByFile) {
+      if (!shouldInspectManualHelperUsage(file)) {
+        continue;
+      }
+      const sourceText = readCurrentSource(file, options, fileTextByPath);
+      if (!sourceText) {
+        continue;
+      }
+      const sourceFile = parser.parseSourceFile(file, sourceText);
+      findings.push(...findManualHelperUsageFindings(file, sourceFile, addedLines));
     }
-    const sourceText = readCurrentSource(file, options, fileTextByPath);
-    if (!sourceText) {
-      continue;
-    }
-    findings.push(...findManualHelperUsageFindings(file, sourceText, addedLines));
+  } finally {
+    parser.close();
   }
 
   return findings;

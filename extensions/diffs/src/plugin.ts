@@ -41,6 +41,11 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     }),
     logger: api.logger,
   });
+  api.registerService({
+    id: "diffs-artifact-cleanup",
+    start: () => store.startCleanup(),
+    stop: () => store.stopCleanup(),
+  });
   const resolveCurrentPluginConfig = () =>
     resolveLivePluginConfigObject(
       api.runtime.config?.current

@@ -2,6 +2,7 @@ import {
   ErrorCodes,
   errorShape,
 } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { formatForLog } from "../ws-log.js";
 import type { RespondFn } from "./types.js";
 
@@ -13,6 +14,9 @@ export async function respondUnavailableOnThrow(respond: RespondFn, fn: () => Pr
   try {
     await fn();
   } catch (err) {
+    if (err instanceof SessionMutationAuthorizationChangedError) {
+      throw err;
+    }
     respondUnavailable(respond, err);
   }
 }

@@ -1,15 +1,16 @@
-import type { RawData } from "ws";
+import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../../server-constants.js";
 import { formatError } from "../../server-utils.js";
 import {
   classifyGatewayStaleInstall,
   GATEWAY_STALE_INSTALL_CLOSE_REASON,
 } from "../../stale-install.js";
+import type { GatewayConnectionFrame } from "../connection-transport.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
 export function attachGatewayWsMessageHandlerOnDemand(params: GatewayWsMessageHandlerParams): void {
-  const queued: RawData[] = [];
-  const queueMessage = (data: RawData) => {
-    if (queued.length >= 16) {
+  const queued: GatewayConnectionFrame[] = [];
+  const queueMessage = (data: GatewayConnectionFrame) => {
+    if (queued.length >= MAX_QUEUED_GATEWAY_PREAUTH_FRAMES) {
       params.setCloseCause("message-handler-loading-overflow", { queuedFrames: queued.length });
       params.close(1008, "gateway message handler loading");
       return;
@@ -24,9 +25,9 @@ export function attachGatewayWsMessageHandlerOnDemand(params: GatewayWsMessageHa
       if (params.isClosed() || params.connectionWork.isClosing) {
         return;
       }
-      attachGatewayWsMessageHandler(params);
+      const receive = attachGatewayWsMessageHandler(params);
       for (const data of queued) {
-        params.socket.emit("message", data);
+        receive(data);
       }
     })
     .catch((error: unknown) => {

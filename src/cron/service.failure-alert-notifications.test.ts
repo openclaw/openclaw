@@ -13,6 +13,7 @@ import {
   enqueueSystemEvent,
   peekSystemEventEntries,
 } from "../infra/system-events.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -119,6 +120,7 @@ describe("CronService failure notification delivery", () => {
       throw new Error("failure alert channel unavailable");
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       cronConfig: { failureAlert: { enabled: true, after: 1 } },
@@ -159,9 +161,12 @@ describe("CronService failure notification delivery", () => {
       });
 
       await cron.run(job.id, "force");
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      await expect(sendCronFailureAlert.mock.results[0]?.value).rejects.toThrow(
+        "failure alert channel unavailable",
+      );
       await vi.advanceTimersByTimeAsync(1);
 
-      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       expect(peekSystemEventEntries(testCase.sessionKey)).toHaveLength(1);
       expect(runOnce).toHaveBeenCalledTimes(testCase.wakesNow ? 1 : 0);
       if (testCase.wakesNow) {

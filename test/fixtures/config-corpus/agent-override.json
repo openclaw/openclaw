@@ -1,0 +1,66 @@
+{
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "FAKE_CONFIG_CORPUS_CREDENTIAL"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "openai/gpt-5.5",
+      "systemAgent": {
+        "agentId": "main"
+      },
+      "heartbeat": {
+        "agentId": "main"
+      }
+    },
+    "entries": {
+      "main": {},
+      "secondary": {
+        "model": "fixture-provider/fixture-model",
+        "models": {
+          "fixture-provider/fixture-model": {
+            "alias": "fixture-local"
+          }
+        }
+      }
+    },
+    "ownership": "explicit"
+  },
+  "plugins": {
+    "entries": {
+      "openai": {
+        "enabled": true
+      }
+    }
+  },
+  "models": {
+    "providers": {
+      "openai": {},
+      "fixture-provider": {
+        "baseUrl": "https://fixture-provider.invalid/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "fixture-model",
+            "name": "Fixture Model",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 8192,
+            "maxTokens": 1024
+          }
+        ]
+      }
+    }
+  }
+}

@@ -78,7 +78,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       root = documents.rootRevision(tabId);
       tab = await chromeApi.tabs.get(tabId);
     } while (root !== documents.rootRevision(tabId));
-    return tab;
+    return documents.resolveTabSnapshot(tabId, tab);
   }
 
   const mutateStorage = (task) => {
@@ -217,9 +217,6 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       (typeof tab?.pendingUrl === "string" && !eligibilityForTab(tab).eligible);
     const created = createdTabs.get(tabId);
     if (!created) {
-      if (mode === ACCESS_MODE_SELECTED && typeof change.groupId === "number") {
-        invalidateTab(tabId);
-      }
       return accessChanged;
     }
     if (typeof change.url === "string") {
@@ -412,9 +409,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const normalized = nextMode === ACCESS_MODE_ALL ? ACCESS_MODE_ALL : ACCESS_MODE_SELECTED;
     if (normalized !== mode) {
       mode = normalized;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
     return mode;
   }
@@ -423,18 +418,14 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const normalized = nextEnabled === true;
     if (normalized !== enabled) {
       enabled = normalized;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
   }
 
   function beginTransition() {
     if (!transitioning) {
       transitioning = true;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
   }
 
@@ -466,8 +457,11 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     invalidateTab(tabId);
   }
 
-  function renewTabAccess(tabId, attachedEpoch, tab) {
+  function renewTabAccess(tabId, attachedEpoch, observedTab, change) {
+    const tab = documents.resolveTabUpdate(tabId, observedTab, change);
+    const selectedGroupChange = mode === ACCESS_MODE_SELECTED && typeof change.groupId === "number";
     const blankObservers =
+      !selectedGroupChange &&
       !attachedEpoch &&
       tab?.id === tabId &&
       initialBlankDocument(tab) &&
@@ -490,7 +484,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     // An allowed document change retires page reads/actions, not tab authority.
     // Only an already-proven attachment gets synchronous event renewal. Without
     // an attachment, an eligible initial HTTP commit can precede create's callback.
-    if (!eligibilityForTab(tab).eligible || (attachedEpoch && !canRenew)) {
+    if (!eligibilityForTab(tab).eligible || (!canRenew && (attachedEpoch || selectedGroupChange))) {
       invalidateTab(tabId);
     } else {
       tabRevisions.set(tabId, {
@@ -633,10 +627,11 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         continue;
       }
       const accessible = [];
-      for (const tab of tabs) {
+      for (const snapshot of tabs) {
         if (listRevision !== discoveryRevision) {
           break;
         }
+        const tab = documents.resolveTabSnapshot(snapshot.id, snapshot);
         if (tabIsRevoking(tab.id) || !eligibilityForTab(tab).eligible) {
           continue;
         }

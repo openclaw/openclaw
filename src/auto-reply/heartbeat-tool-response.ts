@@ -3,11 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 import { assertCronJobScratchContent } from "../cron/scratch-contract.js";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
-import {
-  getReplyPayloadMetadata,
-  setReplyPayloadMetadata,
-  type ReplyPayload,
-} from "./reply-payload.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "./reply-payload.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 /** Tool name used by heartbeat runs to report visible or silent progress. */
@@ -102,51 +98,22 @@ export function createHeartbeatToolResponsePayload(response: HeartbeatToolRespon
   return payload;
 }
 
-function getHeartbeatToolResponseFromPayload(
-  payload: ReplyPayload | undefined,
-): HeartbeatToolResponse | undefined {
-  return normalizeHeartbeatToolResponse(
-    payload?.channelData?.[HEARTBEAT_RESPONSE_CHANNEL_DATA_KEY],
-  );
-}
-
-/** Find the last heartbeat tool response embedded in a reply result. */
-export function resolveHeartbeatToolResponseFromReplyResult(
+/** Select the newest valid response and retain its private metadata carrier. */
+export function selectHeartbeatToolResponse(
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
-): HeartbeatToolResponse | undefined {
-  if (!replyResult) {
-    return undefined;
-  }
-  const payloads = Array.isArray(replyResult) ? replyResult : [replyResult];
-  for (let idx = payloads.length - 1; idx >= 0; idx -= 1) {
-    const response = getHeartbeatToolResponseFromPayload(payloads[idx]);
-    if (response) {
-      return response;
-    }
-  }
-  return undefined;
-}
-
-/** Reads the private scratch proposal captured for the heartbeat turn. */
-export function resolveHeartbeatScratchProposalFromReplyResult(
-  replyResult: ReplyPayload | ReplyPayload[] | undefined,
-): string | undefined {
+): { response: HeartbeatToolResponse; payload: ReplyPayload } | undefined {
   if (!replyResult) {
     return undefined;
   }
   const payloads = Array.isArray(replyResult) ? replyResult : [replyResult];
   for (let idx = payloads.length - 1; idx >= 0; idx -= 1) {
     const payload = payloads[idx];
-    if (!payload) {
-      continue;
+    const response = normalizeHeartbeatToolResponse(
+      payload?.channelData?.[HEARTBEAT_RESPONSE_CHANNEL_DATA_KEY],
+    );
+    if (response && payload) {
+      return { response, payload };
     }
-    // Anchor to the newest heartbeat-response payload: a later corrected
-    // response without scratch must supersede an earlier scratch proposal,
-    // so the scan stops at the first response payload either way.
-    if (!getHeartbeatToolResponseFromPayload(payload)) {
-      continue;
-    }
-    return getReplyPayloadMetadata(payload)?.heartbeatScratchProposal;
   }
   return undefined;
 }

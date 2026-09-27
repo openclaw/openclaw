@@ -164,7 +164,7 @@ Remote embeddings require an API key. Bedrock uses the AWS SDK default credentia
 | Bedrock        | AWS credential chain, or `AWS_BEARER_TOKEN_BEDROCK` | No API key needed                   |
 | DeepInfra      | `DEEPINFRA_API_KEY`                                 | `models.providers.deepinfra.apiKey` |
 | Gemini         | `GEMINI_API_KEY`                                    | `models.providers.google.apiKey`    |
-| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`  | Auth profile via device login       |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`                              | Auth profile via device login       |
 | Mistral        | `MISTRAL_API_KEY`                                   | `models.providers.mistral.apiKey`   |
 | Ollama         | `OLLAMA_API_KEY` (placeholder)                      | --                                  |
 | OpenAI         | `OPENAI_API_KEY`                                    | `models.providers.openai.apiKey`    |
@@ -231,12 +231,13 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
     Upgrading any existing configuration that already uses
     `gemini-embedding-2` can trigger the same pause even when you do not edit the
-    configuration. Before this release, the stable model's dimension was
+    configuration. Before 2026.8.1, the stable model's dimension was
     omitted from index identity whether `outputDimensionality` was absent or
-    explicitly set. After upgrade, an absent setting resolves to 3072, while an
+    explicitly set. From 2026.8.1 ([#128716](https://github.com/openclaw/openclaw/pull/128716)),
+    an absent setting resolves to 3072, while an
     explicit setting between 128 and 3072 becomes part of the identity. The
     default `gemini-embedding-001` keeps its existing identity when this setting
-    is absent; an explicitly configured value that was previously ignored now
+    is absent; an explicitly configured value that 2026.8.1 no longer ignores
     also changes the identity. For either path, check the affected agent with
     `openclaw memory status --deep --agent <id>`, then rebuild when ready with
     `openclaw memory index --force --agent <id>`.
@@ -343,7 +344,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     | ----------------- | -------- | --------------- | ----------------------- |
     | `local.modelPath` | `string` | auto-downloaded | Path to GGUF model file |
 
-    Install the official llama.cpp provider, then choose llama.cpp once in
+    Install the official [llama.cpp provider](/plugins/llama-cpp), then choose llama.cpp once in
     interactive setup. OpenClaw installs a pinned, verified `llama-server` and
     writes its loopback `localService` configuration. Default model:
     `embeddinggemma-300m-qat-Q8_0.gguf` (~0.3 GB, auto-downloaded).
@@ -514,6 +515,8 @@ Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastes
 Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
 
 ---
+
+<a id="session-memory-search-experimental" />
 
 ## Session memory search
 
@@ -734,7 +737,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 | `frequency`                             | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                |
 | `model`                                 | `string`  | default model | Optional Dream Diary subagent model override                                                                                     |
 | `phases.deep.maxPromotedSnippetTokens`  | `number`  | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
-| `phases.deep.maxPriorEntryLossFraction` | `number`  | `0.25`        | Reject a consolidation rewrite that removes more than this fraction of prior entries                                             |
+| `phases.deep.maxPriorEntryLossFraction` | `number`  | `0.25`        | Reject consolidation or append compaction that removes more than this fraction of prior entries                                  |
 
 ### Example
 

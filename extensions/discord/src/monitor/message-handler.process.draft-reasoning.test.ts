@@ -1,4 +1,5 @@
 // Discord message processing coverage split by cohesive behavior.
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
   createNoQueuedDispatchResult,
@@ -36,7 +37,14 @@ async function runReasoningProgressDraft(
   const draftStream = createMockDraftStreamForTest();
 
   dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-    await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+    await params?.replyOptions?.onItemEvent?.(
+      projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
+    );
+    await params?.replyOptions?.onToolStart?.({
+      toolCallId: "exec-1",
+      name: "exec",
+      phase: "start",
+    });
     for (const payload of payloads) {
       await params?.replyOptions?.onReasoningStream?.(
         typeof payload === "string" ? { text: payload } : payload,
@@ -56,17 +64,44 @@ async function runReasoningProgressDraft(
 }
 
 describe("processDiscordMessage draft streaming reasoning", () => {
-  it("skips empty apply_patch starts and renders the patch summary", async () => {
+  it("keeps one prepared Apply Patch row when the raw summary arrives", async () => {
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onToolStart?.({ name: "apply_patch", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.(
+        projectAgentToolActivity({ toolCallId: "patch-1", name: "apply_patch", phase: "start" }),
+      );
+      await params?.replyOptions?.onToolStart?.({
+        toolCallId: "patch-1",
+        name: "apply_patch",
+        phase: "start",
+      });
       await params?.replyOptions?.onPatchSummary?.({
+        toolCallId: "patch-1",
         phase: "end",
         name: "apply_patch",
         summary: "1 modified",
         modified: ["extensions/discord/src/monitor/message-handler.draft-preview.ts"],
       });
+      await params?.replyOptions?.onItemEvent?.(
+        projectAgentToolActivity({
+          toolCallId: "patch-1",
+          name: "apply_patch",
+          phase: "result",
+          status: "completed",
+          result: {
+            details: {
+              summary: {
+                added: [],
+                modified: ["extensions/discord/src/monitor/message-handler.draft-preview.ts"],
+                deleted: [],
+              },
+            },
+          },
+        }),
+      );
+      await elapseProgressDraftStartDelay();
       return createNoQueuedDispatchResult();
     });
 
@@ -84,12 +119,9 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-preview.ts",
-      { complete: true },
-    );
-    const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates.join("\n")).not.toContain("Apply Patch");
+    expect(draftStream.update).toHaveBeenCalledExactlyOnceWith("Clawing...\n\n🩹 Apply Patch", {
+      complete: true,
+    });
   });
 
   it("shows reasoning text instead of a bare Reasoning progress line", async () => {
@@ -97,7 +129,14 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.(
+        projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
+      );
+      await params?.replyOptions?.onToolStart?.({
+        toolCallId: "exec-1",
+        name: "exec",
+        phase: "start",
+      });
       await params?.replyOptions?.onItemEvent?.({
         kind: "analysis",
         title: "Reasoning",
@@ -123,7 +162,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _Reading the event projector_",
+      "Clawing...\n\n🛠️ Exec: running\n🧠 _Reading the event projector_",
       { complete: true },
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
@@ -136,7 +175,14 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.(
+        projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
+      );
+      await params?.replyOptions?.onToolStart?.({
+        toolCallId: "exec-1",
+        name: "exec",
+        phase: "start",
+      });
       await params?.replyOptions?.onReasoningStream?.({
         text: "Private planning",
         requiresReasoningProgressOptIn: true,
@@ -160,7 +206,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🛠️ Exec\n• done", {
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🛠️ Exec: running\n• done", {
       complete: true,
     });
     expect(draftStream.update.mock.calls.map((call) => call[0]).join("\n")).not.toContain(
@@ -168,36 +214,11 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     );
   });
 
-  it("accumulates reasoning deltas in Discord progress drafts", async () => {
-    const draftStream = await runReasoningProgressDraft([
-      "Considering",
-      " plugin",
-      " installation",
-      "!",
-    ]);
-
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _Considering plugin installation!_",
-      { complete: true },
-    );
-    const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates.join("\n")).not.toContain("• _!_");
-  });
-
   it("preserves raw reasoning content that starts with Thinking", async () => {
     const draftStream = await runReasoningProgressDraft(["Thinking", " through the install plan"]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _Thinking through the install plan_",
-      { complete: true },
-    );
-  });
-
-  it("preserves raw reasoning content that starts with Thinking colon", async () => {
-    const draftStream = await runReasoningProgressDraft(["Thinking: compare install paths"]);
-
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _Thinking: compare install paths_",
+      "Clawing...\n\n🛠️ Exec: running\n🧠 _Thinking through the install plan_",
       { complete: true },
     );
   });
@@ -206,7 +227,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const draftStream = await runReasoningProgressDraft(["Reasoning: compare install paths"]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _Reasoning: compare install paths_",
+      "Clawing...\n\n🛠️ Exec: running\n🧠 _Reasoning: compare install paths_",
       { complete: true },
     );
   });
@@ -215,7 +236,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const draftStream = await runReasoningProgressDraft(["Reasoning:\ncompare install paths"]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _compare install paths_",
+      "Clawing...\n\n🛠️ Exec: running\n🧠 _compare install paths_",
       { complete: true },
     );
   });
@@ -224,7 +245,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const draftStream = await runReasoningProgressDraft(["Thinking...\n\n_compare install paths_"]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _compare install paths_",
+      "Clawing...\n\n🛠️ Exec: running\n🧠 _compare install paths_",
       { complete: true },
     );
   });
@@ -233,16 +254,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const draftStream = await runReasoningProgressDraft(["Thinking\nthrough the plan"]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _Thinking through the plan_",
-      { complete: true },
-    );
-  });
-
-  it("appends raw reasoning chunks that start with Thinking", async () => {
-    const draftStream = await runReasoningProgressDraft(["I was ", "Thinking about the plan"]);
-
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _I was Thinking about the plan_",
+      "Clawing...\n\n🛠️ Exec: running\n🧠 _Thinking through the plan_",
       { complete: true },
     );
   });
@@ -251,19 +263,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const draftStream = await runReasoningProgressDraft(["I was ", "Thinking... through the plan"]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _I was Thinking... through the plan_",
-      { complete: true },
-    );
-  });
-
-  it("appends raw reasoning chunks that start with Reasoning colon", async () => {
-    const draftStream = await runReasoningProgressDraft([
-      "I was ",
-      "Reasoning: through edge cases",
-    ]);
-
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _I was Reasoning: through edge cases_",
+      "Clawing...\n\n🛠️ Exec: running\n🧠 _I was Thinking... through the plan_",
       { complete: true },
     );
   });
@@ -303,9 +303,23 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onToolStart?.({ name: "first", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.(
+        projectAgentToolActivity({ toolCallId: "first-1", name: "first", phase: "start" }),
+      );
+      await params?.replyOptions?.onToolStart?.({
+        toolCallId: "first-1",
+        name: "first",
+        phase: "start",
+      });
       await params?.replyOptions?.onAssistantMessageStart?.();
-      await params?.replyOptions?.onToolStart?.({ name: "second", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.(
+        projectAgentToolActivity({ toolCallId: "second-1", name: "second", phase: "start" }),
+      );
+      await params?.replyOptions?.onToolStart?.({
+        toolCallId: "second-1",
+        name: "second",
+        phase: "start",
+      });
       await elapseProgressDraftStartDelay();
       return createNoQueuedDispatchResult();
     });
@@ -324,9 +338,12 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🧩 First\n🧩 Second", {
-      complete: true,
-    });
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Shelling\n\n🧩 First: running\n🧩 Second: running",
+      {
+        complete: true,
+      },
+    );
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 

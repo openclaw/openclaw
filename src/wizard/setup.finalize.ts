@@ -16,10 +16,6 @@ import {
   buildGatewayInstallPlan,
   gatewayInstallErrorHint,
 } from "../commands/daemon-install-helpers.js";
-import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  GATEWAY_DAEMON_RUNTIME_OPTIONS,
-} from "../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
@@ -61,6 +57,7 @@ import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
+import { resolveOnboardingGatewayRuntime } from "./setup.service-runtime.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
 
 type FinalizeOnboardingOptions = {
@@ -146,22 +143,6 @@ async function closeSessionGatewayForOnboarding(params: {
   await params.sessionGateway.close({ reason: params.reason }).catch((error: unknown) => {
     params.runtime.error(formatErrorMessage(error));
   });
-}
-
-function getLocalizedGatewayDaemonRuntimeOptions() {
-  return GATEWAY_DAEMON_RUNTIME_OPTIONS.map((option) => ({
-    hint: t(
-      option.value === "node"
-        ? "wizard.finalize.daemonRuntimeNodeHint"
-        : "wizard.finalize.daemonRuntimeBunHint",
-    ),
-    label: t(
-      option.value === "node"
-        ? "wizard.finalize.daemonRuntimeNode"
-        : "wizard.finalize.daemonRuntimeBun",
-    ),
-    value: option.value,
-  }));
 }
 
 const loadSearchSetupModule = createLazyRuntimeModule(() => import("../flows/search-setup.js"));
@@ -253,23 +234,6 @@ export async function ensureGatewayServiceForOnboarding(params: {
 }): Promise<{ gateway: GatewayServiceSetupOutcome; containerWithoutUserSystemd: boolean }> {
   const { flow, opts, nextConfig, settings, prompter, runtime } = params;
 
-  const withWizardProgress = async <T>(
-    label: string,
-    optionsLocal: { doneMessage?: string | (() => string | undefined) },
-    work: (progress: { update: (message: string) => void }) => Promise<T>,
-  ): Promise<T> => {
-    const progress = prompter.progress(label);
-    try {
-      return await work(progress);
-    } finally {
-      progress.stop(
-        typeof optionsLocal.doneMessage === "function"
-          ? optionsLocal.doneMessage()
-          : optionsLocal.doneMessage,
-      );
-    }
-  };
-
   if (isGatewayExternallySupervised()) {
     await prompter.note(
       formatExternalSupervisorActionRequired("manage the gateway service"),
@@ -345,165 +309,153 @@ export async function ensureGatewayServiceForOnboarding(params: {
   }
 
   let gateway: GatewayServiceSetupOutcome = { status: "ready", action: "reused" };
-  if (installDaemon) {
-    const daemonRuntime =
-      flow === "quickstart"
-        ? DEFAULT_GATEWAY_DAEMON_RUNTIME
-        : await prompter.select({
-            message: t("wizard.finalize.daemonRuntime"),
-            options: getLocalizedGatewayDaemonRuntimeOptions(),
-            initialValue: opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME,
-          });
-    if (flow === "quickstart") {
-      await prompter.note(
-        t("wizard.finalize.quickstartNodeRuntime"),
-        t("wizard.finalize.daemonRuntime"),
+  const service = resolveGatewayService();
+  if (params.loadedAction === "resume") {
+    try {
+      const started = await startGatewayService(
+        service,
+        { env: process.env, stdout: process.stdout },
+        settings.port,
       );
-    }
-    const service = resolveGatewayService();
-    if (params.loadedAction === "resume") {
-      try {
-        const started = await startGatewayService(
-          service,
-          { env: process.env, stdout: process.stdout },
-          settings.port,
-        );
-        if (started.outcome === "already-running" || started.outcome === "started") {
-          return {
-            gateway: {
-              status: "ready",
-              action: started.outcome === "already-running" ? "reused" : "started",
-            },
-            containerWithoutUserSystemd,
-          };
-        }
-        if (started.outcome === "repair-required") {
-          return {
-            gateway: {
-              status: "failed",
-              error: formatGatewayServiceStartRepairIssues(started.issues),
-            },
-            containerWithoutUserSystemd,
-          };
-        }
-      } catch (error) {
+      if (started.outcome === "already-running" || started.outcome === "started") {
         return {
-          gateway: { status: "failed", error: formatErrorMessage(error) },
+          gateway: {
+            status: "ready",
+            action: started.outcome === "already-running" ? "reused" : "started",
+          },
           containerWithoutUserSystemd,
         };
       }
-    }
-    const loaded = await service.isLoaded({ env: process.env });
-    let shouldInstall = !loaded;
-    if (loaded) {
-      const action =
-        (params.loadedAction === "restart" ? params.loadedAction : undefined) ??
-        (await prompter.select({
-          message: t("wizard.finalize.alreadyInstalled"),
-          options: [
-            { value: "restart", label: t("wizard.finalize.restart") },
-            { value: "reinstall", label: t("wizard.finalize.reinstall") },
-            { value: "skip", label: t("common.skip") },
-          ],
-        }));
-      if (action === "restart") {
-        let restartDoneMessage = t("wizard.finalize.gatewayServiceRestarted");
-        await withWizardProgress(
-          t("wizard.finalize.gatewayService"),
-          { doneMessage: () => restartDoneMessage },
-          async (progress) => {
-            progress.update(t("wizard.finalize.gatewayServiceRestarting"));
-            const restartResult = await service.restart({
-              env: process.env,
-              stdout: process.stdout,
-            });
-            const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
-            restartDoneMessage = restartStatus.scheduled
-              ? t("wizard.finalize.gatewayServiceRestartScheduled")
-              : t("wizard.finalize.gatewayServiceRestarted");
-            gateway = {
-              status: "ready",
-              action: restartStatus.scheduled ? "restart-scheduled" : "restarted",
-            };
+      if (started.outcome === "repair-required") {
+        return {
+          gateway: {
+            status: "failed",
+            error: formatGatewayServiceStartRepairIssues(started.issues),
           },
-        );
-      } else if (action === "reinstall") {
-        // Preserve the old definition so the install owner can replace or restore it.
-        shouldInstall = true;
+          containerWithoutUserSystemd,
+        };
       }
-    }
-
-    if (shouldInstall) {
-      const progress = prompter.progress(t("wizard.finalize.gatewayService"));
-      let installError: string | null = null;
-      const installWarnings: Array<{ message: string; title?: string }> = [];
-      const flushInstallWarnings = async () => {
-        let warning: (typeof installWarnings)[number] | undefined;
-        // Remove before awaiting so a rejected note is not replayed when the
-        // outer catch drains warnings that remain in the planner's queue.
-        while ((warning = installWarnings.shift()) !== undefined) {
-          await prompter.note(warning.message, warning.title);
-        }
+    } catch (error) {
+      return {
+        gateway: { status: "failed", error: formatErrorMessage(error) },
+        containerWithoutUserSystemd,
       };
+    }
+  }
+  const loaded = await service.isLoaded({ env: process.env });
+  let shouldInstall = !loaded;
+  if (loaded) {
+    const action =
+      (params.loadedAction === "restart" ? params.loadedAction : undefined) ??
+      (await prompter.select({
+        message: t("wizard.finalize.alreadyInstalled"),
+        options: [
+          { value: "restart", label: t("wizard.finalize.restart") },
+          { value: "reinstall", label: t("wizard.finalize.reinstall") },
+          { value: "skip", label: t("common.skip") },
+        ],
+      }));
+    if (action === "restart") {
+      let restartDoneMessage = t("wizard.finalize.gatewayServiceRestarted");
+      const progress = prompter.progress(t("wizard.finalize.gatewayService"));
       try {
-        progress.update(t("wizard.finalize.gatewayServicePreparing"));
-        const tokenResolution = await resolveGatewayInstallToken({
-          config: nextConfig,
+        progress.update(t("wizard.finalize.gatewayServiceRestarting"));
+        const restartResult = await service.restart({
           env: process.env,
+          stdout: process.stdout,
         });
-        for (const warning of tokenResolution.warnings) {
-          await prompter.note(warning, "Gateway service");
-        }
-        if (tokenResolution.unavailableReason) {
-          installError = [
-            t("wizard.finalize.gatewayInstallBlocked"),
-            tokenResolution.unavailableReason,
-            t("wizard.finalize.gatewayInstallFixAuth"),
-          ].join(" ");
-        } else {
-          const existingCommand = await service.readCommand(process.env).catch(() => null);
-          const { programArguments, workingDirectory, environment, environmentValueSources } =
-            await buildGatewayInstallPlan({
-              env: process.env,
-              port: settings.port,
-              runtime: daemonRuntime,
-              existingCommand,
-              warn: (message, title) => {
-                installWarnings.push({ message, title });
-              },
-              config: nextConfig,
-            });
-          await flushInstallWarnings();
-
-          progress.update(t("wizard.finalize.gatewayServiceInstalling"));
-          await service.install({
-            env: process.env,
-            stdout: process.stdout,
-            programArguments,
-            workingDirectory,
-            environment,
-            environmentValueSources,
-          });
-          gateway = { status: "ready", action: "installed" };
-        }
-      } catch (err) {
-        await flushInstallWarnings();
-        installError = formatErrorMessage(err);
+        const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
+        restartDoneMessage = restartStatus.scheduled
+          ? t("wizard.finalize.gatewayServiceRestartScheduled")
+          : t("wizard.finalize.gatewayServiceRestarted");
+        gateway = {
+          status: "ready",
+          action: restartStatus.scheduled ? "restart-scheduled" : "restarted",
+        };
       } finally {
-        progress.stop(
-          installError
-            ? t("wizard.finalize.gatewayServiceInstallFailed")
-            : t("wizard.finalize.gatewayServiceInstalled"),
-        );
+        progress.stop(restartDoneMessage);
       }
-      if (installError) {
-        await prompter.note(
-          t("wizard.finalize.gatewayServiceInstallFailedWithError", { error: installError }),
-          "Gateway",
-        );
-        await prompter.note(gatewayInstallErrorHint(), "Gateway");
-        gateway = { status: "failed", error: installError };
+    } else if (action === "reinstall") {
+      // Preserve the old definition so the install owner can replace or restore it.
+      shouldInstall = true;
+    }
+  }
+
+  if (shouldInstall) {
+    const progress = prompter.progress(t("wizard.finalize.gatewayService"));
+    let installError: string | null = null;
+    const installWarnings: Array<{ message: string; title?: string }> = [];
+    const flushInstallWarnings = async () => {
+      let warning: (typeof installWarnings)[number] | undefined;
+      // Remove before awaiting so a rejected note is not replayed when the
+      // outer catch drains warnings that remain in the planner's queue.
+      while ((warning = installWarnings.shift()) !== undefined) {
+        await prompter.note(warning.message, warning.title);
       }
+    };
+    try {
+      progress.update(t("wizard.finalize.gatewayServicePreparing"));
+      const tokenResolution = await resolveGatewayInstallToken({
+        config: nextConfig,
+        env: process.env,
+      });
+      for (const warning of tokenResolution.warnings) {
+        await prompter.note(warning, "Gateway service");
+      }
+      if (tokenResolution.unavailableReason) {
+        installError = [
+          t("wizard.finalize.gatewayInstallBlocked"),
+          tokenResolution.unavailableReason,
+          t("wizard.finalize.gatewayInstallFixAuth"),
+        ].join(" ");
+      } else {
+        const existingCommand = await service.readCommand(process.env);
+        const selection = await resolveOnboardingGatewayRuntime({
+          env: process.env,
+          existingCommand,
+          runtime: opts.daemonRuntime,
+          flow,
+          prompter,
+        });
+        const plan = await buildGatewayInstallPlan({
+          env: selection.env,
+          port: settings.port,
+          runtime: selection.runtime,
+          pinnedRuntimePath: selection.pinnedRuntimePath,
+          existingCommand,
+          warn: (message, title) => {
+            installWarnings.push({ message, title });
+          },
+          config: nextConfig,
+        });
+        await flushInstallWarnings();
+
+        progress.update(t("wizard.finalize.gatewayServiceInstalling"));
+        await service.install({
+          env: process.env,
+          stdout: process.stdout,
+          ...plan,
+          runtimePinUpdate: selection.runtimePinUpdate,
+        });
+        gateway = { status: "ready", action: "installed" };
+      }
+    } catch (err) {
+      await flushInstallWarnings();
+      installError = formatErrorMessage(err);
+    } finally {
+      progress.stop(
+        installError
+          ? t("wizard.finalize.gatewayServiceInstallFailed")
+          : t("wizard.finalize.gatewayServiceInstalled"),
+      );
+    }
+    if (installError) {
+      await prompter.note(
+        t("wizard.finalize.gatewayServiceInstallFailedWithError", { error: installError }),
+        "Gateway",
+      );
+      await prompter.note(gatewayInstallErrorHint(), "Gateway");
+      gateway = { status: "failed", error: installError };
     }
   }
 
@@ -856,6 +808,7 @@ export async function finalizeSetupWizard(
     const webSearchProvider = nextConfig.tools?.web?.search?.provider;
     const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
     const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
+    let webSearchLines: string[];
     if (webSearchProvider) {
       const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadSearchSetupModule();
       const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
@@ -893,65 +846,45 @@ export async function finalizeSetupWizard(
                 ? t("wizard.finalize.webSearchAuthProfile", { provider: authProviderLabel })
                 : undefined;
       if (!entry) {
-        await prompter.note(
-          [
-            t("wizard.finalize.webSearchProviderUnavailable", { provider: label }),
-            t("wizard.finalize.webSearchUnavailableAction"),
-            `  ${formatCliCommand("openclaw configure --section web")}`,
-            "",
-            t("wizard.finalize.webDocs"),
-          ].join("\n"),
-          t("wizard.finalize.webSearchTitle"),
-        );
+        webSearchLines = [
+          t("wizard.finalize.webSearchProviderUnavailable", { provider: label }),
+          t("wizard.finalize.webSearchUnavailableAction"),
+          `  ${formatCliCommand("openclaw configure --section web")}`,
+          "",
+        ];
       } else if (webSearchEnabled !== false && entry.requiresCredential === false) {
         // Keyless providers (e.g. Parallel Search (Free), DuckDuckGo, Ollama) need
         // no API key — report ready rather than the credential-required warning.
-        await prompter.note(
-          [
-            t("wizard.finalize.webSearchKeyFree"),
-            "",
-            t("wizard.finalize.webSearchProvider", { provider: label }),
-            t("wizard.finalize.webDocs"),
-          ].join("\n"),
-          t("wizard.finalize.webSearchTitle"),
-        );
+        webSearchLines = [
+          t("wizard.finalize.webSearchKeyFree"),
+          "",
+          t("wizard.finalize.webSearchProvider", { provider: label }),
+        ];
       } else if (webSearchEnabled !== false && hasCredential) {
-        await prompter.note(
-          [
-            t("wizard.finalize.webSearchEnabled"),
-            "",
-            t("wizard.finalize.webSearchProvider", { provider: label }),
-            ...(keySource ? [keySource] : []),
-            t("wizard.finalize.webDocs"),
-          ].join("\n"),
-          t("wizard.finalize.webSearchTitle"),
-        );
+        webSearchLines = [
+          t("wizard.finalize.webSearchEnabled"),
+          "",
+          t("wizard.finalize.webSearchProvider", { provider: label }),
+          ...(keySource ? [keySource] : []),
+        ];
       } else if (entry.requiresCredential !== false && !hasCredential) {
-        await prompter.note(
-          [
-            t("wizard.finalize.webSearchNoKey", { provider: label }),
-            t("wizard.finalize.webSearchNeedsKey"),
-            `  ${formatCliCommand("openclaw configure --section web")}`,
-            "",
-            t("wizard.finalize.webSearchGetKey", {
-              url: entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web",
-            }),
-            t("wizard.finalize.webDocs"),
-          ].join("\n"),
-          t("wizard.finalize.webSearchTitle"),
-        );
+        webSearchLines = [
+          t("wizard.finalize.webSearchNoKey", { provider: label }),
+          t("wizard.finalize.webSearchNeedsKey"),
+          `  ${formatCliCommand("openclaw configure --section web")}`,
+          "",
+          t("wizard.finalize.webSearchGetKey", {
+            url: entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web",
+          }),
+        ];
       } else {
-        await prompter.note(
-          [
-            t("wizard.finalize.webSearchDisabled", { provider: label }),
-            t("wizard.finalize.webSearchReenable", {
-              command: formatCliCommand("openclaw configure --section web"),
-            }),
-            "",
-            t("wizard.finalize.webDocs"),
-          ].join("\n"),
-          t("wizard.finalize.webSearchTitle"),
-        );
+        webSearchLines = [
+          t("wizard.finalize.webSearchDisabled", { provider: label }),
+          t("wizard.finalize.webSearchReenable", {
+            command: formatCliCommand("openclaw configure --section web"),
+          }),
+          "",
+        ];
       }
     } else {
       // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
@@ -961,34 +894,24 @@ export async function finalizeSetupWizard(
         (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
       );
       if (legacyDetected) {
-        await prompter.note(
-          [
-            t("wizard.finalize.webSearchAutoDetected", { provider: legacyDetected.label }),
-            t("wizard.finalize.webDocs"),
-          ].join("\n"),
-          t("wizard.finalize.webSearchTitle"),
-        );
+        webSearchLines = [
+          t("wizard.finalize.webSearchAutoDetected", { provider: legacyDetected.label }),
+        ];
       } else if (codexNativeSummary) {
-        await prompter.note(
-          [
-            t("wizard.finalize.managedWebSearchSkipped"),
-            codexNativeSummary,
-            t("wizard.finalize.webDocs"),
-          ].join("\n"),
-          t("wizard.finalize.webSearchTitle"),
-        );
+        webSearchLines = [t("wizard.finalize.managedWebSearchSkipped"), codexNativeSummary];
       } else {
-        await prompter.note(
-          [
-            t("wizard.finalize.webSearchSkipped"),
-            `  ${formatCliCommand("openclaw configure --section web")}`,
-            "",
-            t("wizard.finalize.webDocs"),
-          ].join("\n"),
-          t("wizard.finalize.webSearchTitle"),
-        );
+        webSearchLines = [
+          t("wizard.finalize.webSearchSkipped"),
+          `  ${formatCliCommand("openclaw configure --section web")}`,
+          "",
+        ];
       }
     }
+
+    await prompter.note(
+      [...webSearchLines, t("wizard.finalize.webDocs")].join("\n"),
+      t("wizard.finalize.webSearchTitle"),
+    );
 
     if (codexNativeSummary) {
       await prompter.note(

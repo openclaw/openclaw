@@ -15,7 +15,9 @@ import {
 import {
   assertReliabilityForcedExit,
   waitForReliabilityWorkerExit,
+  waitForReliabilityWorkerMessage,
 } from "./sqlite-reliability-process.js";
+import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
 
 type RestoreCrashPoint = "after-publish" | "before-publish";
 type RestoreExit =
@@ -74,46 +76,17 @@ async function waitForWorkerReady(params: {
   child: ChildProcess;
   readStderr: () => string;
 }): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite restore worker did not become ready.${formatReliabilityStderr(params.readStderr())}`,
-        ),
-      );
-    }, 30_000);
-    const onMessage = (message: unknown) => {
-      if (
-        message &&
-        typeof message === "object" &&
-        (message as { kind?: unknown }).kind === "ready"
-      ) {
-        cleanup();
-        resolve();
-      }
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite restore worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
-        ),
-      );
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      params.child.off("message", onMessage);
-      params.child.off("error", onError);
-      params.child.off("exit", onExit);
-    };
-    params.child.on("message", onMessage);
-    params.child.on("error", onError);
-    params.child.on("exit", onExit);
+  await waitForReliabilityWorkerMessage({
+    child: params.child,
+    matches: (message) =>
+      message !== null &&
+      typeof message === "object" &&
+      (message as { kind?: unknown }).kind === "ready",
+    timeoutMs: 30_000,
+    timeoutMessage: () =>
+      `SQLite restore worker did not become ready.${formatReliabilityStderr(params.readStderr())}`,
+    exitMessage: (code, signal) =>
+      `SQLite restore worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
   });
 }
 
@@ -124,43 +97,17 @@ async function waitForCrashPoint(params: {
   scratchPath: string;
   targetPath: string;
 }): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite restore worker did not reach ${params.crashPoint}.${formatReliabilityStderr(params.readStderr())}`,
-        ),
-      );
-    }, RESTORE_TIMEOUT_MS);
-    const onMessage = (message: unknown) => {
+  await waitForReliabilityWorkerMessage({
+    child: params.child,
+    matches: (message) => {
       const event = message as { crashPoint?: unknown; kind?: unknown } | undefined;
-      if (event?.kind === "crash-point" && event.crashPoint === params.crashPoint) {
-        cleanup();
-        resolve();
-      }
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite restore worker exited before ${params.crashPoint}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
-        ),
-      );
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      params.child.off("message", onMessage);
-      params.child.off("error", onError);
-      params.child.off("exit", onExit);
-    };
-    params.child.on("message", onMessage);
-    params.child.on("error", onError);
-    params.child.on("exit", onExit);
+      return event?.kind === "crash-point" && event.crashPoint === params.crashPoint;
+    },
+    timeoutMs: RESTORE_TIMEOUT_MS,
+    timeoutMessage: () =>
+      `SQLite restore worker did not reach ${params.crashPoint}.${formatReliabilityStderr(params.readStderr())}`,
+    exitMessage: (code, signal) =>
+      `SQLite restore worker exited before ${params.crashPoint}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
   });
 
   const outerStagingEntries = listOuterRestoreStagingEntries(params.scratchPath);
@@ -220,7 +167,7 @@ async function runCrashPoint(params: {
     ],
     {
       cwd: process.cwd(),
-      execArgv: ["--import", "tsx"],
+      execArgv: [...resolveForwardedNodeCompilerArgs(), "--import", "tsx"],
       serialization: "json",
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     },

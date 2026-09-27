@@ -1,45 +1,41 @@
 // Inspects local gateway processes for status and diagnostics.
-import fsSync from "node:fs";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { readGatewayLockProcessCmdline } from "./gateway-lock-process.js";
+import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
+import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { findGatewayPidsOnPortSync as findUnixGatewayPidsOnPortSync } from "./restart-stale-pids.js";
-import { spawnPsSync } from "./spawn-ps.js";
-import {
-  readWindowsListeningPidsOnPortSync,
-  readWindowsProcessArgsSync,
-} from "./windows-port-pids.js";
+import { readWindowsListeningPidsOnPortSync } from "./windows-port-pids.js";
 
-// Gateway process helpers verify argv before signaling or reporting listener
-// PIDs so stale port owners cannot be mistaken for OpenClaw.
-const GATEWAY_PS_PROBE_TIMEOUT_MS = 1_000;
+// Verify argv or current recorded ownership before signaling or reporting
+// listener PIDs so stale port owners cannot be mistaken for OpenClaw.
 
-/** Read command argv for a PID using the current platform's process APIs. */
-function readGatewayProcessArgsSync(pid: number): string[] | null {
-  if (process.platform === "linux") {
-    try {
-      return parseProcCmdline(fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8"));
-    } catch {
-      return null;
-    }
+type GatewayProcessContext = { env?: NodeJS.ProcessEnv; port?: number };
+
+function inspectGatewayProcess(pid: number, context: GatewayProcessContext) {
+  try {
+    const options = { ...context, pid, command: "gateway" };
+    const identity = classifyOpenClawArgv(
+      readGatewayLockProcessCmdline(pid, process.platform, 1000, undefined, context.env) ?? [],
+      options,
+    );
+    return identity.kind === "openclaw" || process.platform !== "win32"
+      ? identity
+      : classifyOpenClawArgv([], {
+          ...options,
+          owner: readGatewayOwnerLease({ ...context, current: true }),
+        });
+  } catch {
+    return { kind: "unclassified", reason: "process ownership inspection failed" } as const;
   }
-  if (process.platform === "darwin") {
-    const ps = spawnPsSync(["-o", "command=", "-p", String(pid)], GATEWAY_PS_PROBE_TIMEOUT_MS);
-    if (ps.error || ps.status !== 0) {
-      return null;
-    }
-    const command = ps.stdout.trim();
-    return command ? command.split(/\s+/) : null;
-  }
-  if (process.platform === "win32") {
-    return readWindowsProcessArgsSync(pid);
-  }
-  return null;
 }
 
-/** Signal a PID only after its argv matches a gateway process. */
-export function signalVerifiedGatewayPidSync(pid: number, signal: "SIGTERM" | "SIGUSR1"): void {
-  const args = readGatewayProcessArgsSync(pid);
-  if (!args || !isGatewayArgv(args, { allowGatewayBinary: true })) {
+/** Reinspect argv or current recorded ownership immediately before signaling. */
+export function signalVerifiedGatewayPidSync(
+  pid: number,
+  signal: "SIGTERM" | "SIGUSR1",
+  context: GatewayProcessContext = {},
+): void {
+  if (inspectGatewayProcess(pid, context).kind !== "openclaw") {
     throw new Error(`refusing to signal non-gateway process pid ${pid}`);
   }
   try {
@@ -54,7 +50,10 @@ export function signalVerifiedGatewayPidSync(pid: number, signal: "SIGTERM" | "S
 }
 
 /** Find listener PIDs on `port` and keep only verified gateway processes. */
-export function findVerifiedGatewayListenerPidsOnPortSync(port: number): number[] {
+export function findVerifiedGatewayListenerPidsOnPortSync(
+  port: number,
+  context: { env?: NodeJS.ProcessEnv } = {},
+): number[] {
   const rawPids =
     process.platform === "win32"
       ? readWindowsListeningPidsOnPortSync(port)
@@ -62,10 +61,7 @@ export function findVerifiedGatewayListenerPidsOnPortSync(port: number): number[
 
   return uniqueValues(rawPids)
     .filter((pid): pid is number => Number.isFinite(pid) && pid > 0 && pid !== process.pid)
-    .filter((pid) => {
-      const args = readGatewayProcessArgsSync(pid);
-      return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
-    });
+    .filter((pid) => inspectGatewayProcess(pid, { ...context, port }).kind === "openclaw");
 }
 
 /** Format gateway PIDs for human-facing diagnostics. */

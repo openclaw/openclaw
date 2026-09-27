@@ -42,6 +42,7 @@ export function executePluginCommand(params: {
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
   senderIsOwner?: boolean;
+  assertOwnerCurrent?: () => void;
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
   /** Host-resolved agent authority for plugin-owned or non-agent-shaped session keys. */
   agentId?: string;

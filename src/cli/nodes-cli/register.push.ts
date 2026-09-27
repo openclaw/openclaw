@@ -23,7 +23,11 @@ export function registerNodesPushCommand(nodes: Command) {
       .action(async (opts: NodesRpcOpts & { environment?: string }) => {
         await runNodesCommand("push", async () => {
           const environment = normalizeOptionalLowercaseString(opts.environment);
-          if (opts.environment && environment !== "sandbox" && environment !== "production") {
+          if (
+            opts.environment !== undefined &&
+            environment !== "sandbox" &&
+            environment !== "production"
+          ) {
             throw new Error("invalid --environment (use sandbox|production)");
           }
           const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");

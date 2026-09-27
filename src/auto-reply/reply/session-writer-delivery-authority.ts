@@ -1,6 +1,7 @@
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
 import {
   getReplyPayloadMetadata,
   type ReplyPayload,
@@ -30,7 +31,7 @@ function isAuthorityCurrent(
         storePath,
       })
     : undefined;
-  return Boolean(
+  const writerIsCurrent = Boolean(
     current &&
     current.sessionId === authority.expectedSessionId &&
     (authority.expectedLifecycleRevision === undefined ||
@@ -38,6 +39,24 @@ function isAuthorityCurrent(
     (authority.expectedWriterRunId === undefined ||
       current.activeWriterRunId === authority.expectedWriterRunId),
   );
+  if (!writerIsCurrent || !authority.harnessCompletion) {
+    return writerIsCurrent;
+  }
+  const claim = authority.harnessCompletion;
+  if (
+    !current ||
+    claim.requesterSessionKey !== authority.sessionKey ||
+    (authority.agentId !== undefined && claim.requesterAgentId !== authority.agentId)
+  ) {
+    return false;
+  }
+  try {
+    // A queued final owns transport custody after execution cleanup. Keep the
+    // exact task/outcome and session fence, not the now-retired input claim.
+    return Boolean(getOwedHarnessCompletionTask(claim, current));
+  } catch {
+    return false;
+  }
 }
 
 /** Revalidates a settled final payload against the latest committed session writer. */

@@ -15,10 +15,8 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createWorkerSessionPlacementStore } from "../../../../src/gateway/worker-environments/placement-store.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../../../src/state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../../../src/state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../../../src/test-utils/database-cleanup.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
@@ -119,11 +117,11 @@ async function createQaSession(
   return { agentId: session.agentId, sessionId: session.sessionId, sessionKey: session.key };
 }
 
-function seedPlacement(
+async function seedPlacement(
   store: ReturnType<typeof createWorkerSessionPlacementStore>,
   session: SessionIdentity,
 ) {
-  let placement = store.startDispatch(session);
+  let placement = await store.startDispatch(session);
   placement = store.transition({
     sessionId: session.sessionId,
     from: "requested",
@@ -154,7 +152,7 @@ function seedPlacement(
   });
 }
 
-function seedUnknownWorkerState(
+async function seedUnknownWorkerState(
   stateDir: string,
   lost: SessionIdentity,
   isolated: SessionIdentity,
@@ -189,8 +187,18 @@ function seedUnknownWorkerState(
   const database = openOpenClawStateDatabase({ path: databasePath });
   try {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-    seedPlacement(store, lost);
-    let other = store.startDispatch(isolated);
+    database.db
+      .prepare(
+        "UPDATE worker_environments SET state = 'attached', attached_session_ids_json = ? WHERE environment_id = ?",
+      )
+      .run(JSON.stringify([lost.sessionId]), ENVIRONMENT_ID);
+    await seedPlacement(store, lost);
+    database.db
+      .prepare(
+        "UPDATE worker_environments SET state = 'orphaned', attached_session_ids_json = '[]' WHERE environment_id = ?",
+      )
+      .run(ENVIRONMENT_ID);
+    let other = await store.startDispatch(isolated);
     other = store.transition({
       sessionId: isolated.sessionId,
       from: "requested",
@@ -204,7 +212,7 @@ function seedUnknownWorkerState(
       recoveryError: INDEPENDENT_REASON,
     });
   } finally {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
   }
 }
 
@@ -239,7 +247,7 @@ async function runProof(options: ProducerOptions) {
   const gatewayOwner = createQaGatewayChild();
   let gateway: Gateway | undefined;
   let verdict: Record<string, unknown> | undefined;
-  let proofError: unknown;
+  let proofError: Error | undefined;
   try {
     bus = await startQaBusServer({ state });
     mock = await startQaMockOpenAiServer();
@@ -282,7 +290,7 @@ async function runProof(options: ProducerOptions) {
     }
 
     await gateway.restartAfterStateMutation(async ({ stateDir }) => {
-      seedUnknownWorkerState(stateDir, lost, isolated);
+      await seedUnknownWorkerState(stateDir, lost, isolated);
     });
     const first = await waitForFailedPlacement(gateway, lost);
     const independent = await waitForFailedPlacement(gateway, isolated);
@@ -292,9 +300,13 @@ async function runProof(options: ProducerOptions) {
     ) {
       throw new Error("session placements did not retain their distinct environment identities");
     }
-    const firstReason = String(first.terminalReason ?? "");
-    if (!firstReason.startsWith("cloud worker disappeared:") || firstReason.length > 1_024) {
-      throw new Error(`unexpected disappearance reason: ${firstReason}`);
+    const firstReason = first.terminalReason;
+    if (
+      typeof firstReason !== "string" ||
+      !firstReason.startsWith("cloud worker disappeared:") ||
+      firstReason.length > 1_024
+    ) {
+      throw new Error(`unexpected disappearance reason: ${JSON.stringify(firstReason)}`);
     }
     if (independent.terminalReason !== INDEPENDENT_REASON || firstReason === INDEPENDENT_REASON) {
       throw new Error("independent session placements leaked terminal reasons");
@@ -362,7 +374,10 @@ async function runProof(options: ProducerOptions) {
       "utf8",
     );
   } catch (error) {
-    proofError = error;
+    proofError =
+      error instanceof Error
+        ? error
+        : new Error("cloud worker disappearance proof failed", { cause: error });
   } finally {
     const cleanup = await Promise.allSettled([
       stopQaGatewayFixture(gatewayOwner),

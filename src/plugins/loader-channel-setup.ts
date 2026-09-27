@@ -1,4 +1,5 @@
 // Builds channel setup metadata from plugin light surfaces.
+import { mergeChannelPluginSection } from "../channels/plugins/merge-plugin-section.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -6,31 +7,6 @@ import type { ChannelPluginLoadIntent } from "./loader-types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi } from "./types.js";
-
-function mergeChannelPluginSection<T>(
-  baseValue: T | undefined,
-  overrideValue: T | undefined,
-): T | undefined {
-  if (
-    baseValue &&
-    overrideValue &&
-    typeof baseValue === "object" &&
-    typeof overrideValue === "object"
-  ) {
-    const merged = {
-      ...(baseValue as Record<string, unknown>),
-    };
-    for (const [key, value] of Object.entries(overrideValue as Record<string, unknown>)) {
-      if (value !== undefined) {
-        merged[key] = value;
-      }
-    }
-    return {
-      ...merged,
-    } as T;
-  }
-  return overrideValue ?? baseValue;
-}
 
 export function mergeSetupRuntimeChannelPlugin(
   runtimePlugin: ChannelPlugin,

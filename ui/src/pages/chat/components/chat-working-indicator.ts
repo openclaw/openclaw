@@ -1,7 +1,9 @@
 import { html, nothing } from "lit";
+import type { ThemeMascot } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import "../../../components/elapsed-time.ts";
 import "../../../components/working-phrase.ts";
 import { icons } from "../../../components/icons.ts";
+import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
@@ -49,6 +51,8 @@ function outputTokensLabel(outputTokens: number): string {
 export function renderChatWorkingIndicator(
   part: Extract<ChatItem, { kind: "reading-indicator" }>,
   options: {
+    mascot?: ThemeMascot;
+    workingPhrases?: readonly string[];
     waitingApproval?: boolean;
     startupLabel?: string;
     outputTokens?: number | null;
@@ -56,6 +60,7 @@ export function renderChatWorkingIndicator(
   } = {},
 ) {
   const waitingApproval = options.waitingApproval === true;
+  const neutral = (options.mascot ?? currentThemeBranding().mascot) === "none";
   const continuation = options.presentation === "continuation";
   const statusLabel = waitingApproval
     ? t("chat.waitingForApproval")
@@ -77,12 +82,16 @@ export function renderChatWorkingIndicator(
           ? nothing
           : html`
               <div
-                class="chat-bubble chat-reading-indicator ${selectWorkingClawSurprise(part.key, {
-                  eligible: !waitingApproval,
-                })}"
+                class="chat-bubble chat-reading-indicator ${
+                  neutral
+                    ? "chat-reading-indicator--neutral"
+                    : selectWorkingClawSurprise(part.key, {
+                        eligible: !waitingApproval,
+                      })
+                }"
                 aria-hidden="true"
               >
-                ${icons.claw}
+                ${neutral ? html`<span></span><span></span><span></span>` : icons.claw}
               </div>
             `
       }
@@ -112,6 +121,7 @@ export function renderChatWorkingIndicator(
                     aria-hidden="true"
                     .startMs=${part.startedAt}
                     .seed=${part.key}
+                    .phrases=${options.workingPhrases}
                   ></openclaw-working-phrase>
                 `
               : nothing
@@ -143,7 +153,9 @@ export function renderTurnRecapRow(
       ${
         continuation
           ? nothing
-          : html`<span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>`
+          : html`<span class="chat-tasks-status__claw" aria-hidden="true"
+              >${currentThemeBranding().mascot === "none" ? icons.mark : icons.claw}</span
+            >`
       }
       <span>${t("chat.turnRecap.doneIn", { duration })}</span>
       ${

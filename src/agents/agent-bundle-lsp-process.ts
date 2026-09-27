@@ -23,8 +23,9 @@ const defaultLspSpawnDependencies: LspSpawnDependencies = {
 
 export async function spawnLspServerProcess(
   config: StdioMcpServerLaunchConfig,
-  dependencies: LspSpawnDependencies = defaultLspSpawnDependencies,
+  options: { abortSignal?: AbortSignal; dependencies?: LspSpawnDependencies } = {},
 ): Promise<OwnedStdioProcess> {
+  const dependencies = options.dependencies ?? defaultLspSpawnDependencies;
   const mergedEnv = dependencies.sanitizeHostExecEnv({
     baseEnv: process.env,
     overrides: config.env ?? null,
@@ -40,6 +41,7 @@ export async function spawnLspServerProcess(
     env: mergedEnv,
     exactEnv: true,
     cwd: config.cwd,
+    abortSignal: options.abortSignal,
     // Stable LSP config permits unresolved Windows wrappers to use Node's shell parsing.
     ...(invocation.shell === true ? { windowsShell: true } : {}),
   });

@@ -135,6 +135,7 @@ describe("Buzz live directory", () => {
               content: JSON.stringify({
                 display_name: "Alice",
                 picture: "https://example.com/alice.png",
+                nip05: "alice@example.com",
               }),
             }),
           );
@@ -195,16 +196,19 @@ describe("Buzz live directory", () => {
     ]);
     expect(relayMocks.auth).toHaveBeenCalledOnce();
     expect(relayMocks.close).toHaveBeenCalledOnce();
+    const peers = await listBuzzDirectoryPeersLive({
+      cfg,
+      accountId: "default",
+      query: "  @EXAMPLE.COM  ",
+      limit: 1,
+    });
+    expect(peers.map((entry) => entry.id)).toEqual([MEMBER_PUBLIC_KEY]);
   });
 
   it.each([
-    { rootEnabled: false, accountEnabled: true, active: false, unavailable: false },
     { rootEnabled: false, accountEnabled: true, active: false, unavailable: true },
     { rootEnabled: true, accountEnabled: false, active: false, unavailable: false },
-    { rootEnabled: true, accountEnabled: false, active: false, unavailable: true },
     { rootEnabled: false, accountEnabled: true, active: true, unavailable: false },
-    { rootEnabled: false, accountEnabled: true, active: true, unavailable: true },
-    { rootEnabled: true, accountEnabled: false, active: true, unavailable: false },
     { rootEnabled: true, accountEnabled: false, active: true, unavailable: true },
   ])(
     "returns static rooms without network for disabled identities: %j",

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigUiHints } from "../../api/types.ts";
 import {
   isSettingsNavigationRouteVisible,
@@ -60,6 +61,7 @@ function resolveStaticSettingsBlock(
 // dead-end.
 const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, () => readonly string[]>> = {
   memory: memoryVisibleSchemaKeys,
+  "plugin-settings": () => ["enabled", "allow", "deny", "load", "slots"],
   updates: () => ["channel", "checkOnStart", "auto"],
 };
 
@@ -95,6 +97,7 @@ export function findSettingsSearchBlocks(params: {
   value: Record<string, unknown> | null;
   uiHints: ConfigUiHints;
   identityAvailable?: boolean;
+  multipleProfiles?: boolean;
   basePath?: string;
   canAdmin?: boolean;
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
@@ -108,6 +111,7 @@ export function findSettingsSearchBlocks(params: {
       ? STATIC_SETTINGS_BLOCKS.filter(
           (block) =>
             (params.identityAvailable || !block.requiresIdentity) &&
+            (params.multipleProfiles || !block.requiresMultipleProfiles) &&
             (params.nativeDeviceSettings || !block.requiresNativeDeviceSettings) &&
             isSettingsNavigationRouteVisible(
               block.routeId,
@@ -120,10 +124,7 @@ export function findSettingsSearchBlocks(params: {
           )
           .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
       : [];
-  const schema =
-    params.schema && typeof params.schema === "object" && !Array.isArray(params.schema)
-      ? (params.schema as JsonSchema)
-      : null;
+  const schema = isRecord(params.schema) ? (params.schema as JsonSchema) : null;
   if (!schema || schemaType(schema) !== "object" || !schema.properties) {
     return matches;
   }
@@ -185,22 +186,24 @@ export function findSettingsSearchBlocks(params: {
     }
     const encodedKey = encodeURIComponent(key);
     const editorHash = `#config-section-${encodedKey}`;
-    const destination = { search: "", hash: editorHash };
-    matches.push(
-      routeId === "memory"
+    matches.push({
+      routeId,
+      label: meta?.label ?? sectionSchema.title ?? key,
+      ...(routeId === "memory"
         ? {
-            routeId,
-            label: meta?.label ?? sectionSchema.title ?? key,
             pathname: pathForMemoryTab("settings", params.basePath),
-            hash: destination.hash,
+            hash: editorHash,
           }
-        : {
-            routeId,
-            label: meta?.label ?? sectionSchema.title ?? key,
-            search: `?section=${encodedKey}${matchesAdvanced || key === "wizard" ? "&advanced=1" : ""}`,
-            hash: destination.hash,
-          },
-    );
+        : routeId === "plugin-settings"
+          ? {
+              search: "?tab=advanced",
+              hash: "#plugin-settings-advanced",
+            }
+          : {
+              search: `?section=${encodedKey}${matchesAdvanced || key === "wizard" ? "&advanced=1" : ""}`,
+              hash: editorHash,
+            }),
+    });
   }
   return matches;
 }

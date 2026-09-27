@@ -42,18 +42,13 @@ function dynamicModelScope(
       : "unscoped";
 }
 
-export function createGithubCopilotDynamicModelHooks(params: {
-  discoveryEnabled(config?: OpenClawConfig): boolean;
-}) {
+export function createGithubCopilotDynamicModelHooks() {
   const preparedDynamicModels = new WeakMap<
     object,
     Map<string, ReadonlyMap<string, ProviderRuntimeModel>>
   >();
 
   async function resolveCatalogAuth(ctx: GithubCopilotCatalogContext) {
-    if (!params.discoveryEnabled(ctx.config)) {
-      return null;
-    }
     const auth = await resolveFirstGithubToken(ctx);
     return auth.githubToken ? auth : null;
   }
@@ -161,7 +156,6 @@ export function createGithubCopilotDynamicModelHooks(params: {
     prepareDynamicModel,
     resolveDynamicModel,
     runCatalog,
-    preferRuntimeResolvedModel: ({ config }: { config?: OpenClawConfig }) =>
-      params.discoveryEnabled(config),
+    preferRuntimeResolvedModel: () => true,
   };
 }

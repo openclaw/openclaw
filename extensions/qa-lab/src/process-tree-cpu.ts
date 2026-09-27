@@ -1,5 +1,5 @@
-// Qa Lab plugin module implements process tree cpu behavior.
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import {
   asNonNegativeFiniteNumber,
   parseStrictFiniteNumber,
@@ -59,6 +59,17 @@ function parsePsRssBytes(raw: string): number | null {
     return null;
   }
   return Math.round(rssKiB * 1024);
+}
+
+function readLinuxProcessRssBytes(pid: number): number | null {
+  try {
+    const status = readFileSync(`/proc/${pid}/status`, "utf8");
+    const match = status.match(/^VmRSS:[ \t]+(\d+)[ \t]+kB[ \t]*$/mu);
+    const rssKiB = parseStrictNonNegativeInteger(match?.[1]);
+    return rssKiB === undefined ? null : rssKiB * 1024;
+  } catch {
+    return null;
+  }
 }
 
 function parseWindowsProcessCpuTimeMs(params: {
@@ -131,7 +142,8 @@ function parseWindowsProcessTreeSnapshot(raw: string): ProcessTreeSnapshot | nul
 function collectProcessTreeMetric(
   rootPid: number,
   childrenByParent: Map<number, number[]>,
-  metricByPid: Map<number, number>,
+  metricByPid: Map<number, number | null>,
+  readRequiredMetric?: (pid: number) => number | null,
 ): number | null {
   if (!metricByPid.has(rootPid)) {
     return null;
@@ -146,7 +158,11 @@ function collectProcessTreeMetric(
       continue;
     }
     seen.add(pid);
-    total += metricByPid.get(pid) ?? 0;
+    const metric = readRequiredMetric ? readRequiredMetric(pid) : (metricByPid.get(pid) ?? 0);
+    if (metric === null) {
+      return null;
+    }
+    total += metric;
     for (const childPid of childrenByParent.get(pid) ?? []) {
       stack.push(childPid);
     }
@@ -209,18 +225,28 @@ function readProcessTreeMetric(params: {
     return null;
   }
 
+  // ps can report zero after a leader exits while its threads still hold memory.
+  // Keep that process in the tree and require an available VmRSS for every member.
+  const readRequiredMetric =
+    process.platform === "linux" && params.posixColumn === "rss="
+      ? readLinuxProcessRssBytes
+      : undefined;
   const childrenByParent = new Map<number, number[]>();
-  const metricByPid = new Map<number, number>();
+  const metricByPid = new Map<number, number | null>();
   for (const line of result.stdout.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/u);
+    const match = line.trim().match(/^(\d+)\s+(\d+)(?:\s+(\S+))?$/u);
     if (!match) {
       continue;
     }
     const [, pidRaw, ppidRaw, metricRaw] = match;
     const pid = Number(pidRaw);
     const ppid = Number(ppidRaw);
-    const metric = params.parsePosixMetric(metricRaw ?? "");
-    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || metric === null) {
+    const metric = readRequiredMetric ? null : params.parsePosixMetric(metricRaw ?? "");
+    if (
+      !Number.isInteger(pid) ||
+      !Number.isInteger(ppid) ||
+      (!readRequiredMetric && metric === null)
+    ) {
       continue;
     }
     metricByPid.set(pid, metric);
@@ -229,7 +255,7 @@ function readProcessTreeMetric(params: {
     childrenByParent.set(ppid, children);
   }
 
-  return collectProcessTreeMetric(rootPid, childrenByParent, metricByPid);
+  return collectProcessTreeMetric(rootPid, childrenByParent, metricByPid, readRequiredMetric);
 }
 
 export function readProcessTreeCpuMs(rootPid: number | null | undefined): number | null {

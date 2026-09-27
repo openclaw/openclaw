@@ -1,7 +1,7 @@
-// Diagnostic support export helpers write support bundles to disk.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { INCLUDE_KEY } from "../config/includes.js";
@@ -11,7 +11,7 @@ import { redactConfigObject } from "../config/redact-snapshot.js";
 import { buildConfigSchemaCore } from "../config/schema.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
+import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
 import {
@@ -82,11 +82,9 @@ type DiagnosticSupportExportManifest = {
   };
 };
 
-type DiagnosticSupportExportFile = DiagnosticSupportBundleFile;
-
 type DiagnosticSupportExportArtifact = {
   manifest: DiagnosticSupportExportManifest;
-  files: DiagnosticSupportExportFile[];
+  files: DiagnosticSupportBundleFile[];
 };
 
 export type WriteDiagnosticSupportExportResult = {
@@ -181,7 +179,7 @@ type SupportSnapshotStatus =
 
 type CollectedSupportSnapshot = {
   summary: SupportSnapshotStatus;
-  file?: DiagnosticSupportExportFile;
+  file?: DiagnosticSupportBundleFile;
 };
 
 function normalizePositiveInteger(value: unknown, fallback: number): number {
@@ -329,6 +327,7 @@ function readConfigExport(options: {
   const redactedConfigPath = redactPathForSupport(options.configPath, options);
   let stat: fs.Stats | undefined;
   try {
+    assertNotUpdateCapturePath(options.configPath, options.stateDir);
     stat = fs.statSync(options.configPath);
     const { buffer } = readRegularFileSync({
       filePath: options.configPath,
@@ -411,10 +410,21 @@ function readStabilityBundle(
   if (target === false) {
     return { status: "missing", dir: "$OPENCLAW_STATE_DIR/logs/stability" };
   }
-  if (target === undefined || target === "latest") {
-    return readLatestDiagnosticStabilityBundleSync({ stateDir });
+  try {
+    if (target !== undefined && target !== "latest") {
+      assertNotUpdateCapturePath(target, stateDir);
+    }
+    const result =
+      target === undefined || target === "latest"
+        ? readLatestDiagnosticStabilityBundleSync({ stateDir })
+        : readDiagnosticStabilityBundleFileSync(target);
+    if (result.status === "found") {
+      assertNotUpdateCapturePath(result.path, stateDir);
+    }
+    return result;
+  } catch (error) {
+    return { status: "failed", error };
   }
-  return readDiagnosticStabilityBundleFileSync(target);
 }
 
 function sanitizeLogTail(tail: LogTailPayload, options: SupportRedactionContext): SanitizedLogTail {
@@ -528,6 +538,7 @@ async function collectSupportLogTail(params: {
       limit: params.limit,
       maxBytes: params.maxBytes,
     });
+    assertNotUpdateCapturePath(tail.file, params.redaction.stateDir);
     return sanitizeLogTail(tail, params.redaction);
   } catch (error) {
     return failedLogTail(error, params.redaction);
@@ -577,7 +588,7 @@ function renderSummary(params: {
       : `no stability bundle included (${params.stability.status})`;
   const configLine = params.config.exists
     ? `config shape included (${params.config.parseOk ? "parsed" : "parse failed"})`
-    : "config file not found";
+    : (params.config.error ?? "config file not found");
   const logTailLine =
     params.logTail.status === "failed"
       ? `sanitized log tail unavailable (${params.logTail.error})`
@@ -720,7 +731,7 @@ async function buildDiagnosticSupportExport(
     status: statusSnapshot.summary,
     health: healthSnapshot.summary,
   };
-  const files: DiagnosticSupportExportFile[] = [
+  const files: DiagnosticSupportBundleFile[] = [
     jsonSupportBundleFile("diagnostics.json", diagnostics),
     jsonSupportBundleFile("config/shape.json", config.shape),
     jsonSupportBundleFile("config/sanitized.json", config.sanitized ?? null),

@@ -137,6 +137,12 @@ describe("qa transport registry", () => {
     expect(qaTransportSupportsModuleFlows([], { channelId: "selected", driver: "live" })).toBe(
       false,
     );
+    expect(
+      qaTransportSupportsModuleFlows(undefined, { channelId: "discord", driver: "crabline" }),
+    ).toBe(true);
+    expect(
+      qaTransportSupportsModuleFlows(undefined, { channelId: "telegram", driver: "crabline" }),
+    ).toBe(false);
   });
 
   it("rejects module-flow support when the created adapter lacks prepareFlow", async () => {

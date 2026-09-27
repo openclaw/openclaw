@@ -8,6 +8,7 @@ export async function prepareGatewayShutdownRuntime() {
     },
     { runGlobalGatewayStopSafely },
     { flushPendingSessionsChangedEvents },
+    { drainSessionEventPublications },
     { closeMcpLoopbackServer },
     { stopTaskRegistryMaintenance },
     { markRestartAbortedMainSessions },
@@ -16,11 +17,13 @@ export async function prepareGatewayShutdownRuntime() {
     { stopGmailWatcher },
     { disposeAllCodeModeRuns },
     { closeProviderTransportDispatcherPool },
-    { clearActivePluginRegistry, prepareActivePluginRegistryShutdown },
+    { prepareActivePluginRegistryShutdown },
+    { waitForPluginCacheRetirement },
   ] = await Promise.all([
     import("./server-close.runtime.js"),
     import("../plugins/hook-runner-global.js"),
     import("./server-methods/session-change-event.js"),
+    import("./session-event-prepared-row.js"),
     import("./mcp-http.js"),
     import("../tasks/task-registry.maintenance.js"),
     import("../agents/main-session-recovery/main-session-restart-recovery.js"),
@@ -30,6 +33,7 @@ export async function prepareGatewayShutdownRuntime() {
     import("../agents/code-mode-state.js"),
     import("../agents/provider-transport-dispatcher-pool.js"),
     import("../plugins/runtime.js"),
+    import("../plugins/plugin-cache.js"),
   ]);
   await prepareActivePluginRegistryShutdown();
 
@@ -40,6 +44,7 @@ export async function prepareGatewayShutdownRuntime() {
     runGatewayClosePrelude,
     runGlobalGatewayStopSafely,
     flushPendingSessionsChangedEvents,
+    drainSessionEventPublications,
     closeMcpLoopbackServer,
     stopTaskRegistryMaintenance,
     markRestartAbortedMainSessions,
@@ -48,7 +53,7 @@ export async function prepareGatewayShutdownRuntime() {
     stopGmailWatcher,
     disposeAllCodeModeRuns,
     closeProviderTransportDispatcherPool,
-    clearActivePluginRegistry,
+    waitForPluginCacheRetirement,
   };
 }
 

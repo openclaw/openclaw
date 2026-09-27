@@ -72,7 +72,7 @@ async function readExistingVectorModel(databasePath: string): Promise<string | n
     } catch (error) {
       failure ??= error;
     }
-    if (prepared && !prepared.cleanup()) {
+    if (prepared && !(await prepared.cleanupAsync())) {
       failure ??= new Error("Temporary SQLite inspection snapshot cleanup did not complete.");
     }
   }

@@ -1,4 +1,3 @@
-// Feishu plugin module implements bot sender name behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,

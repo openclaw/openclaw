@@ -298,6 +298,7 @@ describe("GatewayChatClient operator scopes", () => {
         token: "approved-tui-device-token",
         scopes: requestedScopes,
         env: undefined,
+        expectedToken: "cached-read-only-device-token",
       });
 
       const history = approved.client.loadHistory({ sessionKey: "main", limit: 20 });

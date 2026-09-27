@@ -37,6 +37,7 @@ export type FirstRunActivationReceipt = {
   gatewayUrl: string;
   agentId: string;
   modelRef: string | null;
+  modelTarget?: "utility";
   kind: string;
   deadlineMs: number;
   owner: string;
@@ -78,6 +79,7 @@ function activationOwner(
       connection.bootstrapToken,
       connection.bootstrapProfile ?? "",
       deviceToken ?? "",
+      ...(receipt.modelTarget ? [receipt.modelTarget] : []),
     ];
     const encoder = new TextEncoder();
     const framed = values.map((value) => `${encoder.encode(value).length}:${value}`).join("|");
@@ -128,6 +130,7 @@ export function readFirstRunActivationReceipt(
       typeof receipt.gatewayUrl !== "string" ||
       typeof receipt.agentId !== "string" ||
       (receipt.modelRef !== null && typeof receipt.modelRef !== "string") ||
+      (receipt.modelTarget !== undefined && receipt.modelTarget !== "utility") ||
       typeof receipt.kind !== "string" ||
       typeof receipt.deadlineMs !== "number" ||
       !Number.isFinite(receipt.deadlineMs) ||
@@ -157,7 +160,12 @@ export function firstRunActivationDeadline(kind: string): number {
 
 export function persistFirstRunActivationReceipt(
   context: ActivationContext,
-  candidate: { kind: string; modelRef?: string | null; deadlineMs?: number },
+  candidate: {
+    kind: string;
+    modelRef?: string | null;
+    modelTarget?: "utility";
+    deadlineMs?: number;
+  },
 ): FirstRunActivationReceipt | null {
   const storage = getSafeLocalStorage();
   if (!storage || context.gateway.snapshot.phase !== "connected") {
@@ -169,6 +177,7 @@ export function persistFirstRunActivationReceipt(
       gatewayUrl: gatewayCredentialScope(context.gateway.connection.gatewayUrl),
       agentId: context.agentSelection.state.selectedId ?? "",
       modelRef: candidate.modelRef ?? null,
+      ...(candidate.modelTarget ? { modelTarget: candidate.modelTarget } : {}),
       kind: candidate.kind,
       deadlineMs: candidate.deadlineMs ?? firstRunActivationDeadline(candidate.kind),
     };

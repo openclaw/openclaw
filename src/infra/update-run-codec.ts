@@ -7,6 +7,8 @@ import { escapeRegExp } from "../shared/regexp.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
+import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
+import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
@@ -18,37 +20,38 @@ const RETAINED_STEP_NAMES = [
   "notice:verifying",
   "previous generation restoration",
   "post-update verification",
+  "diagnostic:database snapshot",
+  "diagnostic:database migration writes",
+  "diagnostic:database rollback",
+  "task-delivery-recovery",
   "driver:adopted",
   "driver:identity-unavailable",
   "reconcile:abandoned",
   "reconcile:superseded",
   "reconcile:acknowledged",
+  "reconcile:settle",
 ];
-const JSON_FIELDS = [
-  "origin",
-  "target",
-  "before",
-  "after",
-  "steps",
-  "verification",
-  "repair",
-] as const;
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
+  busyTimeoutMs?: number;
   redactPaths?: readonly string[];
 };
 
-function mapJsonText(value: unknown, transform: (text: string) => string): unknown {
+function mapJsonText(
+  value: unknown,
+  transform: (text: string, key?: string) => string,
+  key?: string,
+): unknown {
   if (typeof value === "string") {
-    return transform(value);
+    return transform(value, key);
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => mapJsonText(entry, transform));
+    return value.map((entry) => mapJsonText(entry, transform, key));
   }
   if (isRecord(value)) {
     return Object.fromEntries(
       Object.keys(value)
         .toSorted()
-        .map((key) => [key, mapJsonText(value[key], transform)]),
+        .map((field) => [field, mapJsonText(value[field], transform, field)]),
     );
   }
   return value;
@@ -63,7 +66,11 @@ export function isRetainedStep(item: unknown): boolean {
 }
 
 /** Phase history, notice custody, and restoration proof survive diagnostic eviction. */
-function boundedJson(input: unknown, maxBytes = JSON_BYTES): string {
+function boundedJson(
+  input: unknown,
+  maxBytes = JSON_BYTES,
+  preservedTextFields?: ReadonlySet<string>,
+): string {
   let value = input;
   let json = JSON.stringify(value);
   while (Buffer.byteLength(json) > maxBytes) {
@@ -72,10 +79,16 @@ function boundedJson(input: unknown, maxBytes = JSON_BYTES): string {
       if (disposable >= 0) {
         value = value.toSpliced(disposable, 1);
       } else {
-        // Reserved identities and timestamps fit; discard optional diagnostics
-        // before losing phase history, notice custody, or restoration proof.
+        // Recovery details are the durable backup receipt, not optional diagnostics.
         const compacted = value.map((item) =>
-          isRecord(item) ? { ...item, detail: undefined } : item,
+          isRecord(item) &&
+          item.step !== "task-delivery-recovery" &&
+          item.step !== "diagnostic:database snapshot" &&
+          item.step !== "diagnostic:database migration writes" &&
+          item.step !== "diagnostic:database rollback" &&
+          !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
+            ? { ...item, detail: undefined, failureFacts: undefined }
+            : item,
         );
         if (JSON.stringify(compacted) === json) {
           throw new Error("Update run retained step metadata exceeds its byte limit");
@@ -84,27 +97,81 @@ function boundedJson(input: unknown, maxBytes = JSON_BYTES): string {
       }
     } else if (isRecord(value)) {
       const object = value;
-      const key = Object.keys(object)
+      const arrayField = Object.keys(object)
         .toSorted()
         .find((field) => Array.isArray(object[field]) && object[field].length > 0);
-      const array = key ? object[key] : undefined;
-      if (key && Array.isArray(array)) {
-        value = { ...object, [key]: array.slice(1) };
+      const array = arrayField ? object[arrayField] : undefined;
+      if (arrayField && Array.isArray(array)) {
+        value = { ...object, [arrayField]: array.slice(1) };
       } else {
-        value = mapJsonText(value, (text) => truncateUtf16Safe(text, Math.floor(text.length / 2)));
+        value = mapJsonText(value, (text, key) =>
+          key && preservedTextFields?.has(key)
+            ? text
+            : truncateUtf16Safe(text, Math.floor(text.length / 2)),
+        );
       }
     } else {
       throw new Error("Update run metadata exceeds its bounded schema");
     }
-    json = JSON.stringify(value);
+    const nextJson = JSON.stringify(value);
+    if (nextJson === json) {
+      throw new Error("Update run retained metadata exceeds its byte limit");
+    }
+    json = nextJson;
   }
   return json;
 }
 
 function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
-  const { driver, previousDrivers, ...diagnostics } = origin;
-  const identities = JSON.stringify({ driver, previousDrivers });
-  const boundedDiagnostics = boundedJson(diagnostics, JSON_BYTES - Buffer.byteLength(identities));
+  const {
+    driver,
+    previousDrivers,
+    updateRecoveryCapture,
+    requester,
+    sessionKey,
+    deliveryContext,
+    campaignId,
+    ...admissionDiagnostics
+  } = origin;
+  // Operational receipts are not expendable diagnostics. Keep them exact inside
+  // the existing database byte budget; oversized sets fail before replacing a row.
+  const retained = JSON.stringify({ driver, previousDrivers, updateRecoveryCapture });
+  if (Buffer.byteLength(retained) > JSON_BYTES) {
+    throw new Error("Update run recovery receipts exceed the origin byte limit");
+  }
+  const routing = { requester, sessionKey, deliveryContext, campaignId };
+  const hasAdmission = origin.admission !== undefined || origin.candidateAdmission !== undefined;
+  // Admission diagnostics cannot shorten routing; both yield to recovery receipts.
+  const identities = hasAdmission
+    ? JSON.stringify({ driver, previousDrivers, updateRecoveryCapture, ...routing })
+    : retained;
+  const diagnostics = hasAdmission ? admissionDiagnostics : { ...admissionDiagnostics, ...routing };
+  // Merging removes the diagnostic braces and needs a comma only when identities exist.
+  const diagnosticBudget =
+    JSON_BYTES - Buffer.byteLength(identities) + 2 - (identities === "{}" ? 0 : 1);
+  if (
+    diagnostics.candidateAdmission?.warnings.length &&
+    Buffer.byteLength(JSON.stringify(diagnostics)) > diagnosticBudget
+  ) {
+    diagnostics.candidateAdmission = { ...diagnostics.candidateAdmission, warnings: [] };
+  }
+  const preservedTextFields = new Set([
+    "owner",
+    "verdict",
+    "status",
+    "code",
+    "name",
+    "candidateVersion",
+    "installedVersion",
+    "fallbackReason",
+  ]);
+  const minimumDiagnostics = JSON.stringify(
+    mapJsonText(diagnostics, (text, key) => (key && preservedTextFields.has(key) ? text : "")),
+  );
+  if (Buffer.byteLength(minimumDiagnostics) > diagnosticBudget) {
+    return retained;
+  }
+  const boundedDiagnostics = boundedJson(diagnostics, diagnosticBudget, preservedTextFields);
   return `{${[identities.slice(1, -1), boundedDiagnostics.slice(1, -1)].filter(Boolean).join(",")}}`;
 }
 
@@ -143,21 +210,34 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
         ]
       : [];
   });
-  // Process identities are exact observations, never redacted diagnostic strings.
-  const { driver, previousDrivers, ...originDiagnostics } = input.origin;
+  // Process identities and recovery receipts are operational facts, not diagnostics.
+  const { driver, previousDrivers, updateRecoveryCapture, ...originDiagnostics } = input.origin;
   const record = UpdateRunRecordSchema.parse(
-    mapJsonText({ ...input, origin: originDiagnostics }, (value) => {
-      let text = redactSensitiveText(value, { mode: "tools" });
-      for (const [pattern, replacement] of redactPaths) {
-        text = text.replace(pattern, () => replacement);
-      }
-      return truncateUtf16Safe(text, 1024);
-    }),
+    mapJsonText(
+      {
+        ...input,
+        origin: originDiagnostics,
+        steps: input.steps.map((step) => ({
+          ...step,
+          ...(step.failureFacts
+            ? { failureFacts: normalizeUpdateFailureFacts(step.failureFacts, env) }
+            : {}),
+        })),
+      },
+      (value) => {
+        let text = redactSensitiveText(value, { mode: "tools" });
+        for (const [pattern, replacement] of redactPaths) {
+          text = text.replace(pattern, () => replacement);
+        }
+        return truncateUtf16Safe(text, UPDATE_RUN_TEXT_LIMIT);
+      },
+    ),
   );
   record.origin = UpdateRunRecordSchema.shape.origin.parse({
     ...record.origin,
     driver,
     previousDrivers,
+    updateRecoveryCapture,
   });
   return {
     run_id: record.runId,
@@ -178,23 +258,4 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     finished_at_ms: record.finishedAtMs,
     downtime_ms: record.downtimeMs,
   };
-}
-
-export function decodeRun(row: UpdateRuns): UpdateRunRecord {
-  const metadata = Object.fromEntries(
-    JSON_FIELDS.map((field) => [field, JSON.parse(row[`${field}_json`])]),
-  );
-  return UpdateRunRecordSchema.parse({
-    ...metadata,
-    runId: row.run_id,
-    createdAtMs: row.created_at_ms,
-    updatedAtMs: row.updated_at_ms,
-    trigger: row.trigger,
-    phase: row.phase,
-    status: row.status,
-    reason: row.reason,
-    confirmedAtMs: row.confirmed_at_ms,
-    finishedAtMs: row.finished_at_ms,
-    downtimeMs: row.downtime_ms,
-  });
 }

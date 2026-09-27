@@ -1,4 +1,3 @@
-// Slack plugin module implements token behavior.
 import type { AuthTestResponse } from "@slack/web-api";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 

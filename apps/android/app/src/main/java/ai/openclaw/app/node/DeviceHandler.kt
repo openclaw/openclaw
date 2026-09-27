@@ -27,6 +27,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
 import java.util.Locale
+import kotlin.math.roundToInt
 
 private const val DEFAULT_DEVICE_APPS_LIMIT = 100
 private const val MAX_DEVICE_APPS_LIMIT = 200
@@ -111,9 +112,6 @@ private data class DeviceAppsRequest(
   val limit: Int,
 )
 
-/**
- * Gateway device command adapter for Android status, info, permission, and health snapshots.
- */
 class DeviceHandler internal constructor(
   private val appContext: Context,
   private val smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
@@ -138,16 +136,12 @@ class DeviceHandler internal constructor(
     val temperatureC: Double?,
   )
 
-  /** Returns battery, storage, network, and uptime state for device.status. */
   fun handleDeviceStatus(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(statusPayloadJson())
 
-  /** Returns stable Android hardware, OS, app, and locale metadata for device.info. */
   fun handleDeviceInfo(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(infoPayloadJson())
 
-  /** Returns permission and promptability state for Android capabilities exposed to the gateway. */
   fun handleDevicePermissions(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(permissionsPayloadJson())
 
-  /** Returns coarse device health for memory, power, thermal, battery, and security patch state. */
   fun handleDeviceHealth(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(healthPayloadJson())
 
   fun handleDeviceApps(paramsJson: String?): GatewaySession.InvokeResult {
@@ -194,7 +188,13 @@ class DeviceHandler internal constructor(
       put(
         "battery",
         buildJsonObject {
-          battery.levelFraction?.let { put("level", JsonPrimitive(it)) }
+          // `level` is a normalized 0.0–1.0 fraction of full charge (the shared
+          // OpenClawBatteryStatusPayload contract; matches iOS). It is NOT a percentage:
+          // 1.0 == fully charged. `levelPercent` mirrors it as an integer 0–100.
+          battery.levelFraction?.let {
+            put("level", JsonPrimitive(it))
+            put("levelPercent", JsonPrimitive((it * 100.0).roundToInt()))
+          }
           put("state", JsonPrimitive(mapBatteryState(battery.status)))
           put("lowPowerModeEnabled", JsonPrimitive(powerManager?.isPowerSaveMode == true))
         },

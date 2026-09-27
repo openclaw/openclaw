@@ -15,6 +15,7 @@ type NodeSubscriptionManager = {
   subscribe: (nodeId: string, pairingGeneration: string, sessionKey: string) => void;
   unsubscribe: (nodeId: string, pairingGeneration: string, sessionKey: string) => void;
   unsubscribeAll: (nodeId: string, pairingGeneration?: string) => void;
+  hasSubscribers: (sessionKey: string) => boolean;
   updatePairingGeneration: (params: {
     nodeId: string;
     previousPairingGeneration: string;
@@ -228,6 +229,7 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     subscribe,
     unsubscribe,
     unsubscribeAll,
+    hasSubscribers: (sessionKey) => sessionSubscribers.has(sessionKey.trim()),
     updatePairingGeneration,
     sendToSession,
     sendToAllSubscribed,

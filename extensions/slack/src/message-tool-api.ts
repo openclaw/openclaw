@@ -106,14 +106,7 @@ export function describeSlackMessageTool({
             maxItems: 8,
             uniqueItems: true,
             description:
-              'Slack conversation-open: 1-8 other member IDs. One opens a DM; multiple open or reuse a group DM. Exclude the calling account. Use the returned target with action="send".',
-          }),
-        ),
-        teamId: Type.Optional(
-          Type.String({
-            pattern: "^T[A-Z0-9]+$",
-            description:
-              "Slack workspace for conversation-open. Defaults to the trusted current workspace for the selected account; required for detached Enterprise operations.",
+              'Slack conversation-open: 1-8 other member IDs. One opens a DM; multiple open or reuse a group DM. Exclude the calling account. Use the returned target with action="send". teamId defaults to the trusted current workspace for the selected account; detached Enterprise operations require it.',
           }),
         ),
       },

@@ -27,12 +27,15 @@ export type SessionBoardFace = "chat" | "dashboard";
 export type GatewayAgentRow = Pick<
   AgentSummary,
   | "id"
+  | "status"
+  | "admissionRefusal"
   | "kind"
   | "name"
   | "identity"
   | "workspace"
   | "workspaceGit"
   | "model"
+  | "utilityModel"
   | "agentRuntime"
   | "thinkingLevels"
   | "thinkingOptions"

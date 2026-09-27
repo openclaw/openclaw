@@ -171,7 +171,7 @@ class ChatQuestionHistoryLayoutTest {
       // IO publications reach the ViewModel bridges through Android Main.
       composeRule.runOnIdle {
         model.chatSessionKey.value == SESSION && !model.chatHistoryLoading.value &&
-          model.chatHealthOk.value && model.chatMessages.value.size == 3 && runtime.pendingRunCount.value == 0
+          model.chatHealthOk.value && model.chatMessages.value.size == 3 && model.pendingRunCount.value == 0
       }
     }
   }
@@ -237,7 +237,7 @@ class ChatQuestionHistoryLayoutTest {
   private fun question() =
     QuestionRecord(
       id = "history-question",
-      questions = listOf(Question("visibility", "Button test", "Can you select this button?", listOf(QuestionOption(ANSWER)), isOther = false)),
+      questions = listOf(Question("visibility", "Button test", "Can you select this button?", options = listOf(QuestionOption(ANSWER)), isOther = false)),
       agentId = "main",
       sessionKey = SESSION,
       createdAtMs = 1783555001000,

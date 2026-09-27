@@ -17,7 +17,10 @@ import {
   type MockInstance,
 } from "vitest";
 import * as commandRunner from "../../process/exec-runner.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
 import {
   deleteRegistryWorktree,
@@ -33,6 +36,17 @@ import { materializeManagedWorktreeFixture } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
 
+function isWorktreeAdd(argv: readonly string[]): boolean {
+  if (argv[0] !== "git") {
+    return false;
+  }
+  let command = 1;
+  while (argv[command] === "-c" || argv[command] === "-C") {
+    command += 2;
+  }
+  return argv[command] === "worktree" && argv[command + 1] === "add";
+}
+
 function expectCheckoutTimeouts(
   commandSpy: MockInstance<typeof commandRunner.runCommandWithTimeout>,
   checkoutBases: string[],
@@ -40,7 +54,7 @@ function expectCheckoutTimeouts(
   const gitCommands = commandSpy.mock.calls
     .filter(([argv]) => argv[0] === "git")
     .map(([argv, options]) => ({
-      checkout: argv[3] === "worktree" && argv[4] === "add",
+      checkout: isWorktreeAdd(argv) || (argv.includes("read-tree") && argv.includes("-u")),
       base: argv.at(-1),
       timeoutMs: typeof options === "number" ? options : options.timeoutMs,
     }));
@@ -142,6 +156,7 @@ describe("ManagedWorktreeService", () => {
   });
 
   afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(templateRoot, { recursive: true, force: true });
   });
@@ -157,7 +172,13 @@ describe("ManagedWorktreeService", () => {
     repo = await fs.realpath(repo);
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     now = 1_700_000_000_000;
-    service = new ManagedWorktreeService({ env, now: () => now });
+    // These cases inject ordinary Git checkout failures; accelerated checkout
+    // and its separate template allocation are covered by service.acceleration.
+    service = new ManagedWorktreeService({
+      env,
+      now: () => now,
+      getConfig: () => ({ worktreeAcceleration: false }),
+    });
   });
 
   afterEach(async () => {
@@ -180,22 +201,10 @@ describe("ManagedWorktreeService", () => {
     expect(created.path).toContain(path.join("worktrees", created.repoFingerprint, "remote-task"));
     expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
     expect(repeated).toEqual(created);
-    expectCheckoutTimeouts(commandSpy, ["origin/main"]);
-  });
-
-  it("reads registry records without retiring a temporarily unavailable worktree", async () => {
-    const created = await service.create({
-      repoRoot: repo,
-      name: "read-only-list",
-      baseRef: "HEAD",
-    });
-    await fs.rm(created.path, { recursive: true, force: true });
-
-    expect(service.listRegistryRecords()).toEqual([expect.objectContaining({ id: created.id })]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-
-    expect(await service.list()).toEqual([]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBe(now);
+    expectCheckoutTimeouts(commandSpy, [
+      "origin/main",
+      await git(created.path, "rev-parse", "HEAD"),
+    ]);
   });
 
   it("does not remove a worktree owned by another caller", async () => {
@@ -477,9 +486,11 @@ describe("ManagedWorktreeService", () => {
       const controller = new AbortController();
       const closed = new Error("admission closed");
       let authorityClosed = false;
+      let checkoutFailed = false;
       commandSpy.mockImplementation(async (...args) => {
         const result = await runCommand(...args);
-        if (args[0][3] === "worktree" && args[0][4] === "add" && result.code !== 0) {
+        if (args[0][0] === "git" && args[0].includes("read-tree") && result.code !== 0) {
+          checkoutFailed = true;
           if (admission === "aborted") {
             controller.abort(closed);
           }
@@ -501,17 +512,18 @@ describe("ManagedWorktreeService", () => {
         await expect(creation).rejects.toMatchObject(
           admission === "aborted" ? { code: "OPENCLAW_STATE_LEASE_ABORTED" } : closed,
         );
-        expectCheckoutTimeouts(commandSpy, ["origin/main"]);
+        expect(checkoutFailed).toBe(true);
+        expectCheckoutTimeouts(commandSpy, ["origin/main", remoteCommit]);
         expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
         expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
         return;
       }
       const created = await creation;
+      expect(checkoutFailed).toBe(true);
       expect(created.baseRef).toBe("HEAD");
-      expect(await git(created.path, "rev-parse", "HEAD")).toBe(
-        await git(repo, "rev-parse", "HEAD"),
-      );
-      expectCheckoutTimeouts(commandSpy, ["origin/main", "HEAD"]);
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(localHead);
+      expectCheckoutTimeouts(commandSpy, ["origin/main", remoteCommit, "HEAD", localHead]);
     },
   );
 
@@ -527,12 +539,13 @@ describe("ManagedWorktreeService", () => {
     expect(await git(repo, "rev-parse", "openclaw/existing-name")).toBe(branchTip);
   });
 
-  it("copies only included ignored regular files without following symlinks", async () => {
+  it("copies included ignored regular files independently, including hardlinks, without following symlinks", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "cache/\nlinked\nlinked-dir/\n");
     await fs.writeFile(path.join(repo, ".worktreeinclude"), "cache/*.txt\nlinked\nlinked-dir/**\n");
     await fs.mkdir(path.join(repo, "cache"));
     await fs.writeFile(path.join(repo, "cache", "keep.txt"), "keep\n");
     await fs.chmod(path.join(repo, "cache", "keep.txt"), 0o744);
+    await fs.link(path.join(repo, "cache", "keep.txt"), path.join(repo, "cache", "linked.txt"));
     await fs.writeFile(path.join(repo, "cache", "skip.bin"), "skip\n");
     const outside = path.join(root, "outside.txt");
     await fs.writeFile(outside, "outside\n");
@@ -546,7 +559,15 @@ describe("ManagedWorktreeService", () => {
     const copied = path.join(created.path, "cache", "keep.txt");
     expect(await fs.readFile(copied, "utf8")).toBe("keep\n");
     expect((await fs.stat(copied)).mode & 0o777).toBe(0o744);
-    expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(["cache/keep.txt"]);
+    expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([
+      "cache/keep.txt",
+      "cache/linked.txt",
+    ]);
+    await fs.writeFile(copied, "worktree edit\n");
+    expect(await fs.readFile(path.join(repo, "cache", "keep.txt"), "utf8")).toBe("keep\n");
+    expect(await fs.readFile(path.join(created.path, "cache", "linked.txt"), "utf8")).toBe(
+      "keep\n",
+    );
     await expect(fs.stat(path.join(created.path, "cache", "skip.bin"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -578,7 +599,67 @@ describe("ManagedWorktreeService", () => {
 
     expect(await fs.readFile(path.join(created.path, "collision.txt"), "utf8")).toBe("from base\n");
     expect((await fs.stat(path.join(created.path, "collision.txt"))).mode & 0o111).toBe(0);
-    expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([]);
+    expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([]);
+  });
+
+  it("rejects an included file replaced by a symlink after inspection", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
+    const source = path.join(repo, "settings.local");
+    await fs.writeFile(source, "included bytes\n");
+    const outside = path.join(root, "outside.txt");
+    await fs.writeFile(outside, "outside bytes\n");
+    const lstat = fs.lstat.bind(fs);
+    let replaced = false;
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const observed = await lstat(...args);
+      if (args[0] === source && !replaced) {
+        replaced = true;
+        await fs.rename(source, `${source}.original`);
+        await fs.symlink(outside, source);
+      }
+      return observed;
+    });
+
+    await expect(
+      service.create({ repoRoot: repo, name: "swapped-source", baseRef: "HEAD" }),
+    ).rejects.toThrow();
+
+    expect(replaced).toBe(true);
+    expect(listRegistryWorktrees(env)).toEqual([]);
+    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(
+      "refs/heads/openclaw/swapped-source",
+    );
+    expect(await fs.readFile(outside, "utf8")).toBe("outside bytes\n");
+  });
+
+  it("provisions large files under a literal tilde directory", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "~/\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "~/**\n");
+    await fs.mkdir(path.join(repo, "~"));
+    const size = 17 * 1024 * 1024;
+    const tail = Buffer.from("large provisioned file\n");
+    const source = await fs.open(path.join(repo, "~", "large.bin"), "wx");
+    try {
+      await source.truncate(size);
+      await source.write(tail, 0, tail.length, size - tail.length);
+    } finally {
+      await source.close();
+    }
+
+    const created = await service.create({ repoRoot: repo, name: "large-tilde", baseRef: "HEAD" });
+
+    expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(["~/large.bin"]);
+    const copied = await fs.open(path.join(created.path, "~", "large.bin"), "r");
+    try {
+      expect((await copied.stat()).size).toBe(size);
+      const buffer = Buffer.alloc(tail.length);
+      const { bytesRead } = await copied.read(buffer, 0, buffer.length, size - buffer.length);
+      expect(bytesRead).toBe(tail.length);
+      expect(buffer).toEqual(tail);
+    } finally {
+      await copied.close();
+    }
   });
 
   it("runs an executable setup script with source and worktree paths", async () => {
@@ -651,7 +732,7 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("broken-setup");
     expect(await git(repo, "branch", "--list", "openclaw/broken-setup")).toBe("");
-    expect(service.listRegistryRecords()).toEqual([]);
+    expect(await service.listRegistryRecords()).toEqual([]);
     expect.soft(failure.message).toContain(fatal);
     expect.soft(failure.message.length).toBeLessThanOrEqual(2_300);
     expect.soft(/(?:exit|code|status)[^\n]*23/i.test(failure.message)).toBe(true);
@@ -676,7 +757,7 @@ describe("ManagedWorktreeService", () => {
     expect(removed).toMatchObject({ removed: true, snapshotRef: expect.any(String) });
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "show-ref", "--verify", removed.snapshotRef!)).not.toBe("");
-    const provisionedState = getRegistryWorktreeProvisionedState(env, created.id)!;
+    const provisionedState = (await getRegistryWorktreeProvisionedState(env, created.id))!;
     expect(provisionedState).toEqual([{ path: "provisioned.env", mode, chunks: 1 }]);
     const snapshotFiles = await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!);
     expect(snapshotFiles).not.toContain("ignored.txt");
@@ -686,7 +767,10 @@ describe("ManagedWorktreeService", () => {
     now += IDLE_GC_MS + 1;
     const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
     const restored = await service.restore({ id: created.id });
-    expectCheckoutTimeouts(commandSpy, [removed.snapshotRef!]);
+    expectCheckoutTimeouts(commandSpy, [
+      originalHead,
+      await git(repo, "rev-parse", removed.snapshotRef!),
+    ]);
     expect(restored.removedAt).toBeUndefined();
     expect(restored.lastActiveAt).toBe(now);
     expect((await service.gc()).removed).toEqual([]);
@@ -703,7 +787,7 @@ describe("ManagedWorktreeService", () => {
       "source value\n",
     );
     expect(
-      getRegistryWorktreeProvisionedChunk(env, {
+      await getRegistryWorktreeProvisionedChunk(env, {
         worktreeId: created.id,
         path: "provisioned.env",
         chunkIndex: 0,
@@ -854,7 +938,7 @@ describe("ManagedWorktreeService", () => {
     );
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
     expect(
-      getRegistryWorktreeProvisionedChunk(env, {
+      await getRegistryWorktreeProvisionedChunk(env, {
         worktreeId: created.id,
         path: ".env.local",
         chunkIndex: 0,

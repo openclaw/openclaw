@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -656,7 +657,22 @@ describe("createPersistCronSessionEntry", () => {
       persistSessionEntry: vi.fn(async () => {}),
     });
 
-    await persist();
+    const target = resolveSqliteTargetFromSessionStorePath(storePath);
+    if (!target.path) {
+      throw new Error("expected SQLite database path");
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+    const reads = trackSqliteStatementExecutions(database.db, ["aggregate"], (query) =>
+      query.includes('"transcript_events"') && /(?:count|sum)\s*\(/iu.test(query)
+        ? "aggregate"
+        : null,
+    );
+    try {
+      await persist();
+      expect(reads.counts.aggregate).toBe(0);
+    } finally {
+      reads.restore();
+    }
 
     expect(cronSession.store["agent:main:cron:completed"]).toEqual({
       sessionId: "run-session-id",

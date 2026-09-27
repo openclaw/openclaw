@@ -1,4 +1,3 @@
-// Msteams plugin module implements token response behavior.
 export function readAccessToken(value: unknown): string | null {
   if (typeof value === "string") {
     return value;

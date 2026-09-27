@@ -2,8 +2,9 @@ import { Writable } from "node:stream";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Progress tests cover CLI progress rendering and lifecycle cleanup.
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { supportsOscProgress } from "../../packages/terminal-core/src/osc-progress.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { createCliProgress, shouldUseInteractiveProgressSpinner } from "./progress.js";
+import { createCliProgress, withProgress } from "./progress.js";
 
 const clackMocks = vi.hoisted(() => {
   const spinnerInstance = {
@@ -196,37 +197,29 @@ describe("cli progress", () => {
     }
   });
 
-  it("does not use readline-backed spinners while raw TUI input is active", () => {
-    expect(
-      shouldUseInteractiveProgressSpinner({
-        streamIsTty: true,
-        stdinIsRaw: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps the normal interactive spinner for regular tty commands", () => {
-    expect(
-      shouldUseInteractiveProgressSpinner({
-        streamIsTty: true,
-        stdinIsRaw: false,
-      }),
-    ).toBe(true);
-  });
-
   it("routes clack spinner output through the progress stream", () => {
     const stream = createOutput(true, vi.fn());
 
-    const progress = createCliProgress({
-      label: "Loading",
-      stream,
+    const fallbacks: Array<"spinner" | "none"> = ["spinner", "none"];
+    let fallbackReads = 0;
+    withStdinIsRaw(false, () => {
+      const progress = createCliProgress({
+        label: "Loading",
+        stream,
+        get fallback() {
+          return fallbacks[fallbackReads++];
+        },
+      });
+      try {
+        expect(clackMocks.spinner).toHaveBeenCalledWith({ output: stream });
+        expect(clackMocks.spinnerInstance.start).toHaveBeenCalledWith(
+          expect.stringContaining("Loading"),
+        );
+        expect(fallbackReads).toBe(2);
+      } finally {
+        progress.done();
+      }
     });
-    progress.done();
-
-    expect(clackMocks.spinner).toHaveBeenCalledWith({ output: stream });
-    expect(clackMocks.spinnerInstance.start).toHaveBeenCalledWith(
-      expect.stringContaining("Loading"),
-    );
   });
 
   it("does not write terminal controls when raw TUI input suppresses the default spinner", () => {
@@ -260,7 +253,8 @@ describe("cli progress", () => {
         firstWrites.push(chunk);
       }),
     );
-    const secondStream = createOutput(true, vi.fn());
+    const secondWrite = vi.fn();
+    const secondStream = createOutput(true, secondWrite);
 
     const delayed = createCliProgress({
       label: "Delayed",
@@ -278,7 +272,53 @@ describe("cli progress", () => {
     next.done();
 
     expect(firstWrites).toStrictEqual([]);
+    expect(secondWrite).toHaveBeenCalledWith(theme.accent("Next"));
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "releases the line after work callbacks %s",
+    async (outcome) => {
+      const events: string[] = [];
+      const stream = createOutput(true, (chunk) => events.push(chunk));
+      const oscSupported = supportsOscProgress(process.env, true);
+      const error = new Error("work failed");
+      let owned: ReturnType<typeof createCliProgress> | undefined;
+      let next: ReturnType<typeof createCliProgress> | undefined;
+      try {
+        const work = withProgress({ label: "Work", stream, fallback: "line" }, async (progress) => {
+          owned = progress;
+          await Promise.resolve();
+          events.push("callback");
+          progress.setLabel("Updated");
+          if (outcome === "reject") {
+            throw error;
+          }
+          return "value";
+        });
+        if (outcome === "reject") {
+          await expect(work).rejects.toBe(error);
+        } else {
+          await expect(work).resolves.toBe("value");
+        }
+        expect(events).toEqual([
+          ...(oscSupported ? ["\x1b]9;4;3;0\x1b\\"] : []),
+          "\r\x1b[2K",
+          theme.accent("Work"),
+          "callback",
+          ...(oscSupported ? ["\x1b]9;4;3;0\x1b\\"] : []),
+          "\r\x1b[2K",
+          theme.accent("Updated"),
+          ...(oscSupported ? ["\x1b]9;4;0;0\x1b\\"] : []),
+          "\r\x1b[2K",
+        ]);
+        next = createCliProgress({ label: "Next", stream, fallback: "line" });
+        expect(events.at(-1)).toBe(theme.accent("Next"));
+      } finally {
+        owned?.done();
+        next?.done();
+      }
+    },
+  );
 
   it("clamps oversized delayed progress timers", () => {
     const stream = createOutput(true, vi.fn());

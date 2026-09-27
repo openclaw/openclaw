@@ -1,12 +1,12 @@
 /** Doctor checks and repairs for workspace memory files and legacy workspace hints. */
 import fs from "node:fs";
 import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { readRegularFile } from "../infra/regular-file.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   LEGACY_ROOT_MEMORY_FILENAME,
@@ -70,7 +70,7 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
   return true;
 }
 
-export type RootMemoryFilesDetection = {
+type RootMemoryFilesDetection = {
   workspaceDir: string;
   canonicalPath: string;
   legacyPath: string;
@@ -112,9 +112,7 @@ async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> 
 }
 
 /** Detects canonical and legacy root memory files in a workspace. */
-export async function detectRootMemoryFiles(
-  workspaceDir: string,
-): Promise<RootMemoryFilesDetection> {
+async function detectRootMemoryFiles(workspaceDir: string): Promise<RootMemoryFilesDetection> {
   const resolvedWorkspace = path.resolve(workspaceDir);
   const canonicalPath = resolveCanonicalRootMemoryPath(resolvedWorkspace);
   const legacyPath = resolveLegacyRootMemoryPath(resolvedWorkspace);
@@ -143,7 +141,7 @@ function formatBytes(bytes?: number): string {
 }
 
 /** Formats the warning for split canonical/legacy root memory files. */
-export function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection): string | null {
+function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection): string | null {
   if (detection.canonicalExists && detection.legacyExists) {
     return [
       "Split root durable memory files detected:",
@@ -157,7 +155,7 @@ export function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection
   return null;
 }
 
-export type RootMemoryMigrationResult = {
+type RootMemoryMigrationResult = {
   changed: boolean;
   canonicalPath: string;
   legacyPath: string;
@@ -208,7 +206,7 @@ function buildMergedLegacyRootMemorySection(params: {
 }
 
 /** Archives and merges a legacy root memory file into canonical memory. */
-export async function migrateLegacyRootMemoryFile(
+async function migrateLegacyRootMemoryFile(
   workspaceDir: string,
 ): Promise<RootMemoryMigrationResult> {
   const detection = await detectRootMemoryFiles(workspaceDir);

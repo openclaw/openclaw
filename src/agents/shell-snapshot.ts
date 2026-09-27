@@ -3,16 +3,16 @@
  *
  * Caches safe shell-derived environment variables while filtering secrets and stale snapshots.
  */
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { resolveStateDir } from "../config/paths.js";
-import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { spawnProcess } from "../process/spawn-utils.js";
 
 const SNAPSHOT_VERSION = 1;
 const SNAPSHOT_REFRESH_MS = 5 * 60 * 1000;
@@ -66,6 +66,7 @@ type ShellSnapshot = {
 };
 
 type ShellSnapshotWrapOptions = {
+  enabled?: boolean;
   command: string;
   shell: string;
   shellArgs: string[];
@@ -83,6 +84,7 @@ export async function maybeWrapCommandWithShellSnapshot(
   opts: ShellSnapshotWrapOptions,
 ): Promise<string> {
   if (
+    opts.enabled === false ||
     process.platform === "win32" ||
     isExecShellSnapshotDisabled(process.env) ||
     !isSupportedSnapshotShell(opts.shell, opts.shellArgs)
@@ -453,7 +455,7 @@ async function runShell(opts: {
   timeoutMs: number;
 }): Promise<{ status: number | null }> {
   return await new Promise((resolve) => {
-    const child = spawn(opts.shell, [...opts.shellArgs, opts.command], {
+    const child = spawnProcess(opts.shell, [...opts.shellArgs, opts.command], {
       cwd: opts.cwd,
       detached: process.platform !== "win32",
       env: opts.env,
@@ -467,9 +469,19 @@ async function runShell(opts: {
       }
       settled = true;
       clearTimeout(timeout);
-      killProcessTree(child.pid ?? 0, { graceMs: 0, detached: true });
+      if (child.pid) {
+        killProcessTree(child.pid, { graceMs: 0, detached: true });
+      } else {
+        // Broker admission can outlive the capture deadline; cancel the pending child too.
+        child.kill("SIGKILL");
+      }
       resolve({ status });
     };
+    child.once("spawn", () => {
+      if (settled && child.pid) {
+        killProcessTree(child.pid, { graceMs: 0, detached: true });
+      }
+    });
     const timeout = setTimeout(() => {
       killProcessTree(child.pid ?? 0, { graceMs: 250, detached: true });
       finish(null);

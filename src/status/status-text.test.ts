@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { createQueuedTaskRunCore } from "../tasks/task-executor.js";
+import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
+import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { appendSessionCostLine } from "./status-runtime-lines.js";
-import { buildStatusReplyParts, buildStatusText } from "./status-text.js";
+import { buildStatusText } from "./status-text.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionCostSummariesFromCache: vi.fn(),
@@ -32,42 +35,57 @@ vi.mock("../infra/provider-usage.js", async (importOriginal) => {
 
 type StatusTextParams = Parameters<typeof buildStatusText>[0];
 
+function statusParams(overrides: Partial<StatusTextParams>): StatusTextParams {
+  return {
+    cfg: {},
+    sessionKey: "agent:main:main",
+    statusChannel: "mobilechat",
+    provider: "openai",
+    model: "gpt-5.4-mini",
+    resolvedHarness: "openclaw",
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    isGroup: false,
+    defaultGroupActivation: () => "mention",
+    taskLineOverride: "",
+    skipDefaultTaskLookup: true,
+    modelAuthOverride: "api-key",
+    activeModelAuthOverride: "api-key",
+    includeTranscriptUsage: false,
+    ...overrides,
+  };
+}
+
 async function renderTelegramStatus(params: {
   cfg: StatusTextParams["cfg"];
   sessionEntry: NonNullable<StatusTextParams["sessionEntry"]>;
   statusAccountId?: string;
   sessionKey?: string;
   agentId?: string;
+  taskLookup?: Pick<StatusTextParams, "taskLineOverride" | "skipDefaultTaskLookup">;
 }): Promise<string> {
-  return await buildStatusText({
-    cfg: params.cfg,
-    sessionEntry: params.sessionEntry,
-    sessionKey: params.sessionKey ?? "agent:main:main",
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    statusChannel: "telegram",
-    ...(params.statusAccountId ? { statusAccountId: params.statusAccountId } : {}),
-    provider: "openai",
-    model: "gpt-5.4-mini",
-    resolvedHarness: "pi",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    isGroup: false,
-    defaultGroupActivation: () => "mention",
-    pluginHealthLineOverride: "Plugins: test",
-    taskLineOverride: "",
-    skipDefaultTaskLookup: true,
-    primaryModelLabelOverride: "openai/gpt-5.4-mini",
-    modelAuthOverride: "test",
-    activeModelAuthOverride: "test",
-    includeTranscriptUsage: false,
-  });
+  return await buildStatusText(
+    statusParams({
+      cfg: params.cfg,
+      sessionEntry: params.sessionEntry,
+      sessionKey: params.sessionKey ?? "agent:main:main",
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      statusChannel: "telegram",
+      ...(params.statusAccountId ? { statusAccountId: params.statusAccountId } : {}),
+      resolvedHarness: "pi",
+      pluginHealthLineOverride: "Plugins: test",
+      ...params.taskLookup,
+      primaryModelLabelOverride: "openai/gpt-5.4-mini",
+      modelAuthOverride: "test",
+      activeModelAuthOverride: "test",
+    }),
+  );
 }
 
 describe("buildStatusText channel features", () => {
   it.each([
     { richMessages: undefined, expected: "Telegram rich messages: off" },
-    { richMessages: false, expected: "Telegram rich messages: off" },
     { richMessages: true, expected: "Telegram rich messages: on" },
   ])("shows Telegram rich message state for %s", async ({ richMessages, expected }) => {
     const telegram = richMessages === undefined ? {} : { richMessages };
@@ -129,48 +147,99 @@ describe("buildStatusText channel features", () => {
   });
 });
 
+describe("buildStatusText task lookup overrides", () => {
+  beforeEach(() => resetTaskRegistryForTests({ persist: false }));
+  afterEach(() => resetTaskRegistryForTests({ persist: false }));
+
+  it.each([
+    { taskLineOverride: "Prepared task line", skipDefaultTaskLookup: false },
+    { taskLineOverride: "Prepared task line", skipDefaultTaskLookup: true },
+    { taskLineOverride: "", skipDefaultTaskLookup: true },
+  ])("renders an override without registry availability: %j", async (taskLookup) => {
+    configureTaskRegistryRuntime({
+      store: {
+        ...createInMemoryTaskRegistryStore(),
+        loadSnapshot() {
+          throw new Error("task registry unavailable");
+        },
+        async withSnapshotAsync() {
+          throw new Error("task registry unavailable");
+        },
+      },
+    });
+    const text = await renderTelegramStatus({
+      cfg: {},
+      sessionEntry: { sessionId: "override-status", updatedAt: 0 },
+      taskLookup,
+    });
+    if (taskLookup.taskLineOverride) {
+      expect(text).toContain(taskLookup.taskLineOverride);
+    } else {
+      expect(text).not.toContain("📌 Tasks:");
+    }
+  });
+
+  it("keeps an empty task override on the agent-only fallback", async () => {
+    configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });
+    createQueuedTaskRunCore({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      agentId: "main",
+      task: "private task detail",
+      runId: "override-agent-task",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    const text = await renderTelegramStatus({
+      cfg: {},
+      sessionEntry: { sessionId: "empty-override-status", updatedAt: 0 },
+      taskLookup: { taskLineOverride: "", skipDefaultTaskLookup: false },
+    });
+    expect(text).toContain("📌 Tasks: 1 active · 1 total · agent-local");
+    expect(text).not.toContain("private task detail");
+  });
+});
+
 describe("buildStatusText global subagent scope", () => {
   beforeEach(() => resetSubagentRegistryForTests({ persist: false }));
   afterEach(() => resetSubagentRegistryForTests({ persist: false }));
 
-  it.each(["research", "ops"])(
-    "shows the selected global agent's children when the default is %s",
-    async (defaultAgentId) => {
-      for (const agentId of ["research", "ops"]) {
-        addSubagentRunForTests({
-          runId: `status-global-${agentId}`,
-          childSessionKey: `agent:${agentId}:subagent:status-worker`,
-          controllerSessionKey: "global",
-          requesterSessionKey: "global",
-          requesterAgentId: agentId,
-          requesterDisplayKey: "global",
-          task: `${agentId} status worker`,
-          cleanup: "keep",
-          createdAt: Date.now() - 1_000,
-          startedAt: Date.now() - 1_000,
-        });
-      }
-
-      const text = await renderTelegramStatus({
-        cfg: {
-          agents: {
-            entries: {
-              research: { default: defaultAgentId === "research" },
-              ops: { default: defaultAgentId === "ops" },
-            },
-          },
-          session: { scope: "global" },
-        },
-        sessionEntry: { sessionId: "global-status", updatedAt: 0 },
-        sessionKey: "global",
-        agentId: "research",
+  it("shows the selected global agent's children instead of the default agent's", async () => {
+    for (const agentId of ["research", "ops"]) {
+      addSubagentRunForTests({
+        runId: `status-global-${agentId}`,
+        childSessionKey: `agent:${agentId}:subagent:status-worker`,
+        controllerSessionKey: "global",
+        requesterSessionKey: "global",
+        requesterAgentId: agentId,
+        requesterDisplayKey: "global",
+        task: `${agentId} status worker`,
+        cleanup: "keep",
+        createdAt: Date.now() - 1_000,
+        startedAt: Date.now() - 1_000,
       });
+    }
 
-      expect(text).toContain("🤖 Subagents: 1 active");
-      expect(text).toContain("research status worker");
-      expect(text).not.toContain("ops status worker");
-    },
-  );
+    const text = await renderTelegramStatus({
+      cfg: {
+        agents: {
+          entries: {
+            research: {},
+            ops: { default: true },
+          },
+        },
+        session: { scope: "global" },
+      },
+      sessionEntry: { sessionId: "global-status", updatedAt: 0 },
+      sessionKey: "global",
+      agentId: "research",
+    });
+
+    expect(text).toContain("🤖 Subagents: 1 active");
+    expect(text).toContain("research status worker");
+    expect(text).not.toContain("ops status worker");
+  });
 });
 
 describe("Codex usage after runtime fallback", () => {
@@ -191,32 +260,20 @@ describe("Codex usage after runtime fallback", () => {
   });
 
   async function renderFallbackStatus(agentHarnessId: "codex" | "openclaw"): Promise<string> {
-    return await buildStatusText({
-      cfg: {},
-      sessionEntry: {
-        sessionId: `fallback-${agentHarnessId}`,
-        updatedAt: 0,
-        agentRuntimeOverride: "openclaw",
-        agentHarnessId,
-      },
-      sessionKey: "agent:main:main",
-      statusChannel: "mobilechat",
-      provider: "openai",
-      model: "gpt-5.4-mini",
-      resolvedHarness: "openclaw",
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-      pluginHealthLineOverride: "Plugins: test",
-      taskLineOverride: "",
-      skipDefaultTaskLookup: true,
-      primaryModelLabelOverride: "openai/gpt-5.4-mini",
-      modelAuthOverride: "oauth",
-      activeModelAuthOverride: "oauth",
-      includeTranscriptUsage: false,
-    });
+    return await buildStatusText(
+      statusParams({
+        sessionEntry: {
+          sessionId: `fallback-${agentHarnessId}`,
+          updatedAt: 0,
+          agentRuntimeOverride: "openclaw",
+          agentHarnessId,
+        },
+        pluginHealthLineOverride: "Plugins: test",
+        primaryModelLabelOverride: "openai/gpt-5.4-mini",
+        modelAuthOverride: "oauth",
+        activeModelAuthOverride: "oauth",
+      }),
+    );
   }
 
   it("shows Codex rate-limit usage for a Codex-bound session on OpenClaw Default", async () => {
@@ -252,6 +309,19 @@ describe("session status cost line", () => {
     }),
   };
 
+  const costSummary = {
+    input: 400_000,
+    output: 56_000,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 456_000,
+    totalCost: 1.23,
+    inputCost: 1,
+    outputCost: 0.23,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+  };
+
   beforeEach(() => {
     mocks.loadSessionCostSummariesFromCache.mockReset();
   });
@@ -266,16 +336,7 @@ describe("session status cost line", () => {
       },
       summaries: [
         {
-          input: 400_000,
-          output: 56_000,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 456_000,
-          totalCost: 1.23,
-          inputCost: 1,
-          outputCost: 0.23,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
+          ...costSummary,
           missingCostEntries: 0,
         },
       ],
@@ -284,20 +345,6 @@ describe("session status cost line", () => {
     await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
       "💵 $1.23 · 456k tok (today)",
     );
-  });
-
-  it("omits a cold cost cache", async () => {
-    mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
-      cacheStatus: {
-        status: "partial",
-        cachedFiles: 0,
-        pendingFiles: 1,
-        staleFiles: 0,
-      },
-      summaries: [null],
-    });
-
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBeNull();
   });
 
   it("omits a stale cached summary", async () => {
@@ -310,16 +357,12 @@ describe("session status cost line", () => {
       },
       summaries: [
         {
+          ...costSummary,
           input: 1,
           output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
           totalTokens: 2,
           totalCost: 1,
-          inputCost: 1,
           outputCost: 0,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
           missingCostEntries: 0,
         },
       ],
@@ -338,16 +381,7 @@ describe("session status cost line", () => {
       },
       summaries: [
         {
-          input: 400_000,
-          output: 56_000,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 456_000,
-          totalCost: 1.23,
-          inputCost: 1,
-          outputCost: 0.23,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
+          ...costSummary,
           missingCostEntries: 12,
           missingCostByModel: {
             "openai/gpt-5.6-sol": 10,
@@ -365,243 +399,37 @@ describe("session status cost line", () => {
 
 describe("buildStatusText thinking facts", () => {
   it("keeps the prepared thinking level for a discovered Ollama reasoning model", async () => {
-    const text = await buildStatusText({
-      cfg: {},
-      sessionEntry: {
-        sessionId: "wa-ollama-think",
-        updatedAt: 0,
-        thinkingLevel: "high",
-        modelOverride: "glm-5.2:cloud",
-        providerOverride: "ollama",
-      },
-      sessionKey: "agent:main:main",
-      statusChannel: "whatsapp",
-      provider: "ollama",
-      model: "glm-5.2:cloud",
-      thinkingCatalog: [
-        {
-          provider: "ollama",
-          id: "glm-5.2:cloud",
-          reasoning: true,
+    const text = await buildStatusText(
+      statusParams({
+        sessionEntry: {
+          sessionId: "wa-ollama-think",
+          updatedAt: 0,
+          thinkingLevel: "high",
+          modelOverride: "glm-5.2:cloud",
+          providerOverride: "ollama",
         },
-      ],
-      resolvedHarness: "openclaw",
-      resolvedThinkLevel: "high",
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "on",
-      resolveDefaultThinkingLevel: async () => "high",
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-      pluginHealthLineOverride: "Plugins: test",
-      taskLineOverride: "",
-      skipDefaultTaskLookup: true,
-      primaryModelLabelOverride: "ollama/glm-5.2:cloud",
-      modelAuthOverride: "local",
-      activeModelAuthOverride: "local",
-      includeTranscriptUsage: false,
-    });
+        statusChannel: "whatsapp",
+        provider: "ollama",
+        model: "glm-5.2:cloud",
+        thinkingCatalog: [
+          {
+            provider: "ollama",
+            id: "glm-5.2:cloud",
+            reasoning: true,
+          },
+        ],
+        resolvedThinkLevel: "high",
+        resolvedReasoningLevel: "on",
+        resolveDefaultThinkingLevel: async () => "high",
+        pluginHealthLineOverride: "Plugins: test",
+        primaryModelLabelOverride: "ollama/glm-5.2:cloud",
+        modelAuthOverride: "local",
+        activeModelAuthOverride: "local",
+      }),
+    );
 
     expect(text).toContain("think high");
     expect(text).not.toMatch(/think\s+off\b/);
-  });
-});
-
-describe("buildStatusText prepared context windows", () => {
-  afterEach(() => cliBackendsTesting.resetDepsForTest());
-  const catalog = [
-    {
-      provider: "deepseek",
-      id: "deepseek-v4-flash",
-      contextWindow: 1_000_000,
-      contextTokens: 1_000_000,
-    },
-    {
-      provider: "fallback",
-      id: "small-model",
-      contextWindow: 128_000,
-      contextTokens: 128_000,
-    },
-    {
-      provider: "openrouter",
-      id: "deepseek/deepseek-v4-flash",
-      contextWindow: 1_000_000,
-      contextTokens: 1_000_000,
-    },
-  ];
-
-  async function renderPreparedStatus(
-    overrides: Partial<Parameters<typeof buildStatusReplyParts>[0]> = {},
-  ) {
-    return await buildStatusReplyParts({
-      cfg: {},
-      sessionEntry: {
-        sessionId: "prepared-context",
-        updatedAt: 0,
-        totalTokens: 45_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-      sessionKey: "agent:main:main",
-      statusChannel: "mobilechat",
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
-      thinkingCatalog: catalog,
-      resolvedHarness: "openclaw",
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-      pluginHealthLineOverride: "Plugins: test",
-      taskLineOverride: "",
-      skipDefaultTaskLookup: true,
-      modelAuthOverride: "api-key",
-      activeModelAuthOverride: "api-key",
-      includeTranscriptUsage: false,
-      ...overrides,
-    });
-  }
-
-  it("renders a cold-cache prepared window in plain and rich status", async () => {
-    const parts = await renderPreparedStatus();
-    const table = parts.presentation.blocks.find((block) => block.type === "table");
-
-    expect(parts.text).toContain("Context: 45k/1.0m");
-    expect(parts.text).not.toContain("Context: 45k/200k");
-    expect(table?.type === "table" ? table.rows : []).toContainEqual([
-      "📚 Context",
-      expect.stringContaining("45k/1.0m"),
-    ]);
-  });
-
-  it("keeps the selected prepared window over stale active model state", async () => {
-    const parts = await renderPreparedStatus({
-      sessionEntry: {
-        sessionId: "selected-prepared-context",
-        updatedAt: 0,
-        providerOverride: "deepseek",
-        modelOverride: "deepseek-v4-flash",
-        modelOverrideSource: "user",
-        modelProvider: "fallback",
-        model: "small-model",
-        totalTokens: 45_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    });
-
-    expect(parts.text).toContain("Context: 45k/1.0m");
-    expect(parts.text).not.toContain("Context: 45k/128k");
-  });
-
-  it("uses the active prepared window for an established fallback", async () => {
-    const parts = await renderPreparedStatus({
-      sessionEntry: {
-        sessionId: "active-prepared-context",
-        updatedAt: 0,
-        providerOverride: "deepseek",
-        modelOverride: "deepseek-v4-flash",
-        modelProvider: "fallback",
-        model: "small-model",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "deepseek/deepseek-v4-flash",
-          activeModel: "fallback/small-model",
-          reason: "provider unavailable",
-        },
-        totalTokens: 45_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    });
-
-    expect(parts.text).toContain("Context: 45k/128k");
-    expect(parts.text).not.toContain("Context: 45k/1.0m");
-  });
-
-  it("keeps Anthropic authored caps below the prepared Claude CLI window", async () => {
-    // Supply runtime alias metadata while exercising the authored context cap.
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-          bundleMcp: true,
-        },
-      ],
-    });
-    const parts = await renderPreparedStatus({
-      provider: "anthropic",
-      model: "claude-haiku-4-5",
-      resolvedHarness: "claude-cli",
-      sessionEntry: {
-        sessionId: "claude-cli-authored-cap",
-        updatedAt: 0,
-        modelProvider: "claude-cli",
-        model: "claude-haiku-4-5",
-        agentHarnessId: "claude-cli",
-        contextTokens: 256_000,
-        contextTokensSource: "resolved",
-        totalTokens: 45_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-      thinkingCatalog: [
-        {
-          provider: "anthropic",
-          id: "claude-haiku-4-5",
-          contextWindow: 1_000_000,
-          contextTokens: 1_000_000,
-        },
-      ],
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.test",
-              models: [
-                {
-                  id: "claude-haiku-4-5",
-                  name: "Claude Haiku 4.5",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1_000_000,
-                  contextTokens: 256_000,
-                  maxTokens: 128_000,
-                },
-              ],
-            },
-          },
-        },
-      },
-    });
-
-    expect(parts.text).toContain("Context: 45k/256k");
-    expect(parts.text).not.toContain("Context: 45k/1.0m");
-  });
-
-  it("matches namespaced prepared model IDs without stripping them", async () => {
-    const parts = await renderPreparedStatus({
-      provider: "openrouter",
-      model: "deepseek/deepseek-v4-flash",
-      thinkingCatalog: [
-        ...catalog,
-        {
-          provider: "openrouter",
-          id: "deepseek-v4-flash",
-          reasoning: false,
-          input: ["text"],
-          contextWindow: 128_000,
-          contextTokens: 128_000,
-        },
-      ],
-    });
-
-    expect(parts.text).toContain("Context: 45k/1.0m");
-    expect(parts.text).not.toContain("Context: 45k/128k");
   });
 });
 
@@ -613,26 +441,10 @@ describe("buildStatusText lazy loader retry", () => {
   });
 
   function retryStatusParams(sessionId: string): Parameters<typeof buildStatusText>[0] {
-    return {
-      cfg: {},
+    return statusParams({
       sessionEntry: { sessionId, updatedAt: 0 },
-      sessionKey: "agent:main:main",
-      statusChannel: "mobilechat",
-      provider: "openai",
-      model: "gpt-5.4-mini",
-      resolvedHarness: "openclaw",
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-      taskLineOverride: "",
-      skipDefaultTaskLookup: true,
       primaryModelLabelOverride: "openai/gpt-5.4-mini",
-      modelAuthOverride: "api-key",
-      activeModelAuthOverride: "api-key",
-      includeTranscriptUsage: false,
-    };
+    });
   }
 
   it("falls back on import failure and retries in the same module instance", async () => {

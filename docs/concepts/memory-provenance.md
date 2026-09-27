@@ -85,6 +85,11 @@ reconciliation transfers the parents' origins to the surviving entry. It
 runs in code around the model call, including for participating agents that
 share a workspace; the model does not own the origin rows.
 
+A file replacement can succeed before a later file error is reported. In that
+case, or when publication is uncertain, consolidation keeps the replacement's
+origins so a later `memory forget` can still target it. It does not automatically
+retry an uncertain replacement as an append.
+
 Origins for replaced entries remain while retained rewrite preimages still
 reference their promotion markers. Backup rotation prunes those origins only
 when live entries, retained preimages, diary excerpts, and indexed snapshots no longer reference them.
@@ -192,9 +197,14 @@ merged prose. Surviving sources may support a new entry later, but automatic
 reconstruction is not guaranteed.
 
 The cleanup covers matching promoted entries, session-corpus lines, memory
-index chunks and their full-text/vector rows, cached embeddings, short-term
-state, ingestion deduplication state, and dreaming rewrite preimages. It also
-removes whole lines containing exact selected corpus snippets from scanned
+index chunks and their full-text/vector rows, short-term state, ingestion
+deduplication state, and dreaming rewrite preimages. A nonempty session selection
+also clears the selected agent's entire embedding cache, including results from
+unfinished rebuilds that are not yet linked to published chunks. Unrelated
+published index entries remain usable; later indexing may need to regenerate
+cached embeddings. Dry runs report this removal without applying it.
+
+The purge also removes whole lines containing exact selected corpus snippets from scanned
 memory files and dream diaries. The
 [command reference](/cli/memory#memory-forget) describes the counters and
 selection limits.

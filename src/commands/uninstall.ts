@@ -129,7 +129,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
       ],
       initialValues: ["service"],
     });
-    if (isCancel(selection)) {
+    if (typeof selection === "symbol") {
       cancel(stylePromptTitle("Uninstall cancelled.") ?? "Uninstall cancelled.");
       runtime.exit(0);
       return;

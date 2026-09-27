@@ -13,6 +13,28 @@
  * ui/src/components/settings-ui.ts rather than hand-rolled markup.
  */
 
+.settings-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-5);
+}
+
+.settings-summary__tile {
+  padding: var(--space-3) var(--space-4);
+}
+
+.settings-summary dt {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.settings-summary dd {
+  margin: var(--space-2) 0 0;
+  font-size: var(--control-ui-text-lg);
+  font-weight: 600;
+}
+
 /* ── Workspace shell (shared by every settings takeover page) ── */
 
 .settings-workspace {
@@ -29,6 +51,21 @@
 
 .settings-workspace__body > * + * {
   margin-top: var(--space-5);
+}
+
+.content-header--settings {
+  flex-wrap: wrap;
+  max-height: none;
+}
+
+.content-header--settings .page-header-actions {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.content-header--settings .page-header-actions > * {
+  flex-shrink: 0;
+  max-width: 100%;
 }
 
 .settings-workspace--fill-height {
@@ -472,6 +509,10 @@
   stroke-linejoin: round;
 }
 
+.cfg-object[open] > .cfg-object__summary .cfg-object__chevron {
+  transform: rotate(90deg);
+}
+
 /* Indented child rows (e.g. per-item options under a parent toggle). */
 .settings-subrows .settings-row {
   padding-left: var(--space-7);
@@ -482,35 +523,6 @@
 }
 
 /* ── Controls ── */
-
-/* One control height inside settings clusters. Buttons, inputs, selects, and
-   segmented controls share 32px so mixed rows never show ragged heights.
-   Multi-select list boxes and textareas keep their natural height. */
-.settings-row__control .btn,
-.settings-section__actions .btn,
-.settings-group .data-table-search input {
-  height: var(--settings-control-height);
-  padding-block: 0;
-  box-sizing: border-box;
-}
-
-.settings-row__control .btn--icon,
-.settings-section__actions .btn--icon {
-  width: var(--settings-control-height);
-  min-width: var(--settings-control-height);
-  padding-inline: 0;
-}
-
-.settings-section__actions .btn--xs.btn--icon {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-}
-
-.settings-section__actions .btn--xs.btn--icon svg {
-  width: 16px;
-  height: 16px;
-}
 
 .settings-toggle {
   display: inline-flex;
@@ -532,6 +544,10 @@ wa-switch.settings-toggle {
    paired media pickers aligned instead of letting native intrinsic width win. */
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select--media-device {
   width: 340px;
+}
+
+.settings-row__control input.settings-input {
+  text-align: right;
 }
 
 /* Lone value inputs share one width so stacked rows in a group read as a
@@ -577,7 +593,6 @@ wa-switch.settings-toggle {
   .settings-row__control
   > input[type="number"].settings-input {
   width: 110px;
-  text-align: center;
 }
 
 /* Time inputs hold HH:MM; the shared 340px text width would stretch the paired
@@ -658,6 +673,45 @@ textarea.settings-input {
   background: var(--accent);
 }
 
+.settings-permission-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 11rem;
+  align-items: center;
+  gap: var(--space-3);
+  width: 20rem;
+  max-width: 100%;
+}
+
+.settings-permission-control .settings-status {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.settings-permission-control .settings-status > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.settings-permission-check {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.settings-permission-check svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-permission-control > .btn {
+  width: 100%;
+  white-space: normal;
+}
+
+.settings-permission-recovery {
+  grid-column: 2;
+}
+
 .updates-status-control {
   display: inline-flex;
   align-items: center;
@@ -669,6 +723,10 @@ textarea.settings-input {
     white-space: normal;
     overflow-wrap: anywhere;
   }
+}
+
+.updates-status-check-failed .settings-status {
+  color: var(--warn);
 }
 
 .updates-attempt-details {

@@ -4,62 +4,37 @@ import { describe, expect, it } from "vitest";
 import { withTempHome } from "./test-helpers.js";
 import { validateConfigObject } from "./validation.js";
 
+function validateAvatar(home: string, avatar: string) {
+  return validateConfigObject({
+    agents: {
+      entries: {
+        main: { default: true, workspace: path.join(home, "openclaw"), identity: { avatar } },
+      },
+    },
+  });
+}
+
 describe("identity avatar validation", () => {
   it("accepts workspace-relative avatar paths", async () => {
     await withTempHome(async (home) => {
-      const workspace = path.join(home, "openclaw");
-      const res = validateConfigObject({
-        agents: {
-          entries: {
-            main: { default: true, workspace, identity: { avatar: "avatars/openclaw.png" } },
-          },
-        },
-      });
+      const res = validateAvatar(home, "avatars/openclaw.png");
       expect(res.ok).toBe(true);
     });
   });
 
   it("accepts http(s) and data avatars", async () => {
     await withTempHome(async (home) => {
-      const workspace = path.join(home, "openclaw");
-      const httpRes = validateConfigObject({
-        agents: {
-          entries: {
-            main: {
-              default: true,
-              workspace,
-              identity: { avatar: "https://example.com/avatar.png" },
-            },
-          },
-        },
-      });
+      const httpRes = validateAvatar(home, "https://example.com/avatar.png");
       expect(httpRes.ok).toBe(true);
 
-      const dataRes = validateConfigObject({
-        agents: {
-          entries: {
-            main: {
-              default: true,
-              workspace,
-              identity: { avatar: "data:image/png;base64,AAA" },
-            },
-          },
-        },
-      });
+      const dataRes = validateAvatar(home, "data:image/png;base64,AAA");
       expect(dataRes.ok).toBe(true);
     });
   });
 
   it("rejects avatar paths outside workspace", async () => {
     await withTempHome(async (home) => {
-      const workspace = path.join(home, "openclaw");
-      const res = validateConfigObject({
-        agents: {
-          entries: {
-            main: { default: true, workspace, identity: { avatar: "../oops.png" } },
-          },
-        },
-      });
+      const res = validateAvatar(home, "../oops.png");
       expect(res.ok).toBe(false);
       if (!res.ok) {
         expect(res.issues[0]?.path).toBe("agents.entries.main.identity.avatar");

@@ -120,7 +120,7 @@ export class SystemAgentChatEngine {
     beforePersistentApply?: () => void,
     terminalStatus?: "expired" | "cancelled",
   ): Promise<SystemAgentChatReply | null> {
-    const turn = this.turnQueue.then(async () => {
+    return await this.enqueueTurn(async () => {
       const reply = await this.router.resolveOperatorApproval(
         decision,
         proposalHash,
@@ -137,8 +137,6 @@ export class SystemAgentChatEngine {
       }
       return reply;
     });
-    this.turnQueue = turn.catch(() => undefined);
-    return await turn;
   }
 
   noteAssistantMessage(text: string): void {
@@ -177,7 +175,7 @@ export class SystemAgentChatEngine {
   }
 
   async handle(text: string, options?: SystemAgentChatTurnOptions): Promise<SystemAgentChatReply> {
-    const turn = this.turnQueue.then(async () => {
+    return await this.enqueueTurn(async () => {
       await this.requireVerifiedInference();
       const sensitiveTurn = this.wizard.sensitiveInputPending;
       const reply = await this.router.resolveTurn(text, options);
@@ -186,27 +184,27 @@ export class SystemAgentChatEngine {
         sensitiveTurn ? "<redacted secret>" : redactSensitiveCommandText(text),
       );
     });
-    this.turnQueue = turn.catch(() => undefined);
-    return await turn;
   }
 
   async answerWizard(answer: WizardAnswer): Promise<SystemAgentChatReply> {
-    const turn = this.turnQueue.then(async () => {
+    return await this.enqueueTurn(async () => {
       await this.requireVerifiedInference();
       const result = await this.router.answerWizard(this.wizard.answer(answer));
       return this.completeTurn({ text: result.text, action: "none" }, result.userHistoryText);
     });
-    this.turnQueue = turn.catch(() => undefined);
-    return await turn;
   }
 
   async cancelWizard(cancel: SystemAgentWizardCancel): Promise<SystemAgentChatReply> {
-    const turn = this.turnQueue.then(async () => {
+    return await this.enqueueTurn(async () => {
       const result = await this.router.answerWizard(this.wizard.cancel(cancel));
       return this.completeTurn({ text: result.text, action: "none" }, result.userHistoryText);
     });
+  }
+
+  private enqueueTurn<T>(run: () => Promise<T>): Promise<T> {
+    const turn = this.turnQueue.then(run);
     this.turnQueue = turn.catch(() => undefined);
-    return await turn;
+    return turn;
   }
 
   private completeTurn(reply: SystemAgentChatReply, userHistoryText: string): SystemAgentChatReply {
@@ -223,7 +221,9 @@ export class SystemAgentChatEngine {
     const overview = await (this.options.deps?.loadOverview ?? loadSystemAgentOverview)({
       agentId: route.agentId,
     });
-    return { ...overview, defaultModel: route.modelLabel };
+    return route.modelTarget === "utility"
+      ? { ...overview, setupModel: route.modelLabel }
+      : { ...overview, defaultModel: route.modelLabel };
   }
 
   async planGreeting(params: {

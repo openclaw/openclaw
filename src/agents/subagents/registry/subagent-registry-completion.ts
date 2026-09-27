@@ -10,8 +10,8 @@ import {
   type DetachedTaskTerminalState,
 } from "../../../tasks/detached-task-runtime-contract.js";
 import { resolveRequiredCompletionTerminalResult } from "../../../tasks/task-completion-contract.js";
-import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
+import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   SUBAGENT_ENDED_REASON_KILLED,
   SUBAGENT_ENDED_OUTCOME_ERROR,
@@ -25,6 +25,31 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
+/** Classify execution independently of reply capture, including cancelled yielded runs. */
+export function resolveSubagentTaskTerminalStatus(
+  entry: SubagentRunRecord,
+): DetachedTaskTerminalState["status"] | undefined {
+  const outcome = entry.execution.outcome;
+  if (
+    typeof entry.execution.endedAt !== "number" ||
+    !outcome ||
+    entry.pauseReason === "sessions_yield"
+  ) {
+    return undefined;
+  }
+  if (
+    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.suppressAnnounceReason !== "steer-restart"
+  ) {
+    return "cancelled";
+  }
+  return outcome.status === "ok"
+    ? "succeeded"
+    : outcome.status === "timeout"
+      ? "timed_out"
+      : "failed";
+}
+
 /** Returns the complete task projection only after completion capture has settled. */
 export function resolveFinalizedSubagentTaskState(
   entry: SubagentRunRecord,
@@ -32,19 +57,16 @@ export function resolveFinalizedSubagentTaskState(
   const endedAt = entry.execution.endedAt;
   const outcome = entry.execution.outcome;
   const completion = entry.completion;
+  const status = resolveSubagentTaskTerminalStatus(entry);
   if (
     typeof endedAt !== "number" ||
-    !outcome ||
-    entry.pauseReason === "sessions_yield" ||
+    status === undefined ||
     (completion?.resultText === undefined && typeof completion?.capturedAt !== "number")
   ) {
     return undefined;
   }
   const progressSummary = resolveSubagentCompletionResultText(entry);
-  if (
-    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-    entry.suppressAnnounceReason !== "steer-restart"
-  ) {
+  if (status === "cancelled") {
     return {
       status: "cancelled",
       endedAt,
@@ -54,7 +76,7 @@ export function resolveFinalizedSubagentTaskState(
       terminalSummary: null,
     };
   }
-  if (outcome.status === "ok") {
+  if (status === "succeeded") {
     const terminal =
       entry.expectsCompletionMessage !== true
         ? {}
@@ -71,10 +93,10 @@ export function resolveFinalizedSubagentTaskState(
     };
   }
   return {
-    status: outcome.status === "timeout" ? "timed_out" : "failed",
+    status,
     endedAt,
     lastEventAt: endedAt,
-    error: outcome.status === "error" ? outcome.error : undefined,
+    error: outcome?.status === "error" ? outcome.error : undefined,
     progressSummary,
     terminalSummary: null,
   };

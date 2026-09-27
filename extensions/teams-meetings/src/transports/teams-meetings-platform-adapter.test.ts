@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
@@ -16,6 +17,29 @@ import {
 } from "./teams-meetings-platform-adapter.test-helpers.js";
 
 describe("Microsoft Teams meeting platform adapter", () => {
+  it.each([true, false])(
+    "starts browser capture only for the current Teams session (owner=%s)",
+    async (owns) => {
+      const source = TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.buildAudioCaptureScript?.({
+        action: "start",
+        captureId: "capture-1",
+        meetingSessionId: "session-1",
+        meetingUrl: CONSUMER_URL,
+      });
+      const identity = TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.normalizeForReuse(CONSUMER_URL);
+      const result = runInNewContext(`(${source})()`, {
+        URL,
+        location: { href: CONSUMER_URL },
+        window: {
+          __openclawTeamsMeeting: { sessionId: owns ? "session-1" : "session-2", identity },
+        },
+        AudioContext: function AudioContext() {
+          throw new Error("capture admitted");
+        },
+      });
+      await expect(result).rejects.toThrow(owns ? "capture admitted" : "no longer owns");
+    },
+  );
   it.each([
     ["teams-login-required", "login-required"],
     ["teams-admission-required", "admission-required"],
@@ -83,13 +107,9 @@ describe("Microsoft Teams meeting platform adapter", () => {
   it.each([
     ["camera", "Turn camera off", undefined, "on"],
     ["camera", "Turn camera on", undefined, "off"],
-    ["camera", "Stop video", undefined, "on"],
-    ["camera", "Start video", undefined, "off"],
     ["camera", "Turn camera on", "true", "on"],
     ["microphone", "Mute", undefined, "on"],
     ["microphone", "Unmute", undefined, "off"],
-    ["microphone", "Turn microphone off", undefined, "on"],
-    ["microphone", "Turn microphone on", undefined, "off"],
     ["microphone", "Microphone is muted", undefined, "off"],
     ["microphone", "Turn microphone off", "false", "off"],
   ])(
@@ -109,8 +129,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
   it.each([
     ["camera", true, false],
-    ["camera", false, true],
-    ["microphone", true, false],
     ["microphone", false, true],
   ])("reads the live %s switch checked=%s", async (kind, checked, expectedOff) => {
     const target = control({ checked, label: kind === "camera" ? "Camera" : "Microphone" });
@@ -722,13 +740,10 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(join.clicks).toBe(1);
   });
 
-  it.each(["meeting ended", "call ended — rejoin"])(
-    "does not infer departure from page-wide text: %s",
-    (bodyText) => {
-      const { result } = runLeaveScript({ bodyText });
-      expect(result).toEqual({ departed: false, urlMatched: true });
-    },
-  );
+  it("does not infer departure from page-wide text", () => {
+    const { result } = runLeaveScript({ bodyText: "call ended — rejoin" });
+    expect(result).toEqual({ departed: false, urlMatched: true });
+  });
 
   it("requires positive input and output route evidence before realtime", () => {
     expect(

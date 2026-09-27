@@ -24,10 +24,18 @@ import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
-import { listAgentEntries, resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
-import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
+import {
+  listAgentEntriesWithSource,
+  resolveAgentConfig,
+  resolveSessionAgentIds,
+} from "./agent-scope.js";
+import {
+  resolveProviderToolPolicy,
+  resolveProviderToolPolicyEntry,
+} from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
@@ -40,6 +48,7 @@ import {
   type SubagentSessionRole,
 } from "./subagents/spawn/subagent-capabilities.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
+import type { ConfiguredToolPolicySources } from "./tool-policy-pipeline.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
@@ -315,6 +324,16 @@ function resolveExplicitProfileAlsoAllow(tools?: OpenClawConfig["tools"]): strin
   return Array.isArray(tools?.alsoAllow) ? tools.alsoAllow : undefined;
 }
 
+function profileAllowsGatewayConfigReads(profile?: string, alsoAllow?: string[]): boolean {
+  const policy = resolveToolProfilePolicy(profile);
+  if (!policy?.allow || policy.allow.includes("*")) {
+    return true;
+  }
+  // Limited profiles expose updates; configuration reads still require an explicit grant.
+  const allow = normalizeUniqueSingleOrTrimmedStringList(alsoAllow);
+  return allow.length > 0 && createToolPolicyMatcher({ allow })("gateway");
+}
+
 function hasExplicitToolSection(section: unknown): boolean {
   return section !== undefined && section !== null;
 }
@@ -353,9 +372,9 @@ export function resolveEffectiveToolPolicy(params: {
     typeof params.agentId === "string" && params.agentId.trim()
       ? normalizeAgentId(params.agentId)
       : undefined;
+  const agentEntries = params.config ? listAgentEntriesWithSource(params.config) : [];
   const canResolveConfiguredAgent =
-    params.config &&
-    (!hasAgentRosterProperty(params.config) || listAgentEntries(params.config).length > 0);
+    params.config && (!hasAgentRosterProperty(params.config) || agentEntries.length > 0);
   const agentId = canResolveConfiguredAgent
     ? resolveSessionAgentIds({
         config: params.config,
@@ -377,16 +396,92 @@ export function resolveEffectiveToolPolicy(params: {
 
   const profile = agentTools?.profile ?? globalTools?.profile;
   const profileSource = agentTools?.profile ? "agent" : globalTools?.profile ? "global" : undefined;
-  const providerPolicy = resolveProviderToolPolicy({
+  const providerEntry = resolveProviderToolPolicyEntry({
     byProvider: globalTools?.byProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
-  const agentProviderPolicy = resolveProviderToolPolicy({
+  const agentProviderEntry = resolveProviderToolPolicyEntry({
     byProvider: agentTools?.byProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+  const providerPolicy = providerEntry?.policy;
+  const agentProviderPolicy = agentProviderEntry?.policy;
+  const agentSource = agentEntries.find(
+    ({ entry }) => normalizeAgentId(entry.id) === agentId,
+  )?.source;
+  const agentToolsPath = agentSource
+    ? formatConcreteConfigPath([
+        "agents",
+        agentSource.kind,
+        agentSource.kind === "entries" ? agentSource.key : agentSource.index,
+        "tools",
+      ])
+    : params.config &&
+        !hasAgentRosterProperty(params.config) &&
+        !agentConfig?.tools &&
+        implicitDefaultTools
+      ? "agents.defaults.tools"
+      : `agents.entries.${agentId}.tools`;
+  const providerPath = providerEntry
+    ? `tools.byProvider[${JSON.stringify(providerEntry.key)}]`
+    : undefined;
+  const agentProviderPath = agentProviderEntry
+    ? `${agentToolsPath}.byProvider[${JSON.stringify(agentProviderEntry.key)}]`
+    : undefined;
+  const providerProfilePath = agentProviderPolicy?.profile ? agentProviderPath : providerPath;
+  // A new agent list shadows the inherited list. Omit the append recipe when
+  // it would silently discard inherited grants, or conflict with tools.allow.
+  const profileAlsoAllowPath =
+    !agentTools?.allow && (agentTools?.alsoAllow || !globalTools?.alsoAllow?.length)
+      ? `${agentToolsPath}.alsoAllow`
+      : undefined;
+  const sources: ConfiguredToolPolicySources = {
+    profile: {
+      kind: "profile",
+      path: profileSource === "agent" ? `${agentToolsPath}.profile` : "tools.profile",
+      profile,
+      alsoAllowPath: profileAlsoAllowPath,
+    },
+    providerProfile: {
+      kind: "profile",
+      path: providerProfilePath ? `${providerProfilePath}.profile` : undefined,
+      profile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
+      // Provider-specific repairs need to preserve both inherited provider
+      // settings and the base profile; leave those to the detailed sources.
+    },
+    global: { kind: "config", path: "tools" },
+    globalProvider: { kind: "config", path: providerPath },
+    agent: { kind: "config", path: agentToolsPath },
+    agentProvider: { kind: "config", path: agentProviderPath },
+  };
+  const profiles = [
+    ...(globalTools?.profile
+      ? [{ profile: globalTools.profile, source: "tools.profile", active: !agentTools?.profile }]
+      : []),
+    ...(agentTools?.profile
+      ? [{ profile: agentTools.profile, source: `${agentToolsPath}.profile`, active: true }]
+      : []),
+    ...(providerPolicy?.profile && providerPath
+      ? [
+          {
+            profile: providerPolicy.profile,
+            source: `${providerPath}.profile`,
+            active: !agentProviderPolicy?.profile,
+          },
+        ]
+      : []),
+    ...(agentProviderPolicy?.profile && agentProviderPath
+      ? [
+          {
+            profile: agentProviderPolicy.profile,
+            source: `${agentProviderPath}.profile`,
+            active: true,
+          },
+        ]
+      : []),
+  ];
   const explicitProfileAlsoAllow =
     resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
   const agentPolicy = pickSandboxToolPolicy(agentTools);
@@ -403,6 +498,8 @@ export function resolveEffectiveToolPolicy(params: {
 
   const effectivePolicy = {
     agentId,
+    sources,
+    profiles,
     globalPolicy: pickSandboxToolPolicy(globalTools),
     globalProviderPolicy: pickSandboxToolPolicy(providerPolicy),
     agentPolicy,
@@ -419,6 +516,13 @@ export function resolveEffectiveToolPolicy(params: {
         ? providerPolicy?.alsoAllow
         : undefined,
   };
+
+  const gatewayConfigReadAllowed =
+    profileAllowsGatewayConfigReads(profile, effectivePolicy.profileAlsoAllow) &&
+    profileAllowsGatewayConfigReads(
+      effectivePolicy.providerProfile,
+      effectivePolicy.providerProfileAlsoAllow,
+    );
 
   // Recommend removed implicit grants only when adding them to the profile
   // can work: every other static policy layer must permit the tool.
@@ -466,15 +570,23 @@ export function resolveEffectiveToolPolicy(params: {
     }
   }
 
-  return effectivePolicy;
+  return { ...effectivePolicy, gatewayConfigReadAllowed };
 }
 
-function denyAllToolPolicy(): SandboxToolPolicy {
-  return { allow: [], deny: ["*"] };
+type GroupToolPolicyOutcome =
+  | { kind: "resolved"; policy?: SandboxToolPolicy }
+  | { kind: "account-unavailable"; accountId: string; message: string };
+
+function unavailableScheduledAccount(accountId: string): GroupToolPolicyOutcome {
+  return {
+    kind: "account-unavailable",
+    accountId,
+    message: `Scheduled account "${accountId}" is unavailable. Re-add it to the channel configuration, or recreate this automation from the intended account.`,
+  };
 }
 
-/** Resolve group-scoped tool policy after validating session provenance. */
-export function resolveGroupToolPolicy(params: {
+/** Resolve policy without conflating unavailable scheduled authority with intentional denial. */
+export function resolveGroupToolPolicyOutcome(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   spawnedBy?: string | null;
@@ -490,9 +602,9 @@ export function resolveGroupToolPolicy(params: {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
-}): SandboxToolPolicy | undefined {
+}): GroupToolPolicyOutcome {
   if (!params.config) {
-    return undefined;
+    return { kind: "resolved" };
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
@@ -513,8 +625,8 @@ export function resolveGroupToolPolicy(params: {
   const accountId = normalizeAccountId(params.accountId);
   if (!channel) {
     return params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID
-      ? denyAllToolPolicy()
-      : undefined;
+      ? unavailableScheduledAccount(accountId)
+      : { kind: "resolved" };
   }
   let plugin;
   try {
@@ -533,13 +645,11 @@ export function resolveGroupToolPolicy(params: {
       configured = false;
     }
     if (!configured) {
-      // A named creator account is an authority boundary, not a fallback hint.
-      // If it disappears, deny the scheduled surface instead of selecting default config.
-      return denyAllToolPolicy();
+      return unavailableScheduledAccount(accountId);
     }
   }
   if (groupIds.length === 0) {
-    return undefined;
+    return { kind: "resolved" };
   }
   for (const groupId of groupIds) {
     const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
@@ -556,7 +666,7 @@ export function resolveGroupToolPolicy(params: {
     });
     const policy = pickSandboxToolPolicy(toolsConfig);
     if (policy) {
-      return policy;
+      return { kind: "resolved", policy };
     }
   }
   const configTools = resolveChannelGroupToolsPolicy({
@@ -572,5 +682,16 @@ export function resolveGroupToolPolicy(params: {
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
   });
-  return pickSandboxToolPolicy(configTools);
+  return { kind: "resolved", policy: pickSandboxToolPolicy(configTools) };
+}
+
+/** Tool-building callers must stop before exposing a surface with unavailable authority. */
+export function resolveGroupToolPolicy(
+  params: Parameters<typeof resolveGroupToolPolicyOutcome>[0],
+): SandboxToolPolicy | undefined {
+  const outcome = resolveGroupToolPolicyOutcome(params);
+  if (outcome.kind === "account-unavailable") {
+    throw new Error(outcome.message);
+  }
+  return outcome.policy;
 }

@@ -7,7 +7,7 @@ status: active
 
 Manage sandbox runtimes for isolated agent execution: Docker/Podman containers, SSH targets, or OpenShell backends.
 
-[`openclaw agent exec`](/cli/agent#agent-exec) does not use these configured runtimes. Its isolated implicit policy config turns the agent sandbox off, allows full Gateway-host execution, and restricts filesystem tools to `--cwd`.
+[`openclaw agent exec`](/cli/agent#agent-exec) preserves a sandbox selected by the inherited config or `--config`, including its execution routing. Without a configured sandbox, its defaults allow full Gateway-host execution and restrict filesystem tools to `--cwd`. `--isolated` and `--auth-env-only` skip config inheritance and use those defaults.
 
 ## Commands
 
@@ -47,6 +47,18 @@ Options:
 
 Pass exactly one of `--all`, `--session`, or `--agent`.
 
+Scoped recreation selects registry entries before inspecting their backends. An
+unrelated runtime on another Podman connection or an unavailable backend does not
+block `--session` or `--agent`. The selected runtime still requires its recorded
+target to be active and reachable; `--force` only skips the confirmation prompt.
+Browser-only recreation does not inspect regular sandbox runtimes.
+
+When recorded Podman targets differ, an unscoped `sandbox list` can still fail its
+target check. Restore the affected runtime's original connection, use its known
+exact scope key with `recreate --session`, and review the preview before confirming.
+If you do not know the exact scope, keep the registry intact; do not guess a key,
+broaden to `--all`, or rewrite its recorded target to bypass validation.
+
 For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the remote workspace is canonical after the initial seed, `recreate` deletes that canonical remote workspace for the selected scope, and the next run reseeds it from the current local workspace.
 
 ### `openclaw sandbox explain`
@@ -75,13 +87,13 @@ Prefer `openclaw sandbox recreate` over manual backend-specific cleanup. It uses
 
 ## Common triggers
 
-| Change                                                                                                                                                         | Command                                                             |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Container sandbox image update (`agents.defaults.sandbox.docker.image`)                                                                                        | `openclaw sandbox recreate --all`                                   |
-| Sandbox config (`agents.defaults.sandbox.*`)                                                                                                                   | `openclaw sandbox recreate --all`                                   |
-| SSH target/auth (`agents.defaults.sandbox.ssh.{target,workspaceRoot,identityFile,certificateFile,knownHostsFile,identityData,certificateData,knownHostsData}`) | `openclaw sandbox recreate --all`                                   |
-| OpenShell source/policy/mode (`plugins.entries.openshell.config.{from,mode,policy}`)                                                                           | `openclaw sandbox recreate --all`                                   |
-| `setupCommand`                                                                                                                                                 | `openclaw sandbox recreate --all` (or `--agent <id>` for one agent) |
+Run `openclaw sandbox recreate --all` after any of these changes:
+
+- Container sandbox image update: `agents.defaults.sandbox.docker.image`
+- Sandbox config: `agents.defaults.sandbox.*`
+- SSH target/auth: `agents.defaults.sandbox.ssh.{target,workspaceRoot,identityFile,certificateFile,knownHostsFile,identityData,certificateData,knownHostsData}`
+- OpenShell source/policy/mode: `plugins.entries.openshell.config.{from,mode,policy}`
+- `setupCommand` — `--agent <id>` recreates one agent instead of all
 
 <Note>
 Runtimes are automatically recreated when the agent is next used.
@@ -130,3 +142,4 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
 - [Sandboxing](/gateway/sandboxing)
 - [Agent workspace](/concepts/agent-workspace)
 - [Doctor](/gateway/doctor): checks sandbox setup.
+- [OpenShell](/gateway/openshell) — a managed sandbox backend driven through the `openshell` CLI

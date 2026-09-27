@@ -54,7 +54,10 @@ it.each([
     } else {
       expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
     }
-    expect(container.querySelector(".chat-sender-name")?.textContent).toContain("Example User");
+    expect(container.querySelector(".chat-group.user .chat-sender-name")).toBeNull();
+    expect(container.querySelector(".chat-group.assistant .chat-sender-name")?.textContent).toBe(
+      "Molty",
+    );
     expect(container.textContent).toContain("Workspace inspected");
     transcript.hostDisconnected();
   },
@@ -72,6 +75,9 @@ it("hides avatars for a subagent key before its session row loads", async () => 
   await flushDeferredRowPrune();
   expect(container.querySelectorAll(".chat-group").length).toBeGreaterThan(0);
   expect(container.querySelector(".chat-avatar, .chat-author-avatar")).toBeNull();
-  expect(container.querySelector(".chat-sender-name")?.textContent).toContain("Example User");
+  expect(container.querySelector(".chat-group.user .chat-sender-name")).toBeNull();
+  expect(container.querySelector(".chat-group.assistant .chat-sender-name")?.textContent).toBe(
+    "Molty",
+  );
   transcript.hostDisconnected();
 });

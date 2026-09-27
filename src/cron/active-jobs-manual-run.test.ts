@@ -16,12 +16,13 @@
 //
 // Production hot-path: cron.run("<id>", "force") direct invocation, the same
 // surface used by the `openclaw cron run` CLI / RPC and agent tools. No
-// internal-API rerouting (e.g. deferAgentTurnJobs:false) — the test exercises
+// internal-API rerouting (e.g. deferAgentWork:false) — the test exercises
 // the same `prepareManualRun` → `finishPreparedManualRun` chain that hits
 // production callers.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   advanceCronActiveJobGeneration,
   clearCronJobActive,
@@ -72,6 +73,8 @@ async function createManualRunHarness(jobId: string) {
   const entered = createDeferred();
   const release = createDeferred<IsolatedRunResult>();
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath: store.storePath,
     cronEnabled: true,
     log: logger,
@@ -198,6 +201,8 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
     const onIsolatedAgentSetupTimeout = vi.fn();
     let startedCount = 0;
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath: store.storePath,
       cronEnabled: true,
       log: logger,

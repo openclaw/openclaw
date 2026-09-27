@@ -167,7 +167,6 @@ describe("node execution target resolution", () => {
   });
 
   it.each([
-    { name: "alone", siblings: [] },
     {
       name: "beside a connected non-executor",
       siblings: [
@@ -278,7 +277,7 @@ function createDirectNodeRun(signal?: AbortSignal): DirectNodeRun {
       env: undefined,
       invokeDeadlineMs: 30_000,
       invokeWaitMs: 35_000,
-      runTimeoutSec: 30,
+      runTimeoutMs: 30_000,
       supportsSystemRunPrepare: true,
     },
   };

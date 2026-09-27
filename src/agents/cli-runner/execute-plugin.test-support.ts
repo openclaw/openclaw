@@ -4,6 +4,7 @@ import type {
   CliBackendExecuteContext,
 } from "../../plugins/cli-backend.types.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { resetAdjustedParamsByToolCallIdForTests } from "../agent-tools.before-tool-call.state.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
@@ -74,6 +75,7 @@ export function runPlugin(
     useResume?: boolean;
     forceNewSession?: boolean;
     liveSession?: boolean;
+    mcpCapture?: Parameters<typeof executePluginOwnedProcess>[0]["mcpCapture"];
     requiredGeneration?: string;
     onNoOutputTimeout?: NonNullable<
       Parameters<typeof executePluginOwnedProcess>[0]["onNoOutputTimeout"]
@@ -95,15 +97,11 @@ export function runPlugin(
     promptContext: context.promptContext,
     useResume: options.useResume ?? Boolean(options.requiredGeneration),
     sessionId: options.sessionId ?? "sdk-session",
+    mcpCapture: options.mcpCapture,
     ...(options.forceNewSession ? { forceNewSession: true } : {}),
     ...(options.liveSession || options.requiredGeneration
       ? {
-          liveSession: {
-            beginCapture: () => {},
-            ...(options.requiredGeneration
-              ? { requiredGeneration: options.requiredGeneration }
-              : {}),
-          },
+          liveSession: { requiredGeneration: options.requiredGeneration },
         }
       : {}),
     ...(options.onNoOutputTimeout ? { onNoOutputTimeout: options.onNoOutputTimeout } : {}),
@@ -134,4 +132,22 @@ export function closePluginTestAdmissions(): void {
   for (const admission of activeAdmissions.splice(0)) {
     admission.close();
   }
+  resetAdjustedParamsByToolCallIdForTests();
+}
+
+export function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {
+  const signal = execution.abortSignal;
+  if (!signal) {
+    throw new Error("Host execution did not expose its abort signal.");
+  }
+  return new Promise((_, reject) => {
+    signal.addEventListener(
+      "abort",
+      () =>
+        reject(
+          signal.reason instanceof Error ? signal.reason : new Error("CLI test run was aborted."),
+        ),
+      { once: true },
+    );
+  });
 }

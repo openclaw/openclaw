@@ -13,21 +13,20 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
+import * as sqliteRead from "../agents/auth-profiles/sqlite-read.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
-import type { RuntimeEnv } from "../runtime.js";
+import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { agentExecCommand } from "./agent-exec.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createRuntime() {
-  return { runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv };
-}
 
 function successResult() {
   return {
@@ -42,6 +41,50 @@ afterEach(() => {
 });
 
 describe("agent exec stored auth", () => {
+  it("does not start a canceled agent after shared auth preparation settles", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+      writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} });
+      const started = createDeferredCore();
+      const pendingRows = createDeferredCore<AuthProfileRowRead>();
+      const emptyRows: AuthProfileRowRead = {
+        store: { status: "readable", raw: { version: 1, profiles: {} } },
+        state: { status: "missing", reason: "row" },
+        cacheable: true,
+      };
+      let temporaryStateDir = "";
+      vi.spyOn(sqliteRead, "readSharedAuthProfileRows").mockImplementation(() => {
+        temporaryStateDir = process.env.OPENCLAW_STATE_DIR!;
+        started.resolve();
+        return pendingRows.promise;
+      });
+      const controller = new AbortController();
+      const runAgent = vi.fn(async () => successResult());
+      const executing = agentExecCommand("inspect", {}, createTestRuntime(), {
+        abortSignal: controller.signal,
+        runAgent,
+      });
+      try {
+        await Promise.race([
+          started.promise,
+          executing.then(() => {
+            throw new Error("Agent exec completed before shared auth preparation");
+          }),
+        ]);
+        controller.abort(new Error("fixture operator canceled preparation"));
+        pendingRows.resolve(emptyRows);
+        const result = await executing;
+        expect(result.exitCode).toBe(1);
+        expect(result.envelope.error?.message).toContain("fixture operator canceled preparation");
+        expect(runAgent).not.toHaveBeenCalled();
+        await expect(fs.stat(temporaryStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        pendingRows.resolve(emptyRows);
+        await executing;
+      }
+    });
+  });
+
   it("skips external Codex CLI credentials under --auth-env-only", async () => {
     const codexHome = tempDirs.make("openclaw-agent-exec-codex-home-");
     await fs.writeFile(
@@ -58,7 +101,7 @@ describe("agent exec stored auth", () => {
     process.env.CODEX_HOME = codexHome;
     process.env.OPENAI_API_KEY = "test-openai-key";
     process.env.DATABASE_URL = "postgres://test.invalid/database";
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let profileIds: string[] = [];
     let runtimeProfileIds: string[] = [];
     let hostExecApiKey: string | undefined;
@@ -166,7 +209,7 @@ describe("agent exec stored auth", () => {
             );
           }
           setRuntimeAuthProfileStoreSnapshot(sharedStore, state.agentDir());
-          const { runtime } = createRuntime();
+          const runtime = createTestRuntime();
           let resolvedKey: string | undefined;
           const result = await agentExecCommand("inspect", {}, runtime, {
             runAgent: async () => {
@@ -230,7 +273,7 @@ describe("agent exec stored auth", () => {
     await withOpenClawTestState({ scenario: "minimal", layout: "split" }, async (state) => {
       writeConfigMachineState("auth.sharedStore", { location: "state-db" });
       writePersistedAuthProfileStoreRaw({ version: 1, profiles: "invalid" });
-      const { runtime } = createRuntime();
+      const runtime = createTestRuntime();
       const runAgent = vi.fn(async () => successResult());
       const result = await agentExecCommand("inspect", {}, runtime, { runAgent });
       expect(result.envelope.error?.message).toContain(
@@ -261,7 +304,7 @@ describe("agent exec stored auth", () => {
       },
       customAgentDir,
     );
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let scopedProfileIds: string[] = [];
 
     await agentExecCommand("inspect", { config: seedPath }, runtime, {
@@ -291,7 +334,7 @@ describe("agent exec stored auth", () => {
       },
       normalAgentDir,
     );
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let persistedCredential: unknown;
     let ownerAgentDir: string | undefined;
     try {
@@ -335,7 +378,7 @@ describe("agent exec stored auth", () => {
       },
       normalAgentDir,
     );
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let profileIds: string[] = [];
     try {
       await agentExecCommand("inspect", { authEnvOnly: false }, runtime, {

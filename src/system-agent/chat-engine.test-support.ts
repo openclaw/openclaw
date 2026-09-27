@@ -21,6 +21,7 @@ import {
   resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
+import type { SystemAgentOverview } from "./overview.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture as createSystemAgentVerifiedInferenceTestFixtureImpl,
   createSystemAgentPluginMetadataTestSnapshot,
@@ -249,7 +250,7 @@ export async function createOAuthVerifiedBinding(
     auth: { authProfileId: profileId, authFingerprint, ...harnessBinding.auth },
     deps: {
       ...harnessBinding.deps,
-      ensureAuthProfileStore: vi.fn(() => ({
+      loadAuthProfileStoreForRuntime: vi.fn(() => ({
         version: 1,
         profiles: { [profileId]: credential },
       })) as never,
@@ -430,26 +431,31 @@ export const CANCEL_HINT = "Say `cancel` to stop this setup.";
 export const countCancelHints = (text: string) => text.split(CANCEL_HINT).length - 1;
 
 export function fakeOverviewLoader(
-  overrides: { defaultModel?: string; claudeFound?: boolean; codexFound?: boolean } = {},
+  overrides: {
+    defaultModel?: string;
+    setupModel?: string;
+    claudeFound?: boolean;
+    codexFound?: boolean;
+  } = {},
 ) {
-  return async () =>
-    ({
-      config: { path: "/tmp/openclaw.json", exists: false, valid: true, issues: [], hash: null },
-      agents: [],
-      defaultAgentId: "main",
-      defaultModel: overrides.defaultModel,
-      tools: {
-        codex: { command: "codex", found: overrides.codexFound ?? false },
-        claude: { command: "claude", found: overrides.claudeFound ?? false },
-        gemini: { command: "gemini", found: false },
-        apiKeys: { openai: false, anthropic: false },
-      },
-      gateway: { url: "ws://127.0.0.1:18789", source: "local", reachable: false },
-      references: {
-        docsUrl: "https://docs.openclaw.ai",
-        sourceUrl: "https://github.com/openclaw/openclaw",
-      },
-    }) as never;
+  return async (): Promise<SystemAgentOverview> => ({
+    config: { path: "/tmp/openclaw.json", exists: false, valid: true, issues: [], hash: null },
+    agents: [],
+    defaultAgentId: "main",
+    defaultModel: overrides.defaultModel,
+    ...(overrides.setupModel ? { setupModel: overrides.setupModel } : {}),
+    tools: {
+      codex: { command: "codex", found: overrides.codexFound ?? false },
+      claude: { command: "claude", found: overrides.claudeFound ?? false },
+      gemini: { command: "gemini", found: false },
+      apiKeys: { openai: false, anthropic: false },
+    },
+    gateway: { url: "ws://127.0.0.1:18789", source: "local", reachable: false },
+    references: {
+      docsUrl: "https://docs.openclaw.ai",
+      sourceUrl: "https://github.com/openclaw/openclaw",
+    },
+  });
 }
 
 export { expectDefined } from "@openclaw/normalization-core";

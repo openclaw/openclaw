@@ -90,13 +90,6 @@ function resolveMatchScore(
   queryNormalized: string,
   queryCompact: string | undefined,
 ): number {
-  // Match class outranks selection heuristics: exact ids beat IPs, names, and id prefixes.
-  if (node.nodeId === query) {
-    return 4_000;
-  }
-  if (typeof node.remoteIp === "string" && node.remoteIp === query) {
-    return 3_000;
-  }
   const name = typeof node.displayName === "string" ? node.displayName : "";
   const nameNormalized = name ? normalizeNodeKey(name) : "";
   if (nameNormalized && nameNormalized === queryNormalized) {
@@ -126,20 +119,26 @@ export function resolveNodeIdFromCandidates(
     throw new Error("node required");
   }
 
-  const normalized = normalizeNodeKey(q);
-  const compact = allowCompactDisplayName ? normalized.replace(/-/g, "") : undefined;
-  let topMatchScore = 0;
-  const strongestMatches: NodeMatchCandidate[] = [];
-  nodes.forEach((node) => {
-    const score = resolveMatchScore(node, q, normalized, compact);
-    if (score > topMatchScore) {
-      topMatchScore = score;
-      strongestMatches.length = 0;
-    }
-    if (score > 0 && score === topMatchScore) {
-      strongestMatches.push(node);
-    }
-  });
+  // Exact ids and IPs outrank names; retain every tie before applying heuristics.
+  let strongestMatches = nodes.filter((node) => node.nodeId === q);
+  if (strongestMatches.length === 0) {
+    strongestMatches = nodes.filter((node) => node.remoteIp === q);
+  }
+  if (strongestMatches.length === 0) {
+    const normalized = normalizeNodeKey(q);
+    const compact = allowCompactDisplayName ? normalized.replace(/-/g, "") : undefined;
+    let topMatchScore = 0;
+    nodes.forEach((node) => {
+      const score = resolveMatchScore(node, q, normalized, compact);
+      if (score > topMatchScore) {
+        topMatchScore = score;
+        strongestMatches.length = 0;
+      }
+      if (score > 0 && score === topMatchScore) {
+        strongestMatches.push(node);
+      }
+    });
+  }
   if (strongestMatches.length === 0) {
     const known = listKnownNodes(nodes);
     throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);

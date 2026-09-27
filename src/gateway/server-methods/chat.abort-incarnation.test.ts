@@ -1,14 +1,14 @@
 /** Cancellation binds session incarnations and retains exact durable dispatch fences. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -17,12 +17,10 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  listOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
+import { observeSessionWorkAdmissionDrain } from "../../sessions/session-lifecycle-admission.test-support.js";
+import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
-import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -75,7 +73,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         defaultSessionId: `${runId}-session`,
         lifecycleRevision: "original",
       });
-      registerSubagentRun({
+      const registration = registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: parentKey,
@@ -87,6 +85,9 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         collect: true,
         expectsCompletionMessage: false,
       });
+      if (registration) {
+        await registration;
+      }
       // Running fixture turns need real ownership so cold lifecycle setup cannot
       // let the registry sweeper mistake them for lost executions.
       registerAgentRunContext(runId, {
@@ -104,7 +105,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       });
       await vi.waitFor(() => expect(ended.execution.status).toBe("terminal"));
       clearAgentRunContext("ended");
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       expect(ended.endedReason).toBe("subagent-complete");
     }
     expect(subagentRuns.get("ended")).toBe(ended);
@@ -118,7 +119,6 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       assertAllowed: () => {},
       onInterrupt: () => admission.release(),
     });
-    const interruptAdmissions = sessionLifecycle.interruptSessionWorkAdmissions;
     const mutateSession = sessionLifecycle.runExclusiveSessionLifecycleMutation;
     let holdEndedMutation = !completed;
     const mutation = vi
@@ -138,19 +138,15 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         }
         return await mutateSession(params);
       });
-    const drain = vi
-      .spyOn(sessionLifecycle, "interruptSessionWorkAdmissions")
-      .mockImplementation(async (params) => {
-        const released = await interruptAdmissions(params);
-        if (params.scope === storePath && Array.from(params.identities).includes(activeKey)) {
-          expect(released).toBe(true);
-          // Keep the captured kill scope pending after the real drain. A cold
-          // sibling reset must not consume the active admission's deadline.
-          entered.resolve();
-          await resume.promise;
-        }
-        return released;
-      });
+    const restoreDrain = observeSessionWorkAdmissionDrain(async (params, released) => {
+      if (params.scope === storePath && Array.from(params.identities).includes(activeKey)) {
+        expect(released).toBe(true);
+        // Keep the captured kill scope pending after the real drain. A cold
+        // sibling reset must not consume the active admission's deadline.
+        entered.resolve();
+        await resume.promise;
+      }
+    });
     const abort = abortParent();
     const dispatch = vi.fn(async () => {});
     const interrupted = vi.fn();
@@ -200,7 +196,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           },
         });
       }
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: "grandchild",
         childSessionKey: grandchildKey,
         requesterSessionKey: endedKey,
@@ -246,7 +242,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       try {
         await abort.pending;
       } finally {
-        drain.mockRestore();
+        restoreDrain();
         mutation.mockRestore();
         releaseSwarmRun("capacity");
         releaseSwarmRun("grandchild");
@@ -269,7 +265,7 @@ it.each(["child", "ancestor"])(
         sessionKey: ancestorKey,
         defaultSessionId: "ancestor-session",
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: "ancestor",
         childSessionKey: ancestorKey,
         requesterSessionKey: parentKey,
@@ -293,7 +289,7 @@ it.each(["child", "ancestor"])(
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: faultOwner === "ancestor" && runId === "bad" ? ancestorKey : parentKey,

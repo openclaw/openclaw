@@ -3,7 +3,7 @@
  */
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
-import { sessionDeliveryChannel } from "../../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../../utils/delivery-context.read.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import { waitForAnnounceRetryDelay } from "./subagent-announce-delivery-retry.js";
@@ -11,7 +11,6 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   getSubagentAnnounceRuntimeConfig,
   getSubagentRequesterSessionActivity,
-  isEmbeddedAgentRunActive,
   resolveSubagentRequesterSessionAbandonment,
   loadRequesterSessionEntry,
   queueSubagentAnnounceMessage,
@@ -21,14 +20,6 @@ import {
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 const SOURCE_OWNER_CHANGED = Symbol("source_owner_changed");
-
-function formatQueueWakeFailureError(
-  fallback: string,
-  outcome: EmbeddedAgentQueueMessageOutcome,
-): string {
-  const summary = formatEmbeddedAgentQueueFailureSummary(outcome);
-  return summary ? `${fallback}: ${summary}` : fallback;
-}
 
 export function resolveRequesterSessionActivity(
   requesterSessionKey: string,
@@ -43,16 +34,7 @@ export function resolveRequesterSessionActivity(
   if (!resolvedAgentId) {
     return { isActive: false };
   }
-  const activity = getSubagentRequesterSessionActivity(requesterSessionKey, resolvedAgentId);
-  if (activity.sessionId || activity.isActive) {
-    return activity;
-  }
-  const { entry } = loadRequesterSessionEntry(requesterSessionKey, resolvedAgentId);
-  const sessionId = entry?.sessionId;
-  return {
-    sessionId,
-    isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
-  };
+  return getSubagentRequesterSessionActivity(requesterSessionKey, resolvedAgentId);
 }
 
 // Backoff schedule for re-attempting an active-requester steer while the run is
@@ -75,6 +57,7 @@ export async function resolveActiveWakeWithRetries(
   wakeOptions: EmbeddedAgentQueueMessageOptions,
   signal?: AbortSignal,
   isAttemptAllowed?: () => boolean,
+  isSourceSessionAdmissionAllowed?: () => boolean,
 ): Promise<EmbeddedAgentQueueMessageOutcome | typeof SOURCE_OWNER_CHANGED> {
   // Bound the whole active wake by the caller's delivery window. Each retry
   // passes only the remaining window into transcript-commit waiting so a
@@ -97,11 +80,14 @@ export async function resolveActiveWakeWithRetries(
       deliveryTimeoutMs: remainingDeliveryTimeoutMs,
     };
   };
+  const canInject = isSourceSessionAdmissionAllowed
+    ? () => isAttemptAllowed?.() !== false && isSourceSessionAdmissionAllowed()
+    : undefined;
   const attemptWake = async (options: EmbeddedAgentQueueMessageOptions) => {
-    if (isAttemptAllowed?.() === false) {
+    if (isAttemptAllowed?.() === false || isSourceSessionAdmissionAllowed?.() === false) {
       return SOURCE_OWNER_CHANGED;
     }
-    const result = await queueSubagentAnnounceMessage(sessionId, message, options);
+    const result = await queueSubagentAnnounceMessage(sessionId, message, options, canInject);
     return isAttemptAllowed?.() === false ? SOURCE_OWNER_CHANGED : result;
   };
   let outcome = await attemptWake(currentOptions);
@@ -114,7 +100,7 @@ export async function resolveActiveWakeWithRetries(
     if (outcome.queued || signal?.aborted) {
       break;
     }
-    if (isAttemptAllowed?.() === false) {
+    if (isAttemptAllowed?.() === false || isSourceSessionAdmissionAllowed?.() === false) {
       outcome = SOURCE_OWNER_CHANGED;
       break;
     }
@@ -181,6 +167,7 @@ export async function maybeSteerSubagentAnnounce(params: {
   createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
   signal?: AbortSignal;
   isSourceSessionEffectsAllowed?: () => boolean;
+  isSourceSessionAdmissionAllowed?: () => boolean;
 }): Promise<
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
   | { status: "none" | "dropped" | "source_owner_changed" }
@@ -233,6 +220,7 @@ export async function maybeSteerSubagentAnnounce(params: {
     queueOptions,
     params.signal,
     params.isSourceSessionEffectsAllowed,
+    params.isSourceSessionAdmissionAllowed,
   );
   if (queueOutcome === SOURCE_OWNER_CHANGED) {
     return { status: "source_owner_changed" };
@@ -248,9 +236,12 @@ export async function maybeSteerSubagentAnnounce(params: {
   // A stale_run refusal means the requester run is evidence-dead: it will not
   // drain its steer queue, so "dropped" would discard the handoff. Report
   // not-active so dispatch takes the direct fallback instead.
+  // Unguarded sinks likewise leave source-bound input to the direct Gateway path.
   if (
     queueOutcome.reason === "stale_run" ||
-    queueOutcome.reason === "transcript_commit_wait_unsupported"
+    queueOutcome.reason === "transcript_commit_wait_unsupported" ||
+    (params.isSourceSessionAdmissionAllowed !== undefined &&
+      queueOutcome.reason === "guarded_injection_unsupported")
   ) {
     return { status: "none" };
   }
@@ -265,7 +256,8 @@ export function formatActiveWakeFailure(
   fallback: string,
   outcome: EmbeddedAgentQueueMessageOutcome,
 ): string {
-  return formatQueueWakeFailureError(fallback, outcome);
+  const summary = formatEmbeddedAgentQueueFailureSummary(outcome);
+  return summary ? `${fallback}: ${summary}` : fallback;
 }
 
 export function isSourceOwnerChangedWake(

@@ -4,16 +4,19 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import type * as ts from "typescript/unstable/ast";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
-import { visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
+import {
+  createNativeTypeScriptParser,
+  type NativeTypeScriptParser,
+} from "./lib/native-typescript.mts";
 import { optionalBundledClusterSet } from "./lib/optional-bundled-clusters.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { toLine } from "./lib/ts-guard-utils.mts";
+import { toLine, visitModuleSpecifiers } from "./lib/ts-guard-utils.mts";
 
 type ImportEntry = {
   family: string;
@@ -245,11 +248,11 @@ function collectPluginSdkImports(filePath: string, sourceFile: ts.SourceFile): I
 
   const visit = ({ kind, specifierNode, specifier }: ModuleSpecifierVisit) =>
     push(kind, specifierNode, specifier);
-  visitModuleSpecifiers(ts, sourceFile, visit);
+  visitModuleSpecifiers(sourceFile, visit);
   return entries;
 }
 
-async function collectCorePluginSdkImports() {
+async function collectCorePluginSdkImports(parser: NativeTypeScriptParser) {
   const files = await walkCodeFiles(srcRoot);
   const inventory: ImportEntry[] = [];
   for (const filePath of files) {
@@ -257,7 +260,7 @@ async function collectCorePluginSdkImports() {
       continue;
     }
     const source = await fs.readFile(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+    const sourceFile = parser.parseSourceFile(filePath, source);
     inventory.push(...collectPluginSdkImports(filePath, sourceFile));
   }
   return inventory.toSorted(compareImports);
@@ -296,11 +299,11 @@ function collectOptionalClusterStaticImports(
       push(kind, specifierNode, specifier);
     }
   };
-  visitModuleSpecifiers(ts, sourceFile, visit);
+  visitModuleSpecifiers(sourceFile, visit);
   return entries;
 }
 
-async function collectOptionalClusterStaticLeaks() {
+async function collectOptionalClusterStaticLeaks(parser: NativeTypeScriptParser) {
   const files = await walkCodeFiles(srcRoot);
   const inventory: OptionalClusterImportEntry[] = [];
   for (const filePath of files) {
@@ -309,7 +312,7 @@ async function collectOptionalClusterStaticLeaks() {
       continue;
     }
     const source = await fs.readFile(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+    const sourceFile = parser.parseSourceFile(filePath, source);
     inventory.push(...collectOptionalClusterStaticImports(filePath, sourceFile));
   }
   return inventory.toSorted((left, right) => {
@@ -651,7 +654,7 @@ function describeCronSeamKinds(relativePath: string, source: string) {
 
   if (
     importsSchedulerModules &&
-    /\bensureLoaded\b|\bpersist\b|\barmTimer\b|\brunMissedJobs\b|\bcomputeJobNextRunAtMs\b|\brecomputeNextRuns\b|\bnextWakeAtMs\b/.test(
+    /\bensureLoaded\b|\bpersist\b|\barmTimer\b|\brunMissedJobs\b|\bcomputeJobNextRunAtMs\b|\brecomputeNextRunsForMaintenance\b|\bnextWakeAtMs\b/.test(
       source,
     )
   ) {
@@ -827,7 +830,7 @@ export function describeSeamKinds(relativePath: string, source: string) {
   }
   if (
     isReplyDeliveryPath &&
-    /blockStreamingEnabled|directlySentBlockKeys|resolveSendableOutboundReplyParts/.test(source) &&
+    /blockStreamingEnabled|directBlockDeliveries|resolveSendableOutboundReplyParts/.test(source) &&
     /\bmediaUrl\b|\bmediaUrls\b/.test(source)
   ) {
     seamKinds.push("streaming-media-handoff");
@@ -1029,8 +1032,9 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   }
 
   await collectWorkspacePackagePaths();
-  const inventory = await collectCorePluginSdkImports();
-  const optionalClusterStaticLeaks = await collectOptionalClusterStaticLeaks();
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  const inventory = await collectCorePluginSdkImports(parser);
+  const optionalClusterStaticLeaks = await collectOptionalClusterStaticLeaks(parser);
   const staticLeakClusters = new Set(optionalClusterStaticLeaks.map((entry) => entry.cluster));
   const result = {
     duplicatedSeamFamilies: buildDuplicatedSeamFamilies(inventory),

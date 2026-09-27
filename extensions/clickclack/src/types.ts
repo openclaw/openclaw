@@ -6,68 +6,23 @@ import type {
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import type { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
-
-/** Session-linked ClickClack discussion settings for one account. */
-type ClickClackDiscussionsConfig = {
-  enabled?: boolean;
-  workspace?: string;
-  controlUrlBase?: string;
-  section?: string;
-};
+import type { ClickClackAccountConfigInput, ClickClackConfigInput } from "./config-schema.js";
 
 /** Per-channel group policy for a ClickClack group/channel. */
-export type ClickClackGroupConfig = {
-  requireMention?: boolean;
-  mentionPatterns?: string[];
-  allowBots?: boolean | "mentions";
-  botLoopProtection?: ChannelBotLoopProtectionConfig;
-};
+export type ClickClackGroupConfig = NonNullable<ClickClackAccountConfigInput["groups"]>[string];
 
 /** User-configurable settings for one ClickClack account. */
-export type ClickClackAccountConfig = {
-  /** Megabyte cap for media this channel accepts and delivers. */
-  mediaMaxMb?: number;
-  name?: string;
-  enabled?: boolean;
-  responsePrefix?: string;
-  baseUrl?: string;
-  apiBaseUrl?: string;
+export type ClickClackAccountConfig = Omit<
+  ClickClackAccountConfigInput,
+  "configWrites" | "token"
+> & {
   token?: unknown;
-  tokenFile?: string;
-  workspace?: string;
-  botUserId?: string;
-  agentId?: string;
-  replyMode?: "agent" | "model";
-  model?: string;
-  systemPrompt?: string;
-  toolsAllow?: string[];
-  defaultTo?: string;
-  allowFrom?: string[];
-  /** Accept messages authored by other ClickClack bots. */
-  allowBots?: boolean | "mentions";
-  /** Sliding-window bot-pair loop guard for accepted bot messages. */
-  botLoopProtection?: ChannelBotLoopProtectionConfig;
-  reconnectMs?: number;
-  /** Opt-in: publish durable agent activity (commentary + tool) rows. */
-  agentActivity?: boolean;
-  /** Opt-in: publish ephemeral native progress while an agent turn runs. */
-  nativeProgress?: boolean;
-  /** Publish the native command catalog to ClickClack composer autocomplete. */
-  commandMenu?: boolean;
-  /** Create and synchronize one managed ClickClack channel per OpenClaw session. */
-  discussions?: ClickClackDiscussionsConfig;
-  /** Require a direct mention before dispatching group messages (default false). */
-  requireMention?: boolean;
-  /** Mention patterns for this account in group channels. */
-  mentionPatterns?: string[];
-  /** Per-channel group policy overrides keyed by ClickClack channel ID. */
-  groups?: Record<string, ClickClackGroupConfig>;
 };
 
 /** Root ClickClack channel config with optional named accounts. */
-type ClickClackConfig = ClickClackAccountConfig & {
+type ClickClackConfig = Omit<ClickClackConfigInput, "token" | "accounts"> & {
+  token?: unknown;
   accounts?: Record<string, Partial<ClickClackAccountConfig>>;
-  defaultAccount?: string;
 };
 
 /** OpenClaw config narrowed to include ClickClack channel settings. */

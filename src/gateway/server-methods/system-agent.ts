@@ -81,7 +81,8 @@ export type { SystemAgentChatSession };
 const MAX_SYSTEM_AGENT_SESSIONS = 8;
 const SYSTEM_AGENT_SEED_HISTORY_LIMIT = 30;
 const DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT = 100;
-const ACTIVATION_SESSION_TIMEOUT_MS = 8 * 60 * 1000;
+// Covers a provider's 15-minute device-code window plus the post-login probe. Activation of a
+// detected route shares it: without a saved profile or key, activation hosts the same sign-in.
 const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
 const PROVIDER_PREPARE_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 function acknowledgeDeliveredSystemAgentWelcome(session: SystemAgentChatSession): void {
@@ -111,7 +112,10 @@ async function evictOldestSession(
   if (oldestKey !== undefined) {
     const oldest = sessions.get(oldestKey);
     if (oldest?.pendingApproval) {
-      context.systemAgentApprovalManager?.expire(oldest.pendingApproval.id, "session-evicted");
+      await context.systemAgentApprovalManager?.expire(
+        oldest.pendingApproval.id,
+        "session-evicted",
+      );
     }
     await oldest?.engine.dispose();
     sessions.delete(oldestKey);
@@ -124,10 +128,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     respond(
       true,
       manager
-        ? listVisiblePendingApprovalRequests({
+        ? await listVisiblePendingApprovalRequests({
             manager,
             client,
-            ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+            ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
           })
         : [],
       undefined,
@@ -162,11 +166,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    // Detection is read-only and may load native provider code. Keep it outside
-    // the mutation lane and off the Gateway event loop so health stays live.
-    const { detectSetupInferenceIsolated } =
-      await import("../../system-agent/setup-inference-detection.js");
-    respond(true, await detectSetupInferenceIsolated(params), undefined);
+    const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
+    respond(true, await detectSetupInference({}, params.agentId), undefined);
   },
   /** Re-run the exact current default-agent inference route without mutating setup. */
   "openclaw.setup.verify": async ({ params, respond, context }) => {
@@ -227,7 +228,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     await startSetupActivationWizard({
       sessionId,
       activation,
-      timeoutMs: ACTIVATION_SESSION_TIMEOUT_MS,
+      timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS,
       context,
       respond,
     });
@@ -253,10 +254,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         new WizardSession(
           async (prompter, signal, runnerSession) => {
             await runSystemAgentGatewayTask(async () => {
-              const [{ prepareAuthChoiceLoadedPluginProvider }, setupShared] = await Promise.all([
-                import("../../plugins/provider-auth-choice.js"),
-                import("../../wizard/setup.shared.js"),
-              ]);
+              const [{ prepareAuthChoiceLoadedPluginProvider }, setupShared, authConfig] =
+                await Promise.all([
+                  import("../../plugins/provider-auth-choice.js"),
+                  import("../../wizard/setup.shared.js"),
+                  import("../../plugins/provider-auth-config.js"),
+                ]);
               const snapshot = await setupShared.readSetupConfigFileSnapshot();
               if (!snapshot.valid) {
                 throw new Error(
@@ -269,27 +272,30 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               const workspaceDir = params.workspace?.trim()
                 ? resolveUserPath(params.workspace.trim())
                 : undefined;
-              const prepared = await prepareAuthChoiceLoadedPluginProvider({
-                authChoice: params.authChoice,
-                ...(params.agentId ? { agentId: params.agentId } : {}),
-                config: baseConfig,
-                prompter,
-                runtime: {
-                  ...defaultRuntime,
-                  exit: (code: number | undefined): never => {
-                    throw new Error(`setup step exited with code ${String(code)}`);
+              const prepared = await prepareAuthChoiceLoadedPluginProvider(
+                {
+                  authChoice: params.authChoice,
+                  ...(params.agentId ? { agentId: params.agentId } : {}),
+                  config: baseConfig,
+                  prompter,
+                  runtime: {
+                    ...defaultRuntime,
+                    exit: (code: number | undefined): never => {
+                      throw new Error(`setup step exited with code ${String(code)}`);
+                    },
+                  },
+                  setDefaultModel: false,
+                  preserveExistingDefaultModel: true,
+                  ...(workspaceDir ? { workspaceDir } : {}),
+                  signal,
+                  isRemote: true,
+                  beforePersistentEffect: () => {
+                    signal.throwIfAborted();
+                    runnerSession.lockCancellationForPreparation();
                   },
                 },
-                setDefaultModel: false,
-                preserveExistingDefaultModel: true,
-                ...(workspaceDir ? { workspaceDir } : {}),
-                signal,
-                isRemote: true,
-                beforePersistentEffect: () => {
-                  signal.throwIfAborted();
-                  runnerSession.lockCancellationForPreparation();
-                },
-              });
+                (result) => result,
+              );
               if (!prepared || prepared.retrySelection) {
                 throw new Error(
                   `Provider setup resolution failed for "${params.authChoice}". Run \`openclaw doctor --fix\`, restart the Gateway, and try again.`,
@@ -298,10 +304,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               signal.throwIfAborted();
               runnerSession.lockCancellation();
               await prepared.persistAuthProfiles();
-              await setupShared.writeWizardConfigFile(prepared.config, {
-                allowConfigSizeDrop: false,
-                baseSnapshot: snapshot,
-                ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
+              await authConfig.writeProviderAuthConfig({
+                config: baseConfig,
+                configSnapshot: snapshot,
+                configPatch: authConfig.createProviderAuthConfigPatch(baseConfig, prepared.config),
+                credentialsSaved: prepared.authProfiles.length > 0,
+                writeOptions: { allowConfigSizeDrop: false },
               });
               if (prepared.agentModelOverride) {
                 runnerSession.setPreparedModelRef(prepared.agentModelOverride);
@@ -337,7 +345,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      await runExclusiveSystemAgentSetupActivation(async () => {
+      const result = await runExclusiveSystemAgentSetupActivation(async () => {
         const runtime = {
           ...defaultRuntime,
           // Setup runs inside the gateway process; a failing sub-step must reject
@@ -346,7 +354,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             throw new Error(`setup step exited with code ${String(code)}`);
           },
         };
-        const result = await activateGatewaySetupInference({
+        return await activateGatewaySetupInference({
           kind: params.kind,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
@@ -359,8 +367,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           surface: "gateway",
           runtime,
         });
-        respond(true, result, undefined);
       });
+      respond(true, result, undefined);
     } catch (error) {
       if (!(error instanceof SetupAdmissionBusyError)) {
         throw error;
@@ -417,7 +425,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         appendTranscriptReset();
         sessions.delete(sessionId);
         if (existing?.pendingApproval) {
-          context.systemAgentApprovalManager?.expire(existing.pendingApproval.id, "session-reset");
+          await context.systemAgentApprovalManager?.expire(
+            existing.pendingApproval.id,
+            "session-reset",
+          );
         }
         await existing?.engine.dispose();
       }
@@ -464,7 +475,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         }
         const engine = new SystemAgentChatEngine({
           surface: "gateway",
-          deps: { gatewayHostLifecycle: context.hostLifecycle },
+          deps: {
+            gatewayHostLifecycle: context.hostLifecycle,
+            applyPluginRuntime: context.applyPluginLifecycleChange,
+          },
           verifiedInference: inference.binding,
           operatorApprovalOnly: params.delegation !== undefined,
           ...(params.delegation?.agentId ? { requesterAgentId: params.delegation.agentId } : {}),
@@ -488,7 +502,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             welcome = onboardingWelcome.text;
             welcomeQuestion = onboardingWelcome.question;
           } else if (params.welcomeVariant === "new-agent") {
-            welcome = buildNewAgentWelcome({ engine });
+            welcome = await buildNewAgentWelcome({ engine });
           } else {
             const overview = await engine.loadOverview();
             const facts = loadSystemAgentGreetingFacts();
@@ -522,6 +536,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         session = {
           engine,
           welcome,
+          optionalWelcome: params.welcomeVariant === undefined && !persistWelcome,
+          ...(params.welcomeVariant === "new-agent" ? { newAgentWelcome: welcome } : {}),
           ...(welcomeQuestion ? { welcomeQuestion } : {}),
           ...(greetingAuditSequence !== undefined
             ? { welcomeAuditSequence: greetingAuditSequence }
@@ -536,6 +552,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             {
               sessionId,
               reply: session.welcome,
+              optionalWelcome: session.optionalWelcome,
               action: "none",
               ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
             },
@@ -552,11 +569,32 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         params.wizardCancel === undefined &&
         (params.message === undefined || !params.message.trim())
       ) {
+        if (params.welcomeVariant === "new-agent") {
+          const interaction = session.engine.decorateRejoinReply({ text: "", action: "none" });
+          if (
+            !interaction.wizardInputPending &&
+            !interaction.sensitive &&
+            !interaction.step &&
+            !interaction.question &&
+            !session.pendingApproval &&
+            !session.engine.getPendingOperatorProposal()
+          ) {
+            session.newAgentWelcome ??= await buildNewAgentWelcome({ engine: session.engine });
+            respond(
+              true,
+              { sessionId, reply: session.newAgentWelcome, optionalWelcome: false, action: "none" },
+              undefined,
+            );
+            // The caretaker warning was not displayed; its delivery cursor stays pending.
+            return undefined;
+          }
+        }
         respond(
           true,
           buildSystemAgentRejoinResult({
             sessionId,
             welcome: session.welcome,
+            optionalWelcome: session.optionalWelcome,
             ...(session.welcomeQuestion ? { welcomeQuestion: session.welcomeQuestion } : {}),
             engine: session.engine,
           }),

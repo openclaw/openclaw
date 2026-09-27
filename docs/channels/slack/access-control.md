@@ -26,6 +26,14 @@ Available action groups in current Slack tooling:
 
 Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
+Interactive message actions retain their caller authority through target and permission lookups and recheck it before each Slack request. If that authority closes, remaining requests stop while an already accepted mutation keeps its result.
+
+In a Slack conversation, delegated `member-info` reads only the current requester
+on the same account; omitting `userId` selects that requester. `emoji-list` uses
+the trusted current workspace. Both metadata actions work without a channel target
+with the bundled plugin and verified official npm or ClawHub installations. Existing
+action gates and Enterprise workspace requirements still apply.
+
 Use `emoji-list` to discover workspace custom emoji and aliases:
 
 ```json
@@ -45,6 +53,20 @@ Results are sorted by shortcode name. `limit` defaults to and cannot exceed 100:
 ```
 
 Use an entry's `identifier` directly as the `react` emoji; surrounding colons are optional. `channels.slack.actions.emojiList` controls discovery separately from the `reactions` gate, and the app needs the `emoji:read` scope.
+
+## Live policy changes
+
+DM access, allowlists, group policy, mention rules, and existing channel policy fields
+apply to new messages, commands, and system events without reconnecting Slack.
+Root settings and account overrides keep their normal precedence. Each admitted turn
+keeps one resolved policy snapshot; a change does not rewrite a reply already in progress.
+Workspace name resolution runs once per new snapshot and never appends identities from
+an older policy. Presence targets learned under an older config snapshot retire before
+another background wake; fresh admitted activity creates new targets.
+
+Transport credentials, account enablement, adding or removing accounts or channel entries,
+name-matching mode, presence settings, and native command/approval registration still
+restart the Slack monitor. The Gateway remains running.
 
 ## Access control and routing
 
@@ -98,16 +120,16 @@ Use an entry's `identifier` directly as the `react` emoji; surrounding colons ar
 
     Name/ID resolution:
 
-    - channel allowlist entries and DM allowlist entries are resolved at startup when token access allows
+    - channel allowlist entries and DM allowlist entries are resolved at startup and when a new policy snapshot is first used, when token access allows
     - unresolved channel-name entries are kept as configured but ignored for routing by default
     - inbound authorization and channel routing are ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
 
     <Warning>
-    Name-based keys (`#channel-name` or `channel-name`) do **not** match under `groupPolicy: "allowlist"`. The channel lookup is ID-first by default, so a name-based key will never route successfully and all messages in that channel will be silently blocked. This differs from `groupPolicy: "open"`, where the channel key is not required for routing and a name-based key appears to work.
+    Name-based keys (`#channel-name` or `channel-name`) depend on successful Slack lookup to resolve a stable channel ID. Under `groupPolicy: "allowlist"`, unresolved names are denied unless `dangerouslyAllowNameMatching` explicitly enables direct name matching.
 
-    Always use the Slack channel ID as the key. To find it: right-click the channel in Slack → **Copy link** — the ID (`C...`) appears at the end of the URL.
+    Prefer the Slack channel ID as the key to avoid that lookup dependency. To find it: right-click the channel in Slack → **Copy link** — the ID (`C...`) appears at the end of the URL.
 
-    Correct:
+    Recommended stable ID:
 
     ```json5
     {
@@ -122,7 +144,7 @@ Use an entry's `identifier` directly as the `react` emoji; surrounding colons ar
     }
     ```
 
-    Incorrect (silently blocked under `groupPolicy: "allowlist"`):
+    Name-based input (requires successful lookup with the default matching policy):
 
     ```json5
     {
@@ -166,7 +188,11 @@ Use an entry's `identifier` directly as the `react` emoji; surrounding colons ar
 
     `ignoreOtherMentions` (default `false`) drops channel messages that mention another user or user group but not this bot. DMs and group DMs (MPIMs) are unaffected. The filter requires a resolved bot user ID from `auth.test`; if that identity is unavailable (for example a user-token-only identity), the gate fails open and messages pass through unchanged.
 
-    `allowBots` is conservative for channels and private channels: bot-authored room messages are accepted only when the sending bot is explicitly listed in that room's `users` allowlist, or when at least one explicit Slack owner ID from `channels.slack.allowFrom` is currently a room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
+    `allowBots` defaults to `true`. Bot-authored messages follow the same channel access and mention rules as other messages; messages from this bot are always ignored. Set `allowBots: false` to prevent other bots from triggering turns, or `allowBots: "mentions"` to require a mention even in rooms with `requireMention: false`. Room settings override account settings, which override `channels.slack.allowBots`. Existing explicit `false` values remain disabled after an update.
+
+    Bot-authored room messages also require either the sending bot to be explicitly listed in that room's `users` allowlist, or at least one explicit Slack owner ID from `channels.slack.allowFrom` to be a current room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
+
+    `allowBots` controls incoming turns, not context visibility. A human request can still include accessible bot-authored room history and thread context when `allowBots: false`; the configured `contextVisibility` and sender allowlist rules still apply.
 
     Accepted bot-authored Slack messages use shared [bot loop protection](/channels/bot-loop-protection). Configure `channels.defaults.botLoopProtection` for the default budget, then override with `channels.slack.botLoopProtection` or `channels.slack.channels.<id>.botLoopProtection` when a workspace or channel needs a different limit.
 

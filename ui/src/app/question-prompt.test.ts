@@ -211,6 +211,21 @@ describe("question event parsing", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    "javascript:alert(1)",
+    "data:text/html,sign-in",
+    "/sign-in",
+    "//example.test/sign-in",
+    "https://operator:password@example.test/sign-in",
+    "https://",
+    42,
+  ])("rejects unsafe external question URLs: %s", (url) => {
+    const state = createState();
+    const question = requestedPayload().questions[0];
+    expect(requestQuestion(state, { questions: [{ ...question, url }] })).toBe(false);
+    expect(state.prompts.size).toBe(0);
+  });
 });
 
 describe("question prompt state", () => {
@@ -319,17 +334,6 @@ describe("question prompt state", () => {
       submitting: false,
       answers: { answers: { format: ["Compact"] } },
     });
-  });
-
-  it("expires pending cards locally when their countdown ends", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
-    const state = createState();
-    requestQuestion(state, { expiresAtMs: Date.now() + 1_000 });
-
-    vi.advanceTimersByTime(1_000);
-
-    expect(state.prompts.get("question-1")?.status).toBe("expired");
   });
 
   it("re-enables a prompt with a non-destructive resolve error", async () => {

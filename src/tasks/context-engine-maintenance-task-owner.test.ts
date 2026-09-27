@@ -9,13 +9,12 @@ import { createRunningTaskRunCore } from "./task-executor.js";
 import { getTaskById } from "./task-registry.js";
 import {
   configureTaskRegistryMaintenance,
-  resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import { resetTaskRegistryForTests } from "./task-runtime.test-helpers.js";
 
 afterEach(async () => {
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetTaskRegistryForTests({ persist: false });
   await drainGlobalSingletonLifecycleState("close");
 });

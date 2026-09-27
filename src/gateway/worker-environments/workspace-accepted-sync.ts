@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -11,10 +11,8 @@ import {
   type AcceptedWorkspaceSettlementOutcome,
 } from "./workspace-accepted-publication.js";
 import type { WorkspaceHashMemo, WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
-import {
-  serializeWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifest,
-} from "./workspace-manifest.js";
+import { serializeWorkspaceManifest } from "./workspace-manifest-worker.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { changedPaths, manifestNodes } from "./workspace-reconcile.js";
 import {
   captureRemoteWorkspaceManifest,
@@ -76,8 +74,9 @@ function createAcceptedWorkspacePublisher(params: {
     manifest: WorkerWorkspaceManifest;
     conflictPaths: string[];
   }) => {
-    const acceptedRaw = serializeWorkerWorkspaceManifest(accepted.manifest);
-    const acceptedDigest = createHash("sha256").update(acceptedRaw).digest("hex");
+    const serialized = await serializeWorkspaceManifest(accepted.manifest);
+    const acceptedRaw = serialized.raw;
+    const acceptedDigest = serialized.manifestRef.slice("sha256:".length);
     if (`sha256:${acceptedDigest}` !== accepted.manifestRef) {
       throw new Error("Accepted workspace manifest does not match its reference");
     }
@@ -140,24 +139,11 @@ function createAcceptedWorkspacePublisher(params: {
       operation: "apply" | "commit",
       publicationFailure: unknown,
     ): Promise<AcceptedWorkspaceSettlementOutcome> => {
-      let settled: SpawnResult;
       try {
-        settled = await transactionCommand("settle");
-      } catch (observationFailure) {
-        throw new AcceptedWorkspacePublicationIndeterminateError(
-          operation,
-          publicationFailure,
-          observationFailure,
-        );
-      }
-      if (!workerWorkspaceCommandSucceeded(settled)) {
-        throw new AcceptedWorkspacePublicationIndeterminateError(
-          operation,
-          publicationFailure,
-          workspaceSyncError(settled),
-        );
-      }
-      try {
+        const settled = await transactionCommand("settle");
+        if (!workerWorkspaceCommandSucceeded(settled)) {
+          throw workspaceSyncError(settled);
+        }
         return parseAcceptedWorkspaceSettlement(settled.stdout);
       } catch (observationFailure) {
         throw new AcceptedWorkspacePublicationIndeterminateError(

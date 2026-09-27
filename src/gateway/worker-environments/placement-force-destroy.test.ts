@@ -5,10 +5,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -26,23 +26,26 @@ describe("forced worker environment destruction", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
   it("serializes with workspace work and abandons an applied result fence", async () => {
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
-    const harness = createHarness(placementStore, { workspaceOperations, workspacePath: root });
+    const harness = createHarness(database, placementStore, {
+      workspaceOperations,
+      workspacePath: root,
+    });
     await harness.environments.attachSession({
       environmentId: harness.ready.environmentId,
       ownerEpoch: harness.ready.ownerEpoch,
       sessionId: REQUEST.sessionId,
     });
-    const active = harness.placements.seedActive(harness.attached.ownerEpoch);
+    const active = await harness.placements.seedActive(harness.attached.ownerEpoch);
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "force-destroy-claim",
       runId: "force-destroy-run",
@@ -102,12 +105,12 @@ describe("forced worker environment destruction", () => {
     { failure: "tunnel stop", state: "draining" as const },
     { failure: "provider stop", state: "destroying" as const },
   ])("stays successful after $failure failure", async ({ state }) => {
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(database, placementStore, {
       destroyFails: true,
       destroyFailureState: state,
       workspacePath: root,
     });
-    harness.placements.seedActive(harness.attached.ownerEpoch);
+    await harness.placements.seedActive(harness.attached.ownerEpoch);
     const onCleanupError = vi.fn();
 
     await expect(
@@ -124,12 +127,12 @@ describe("forced worker environment destruction", () => {
   });
 
   it("retries remote teardown when a failed rollback journal remains", async () => {
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(database, placementStore, {
       destroyFails: true,
       destroyFailureState: "destroying",
       failAt: "workspace",
     });
-    const active = harness.placements.seedActive(harness.attached.ownerEpoch);
+    const active = await harness.placements.seedActive(harness.attached.ownerEpoch);
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }

@@ -228,6 +228,38 @@ describe("installEmbeddedAttemptContextGuards", () => {
     guards.remove();
   });
 
+  it.each([true, false, undefined])(
+    "passes resolved route opt-in %s to pruning eligibility",
+    (optIn) => {
+      const input = createInput();
+      const model = {
+        ...cacheModel,
+        contextWindow: 2_048,
+        provider: "openai",
+        id: "gpt-4o",
+        api: "openai-responses" as const,
+        baseUrl: "https://proxy.example/v1",
+        compat: { supportsPromptCacheKey: optIn },
+        headers: { "x-test-private": "not-for-provider-hooks" },
+      };
+      input.attempt = {
+        ...input.attempt,
+        provider: "openai",
+        modelId: model.id,
+        model,
+        config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
+      };
+      const guards = installEmbeddedAttemptContextGuards(input as never);
+      expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
+        "openai",
+        "gpt-4o",
+        "openai-responses",
+        { baseUrl: model.baseUrl, supportsPromptCacheKey: optIn },
+      );
+      guards.remove();
+    },
+  );
+
   it("does not install cache-TTL pruning for an ineligible provider", async () => {
     const input = createInput();
     input.attempt = {
@@ -243,6 +275,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
       "provider-1",
       "model-1",
       "anthropic-messages",
+      { baseUrl: undefined, supportsPromptCacheKey: undefined },
     );
     expect(hoisted.readLastCacheTtlTimestamp).not.toHaveBeenCalled();
     const messages: AgentMessage[] = [
@@ -437,6 +470,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
         "anthropic",
         "claude-sonnet-4-6",
         "anthropic-messages",
+        { baseUrl: undefined, supportsPromptCacheKey: undefined },
       );
       expect(hoisted.readLastCacheTtlTimestamp).toHaveBeenCalledExactlyOnceWith(
         input.sessionManager,

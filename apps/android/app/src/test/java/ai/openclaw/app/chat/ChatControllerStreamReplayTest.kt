@@ -1,5 +1,11 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayErrorDetails
+import ai.openclaw.app.gateway.GatewayRequestRejected
+import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.ui.chat.ChatTimelineItem
+import ai.openclaw.app.ui.chat.buildTimeline
+import ai.openclaw.app.ui.chat.prepareChatHistory
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -10,6 +16,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -31,7 +38,7 @@ import org.robolectric.RobolectricTestRunner
 class ChatControllerStreamReplayTest {
   private val json = Json { ignoreUnknownKeys = true }
 
-  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, commandOutbox = this.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request)
+  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, commandOutbox = this.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request, gatewayAdvertisesCapability = { it == "session-scoped-model-catalog" })
 
   @OptIn(ExperimentalCoroutinesApi::class)
   private fun TestScope.loadController(gateway: ScriptedGateway): ChatController {
@@ -305,12 +312,91 @@ class ChatControllerStreamReplayTest {
         text("z-original")
         tool("z-original", "shared-call")
         tool("a-followup", "shared-call")
-        val followupTools = controller.pendingToolCalls.value
+        assertEquals(2, controller.pendingToolCalls.value.size)
+        val followupTools = controller.pendingToolCalls.value.filter { it.runId == "a-followup" }
         tool("z-original", "shared-call", "result")
         assertEquals("Original output", controller.streamingAssistantText.value)
         assertEquals(followupTools, controller.pendingToolCalls.value)
         tool("a-followup", "shared-call", "result")
         assertTrue(controller.pendingToolCalls.value.isEmpty())
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun optimisticPromptsKeepToolDisclosuresThroughDelayedHistoryAndAckRekey() =
+    runTest {
+      withPendingRunReplay {
+        assertTrue(send("z-original"))
+        tool("z-original", "original-tool")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        gateway.respond("chat.send") {
+          entered.complete(Unit)
+          release.await()
+          sendAck("canonical-followup", "started")
+        }
+
+        fun toolGroups(): Map<String, List<String?>> =
+          prepareChatHistory(controller.messages.value, owner.sessionKey, owner.sessionKey)
+            .buildTimeline(controller.pendingRunCount.value, controller.toolActivities.value, null)
+            .items
+            .filterIsInstance<ChatTimelineItem.ToolActivity>()
+            .associate { it.disclosureKey to it.tools.map { tool -> tool.toolCallId } }
+        val expected = mapOf("z-original:user" to listOf("original-tool"), "a-followup:user" to listOf("followup-tool"))
+        val followup = async { send("a-followup") }
+        try {
+          runCurrent()
+          assertTrue(entered.isCompleted)
+          tool("a-followup", "followup-tool")
+          controller.refresh()
+          runCurrent()
+          assertTrue("History remains delayed while both prompts are optimistic", controller.historyLoading.value)
+          assertEquals(2, controller.messages.value.size)
+          assertEquals(2, controller.toolActivities.value.size)
+          assertEquals(expected, toolGroups())
+          val originalPrompt = controller.messages.value.single { it.idempotencyKey == "a-followup:user" }
+          release.complete(Unit)
+          assertTrue(followup.await())
+          val rekeyed = controller.messages.value.single { it.idempotencyKey == originalPrompt.idempotencyKey }
+          assertEquals(originalPrompt.id, rekeyed.id)
+          assertEquals("canonical-followup", rekeyed.runId)
+          assertEquals(expected, toolGroups())
+
+          val response =
+            json
+              .parseToJsonElement(
+                historyResponse(
+                  "session-concurrent",
+                  listOf(
+                    ReplayHistoryMessage("user", "z-original", 1_000, idempotencyKey = "z-original:user"),
+                    ReplayHistoryMessage("user", "a-followup", 2_000, idempotencyKey = "a-followup:user"),
+                  ),
+                  inFlightRun = "canonical-followup" to "",
+                  activeRunIds = listOf("z-original", "canonical-followup"),
+                ),
+              ).jsonObject
+          val persisted =
+            (response.getValue("messages") as JsonArray).mapIndexed { index, message ->
+              JsonObject(
+                message.jsonObject + (
+                  "__openclaw" to
+                    buildJsonObject {
+                      put("id", JsonPrimitive("persisted-$index"))
+                      put("runId", JsonPrimitive(if (index == 0) "z-original" else "canonical-followup"))
+                    }
+                ),
+              )
+            }
+          gateway.respondWith("chat.history", JsonObject(response + ("messages" to JsonArray(persisted))).toString())
+          controller.refresh()
+          runCurrent()
+          assertFalse(controller.historyLoading.value)
+          assertEquals(listOf("persisted-0", "persisted-1"), controller.messages.value.map { it.entryId })
+          assertEquals(expected, toolGroups())
+        } finally {
+          release.complete(Unit)
+        }
       }
     }
 
@@ -337,7 +423,7 @@ class ChatControllerStreamReplayTest {
           release.complete(Unit)
           assertTrue(original.await())
           assertEquals("Original output", controller.streamingAssistantText.value)
-          assertEquals(originalTools, controller.pendingToolCalls.value)
+          assertEquals(originalTools.map { it.copy(runId = "canonical-original") }, controller.pendingToolCalls.value)
           terminal("canonical-original", "lifecycle-end")
           assertEquals(1, controller.pendingRunCount.value)
           assertNull(controller.streamingAssistantText.value)
@@ -826,6 +912,38 @@ class ChatControllerStreamReplayTest {
     }
 
   @Test
+  fun concurrentRunsKeepReusedToolIdsAndTheirOwnCompletion() =
+    runTest {
+      withPendingRunReplay {
+        assertTrue(send("z-original"))
+        assertTrue(send("a-followup"))
+        tool("z-original", "shared")
+        tool("a-followup", "shared")
+        assertEquals(
+          setOf("z-original", "a-followup"),
+          controller.pendingToolCalls.value
+            .map { it.runId }
+            .toSet(),
+        )
+        tool("z-original", "shared", "result")
+        assertEquals(
+          "a-followup",
+          controller.pendingToolCalls.value
+            .single()
+            .runId,
+        )
+        assertEquals(2, controller.toolActivities.value.size)
+        terminal("z-original", "lifecycle-end")
+        assertEquals(
+          "a-followup",
+          controller.toolActivities.value
+            .single()
+            .runId,
+        )
+      }
+    }
+
+  @Test
   fun liveEditDiffCreatesAndUpdatesPendingToolUntilResult() =
     runTest {
       val gateway = ScriptedGateway(json)
@@ -862,9 +980,14 @@ class ChatControllerStreamReplayTest {
 
       controller.handleGatewayEvent(
         "agent",
-        """{"sessionKey":"main","runId":"$runId","ts":13,"stream":"tool","data":{"phase":"result","name":"edit","toolCallId":"tool-1"}}""",
+        """{"sessionKey":"main","runId":"$runId","ts":13,"stream":"tool","data":{"phase":"result","name":"edit","toolCallId":"tool-1","isError":true}}""",
       )
       assertTrue(controller.pendingToolCalls.value.isEmpty())
+      val completed = controller.toolActivities.value.single()
+      assertTrue(completed.isComplete)
+      assertEquals(true, completed.isError)
+      assertEquals(runId, completed.runId)
+      assertEquals(ChatDiffStat(added = 8, removed = 2), completed.liveDiff)
     }
 
   @Test
@@ -1147,6 +1270,72 @@ class ChatControllerStreamReplayTest {
         )
         assertNull(controller.errorText.value)
       }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun transcriptInvalidationSurvivesRepeatedWorkerOverloadWithoutAnotherEvent() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway)
+      var reads = 0
+      val updated = listOf(ReplayHistoryMessage("assistant", "committed elsewhere", 1_000))
+      gateway.respond("chat.history") {
+        reads += 1
+        if (reads <= 2) {
+          throw GatewayRequestRejected(
+            GatewaySession.ErrorShape(
+              "UNAVAILABLE",
+              "session history is busy; retry shortly",
+              GatewayErrorDetails(null, false, null, retryable = true),
+            ),
+          )
+        }
+        historyResponse("session-1", updated)
+      }
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+      assertEquals(1, reads)
+      advanceTimeBy(750)
+      runCurrent()
+      assertEquals(2, reads)
+      advanceTimeBy(750)
+      runCurrent()
+      assertEquals(updated.map { it.role to it.text }, transcript(controller))
+      assertEquals(3, reads)
+      advanceTimeBy(5_000)
+      runCurrent()
+      assertEquals("Successful history retires the refresh obligation", 3, reads)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun transcriptOverloadRefreshDoesNotFollowTheUserToAnotherSession() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway)
+      var refusedReads = 0
+      gateway.respond("chat.history") {
+        refusedReads += 1
+        throw GatewayRequestRejected(
+          GatewaySession.ErrorShape("UNAVAILABLE", "busy", GatewayErrorDetails(null, false, null, retryable = true)),
+        )
+      }
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+      assertEquals(1, refusedReads)
+      var newSessionReads = 0
+      gateway.respond("chat.history") {
+        newSessionReads += 1
+        historyResponse("other-session", emptyList())
+      }
+      controller.load("agent:main:other")
+      runCurrent()
+      val readsAfterSwitch = newSessionReads
+      advanceTimeBy(5_000)
+      runCurrent()
+      assertEquals(readsAfterSwitch, newSessionReads)
+      assertEquals(emptyList<Pair<String, String?>>(), transcript(controller))
     }
 
   @Test

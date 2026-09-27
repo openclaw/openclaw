@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -33,6 +34,15 @@ const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 export const GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS = 500;
 export const GATEWAY_CRASH_LOOP_BREAKER_REASON = "gateway.crash_loop_breaker";
 export const GATEWAY_CRASH_LOOP_RECOVERED_REASON = "gateway.crash_loop_recovered";
+export const GATEWAY_SIGNAL_REPEAT_WINDOW_MS = 5 * 60_000;
+
+export function formatGatewayRepeatedSignalHint(
+  signal: NodeJS.Signals,
+  count: number,
+  observation: "received" | "stopped after" = "received",
+): string {
+  return `${observation} ${signal} ${count} times in 5 min: another supervisor may be managing this Gateway — see \`openclaw gateway status --deep\``;
+}
 /**
  * The breaker only self-clears after the full window drains. Operator surfaces name the manual
  * override command, not the internal RPC. Account hints carry accountId to avoid starting a
@@ -75,6 +85,41 @@ export type GatewayCrashLoopBreakerDecision = {
   shouldWriteStabilityBundle: boolean;
   recovered: boolean;
 };
+
+export function readGatewayLastShutdown(
+  env: NodeJS.ProcessEnv = process.env,
+): { reason: string | null; completedAtMs: number } | undefined {
+  try {
+    return withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => {
+        const row = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db)
+            .selectFrom("gateway_boot_lifecycle")
+            .select(["reason", "completed_at_ms as completedAtMs"])
+            .where("outcome", "in", ["clean_stop", "planned_restart", "forced_stop"])
+            .where("completed_at_ms", "is not", null)
+            .orderBy("completed_at_ms", "desc")
+            .limit(1),
+        );
+        return row?.completedAtMs == null
+          ? undefined
+          : { ...row, completedAtMs: row.completedAtMs };
+      },
+      { env },
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+export function readGatewayLastInstallationReplacement(env: NodeJS.ProcessEnv = process.env) {
+  const lastShutdown = readGatewayLastShutdown(env);
+  if (!lastShutdown?.reason?.startsWith("gateway.installation_replaced:")) {
+    return undefined;
+  }
+  return { reason: lastShutdown.reason, completedAtMs: lastShutdown.completedAtMs };
+}
 
 function buildGatewayCrashLoopBreakerDecision(params: {
   uncleanBoots: number;
@@ -259,8 +304,16 @@ export function completeGatewayBootLifecycle(
   if (!bootId) {
     return;
   }
+  const signal =
+    completion.outcome !== "clean_stop"
+      ? undefined
+      : completion.reason === "stop (SIGTERM)"
+        ? "SIGTERM"
+        : completion.reason === "stop (SIGINT)"
+          ? "SIGINT"
+          : undefined;
   try {
-    runOpenClawStateWriteTransaction(
+    const recentStops = runOpenClawStateWriteTransaction(
       ({ db }) => {
         const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
         executeSqliteQuerySync(
@@ -275,9 +328,25 @@ export function completeGatewayBootLifecycle(
             })
             .where("boot_id", "=", bootId),
         );
+        return signal
+          ? executeSqliteQueryTakeFirstSync(
+              db,
+              kysely
+                .selectFrom("gateway_boot_lifecycle")
+                .select((eb) => eb.fn.countAll<number>().as("count"))
+                .where("outcome", "=", "clean_stop")
+                .where("reason", "=", completion.reason ?? null)
+                .where("completed_at_ms", ">=", nowMs - GATEWAY_SIGNAL_REPEAT_WINDOW_MS),
+            )?.count
+          : undefined;
       },
       { env },
     );
+    if (signal && recentStops !== undefined && recentStops >= 3) {
+      gatewayLifecycleLog.warn(
+        formatGatewayRepeatedSignalHint(signal, recentStops, "stopped after"),
+      );
+    }
   } catch (err) {
     gatewayLifecycleLog.warn(`failed to persist gateway boot outcome; fail-open: ${String(err)}`);
   }

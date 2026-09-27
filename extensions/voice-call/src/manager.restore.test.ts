@@ -1,6 +1,6 @@
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 // Voice Call tests cover manager.restore plugin behavior.
@@ -17,25 +17,22 @@ import {
 } from "./manager.test-harness.js";
 import { MAX_CALL_REPLAY_KEYS } from "./manager/replay-keys.js";
 import { loadActiveCallsFromStore } from "./manager/store.js";
-import { setVoiceCallStateRuntime } from "./runtime-state.js";
+import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 
-function installStateRuntime(): void {
-  setVoiceCallStateRuntime({
-    state: {
-      resolveStateDir: () => "",
-      openKeyedStore: (() => {
-        throw new Error("openKeyedStore is not used by voice-call restore tests");
-      }) as never,
-      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateSyncKeyedStoreForTests("voice-call", options),
-      openChannelIngressQueue: (() => {
-        throw new Error("openChannelIngressQueue is not used by voice-call restore tests");
-      }) as never,
-      openChannelIngressDrain: (() => {
-        throw new Error("openChannelIngressDrain is not used by voice-call restore tests");
-      }) as never,
-    },
-  });
+function installStateRuntime(): VoiceCallStateRuntime["state"] {
+  const state: VoiceCallStateRuntime["state"] = {
+    resolveStateDir: () => "",
+    openKeyedStore: (options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests("voice-call", options),
+    openChannelIngressQueue: (() => {
+      throw new Error("openChannelIngressQueue is not used by voice-call restore tests");
+    }) as never,
+    openChannelIngressDrain: (() => {
+      throw new Error("openChannelIngressDrain is not used by voice-call restore tests");
+    }) as never,
+  };
+  setVoiceCallStateRuntime({ state });
+  return state;
 }
 
 function requireSingleActiveCall(manager: CallManager) {
@@ -70,19 +67,13 @@ describe("CallManager verification on restore", () => {
 
   async function initializeManager(params?: {
     callOverrides?: Parameters<typeof makePersistedCall>[0];
-    providerResult?: FakeProvider["getCallStatusResult"];
-    configureProvider?: (provider: FakeProvider) => void;
     configOverrides?: Partial<{ maxDurationSeconds: number }>;
   }) {
     const storePath = createTestStorePath();
     const call = makePersistedCall(params?.callOverrides);
-    writeCallsToStore(storePath, [call]);
+    await writeCallsToStore(storePath, [call]);
 
     const provider = new FakeProvider();
-    if (params?.providerResult) {
-      provider.getCallStatusResult = params.providerResult;
-    }
-    params?.configureProvider?.(provider);
 
     const config = VoiceCallConfigSchema.parse({
       enabled: true,
@@ -95,14 +86,6 @@ describe("CallManager verification on restore", () => {
 
     return { call, manager, provider, storePath };
   }
-
-  it("skips stale calls reported terminal by provider", async () => {
-    const { manager } = await initializeManager({
-      providerResult: { status: "completed", isTerminal: true },
-    });
-
-    expect(manager.getActiveCalls()).toHaveLength(0);
-  });
 
   it("resolves a terminal call from persisted state after restore", async () => {
     const { call, manager } = await initializeManager({
@@ -120,9 +103,44 @@ describe("CallManager verification on restore", () => {
     });
   });
 
+  it("restores existing records through the retained runtime without a data migration", async () => {
+    const retainedStateRuntime = installStateRuntime();
+    const storePath = createTestStorePath();
+    const call = makePersistedCall({
+      callId: "call-before-runtime-threading",
+      state: "completed",
+      endReason: "completed",
+      endedAt: Date.now(),
+    });
+    await writeCallsToStore(storePath, [call]);
+    setVoiceCallStateRuntime({
+      state: {
+        ...retainedStateRuntime,
+        openKeyedStore: () => {
+          throw new Error("ambient state runtime must not own retained manager records");
+        },
+      },
+    });
+
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = registerTestManagerCleanup(
+      new CallManager(config, storePath, undefined, retainedStateRuntime),
+    );
+    await manager.initialize(new FakeProvider(), "https://example.com/voice/webhook");
+
+    await expect(manager.getCallFromMemoryOrStore(String(call.callId))).resolves.toMatchObject({
+      callId: call.callId,
+      state: "completed",
+    });
+  });
+
   it("prefers active provider state before persisted fallback", async () => {
     const storePath = createTestStorePath();
-    writeCallsToStore(storePath, [
+    await writeCallsToStore(storePath, [
       makePersistedCall({
         callId: "call-target",
         providerCallId: "provider-completed",
@@ -151,25 +169,6 @@ describe("CallManager verification on restore", () => {
     });
   });
 
-  it("keeps calls reported active by provider", async () => {
-    const { call, manager } = await initializeManager({
-      providerResult: { status: "in-progress", isTerminal: false },
-    });
-
-    const activeCall = requireSingleActiveCall(manager);
-    expect(activeCall.callId).toBe(call.callId);
-  });
-
-  it("keeps calls when provider returns unknown (transient error)", async () => {
-    const { call, manager } = await initializeManager({
-      providerResult: { status: "error", isTerminal: false, isUnknown: true },
-    });
-
-    const activeCall = requireSingleActiveCall(manager);
-    expect(activeCall.callId).toBe(call.callId);
-    expect(activeCall.state).toBe(call.state);
-  });
-
   it("skips calls older than maxDurationSeconds", async () => {
     const { manager, provider, storePath } = await initializeManager({
       callOverrides: {
@@ -183,93 +182,39 @@ describe("CallManager verification on restore", () => {
     const hangupCall = requireSingleHangupCall(provider);
     expect(hangupCall.reason).toBe("timeout");
 
-    expect(loadActiveCallsFromStore(storePath).activeCalls.size).toBe(0);
-  });
-
-  it("skips calls without providerCallId", async () => {
-    const { manager } = await initializeManager({
-      callOverrides: { providerCallId: undefined, state: "initiated" },
-    });
-
-    expect(manager.getActiveCalls()).toHaveLength(0);
-  });
-
-  it("keeps call when getCallStatus throws (verification failure)", async () => {
-    const { call, manager } = await initializeManager({
-      configureProvider: (provider) => {
-        provider.getCallStatus = async () => {
-          throw new Error("network failure");
-        };
-      },
-    });
-
-    const activeCall = requireSingleActiveCall(manager);
-    expect(activeCall.callId).toBe(call.callId);
-    expect(activeCall.state).toBe(call.state);
+    expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
   });
 
   it("summarizes repeated restored-call verification outcomes", async () => {
     const now = Date.now();
     const storePath = createTestStorePath();
     const calls = [
+      ["missing-provider-a", undefined, 10_000],
+      ["missing-provider-b", undefined, 10_000],
+      ["expired-a", "expired-provider-a", 600_000],
+      ["terminal-a", "terminal-provider-a", 20_000],
+      ["terminal-b", "terminal-provider-b", 20_000],
+    ] as const;
+    const restoredCalls = calls.map(([callId, providerCallId, age]) =>
       makePersistedCall({
-        callId: "missing-provider-a",
-        providerCallId: undefined,
+        callId,
+        providerCallId,
         state: "initiated",
-        startedAt: now - 10_000,
+        startedAt: now - age,
         answeredAt: undefined,
       }),
-      makePersistedCall({
-        callId: "missing-provider-b",
-        providerCallId: undefined,
-        state: "initiated",
-        startedAt: now - 10_000,
-        answeredAt: undefined,
-      }),
-      makePersistedCall({
-        callId: "expired-a",
-        providerCallId: "expired-provider-a",
-        state: "initiated",
-        startedAt: now - 600_000,
-        answeredAt: undefined,
-      }),
-      makePersistedCall({
-        callId: "terminal-a",
-        providerCallId: "terminal-provider-a",
-        state: "initiated",
-        startedAt: now - 20_000,
-        answeredAt: undefined,
-      }),
-      makePersistedCall({
-        callId: "terminal-b",
-        providerCallId: "terminal-provider-b",
-        state: "initiated",
-        startedAt: now - 20_000,
-        answeredAt: undefined,
-      }),
-      makePersistedCall({
-        callId: "unknown-a",
-        providerCallId: "unknown-provider-a",
-        state: "initiated",
-        startedAt: now - 20_000,
-        answeredAt: undefined,
-      }),
-      makePersistedCall({
-        callId: "active-a",
-        providerCallId: "active-provider-a",
-        state: "initiated",
-        startedAt: now - 20_000,
-        answeredAt: undefined,
-      }),
-      makePersistedCall({
-        callId: "failure-a",
-        providerCallId: "failure-provider-a",
-        state: "initiated",
-        startedAt: now - 20_000,
-        answeredAt: undefined,
-      }),
-    ];
-    writeCallsToStore(storePath, calls);
+    );
+    for (const outcome of ["active", "unknown", "failure"]) {
+      restoredCalls.push(
+        makePersistedCall({
+          callId: `${outcome}-a`,
+          providerCallId: `${outcome}-provider-a`,
+          startedAt: now - 30_000,
+          answeredAt: now - 25_000,
+        }),
+      );
+    }
+    await writeCallsToStore(storePath, restoredCalls);
 
     const provider = new FakeProvider();
     provider.getCallStatus = async ({ providerCallId }) => {
@@ -301,6 +246,11 @@ describe("CallManager verification on restore", () => {
         .map((call) => call.callId)
         .toSorted(),
     ).toEqual(["active-a", "failure-a", "unknown-a"]);
+    expect(manager.getActiveCalls().map((call) => call.state)).toEqual([
+      "answered",
+      "answered",
+      "answered",
+    ]);
     const hangupCall = requireSingleHangupCall(provider);
     expect(hangupCall.callId).toBe("expired-a");
     expect(hangupCall.providerCallId).toBe("expired-provider-a");
@@ -342,11 +292,14 @@ describe("CallManager verification on restore", () => {
     });
 
     expect(manager.getActiveCalls()).toHaveLength(1);
+    const endCall = vi.spyOn(manager, "endCall");
     await vi.advanceTimersByTimeAsync(9_000);
     expect(manager.getActiveCalls()).toHaveLength(1);
     expect(provider.hangupCalls).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(1_100);
+    expect(endCall).toHaveBeenCalledOnce();
+    await requireRecord(endCall.mock.results[0], "timeout completion").value;
     expect(manager.getActiveCalls()).toHaveLength(0);
     const hangupCall = requireSingleHangupCall(provider);
     expect(hangupCall.reason).toBe("timeout");
@@ -374,14 +327,17 @@ describe("CallManager verification on restore", () => {
       expect(activeCall.state).toBe(state);
       expect(activeCall.answeredAt).toBe(startedAt);
       expect(
-        loadActiveCallsFromStore(storePath).activeCalls.get(activeCall.callId)?.answeredAt,
+        (await loadActiveCallsFromStore(storePath)).activeCalls.get(activeCall.callId)?.answeredAt,
       ).toBe(startedAt);
 
       await vi.advanceTimersByTimeAsync(9_000);
       expect(manager.getActiveCalls()).toHaveLength(1);
       expect(provider.hangupCalls).toHaveLength(0);
 
+      const endCall = vi.spyOn(manager, "endCall");
       await vi.advanceTimersByTimeAsync(1_100);
+      expect(endCall).toHaveBeenCalledOnce();
+      await requireRecord(endCall.mock.results[0], "timeout completion").value;
       expect(manager.getActiveCalls()).toHaveLength(0);
       const hangupCall = requireSingleHangupCall(provider);
       expect(hangupCall.reason).toBe("timeout");
@@ -400,7 +356,7 @@ describe("CallManager verification on restore", () => {
       endReason: "completed",
       processedEventIds: replayKeys,
     });
-    writeCallsToStore(storePath, [persisted]);
+    await writeCallsToStore(storePath, [persisted]);
 
     const provider = new FakeProvider();
     const config = VoiceCallConfigSchema.parse({
@@ -411,7 +367,7 @@ describe("CallManager verification on restore", () => {
     const manager = registerTestManagerCleanup(new CallManager(config, storePath));
     await manager.initialize(provider, "https://example.com/voice/webhook");
 
-    manager.processEvent({
+    await manager.processEvent({
       id: replayKeys.at(-1) as string,
       type: "call.initiated",
       callId: String(persisted.providerCallId),
@@ -424,7 +380,7 @@ describe("CallManager verification on restore", () => {
 
     expect(manager.getActiveCalls()).toHaveLength(0);
 
-    manager.processEvent({
+    await manager.processEvent({
       id: replayKeys[0] as string,
       type: "call.initiated",
       callId: String(persisted.providerCallId),

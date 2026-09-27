@@ -72,7 +72,8 @@ openclaw devices reject <requestId>
 
 Mint a single-use node onboarding URL with administrator access to the
 Gateway. Paste the printed `npx openclaw connect <url>` command on the machine
-to enroll.
+to enroll. This join URL is not a mobile app setup code; for Android/iOS use
+[`openclaw qr`](/cli/qr) instead.
 
 ```bash
 openclaw devices join-code
@@ -137,9 +138,18 @@ openclaw devices rotate --device <deviceId> --role operator --scope operator.rea
 
 - The target role must already exist in that device's approved pairing contract; rotation cannot mint a new unapproved role.
 - Omitting `--scope` retains the target token's current scopes. Passing explicit `--scope` values replaces that scope set, within the device's approved baseline, for future cached-token reconnects.
+- Pass `--no-scopes` to request an empty scope set. It cannot be combined with `--scope`.
 - A non-admin paired-device caller can rotate only its **own** device token, and the target scope set must stay within the caller's own operator scopes; rotation cannot mint or preserve a broader token than the caller already has.
 
 Returns rotation metadata as JSON. If the caller rotates its own token while authenticated with that device token, the response includes the replacement token so the client can persist it before reconnecting. Shared-secret callers and callers rotating another device never receive the bearer token.
+
+When Doctor reports a legacy node token carrying operator scopes, use its explicit recovery command:
+
+```bash
+openclaw devices rotate --device <deviceId> --role node --no-scopes
+```
+
+This recovery requires `operator.admin` and preserves the device's operator pairing and approved scopes. The Gateway removes only a local cached node token that matches the retired legacy token, in the same commit as rotation. For a node host using a separate state directory, provide valid shared Gateway authentication and restart the node to refresh its cache. A retired device token alone cannot authenticate the reconnect.
 
 ### `openclaw devices revoke --device <id> --role <role>`
 
@@ -155,6 +165,7 @@ A non-admin paired-device caller can revoke only its **own** device token. Revok
 
 - These commands require `operator.pairing` (or `operator.admin`) scope. Non-operator device roles always require `operator.admin`; see [Operator scopes](/gateway/operator-scopes).
 - Token rotation and revocation stay inside the device's approved pairing role set and scope baseline. A stray cached token entry does not grant a token-management target.
+- Rotation and revocation also invalidate the matching device and role's Dashboard read permissions and Cron caller authority retained by an admitted turn, including after a disconnect. Disconnecting alone does not revoke those permissions. Already committed Cron changes keep their outcome, and existing schedules are not canceled by revoking their creator's token.
 - Removing a device or revoking its node token also clears node runtime state. A worker cleanup error does not keep affected connections authorized or open.
 - For operator tokens, the CLI first reads the pairing list, then requests pairing plus the target token's scopes (or explicit rotate scopes). If the target is not visible, it requests admin access for cross-device management. A narrowed token does not inherit a broader device approval baseline; the caller must already be authorized for the requested scopes.
 - For paired-device token sessions, cross-device management (`remove`, `rename`, `rotate`, `revoke`) is self-only unless the caller has `operator.admin`.
@@ -236,3 +247,4 @@ If approval keeps failing, run `openclaw devices list` first to confirm a pendin
 
 - [CLI reference](/cli)
 - [Nodes](/nodes)
+- [`openclaw qr`](/cli/qr) — generate the mobile-node bootstrap QR and setup code

@@ -6,14 +6,14 @@
  */
 import { createHash } from "node:crypto";
 import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   SsrFBlockedError,
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
-} from "../infra/net/ssrf.js";
-import { redactToolPayloadText } from "../logging/redact.js";
+} from "openclaw/plugin-sdk/security-runtime";
+import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getHeadersWithAuth, stripCdpUrlCredentials } from "./cdp-auth.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS } from "./cdp-timeouts.js";
@@ -63,22 +63,17 @@ export function isWebSocketUrl(url: string): boolean {
  * Chrome will reject with HTTP 400.
  */
 export function isDirectCdpWebSocketEndpoint(url: string): boolean {
-  if (!isWebSocketUrl(url)) {
-    return false;
-  }
   try {
     const parsed = new URL(url);
-    return /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(
-      parsed.pathname,
+    return (
+      (parsed.protocol === "ws:" || parsed.protocol === "wss:") &&
+      /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(
+        parsed.pathname,
+      )
     );
-    // isWebSocketUrl above already parsed the same URL successfully, so
-    // new URL(url) cannot throw here. Kept for structural symmetry with
-    // the other try/catch URL helpers.
-    /* c8 ignore start */
   } catch {
     return false;
   }
-  /* c8 ignore stop */
 }
 
 /** Restrict a trusted CDP endpoint to its configured control-plane host. */
@@ -169,6 +164,40 @@ export function appendCdpPath(cdpUrl: string, path: string): string {
   const suffix = path.startsWith("/") ? path : `/${path}`;
   url.pathname = `${basePath}${suffix}`;
   return url.toString();
+}
+
+/** Normalize a reported CDP WebSocket URL against the configured CDP base URL. */
+export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
+  const ws = new URL(wsUrl);
+  const cdp = new URL(cdpUrl);
+  // Treat 0.0.0.0 and :: as wildcard bind addresses that need rewriting.
+  // Containerized browsers (e.g. browserless) report ws://0.0.0.0:<internal-port>
+  // in /json/version — these must be rewritten to the external cdpUrl host:port.
+  const isWildcardBind = ws.hostname === "0.0.0.0" || ws.hostname === "[::]";
+  if ((isLoopbackHost(ws.hostname) || isWildcardBind) && !isLoopbackHost(cdp.hostname)) {
+    ws.hostname = cdp.hostname;
+    const cdpPort = cdp.port || (cdp.protocol === "https:" ? "443" : "80");
+    ws.port = cdpPort;
+    ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
+  } else if (isLoopbackHost(ws.hostname) && isLoopbackHost(cdp.hostname)) {
+    ws.hostname = cdp.hostname;
+    if (!ws.port && cdp.port) {
+      ws.port = cdp.port;
+    }
+  }
+  if (cdp.protocol === "https:" && ws.protocol === "ws:") {
+    ws.protocol = "wss:";
+  }
+  if (!ws.username && !ws.password && (cdp.username || cdp.password)) {
+    ws.username = cdp.username;
+    ws.password = cdp.password;
+  }
+  for (const [key, value] of cdp.searchParams.entries()) {
+    if (!ws.searchParams.has(key)) {
+      ws.searchParams.append(key, value);
+    }
+  }
+  return ws.toString();
 }
 
 /** Normalize ws/wss and direct devtools URLs back to the HTTP JSON endpoint base. */
@@ -289,12 +318,13 @@ async function resolveCdpTabOwnershipContext(params: CdpTabOwnershipParams): Pro
     };
   }
   params.signal?.throwIfAborted();
-  const browserWebSocketUrl =
+  const advertisedWebSocketUrl =
     typeof version.webSocketDebuggerUrl === "string" ? version.webSocketDebuggerUrl.trim() : "";
-  if (!browserWebSocketUrl) {
+  if (!advertisedWebSocketUrl) {
     return { ownership: { status: "non-durable", reason: "browser-identity-unavailable" } };
   }
   try {
+    const browserWebSocketUrl = normalizeCdpWsUrl(advertisedWebSocketUrl, cdpHttpBase);
     const pinned = await assertCdpEndpointAllowed(browserWebSocketUrl, params.ssrfPolicy, {
       source: "discovered",
       configuredUrl: params.cdpUrl,
@@ -306,7 +336,7 @@ async function resolveCdpTabOwnershipContext(params: CdpTabOwnershipParams): Pro
         ...createCdpOwnershipFingerprints({
           profileName: params.profileName,
           cdpUrl: params.cdpUrl,
-          browserWebSocketUrl,
+          browserWebSocketUrl: advertisedWebSocketUrl,
         }),
       },
       browserWebSocketUrl,

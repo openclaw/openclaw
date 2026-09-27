@@ -4,15 +4,13 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema/primitives.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
-import { scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayCliClient,
@@ -21,7 +19,6 @@ import {
 } from "../../utils/message-channel.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -94,38 +91,6 @@ export function normalizeExplicitChatSendOrigin(
   };
 }
 
-export function validateChatSelectedAgent(params: {
-  cfg: OpenClawConfig;
-  requestedSessionKey: string;
-  explicitAgentId?: string;
-}): { ok: true; agentId?: string } | { ok: false; error: string } {
-  const resolved = resolveRequestedSessionAgentId(
-    params.cfg,
-    params.requestedSessionKey,
-    params.explicitAgentId,
-  );
-  return resolved.ok
-    ? { ok: true, agentId: resolved.agentId }
-    : { ok: false, error: resolved.error.message };
-}
-
-export function resolveChatSendActiveScopeKey(params: {
-  sessionKey: string;
-  agentId?: string;
-  mainKey?: string;
-}): string {
-  if (parseAgentSessionKey(params.sessionKey) || !params.agentId) {
-    return params.sessionKey;
-  }
-  return (
-    scopeLegacySessionKeyToAgent({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      mainKey: params.mainKey,
-    }) ?? params.sessionKey
-  );
-}
-
 export function resolveChatSendOriginatingRoute(params: {
   client?: { mode?: string | null; id?: string | null } | null;
   deliver?: boolean;
@@ -146,8 +111,14 @@ export function resolveChatSendOriginatingRoute(params: {
       explicitDeliverRoute: params.deliver === true,
     };
   }
+  // Internal WebChat bindings use the canonical session key, never a stored external route.
+  const internalRoute: ChatSendOriginatingRoute = {
+    originatingChannel: INTERNAL_MESSAGE_CHANNEL,
+    originatingTo: params.sessionKey,
+    explicitDeliverRoute: false,
+  };
   if (params.deliver !== true) {
-    return { originatingChannel: INTERNAL_MESSAGE_CHANNEL, explicitDeliverRoute: false };
+    return internalRoute;
   }
 
   const sessionDeliveryContext = deliveryContextFromSession(params.entry);
@@ -159,7 +130,7 @@ export function resolveChatSendOriginatingRoute(params: {
   const routeAccountIdCandidate = sessionDeliveryContext?.accountId ?? sessionOrigin?.accountId;
   const routeThreadIdCandidate = sessionDeliveryContext?.threadId ?? sessionOrigin?.threadId;
   if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
-    return { originatingChannel: INTERNAL_MESSAGE_CHANNEL, explicitDeliverRoute: false };
+    return internalRoute;
   }
 
   const parsedSessionKey = parseAgentSessionKey(params.sessionKey);
@@ -212,7 +183,7 @@ export function resolveChatSendOriginatingRoute(params: {
     routeToCandidate.trim().length > 0;
 
   if (!hasDeliverableRoute) {
-    return { originatingChannel: INTERNAL_MESSAGE_CHANNEL, explicitDeliverRoute: false };
+    return internalRoute;
   }
 
   return {
@@ -228,40 +199,31 @@ function isAcpSessionKey(sessionKey: string | undefined): boolean {
   return Boolean(sessionKey?.split(":").includes("acp"));
 }
 
-export function explicitOriginTargetsAcpSession(
-  origin: ChatSendExplicitOrigin | undefined,
-): boolean {
+function resolveExplicitOriginBinding(origin: ChatSendExplicitOrigin | undefined) {
   if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
-    return false;
+    return undefined;
   }
   const channel = normalizeMessageChannel(origin.originatingChannel);
   if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
-    return false;
+    return undefined;
   }
-  const binding = getSessionBindingService().resolveByConversation({
+  return getSessionBindingService().resolveByConversation({
     channel,
     accountId: origin.accountId,
     conversationId: origin.originatingTo,
   });
-  return isAcpSessionKey(binding?.targetSessionKey);
+}
+
+export function explicitOriginTargetsAcpSession(
+  origin: ChatSendExplicitOrigin | undefined,
+): boolean {
+  return isAcpSessionKey(resolveExplicitOriginBinding(origin)?.targetSessionKey);
 }
 
 export function explicitOriginTargetsPluginBinding(
   origin: ChatSendExplicitOrigin | undefined,
 ): boolean {
-  if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
-    return false;
-  }
-  const channel = normalizeMessageChannel(origin.originatingChannel);
-  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
-    return false;
-  }
-  const binding = getSessionBindingService().resolveByConversation({
-    channel,
-    accountId: origin.accountId,
-    conversationId: origin.originatingTo,
-  });
-  return isPluginOwnedSessionBindingRecord(binding);
+  return isPluginOwnedSessionBindingRecord(resolveExplicitOriginBinding(origin));
 }
 
 export function normalizeOptionalChatSystemReceipt(

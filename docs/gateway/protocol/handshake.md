@@ -134,8 +134,9 @@ The `sessions.observer.ask` method was removed; use `sessions.companion.ask`.
 The snapshot's optional `appliedConfigHash` is the resolved source-config revision
 accepted by the active Gateway runtime. Clients can compare it with
 `config.get.configRevisionHash` to determine whether a newer saved config still
-needs a restart. `config.get.hash` remains the raw root-file revision used by
-config write conflict guards.
+needs a restart. `config.get.hash` is the opaque authored revision used by config
+write conflict guards. It covers root-file bytes and the captured identities and
+content of included files.
 
 The snapshot's optional `controlUiIdentityUrl` advertises the active Gateway's
 HTTPS dashboard URL when it uses trusted-proxy or Tailscale Serve identity.
@@ -214,6 +215,8 @@ existing token's role and scopes before any local-backend pairing exception.
 
 ### Worker role and closed protocol
 
+A Gateway-owned launcher starts the worker process through
+[`openclaw worker`](/cli/worker); it is not a manual registration command.
 Workers use a closed protocol through either the public
 `/__openclaw__/worker` WebSocket path on the main TLS endpoint or the dedicated
 loopback ingress reached through the gateway-owned, host-key-pinned SSH tunnel.

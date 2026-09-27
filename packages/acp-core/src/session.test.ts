@@ -219,4 +219,33 @@ describe("acp session manager", () => {
       }),
     ).toThrow(/session limit reached/i);
   });
+
+  it("reports every removal path through onSessionRemoved", () => {
+    const removed: string[] = [];
+    const reportingStore = createInMemorySessionStore({
+      now,
+      maxSessions: 2,
+      idleTtlMs: 1_000,
+      onSessionRemoved: (sessionId) => removed.push(sessionId),
+    });
+
+    reportingStore.createSession({ sessionKey: "k", cwd: "/", sessionId: "deleted" });
+    expect(reportingStore.deleteSession("deleted")).toBe(true);
+    expect(removed).toEqual(["deleted"]);
+
+    // Idle reaping: the session ages past the TTL and is swept on the next create.
+    reportingStore.createSession({ sessionKey: "k", cwd: "/", sessionId: "stale" });
+    nowMs += 5_000;
+    reportingStore.createSession({ sessionKey: "k", cwd: "/", sessionId: "fresh" });
+    expect(removed).toEqual(["deleted", "stale"]);
+
+    // Capacity eviction: at maxSessions the oldest idle session makes room.
+    reportingStore.createSession({ sessionKey: "k", cwd: "/", sessionId: "second" });
+    reportingStore.createSession({ sessionKey: "k", cwd: "/", sessionId: "third" });
+    expect(removed).toEqual(["deleted", "stale", "fresh"]);
+
+    // Dispose reports whatever was still held.
+    reportingStore.dispose();
+    expect(removed).toEqual(["deleted", "stale", "fresh", "second", "third"]);
+  });
 });

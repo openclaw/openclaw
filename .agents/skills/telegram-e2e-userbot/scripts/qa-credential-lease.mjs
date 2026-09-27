@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 
-import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { promisify } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
+import {
+  resolveQaConvexBrokerConnection,
+  runQaConvexLookup,
+} from "../../../../extensions/qa-lab/src/qa-credentials-bootstrap.ts";
 
 const ENDPOINT_PREFIX = "/qa-credentials/v1";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
-const CONVEX_BROKER_DEPLOYMENT = "reminiscent-ibex-847";
-const CONVEX_BROKER_SITE_URL = `https://${CONVEX_BROKER_DEPLOYMENT}.convex.site`;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PAYLOAD_MAX_CHUNKS = 4096;
@@ -18,7 +18,6 @@ const DEFAULT_RESPONSE_MAX_BYTES = 1024 * 1024;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
 const CONVEX_WRITE_CONTENTION =
   /Documents read from or written to the "credential_sets" table changed while this mutation was being run/u;
-const execFile = promisify(execFileCallback);
 
 export class QaCredentialBrokerError extends Error {
   constructor(code, message, retryAfterMs) {
@@ -37,73 +36,13 @@ function retryableAcquireError(error) {
   );
 }
 
-function parseBrokerConfig({ siteUrl, secret, allowInsecureHttp }) {
-  let parsed;
-  try {
-    parsed = new URL(siteUrl);
-  } catch {
-    throw new Error("OPENCLAW_QA_CONVEX_SITE_URL must be a valid URL.");
-  }
-  const loopback =
-    parsed.hostname === "localhost" ||
-    parsed.hostname === "::1" ||
-    parsed.hostname === "[::1]" ||
-    /^127(?:\.\d{1,3}){3}$/u.test(parsed.hostname);
-  const allowLoopbackHttp = /^(?:1|true|yes)$/iu.test(allowInsecureHttp?.trim() ?? "");
-  if (
-    parsed.protocol !== "https:" &&
-    !(parsed.protocol === "http:" && loopback && allowLoopbackHttp)
-  ) {
-    throw new Error(
-      "OPENCLAW_QA_CONVEX_SITE_URL must use https://. " +
-        "Loopback http:// requires OPENCLAW_QA_ALLOW_INSECURE_HTTP=1.",
-    );
-  }
-  return { siteUrl: parsed.toString().replace(/\/+$/u, ""), secret };
-}
-
-async function defaultRunConvexCli(args, { cwd }) {
-  const { stdout } = await execFile("convex", args, {
-    cwd,
-    env: process.env,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-  });
-  return stdout.trim();
-}
-
-async function resolveBrokerConfig({ env, cwd, runConvexCliImpl, convexProjectDir }) {
-  const siteUrl = env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
-  const secret = env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
-  if (siteUrl || secret) {
-    if (!siteUrl || !secret) {
-      throw new Error(
-        "Set both OPENCLAW_QA_CONVEX_SITE_URL and OPENCLAW_QA_CONVEX_SECRET_CI, or leave both unset to use Convex CLI authentication.",
-      );
-    }
-    return parseBrokerConfig({
-      siteUrl,
-      secret,
-      allowInsecureHttp: env.OPENCLAW_QA_ALLOW_INSECURE_HTTP,
-    });
-  }
-
-  const projectDir = convexProjectDir ?? path.join(cwd, "qa", "convex-credential-broker");
-  try {
-    const cliSecret = (
-      await runConvexCliImpl(
-        ["env", "--deployment", CONVEX_BROKER_DEPLOYMENT, "get", "OPENCLAW_QA_CONVEX_SECRET_CI"],
-        { cwd: projectDir },
-      )
-    ).trim();
-    if (!cliSecret) throw new Error("Convex production broker credential is missing.");
-    return parseBrokerConfig({ siteUrl: CONVEX_BROKER_SITE_URL, secret: cliSecret });
-  } catch (error) {
-    throw new Error(
-      "Could not load the QA broker through the Convex CLI. Ask the user to install and authenticate the convex command, then request access to the OpenClaw broker project.",
-      { cause: error },
-    );
-  }
+async function defaultRunConvexCli(args, options) {
+  // The standalone Telegram entrypoint keeps its existing child-process owner.
+  const { runCommand } = await import("./run-mock-sut-user-e2e.mjs");
+  const { withTelegramRun } = await import("./telegram-run-scope.mjs");
+  return await runQaConvexLookup(args, options, (command, argv, runOptions) =>
+    withTelegramRun(() => runCommand(command, argv, runOptions), { signal: options.signal }),
+  );
 }
 
 async function readBrokerResponse(response, maxBytes) {
@@ -221,25 +160,29 @@ export async function acquireQaLease({
   payloadMaxBytes = DEFAULT_PAYLOAD_MAX_BYTES,
   payloadMaxChunks = DEFAULT_PAYLOAD_MAX_CHUNKS,
   env = process.env,
+  signal,
   cwd = process.cwd(),
   runConvexCliImpl = defaultRunConvexCli,
   convexProjectDir,
   fetchImpl = fetch,
-  sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleepImpl = (ms) => delay(ms, undefined, { signal }),
   randomImpl = Math.random,
 } = {}) {
   if (!kind) throw new Error("acquireQaLease requires a credential kind.");
-  const broker = await resolveBrokerConfig({
+  signal?.throwIfAborted();
+  const broker = await resolveQaConvexBrokerConnection({
     env,
     cwd,
     runConvexCliImpl,
     convexProjectDir,
+    signal,
   });
   const requestOptions = { broker, fetchImpl, httpTimeoutMs };
   const startedAt = Date.now();
   let acquired;
   let confirmedAt;
   for (;;) {
+    signal?.throwIfAborted();
     try {
       confirmedAt = { wall: Date.now(), monotonic: performance.now() };
       acquired = await callBroker(
@@ -270,6 +213,63 @@ export async function acquireQaLease({
   if (!identity.credentialId || !identity.leaseToken) {
     throw new Error("Broker acquire response is missing lease identity.");
   }
+  return await manageQaLease({
+    identity,
+    acquired,
+    confirmedAt,
+    requestOptions,
+    leaseTtlMs,
+    heartbeatIntervalMs,
+    payloadMaxBytes,
+    payloadMaxChunks,
+    signal,
+  });
+}
+
+// Recovery revalidates the same broker owner. It never allocates a replacement.
+export async function resumeQaLease({
+  recovery,
+  env = process.env,
+  signal,
+  cwd = process.cwd(),
+  fetchImpl = fetch,
+  runConvexCliImpl = defaultRunConvexCli,
+  convexProjectDir,
+  httpTimeoutMs = DEFAULT_HTTP_TIMEOUT_MS,
+}) {
+  signal?.throwIfAborted();
+  const broker = await resolveQaConvexBrokerConnection({
+    env,
+    cwd,
+    runConvexCliImpl,
+    convexProjectDir,
+    signal,
+  });
+  return await manageQaLease({
+    identity: recovery.identity,
+    acquired: { payload: undefined },
+    requestOptions: { broker, fetchImpl, httpTimeoutMs },
+    leaseTtlMs: recovery.leaseTtlMs,
+    heartbeatIntervalMs: recovery.heartbeatIntervalMs,
+    payloadMaxBytes: DEFAULT_PAYLOAD_MAX_BYTES,
+    payloadMaxChunks: DEFAULT_PAYLOAD_MAX_CHUNKS,
+    signal,
+    recovering: true,
+  });
+}
+
+async function manageQaLease({
+  identity,
+  acquired,
+  requestOptions,
+  leaseTtlMs,
+  heartbeatIntervalMs,
+  payloadMaxBytes,
+  payloadMaxChunks,
+  signal,
+  recovering = false,
+  confirmedAt = { wall: Date.now(), monotonic: performance.now() },
+}) {
   let heartbeatError;
   let heartbeatInFlight;
   let resolveUnhealthy;
@@ -322,6 +322,7 @@ export async function acquireQaLease({
   let payload;
   try {
     await initialHeartbeat;
+    signal?.throwIfAborted();
     assertHealthy();
     payload = await resolveCredentialPayload(
       acquired,
@@ -334,7 +335,12 @@ export async function acquireQaLease({
       { assertHealthy, whenUnhealthy },
     );
     assertHealthy();
+    signal?.throwIfAborted();
   } catch (error) {
+    if (recovering) {
+      await stopHeartbeat();
+      throw error;
+    }
     try {
       await stopHeartbeat();
       await callBroker("release", identity, requestOptions);
@@ -346,22 +352,26 @@ export async function acquireQaLease({
     }
     throw error;
   }
-  let released = false;
+  let releasing;
   return {
     payload,
-    credentialId: acquired.credentialId,
+    credentialId: identity.credentialId,
+    recovery: { identity, leaseTtlMs, heartbeatIntervalMs },
     whenUnhealthy,
     assertHealthy,
     abandon: async () => {
       invalidate(new Error("Credential lease abandoned; waiting for existing broker expiry."));
       await stopHeartbeat();
     },
-    release: async () => {
-      if (released) return;
-      invalidate(new Error("Credential lease released."));
-      await stopHeartbeat();
-      await callBroker("release", identity, requestOptions);
-      released = true;
+    release: () => {
+      invalidate(
+        Object.assign(new Error("Credential lease released."), { code: "LEASE_RELEASED" }),
+      );
+      releasing ??= (async () => {
+        await stopHeartbeat();
+        await callBroker("release", identity, requestOptions);
+      })();
+      return releasing;
     },
   };
 }

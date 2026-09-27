@@ -8,7 +8,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  cleanupCanaryArtifactsForExtensions,
   formatBoundaryCheckSuccessSummary,
   formatSlowCompileSummary,
   formatSkippedCompileProgress,
@@ -53,7 +52,7 @@ afterEach(() => {
 });
 
 describe("check-extension-package-tsc-boundary", () => {
-  it("reruns the real compiler after an inherited paths change in the CLI", () => {
+  it("compiles packaged roots and invalidates them when exports or inherited paths change", () => {
     const root = fs.realpathSync.native(createTempExtensionRoot().rootDir);
     const write = (file: string, contents: string) => {
       const target = path.join(root, file);
@@ -74,24 +73,50 @@ describe("check-extension-package-tsc-boundary", () => {
     write(pathsConfig, JSON.stringify(config));
     write(
       "extensions/tsconfig.package-boundary.base.json",
-      '{"extends":"./tsconfig.package-boundary.paths.json","compilerOptions":{"rootDir":"${configDir}"}}',
+      '{"extends":"./tsconfig.package-boundary.paths.json","compilerOptions":{"rootDir":"${configDir}"},"include":["${configDir}/*.ts","${configDir}/src/**/*.ts"]}',
     );
-    write(
-      "extensions/demo/tsconfig.json",
-      '{"extends":"../tsconfig.package-boundary.base.json","include":["index.ts"]}',
-    );
+    write("extensions/demo/tsconfig.json", '{"extends":"../tsconfig.package-boundary.base.json"}');
     write(
       "packages/plugin-sdk/dist/src/plugin-sdk/core.d.ts",
       "export type DemoContract = { ok: boolean };\n",
     );
     write(
       "extensions/demo/index.ts",
-      'import type { DemoContract } from "openclaw/plugin-sdk/core";\nexport const demo: DemoContract = { ok: true };\n',
+      'import type { DemoContract } from "openclaw/plugin-sdk/core";\nexport const demo: DemoContract = { ok: true };\nexport const marker: "ambient" = boundaryMarker;\n',
+    );
+    write("extensions/demo/src/environment.d.ts", 'declare const boundaryMarker: "ambient";\n');
+    write(
+      "extensions/larger/tsconfig.json",
+      '{"extends":"../tsconfig.package-boundary.base.json"}',
+    );
+    write("extensions/larger/index.ts", 'export { value } from "./src/value.js";\n');
+    write(
+      "extensions/larger/src/value.ts",
+      `export const value = ${JSON.stringify("x".repeat(2000))};\n`,
+    );
+    const demoPackage = {
+      name: "@openclaw/demo",
+      exports: { ".": "./dist/index.js" },
+      openclaw: {
+        extensions: ["./index.ts"],
+        build: { workerEntries: ["./src/worker.ts"] },
+      },
+    };
+    write("extensions/demo/package.json", JSON.stringify(demoPackage));
+    write("extensions/demo/openclaw.plugin.json", '{"id":"demo"}');
+    write("extensions/larger/package.json", '{"name":"@openclaw/larger"}');
+    write("extensions/demo/src/worker.ts", "export const worker = true;\n");
+    write("extensions/demo/test-api.ts", 'export * from "./src/private.test-helper.js";\n');
+    write(
+      "extensions/demo/src/private.test-helper.ts",
+      'export const value: number = "invalid";\n',
     );
     // Hold preparation fixed; scheduling, config parsing, and compilation remain real.
     write("scripts/prepare-extension-package-boundary-artifacts.mts", "export {};\n");
     for (const file of [
       "check-extension-package-tsc-boundary.mts",
+      "compile-extension-boundary.mts",
+      "check-file-utils.ts",
       "tsx.mjs",
       "windows-cmd-helpers.mjs",
     ]) {
@@ -102,6 +127,8 @@ describe("check-extension-package-tsc-boundary", () => {
       "scripts/lib",
       "packages/normalization-core/src",
       "packages/normalization-core/package.json",
+      "src/shared/non-packaged-plugin-dirs.ts",
+      "src/plugins/package-entrypoints.ts",
     ]) {
       fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
       fs.cpSync(path.resolve(file), path.join(root, file), { recursive: true });
@@ -115,16 +142,46 @@ describe("check-extension-package-tsc-boundary", () => {
       spawnSync(
         process.execPath,
         ["scripts/check-extension-package-tsc-boundary.mts", "--mode=compile"],
-        { cwd: root, encoding: "utf8", timeout: 20_000 },
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 20_000,
+          env: { ...process.env, OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: "1" },
+        },
       );
     const cold = run();
     expect(cold.error, cold.stderr).toBeUndefined();
     expect(cold.status, cold.stdout + cold.stderr).toBe(0);
-    expect(cold.stdout).toContain("compiled plugins: 1");
+    expect(cold.stdout).toContain("compiled plugins: 2");
+    expect(cold.stdout.indexOf("] larger")).toBeLessThan(cold.stdout.indexOf("] demo"));
+    const receipt = JSON.parse(
+      fs.readFileSync(
+        path.join(root, ".artifacts/extension-package-boundary/compile/demo.inputs.json"),
+        "utf8",
+      ),
+    );
+    expect(receipt.inputs.some((file: string) => file.endsWith("/demo/src/worker.ts"))).toBe(true);
     const warm = run();
     expect(warm.status, warm.stdout + warm.stderr).toBe(0);
     expect(warm.stdout).toContain("compiled plugins: 0");
-    expect(warm.stdout).toContain("skipped plugins: 1");
+    expect(warm.stdout).toContain("skipped plugins: 2");
+    write(
+      "extensions/demo/package.json",
+      JSON.stringify({
+        ...demoPackage,
+        exports: { ...demoPackage.exports, "./test-api.js": "./test-api.ts" },
+      }),
+    );
+    const exportedTestApi = run();
+    expect(exportedTestApi.status, exportedTestApi.stdout + exportedTestApi.stderr).toBe(1);
+    expect(exportedTestApi.stderr).toContain("TS2322");
+    write("extensions/demo/package.json", JSON.stringify(demoPackage));
+    write("extensions/outside.ts", "export const outside = true;\n");
+    write("extensions/demo/src/worker.ts", 'export { outside } from "../../outside.js";\n');
+    const escapingWorker = run();
+    expect(escapingWorker.status, escapingWorker.stdout + escapingWorker.stderr).toBe(1);
+    expect(escapingWorker.stderr).toContain("TS6059");
+    write("extensions/demo/src/worker.ts", "export const worker = true;\n");
     config.compilerOptions.paths["openclaw/plugin-sdk/*"] = ["../missing-sdk/*.d.ts"];
     write(pathsConfig, JSON.stringify(config));
     const changed = run();
@@ -145,29 +202,6 @@ describe("check-extension-package-tsc-boundary", () => {
       ),
     ).rejects.toMatchObject({ kind: "timeout", fullOutput: expect.stringContaining(diagnostic) });
   });
-  it("removes stale canary artifacts across extensions", () => {
-    const { rootDir } = createTempExtensionRoot();
-    const { canaryPath, tsconfigPath } = writeCanaryArtifacts(rootDir);
-
-    cleanupCanaryArtifactsForExtensions(["demo"], rootDir);
-
-    expect(fs.existsSync(canaryPath)).toBe(false);
-    expect(fs.existsSync(tsconfigPath)).toBe(false);
-  });
-
-  it("cleans canary artifacts again on process exit", () => {
-    const { rootDir } = createTempExtensionRoot();
-    const { canaryPath, tsconfigPath } = writeCanaryArtifacts(rootDir);
-    const processObject = new EventEmitter();
-    const teardown = installCanaryArtifactCleanup(["demo"], { processObject, rootDir });
-
-    processObject.emit("exit");
-    teardown();
-
-    expect(fs.existsSync(canaryPath)).toBe(false);
-    expect(fs.existsSync(tsconfigPath)).toBe(false);
-  });
-
   it("cleans stale artifacts for every extension id passed to the cleanup hook", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-canary-"));
     tempRoots.add(rootDir);
@@ -194,6 +228,10 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: "4" }, 32)).toBe(4);
     expect(resolveCompileConcurrency({}, 12)).toBe(6);
     expect(resolveCompileConcurrency({}, 3)).toBe(1);
+    expect(resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: "16" }, 16)).toBe(
+      8,
+    );
+    expect(resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: "16" }, 2)).toBe(1);
     for (const value of ["4x", "0", "1e3"]) {
       expect(() =>
         resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: value }, 32),

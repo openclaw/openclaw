@@ -32,8 +32,6 @@ internal data class WearAgentSummary(
 internal data class WearSessionSummary(
   val id: String,
   val title: String?,
-  val updatedAtEpochMillis: Long?,
-  val selected: Boolean,
   val activeOnPhone: Boolean = false,
   val openOnWatch: Boolean = false,
 )
@@ -46,25 +44,28 @@ internal data class WearModelSummary(
 
 internal data class WearConversationSnapshot(
   val gatewayState: WearGatewayState,
+  val phoneNodeId: String? = null,
   val activeAgentId: String? = null,
+  val replyTextSupported: Boolean = false,
   val agents: List<WearAgentSummary> = emptyList(),
   val agentControlsSupported: Boolean = false,
   val gatewayControlsSupported: Boolean = false,
   val activeSessionId: String? = null,
-  val phoneActiveSessionId: String? = null,
+  val activeSessionTitle: String? = null,
   val sessions: List<WearSessionSummary> = emptyList(),
   val sessionSearchQuery: String? = null,
   val sessionSearchResults: List<WearSessionSummary> = emptyList(),
   val sessionSearchHasMore: Boolean = false,
   val sessionSearchSupported: Boolean = false,
   val models: List<WearModelSummary> = emptyList(),
+  val modelCatalogRefreshFailed: Boolean = false,
+  val sessionModelCatalogSupported: Boolean = false,
   val modelSearchQuery: String? = null,
   val modelSearchResults: List<WearModelSummary> = emptyList(),
   val modelControlsSupported: Boolean = false,
   val modelSearchSupported: Boolean = false,
   val messages: List<WearChatMessage> = emptyList(),
   val streamingAssistantText: String? = null,
-  val pendingRunCount: Int = 0,
   val selectedModelRef: String? = null,
   val failure: WearConversationFailure? = null,
   val realtimeTalk: WearRealtimeTalkSnapshot = WearRealtimeTalkSnapshot(),
@@ -98,9 +99,27 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
   val pulseSupported =
     connected &&
       WearProxyCapability.AgentPulse in proxyCapabilities
+
+  fun sessionSummary(session: WearSession) =
+    WearSessionSummary(
+      id = session.key,
+      title = session.title,
+      activeOnPhone = session.key == phoneActiveSessionKey,
+      openOnWatch = session.key == selectedSession?.key,
+    )
+
+  fun modelSummary(model: WearModel) =
+    WearModelSummary(
+      ref = model.ref,
+      name = model.name,
+      selected = model.ref == selectedModelRef,
+    )
+
   return WearConversationSnapshot(
+    phoneNodeId = phoneNodeId,
+    activeAgentId = selectedSession?.agentId ?: activeAgentId,
+    replyTextSupported = WearProxyCapability.ReplyText in proxyCapabilities,
     gatewayState = if (connected) WearGatewayState.CONNECTED else WearGatewayState.DISCONNECTED,
-    activeAgentId = activeAgentId,
     agents =
       agents.map { agent ->
         WearAgentSummary(
@@ -113,56 +132,25 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
     agentControlsSupported = WearProxyCapability.AgentControls in proxyCapabilities,
     gatewayControlsSupported = WearProxyCapability.GatewayControls in proxyCapabilities,
     activeSessionId = selectedSession?.key,
-    phoneActiveSessionId = phoneActiveSessionKey,
-    sessions =
-      sessions.map { session ->
-        WearSessionSummary(
-          id = session.key,
-          title = session.title,
-          updatedAtEpochMillis = session.updatedAt,
-          selected = session.key == selectedSession?.key,
-          activeOnPhone = session.key == phoneActiveSessionKey,
-          openOnWatch = session.key == selectedSession?.key,
-        )
-      },
+    activeSessionTitle = selectedSession?.title,
+    sessions = sessions.map(::sessionSummary),
     sessionSearchQuery = sessionSearchQuery,
-    sessionSearchResults =
-      sessionSearchResults.map { session ->
-        WearSessionSummary(
-          id = session.key,
-          title = session.title,
-          updatedAtEpochMillis = session.updatedAt,
-          selected = session.key == selectedSession?.key,
-          activeOnPhone = session.key == phoneActiveSessionKey,
-          openOnWatch = session.key == selectedSession?.key,
-        )
-      },
+    sessionSearchResults = sessionSearchResults.map(::sessionSummary),
     sessionSearchHasMore = sessionSearchHasMore,
     sessionSearchSupported = WearProxyCapability.SessionSearchPagination in proxyCapabilities,
-    models =
-      models.map { model ->
-        WearModelSummary(
-          ref = model.ref,
-          name = model.name,
-          selected = model.ref == selectedModelRef,
-        )
-      },
+    models = models.map(::modelSummary),
     modelControlsSupported = WearProxyCapability.ModelControls in proxyCapabilities,
-    modelSearchSupported = WearProxyCapability.ModelCatalogSearch in proxyCapabilities,
+    modelCatalogRefreshFailed = modelCatalogRefreshFailed,
+    sessionModelCatalogSupported = WearProxyCapability.SessionScopedModelCatalog in proxyCapabilities,
+    modelSearchSupported =
+      WearProxyCapability.ModelCatalogSearch in proxyCapabilities &&
+        WearProxyCapability.SessionScopedModelCatalog in proxyCapabilities,
     modelSearchQuery = modelSearchQuery,
-    modelSearchResults =
-      modelSearchResults.map { model ->
-        WearModelSummary(
-          ref = model.ref,
-          name = model.name,
-          selected = model.ref == selectedModelRef,
-        )
-      },
+    modelSearchResults = modelSearchResults.map(::modelSummary),
     messages = messages,
     streamingAssistantText = streamText,
-    pendingRunCount = if (activeRunId != null) 1 else 0,
     selectedModelRef = selectedModelRef,
-    failure = failure,
+    failure = conversationFailure,
     realtimeTalk = realtimeTalk,
     agentPulseSupported = pulseSupported,
     agentPulse = agentPulse.takeIf { pulseSupported },

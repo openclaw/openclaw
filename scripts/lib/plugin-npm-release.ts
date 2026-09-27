@@ -490,12 +490,53 @@ async function isPluginVersionPublished(packageName: string, version: string): P
   return Object.hasOwn(result.packument.versions, version);
 }
 
+export type NpmPackageObservation = {
+  packageExists: boolean;
+  hasVersionHistory: boolean;
+  selectedVersionExists: boolean;
+  latestVersion: string | null;
+};
+
+export async function observeNpmPackage(
+  params: Parameters<typeof fetchNpmRegistryPackumentWithRetry>[0] & { version?: string },
+): Promise<NpmPackageObservation> {
+  const result = await fetchNpmRegistryPackumentWithRetry(params);
+  if (result.status === 404) {
+    return {
+      packageExists: false,
+      hasVersionHistory: false,
+      selectedVersionExists: false,
+      latestVersion: null,
+    };
+  }
+  if (!result.ok) {
+    throw new Error(`${params.packageName}: npm registry returned HTTP ${result.status}.`);
+  }
+  if (!isRecord(result.packument) || !isRecord(result.packument.versions)) {
+    throw new Error(`${params.packageName}: npm registry returned an invalid versions map.`);
+  }
+  const tags = result.packument["dist-tags"];
+  const latest = isRecord(tags) ? tags.latest : undefined;
+  return {
+    packageExists: true,
+    hasVersionHistory: Object.keys(result.packument.versions).length > 0,
+    selectedVersionExists:
+      params.version !== undefined && Object.hasOwn(result.packument.versions, params.version),
+    latestVersion:
+      typeof latest === "string" && latest.length <= 128 && /^[0-9A-Za-z.+-]+$/u.test(latest)
+        ? latest
+        : null,
+  };
+}
+
 export async function collectPluginReleasePlan(params?: {
   rootDir?: string;
   selection?: string[];
   selectionMode?: PluginReleaseSelectionMode;
   gitRange?: GitRangeSelection;
   npmDistTag?: "extended-stable";
+  resolvePublishedVersion?: (packageName: string, version: string) => Promise<boolean>;
+  resolveLatestVersion?: NpmLatestVersionResolver;
 }): Promise<PluginReleasePlan> {
   const gitRangeSelection = params?.gitRange
     ? collectPluginNpmGitRangeSelection({
@@ -538,12 +579,16 @@ export async function collectPluginReleasePlan(params?: {
   const warnings = assertPluginReleaseDependencyFreshness(
     selectedPublishable,
     "Plugin NPM release plan",
+    params?.resolveLatestVersion,
   );
 
   const plan = await runTasksWithConcurrency({
     tasks: selectedPublishable.map((plugin) => async () => ({
       ...plugin,
-      alreadyPublished: await isPluginVersionPublished(plugin.packageName, plugin.version),
+      alreadyPublished: await (params?.resolvePublishedVersion ?? isPluginVersionPublished)(
+        plugin.packageName,
+        plugin.version,
+      ),
     })),
     limit: PLUGIN_NPM_RELEASE_PLAN_CONCURRENCY,
     errorMode: "stop",

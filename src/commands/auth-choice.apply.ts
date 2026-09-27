@@ -22,28 +22,24 @@ async function normalizeLegacyChoice(
   return resolveLegacyOnboardAuthChoice(authChoice, params).authChoice;
 }
 
-async function normalizeTokenProviderChoice(params: {
-  authChoice: AuthChoice;
-  source: ApplyAuthChoiceParams;
-}): Promise<AuthChoice> {
-  if (!params.source.opts?.tokenProvider) {
-    return params.authChoice;
+async function normalizeTokenProviderChoice(
+  authChoice: AuthChoice,
+  params: ApplyAuthChoiceParams,
+): Promise<AuthChoice> {
+  if (!params.opts?.tokenProvider) {
+    return authChoice;
   }
-  if (
-    params.authChoice !== "apiKey" &&
-    params.authChoice !== "token" &&
-    params.authChoice !== "setup-token"
-  ) {
-    return params.authChoice;
+  if (authChoice !== "apiKey" && authChoice !== "token" && authChoice !== "setup-token") {
+    return authChoice;
   }
   const { normalizeApiKeyTokenProviderAuthChoice } =
     await import("./auth-choice.apply.api-providers.js");
   return normalizeApiKeyTokenProviderAuthChoice({
-    authChoice: params.authChoice,
-    tokenProvider: params.source.opts.tokenProvider,
-    config: params.source.config,
-    workspaceDir: params.source.workspaceDir,
-    env: params.source.env,
+    authChoice,
+    tokenProvider: params.opts.tokenProvider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
   });
 }
 
@@ -56,20 +52,18 @@ async function formatDeprecatedProviderChoiceError(
   }
   const { resolveManifestDeprecatedProviderAuthChoice } =
     await import("../plugins/provider-auth-choices.js");
-  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice, params);
-  if (deprecatedChoice) {
-    return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(deprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`;
-  }
-  const { resolveDeprecatedProviderInstallCatalogEntry } =
-    await import("../plugins/provider-install-catalog.js");
-  const externalDeprecatedChoice = resolveDeprecatedProviderInstallCatalogEntry(authChoice, {
-    ...params,
-    includeUntrustedWorkspacePlugins: false,
-  });
-  if (!externalDeprecatedChoice) {
+  const deprecatedChoice =
+    resolveManifestDeprecatedProviderAuthChoice(authChoice, params) ??
+    (
+      await import("../plugins/provider-install-catalog.js")
+    ).resolveDeprecatedProviderInstallCatalogEntry(authChoice, {
+      ...params,
+      includeUntrustedWorkspacePlugins: false,
+    });
+  if (!deprecatedChoice) {
     return undefined;
   }
-  return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(externalDeprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`;
+  return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(deprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`;
 }
 
 /** Prepare a selected auth choice without writing its returned provider profiles. */
@@ -78,15 +72,18 @@ export async function prepareAuthChoice(
 ): Promise<PreparedAuthChoiceResult> {
   const normalizedAuthChoice =
     (await normalizeLegacyChoice(params.authChoice, params)) ?? params.authChoice;
-  const normalizedProviderAuthChoice = await normalizeTokenProviderChoice({
-    authChoice: normalizedAuthChoice,
-    source: params,
-  });
+  const normalizedProviderAuthChoice = await normalizeTokenProviderChoice(
+    normalizedAuthChoice,
+    params,
+  );
   const normalizedParams =
     normalizedProviderAuthChoice === params.authChoice
       ? params
       : { ...params, authChoice: normalizedProviderAuthChoice };
-  const result = await prepareAuthChoiceLoadedPluginProvider(normalizedParams);
+  const result = await prepareAuthChoiceLoadedPluginProvider(
+    normalizedParams,
+    (prepared) => prepared,
+  );
   if (result) {
     return result;
   }
@@ -129,6 +126,9 @@ export async function applyAuthChoice(
   await prepared.persistAuthProfiles();
   return {
     config: prepared.config,
+    ...(prepared.utilityModelOverride
+      ? { utilityModelOverride: prepared.utilityModelOverride, modelTarget: prepared.modelTarget }
+      : {}),
     ...(prepared.agentModelOverride ? { agentModelOverride: prepared.agentModelOverride } : {}),
     ...(prepared.retrySelection ? { retrySelection: true } : {}),
   };

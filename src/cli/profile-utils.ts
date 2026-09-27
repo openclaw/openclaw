@@ -6,10 +6,6 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 export function isValidProfileName(value: string): boolean {
-  if (!value) {
-    return false;
-  }
-  // Keep it path-safe + shell-friendly.
   return PROFILE_NAME_RE.test(value);
 }
 

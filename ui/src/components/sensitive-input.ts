@@ -14,6 +14,9 @@ type SensitiveInputProps = {
   inputClassName?: string;
   placeholder?: string;
   disabled?: boolean;
+  invalid?: boolean;
+  describedBy?: string;
+  label?: string;
   onInput: (value: string) => void;
   onToggle: () => void;
 };
@@ -76,6 +79,9 @@ export function renderSensitiveInput(props: SensitiveInputProps): TemplateResult
         placeholder=${props.placeholder ?? ""}
         .value=${props.value}
         ?disabled=${props.disabled}
+        aria-invalid=${props.invalid ? "true" : nothing}
+        aria-describedby=${props.describedBy ?? nothing}
+        aria-label=${props.label ?? nothing}
         data-sensitive-value
         @input=${handleInput}
         @change=${handleMaskSync}

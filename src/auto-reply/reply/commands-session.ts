@@ -12,8 +12,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
 import {
-  setChannelConversationBindingIdleTimeoutBySessionKey,
-  setChannelConversationBindingMaxAgeBySessionKey,
+  setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
+  setChannelConversationBindingMaxAgeBySessionKeyAsync,
 } from "../../channels/plugins/conversation-bindings.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
@@ -23,12 +23,12 @@ import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import {
-  clearRestartSentinel,
+  clearRestartSentinelIfRevision,
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
+import { scheduleGatewayRestart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import {
@@ -254,36 +254,22 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
 
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
-    if (isReset) {
-      if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-        delete targetSessionEntry.responseUsage;
-        params.sessionStore[params.sessionKey] = targetSessionEntry;
-        if (
-          !(await persistCommandSession({
-            ...params,
-            sessionEntry: targetSessionEntry,
-            touchedFields: ["responseUsage"],
-          }))
-        ) {
-          return sessionEntryPersistenceConflictReply();
-        }
-      }
-      return sessionCommandReply("⚙️ Usage footer: reset to default.");
+    let next: ReturnType<typeof normalizeUsageDisplay>;
+    if (!isReset) {
+      const current = resolveEffectiveResponseUsage(
+        targetSessionEntry?.responseUsage,
+        params.cfg.messages?.responseUsage,
+        params.command.channel,
+      );
+      next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
     }
 
-    const replyChannel = params.command.channel;
-    const currentRaw = targetSessionEntry?.responseUsage;
-    const current = resolveEffectiveResponseUsage(
-      currentRaw,
-      params.cfg.messages?.responseUsage,
-      replyChannel,
-    );
-    const next =
-      requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
-
     if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-      targetSessionEntry.responseUsage = next;
-      params.sessionStore[params.sessionKey] = targetSessionEntry;
+      if (isReset) {
+        delete targetSessionEntry.responseUsage;
+      } else {
+        targetSessionEntry.responseUsage = next;
+      }
       if (
         !(await persistCommandSession({
           ...params,
@@ -295,7 +281,9 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
       }
     }
 
-    return sessionCommandReply(`⚙️ Usage footer: ${next}.`);
+    return sessionCommandReply(
+      isReset ? "⚙️ Usage footer: reset to default." : `⚙️ Usage footer: ${next}.`,
+    );
   },
 );
 
@@ -325,27 +313,16 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
     const nextMode = resetsToDefault ? undefined : normalizeFastMode(rawMode);
-    if (nextMode === undefined) {
-      if (resetsToDefault) {
-        if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-          delete targetSessionEntry.fastMode;
-          if (
-            !(await persistCommandSession({
-              ...params,
-              sessionEntry: targetSessionEntry,
-              touchedFields: ["fastMode"],
-            }))
-          ) {
-            return sessionEntryPersistenceConflictReply();
-          }
-        }
-        return sessionCommandReply("⚙️ Fast mode reset to default.");
-      }
+    if (nextMode === undefined && !resetsToDefault) {
       return sessionCommandReply("⚙️ Usage: /fast status|auto|on|off|default");
     }
 
     if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-      targetSessionEntry.fastMode = nextMode;
+      if (resetsToDefault) {
+        delete targetSessionEntry.fastMode;
+      } else {
+        targetSessionEntry.fastMode = nextMode;
+      }
       if (
         !(await persistCommandSession({
           ...params,
@@ -358,9 +335,11 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
     }
 
     return sessionCommandReply(
-      nextMode === "auto"
-        ? "⚙️ Fast mode set to auto."
-        : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
+      resetsToDefault
+        ? "⚙️ Fast mode reset to default."
+        : nextMode === "auto"
+          ? "⚙️ Fast mode set to auto."
+          : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
     );
   },
 );
@@ -402,8 +381,10 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     const conversationBindings = getChannelPlugin(bindingContext.channel)?.conversationBindings;
     const supportsLifecycleUpdate =
       action === SESSION_ACTION_IDLE
-        ? typeof conversationBindings?.setIdleTimeoutBySessionKey === "function"
-        : typeof conversationBindings?.setMaxAgeBySessionKey === "function";
+        ? typeof conversationBindings?.setIdleTimeoutBySessionKeyAsync === "function" ||
+          typeof conversationBindings?.setIdleTimeoutBySessionKey === "function"
+        : typeof conversationBindings?.setMaxAgeBySessionKeyAsync === "function" ||
+          typeof conversationBindings?.setMaxAgeBySessionKey === "function";
     if (!conversationBindings?.supportsCurrentConversationBinding || !supportsLifecycleUpdate) {
       return sessionCommandReply(
         "⚠️ /session idle and /session max-age are currently available only on channels that support conversation binding lifecycle updates.",
@@ -413,7 +394,8 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
 
   const sessionBindingService = getSessionBindingService();
 
-  const activeBinding = sessionBindingService.resolveByConversation(bindingContext);
+  const activeBinding = await sessionBindingService.resolveByConversationAsync(bindingContext);
+  params.opts?.abortSignal?.throwIfAborted();
   if (!activeBinding) {
     return sessionCommandReply("ℹ️ This conversation is not currently bound.");
   }
@@ -450,31 +432,18 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   );
   const maxAgeMs = resolveSessionBindingDurationMs(activeBinding, "maxAgeMs", 0);
   const maxAgeExpiresAt = resolveSessionBindingExpiryAt(activeBinding.boundAt, maxAgeMs);
+  const isIdle = action === SESSION_ACTION_IDLE;
+  const settingLabel = isIdle ? "Idle timeout" : "Max age";
+  const expiryDescription = isIdle ? "next auto-unbind" : "hard auto-unbind";
 
   if (!durationArgRaw) {
-    if (action === SESSION_ACTION_IDLE) {
-      if (
-        typeof idleExpiresAt === "number" &&
-        Number.isFinite(idleExpiresAt) &&
-        idleExpiresAt > Date.now()
-      ) {
-        return sessionCommandReply(
-          `ℹ️ Idle timeout active (${formatThreadBindingDurationLabel(idleTimeoutMs)}, next auto-unbind at ${formatSessionExpiry(idleExpiresAt)}).`,
-        );
-      }
-      return sessionCommandReply("ℹ️ Idle timeout is currently disabled for this bound session.");
-    }
-
-    if (
-      typeof maxAgeExpiresAt === "number" &&
-      Number.isFinite(maxAgeExpiresAt) &&
-      maxAgeExpiresAt > Date.now()
-    ) {
+    const expiresAt = isIdle ? idleExpiresAt : maxAgeExpiresAt;
+    if (typeof expiresAt === "number" && Number.isFinite(expiresAt) && expiresAt > Date.now()) {
       return sessionCommandReply(
-        `ℹ️ Max age active (${formatThreadBindingDurationLabel(maxAgeMs)}, hard auto-unbind at ${formatSessionExpiry(maxAgeExpiresAt)}).`,
+        `ℹ️ ${settingLabel} active (${formatThreadBindingDurationLabel(isIdle ? idleTimeoutMs : maxAgeMs)}, ${expiryDescription} at ${formatSessionExpiry(expiresAt)}).`,
       );
     }
-    return sessionCommandReply("ℹ️ Max age is currently disabled for this bound session.");
+    return sessionCommandReply(`ℹ️ ${settingLabel} is currently disabled for this bound session.`);
   }
 
   let durationMs: number;
@@ -486,13 +455,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
 
   const updatedBindings =
     action === SESSION_ACTION_IDLE
-      ? setChannelConversationBindingIdleTimeoutBySessionKey({
+      ? await setChannelConversationBindingIdleTimeoutBySessionKeyAsync({
           channelId: bindingContext.channel,
           targetSessionKey: activeBinding.targetSessionKey,
           accountId: bindingContext.accountId,
           idleTimeoutMs: durationMs,
         })
-      : setChannelConversationBindingMaxAgeBySessionKey({
+      : await setChannelConversationBindingMaxAgeBySessionKeyAsync({
           channelId: bindingContext.channel,
           targetSessionKey: activeBinding.targetSessionKey,
           accountId: bindingContext.accountId,
@@ -508,9 +477,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
 
   if (durationMs <= 0) {
     return sessionCommandReply(
-      action === SESSION_ACTION_IDLE
-        ? `✅ Idle timeout disabled for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"}.`
-        : `✅ Max age disabled for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"}.`,
+      `✅ ${settingLabel} disabled for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"}.`,
     );
   }
 
@@ -524,46 +491,42 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       : "n/a";
 
   return sessionCommandReply(
-    action === SESSION_ACTION_IDLE
-      ? `✅ Idle timeout set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (next auto-unbind at ${expiryLabel}).`
-      : `✅ Max age set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (hard auto-unbind at ${expiryLabel}).`,
+    `✅ ${settingLabel} set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (${expiryDescription} at ${expiryLabel}).`,
   );
 };
 export const handleRestartCommand: CommandHandler = defineGatewayControlCommand(
   "/restart",
   async (params) => {
-    const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
     const sentinelPayload = buildRestartCommandSentinel(params);
-    if (hasSigusr1Listener) {
-      let sentinelWritten = false;
-      scheduleGatewaySigusr1Restart({
+    if (process.listenerCount("SIGUSR2") > 0) {
+      let sentinelRevision: number | undefined;
+      scheduleGatewayRestart({
         reason: "/restart",
         // The routed restart acknowledgement and scheduler must own the same
         // pending session key to avoid cross-session overwrite (#86742).
         sessionKey: sentinelPayload?.sessionKey,
-        emitHooks: sentinelPayload
-          ? {
-              beforeEmit: async () => {
-                await writeRestartSentinel(sentinelPayload);
-                sentinelWritten = true;
-              },
-              afterEmitRejected: async () => {
-                if (sentinelWritten) {
-                  await clearRestartSentinel();
-                }
-              },
+        emitHooks: {
+          assertCurrent: params.command.assertOwnerCurrent,
+          beforeEmit: async () => {
+            if (sentinelPayload) {
+              sentinelRevision = (await writeRestartSentinel(sentinelPayload)).revision;
             }
-          : undefined,
+          },
+          afterEmitRejected: async () => {
+            if (sentinelRevision !== undefined) {
+              await clearRestartSentinelIfRevision(sentinelRevision);
+            }
+          },
+        },
       });
       return sessionCommandReply(
-        "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
+        "⚙️ Restarting OpenClaw in-process (SIGUSR2); back in a few seconds.",
       );
     }
-    let sentinelWritten = false;
+    let sentinelRevision: number | undefined;
     try {
       if (sentinelPayload) {
-        await writeRestartSentinel(sentinelPayload);
-        sentinelWritten = true;
+        sentinelRevision = (await writeRestartSentinel(sentinelPayload)).revision;
       }
     } catch (err) {
       logVerbose(`failed to write /restart sentinel: ${String(err)}`);
@@ -571,10 +534,17 @@ export const handleRestartCommand: CommandHandler = defineGatewayControlCommand(
         "⚠️ Restart failed: could not persist the post-restart acknowledgement.",
       );
     }
+    const nonOwner = rejectNonOwnerCommand(params, "/restart");
+    if (nonOwner) {
+      if (sentinelRevision !== undefined) {
+        await clearRestartSentinelIfRevision(sentinelRevision);
+      }
+      return nonOwner;
+    }
     const restartMethod = triggerOpenClawRestart();
     if (!restartMethod.ok) {
-      if (sentinelWritten) {
-        await clearRestartSentinel();
+      if (sentinelRevision !== undefined) {
+        await clearRestartSentinelIfRevision(sentinelRevision);
       }
       const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
       return sessionCommandReply(`⚠️ Restart failed (${restartMethod.method}).${detail}`);

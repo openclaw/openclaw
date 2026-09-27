@@ -3,6 +3,7 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import {
   coerceErrorMessage,
+  collectNestedErrorCandidates,
   formatErrorMessage,
   stringifyNonErrorCause,
   toErrorObject,
@@ -27,6 +28,7 @@ describe("formatErrorMessage", () => {
       throw body;
     };
     const failure: unknown = await run().catch((error: unknown) => error);
+    expect(collectNestedErrorCandidates(failure)).toEqual([failure, cleanup, body]);
     const redact = vi.fn((text: string) => text.replaceAll("secret", "[REDACTED]"));
 
     expect(formatErrorMessage(failure, { redact })).toContain(
@@ -192,6 +194,25 @@ describe("formatErrorMessage", () => {
   });
 });
 
+describe("collectNestedErrorCandidates", () => {
+  it("keeps other branches when a suppressed accessor throws", () => {
+    const leaf = new Error("body failed");
+    const error = Object.defineProperty({ error: leaf }, "suppressed", {
+      get() {
+        throw new Error("opaque suppressed branch");
+      },
+    });
+    expect(collectNestedErrorCandidates(error)).toEqual([error, leaf]);
+  });
+
+  it("deduplicates cyclic suppressed branches", () => {
+    const leaf = new Error("body failed");
+    const error = { error: leaf, suppressed: undefined as unknown };
+    error.suppressed = error;
+    expect(collectNestedErrorCandidates(error)).toEqual([error, leaf]);
+  });
+});
+
 describe("toErrorObject", () => {
   it("preserves Error and string inputs", () => {
     const error = new Error("boom");
@@ -286,28 +307,6 @@ describe("toStructuredErrorObject", () => {
     expect(functionError.cause).toBe(functionCause);
     expect(functionError).toMatchObject({ code: "EFUNCTION" });
     expect(Reflect.get(functionError, detailKey)).toBe("function symbol detail");
-  });
-
-  it("skips fields whose definition fails and continues copying later details", () => {
-    const originalDefineProperty = Object.defineProperty;
-    const defineProperty = vi
-      .spyOn(Object, "defineProperty")
-      .mockImplementation(
-        (target: unknown, key: PropertyKey, attributes: PropertyDescriptor): unknown => {
-          if (target instanceof Error && key === "blocked") {
-            throw new Error("definition rejected");
-          }
-          return originalDefineProperty(target as object, key, attributes);
-        },
-      );
-
-    try {
-      const error = toStructuredErrorObject({ before: 1, blocked: 2, after: 3 });
-      expect(error).toMatchObject({ before: 1, after: 3 });
-      expect(error).not.toHaveProperty("blocked");
-    } finally {
-      defineProperty.mockRestore();
-    }
   });
 
   it("skips throwing fields and preserves the base Error for enumeration failures", () => {
@@ -415,6 +414,7 @@ describe("coerceErrorMessage", () => {
 
 describe("stringifyNonErrorCause", () => {
   it("renders primitive and structured values", () => {
+    expect(stringifyNonErrorCause("hi")).toBe("hi");
     expect(stringifyNonErrorCause(null)).toBe("null");
     expect(stringifyNonErrorCause(42)).toBe("42");
     expect(stringifyNonErrorCause({ ok: true })).toBe('{"ok":true}');
@@ -423,5 +423,6 @@ describe("stringifyNonErrorCause", () => {
   it("falls back to object tags when JSON has no string result", () => {
     expect(stringifyNonErrorCause(undefined)).toBe("[object Undefined]");
     expect(stringifyNonErrorCause(Symbol("value"))).toBe("[object Symbol]");
+    expect(stringifyNonErrorCause(() => {})).toBe("[object Function]");
   });
 });

@@ -171,197 +171,137 @@ export function countRichTextChars(text: RichText): number {
   return countRichTextChars(text.text);
 }
 
-function countCaptionChars(caption: RichBlockCaption | undefined): number {
-  if (!caption) {
-    return 0;
-  }
-  return countRichTextChars(caption.text) + countRichTextChars(caption.credit ?? "");
-}
+type RichBlockMeasurement = { chars: number; blocks: number; media: number; nesting: number };
 
-export function countInputRichBlockChars(block: InputRichBlock): number {
-  switch (block.type) {
-    case "paragraph":
-    case "heading":
-    case "footer":
-      return countRichTextChars(block.text);
-    case "pre":
-      return block.text.length;
-    case "mathematical_expression":
-      return block.expression.length;
-    case "pullquote":
-      return countRichTextChars(block.text) + countRichTextChars(block.credit ?? "");
-    case "blockquote":
-      return (
-        block.blocks.reduce((total, item) => total + countInputRichBlockChars(item), 0) +
-        countRichTextChars(block.credit ?? "")
-      );
-    case "collage":
-    case "slideshow":
-      return (
-        block.blocks.reduce((total, item) => total + countInputRichBlockChars(item), 0) +
-        countCaptionChars(block.caption)
-      );
-    case "details":
-      return (
-        countRichTextChars(block.summary) +
-        block.blocks.reduce((total, item) => total + countInputRichBlockChars(item), 0)
-      );
-    case "list":
-      return block.items.reduce(
-        (total, item) =>
-          total + item.blocks.reduce((inner, child) => inner + countInputRichBlockChars(child), 0),
-        0,
-      );
-    case "table":
-      return (
-        countRichTextChars(block.caption ?? "") +
-        block.cells.reduce(
-          (rowTotal, row) =>
-            rowTotal +
-            row.reduce((cellTotal, cell) => cellTotal + countRichTextChars(cell.text ?? ""), 0),
-          0,
-        )
-      );
-    case "photo":
-    case "video":
-    case "audio":
-    case "animation":
-    case "voice_note":
-    case "map":
-      return countCaptionChars(block.caption);
-    // divider and anchor carry no text.
-    default:
-      return 0;
-  }
-}
-
-/** Bot API block budget, including nested blocks, list items, and table rows. */
-export function countInputRichBlocks(blocks: readonly InputRichBlock[]): number {
-  return blocks.reduce((total, block) => {
-    switch (block.type) {
-      case "blockquote":
-      case "details":
-      case "collage":
-      case "slideshow":
-        return total + 1 + countInputRichBlocks(block.blocks);
-      case "list":
-        return (
-          total +
-          1 +
-          block.items.reduce((items, item) => items + 1 + countInputRichBlocks(item.blocks), 0)
-        );
-      case "table":
-        return total + 1 + block.cells.length;
-      default:
-        return total + 1;
-    }
-  }, 0);
-}
-
-function maxRichTextNesting(text: RichText): number {
+function measureRichBlockText(text: RichText, size: RichBlockMeasurement, depth: number): void {
   if (typeof text === "string") {
-    return 0;
+    size.chars += text.length;
+  } else if (Array.isArray(text)) {
+    for (const part of text) {
+      measureRichBlockText(part, size, depth);
+    }
+  } else if (text.type === "mathematical_expression") {
+    size.chars += text.expression.length;
+  } else if (text.type === "custom_emoji") {
+    size.chars += text.alternative_text.length;
+  } else {
+    if (depth >= size.nesting) {
+      size.nesting = depth + 1;
+    }
+    measureRichBlockText(text.text, size, depth + 1);
   }
-  if (Array.isArray(text)) {
-    return Math.max(0, ...text.map(maxRichTextNesting));
-  }
-  if (text.type === "mathematical_expression" || text.type === "custom_emoji") {
-    return 0;
-  }
-  return 1 + maxRichTextNesting(text.text);
 }
 
-function maxCaptionNesting(caption: RichBlockCaption | undefined): number {
-  return caption
-    ? Math.max(
-        maxRichTextNesting(caption.text),
-        caption.credit ? maxRichTextNesting(caption.credit) : 0,
-      )
-    : 0;
+function measureRichBlockCaption(
+  caption: RichBlockCaption | undefined,
+  size: RichBlockMeasurement,
+  depth: number,
+): void {
+  if (caption) {
+    if (depth > size.nesting) {
+      size.nesting = depth;
+    }
+    measureRichBlockText(caption.text, size, depth);
+    if (caption.credit) {
+      measureRichBlockText(caption.credit, size, depth);
+    }
+  }
 }
 
-/** Maximum nested block/formatting edges in a rich-message tree. */
-export function maxInputRichBlockNesting(blocks: readonly InputRichBlock[]): number {
-  const blockDepth = (block: InputRichBlock): number => {
+function measureRichBlockChildren(
+  children: readonly InputRichBlock[],
+  size: RichBlockMeasurement,
+  depth: number,
+): void {
+  // Empty containers still contribute their nesting edge; plain text leaves do not add one.
+  if (depth > size.nesting) {
+    size.nesting = depth;
+  }
+  for (const block of children) {
+    size.blocks += 1;
     switch (block.type) {
       case "paragraph":
       case "heading":
       case "footer":
-        return maxRichTextNesting(block.text);
+        measureRichBlockText(block.text, size, depth);
+        break;
+      case "pre":
+        size.chars += block.text.length;
+        break;
+      case "mathematical_expression":
+        size.chars += block.expression.length;
+        break;
       case "pullquote":
-        return Math.max(
-          maxRichTextNesting(block.text),
-          block.credit ? maxRichTextNesting(block.credit) : 0,
-        );
+        measureRichBlockText(block.text, size, depth);
+        if (block.credit) {
+          measureRichBlockText(block.credit, size, depth);
+        }
+        break;
       case "blockquote":
-        return Math.max(
-          1 + maxInputRichBlockNesting(block.blocks),
-          block.credit ? 1 + maxRichTextNesting(block.credit) : 0,
-        );
+        measureRichBlockChildren(block.blocks, size, depth + 1);
+        if (block.credit) {
+          measureRichBlockText(block.credit, size, depth + 1);
+        }
+        break;
       case "details":
-        return Math.max(
-          1 + maxInputRichBlockNesting(block.blocks),
-          1 + maxRichTextNesting(block.summary),
-        );
+        measureRichBlockChildren(block.blocks, size, depth + 1);
+        measureRichBlockText(block.summary, size, depth + 1);
+        break;
       case "collage":
       case "slideshow":
-        return Math.max(
-          1 + maxInputRichBlockNesting(block.blocks),
-          1 + maxCaptionNesting(block.caption),
-        );
+        measureRichBlockChildren(block.blocks, size, depth + 1);
+        measureRichBlockCaption(block.caption, size, depth + 1);
+        break;
       case "list":
-        return 1 + Math.max(0, ...block.items.map((item) => maxInputRichBlockNesting(item.blocks)));
+        size.blocks += block.items.length;
+        if (depth >= size.nesting) {
+          size.nesting = depth + 1;
+        }
+        for (const item of block.items) {
+          measureRichBlockChildren(item.blocks, size, depth + 1);
+        }
+        break;
       case "table":
-        return (
-          1 +
-          Math.max(
-            maxRichTextNesting(block.caption ?? ""),
-            ...block.cells.flatMap((row) => row.map((cell) => maxRichTextNesting(cell.text ?? ""))),
-          )
-        );
+        size.blocks += block.cells.length;
+        if (depth >= size.nesting) {
+          size.nesting = depth + 1;
+        }
+        if (block.caption) {
+          measureRichBlockText(block.caption, size, depth + 1);
+        }
+        for (const row of block.cells) {
+          for (const cell of row) {
+            const text = cell.text;
+            if (text) {
+              measureRichBlockText(text, size, depth + 1);
+            }
+          }
+        }
+        break;
       case "photo":
       case "video":
       case "audio":
       case "animation":
       case "voice_note":
+        size.media += 1;
+        measureRichBlockCaption(block.caption, size, depth + 1);
+        break;
       case "map":
-        return block.caption ? 1 + maxCaptionNesting(block.caption) : 0;
-      case "pre":
-        // This wire model intentionally narrows pre text to a plain string;
-        // draft-only thinking blocks are not part of InputRichBlock.
-        return 0;
-      default:
-        return 0;
+        // Live-verified: maps do not consume the 50-attachment budget.
+        measureRichBlockCaption(block.caption, size, depth + 1);
+        break;
+      case "anchor":
+      case "divider":
+        break;
     }
-  };
-  return Math.max(0, ...blocks.map(blockDepth));
+  }
 }
 
-/** Media elements per block, for the wire's 50-media message cap. */
-export function countInputRichBlockMedia(block: InputRichBlock): number {
-  switch (block.type) {
-    // Maps are excluded: 51 maps in one message were accepted live, so they
-    // do not consume the 50-attachment budget.
-    case "photo":
-    case "video":
-    case "audio":
-    case "animation":
-    case "voice_note":
-      return 1;
-    case "collage":
-    case "slideshow":
-    case "blockquote":
-    case "details":
-      return block.blocks.reduce((total, item) => total + countInputRichBlockMedia(item), 0);
-    case "list":
-      return block.items.reduce(
-        (total, item) =>
-          total + item.blocks.reduce((inner, child) => inner + countInputRichBlockMedia(child), 0),
-        0,
-      );
-    default:
-      return 0;
-  }
+/** Bot API budgets: UTF-16 text, nested blocks/items/rows, media, and formatting edges. */
+export function measureInputRichBlocks(blocks: readonly InputRichBlock[]) {
+  const size = { chars: 0, blocks: 0, media: 0, nesting: 0 };
+  measureRichBlockChildren(blocks, size, 0);
+  return size;
 }
 
 export function richTextToPlainString(text: RichText): string {
@@ -486,16 +426,4 @@ function inputRichBlocksToPlainTextAtDepth(
 
 export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): string {
   return inputRichBlocksToPlainTextAtDepth(blocks, 0);
-}
-
-export function boldRichText(text: string): RichText {
-  return { type: "bold", text };
-}
-
-export function italicRichText(text: string): RichText {
-  return { type: "italic", text };
-}
-
-export function paragraphBlock(text: RichText): InputRichBlockParagraph {
-  return { type: "paragraph", text };
 }

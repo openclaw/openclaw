@@ -10,7 +10,6 @@ import {
   listTaskFlowsForOwner,
   resolveTaskFlowForLookupTokenForOwner,
 } from "../../tasks/task-flow-owner-access.js";
-import type { TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import {
   createManagedTaskFlow,
   failFlow,
@@ -22,10 +21,14 @@ import {
 } from "../../tasks/task-flow-runtime-internal.js";
 import type { TaskDeliveryState } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import {
+  asManagedTaskFlowRecord,
+  mapFlowTaskRunResult,
+  mapFlowUpdateResult,
+} from "./runtime-managed-flow-result.js";
 import type {
   BoundTaskFlowRuntime,
   ManagedTaskFlowMutationResult,
-  ManagedTaskFlowRecord,
   PluginRuntimeTaskFlow,
 } from "./runtime-taskflow.types.js";
 
@@ -35,37 +38,6 @@ function assertSessionKey(sessionKey: string | undefined, errorMessage: string):
     throw new Error(errorMessage);
   }
   return normalized;
-}
-
-function asManagedTaskFlowRecord(
-  flow: TaskFlowRecord | undefined,
-): ManagedTaskFlowRecord | undefined {
-  if (!flow || flow.syncMode !== "managed" || !flow.controllerId) {
-    return undefined;
-  }
-  return flow as ManagedTaskFlowRecord;
-}
-
-function mapFlowUpdateResult(result: TaskFlowUpdateResult): ManagedTaskFlowMutationResult {
-  if (result.applied) {
-    const managed = asManagedTaskFlowRecord(result.flow);
-    if (!managed) {
-      return {
-        applied: false,
-        code: "not_managed",
-        current: result.flow,
-      };
-    }
-    return {
-      applied: true,
-      flow: managed,
-    };
-  }
-  return {
-    applied: false,
-    code: result.reason,
-    ...(result.current ? { current: result.current } : {}),
-  };
 }
 
 function applyManagedFlowMutationForOwner(params: {
@@ -249,36 +221,7 @@ function createBoundTaskFlowRuntime(params: {
         lastEventAt: input.lastEventAt,
         progressSummary: input.progressSummary,
       });
-      if (!created.created) {
-        return {
-          created: false,
-          found: created.found,
-          reason: created.reason ?? "Task was not created.",
-          ...(created.flow ? { flow: created.flow } : {}),
-        };
-      }
-      const managed = asManagedTaskFlowRecord(created.flow);
-      if (!managed) {
-        return {
-          created: false,
-          found: true,
-          reason: "TaskFlow does not accept managed child tasks.",
-          flow: created.flow,
-        };
-      }
-      if (!created.task) {
-        return {
-          created: false,
-          found: true,
-          reason: "Task was not created.",
-          flow: created.flow,
-        };
-      }
-      return {
-        created: true,
-        flow: managed,
-        task: created.task,
-      };
+      return mapFlowTaskRunResult(created);
     },
   };
 }

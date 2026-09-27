@@ -123,7 +123,7 @@ export function resolveSlackConversationBindingRoute(params: {
     : boundThreadRoute?.boundSessionKey || boundThreadRoute?.bindingRecord
       ? boundThreadRoute
       : resolveRuntimeConversationBindingRoute({
-          route: params.route,
+          route: boundThreadRoute?.route ?? params.route,
           touchBinding: params.touchBinding,
           conversation: {
             channel: "slack",
@@ -135,7 +135,7 @@ export function resolveSlackConversationBindingRoute(params: {
     params.bindingsEnabled && !runtimeRoute.boundSessionKey && !runtimeRoute.bindingRecord
       ? resolveConfiguredBindingRoute({
           cfg: params.cfg,
-          route: params.route,
+          route: runtimeRoute.route,
           conversation: {
             channel: "slack",
             accountId: params.accountId,
@@ -148,6 +148,6 @@ export function resolveSlackConversationBindingRoute(params: {
     configuredRoute,
     route: runtimeRoute.boundSessionKey
       ? runtimeRoute.route
-      : (configuredRoute?.route ?? params.route),
+      : (configuredRoute?.route ?? runtimeRoute.route),
   };
 }

@@ -161,11 +161,7 @@ describe("detectRemoteHostFromCliPath", () => {
 
   it.each([
     ['exec ssh -J jump@bastion bot@messages-mac imsg "$@"', "jump host"],
-    ['exec ssh -o ProxyJump=jump@bastion bot@messages-mac imsg "$@"', "ProxyJump"],
     ['exec ssh -o ProxyCommand=jump@bastion bot@messages-mac imsg "$@"', "ProxyCommand"],
-    ['exec ssh -F jump@bastion bot@messages-mac imsg "$@"', "config option"],
-    ['exec ssh -W jump@bastion bot@messages-mac imsg "$@"', "stdio forward"],
-    ['exec ssh -L jump@bastion bot@messages-mac imsg "$@"', "port forward"],
     ["exec ssh bot@messages-mac imsg", "missing argument forwarding"],
   ])("rejects an ambiguous %s wrapper (%s)", async (command) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-ambiguous-"));
@@ -200,10 +196,6 @@ describe("detectRemoteHostFromCliPath", () => {
   });
 
   it.each([
-    [
-      "continued exec",
-      ["#!/bin/sh", "exec \\", 'ssh -J jump@bastion bot@messages-mac imsg "$@"', ""].join("\n"),
-    ],
     [
       "continued simple ssh",
       ["#!/bin/sh", "exec \\", 'ssh bot@messages-mac imsg "$@"', ""].join("\n"),

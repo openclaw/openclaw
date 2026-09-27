@@ -1,4 +1,3 @@
-// Matrix plugin module implements mentions behavior.
 import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";

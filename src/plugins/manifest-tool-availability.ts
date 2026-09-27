@@ -37,32 +37,6 @@ function readStringAtPath(root: unknown, path: string): string | undefined {
   return normalizeOptionalString(readPath(root, path));
 }
 
-function readEffectiveConfigs(params: {
-  config?: OpenClawConfig;
-  rootPath: string;
-  overlayPath?: string;
-  overlayMapPath?: string;
-}): Array<Record<string, unknown>> {
-  const root = readPath(params.config, params.rootPath);
-  if (!isRecord(root)) {
-    return [];
-  }
-  const overlay = readPath(root, params.overlayPath);
-  const baseConfig = isRecord(overlay) ? { ...root, ...overlay } : root;
-  if (params.overlayMapPath?.trim()) {
-    const overlayMap = readPath(baseConfig, params.overlayMapPath);
-    if (!isRecord(overlayMap)) {
-      return [];
-    }
-    return Object.entries(overlayMap)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .flatMap(([, mapOverlay]) =>
-        isRecord(mapOverlay) ? [{ ...baseConfig, ...mapOverlay }] : [],
-      );
-  }
-  return [baseConfig];
-}
-
 function hasConfiguredValue(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -102,22 +76,28 @@ export function manifestConfigSignalPasses(params: {
   env: NodeJS.ProcessEnv;
   signal: ManifestConfigAvailabilitySignal;
 }): boolean {
-  const effectiveConfigs = readEffectiveConfigs({
-    config: params.config,
-    rootPath: params.signal.rootPath,
-    overlayPath: params.signal.overlayPath,
-    overlayMapPath: params.signal.overlayMapPath,
-  });
-  if (effectiveConfigs.length === 0) {
+  const root = readPath(params.config, params.signal.rootPath);
+  if (!isRecord(root)) {
     return false;
   }
-  return effectiveConfigs.some((effectiveConfig) =>
+  const overlay = readPath(root, params.signal.overlayPath);
+  const baseConfig = isRecord(overlay) ? { ...root, ...overlay } : root;
+  const passes = (effectiveConfig: Record<string, unknown>) =>
     manifestEffectiveConfigSignalPasses({
       config: params.config,
       env: params.env,
       effectiveConfig,
       signal: params.signal,
-    }),
+    });
+  if (!params.signal.overlayMapPath?.trim()) {
+    return passes(baseConfig);
+  }
+  const overlayMap = readPath(baseConfig, params.signal.overlayMapPath);
+  return (
+    isRecord(overlayMap) &&
+    Object.entries(overlayMap)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .some(([, mapOverlay]) => isRecord(mapOverlay) && passes({ ...baseConfig, ...mapOverlay }))
   );
 }
 

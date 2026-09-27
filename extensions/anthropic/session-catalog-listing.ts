@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { readFileWindowFully } from "openclaw/plugin-sdk/file-access-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -124,15 +125,9 @@ export async function readLocalClaudeTranscriptPage(
       );
       position -= size;
       const chunk = Buffer.allocUnsafe(size);
-      // Positional reads may return short, so complete the bounded window.
-      // A zero-byte read before it fills means the file changed after stat.
-      let filled = 0;
-      while (filled < size) {
-        const { bytesRead } = await handle.read(chunk, filled, size - filled, position + filled);
-        if (bytesRead === 0) {
-          throw new Error("Claude transcript changed while it was being read");
-        }
-        filled += bytesRead;
+      const filled = await readFileWindowFully(handle, chunk, position);
+      if (filled !== size) {
+        throw new Error("Claude transcript changed while it was being read");
       }
       scanned += filled;
       let right = filled;

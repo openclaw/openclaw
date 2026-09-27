@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { copyCoreTtsAttemptResultProvenance } from "../../tools/tts-tool-result-provenance.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import type { ToolSummaryTrace } from "../types.js";
+import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import type { runEmbeddedAttemptWithBackend } from "./backend.js";
 
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
@@ -67,7 +68,7 @@ export function hasCompletedModelProgressForIdleBreaker(
 
 export function buildTraceToolSummary(params: {
   toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"];
-  fallbackHadFailure: boolean;
+  lastToolError?: EmbeddedRunAttemptForRunner["lastToolError"];
 }): ToolSummaryTrace | undefined {
   if (!params.toolMetas?.length) {
     return undefined;
@@ -88,6 +89,31 @@ export function buildTraceToolSummary(params: {
     tools,
     // Per-call error metadata is additive to the shipped harness result contract.
     // Keep the prior any-failure signal for external harnesses that do not emit it yet.
-    failures: failedToolCalls || Number(params.fallbackHadFailure),
+    failures: failedToolCalls || Number(Boolean(params.lastToolError)),
+    ...(params.lastToolError
+      ? { unresolvedError: { toolName: params.lastToolError.toolName } }
+      : {}),
   };
+}
+
+export function resolveSuccessfulToolNames(
+  attempt: Pick<EmbeddedRunAttemptWithReceiptEvidence, "toolMetas" | "successfulNestedToolNames">,
+): string[] {
+  const successfulToolNames = [
+    ...new Set(
+      attempt.toolMetas
+        .filter((entry) => entry.isError === false)
+        .map((entry) => entry.toolName.trim())
+        .filter(Boolean),
+    ),
+  ];
+  const missingNestedToolNames = [
+    ...new Set(
+      (attempt.successfulNestedToolNames ?? []).map((name) => name.trim()).filter(Boolean),
+    ),
+  ]
+    .filter((name) => !successfulToolNames.includes(name))
+    .toSorted();
+  successfulToolNames.push(...missingNestedToolNames);
+  return successfulToolNames;
 }

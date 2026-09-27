@@ -38,16 +38,16 @@ All Codex harness settings live under `plugins.entries.codex.config`.
 
 Top-level fields:
 
-| Field                      | Default                  | Meaning                                                                                                                                        |
-| -------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `discovery`                | enabled                  | Model discovery settings for Codex app-server `model/list`.                                                                                    |
-| `appServer`                | managed stdio app-server | Transport, command, auth, approval, sandbox, and timeout settings. The ordinary harness defaults to agent-scoped state.                        |
-| `codexDynamicToolsLoading` | `"searchable"`           | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context.                                                       |
-| `codexDynamicToolsExclude` | `[]`                     | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.                                                                    |
-| `codexPlugins`             | disabled                 | Native Codex plugin/app support, including opt-in access to connected account apps. See [Native Codex plugins](/plugins/codex-native-plugins). |
-| `computerUse`              | disabled                 | Codex Computer Use setup. See [Codex Computer Use](/plugins/codex-computer-use).                                                               |
-| `sessionCatalog`           | enabled                  | Native Codex session discovery for the sidebar. Set `enabled: false` to disable it, or set `homes` to include additional local Codex stores.   |
-| `supervision`              | disabled                 | Agent-facing native-session transcript and write-control policy. See [Codex supervision](/plugins/codex-supervision).                          |
+| Field                      | Default                  | Meaning                                                                                                                                                                                                                                 |
+| -------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `discovery`                | enabled                  | Model discovery settings for Codex app-server `model/list`. See [Codex model discovery](/plugins/codex-harness-reference/model-discovery).                                                                                              |
+| `appServer`                | managed stdio app-server | Transport, command, auth, approval, sandbox, and timeout settings. The ordinary harness defaults to agent-scoped state. See [Codex app-server transport](/plugins/codex-harness-reference/app-server-transport).                        |
+| `codexDynamicToolsLoading` | `"searchable"`           | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context. See [Codex dynamic tools](/plugins/codex-harness-reference/dynamic-tools).                                                                     |
+| `codexDynamicToolsExclude` | `[]`                     | Additional OpenClaw dynamic tool names to omit from Codex app-server turns. See [Codex dynamic tools](/plugins/codex-harness-reference/dynamic-tools).                                                                                  |
+| `codexPlugins`             | disabled                 | Native Codex plugin/app support, including opt-in access to connected account apps. See [Native Codex plugins](/plugins/codex-native-plugins).                                                                                          |
+| `computerUse`              | disabled                 | Codex Computer Use setup. See [Codex Computer Use](/plugins/codex-computer-use).                                                                                                                                                        |
+| `sessionCatalog`           | enabled                  | Native Codex session discovery for the sidebar. Set `enabled: false` to disable it, or set `homes` to include additional local Codex stores. See [Codex session catalog and supervision](/plugins/codex-harness-reference/supervision). |
+| `supervision`              | disabled                 | Agent-facing native-session transcript and write-control policy. See [Codex supervision](/plugins/codex-supervision).                                                                                                                   |
 
 ## Where each section moved
 

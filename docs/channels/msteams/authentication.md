@@ -33,7 +33,7 @@ Use a PEM certificate registered with your Entra ID app registration.
       tenantId: "<TENANT_ID>",
       authType: "federated",
       certificatePath: "/path/to/cert.pem",
-      webhook: { port: 3978, path: "/api/messages" },
+      webhook: { path: "/api/messages" },
     },
   },
 }
@@ -72,7 +72,7 @@ Use Azure Managed Identity for passwordless authentication on Azure infrastructu
       tenantId: "<TENANT_ID>",
       authType: "federated",
       useManagedIdentity: true,
-      webhook: { port: 3978, path: "/api/messages" },
+      webhook: { path: "/api/messages" },
     },
   },
 }
@@ -131,6 +131,6 @@ For AKS deployments using workload identity:
 | **Certificate**      | `authType: "federated"` + `certificatePath`    | No shared secret over network      | Certificate management overhead       |
 | **Managed Identity** | `authType: "federated"` + `useManagedIdentity` | Passwordless, no secrets to manage | Azure infrastructure required         |
 
-`certificateThumbprint` can be set alongside `certificatePath` but is not read by the auth path today; it is accepted for forward compatibility only.
+`certificateThumbprint` can be set alongside `certificatePath` but is not read by the auth path; it is accepted for forward compatibility only.
 
 **Default:** when `authType` is unset, OpenClaw uses client-secret authentication (`appPassword`). Existing configs keep working unchanged.

@@ -2,8 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerSecretsCli } from "./secrets-cli.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
@@ -79,6 +82,43 @@ beforeEach(() => {
 });
 
 describe("secrets store CLI", () => {
+  it.each(["set", "import"])(
+    "preserves an existing credential during a redacted %s round-trip",
+    async (command) => {
+      const file = path.join(tempDirs.make("store-cli-redacted-"), "input");
+      await fs.writeFile(
+        file,
+        command === "set"
+          ? "__OPENCLAW_REDACTED__"
+          : "OPENCLAW_GATEWAY_TOKEN=__OPENCLAW_REDACTED__\n",
+      );
+      mocks.read.mockReturnValue({ ok: true, value: "synthetic-existing-token" });
+      await createProgram().parseAsync(
+        command === "set"
+          ? ["secrets", "store", "set", "OPENCLAW_GATEWAY_TOKEN", "--value-file", file]
+          : ["secrets", "store", "import", "--from", file, "--yes"],
+        { from: "user" },
+      );
+      expect(mocks.write).not.toHaveBeenCalled();
+      expect(mocks.runtimeLogs.join("\n")).toContain(
+        "Skipped redacted value for OPENCLAW_GATEWAY_TOKEN; existing entry unchanged.",
+      );
+      expect(mocks.gatewayIdentity).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a redacted import without a usable existing credential before writing other entries", async () => {
+    const file = path.join(tempDirs.make("store-cli-redacted-"), "input.env");
+    await fs.writeFile(file, "SERVICE_MODE=test\nOPENCLAW_GATEWAY_TOKEN=__OPENCLAW_REDACTED__\n");
+    mocks.read.mockReturnValue({ ok: false, error: { code: "SECRET_STORE_NOT_FOUND" } });
+    await expect(
+      createProgram().parseAsync(["secrets", "store", "import", "--from", file, "--yes"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:2");
+    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.runtimeErrors.join("\n")).toContain("OPENCLAW_GATEWAY_TOKEN");
+  });
   it("writes JSON results for list and get", async () => {
     mocks.list.mockReturnValueOnce([
       { name: "SERVICE_MODE", kind: "env", valuePreview: "production" },

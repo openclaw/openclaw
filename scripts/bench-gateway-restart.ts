@@ -36,6 +36,7 @@ import {
   resolveEntry as resolveGatewayBenchEntry,
   resolveOutputPath,
   summarizeNumbers,
+  summarizeTraceStats,
   type SummaryStats,
   validateCliArgs as validateGatewayBenchCliArgs,
   waitForInitialProbe,
@@ -249,7 +250,7 @@ function validateCliArgs(argv: string[]): void {
 function ensureSupportedRestartPlatform(platform: NodeJS.Platform = process.platform): void {
   if (platform === "win32") {
     throw new Error(
-      "Gateway restart benchmark is not supported on Windows because it requires SIGUSR1 in-process restarts; run it on macOS or Linux.",
+      "Gateway restart benchmark is not supported on Windows because it requires SIGUSR2 in-process restarts; run it on macOS or Linux.",
     );
   }
 }
@@ -332,7 +333,7 @@ function isTraceMetricSummaryKey(name: string): boolean {
     lastSegment === "activeTimersCount" ||
     lastSegment === "processSigintListenersCount" ||
     lastSegment === "processSigtermListenersCount" ||
-    lastSegment === "processSigusr1ListenersCount" ||
+    lastSegment === "processRestartListenersCount" ||
     lastSegment === "restartExpectedMs" ||
     lastSegment?.endsWith("Count") === true ||
     lastSegment?.endsWith("Ms") === true
@@ -400,23 +401,7 @@ function summarizeResourceSlope(
 
 function summarizeCase(benchCase: GatewayBenchCase, samples: GatewayRestartSample[]): CaseResult {
   const iterations = samples.flatMap((sample) => sample.iterations);
-  const restartTraceKeys = new Set<string>();
-  for (const iteration of iterations) {
-    for (const key of Object.keys(iteration.restartTrace)) {
-      restartTraceKeys.add(key);
-    }
-  }
-  const restartTrace: Record<string, SummaryStats> = {};
-  for (const key of [...restartTraceKeys].toSorted()) {
-    const stats = summarizeNumbers(
-      iterations
-        .map((iteration) => iteration.restartTrace[key])
-        .filter((value): value is number => typeof value === "number"),
-    );
-    if (stats) {
-      restartTrace[key] = stats;
-    }
-  }
+  const restartTrace = summarizeTraceStats(iterations, (iteration) => iteration.restartTrace);
   const failedIterations = iterations.filter((iteration) => iteration.failureCode !== null);
   const sampleOnlyFailures = samples.filter(
     (sample) =>
@@ -974,7 +959,7 @@ async function runGatewaySample(options: {
         type: "restart-intent-written",
       });
       try {
-        process.kill(targetPid, "SIGUSR1");
+        process.kill(targetPid, "SIGUSR2");
       } catch {
         iteration.failureCode = "restart_signal_failed";
         failureCode = iteration.failureCode;

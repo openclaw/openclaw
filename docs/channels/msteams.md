@@ -131,7 +131,7 @@ Every section heading from the previous single-page version keeps its anchor her
   <Card title="Groups" icon="users" href="/channels/groups">
     Group chat behavior and mention gating.
   </Card>
-  <Card title="Channel Routing" icon="route" href="/channels/channel-routing">
+  <Card title="Channel routing" icon="route" href="/channels/channel-routing">
     Session routing for messages.
   </Card>
   <Card title="Configuration reference" icon="sliders" href="/gateway/config-channels/workplace-chat">

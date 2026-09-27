@@ -1,18 +1,13 @@
 // Status, health, sessions, and task/flow command registration.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
-import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { ExpectedCliError } from "../failure-output.js";
-import { formatHelpExamples } from "../help-format.js";
+import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import { registerTasksCommand } from "./register.tasks.js";
-
-function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
-  return Boolean(opts.verbose || opts.debug);
-}
 
 type SessionsListCliOptions = {
   json?: boolean;
@@ -143,7 +138,7 @@ function registerSessionsLifecycleCommand(
     .command(`${operation} <keys...>`)
     .description(
       destructive
-        ? "Delete stored sessions and their live artifacts via the running gateway"
+        ? "Delete stored sessions and their live artifacts via the running gateway. Retained archives can remain searchable."
         : "Archive stored sessions via the running gateway",
     )
     .option(`--dry-run`, `Preview ${operation} actions without writing`, false);
@@ -157,7 +152,7 @@ function registerSessionsLifecycleCommand(
         `\n${theme.heading("Examples:")}\n${formatHelpExamples(examples)}${
           destructive
             ? `\n\n${theme.muted(
-                "Deletion uses the Control UI lifecycle operation, including transcript archival and runtime cleanup.",
+                "Deletion uses the Control UI lifecycle operation, including transcript archival and runtime cleanup. Retained deleted-session archives can remain eligible for memory search. To remove indexed memories, run `openclaw memory forget --agent <agent-id> --session <id-or-key>` on the Gateway host or container using its state and configuration. Use the agent that owned the deleted session, including for global keys. Memory cleanup runs locally; --url does not forward it to a remote Gateway.",
               )}`
             : ""
         }`,
@@ -201,7 +196,7 @@ async function runWithVerboseAndTimeout(
   opts: { verbose?: boolean; debug?: boolean; timeout?: unknown },
   action: (params: { verbose: boolean; timeoutMs: number | undefined }) => Promise<void>,
 ): Promise<void> {
-  const verbose = resolveVerbose(opts);
+  const verbose = Boolean(opts.verbose || opts.debug);
   setVerbose(verbose);
   await runCommandWithRuntime(defaultRuntime, async () => {
     const timeoutMs = parseStrictPositiveInteger(opts.timeout);
@@ -222,7 +217,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--usage", "Show model provider usage/quota snapshots", false)
     .option("--agent <id>", "Agent id for --usage auth scope")
     .option("--deep", "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
-    .option("--timeout <ms>", "Probe timeout in milliseconds", "10000")
+    .option("--timeout <ms>", "Probe timeout in milliseconds")
     .option("--verbose", "Verbose logging", false)
     .option("--debug", "Alias for --verbose", false)
     .addHelpText(
@@ -240,11 +235,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw status --deep --timeout 5000", "Tighten probe timeout."],
         ])}`,
     )
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/status", "docs.openclaw.ai/cli/status")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/status"))
     .action(async (opts) => {
       await runWithVerboseAndTimeout(opts, async ({ verbose, timeoutMs }) => {
         const { statusCommand } = await import("../../commands/status.js");
@@ -267,14 +258,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("health")
     .description("Fetch health from the running gateway")
     .option("--json", "Output JSON instead of text", false)
-    .option("--timeout <ms>", "Connection timeout in milliseconds", "10000")
+    .option("--timeout <ms>", "Connection timeout in milliseconds")
     .option("--verbose", "Verbose logging", false)
     .option("--debug", "Alias for --verbose", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/health", "docs.openclaw.ai/cli/health")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/health"))
     .action(async (opts) => {
       await runWithVerboseAndTimeout(opts, async ({ verbose, timeoutMs }) => {
         const { healthCommand } = await import("../../commands/health.js");
@@ -307,11 +294,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           "Shows token usage per session when the agent reports it; set the model entry's contextTokens to cap the window and show %.",
         )}`,
     )
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.openclaw.ai/cli/sessions")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/sessions"))
     .action(async (opts) => {
       await runSessionsListCli(opts as SessionsListCliOptions);
     });
@@ -491,19 +474,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         )}`,
     )
     .action(async (key: string, opts, command) => {
-      // Sibling `sessions` subcommands inherit parent options (see list/cleanup
-      // above): `--agent`/`--json` may be supplied on the parent `sessions`
-      // command, e.g. `openclaw sessions --agent work compact <key>`. Merge those
-      // so a parent `--agent` is not silently dropped and the wrong agent's
-      // session compacted.
-      //
-      // The parent also defines list-only options (`--store`/`--all-agents`/
-      // `--active`/`--limit`). `compact` mutates the single session the gateway
-      // resolves from <key> + --agent, so it cannot honor a parent `--store`
-      // (the gateway picks the store) and the rest are meaningless here.
-      // Silently dropping `--store` is the dangerous case — the user could
-      // believe they targeted one store while the gateway compacts another — so
-      // reject any unsupported inherited option instead of ignoring it.
+      // Preserve parent agent/JSON options, but reject selectors the Gateway cannot honor.
       const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
       rejectUnsupportedSessionsParentOptions(
         "compact",

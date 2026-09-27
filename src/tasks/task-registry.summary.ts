@@ -1,10 +1,25 @@
 // Summarizes task registry records for CLI and API surfaces.
+import {
+  addTaskAuditRecordSummary,
+  type RetainedLostTaskAuditSummary,
+  type TaskAuditRecord,
+  type TaskAuditSummary,
+} from "./task-registry.audit.js";
+import { createEmptyTaskAuditSummary } from "./task-registry.audit.shared.js";
 import type {
   TaskRecord,
   TaskRegistrySummary,
   TaskRuntimeCounts,
+  TaskRuntime,
+  TaskStatus,
   TaskStatusCounts,
 } from "./task-registry.types.js";
+
+export type TaskStatusSummary = {
+  tasks: TaskRegistrySummary;
+  taskAudit: TaskAuditSummary;
+  taskAuditRetainedLost: RetainedLostTaskAuditSummary;
+};
 
 // Summary helpers keep task status/runtime counters stable for UI and plugin views.
 function createEmptyTaskStatusCounts(): TaskStatusCounts {
@@ -39,20 +54,48 @@ export function createEmptyTaskRegistrySummary(): TaskRegistrySummary {
   };
 }
 
+export function addTaskRegistrySummaryCounts(
+  summary: TaskRegistrySummary,
+  runtime: TaskRuntime,
+  status: TaskStatus,
+  count: number,
+): void {
+  summary.total += count;
+  summary.byStatus[status] += count;
+  summary.byRuntime[runtime] += count;
+  if (status === "queued" || status === "running") {
+    summary.active += count;
+  } else {
+    summary.terminal += count;
+  }
+  if (status === "failed" || status === "timed_out" || status === "lost") {
+    summary.failures += count;
+  }
+}
+
 export function summarizeTaskRecords(records: Iterable<TaskRecord>): TaskRegistrySummary {
   const summary = createEmptyTaskRegistrySummary();
   for (const task of records) {
-    summary.total += 1;
-    summary.byStatus[task.status] += 1;
-    summary.byRuntime[task.runtime] += 1;
-    if (task.status === "queued" || task.status === "running") {
-      summary.active += 1;
-    } else {
-      summary.terminal += 1;
-    }
-    if (task.status === "failed" || task.status === "timed_out" || task.status === "lost") {
-      summary.failures += 1;
-    }
+    addTaskRegistrySummaryCounts(summary, task.runtime, task.status, 1);
   }
   return summary;
+}
+
+export function createEmptyTaskStatusSummary(): TaskStatusSummary {
+  return {
+    tasks: createEmptyTaskRegistrySummary(),
+    taskAudit: createEmptyTaskAuditSummary(),
+    taskAuditRetainedLost: { count: 0 },
+  };
+}
+
+export function addTaskStatusSummaryRecord(
+  summary: TaskStatusSummary,
+  task: TaskAuditRecord & Pick<TaskRecord, "runtime">,
+  now: number,
+): void {
+  addTaskRegistrySummaryCounts(summary.tasks, task.runtime, task.status, 1);
+  if (addTaskAuditRecordSummary(summary.taskAudit, summary.taskAuditRetainedLost, task, now)) {
+    summary.tasks.failures -= 1;
+  }
 }

@@ -1,4 +1,3 @@
-// Discord plugin module implements client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";

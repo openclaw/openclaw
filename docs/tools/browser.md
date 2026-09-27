@@ -45,7 +45,7 @@ one per reader job. Open the page that matches your task.
 This browser is **not** your daily driver. It is a safe, isolated surface for
 agent automation and verification.
 
-On macOS, you can explicitly copy cookies from a Chrome-family system profile into a separate managed profile. The managed browser still uses its own user data directory; only the selected cookies are copied, and local storage and IndexedDB stay behind. See [Profiles](/tools/browser/existing-session#profiles-multi-browser) or the [`openclaw browser` CLI reference](/cli/browser) for import commands and limitations.
+On macOS, you can explicitly copy cookies from a Chrome-family system profile into a separate managed profile. The managed browser still uses its own user data directory. Only the selected cookies are copied, and local storage and IndexedDB stay behind. See [Profiles](/tools/browser/existing-session#profiles-multi-browser) or the [`openclaw browser` CLI reference](/cli/browser) for import commands and limitations.
 
 ## Where each section moved
 
@@ -93,3 +93,6 @@ still resolves. Each entry points at the page that now holds the content.
 - [Tools Overview](/tools) - all available agent tools
 - [Sandboxing](/gateway/sandboxing) - browser control in sandboxed environments
 - [Security](/gateway/security) - browser control risks and hardening
+- [Web fetch](/tools/web-fetch) - retrieve a page without driving a browser
+- [Diffs](/tools/diffs) - read-only diff viewer and file renderer for agents
+- [Browser login](/tools/browser-login) - signing a profile into a site before automating it

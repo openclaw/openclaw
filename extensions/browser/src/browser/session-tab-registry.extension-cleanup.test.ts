@@ -21,7 +21,9 @@ import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import { resolveBrowserConfig, type ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
+import { readColdNativeActivity } from "./session-tab-process-state.js";
 import { durableOwnership } from "./session-tab-registry.sqlite.test-helpers.js";
+import { browserSessionTabNativeIdentity } from "./session-tab-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cdpMocks = vi.hoisted(() => ({
@@ -36,7 +38,9 @@ vi.mock("./cdp.helpers.js", async (importOriginal) => ({
 import {
   closeTrackedBrowserTabsForSessions,
   sweepTrackedBrowserTabs,
+  touchSessionBrowserTab,
   trackSessionBrowserTab,
+  untrackSessionBrowserTab,
 } from "./session-tab-registry.js";
 
 const config = {
@@ -121,6 +125,68 @@ describe("durable extension session tab cleanup", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = originalStateDir;
     }
+  });
+
+  function trackColdSiblings(nativeTargetId: string) {
+    const params = {
+      sessionKey: `agent:main:${nativeTargetId.toLowerCase()}`,
+      targetId: nativeTargetId,
+      profile: "chrome",
+    };
+    const firstOwnership = durableOwnership(nativeTargetId, "profile-a", "browser-a");
+    const lastOwnership = durableOwnership(nativeTargetId, "profile-b", "browser-b");
+    for (const ownership of [firstOwnership, lastOwnership]) {
+      trackSessionBrowserTab({ ...params, ownership, now: 1_000 });
+    }
+    // Both real durable generations own this alias, so activity cannot adopt either row.
+    touchSessionBrowserTab({ ...params, now: 2_000 });
+    const coldIdentity = browserSessionTabNativeIdentity({ ...params, nativeTargetId });
+    expect(readColdNativeActivity(coldIdentity)).toBe(2_000);
+    return { params, firstOwnership, lastOwnership, coldIdentity };
+  }
+
+  it.each(["deletion", "replacement"] as const)(
+    "retires cold activity after the final native owner's %s",
+    (retirement) => {
+      const { params, firstOwnership, lastOwnership, coldIdentity } =
+        trackColdSiblings("NATIVE-RETIRE");
+      untrackSessionBrowserTab({ ...params, ownership: firstOwnership });
+      expect(openStore().entries()).toHaveLength(1);
+      expect(readColdNativeActivity(coldIdentity)).toBe(2_000);
+
+      if (retirement === "deletion") {
+        untrackSessionBrowserTab({ ...params, ownership: lastOwnership });
+        expect(openStore().entries()).toEqual([]);
+      } else {
+        trackSessionBrowserTab({
+          ...params,
+          targetId: "opaque-handle",
+          ownership: lastOwnership,
+          now: 3_000,
+        });
+        expect(openStore().entries()).toHaveLength(1);
+        expect(openStore().entries()[0]?.value).toMatchObject({ interactionTargetKind: "opaque" });
+      }
+      expect(readColdNativeActivity(coldIdentity)).toBeUndefined();
+    },
+  );
+
+  it("retires cold activity after terminal cleanup and preserves retryable owners", async () => {
+    const closed = trackColdSiblings("NATIVE-CLOSED");
+    const retryable = trackColdSiblings("NATIVE-RETRYABLE");
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: [closed.params.sessionKey, retryable.params.sessionKey],
+        now: 3_000,
+        closeDurableTab: async (tab) =>
+          tab.nativeTargetId === closed.params.targetId
+            ? { status: "closed" }
+            : { status: "unavailable", reason: "target-lookup-failed" },
+      }),
+    ).resolves.toBe(2);
+    expect(openStore().entries()).toHaveLength(2);
+    expect(readColdNativeActivity(retryable.coldIdentity)).toBe(2_000);
+    expect(readColdNativeActivity(closed.coldIdentity)).toBeUndefined();
   });
 
   it("uses the live process-only extension credential for lifecycle cleanup", async () => {

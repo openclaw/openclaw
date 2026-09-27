@@ -73,7 +73,13 @@ channel records with `toInboundMediaFacts(...)` from
 inbound context. When a plugin must authorize local media reads, import
 `getAgentScopedMediaLocalRoots(...)` or
 `getAgentScopedMediaLocalRootsForSources(...)` from the focused
-`openclaw/plugin-sdk/media-local-roots` subpath. The old
+`openclaw/plugin-sdk/media-local-roots` subpath. Agent-scoped roots do not grant
+the shared sandbox parent. To send a file generated in the active sandbox, pass
+its authoritative session workspace as the third argument to
+`getAgentScopedMediaLocalRoots(...)` or as `sessionWorkspaceDir` to the sources
+helper. Obtain that value from trusted host session context; never derive it
+from the requested media path. Without that context, workspace-only policy
+intentionally rejects sandbox paths. The old
 `agent-media-payload` builder/root facade is deprecated compatibility.
 
 ## Native payload shaping
@@ -107,3 +113,44 @@ The separate `deliveryRetryOwner` field controls who handles failed delivery;
 it does not extend the run's authority. Operator sends retain normal durable
 queueing. Do not serialize either authority callback or expose these fields in
 the model-facing action schema.
+
+## Progress card handoff
+
+A waiting reply can carry the optional host-owned
+`info.adoptProgressContinuation(receipt)` capability in its reply-dispatch
+context. An editable-progress adapter uses it to transfer an already visible
+card, not to send a replacement card or credit final-answer delivery.
+
+Drain and flush the existing draft, recheck `assertPlatformSendAuthorized`, and
+pass its confirmed `messageId`, delivered `text`, prepared `snapshot`, and
+`channel`/`accountId`/`to`/`threadId` destination. Staged content or an ambiguous
+send is not a receipt. Only a `true` result transfers custody: detach the old
+stream without deleting its message. If the capability is absent or declines,
+keep ordinary reply delivery, including any media or controls alongside the
+waiting text.
+
+Core retains only bounded presentation data and its receipt. Never serialize
+the capability, expose it in action arguments, or reuse the old turn's callbacks.
+
+## Post-delivery pins
+
+`outbound.pinDeliveredMessage` receives the same optional
+`assertDirectAdapterHandoff` callback as the message send. The field carries the
+existing delivery owner's authority into the follow-up pin operation; accepting
+the message does not authorize later pin requests after that owner closes.
+Preserve the callback through asynchronous preparation and check it immediately
+before each provider request, including retries. Telegram forwards it to the
+existing `assertPlatformSendAuthorized` transport option, which checks after
+the account throttle releases each request.
+
+Use the synchronous assertion for this check. `onPlatformSendDispatch` also
+records dispatch timing and is not a substitute for an authority assertion.
+Once a pin request has been submitted, preserve its accepted result instead of
+checking authority again after the response. Optional pin failure keeps the
+delivery successful; required pin failure retains the sent message and receipt
+in a `partial_failed` result from `sendDurableMessageBatch`.
+
+The new pin-context field is optional so existing callers and plugin signatures
+remain source-compatible. Callers without it retain their existing behavior;
+do not expose it in configuration, action schemas, or stored payloads. See
+[message presentation and delivery](/plugins/message-presentation) for pin options.

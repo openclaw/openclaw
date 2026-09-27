@@ -19,8 +19,8 @@ Gateway's SQLite state database:
   reject pending requests.
 
 The former standalone node pairing store (`nodes/paired.json` with a per-node
-token, retired from the connect path in January 2026) is gone: gateways fold
-any remaining rows into the device records once at startup and archive the
+token, retired from the connect path in January 2026) is gone: `openclaw doctor --fix`
+folds remaining rows into the device records and archives the
 legacy files with a `.migrated` suffix. Legacy TCP bridge support has been
 removed.
 
@@ -448,9 +448,12 @@ database under the Gateway state directory (default `~/.openclaw`):
   approved node surfaces, pending surface requests, pending device pairing
   requests, and bootstrap tokens)
 
-If you override `OPENCLAW_STATE_DIR`, the database moves with it. Gateways
-upgraded from releases with JSON stores import them at startup and leave
-`devices/*.json.migrated` and `nodes/*.json.migrated` archives behind.
+If you override `OPENCLAW_STATE_DIR`, the database moves with it. Stop the Gateway
+and run `openclaw doctor --fix` to import stores from older releases. Doctor leaves
+`devices/*.json.migrated` and `nodes/*.json.migrated` archives behind. It imports
+device approvals before folding node capabilities; existing SQLite approvals
+take precedence. Normal Gateway startup reports pending legacy stores without
+changing them.
 
 Security notes:
 
@@ -467,5 +470,6 @@ Security notes:
 ## Related
 
 - [Channel pairing](/channels/pairing)
+- [Gateway protocol auth](/gateway/protocol/auth) — the wire contract for device identity, pairing signatures, and device tokens
 - [Nodes CLI](/cli/nodes)
 - [Devices CLI](/cli/devices)

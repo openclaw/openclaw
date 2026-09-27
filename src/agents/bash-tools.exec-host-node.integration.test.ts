@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { handleInvoke } from "../node-host/invoke.js";
@@ -136,6 +138,45 @@ beforeEach(async ({ onTestFinished }) => {
 afterEach(async () => {
   await state.cleanup();
 });
+
+it.each(
+  (["gateway", "node"] as const).flatMap((host) =>
+    (["subagent", "dashboard"] as const).map((surface) => ({ host, surface })),
+  ),
+)(
+  "preserves child context through $host exec from a $surface session",
+  async ({ host, surface }) => {
+    const childSessionKey = `agent:main:${surface}:exec-child`;
+    const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: childSessionKey, storePath },
+      {
+        sessionId: "exec-child-instance",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        spawnedBy: "agent:main:main",
+      },
+    );
+    const tool = createExecTool({
+      host,
+      node: "node-1",
+      security: "full",
+      ask: "off",
+      notifyOnExit: false,
+      allowBackground: false,
+      config: { session: { store: storePath } },
+      sessionKey: "agent:main:main",
+      runSessionKey: childSessionKey,
+      notifySessionKey: childSessionKey,
+    });
+    const result = await tool.execute("child-exec-context", {
+      command: `${quoteCliArg(process.execPath)} -e ${quoteCliArg("process.stdout.write(process.env.OPENCLAW_SUBAGENT_EXEC || 'missing')")}`,
+      env: { OPENCLAW_SUBAGENT_EXEC: "0" },
+      workdir: state.root,
+    });
+    expect(result.details).toMatchObject({ status: "completed", aggregated: "1" });
+  },
+);
 
 it("prepares managed GitHub exec with the node's own sanitized environment", async () => {
   const environment = withEnv(
@@ -331,8 +372,6 @@ it("denies caller allowlist/off misses before dispatch to a permissive node", as
 
 it.each([
   { channel: "webchat", decision: "allow-once" },
-  { channel: "webchat", decision: "allow-always" },
-  { channel: "a2a", decision: "allow-once" },
   { channel: "a2a", decision: "allow-always" },
 ])(
   "keeps $channel node approval $decision inside the originating tool lifetime",

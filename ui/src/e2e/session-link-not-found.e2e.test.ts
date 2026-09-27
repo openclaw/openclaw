@@ -109,7 +109,6 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "sessions.list": sessionsListResponse([sessionRow(mainKey, "Main", 1)]),
-            "chat.startup": { resolution: { ok: false } },
           },
           mainSessionKey: mainKey,
           sessionKey: savedActiveKey,
@@ -140,8 +139,11 @@ suite.define(() => {
         expect(await page.locator("openclaw-chat-page").count()).toBe(0);
         expect(await page.locator(".agent-chat__input textarea").count()).toBe(0);
         expect(await page.locator("openclaw-toast-host .app-toast").count()).toBe(0);
-        expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+        expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.resolve")).toEqual([
+          expect.objectContaining({
+            params: expect.objectContaining({ shortId: "deadbeef", agentId: "main" }),
+          }),
           expect.objectContaining({
             params: expect.objectContaining({ reference: { key: "agent:main:deadbeef" } }),
           }),

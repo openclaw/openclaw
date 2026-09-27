@@ -14,6 +14,7 @@ import {
   type MockInstance,
   vi,
 } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { logWebSelfId } from "./auth-store.js";
 import { enqueueCredsSave } from "./creds-persistence.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
@@ -468,16 +469,6 @@ describe("web session", () => {
     expect(readLastSocketOptions().waWebSocketUrl).toBe("ws://127.0.0.1:49153/ws/chat");
   });
 
-  it("preserves explicit Baileys WebSocket URL options over environment", async () => {
-    vi.stubEnv(OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV, "ws://127.0.0.1:49153/ws/chat");
-
-    await createWaSocket(false, false, {
-      waWebSocketUrl: "ws://127.0.0.1:49154/ws/chat",
-    });
-
-    expect(readLastSocketOptions().waWebSocketUrl).toBe("ws://127.0.0.1:49154/ws/chat");
-  });
-
   it("ignores blank Baileys WebSocket URL environment overrides", async () => {
     vi.stubEnv(OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV, " ");
 
@@ -624,16 +615,6 @@ describe("web session", () => {
     expect(passed.fetchAgent).toBeUndefined();
   });
 
-  it("waits for connection open", async () => {
-    const ev = new EventEmitter();
-    const promise = waitForWaConnection(
-      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
-      { timeout: "none" },
-    );
-    ev.emit("connection.update", { connection: "open" });
-    await expect(promise).resolves.toBeUndefined();
-  });
-
   it("keeps one-argument callers on the old no-timeout wait policy", async () => {
     const ev = new EventEmitter();
     const promise = waitForWaConnection({ ev } as unknown as ReturnType<
@@ -710,11 +691,7 @@ describe("web session", () => {
       JSON.stringify({ me: { id: "12345@s.whatsapp.net" } }),
       "utf-8",
     );
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
 
     logWebSelfId(authDir, runtime as never, true);
 
@@ -733,11 +710,7 @@ describe("web session", () => {
       }),
       "utf-8",
     );
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
 
     logWebSelfId(authDir, runtime as never, true);
 

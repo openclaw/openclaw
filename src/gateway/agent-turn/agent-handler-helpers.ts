@@ -5,11 +5,7 @@ import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionWorkStartError,
-  type SessionEntry,
-} from "../../config/sessions.js";
+import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -107,32 +103,17 @@ export function respondUnavailableAgentSessionForKey(params: {
   ) {
     return true;
   }
-  const harnessSessionError = resolveAgentHarnessSessionContextError(canonicalKey, entry);
-  if (harnessSessionError) {
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, harnessSessionError));
-    return true;
-  }
-  const harnessSessionIdError = resolveAgentHarnessSessionIdMismatchError(
-    entry,
-    params.requestedSessionId,
-  );
-  if (harnessSessionIdError) {
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, harnessSessionIdError));
-    return true;
-  }
-  if (params.isRawModelRun && entry?.modelSelectionLocked === true) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE),
-    );
-    return true;
-  }
-  const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
-  if (!archivedSessionError) {
+  const sessionError =
+    resolveAgentHarnessSessionContextError(canonicalKey, entry) ||
+    resolveAgentHarnessSessionIdMismatchError(entry, params.requestedSessionId) ||
+    (params.isRawModelRun && entry?.modelSelectionLocked === true
+      ? AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE
+      : undefined) ||
+    resolveSessionWorkStartError(canonicalKey, entry);
+  if (!sessionError) {
     return false;
   }
-  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
+  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, sessionError));
   return true;
 }
 
@@ -235,19 +216,6 @@ export function shouldSuppressAgentPromptPersistence(params: {
         event.type === AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION && event.source === "subagent",
     ) === true
   );
-}
-
-export function withSqliteSessionFileMarker(params: {
-  agentId: string | undefined;
-  entry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): SessionEntry {
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  if (!agentId) {
-    return params.entry;
-  }
-  return params.entry;
 }
 
 export function yieldAfterAgentAcceptedAck(): Promise<void> {

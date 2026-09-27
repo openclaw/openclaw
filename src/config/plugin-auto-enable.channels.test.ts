@@ -5,6 +5,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 
+const envSecondaryCatalogEntry = {
+  name: "@openclaw/env-secondary",
+  openclaw: {
+    channel: {
+      id: "env-secondary",
+      label: "Env Secondary",
+      selectionLabel: "Env Secondary",
+      docsPath: "/channels/env-secondary",
+      blurb: "Env secondary entry",
+      preferOver: ["env-primary"],
+    },
+    install: {
+      npmSpec: "@openclaw/env-secondary",
+    },
+  },
+};
+
 const logWarnSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -60,6 +77,33 @@ function materializeEnvCatalogCandidates(
   });
 }
 
+function makePreferredChannelRegistry() {
+  return makeRegistry([
+    {
+      id: "legacy-bundled-chat",
+      channels: ["legacy-bundled-chat"],
+      origin: "bundled",
+      channelConfigs: {
+        "legacy-bundled-chat": {
+          schema: { type: "object" },
+          label: "Legacy Bundled Chat",
+        },
+      },
+    },
+    {
+      id: "openclaw-modern-chat",
+      channels: ["legacy-bundled-chat"],
+      channelConfigs: {
+        "legacy-bundled-chat": {
+          schema: { type: "object" },
+          label: "Modern Chat",
+          preferOver: ["legacy-bundled-chat"],
+        },
+      },
+    },
+  ]);
+}
+
 beforeEach(() => {
   resetPluginAutoEnableTestState();
 });
@@ -77,24 +121,7 @@ describe("applyPluginAutoEnable channels", () => {
     fs.writeFileSync(
       catalogPath,
       JSON.stringify({
-        entries: [
-          {
-            name: "@openclaw/env-secondary",
-            openclaw: {
-              channel: {
-                id: "env-secondary",
-                label: "Env Secondary",
-                selectionLabel: "Env Secondary",
-                docsPath: "/channels/env-secondary",
-                blurb: "Env secondary entry",
-                preferOver: ["env-primary"],
-              },
-              install: {
-                npmSpec: "@openclaw/env-secondary",
-              },
-            },
-          },
-        ],
+        entries: [envSecondaryCatalogEntry],
       }),
       "utf-8",
     );
@@ -128,22 +155,7 @@ describe("applyPluginAutoEnable channels", () => {
               },
             },
           },
-          {
-            name: "@openclaw/env-secondary",
-            openclaw: {
-              channel: {
-                id: "env-secondary",
-                label: "Env Secondary",
-                selectionLabel: "Env Secondary",
-                docsPath: "/channels/env-secondary",
-                blurb: "Env secondary entry",
-                preferOver: ["env-primary"],
-              },
-              install: {
-                npmSpec: "@openclaw/env-secondary",
-              },
-            },
-          },
+          envSecondaryCatalogEntry,
         ],
       }),
       "utf-8",
@@ -178,22 +190,7 @@ describe("applyPluginAutoEnable channels", () => {
     fs.writeFileSync(
       realPath,
       JSON.stringify({
-        entries: [
-          {
-            name: "@openclaw/env-secondary",
-            openclaw: {
-              channel: {
-                id: "env-secondary",
-                label: "Env Secondary",
-                selectionLabel: "Env Secondary",
-                docsPath: "/channels/env-secondary",
-                blurb: "Env secondary entry",
-                preferOver: ["env-primary"],
-              },
-              install: { npmSpec: "@openclaw/env-secondary" },
-            },
-          },
-        ],
+        entries: [envSecondaryCatalogEntry],
       }),
       "utf-8",
     );
@@ -269,6 +266,106 @@ describe("applyPluginAutoEnable channels", () => {
   );
 
   describe("third-party channel plugins", () => {
+    it("ignores workspace channel claims and keeps bundled channel auto-enable", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { telegram: { botToken: "token" } },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "workspace-telegram",
+            channels: ["telegram"],
+            origin: "workspace",
+            channelConfigs: {
+              telegram: {
+                schema: { type: "object" },
+                label: "Workspace Telegram",
+                preferOver: ["telegram"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.channels?.telegram?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["workspace-telegram"]).toBeUndefined();
+      expect(result.config.plugins?.entries?.telegram).toBeUndefined();
+      expect(result.changes).toContain("Telegram configured, enabled automatically.");
+    });
+
+    it("does not materialize or allowlist workspace auto-enable candidates", () => {
+      const result = materializePluginAutoEnableCandidates({
+        config: {
+          plugins: { allow: ["mattermost"] },
+        },
+        candidates: [
+          {
+            pluginId: "workspace-telegram",
+            kind: "channel-configured",
+            channelId: "telegram",
+          },
+        ],
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "workspace-telegram",
+            channels: ["telegram"],
+            origin: "workspace",
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["workspace-telegram"]).toBeUndefined();
+      expect(result.config.plugins?.allow).toEqual(["mattermost"]);
+      expect(result.changes).toStrictEqual([]);
+      expect(Object.keys(result.autoEnabledReasons)).toStrictEqual([]);
+    });
+
+    it.each([
+      {
+        label: "enabled entry",
+        plugins: { entries: { "workspace-telegram": { enabled: true } } },
+      },
+      {
+        label: "allowlist",
+        plugins: { allow: ["workspace-telegram"] },
+      },
+    ])("preserves a workspace channel replacement trusted by $label", ({ plugins }) => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { telegram: { botToken: "token" } },
+          plugins,
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "telegram",
+            channels: ["telegram"],
+            origin: "bundled",
+          },
+          {
+            id: "workspace-telegram",
+            channels: ["telegram"],
+            origin: "workspace",
+            channelConfigs: {
+              telegram: {
+                schema: { type: "object" },
+                preferOver: ["telegram"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.channels?.telegram?.enabled).toBeUndefined();
+      expect(result.config.plugins?.entries?.telegram?.enabled).toBe(false);
+      expect(result.config.plugins?.entries?.["workspace-telegram"]?.enabled).toBe(
+        plugins.entries?.["workspace-telegram"]?.enabled,
+      );
+      expect(result.config.plugins?.allow).toEqual(plugins.allow);
+    });
+
     it("activates external channel plugins under plugins.entries when plugin id matches channel id", () => {
       const result = materializePluginAutoEnableCandidates({
         config: {
@@ -430,30 +527,7 @@ describe("applyPluginAutoEnable channels", () => {
           channels: { "legacy-bundled-chat": { token: "legacy" } },
         },
         env: makeIsolatedEnv(),
-        manifestRegistry: makeRegistry([
-          {
-            id: "legacy-bundled-chat",
-            channels: ["legacy-bundled-chat"],
-            origin: "bundled",
-            channelConfigs: {
-              "legacy-bundled-chat": {
-                schema: { type: "object" },
-                label: "Legacy Bundled Chat",
-              },
-            },
-          },
-          {
-            id: "openclaw-modern-chat",
-            channels: ["legacy-bundled-chat"],
-            channelConfigs: {
-              "legacy-bundled-chat": {
-                schema: { type: "object" },
-                label: "Modern Chat",
-                preferOver: ["legacy-bundled-chat"],
-              },
-            },
-          },
-        ]),
+        manifestRegistry: makePreferredChannelRegistry(),
       });
 
       expect(result.config.plugins?.entries?.["openclaw-modern-chat"]?.enabled).toBe(true);
@@ -497,30 +571,7 @@ describe("applyPluginAutoEnable channels", () => {
           plugins: { entries: { "openclaw-modern-chat": { enabled: false } } },
         },
         env: makeIsolatedEnv(),
-        manifestRegistry: makeRegistry([
-          {
-            id: "legacy-bundled-chat",
-            channels: ["legacy-bundled-chat"],
-            origin: "bundled",
-            channelConfigs: {
-              "legacy-bundled-chat": {
-                schema: { type: "object" },
-                label: "Legacy Bundled Chat",
-              },
-            },
-          },
-          {
-            id: "openclaw-modern-chat",
-            channels: ["legacy-bundled-chat"],
-            channelConfigs: {
-              "legacy-bundled-chat": {
-                schema: { type: "object" },
-                label: "Modern Chat",
-                preferOver: ["legacy-bundled-chat"],
-              },
-            },
-          },
-        ]),
+        manifestRegistry: makePreferredChannelRegistry(),
       });
 
       expect(result.config.plugins?.entries?.["openclaw-modern-chat"]?.enabled).toBe(false);

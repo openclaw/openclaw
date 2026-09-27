@@ -2,10 +2,10 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
-import { resolveConfiguredProviderFallback } from "../../../agents/configured-provider-fallback.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-ref-shared.js";
+import { resolveConfiguredPrimaryProviderFallback } from "../../../agents/model-selection-shared.js";
 import { configuredModelRouteNeedsCodex } from "../../../config/codex-plugin-diagnostics.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
 import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shared.js";
@@ -290,7 +290,9 @@ function resolveDefaultProviderForAliasContext(params: {
       );
     return normalizeProviderId(parsed?.provider ?? DEFAULT_PROVIDER) || DEFAULT_PROVIDER;
   }
-  const implicit = parseCodexRouteModelRef(resolveImplicitDefaultAgentModelRef(params.cfg));
+  const implicit = parseCodexRouteModelRef(
+    resolveImplicitDefaultAgentModelRef(params.cfg, params.agentId),
+  );
   return normalizeProviderId(implicit?.provider ?? DEFAULT_PROVIDER) || DEFAULT_PROVIDER;
 }
 
@@ -392,11 +394,14 @@ function normalizeProviderModelRef(provider: string, modelId: string): string {
   return `${normalizedProvider}/${normalizedModelId}`;
 }
 
-export function resolveImplicitDefaultAgentModelRef(cfg: OpenClawConfig): string {
-  const fallbackProvider = resolveConfiguredProviderFallback({
+export function resolveImplicitDefaultAgentModelRef(cfg: OpenClawConfig, agentId?: string): string {
+  const fallbackProvider = resolveConfiguredPrimaryProviderFallback({
     cfg,
+    agentId,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
   });
   return fallbackProvider
     ? normalizeProviderModelRef(fallbackProvider.provider, fallbackProvider.model)

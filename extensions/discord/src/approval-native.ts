@@ -1,6 +1,10 @@
-// Discord plugin module implements approval native behavior.
+import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
+import {
+  createChannelApproverDmTargetResolver,
+  createChannelNativeOriginTargetResolver,
+  resolveApprovalRequestSessionConversation,
+} from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -8,11 +12,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
-import {
-  createChannelApproverDmTargetResolver,
-  createChannelNativeOriginTargetResolver,
-  createApproverRestrictedNativeApprovalCapability,
-} from "./approval-runtime.js";
 import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import {
   getDiscordExecApprovalApprovers,
@@ -166,7 +165,7 @@ function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalCon
         accountId && accountId !== "default"
           ? `channels.discord.accounts.${accountId}`
           : "channels.discord";
-      return `Approve it from the Web UI or terminal UI for now. Discord supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; set \`${prefix}.execApprovals.enabled\` to \`auto\` or \`true\`.`;
+      return `Approve it from the Web UI for now. Discord supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; set \`${prefix}.execApprovals.enabled\` to \`auto\` or \`true\`.`;
     },
     listAccountIds: listDiscordAccountIds,
     hasApprovers: ({ cfg, accountId }) =>

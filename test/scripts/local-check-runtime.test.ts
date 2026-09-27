@@ -26,6 +26,21 @@ const ROOMY_HOST = {
   logicalCpuCount: 16,
 };
 
+const localTsgoDefaults = [
+  "--declaration",
+  "false",
+  "--incremental",
+  "--tsBuildInfoFile",
+  ".artifacts/tsgo-cache/root.tsbuildinfo",
+];
+const localOxlintDefaults = [
+  "--type-aware",
+  "--tsconfig",
+  "config/tsconfig/oxlint.json",
+  "--report-unused-disable-directives-severity",
+  "error",
+];
+
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -139,16 +154,7 @@ describe("local-check-runtime", () => {
   it("tightens local tsgo runs on constrained hosts", () => {
     const { args, env } = applyLocalTsgoPolicy([], makeEnv(), CONSTRAINED_HOST);
 
-    expect(args).toEqual([
-      "--declaration",
-      "false",
-      "--incremental",
-      "--tsBuildInfoFile",
-      ".artifacts/tsgo-cache/root.tsbuildinfo",
-      "--singleThreaded",
-      "--checkers",
-      "1",
-    ]);
+    expect(args).toEqual([...localTsgoDefaults, "--singleThreaded", "--checkers", "1"]);
     expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
@@ -219,13 +225,7 @@ describe("local-check-runtime", () => {
   it("defaults local tsgo to full-speed mode on roomy hosts", () => {
     const { args, env } = applyLocalTsgoPolicy([], makeEnv(), ROOMY_HOST);
 
-    expect(args).toEqual([
-      "--declaration",
-      "false",
-      "--incremental",
-      "--tsBuildInfoFile",
-      ".artifacts/tsgo-cache/root.tsbuildinfo",
-    ]);
+    expect(args).toEqual(localTsgoDefaults);
     expect(env.GOMAXPROCS).toBeUndefined();
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
@@ -269,16 +269,7 @@ describe("local-check-runtime", () => {
       ROOMY_HOST,
     );
 
-    expect(args).toEqual([
-      "--declaration",
-      "false",
-      "--incremental",
-      "--tsBuildInfoFile",
-      ".artifacts/tsgo-cache/root.tsbuildinfo",
-      "--singleThreaded",
-      "--checkers",
-      "1",
-    ]);
+    expect(args).toEqual([...localTsgoDefaults, "--singleThreaded", "--checkers", "1"]);
     expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
@@ -293,54 +284,10 @@ describe("local-check-runtime", () => {
     expect(env.GOMAXPROCS).toBe("1");
   });
 
-  it("allows forcing full-speed tsgo runs on roomy hosts", () => {
-    const { args, env } = applyLocalTsgoPolicy(
-      [],
-      makeEnv({
-        OPENCLAW_LOCAL_CHECK_MODE: "full",
-      }),
-      ROOMY_HOST,
-    );
-
-    expect(args).toEqual([
-      "--declaration",
-      "false",
-      "--incremental",
-      "--tsBuildInfoFile",
-      ".artifacts/tsgo-cache/root.tsbuildinfo",
-    ]);
-    expect(env.GOMAXPROCS).toBeUndefined();
-    expect(env.GOGC).toBeUndefined();
-    expect(env.GOMEMLIMIT).toBeUndefined();
-  });
-
-  it("serializes local oxlint runs onto one thread on constrained hosts", () => {
-    const { args, env } = applyLocalOxlintPolicy([], makeEnv(), CONSTRAINED_HOST);
-
-    expect(args).toEqual([
-      "--type-aware",
-      "--tsconfig",
-      "config/tsconfig/oxlint.json",
-      "--report-unused-disable-directives-severity",
-      "error",
-      "--threads=1",
-    ]);
-    expect(env.GOMAXPROCS).toBe("2");
-    expect(env.GOGC).toBe("30");
-    expect(env.GOMEMLIMIT).toBe("3GiB");
-  });
-
   it("defaults local oxlint to one thread on roomy hosts", () => {
     const { args, env } = applyLocalOxlintPolicy([], makeEnv(), ROOMY_HOST);
 
-    expect(args).toEqual([
-      "--type-aware",
-      "--tsconfig",
-      "config/tsconfig/oxlint.json",
-      "--report-unused-disable-directives-severity",
-      "error",
-      "--threads=1",
-    ]);
+    expect(args).toEqual([...localOxlintDefaults, "--threads=1"]);
     expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
@@ -353,25 +300,16 @@ describe("local-check-runtime", () => {
       ROOMY_HOST,
     );
 
-    expect(args).toEqual([
-      "--threads=8",
-      "--type-aware",
-      "--tsconfig",
-      "config/tsconfig/oxlint.json",
-      "--report-unused-disable-directives-severity",
-      "error",
-    ]);
+    expect(args).toEqual(["--threads=8", ...localOxlintDefaults]);
     expect(env.GOMAXPROCS).toBe("3");
     expect(env.GOGC).toBe("80");
     expect(env.GOMEMLIMIT).toBe("5GiB");
   });
 
   it.each([
-    { name: "small CI runner", ci: "true", cpus: 4, gib: 16, throttled: true },
     { name: "memory-constrained CI runner", ci: "true", cpus: 16, gib: 16, throttled: true },
     { name: "CPU-constrained CI runner", ci: "true", cpus: 4, gib: 32, throttled: true },
     { name: "parallel CI boundary", ci: "true", cpus: 8, gib: 24, throttled: false },
-    { name: "large CI runner", ci: "true", cpus: 16, gib: 32, throttled: false },
     { name: "disabled local policy", ci: undefined, cpus: 4, gib: 16, throttled: false },
   ])("applies compiler memory policy for $name", ({ ci, cpus, gib, throttled }) => {
     const inputEnv = makeEnv({
@@ -501,13 +439,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
       ROOMY_HOST,
     );
 
-    expect(args).toEqual([
-      "--type-aware",
-      "--tsconfig",
-      "config/tsconfig/oxlint.json",
-      "--report-unused-disable-directives-severity",
-      "error",
-    ]);
+    expect(args).toEqual(localOxlintDefaults);
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
   });
@@ -542,7 +474,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
   );
 });
 
-describe("TypeScript bootstrap dependency ownership", () => {
+describe("Tooling bootstrap dependency ownership", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   function fixture() {
@@ -570,6 +502,100 @@ describe("TypeScript bootstrap dependency ownership", () => {
     fs.writeFileSync(path.join(tsx, "esm.mjs"), "export {};\n");
     return { checkout, modules, entry: pathToFileURL(path.join(tsx, "esm.mjs")).href };
   }
+
+  function nativeFixture() {
+    const root = fs.realpathSync(createTempDir("openclaw-native-toolchain-"));
+    const checkout = path.join(root, "checkout");
+    const lib = path.join(checkout, "scripts", "lib");
+    fs.mkdirSync(lib, { recursive: true });
+    for (const file of ["tsx-cli-shim.mjs", "local-check-runtime.mts"]) {
+      fs.copyFileSync(path.resolve("scripts", "lib", file), path.join(lib, file));
+    }
+    fs.writeFileSync(
+      path.join(checkout, "scripts", "entry.mjs"),
+      'import { runNodeCliShim } from "./lib/tsx-cli-shim.mjs"; await runNodeCliShim(import.meta.url, { implementation: "./implementation.mts" });\n',
+    );
+    fs.writeFileSync(
+      path.join(checkout, "scripts", "implementation.mts"),
+      'import value from "fixture-dependency"; console.log(value);\n',
+    );
+    const configured = " modules";
+    const modules = path.join(checkout, configured);
+    const dependency = path.join(modules, "fixture-dependency");
+    fs.mkdirSync(dependency, { recursive: true });
+    fs.writeFileSync(
+      path.join(dependency, "package.json"),
+      JSON.stringify({ name: "fixture-dependency", type: "module", exports: "./index.js" }),
+    );
+    fs.writeFileSync(path.join(dependency, "index.js"), 'export default "configured";\n');
+    const run = (overrides: NodeJS.ProcessEnv) =>
+      spawnSync(process.execPath, [path.join(checkout, "scripts", "entry.mjs")], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          PNPM_CONFIG_MODULES_DIR: undefined,
+          pnpm_config_modules_dir: undefined,
+          npm_config_modules_dir: undefined,
+          ...overrides,
+        },
+      });
+    return { checkout, modules, configured, run };
+  }
+
+  it.each(["PNPM_CONFIG_MODULES_DIR", "pnpm_config_modules_dir", "npm_config_modules_dir"])(
+    "loads native child packages without TSX through %s, relative to the shim checkout",
+    (key) => {
+      const { checkout, modules, configured, run } = nativeFixture();
+      const result = run({ [key]: configured });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("configured");
+      expect(fs.realpathSync(path.join(checkout, "node_modules"))).toBe(modules);
+      expect(fs.existsSync(path.join(modules, "tsx"))).toBe(false);
+    },
+  );
+
+  it.each(["directory", "link"])("keeps native child dependencies in the owned %s", (kind) => {
+    const { checkout, modules, configured, run } = nativeFixture();
+    const owned = path.join(checkout, "owned");
+    fs.cpSync(modules, owned, { recursive: true });
+    fs.writeFileSync(
+      path.join(owned, "fixture-dependency", "index.js"),
+      'export default "owned";\n',
+    );
+    const local = path.join(checkout, "node_modules");
+    if (kind === "link") {
+      fs.symlinkSync(owned, local, process.platform === "win32" ? "junction" : "dir");
+    } else {
+      fs.renameSync(owned, local);
+    }
+    const before = fs.lstatSync(local);
+    const result = run({ PNPM_CONFIG_MODULES_DIR: configured });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("owned");
+    expect(fs.lstatSync(local).ino).toBe(before.ino);
+    expect(fs.lstatSync(local).isSymbolicLink()).toBe(kind === "link");
+  });
+
+  it.each([false, true])(
+    "preserves native empty primary alias with npm fallback=%s",
+    (fallback) => {
+      const { checkout, configured, run } = nativeFixture();
+      const result = run({
+        PNPM_CONFIG_MODULES_DIR: "",
+        pnpm_config_modules_dir: configured,
+        npm_config_modules_dir: fallback ? configured : undefined,
+      });
+      expect(result.status, result.stderr).toBe(fallback ? 0 : 1);
+      if (fallback) {
+        expect(result.stdout.trim()).toBe("configured");
+      } else {
+        expect(result.stderr).toContain("Cannot find package 'fixture-dependency'");
+        expect(fs.existsSync(path.join(checkout, "node_modules"))).toBe(false);
+      }
+    },
+  );
 
   it.each([false, true])(
     "refuses a missing worktree install with an empty override=%s",

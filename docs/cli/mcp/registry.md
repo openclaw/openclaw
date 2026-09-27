@@ -36,6 +36,7 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
     - `supportsParallelToolCalls: true` marks servers that adapters can call concurrently
     - HTTP servers can use static headers, OAuth login, TLS verification control, and mTLS certificate/key paths
     - embedded OpenClaw exposes configured MCP tools in normal `coding` and `messaging` tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]` disables them explicitly
+    - whole-server tool denials such as `tools.deny: ["bundle-mcp"]` or `tools.deny: ["docs__*"]` exclude those servers before connecting; individual tool denials still apply to the discovered catalog
     - per-server `toolFilter.include` and `toolFilter.exclude` filter discovered MCP tools before they become OpenClaw tools
     - servers that advertise resources or prompts also expose utility tools for listing/reading resources and listing/fetching prompts; those generated utility names (`resources_list`, `resources_read`, `prompts_list`, `prompts_get`) use the same include/exclude filter
     - fetched prompts present their description and role-labeled messages to the agent, including native image blocks for vision-capable models; Code Mode keeps the original prompt JSON shape
@@ -43,6 +44,8 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
     - repeated MCP tool request/protocol failures pause that server briefly so one broken server does not consume the whole turn
     - session-scoped MCP runtimes stay alive between turns until session reset/deletion or compaction ID rollover, explicit Stop, a relevant server config change, or Gateway shutdown; owned stdio children terminate during cleanup
     - detached one-shot runs without a surviving runtime session retire their MCP runtimes at run end; a retained transcript does not extend that lifetime
+    - native harness preparation retains the final bundle's server connections and OAuth context until the session closes; unused discovery servers outside that bundle can be retired after preparation when no other lease needs them
+    - canceling compaction closes MCP runtimes created for that compaction, including pending startup and tool discovery
     - `mcp.sessionIdleTtlMs` is an opt-in idle timeout in milliseconds: unset or `0` keeps runtimes alive, and positive finite values enable idle eviction (fractions round down)
     - a Gateway admits at most 256 OpenClaw-managed runtimes with server connections across sessions and requester partitions; sessions without available servers and sign-in-only catalogs do not consume this limit. Reaching the limit rejects new admissions until you stop or reset unused sessions. See [MCP configuration](/gateway/config-extensions#mcp) for details
 
@@ -50,6 +53,60 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 </AccordionGroup>
 
 Runtime adapters may normalize this shared registry into the shape their downstream client expects. For example, embedded OpenClaw consumes OpenClaw `transport` values directly, while Claude Code and Gemini receive CLI-native `type` values such as `http`, `sse`, or `stdio`.
+
+### Saved MCP server definitions
+
+Commands:
+
+- `openclaw mcp list [--json]`
+- `openclaw mcp show [name] [--json]`
+- `openclaw mcp status [--verbose] [--json]`
+- `openclaw mcp doctor [name] [--probe] [--json]`
+- `openclaw mcp probe [name] [--json]`
+- `openclaw mcp add <name> [flags]`
+- `openclaw mcp set <name> <json>`
+- `openclaw mcp configure <name> [flags]`
+- `openclaw mcp tools <name> [--include csv] [--exclude csv] [--clear]`
+- `openclaw mcp login <name> [--code code]`
+- `openclaw mcp logout <name>`
+- `openclaw mcp reload`
+- `openclaw mcp unset <name>`
+
+Notes:
+
+- `list` sorts server names.
+- `show` without a name prints the full configured MCP server object.
+- `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization. Credential-bearing stdio arguments are redacted in text and JSON output.
+- `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
+- `probe` connects to enabled saved servers and reports tool counts, resources/prompts support, list-change support, and diagnostics. If none are enabled, plain output explains that no servers can be probed and shows add/enable commands; `--json` keeps its empty result envelope. A named disabled server is rejected with an enable hint.
+- `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags. Use `--approval auto|prompt|approve` to set the Codex tool approval mode.
+- `set` expects one JSON object value on the command line.
+- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
+- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
+- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
+- `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
+- `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.
+- Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
+- `unset` fails if the named server does not exist.
+
+Examples:
+
+```bash
+openclaw mcp list
+openclaw mcp show context7 --json
+openclaw mcp status --verbose
+openclaw mcp doctor --probe
+openclaw mcp probe context7 --json
+openclaw mcp add memory --command npx --arg -y --arg @modelcontextprotocol/server-memory
+openclaw mcp set context7 '{"command":"uvx","args":["context7-mcp"]}'
+openclaw mcp tools context7 --include 'resolve-library-id,get-library-docs'
+openclaw mcp set docs '{"url":"https://mcp.example.com","transport":"streamable-http"}'
+openclaw mcp configure docs --timeout 20 --connect-timeout 5 --include 'search,read_*'
+openclaw mcp configure docs --auth oauth --oauth-scope 'docs.read'
+openclaw mcp login docs
+openclaw mcp logout docs
+openclaw mcp unset context7
+```
 
 ### Codex tool approvals
 
@@ -120,60 +177,6 @@ into specific OpenClaw agent ids. Empty, blank, or invalid agent lists are
 rejected by config validation and omitted by the runtime projection path
 instead of becoming global. OpenClaw strips the `codex` metadata before handing
 the native `mcp_servers` config to Codex.
-
-### Saved MCP server definitions
-
-Commands:
-
-- `openclaw mcp list [--json]`
-- `openclaw mcp show [name] [--json]`
-- `openclaw mcp status [--verbose] [--json]`
-- `openclaw mcp doctor [name] [--probe] [--json]`
-- `openclaw mcp probe [name] [--json]`
-- `openclaw mcp add <name> [flags]`
-- `openclaw mcp set <name> <json>`
-- `openclaw mcp configure <name> [flags]`
-- `openclaw mcp tools <name> [--include csv] [--exclude csv] [--clear]`
-- `openclaw mcp login <name> [--code code]`
-- `openclaw mcp logout <name>`
-- `openclaw mcp reload`
-- `openclaw mcp unset <name>`
-
-Notes:
-
-- `list` sorts server names.
-- `show` without a name prints the full configured MCP server object.
-- `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization. Credential-bearing stdio arguments are redacted in text and JSON output.
-- `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
-- `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics.
-- `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags. Use `--approval auto|prompt|approve` to set the Codex tool approval mode.
-- `set` expects one JSON object value on the command line.
-- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
-- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
-- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
-- `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
-- `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.
-- Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
-- `unset` fails if the named server does not exist.
-
-Examples:
-
-```bash
-openclaw mcp list
-openclaw mcp show context7 --json
-openclaw mcp status --verbose
-openclaw mcp doctor --probe
-openclaw mcp probe context7 --json
-openclaw mcp add memory --command npx --arg -y --arg @modelcontextprotocol/server-memory
-openclaw mcp set context7 '{"command":"uvx","args":["context7-mcp"]}'
-openclaw mcp tools context7 --include 'resolve-library-id,get-library-docs'
-openclaw mcp set docs '{"url":"https://mcp.example.com","transport":"streamable-http"}'
-openclaw mcp configure docs --timeout 20 --connect-timeout 5 --include 'search,read_*'
-openclaw mcp configure docs --auth oauth --oauth-scope 'docs.read'
-openclaw mcp login docs
-openclaw mcp logout docs
-openclaw mcp unset context7
-```
 
 ### Common server recipes
 

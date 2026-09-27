@@ -3,8 +3,11 @@
 // agent knows what was marked up.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import type { BrowserInspectedNode } from "./browser-client.ts";
 import type { BrowserTabTarget } from "./browser-target.ts";
+
+registerBrowserEnglish();
 
 /** Point in normalized [0..1] coordinates of the captured screenshot. */
 type AnnotationPoint = { x: number; y: number };
@@ -197,15 +200,7 @@ export function buildBrowserAnnotationContent(params: {
     );
   }
   if (element) {
-    lines.push(
-      t("browser.annotatePrompt.elementDetail", {
-        descriptor: element.descriptor,
-        width: element.width,
-        height: element.height,
-        x: element.x,
-        y: element.y,
-      }),
-    );
+    lines.push(t("browser.annotatePrompt.elementDetail", element));
   }
   lines.push(t("browser.annotatePrompt.outro"));
   return {

@@ -23,11 +23,12 @@ describe("resolveSlackChannelAllowlist", () => {
     const fixture = "lookup-fixture";
     slackClientMocks.conversationsList.mockResolvedValue({ channels: [] });
 
-    await resolveSlackChannelAllowlist({
+    const result = await resolveSlackChannelAllowlist({
       token: fixture,
       entries: ["#does-not-exist"],
     });
 
+    expect(result).toEqual([{ input: "#does-not-exist", resolved: false }]);
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledOnce();
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledWith(fixture);
     expect(slackClientMocks.conversationsList).toHaveBeenCalledOnce();
@@ -88,19 +89,32 @@ describe("resolveSlackChannelAllowlist", () => {
     expect(res[0]?.id).toBe("C2");
   });
 
-  it("keeps unresolved entries", async () => {
-    const client = {
-      conversations: {
-        list: vi.fn().mockResolvedValue({ channels: [] }),
-      },
-    };
+  it.each([
+    { input: "TEAM:%5411111111:CHANNEL:%4301234567", resolved: true },
+    { input: "team:T11111111:user:U01234567", resolved: false },
+    { input: "team:T11111111:channel:%ZZ", resolved: false },
+    { input: " team:T11111111:channel:C01234567", resolved: false },
+  ])(
+    "keeps qualified target ordering and lookup boundaries for $input",
+    async ({ input, resolved }) => {
+      slackClientMocks.conversationsList.mockResolvedValue({ channels: [] });
+      const first = "team:T22222222:channel:C01234567";
+      const last = "team:T33333333:channel:C01234567";
 
-    const res = await resolveSlackChannelAllowlist({
-      token: "xoxb-test",
-      entries: ["#does-not-exist"],
-      client: client as never,
-    });
+      const result = await resolveSlackChannelAllowlist({
+        token: "lookup-fixture",
+        entries: [first, input, last],
+      });
 
-    expect(res[0]?.resolved).toBe(false);
-  });
+      expect(result).toEqual([
+        { input: first, resolved: true, id: first },
+        resolved
+          ? { input, resolved: true, id: "team:T11111111:channel:C01234567" }
+          : { input, resolved: false },
+        { input: last, resolved: true, id: last },
+      ]);
+      expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledTimes(resolved ? 0 : 1);
+      expect(slackClientMocks.conversationsList).toHaveBeenCalledTimes(resolved ? 0 : 1);
+    },
+  );
 });

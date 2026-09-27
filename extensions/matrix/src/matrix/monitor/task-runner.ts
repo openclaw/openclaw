@@ -1,11 +1,21 @@
-// Matrix plugin module implements task runner behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 
-const monitorTaskSignal = new AsyncLocalStorage<AbortSignal>();
+type MatrixMonitorTaskRunnerState = {
+  shutdownSignal: AbortSignal;
+};
+
+type MatrixMonitorTaskContext = {
+  runner: MatrixMonitorTaskRunnerState;
+  settled: boolean;
+  signal: AbortSignal;
+};
+
+const monitorTaskContext = new AsyncLocalStorage<MatrixMonitorTaskContext>();
 
 export function getMatrixMonitorTaskSignal(): AbortSignal | undefined {
-  return monitorTaskSignal.getStore();
+  const context = monitorTaskContext.getStore();
+  return context?.settled ? context.runner.shutdownSignal : context?.signal;
 }
 
 export function createMatrixMonitorTaskRunner(params: {
@@ -13,6 +23,8 @@ export function createMatrixMonitorTaskRunner(params: {
   logVerboseMessage: (message: string) => void;
 }) {
   const inFlight = new Map<Promise<void>, AbortController>();
+  const shutdownController = new AbortController();
+  const runner: MatrixMonitorTaskRunnerState = { shutdownSignal: shutdownController.signal };
   let closed = false;
 
   const runDetachedTask = (label: string, task: () => Promise<void>): Promise<void> => {
@@ -20,8 +32,13 @@ export function createMatrixMonitorTaskRunner(params: {
       return Promise.resolve();
     }
     const controller = new AbortController();
-    const trackedTask: Promise<void> = monitorTaskSignal
-      .run(controller.signal, () => Promise.resolve().then(task))
+    const context: MatrixMonitorTaskContext = {
+      runner,
+      settled: false,
+      signal: AbortSignal.any([controller.signal, runner.shutdownSignal]),
+    };
+    const trackedTask: Promise<void> = monitorTaskContext
+      .run(context, () => Promise.resolve().then(task))
       .catch((error: unknown) => {
         const message = String(error);
         params.logVerboseMessage(`matrix: ${label} failed (${message})`);
@@ -31,8 +48,8 @@ export function createMatrixMonitorTaskRunner(params: {
         });
       })
       .finally(() => {
-        // Async descendants retain the signal, but cannot acquire after their owner settles.
-        controller.abort();
+        // Descendants retain shutdown ownership, but no longer belong to a settled task.
+        context.settled = true;
         inFlight.delete(trackedTask);
       });
     inFlight.set(trackedTask, controller);
@@ -48,6 +65,7 @@ export function createMatrixMonitorTaskRunner(params: {
   return {
     close: () => {
       closed = true;
+      shutdownController.abort();
       for (const controller of inFlight.values()) {
         controller.abort();
       }

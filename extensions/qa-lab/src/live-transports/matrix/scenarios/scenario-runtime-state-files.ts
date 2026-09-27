@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime state files behavior.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findFilesByName } from "./scenario-runtime-find-files.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
@@ -35,38 +35,6 @@ async function readJsonFile(pathname: string): Promise<unknown> {
 
 async function writeJsonFile(pathname: string, value: unknown) {
   await fs.writeFile(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-async function findFilesByName(params: {
-  filename: string;
-  rootDir: string;
-  maxDepth?: number;
-}): Promise<string[]> {
-  const maxDepth = params.maxDepth ?? 8;
-  const matches: string[] = [];
-  async function visit(dir: string, depth: number): Promise<void> {
-    if (depth > maxDepth) {
-      return;
-    }
-    let entries: Array<{ isDirectory(): boolean; isFile(): boolean; name: string }>;
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isFile() && entry.name === params.filename) {
-        matches.push(entryPath);
-        continue;
-      }
-      if (entry.isDirectory()) {
-        await visit(entryPath, depth + 1);
-      }
-    }
-  }
-  await visit(params.rootDir, 0);
-  return matches.toSorted();
 }
 
 function readPersistedMatrixSyncCursor(parsed: unknown): string | null {

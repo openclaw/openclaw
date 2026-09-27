@@ -1,4 +1,3 @@
-// Discord plugin module implements runtime.guild behavior.
 import { PermissionFlagsBits } from "discord-api-types/v10";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
@@ -14,7 +13,7 @@ import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import { getGateway } from "../monitor/gateway-registry.js";
 import { getPresence } from "../monitor/presence-cache.js";
-import { discordGuildActionRuntime } from "./runtime-deps.js";
+import * as discordGuildActionRuntime from "../send.js";
 import {
   createDiscordMessagingActionContext,
   type DiscordMessagingActionOptions,
@@ -25,16 +24,6 @@ import {
   readDiscordChannelEditParams,
   readDiscordChannelMoveParams,
 } from "./runtime.shared.js";
-
-type DiscordRoleMutationOpts = { cfg: OpenClawConfig; accountId?: string };
-type DiscordRoleMutation = (
-  params: {
-    guildId: string;
-    userId: string;
-    roleId: string;
-  },
-  options: DiscordRoleMutationOpts,
-) => Promise<unknown>;
 
 type GuildAdminActionGuard = {
   gate: keyof DiscordActionConfig;
@@ -182,20 +171,16 @@ async function resolveGuildAdminActionPermissions(params: {
     return params.guard.permissions;
   }
 
+  const edit = readDiscordChannelEditParams(params.values);
   const onlyReopen =
-    params.values.archived === false &&
-    !("name" in params.values) &&
-    !("topic" in params.values) &&
-    !("position" in params.values) &&
-    !("parentId" in params.values) &&
-    !("clearParent" in params.values) &&
-    !("nsfw" in params.values) &&
-    !("rateLimitPerUser" in params.values) &&
-    !("locked" in params.values) &&
-    !("autoArchiveDuration" in params.values) &&
+    edit.archived === false &&
+    // Derive the exception from the normalized final payload so future edit fields fail closed.
+    Object.entries(edit).every(
+      ([field, value]) => value === undefined || field === "channelId" || field === "archived",
+    ) &&
     !isLockedThreadChannel(channel);
   return onlyReopen
-    ? [PermissionFlagsBits.ManageThreads, PermissionFlagsBits.SendMessagesInThreads]
+    ? [PermissionFlagsBits.ManageThreads, PermissionFlagsBits.SendMessages]
     : [PermissionFlagsBits.ManageThreads];
 }
 
@@ -239,7 +224,20 @@ async function verifySenderGuildAdminPermission(params: {
         requiredPermissions,
         actionOptions,
       );
-  if (!hasPermission) {
+  const requiresCurrentThreadAccess =
+    params.action === "channelEdit" &&
+    requiredPermissions.includes(PermissionFlagsBits.SendMessages);
+  if (
+    !hasPermission ||
+    (requiresCurrentThreadAccess &&
+      (!targetChannelId ||
+        !(await discordGuildActionRuntime.canViewDiscordGuildChannel(
+          guildId,
+          targetChannelId,
+          senderUserId,
+          actionOptions,
+        ))))
+  ) {
     throw new Error("Sender does not have required permissions for this guild action.");
   }
 
@@ -275,21 +273,6 @@ async function verifySenderGuildAdminPermission(params: {
       throw new Error("Sender cannot manage the requested role overwrite.");
     }
   }
-}
-
-async function runRoleMutation(params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
-  values: Record<string, unknown>;
-  mutate: DiscordRoleMutation;
-}) {
-  const guildId = readStringParam(params.values, "guildId", { required: true });
-  const userId = readStringParam(params.values, "userId", { required: true });
-  const roleId = readStringParam(params.values, "roleId", { required: true });
-  await params.mutate(
-    { guildId, userId, roleId },
-    createDiscordActionOptions({ cfg: params.cfg, accountId: params.accountId }),
-  );
 }
 
 function readChannelPermissionTarget(params: Record<string, unknown>) {
@@ -338,6 +321,7 @@ export async function handleDiscordGuildAction(
         "Discord guild metadata reads require a wildcard channel allowlist for this guild.",
     });
   };
+  assertGuildAdminActionEnabled(action, isActionEnabled);
   switch (action) {
     case "memberInfo": {
       if (!isActionEnabled("memberInfo")) {
@@ -403,9 +387,6 @@ export async function handleDiscordGuildAction(
       return jsonResult({ ok: true, emojis: emojis.slice(0, limit) });
     }
     case "emojiUpload": {
-      if (!isActionEnabled("emojiUploads")) {
-        throw new Error("Discord emoji uploads are disabled.");
-      }
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
@@ -426,9 +407,6 @@ export async function handleDiscordGuildAction(
       return jsonResult({ ok: true, emoji });
     }
     case "stickerUpload": {
-      if (!isActionEnabled("stickerUploads")) {
-        throw new Error("Discord sticker uploads are disabled.");
-      }
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
@@ -452,28 +430,16 @@ export async function handleDiscordGuildAction(
       );
       return jsonResult({ ok: true, sticker });
     }
-    case "roleAdd": {
-      if (!isActionEnabled("roles", false)) {
-        throw new Error("Discord role changes are disabled.");
-      }
-      await runRoleMutation({
-        cfg,
-        accountId,
-        values: params,
-        mutate: discordGuildActionRuntime.addRoleDiscord,
-      });
-      return jsonResult({ ok: true });
-    }
+    case "roleAdd":
     case "roleRemove": {
-      if (!isActionEnabled("roles", false)) {
-        throw new Error("Discord role changes are disabled.");
-      }
-      await runRoleMutation({
-        cfg,
-        accountId,
-        values: params,
-        mutate: discordGuildActionRuntime.removeRoleDiscord,
-      });
+      const guildId = readStringParam(params, "guildId", { required: true });
+      const userId = readStringParam(params, "userId", { required: true });
+      const roleId = readStringParam(params, "roleId", { required: true });
+      const mutate =
+        action === "roleAdd"
+          ? discordGuildActionRuntime.addRoleDiscord
+          : discordGuildActionRuntime.removeRoleDiscord;
+      await mutate({ guildId, userId, roleId }, withOpts());
       return jsonResult({ ok: true });
     }
     case "channelInfo": {
@@ -538,9 +504,6 @@ export async function handleDiscordGuildAction(
       return jsonResult({ ok: true, events });
     }
     case "eventCreate": {
-      if (!isActionEnabled("events")) {
-        throw new Error("Discord events are disabled.");
-      }
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
@@ -576,97 +539,59 @@ export async function handleDiscordGuildAction(
       );
       return jsonResult({ ok: true, event });
     }
+    case "categoryCreate":
     case "channelCreate": {
-      if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
-      }
       const channel = await discordGuildActionRuntime.createChannelDiscord(
-        readDiscordChannelCreateParams(params),
+        action === "categoryCreate"
+          ? {
+              guildId: readStringParam(params, "guildId", { required: true }),
+              name: readStringParam(params, "name", { required: true }),
+              type: 4,
+              position: readNonNegativeIntegerParam(params, "position"),
+            }
+          : readDiscordChannelCreateParams(params),
         withOpts(),
       );
-      return jsonResult({ ok: true, channel });
-    }
-    case "channelEdit": {
-      if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
-      }
-      const channel = await discordGuildActionRuntime.editChannelDiscord(
-        readDiscordChannelEditParams(params),
-        withOpts(),
-      );
-      return jsonResult({ ok: true, channel });
-    }
-    case "channelDelete": {
-      if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
-      }
-      const channelId = readStringParam(params, "channelId", {
-        required: true,
+      return jsonResult({
+        ok: true,
+        [action === "categoryCreate" ? "category" : "channel"]: channel,
       });
+    }
+    case "categoryEdit":
+    case "channelEdit": {
+      const channel = await discordGuildActionRuntime.editChannelDiscord(
+        action === "categoryEdit"
+          ? {
+              channelId: readStringParam(params, "categoryId", { required: true }),
+              name: readStringParam(params, "name"),
+              position: readNonNegativeIntegerParam(params, "position"),
+            }
+          : readDiscordChannelEditParams(params),
+        withOpts(),
+      );
+      return jsonResult({
+        ok: true,
+        [action === "categoryEdit" ? "category" : "channel"]: channel,
+      });
+    }
+    case "categoryDelete":
+    case "channelDelete": {
+      const channelId = readStringParam(
+        params,
+        action === "categoryDelete" ? "categoryId" : "channelId",
+        { required: true },
+      );
       const result = await discordGuildActionRuntime.deleteChannelDiscord(channelId, withOpts());
       return jsonResult(result);
     }
     case "channelMove": {
-      if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
-      }
       await discordGuildActionRuntime.moveChannelDiscord(
         readDiscordChannelMoveParams(params),
         withOpts(),
       );
       return jsonResult({ ok: true });
     }
-    case "categoryCreate": {
-      if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
-      }
-      const guildId = readStringParam(params, "guildId", { required: true });
-      const name = readStringParam(params, "name", { required: true });
-      const position = readNonNegativeIntegerParam(params, "position");
-      const channel = await discordGuildActionRuntime.createChannelDiscord(
-        {
-          guildId,
-          name,
-          type: 4,
-          position: position ?? undefined,
-        },
-        withOpts(),
-      );
-      return jsonResult({ ok: true, category: channel });
-    }
-    case "categoryEdit": {
-      if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
-      }
-      const categoryId = readStringParam(params, "categoryId", {
-        required: true,
-      });
-      const name = readStringParam(params, "name");
-      const position = readNonNegativeIntegerParam(params, "position");
-      const channel = await discordGuildActionRuntime.editChannelDiscord(
-        {
-          channelId: categoryId,
-          name: name ?? undefined,
-          position: position ?? undefined,
-        },
-        withOpts(),
-      );
-      return jsonResult({ ok: true, category: channel });
-    }
-    case "categoryDelete": {
-      if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
-      }
-      const categoryId = readStringParam(params, "categoryId", {
-        required: true,
-      });
-      const result = await discordGuildActionRuntime.deleteChannelDiscord(categoryId, withOpts());
-      return jsonResult(result);
-    }
     case "channelPermissionSet": {
-      if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
-      }
       const { channelId, targetId } = readChannelPermissionTarget(params);
       const targetTypeRaw = readStringParam(params, "targetType", {
         required: true,
@@ -687,9 +612,6 @@ export async function handleDiscordGuildAction(
       return jsonResult({ ok: true });
     }
     case "channelPermissionRemove": {
-      if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
-      }
       const { channelId, targetId } = readChannelPermissionTarget(params);
       await discordGuildActionRuntime.removeChannelPermissionDiscord(
         channelId,

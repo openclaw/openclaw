@@ -1,11 +1,13 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   PICKED,
   WORKSPACE,
   captureNewSessionComposerUiProof,
   captureProjectUiProof,
   captureUiProofEnabled,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
@@ -348,9 +350,15 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await mobileModelSettings.click();
       await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
+      const capturedModelOption = page
+        .locator(".chat-controls__model-picker[open] [data-chat-model-option]")
+        .first();
+      if (captureUiProofEnabled) {
+        await revealChatModelOption(capturedModelOption);
+      }
       await captureProjectUiProof(suite, page, "mobile-new-session-model-open.png", {
         surface: page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
-        content: [page.locator("[data-chat-model-option]").first()],
+        content: [capturedModelOption],
       });
       expect(
         await page
@@ -363,7 +371,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
       await captureProjectUiProof(suite, page, "mobile-new-session-effort-open.png", {
         surface: page.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
-        content: [page.locator('[data-chat-thinking-slider="true"]')],
+        content: [fastMode],
       });
       await page.keyboard.press("Escape");
       await page.setViewportSize({ width: 1280, height: 900 });
@@ -380,14 +388,35 @@ suite.define(() => {
       const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
       const whereTrigger = page.locator("#new-session-where-trigger");
       await whereTrigger.click();
-      await pollLocatorText(whereSelect.locator(".new-session-page__menu-title").first()).toBe(
-        "Environments",
+      const environmentSearch = whereSelect.getByRole("searchbox", { name: "Search environments" });
+      await expect
+        .poll(() => environmentSearch.getAttribute("placeholder"))
+        .toBe("Search environments");
+      await expect
+        .poll(() => environmentSearch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      const localEnvironment = whereSelect.locator('[data-value="gateway"]');
+      expect(await localEnvironment.getAttribute("aria-pressed")).toBe("true");
+      await environmentSearch.fill("no-such-environment");
+      await whereSelect
+        .getByRole("status")
+        .getByText("No matching environments", { exact: true })
+        .waitFor();
+      expect(await whereTrigger.locator(".new-session-page__trigger-label").textContent()).toBe(
+        "Local",
       );
-      await captureProjectUiProof(suite, page, "new-session-environment-menu-label.png", {
-        surface: whereSelect.locator('wa-popup [part="popup"]'),
-        content: [whereSelect.locator(".new-session-page__menu-title").first()],
+      await environmentSearch.fill("");
+      await expect.poll(() => localEnvironment.isVisible()).toBe(true);
+      expect(await localEnvironment.getAttribute("aria-pressed")).toBe("true");
+      await captureProjectUiProof(suite, page, "new-session-environment-search.png", {
+        surface: whereSelect.locator('wa-popup.popover > [part="popup"]'),
+        content: [environmentSearch],
       });
       await page.keyboard.press("Escape");
+      await expect.poll(() => whereTrigger.getAttribute("aria-expanded")).toBe("false");
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.id))
+        .toBe("new-session-where-trigger");
 
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");
@@ -403,7 +432,7 @@ suite.define(() => {
         "Projects",
       );
       await captureProjectUiProof(suite, page, "new-session-project-menu-label.png", {
-        surface: projectSelect.locator('wa-popup [part="popup"]'),
+        surface: projectSelect.locator('wa-popup.popover > [part="popup"]'),
         content: [projectSelect.getByRole("button", { name: "Browse folders" })],
       });
       await projectSelect.getByRole("button", { name: "Browse folders" }).click();
@@ -433,7 +462,7 @@ suite.define(() => {
         "Checkout",
       );
       await captureProjectUiProof(suite, page, "new-session-checkout-menu-label.png", {
-        surface: checkoutSelect.locator('wa-popup [part="popup"]'),
+        surface: checkoutSelect.locator('wa-popup.popover > [part="popup"]'),
         content: [checkoutSelect.locator(".new-session-page__menu-title").first()],
       });
       const currentCheckout = checkoutSelect.locator('[data-value="checkout"]');
@@ -448,12 +477,14 @@ suite.define(() => {
       await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
       await expect.poll(() => currentCheckout.getAttribute("aria-pressed")).toBe("false");
       await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
-        "New worktree from main",
+        "New worktree",
       );
-      await checkoutSelect.getByLabel("From").waitFor();
+      await checkoutBaseRefInput(checkoutSelect).waitFor();
       await checkoutSelect.getByLabel("Name", { exact: true }).waitFor();
       await checkoutSelect
-        .getByText("Creates branch openclaw/<name> in a separate checkout.", { exact: true })
+        .getByText("Creates a branch from the session title in a separate checkout.", {
+          exact: true,
+        })
         .waitFor();
       await page.keyboard.press("Escape");
       await expect.poll(() => checkoutTrigger.getAttribute("aria-expanded")).toBe("false");
@@ -483,9 +514,9 @@ suite.define(() => {
         agentId: "main",
         message: "fix the flaky test",
         worktree: true,
-        worktreeBaseRef: "main",
         cwd: PICKED,
       });
+      expect(createRequest.params).not.toHaveProperty("worktreeBaseRef");
 
       await expect
         .poll(() => new URL(page.url()).pathname)
@@ -576,7 +607,7 @@ suite.define(() => {
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
       await captureProjectUiProof(suite, page, "project-selected.png", {
         surface: checkout.locator('wa-popup [part="popup"]'),
-        content: [checkout.getByLabel("From")],
+        content: [checkoutBaseRefInput(checkout)],
       });
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("inspect the project");
@@ -588,8 +619,8 @@ suite.define(() => {
         message: "inspect the project",
         projectId: "recorded-openclaw",
         worktree: true,
-        worktreeBaseRef: "main",
       });
+      expect(create.params).not.toHaveProperty("worktreeBaseRef");
       expect(create.params).not.toHaveProperty("cwd");
       expect(create.params).not.toHaveProperty("execNode");
     } finally {
@@ -635,6 +666,8 @@ suite.define(() => {
       await gateway.waitForRequest("fs.listDir");
       const input = place.locator("input.new-session-page__browser-path");
       await expect.poll(() => input.inputValue()).toBe(WORKSPACE);
+      // The draft path is set before the request finishes; filter only after its listing arrives.
+      await place.locator(".new-session-page__browser-entry", { hasText: "packages" }).waitFor();
       const requestsBefore = await gateway.getRequests("fs.listDir");
       await input.fill(`${WORKSPACE}/pa`);
       await expect

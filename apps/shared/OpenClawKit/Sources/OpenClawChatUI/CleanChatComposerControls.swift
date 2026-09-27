@@ -8,6 +8,8 @@ import UIKit
 #endif
 
 struct CleanChatComposerSurface: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     let cornerRadius: CGFloat
 
     func body(content: Content) -> some View {
@@ -24,7 +26,9 @@ struct CleanChatComposerSurface: ViewModifier {
         content
             .background(
                 RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                    .fill(OpenClawChatTheme.composerField))
+                    .fill(self.isDesktopLayout
+                        ? AnyShapeStyle(OpenClawChatTheme.desktopComposer(in: self.colorScheme))
+                        : OpenClawChatTheme.composerField))
         #else
         if #available(iOS 26.0, *) {
             content
@@ -55,19 +59,22 @@ enum CleanChatComposerMetrics {
 }
 
 struct CompactChatAttachmentLabel: View {
+    var controlSize: CGFloat = CleanChatComposerMetrics.controlTouchSize
+
     var body: some View {
         Image(systemName: "plus")
             .font(OpenClawChatTypography.display(size: 20, weight: .semibold, relativeTo: .body))
             .foregroundStyle(.secondary)
             .frame(
-                width: CleanChatComposerMetrics.controlTouchSize,
-                height: CleanChatComposerMetrics.controlTouchSize)
+                width: self.controlSize,
+                height: self.controlSize)
             .contentShape(Rectangle())
     }
 }
 
 struct CleanChatContextUsageLabel: View {
     let usage: OpenClawChatContextUsage
+    var controlSize: CGFloat = CleanChatComposerMetrics.controlTouchSize
 
     var body: some View {
         ZStack {
@@ -80,8 +87,8 @@ struct CleanChatContextUsageLabel: View {
         }
         .frame(width: 18, height: 18)
         .frame(
-            width: CleanChatComposerMetrics.controlTouchSize,
-            height: CleanChatComposerMetrics.controlTouchSize)
+            width: self.controlSize,
+            height: self.controlSize)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Context usage")
@@ -108,6 +115,66 @@ struct CleanChatContextUsageLabel: View {
         return String(
             format: String(localized: "%@ tokens used"),
             self.usage.usedTokens.formatted())
+    }
+}
+
+@MainActor
+public struct OpenClawChatContextUsageControl: View {
+    private let usage: OpenClawChatContextUsage
+    private let canCompact: Bool
+    private let controlSize: CGFloat
+    private let onCompact: @MainActor () -> Void
+
+    public init(
+        usage: OpenClawChatContextUsage,
+        canCompact: Bool,
+        controlSize: CGFloat = 28,
+        onCompact: @escaping @MainActor () -> Void)
+    {
+        self.usage = usage
+        self.canCompact = canCompact
+        self.controlSize = controlSize
+        self.onCompact = onCompact
+    }
+
+    public var body: some View {
+        Menu {
+            Text(self.tokensLine)
+                .font(OpenClawChatTypography.body)
+            if let cost = self.usage.totalCost {
+                Text(verbatim: String(
+                    format: String(localized: "Thread cost %@"),
+                    ChatContextUsageFormatter.cost(cost)))
+                    .font(OpenClawChatTypography.body)
+            }
+            Divider()
+            Button(action: self.onCompact) {
+                Text("Compact Thread")
+                    .font(OpenClawChatTypography.body)
+            }
+            .disabled(!self.canCompact)
+        } label: {
+            CleanChatContextUsageLabel(usage: self.usage, controlSize: self.controlSize)
+        }
+        .menuIndicator(.hidden)
+        #if os(macOS)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .fixedSize()
+        #endif
+        .help(self.tokensLine)
+        .accessibilityIdentifier("chat-context-usage")
+    }
+
+    private var tokensLine: String {
+        let used = ChatContextUsageFormatter.tokens(self.usage.usedTokens)
+        guard let window = self.usage.contextWindowTokens else {
+            return String(format: String(localized: "%@ tokens used"), used)
+        }
+        return String(
+            format: String(localized: "%@ of %@ tokens used"),
+            used,
+            ChatContextUsageFormatter.tokens(window))
     }
 }
 
@@ -297,6 +364,7 @@ struct OpenClawChatMicButton: View {
     let isRealtimeTalkActive: Bool
     let isComposerEnabled: Bool
     let isAttachmentInputEnabled: Bool
+    var controlSize: CGFloat = CleanChatComposerMetrics.controlTouchSize
     let onCancelDictation: @MainActor () -> Void
     let onStartDictation: @MainActor () -> Void
 
@@ -345,15 +413,15 @@ struct OpenClawChatMicButton: View {
         return Image(systemName: showsStop ? "stop.fill" : "mic")
             .font(OpenClawChatTypography.display(size: 17, weight: .medium, relativeTo: .body))
             .foregroundStyle(showsStop ? OpenClawChatTheme.accent : .secondary)
-            .frame(width: 44, height: 44)
+            .frame(width: self.controlSize, height: self.controlSize)
             .contentShape(Rectangle())
     }
 
     private func performDictationAction() {
         guard let dictationControl else { return }
         switch Self.dictationPrimaryAction(
-            isPending: self.isDictationPending,
-            isActive: dictationControl.isActive)
+            isPending: self.isDictationPending || dictationControl.isActive,
+            isActive: dictationControl.phase == .listening)
         {
         case .finish:
             dictationControl.finish()
@@ -447,19 +515,20 @@ private struct UnifiedChatMicMetadata: ViewModifier {
     }
 
     private var accessibilityLabel: Text {
-        if self.control.isActive { return Text("Finish dictation") }
-        if self.isPending { return Text("Cancel") }
+        if self.control.phase == .listening { return Text("Finish dictation") }
+        if self.isPending || self.control.isActive { return Text("Cancel dictation") }
         return Text("Dictate message")
     }
 
     private var accessibilityValue: Text {
-        if self.control.isActive { return Text("Listening") }
-        return Text("Not listening")
+        Text((self.isPending && self.control.phase == .idle
+                ? OpenClawChatDictationControl.Phase.starting
+                : self.control.phase).statusText)
     }
 
     private var helpText: Text {
-        if self.control.isActive { return Text("Finish dictation") }
-        if self.isPending { return Text("Cancel") }
+        if self.control.phase == .listening { return Text("Finish dictation") }
+        if self.isPending || self.control.isActive { return Text("Cancel dictation") }
         return Text("Transcribe speech into the message")
     }
 }

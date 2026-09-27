@@ -4,6 +4,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.BackgroundTask
 import ai.openclaw.app.chat.BackgroundTaskDisplayStatus
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.AppModalBottomSheet
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
@@ -28,7 +29,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -138,7 +138,7 @@ internal fun BackgroundTasksSheet(
     }
   }
 
-  ModalBottomSheet(
+  AppModalBottomSheet(
     modifier = Modifier.foldAwareSheet(opening.geometry),
     onDismissRequest = onDismiss,
     sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),

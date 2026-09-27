@@ -14,13 +14,16 @@ export function registerMessagePermissionsCommand(message: Command, helpers: Mes
     .action((opts) => helpers.runMessageAction("permissions", opts));
 }
 
-/** Register Discord message search command and repeatable filters. */
+/** Register the channel message search command and repeatable filters. */
 export function registerMessageSearchCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
-    .withMessageBase(message.command("search").description("Search Discord messages"))
-    .requiredOption("--guild-id <id>", "Guild id")
+    .withMessageBase(message.command("search").description("Search messages"))
     .requiredOption("--query <text>", "Search query")
-    .option("--channel-id <id>", "Channel id")
+    .option("--guild-id <id>", "Guild id (Discord)")
+    .option(
+      "--channel-id <id>",
+      "Channel id (Discord) or Graph team-id/channel-id (Microsoft Teams)",
+    )
     .option("--channel-ids <id>", "Channel id (repeat)", collectOption, [] as string[])
     .option("--author-id <id>", "Author id")
     .option("--author-ids <id>", "Author id (repeat)", collectOption, [] as string[])

@@ -113,13 +113,19 @@ Other approval helpers:
 - Use `settleApprovalReaction` from
   `openclaw/plugin-sdk/approval-reaction-runtime` for explicitly authorized
   reaction decisions. It checks the supplied approvers and actor authorization,
-  loads the Gateway resolver lazily, and calls `clearTarget` for every terminal
+  loads the Gateway resolver lazily, and awaits `clearTarget` for every terminal
   result (including a losing click) or approval-not-found error. Keep transport
-  identity, route checks, cleanup, and result logging in the plugin. Other errors
+  identity, route checks, cleanup, and result logging in the plugin. Resolver errors
   propagate with the binding intact; the channel must hand them to its durable
   ingress or poller for replay. `readApprovalReactionTargetRecord` validates the
   shared persisted fields; transport-specific route and author fields still need
   their own validation.
+- Await `createApprovalReactionTargetStore().register(...)` and `.delete(...)`
+  before completing registration or cleanup. Both update their memory index before
+  waiting for storage. Optional storage failures retain the existing policy:
+  report the failure, disable persistent access, and keep the memory fallback.
+  Settlement reports resolution only after cleanup completes; cleanup failures
+  propagate without being reported as Gateway resolution failures.
 - Use `formatChannelApprovalResolvedLabel` and
   `buildSystemAgentApprovalResolvedText` from
   `openclaw/plugin-sdk/approval-runtime` for terminal presentation.

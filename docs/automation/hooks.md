@@ -87,7 +87,7 @@ Keep these three checks separate:
 The CLI's `ready`, `eligible`, and `loadable` fields describe the first two checks
 plus a nonempty event list. They do **not** prove that the Gateway imported the
 handler, that the global selection includes it, or that its event has fired.
-After changes, verify the actual side effect or hook-specific log.
+After changes, check the actual side effect or hook-specific log.
 
 Config reload prepares the selected handlers before replacing them together.
 If a selected handler cannot load, the previous handlers stay active. An event
@@ -131,7 +131,7 @@ typed lifecycle names such as `before_tool_call`, `message_received`, or
 Handlers for one event run sequentially: family listeners first, then exact
 listeners, in registration order within each group. The dispatcher awaits each
 handler, catches and logs thrown errors, and continues to later handlers.
-There is no priority option for file hooks.
+There is no priority option for directory hooks.
 
 This sequencing does not serialize different events. Message notifications,
 patch notifications, and automatic reset work can overlap with other events and
@@ -165,7 +165,7 @@ quick start on this page.
 | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | [Writing hooks](/automation/hooks/writing-hooks)                    | You are writing a hook and need the file layout, handler contract, or `HOOK.md` fields. |
 | [Hook configuration and discovery](/automation/hooks/configuration) | You are enabling hooks, narrowing the selection, or tracing discovery across sources.   |
-| [Bundled hooks](/automation/hooks/bundled-hooks)                    | You want a shipped hook and need its behavior, options, and verification.               |
+| [Bundled hooks](/automation/hooks/bundled-hooks)                    | You want a shipped hook and need its behavior, options, and checks.                     |
 | [Hook event types and context](/automation/hooks/event-types)       | You need an event key's trigger, wait behavior, or context fields.                      |
 | [Hook troubleshooting](/automation/hooks/troubleshooting)           | A hook is not discovered, not eligible, or not executing.                               |
 

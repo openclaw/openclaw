@@ -9,6 +9,8 @@ type ShortcutDefinition<Key extends string> = {
 
 export const KEYBOARD_SHORTCUT_COMBOS = {
   commandPalette: { modifiers: ["mod"], key: "k", platformSpecific: true },
+  newSession: { modifiers: ["mod", "shift"], key: "o", platformSpecific: true },
+  archiveSession: { modifiers: ["mod", "shift"], key: "a", platformSpecific: true },
   keyboardShortcuts: { modifiers: ["mod"], key: "/" },
   toggleSidebar: { modifiers: ["mod"], key: "b", platformSpecific: true },
   debugOverlay: { modifiers: ["mod", "shift"], key: "d" },
@@ -35,6 +37,10 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   zoomIn: { modifiers: [], key: "+" },
   zoomOut: { modifiers: [], key: "-" },
   zoomReset: { modifiers: [], key: "0" },
+  imagePanLeft: { modifiers: ["shift"], key: "ArrowLeft" },
+  imagePanRight: { modifiers: ["shift"], key: "ArrowRight" },
+  imagePanUp: { modifiers: ["shift"], key: "ArrowUp" },
+  imagePanDown: { modifiers: ["shift"], key: "ArrowDown" },
   // Display-only mouse chords; never keyboard-matched.
   toggleSessionSelect: { modifiers: ["alt"], key: "Click" },
   extendSessionSelect: { modifiers: ["shift"], key: "Click" },
@@ -62,6 +68,8 @@ export function formatKeyboardShortcutParts(
     Escape: applePlatform ? "esc" : "Esc",
     ArrowUp: "↑",
     ArrowDown: "↓",
+    ArrowLeft: "←",
+    ArrowRight: "→",
     Click: "Click",
   };
   return [
@@ -116,7 +124,9 @@ export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: Keyboa
     combo.key === "Enter" ||
     combo.key === "Escape" ||
     combo.key === "ArrowUp" ||
-    combo.key === "ArrowDown"
+    combo.key === "ArrowDown" ||
+    combo.key === "ArrowLeft" ||
+    combo.key === "ArrowRight"
   ) {
     return event.key === combo.key;
   }
@@ -127,3 +137,9 @@ export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: Keyboa
   }
   return event.code === `Key${combo.key.toUpperCase()}`;
 }
+
+/** Runtime controls of the lazily loaded shortcuts dialog. */
+export type KeyboardShortcutsDialogElement = HTMLElement & {
+  isOpen: boolean;
+  toggle: () => void;
+};

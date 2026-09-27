@@ -63,14 +63,14 @@ export async function continueClaudeSession(
           })
         ).items,
     });
-  const existing = listBoundClaudeSessions(api, agentId).get(sourceKey);
+  const existing = listBoundClaudeSessions(api, agentId).get(sourceKey)?.sessionKey;
   if (existing) {
     return await linkSession(existing);
   }
   let history: ClaudeTranscriptItem[] | undefined;
   return await continueClaudeAdoption({
     sourceKey: operationKey,
-    findExisting: () => listBoundClaudeSessions(api, agentId).get(sourceKey),
+    findExisting: () => listBoundClaudeSessions(api, agentId).get(sourceKey)?.sessionKey,
     create: async () => {
       let nodeId: string | undefined;
       let record: ClaudeSessionCatalogSession | undefined;

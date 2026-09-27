@@ -144,13 +144,22 @@ struct SkillBinsGatewayOwnershipTests {
         agentId: String,
         mutate: (inout ExecApprovalsAgent) -> Void) -> Result<Void, FixtureError>
     {
-        var snapshot = ExecApprovalsStore.readSnapshot()
-        var agents = snapshot.file.agents ?? [:]
-        var agent = agents[agentId] ?? ExecApprovalsAgent()
-        mutate(&agent)
-        agents[agentId] = agent
-        snapshot.file.agents = agents
-        guard case .saved = ExecApprovalsStore.saveFile(snapshot.file, ifBaseHash: snapshot.hash) else {
+        let stateDirectoryURL = ExecApprovalsStore.databaseURL()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        do {
+            try ExecApprovalsSQLiteStore.withImmediateTransaction(stateDirectoryURL: stateDirectoryURL) { record in
+                var file = record?.document ?? ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+                var agents = file.agents ?? [:]
+                var agent = agents[agentId] ?? ExecApprovalsAgent()
+                mutate(&agent)
+                agents[agentId] = agent
+                file.agents = agents
+                return ExecApprovalsSQLiteMutation(
+                    value: (),
+                    documentToWrite: ExecApprovalsStore.normalizeIncoming(file))
+            }
+        } catch {
             return .failure(.saveRejected)
         }
         return .success(())

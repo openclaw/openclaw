@@ -138,15 +138,11 @@ export function collectPluginNpmPublishedRuntimeErrors(params: {
   }
 
   for (const [index, entry] of extensions.entries()) {
-    const runtimeEntry = runtimeExtensions[index];
+    const runtimeEntry = runtimeExtensions[index] ?? (isTypeScriptPackageEntry(entry) ? "" : entry);
     if (runtimeEntry) {
       if (!hasPackedFile(packageFiles, runtimeEntry)) {
         errors.push(`${packageLabel} runtime extension entry not found: ${runtimeEntry}`);
       }
-      continue;
-    }
-
-    if (!isTypeScriptPackageEntry(entry)) {
       continue;
     }
 

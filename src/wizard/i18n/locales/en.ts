@@ -503,6 +503,15 @@ export const en = {
     },
     channels: {
       account: "{label} account",
+      commandOwnerTitle: "Administration from chat",
+      commandOwnerHelp:
+        "Chat access lets someone talk to your agent. A command owner can also update OpenClaw, restart the Gateway, change configuration, and approve commands. Choose only your own trusted operator account. This works in servers and groups without DM pairing; it does not grant chat access or change channel access rules.",
+      commandOwnerSetup: "Set up administration from your own chat account?",
+      commandOwnerOwnAccount: "Set up my operator account",
+      commandOwnerChannel: "Which channel has your operator account?",
+      commandOwnerUserId: "Your personal {label} user ID (not a bot, server, or channel ID)",
+      commandOwnerInvalidId: "Enter one user ID without spaces or wildcards.",
+      commandOwnerConfirm: "This is my account: allow {owner} to administer this installation?",
       configuredAction: "{label} already configured. What do you want to do?",
       configuredDeleteUnsupported: "{label} does not support deleting config entries.",
       configureDmPolicies: "Configure DM access policies now? (default: pairing)",

@@ -8,7 +8,7 @@ import type WebSocket from "ws";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
-import { captureWsEvent } from "../proxy-capture/runtime.js";
+import { captureWsEventAsync } from "../proxy-capture/runtime.js";
 import type {
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCallbacks,
@@ -585,39 +585,40 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 
   private captureFrame(direction: "inbound" | "outbound", payload: Buffer | string): void {
-    captureWsEvent({
+    // Finalization retains capture failures; callbacks only observe the returned Promise.
+    void captureWsEventAsync({
       url: this.currentUrl,
       direction,
       kind: "ws-frame",
       flowId: this.flowId,
       payload,
       meta: { provider: this.options.providerId, capability: "realtime-transcription" },
-    });
+    }).catch(() => {});
   }
 
   private captureLocalOpen(): void {
-    captureWsEvent({
+    void captureWsEventAsync({
       url: this.currentUrl,
       direction: "local",
       kind: "ws-open",
       flowId: this.flowId,
       meta: { provider: this.options.providerId, capability: "realtime-transcription" },
-    });
+    }).catch(() => {});
   }
 
   private captureError(error: Error): void {
-    captureWsEvent({
+    void captureWsEventAsync({
       url: this.currentUrl,
       direction: "local",
       kind: "error",
       flowId: this.flowId,
       errorText: error.message,
       meta: { provider: this.options.providerId, capability: "realtime-transcription" },
-    });
+    }).catch(() => {});
   }
 
   private captureClose(code: number, reasonBuffer: Buffer): void {
-    captureWsEvent({
+    void captureWsEventAsync({
       url: this.currentUrl,
       direction: "local",
       kind: "ws-close",
@@ -628,7 +629,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         capability: "realtime-transcription",
         reason: reasonBuffer.length > 0 ? reasonBuffer.toString("utf8") : undefined,
       },
-    });
+    }).catch(() => {});
   }
 }
 

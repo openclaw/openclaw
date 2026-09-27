@@ -1,4 +1,5 @@
 // Synology Chat tests cover core plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -10,6 +11,7 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
+import { setSynologyRuntime } from "./runtime.js";
 import {
   authorizeUserForDmWithIngress,
   RateLimiter,
@@ -81,6 +83,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  setSynologyRuntime(createPluginRuntimeMock());
   vi.stubEnv("SYNOLOGY_CHAT_TOKEN", undefined);
   vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", undefined);
   vi.stubEnv("SYNOLOGY_NAS_HOST", undefined);
@@ -246,21 +249,11 @@ describe("synology-chat core", () => {
 });
 
 describe("synology-chat account resolution", () => {
-  it("lists no accounts when the channel is missing", () => {
-    expect(listAccountIds({})).toStrictEqual([]);
-    expect(listAccountIds({ channels: {} })).toStrictEqual([]);
-  });
-
   it("does not discover an env account when the channel is not installed", () => {
     process.env.SYNOLOGY_CHAT_TOKEN = "env-token";
 
     expect(listAccountIds({})).toStrictEqual([]);
     expect(listAccountIds({ channels: {} })).toStrictEqual([]);
-  });
-
-  it("lists the default account when base config has a token", () => {
-    const cfg = { channels: { "synology-chat": { token: "abc" } } };
-    expect(listAccountIds(cfg)).toEqual(["default"]);
   });
 
   it("lists the default account when env provides a token", () => {

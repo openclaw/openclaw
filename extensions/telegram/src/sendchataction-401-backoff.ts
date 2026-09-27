@@ -1,4 +1,3 @@
-// Telegram plugin module implements sendchataction 401 and transient backoff behavior.
 import { GrammyError, type Bot, type Transformer } from "grammy";
 import {
   computeBackoff,
@@ -16,18 +15,7 @@ import {
 
 type TelegramSendChatActionLogger = (message: string) => void;
 
-type ChatAction =
-  | "typing"
-  | "upload_photo"
-  | "record_video"
-  | "upload_video"
-  | "record_voice"
-  | "upload_voice"
-  | "upload_document"
-  | "find_location"
-  | "record_video_note"
-  | "upload_video_note"
-  | "choose_sticker";
+type ChatAction = Parameters<Bot["api"]["sendChatAction"]>[1];
 
 type TelegramSendChatActionParams = Parameters<Bot["api"]["sendChatAction"]>[2];
 
@@ -72,9 +60,9 @@ function is401Error(error: unknown): boolean {
     typeof error === "object" &&
     error !== null &&
     "error_code" in error &&
-    typeof (error as { error_code: unknown }).error_code === "number"
+    typeof error.error_code === "number"
   ) {
-    return (error as { error_code: number }).error_code === 401;
+    return error.error_code === 401;
   }
   // Fallback for non-Telegram errors without a structured error_code:
   // match "unauthorized" case-insensitively, but do NOT use bare "401"

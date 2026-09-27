@@ -1,8 +1,14 @@
-// Control UI controller manages form utils gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { translateActive } from "../i18n/lib/translate.ts";
+
+export function isSensitiveLeafValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0 && !/^\$\{[^}]*\}$/.test(value.trim());
+  }
+  return value !== undefined && value !== null;
+}
 
 export type JsonSchema = {
   type?: string | string[];
@@ -34,6 +40,7 @@ export type JsonSchema = {
   anyOf?: JsonSchema[];
   oneOf?: JsonSchema[];
   allOf?: JsonSchema[];
+  not?: JsonSchema | boolean;
   nullable?: boolean;
 };
 
@@ -133,10 +140,6 @@ export function humanize(raw: string) {
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/\s+/g, " ")
     .replace(/^./, (m) => m.toUpperCase());
-}
-
-export function cloneConfigObject<T>(value: T): T {
-  return structuredClone(value);
 }
 
 export function serializeConfigForm(form: Record<string, unknown>): string {

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadSessionEntry,
@@ -280,8 +280,26 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
       resetTriggered: false,
     });
     operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+    const aborted = createDeferred();
+    const onAbort = () => aborted.resolve();
+    operation.abortSignal.addEventListener("abort", onAbort, { once: true });
     const stopping =
       pathKind === "fast" ? tryFastAbortFromMessage(state) : handleStopCommand(state.params, true);
+    onTestFinished(async () => {
+      operation.abortSignal.removeEventListener("abort", onAbort);
+      release.resolve();
+      await Promise.allSettled([writer, stopping]);
+      operation.complete();
+    });
+    void stopping.then(
+      () => {
+        if (!operation.abortSignal.aborted) {
+          aborted.reject(new Error("Stop completed without aborting the active operation"));
+        }
+      },
+      (error: unknown) => aborted.reject(error),
+    );
+    await aborted.promise;
     expect(operation.abortSignal.aborted).toBe(true);
     release.resolve();
     await writer;
@@ -292,7 +310,6 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     expect(loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun).toBe(
       false,
     );
-    operation.complete();
   });
 
   it("completes cancellation when its own abort releases the live publisher", async () => {

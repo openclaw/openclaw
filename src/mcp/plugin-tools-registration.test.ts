@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { resolvePluginProviders } from "../plugin-sdk/provider-catalog-runtime.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -33,20 +34,23 @@ function nativePlugin(options: { failDisposal?: boolean; abortSdk?: boolean } = 
     abortReason?: unknown;
     abortFailure?: unknown;
     abortRead?: unknown;
+    resolvePluginProviders: typeof resolvePluginProviders;
   } = {
     disposals: 0,
     factories: 0,
     aborted: createDeferredCore(),
     started: createDeferredCore(),
     finish: createDeferredCore(),
+    // This scope fixture shares its host SDK; the stdio fixture covers native SDK imports.
+    resolvePluginProviders,
   };
   Object.defineProperty(globalThis, key, { value: state, configurable: true });
   const plugin = writePlugin({
     id: "mcp-native",
     body: `const { DatabaseSync } = require("node:sqlite");
-const { resolvePluginProviders } = require("openclaw/plugin-sdk/provider-catalog-runtime");
 module.exports = { id: "mcp-native", register(api) {
   const state = globalThis[${JSON.stringify(key)}];
+  const { resolvePluginProviders } = state;
   const db = state.database = new DatabaseSync(":memory:");
   api.lifecycle.registerRuntimeLifecycle({ id: "native", dispose() {
     state.disposals++;
@@ -119,6 +123,7 @@ module.exports = { id: "mcp-native", register(api) {
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginLoaderTestStateForTest();
+  vi.unstubAllEnvs();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 

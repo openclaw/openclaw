@@ -1,6 +1,6 @@
 import type { ConfigSchemaLookupResult as ProtocolConfigSchemaLookupResult } from "../../packages/gateway-protocol/src/schema/config.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
+import type { ConfigUiHints } from "./schema.hints.js";
 import {
   asSchemaObject,
   findWildcardHintMatch,
@@ -72,17 +72,6 @@ function normalizeLookupPath(path: string): string {
 function splitLookupPath(path: string): string[] {
   const normalized = normalizeLookupPath(path);
   return normalized ? normalized.split(".").filter(Boolean) : [];
-}
-
-function resolveUiHintMatch(
-  uiHints: ConfigUiHints,
-  path: string,
-): { path: string; hint: ConfigUiHint } | null {
-  return findWildcardHintMatch({
-    uiHints,
-    path,
-    splitPath: splitLookupPath,
-  });
 }
 
 function resolveItemsSchema(schema: JsonSchemaObject, index?: number): JsonSchemaObject | null {
@@ -349,6 +338,7 @@ function buildLookupChildren(
   schema: JsonSchemaObject,
   path: string,
   uiHints: ConfigUiHints,
+  splitPath: (path: string) => string[],
   resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver,
 ): ConfigSchemaLookupChild[] {
   const children: ConfigSchemaLookupChild[] = [];
@@ -356,7 +346,7 @@ function buildLookupChildren(
 
   const pushChild = (key: string, childSchema: JsonSchemaObject, isRequired: boolean) => {
     const childPath = path ? `${path}.${key}` : key;
-    const resolvedHint = resolveUiHintMatch(uiHints, childPath);
+    const resolvedHint = findWildcardHintMatch({ uiHints, path: childPath, splitPath });
     const reloadMetadata = resolveReloadMetadata?.(childPath);
     children.push({
       key,
@@ -414,7 +404,23 @@ export function lookupConfigSchema(
     current = next;
   }
 
-  const resolvedHint = resolveUiHintMatch(response.uiHints, normalizedPath);
+  // Parent and child lookups share path parsing only for this response.
+  const hintParts = new Map<string, string[]>();
+  const splitHintPath = schemaHasChildren(current)
+    ? (hintPath: string): string[] => {
+        let cachedParts = hintParts.get(hintPath);
+        if (!cachedParts) {
+          cachedParts = splitLookupPath(hintPath);
+          hintParts.set(hintPath, cachedParts);
+        }
+        return cachedParts;
+      }
+    : splitLookupPath;
+  const resolvedHint = findWildcardHintMatch({
+    uiHints: response.uiHints,
+    path: normalizedPath,
+    splitPath: splitHintPath,
+  });
   const reloadMetadata = resolveReloadMetadata?.(normalizedPath);
   return {
     path: wantsRoot ? "." : normalizedPath,
@@ -426,6 +432,7 @@ export function lookupConfigSchema(
       current,
       wantsRoot ? "" : normalizedPath,
       response.uiHints,
+      splitHintPath,
       resolveReloadMetadata,
     ),
   };

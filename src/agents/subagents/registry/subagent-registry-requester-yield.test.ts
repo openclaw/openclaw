@@ -5,6 +5,7 @@ import {
   registerRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
 import {
+  listUnsettledRequesterChildrenInRuns,
   markRequesterTurnYieldedInRuns,
   settleRequesterTurnAfterSessionSpawns,
 } from "./subagent-registry-requester-yield.js";
@@ -38,7 +39,113 @@ function accepted(entry: SubagentRunRecord) {
   };
 }
 
+function settleRuns(
+  entries: SubagentRunRecord[],
+  overrides: Partial<Parameters<typeof settleRequesterTurnAfterSessionSpawns>[0]> = {},
+) {
+  return settleRequesterTurnAfterSessionSpawns({
+    requesterSessionKey: REQUESTER,
+    requesterTurnRunId: REQUESTER_TURN,
+    requesterYielded: true,
+    acceptedSessionSpawns: entries.map(accepted),
+    runs: new Map(entries.map((entry) => [entry.runId, entry])),
+    persistOrThrow: vi.fn(),
+    schedule: vi.fn(),
+    ...overrides,
+  });
+}
+
 describe("settleRequesterTurnAfterSessionSpawns", () => {
+  it.each([false, true])(
+    "publishes a nested requester's pause with its wake batch (persistence failure: %s)",
+    (failPersistence) => {
+      const requester: SubagentRunRecord = {
+        ...makeRun(REQUESTER_TURN),
+        childSessionKey: REQUESTER,
+        requesterSessionKey: "agent:main:parent",
+        execution: { status: "running", startedAt: 1_000 },
+        delivery: undefined,
+      };
+      const child = makeRun("run-child");
+      const originalRequester = structuredClone(requester);
+      const originalChild = structuredClone(child);
+      const runs = new Map([
+        [requester.runId, requester],
+        [child.runId, child],
+      ]);
+      const schedule = vi.fn(() => {
+        expect(requester.pauseReason).toBe("sessions_yield");
+        expect(requester.execution.status).toBe("terminal");
+      });
+      const persistOrThrow = vi.fn((...runIds: string[]) => {
+        expect(runIds).toContain(requester.runId);
+        expect(runIds).toContain(child.runId);
+        expect(requester.pauseReason).toBe("sessions_yield");
+        if (failPersistence) {
+          throw new Error("storage unavailable");
+        }
+      });
+      const settle = () =>
+        settleRequesterTurnAfterSessionSpawns({
+          requesterSessionKey: REQUESTER,
+          requesterTurnRunId: REQUESTER_TURN,
+          requesterYielded: true,
+          acceptedSessionSpawns: [accepted(child)],
+          runs,
+          persistOrThrow,
+          schedule,
+        });
+
+      if (failPersistence) {
+        expect(settle).toThrow("storage unavailable");
+        expect(requester).toEqual(originalRequester);
+        expect(child).toEqual(originalChild);
+        expect(schedule).not.toHaveBeenCalled();
+      } else {
+        expect(settle()).toBe(true);
+        expect(schedule).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it.each(["cancelled", "superseded", "terminal", "different-session"] as const)(
+    "does not pause a %s requester while settling its children",
+    (kind) => {
+      const requester: SubagentRunRecord = {
+        ...makeRun(REQUESTER_TURN),
+        childSessionKey: kind === "different-session" ? "agent:main:other" : REQUESTER,
+        requesterSessionKey: "agent:main:parent",
+        execution: { status: "running", startedAt: 1_000 },
+        generation: 1,
+        ...(kind === "cancelled"
+          ? { killIntent: { requestedAt: 2_000, reason: "killed" as const } }
+          : {}),
+      };
+      if (kind === "terminal") {
+        requester.execution = { status: "terminal", endedAt: 2_000, outcome: { status: "ok" } };
+      }
+      const child = makeRun("run-child");
+      const runs = new Map([
+        [requester.runId, requester],
+        [child.runId, child],
+      ]);
+      if (kind === "superseded") {
+        runs.set("new-requester", { ...requester, runId: "new-requester", generation: 2 });
+      }
+      const before = structuredClone(requester);
+      settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: REQUESTER,
+        requesterTurnRunId: REQUESTER_TURN,
+        requesterYielded: true,
+        acceptedSessionSpawns: [accepted(child)],
+        runs,
+        persistOrThrow: () => {},
+        schedule: () => {},
+      });
+      expect(requester).toEqual(before);
+    },
+  );
+
   it("persists explicit yield intent before settlement", () => {
     const entry = makeRun("run-child", false);
     const persistOrThrow = vi.fn();
@@ -62,15 +169,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const schedule = vi.fn();
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(first), accepted(second)],
-        runs: new Map([
-          [first.runId, first],
-          [second.runId, second],
-        ]),
+      settleRuns([first, second], {
         persistOrThrow,
         schedule,
       }),
@@ -87,6 +186,45 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(first.requesterTurnRunId).toBeUndefined();
     expect(schedule).toHaveBeenCalledOnce();
   });
+
+  it.each([undefined, 1_000])(
+    "starts a private delivery window on normal release without renewing an existing window (%s)",
+    (windowStartedAt) => {
+      const entry = makeRun("private-child", false);
+      entry.completionTarget = "parent";
+      entry.delivery = {
+        status: "pending",
+        ...(windowStartedAt === undefined
+          ? {}
+          : { windowStartedAt, deadlineAt: windowStartedAt + 30 * 60_000 }),
+      };
+      const releasedAt = Date.now();
+      const persistOrThrow = vi.fn(() => {
+        expect(entry.delivery?.windowStartedAt).toBeGreaterThanOrEqual(
+          windowStartedAt ?? releasedAt,
+        );
+        expect(entry.delivery?.deadlineAt).toBe(
+          (entry.delivery?.windowStartedAt ?? 0) + 30 * 60_000,
+        );
+      });
+
+      expect(
+        settleRequesterTurnAfterSessionSpawns({
+          requesterSessionKey: REQUESTER,
+          requesterTurnRunId: REQUESTER_TURN,
+          requesterYielded: false,
+          acceptedSessionSpawns: [accepted(entry)],
+          runs: new Map([[entry.runId, entry]]),
+          persistOrThrow,
+          schedule: vi.fn(),
+        }),
+      ).toBe(true);
+      expect(persistOrThrow).toHaveBeenCalledOnce();
+      if (windowStartedAt !== undefined) {
+        expect(entry.delivery?.windowStartedAt).toBe(windowStartedAt);
+      }
+    },
+  );
 
   it("promotes the requester attachment only after durable settlement", () => {
     const entry = makeRun("run-child");
@@ -115,15 +253,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     });
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
+      settleRuns([entry], {
         requesterAgentId: "main",
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
-        runs: new Map([[entry.runId, entry]]),
         persistOrThrow,
-        schedule: vi.fn(),
       }),
     ).toBe(true);
     expect(
@@ -154,17 +286,11 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     });
 
     expect(() =>
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
+      settleRuns([entry], {
         requesterAgentId: "main",
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
-        runs: new Map([[entry.runId, entry]]),
         persistOrThrow: () => {
           throw new Error("persist failed");
         },
-        schedule: vi.fn(),
       }),
     ).toThrow("persist failed");
     expect(
@@ -191,11 +317,8 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       const schedule = vi.fn();
 
       expect(
-        settleRequesterTurnAfterSessionSpawns({
-          requesterSessionKey: REQUESTER,
-          requesterTurnRunId: REQUESTER_TURN,
+        settleRuns([first, missing], {
           requesterYielded,
-          acceptedSessionSpawns: [accepted(first), accepted(missing)],
           runs,
           persistOrThrow,
           schedule,
@@ -218,13 +341,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const schedule = vi.fn();
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
-        runs: new Map([[entry.runId, entry]]),
-        persistOrThrow: vi.fn(),
+      settleRuns([entry], {
         schedule,
       }),
     ).toBe(true);
@@ -274,17 +391,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     };
     invalidate(entry);
 
-    expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
-        runs: new Map([[entry.runId, entry]]),
-        persistOrThrow: vi.fn(),
-        schedule: vi.fn(),
-      }),
-    ).toBe(true);
+    expect(settleRuns([entry])).toBe(true);
     expect(entry.requesterSettleWake?.requesterYieldBatch).toBe(true);
   });
 
@@ -309,10 +416,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       }),
     ).toBe(1);
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
+      settleRuns([entry], {
         acceptedSessionSpawns: [
           { runId: originalRunId, childSessionKey: sessionKey, expectsCompletionMessage: true },
         ],
@@ -324,7 +428,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(persistOrThrow).toHaveBeenCalledTimes(expected ? 2 : 1);
     if (expected) {
       expect(entry.requesterSettleWake?.batchRunIds).toEqual([entry.runId]);
-      expect(schedule).toHaveBeenCalledExactlyOnceWith(entry.runId, entry);
+      expect(schedule).toHaveBeenCalledExactlyOnceWith(entry.runId, entry, "settle");
     } else {
       expect(entry.requesterSettleWake).toBeUndefined();
       expect(entry.requesterTurnRunId).toBe(REQUESTER_TURN);
@@ -339,13 +443,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const schedule = vi.fn();
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
-        runs: new Map([[entry.runId, entry]]),
-        persistOrThrow: vi.fn(),
+      settleRuns([entry], {
         schedule,
       }),
     ).toBe(true);
@@ -357,30 +455,6 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(schedule).not.toHaveBeenCalled();
   });
 
-  it("re-arms a completion whose delivery is in progress when its requester yields", () => {
-    const entry = makeRun("run-child");
-    entry.delivery = { status: "in_progress" };
-    const schedule = vi.fn();
-
-    expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
-        runs: new Map([[entry.runId, entry]]),
-        persistOrThrow: vi.fn(),
-        schedule,
-      }),
-    ).toBe(true);
-    expect(entry.requesterSettleWake).toMatchObject({
-      requesterYieldBatch: true,
-      afterRequesterYield: true,
-    });
-    expect(entry.delivery?.disposition).toBe("intentional_non_delivery");
-    expect(schedule).toHaveBeenCalledExactlyOnceWith(entry.runId, entry);
-  });
-
   it("persists a mixed delivered and in-progress yielded batch before scheduling", () => {
     const alpha = makeRun("run-alpha");
     const beta = makeRun("run-beta");
@@ -390,15 +464,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const schedule = vi.fn(() => calls.push("schedule"));
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(alpha), accepted(beta)],
-        runs: new Map([
-          [alpha.runId, alpha],
-          [beta.runId, beta],
-        ]),
+      settleRuns([alpha, beta], {
         persistOrThrow,
         schedule,
       }),
@@ -418,7 +484,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(beta.requesterTurnRunId).toBeUndefined();
     expect(beta.delivery?.disposition).toBe("intentional_non_delivery");
     expect(calls).toEqual(["persist", "schedule"]);
-    expect(schedule).toHaveBeenCalledExactlyOnceWith(alpha.runId, alpha);
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(alpha.runId, alpha, "settle");
   });
 
   it.each([true, false])(
@@ -447,11 +513,8 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       }
 
       expect(
-        settleRequesterTurnAfterSessionSpawns({
-          requesterSessionKey: REQUESTER,
-          requesterTurnRunId: REQUESTER_TURN,
+        settleRuns([inline, completion], {
           requesterYielded,
-          acceptedSessionSpawns: [accepted(inline), accepted(completion)],
           runs,
           persistOrThrow,
           schedule,
@@ -465,10 +528,10 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           batchRunIds: [completion.runId],
           afterRequesterYield: true,
         });
-        expect(schedule).toHaveBeenCalledExactlyOnceWith(completion.runId, completion);
+        expect(schedule).toHaveBeenCalledExactlyOnceWith(completion.runId, completion, "settle");
       } else {
         expect(completion.requesterSettleWake).toBeUndefined();
-        expect(schedule).toHaveBeenCalledExactlyOnceWith(completion.runId, completion);
+        expect(schedule).toHaveBeenCalledExactlyOnceWith(completion.runId, completion, "settle");
       }
       expect(inline.requesterTurnRunId).toBe(REQUESTER_TURN);
       expect(inline.requesterTurnYielded).toBeUndefined();
@@ -484,14 +547,8 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const runs = new Map([[entry.runId, entry]]);
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
+      settleRuns([entry], {
         runs,
-        persistOrThrow: vi.fn(),
-        schedule: vi.fn(),
       }),
     ).toBe(true);
     expect(runs.get(entry.runId)).toBe(entry);
@@ -514,14 +571,8 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const runs = new Map([[entry.runId, entry]]);
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
+      settleRuns([entry], {
         runs,
-        persistOrThrow: vi.fn(),
-        schedule: vi.fn(),
       }),
     ).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
@@ -533,14 +584,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const runs = new Map([[entry.runId, entry]]);
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
+      settleRuns([entry], {
         requesterYielded: false,
-        acceptedSessionSpawns: [accepted(entry)],
         runs,
-        persistOrThrow: vi.fn(),
-        schedule: vi.fn(),
       }),
     ).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
@@ -553,20 +599,179 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const failure = new Error("sqlite unavailable");
 
     expect(() =>
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
+      settleRuns([entry], {
         requesterYielded: false,
-        acceptedSessionSpawns: [accepted(entry)],
         runs,
         persistOrThrow: () => {
           throw failure;
         },
-        schedule: vi.fn(),
       }),
     ).toThrow(failure);
     expect(runs.get(entry.runId)).toBe(entry);
     expect(entry.requesterTurnRunId).toBe(REQUESTER_TURN);
     expect(entry.retireAfterRequesterTurn).toBe(true);
+  });
+});
+
+describe("listUnsettledRequesterChildrenInRuns", () => {
+  const NOW = 10_000;
+
+  function runningRun(
+    runId: string,
+    overrides: Partial<SubagentRunRecord> = {},
+  ): SubagentRunRecord {
+    return {
+      ...makeRun(runId, false),
+      requesterTurnRunId: undefined,
+      execution: { status: "running", startedAt: NOW - 1_000 },
+      delivery: { status: "pending" },
+      ...overrides,
+    };
+  }
+
+  it("lists running and undelivered children owned by earlier turns or armed wakes", () => {
+    const yielded = runningRun("run-yielded", {
+      label: "Work session",
+      requesterSettleWake: { status: "pending", attemptCount: 0, requesterYieldBatch: true },
+    });
+    const earlierTurn = runningRun("run-earlier", { requesterTurnRunId: "run-turn-0" });
+    const completing = runningRun("run-completing", {
+      execution: { status: "terminal", startedAt: NOW - 3_000, endedAt: NOW - 100 },
+      delivery: { status: "in_progress" },
+    });
+    const runs = new Map(
+      [yielded, earlierTurn, completing].map((entry) => [entry.runId, entry] as const),
+    );
+
+    expect(
+      listUnsettledRequesterChildrenInRuns({
+        requesterSessionKey: REQUESTER,
+        requesterAgentId: undefined,
+        excludeRequesterTurnRunId: "run-turn-2",
+        runs,
+        now: NOW,
+      }),
+    ).toEqual([
+      {
+        runId: "run-completing",
+        childSessionKey: "agent:main:subagent:run-completing",
+        startedAt: NOW - 3_000,
+        state: "completing",
+        wakeArmed: false,
+      },
+      {
+        runId: "run-yielded",
+        childSessionKey: "agent:main:subagent:run-yielded",
+        label: "Work session",
+        startedAt: NOW - 1_000,
+        state: "running",
+        wakeArmed: true,
+      },
+      {
+        runId: "run-earlier",
+        childSessionKey: "agent:main:subagent:run-earlier",
+        startedAt: NOW - 1_000,
+        state: "running",
+        wakeArmed: false,
+      },
+    ]);
+  });
+
+  it.each([
+    { name: "the current turn's own child", overrides: { requesterTurnRunId: "run-turn-2" } },
+    {
+      name: "a delivered child",
+      overrides: {
+        execution: { status: "terminal", endedAt: NOW - 1 },
+        delivery: { status: "delivered" },
+      },
+    },
+    { name: "a collector run", overrides: { collect: true } },
+    {
+      name: "a child without a completion obligation",
+      overrides: { expectsCompletionMessage: false },
+    },
+    {
+      name: "a child being killed",
+      overrides: { killIntent: { requestedAt: NOW, reason: "stop" } },
+    },
+    { name: "another requester's child", overrides: { requesterSessionKey: "agent:main:other" } },
+    { name: "another agent's child", overrides: { requesterAgentId: "other" } },
+  ] as const)("omits $name", ({ overrides }) => {
+    const entry = runningRun("run-child", { requesterAgentId: "main", ...overrides });
+    expect(
+      listUnsettledRequesterChildrenInRuns({
+        requesterSessionKey: REQUESTER,
+        requesterAgentId: "main",
+        excludeRequesterTurnRunId: "run-turn-2",
+        runs: new Map([[entry.runId, entry]]),
+        now: NOW,
+      }),
+    ).toEqual([]);
+  });
+
+  it("reports a child paused by its own sessions_yield as paused, not completing", () => {
+    const paused = runningRun("run-paused", {
+      execution: { status: "terminal", startedAt: NOW - 2_000, endedAt: NOW - 500 },
+      pauseReason: "sessions_yield",
+      delivery: { status: "pending" },
+      requesterSettleWake: { status: "pending", attemptCount: 0, requesterYieldBatch: true },
+    });
+    expect(
+      listUnsettledRequesterChildrenInRuns({
+        requesterSessionKey: REQUESTER,
+        runs: new Map([[paused.runId, paused]]),
+        now: NOW,
+      }),
+    ).toEqual([
+      {
+        runId: "run-paused",
+        childSessionKey: "agent:main:subagent:run-paused",
+        startedAt: NOW - 2_000,
+        state: "paused",
+        wakeArmed: true,
+      },
+    ]);
+  });
+
+  it("does not let a superseded generation stand in for a killed successor", () => {
+    const superseded = runningRun("run-gen-1", { generation: 1 });
+    const killed = runningRun("run-gen-2", {
+      generation: 2,
+      childSessionKey: superseded.childSessionKey,
+      killIntent: { requestedAt: NOW, reason: "stop" },
+    });
+    expect(
+      listUnsettledRequesterChildrenInRuns({
+        requesterSessionKey: REQUESTER,
+        runs: new Map([
+          [superseded.runId, superseded],
+          [killed.runId, killed],
+        ]),
+        now: NOW,
+      }),
+    ).toEqual([]);
+  });
+
+  it("reports only the latest generation of a steered child session", () => {
+    const superseded = runningRun("run-gen-1", {
+      generation: 1,
+      execution: { status: "terminal", startedAt: NOW - 2_000, endedAt: NOW - 1_500 },
+      delivery: { status: "pending" },
+    });
+    const current = runningRun("run-gen-2", {
+      generation: 2,
+      childSessionKey: superseded.childSessionKey,
+    });
+    expect(
+      listUnsettledRequesterChildrenInRuns({
+        requesterSessionKey: REQUESTER,
+        runs: new Map([
+          [superseded.runId, superseded],
+          [current.runId, current],
+        ]),
+        now: NOW,
+      }).map((child) => child.runId),
+    ).toEqual(["run-gen-2"]);
   });
 });

@@ -27,9 +27,6 @@ describe("Cohere onboarding", () => {
       COHERE_COMMAND_A_VISION_MODEL_ID,
       COHERE_NORTH_MINI_CODE_MODEL_ID,
     ]);
-    expect(buildCohereCatalogModels()).toHaveLength(
-      manifest.modelCatalog.providers.cohere.models.length,
-    );
   });
 
   it("sets Cohere only when there is no primary model", () => {

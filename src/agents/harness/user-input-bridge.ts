@@ -2,25 +2,10 @@ import { markReplyPayloadForSourceSuppressionDelivery } from "../../auto-reply/r
 import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-runtime.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
-
-export type AgentHarnessUserInputOption = {
-  label: string;
-  description?: string;
-};
-
-export type AgentHarnessUserInputQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  multiSelect?: boolean;
-  isOther?: boolean;
-  isSecret?: boolean;
-  options?: readonly AgentHarnessUserInputOption[] | null;
-};
-
-export type AgentHarnessUserInputAnswers = {
-  answers: Record<string, { answers: string[] }>;
-};
+import type {
+  AgentHarnessUserInputAnswers,
+  AgentHarnessUserInputQuestion,
+} from "./user-input-types.js";
 
 export type AgentHarnessUserInputPromptOptions = {
   intro?: string;
@@ -125,6 +110,10 @@ function buildAgentHarnessQuestionPresentation(params: {
       {
         type: "buttons",
         buttons: [
+          // Navigation must not resolve the question before the external step completes.
+          ...(question.url
+            ? [{ label: "Open link", action: { type: "url" as const, url: question.url } }]
+            : []),
           ...options.map((option) => ({
             label: formatText(option.label),
             action: {

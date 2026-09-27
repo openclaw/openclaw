@@ -1,0 +1,179 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  ErrorCodes,
+  errorShape,
+  type GatewayRequestHandlerOptions,
+} from "openclaw/plugin-sdk/gateway-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  CRABBOX_WORKER_PROVIDER_ID,
+  parseCrabboxProfile,
+  resolveCrabboxWarmImageProfile,
+} from "./crabbox-worker-profile.js";
+import type { CrabboxSnapshotActions } from "./crabbox-worker-snapshot-actions.js";
+import {
+  type CrabboxState,
+  CrabboxWarmImageRequestError,
+  crabboxWarmImageRecoveryHint,
+  isCrabboxWarmImageHeld,
+  listCrabboxLegacyWarmLeases,
+  listCrabboxWarmImages,
+  recoverCrabboxWarmImageCapture,
+} from "./crabbox-worker-warm-image-store.js";
+
+type Request = Pick<GatewayRequestHandlerOptions, "respond"> & { params?: unknown };
+
+export async function mutateCrabboxImage(
+  api: OpenClawPluginApi,
+  images: CrabboxSnapshotActions,
+  action: "pin" | "delete" | "rollback",
+  { params, respond }: Request,
+): Promise<void> {
+  const checkpointId = isRecord(params) ? normalizeOptionalString(params.checkpointId) : undefined;
+  if (
+    !checkpointId ||
+    !isRecord(params) ||
+    (action === "pin" && typeof params.pinned !== "boolean") ||
+    Object.keys(params).some(
+      (key) => key !== "checkpointId" && !(action === "pin" && key === "pinned"),
+    )
+  ) {
+    sendError(
+      respond,
+      new Error(
+        `crabbox.images.${action} requires checkpointId${action === "pin" ? " and pinned: boolean" : ""}.`,
+      ),
+      true,
+    );
+    return;
+  }
+  try {
+    if (action === "pin") {
+      respond(true, snapshotSummary(await images.pin(checkpointId, params.pinned === true)));
+    } else if (action === "rollback") {
+      respond(true, snapshotSummary(await images.rollback(checkpointId)));
+    } else {
+      const profiles = Object.values(api.runtime.config.current().cloudWorkers?.profiles ?? {})
+        .filter((profile) => profile.provider.trim().toLowerCase() === CRABBOX_WORKER_PROVIDER_ID)
+        .map((profile) => profile.settings ?? {});
+      respond(true, await images.delete(checkpointId, profiles));
+    }
+  } catch (error) {
+    sendError(respond, error, error instanceof CrabboxWarmImageRequestError);
+  }
+}
+
+function sendError(respond: Request["respond"], error: unknown, invalidRequest = false) {
+  const payload = { error: formatErrorMessage(error) };
+  respond(
+    false,
+    payload,
+    errorShape(
+      invalidRequest ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+      payload.error,
+      {
+        details: payload,
+      },
+    ),
+  );
+}
+
+function profileStatus(settings: Readonly<Record<string, unknown>>) {
+  try {
+    const configured = parseCrabboxProfile(settings);
+    // Resolve the provider's default without reading forwarded environment values.
+    const profile = resolveCrabboxWarmImageProfile(configured);
+    const warmImages = profile.warmImage && profile.class ? "on" : "off";
+    const reason =
+      configured.warmImage === false
+        ? "Disabled in this profile."
+        : profile.target !== "linux"
+          ? "Warm images require Linux."
+          : configured.warmImage !== true && configured.setupEnv?.length
+            ? "Forwarded setup environment keeps warm images off by default."
+            : !profile.class
+              ? "Requires a configured or placement machine class."
+              : configured.warmImage === true
+                ? "Explicitly enabled in this profile."
+                : "Enabled by default for Linux with a known machine class and no setup environment.";
+    return {
+      backend: configured.provider,
+      machineClass: configured.class,
+      os: configured.target,
+      warmImages,
+      reason,
+    };
+  } catch (error) {
+    return { warmImages: "off", reason: formatErrorMessage(error) };
+  }
+}
+
+function snapshotSummary(image: Awaited<ReturnType<typeof listCrabboxWarmImages>>[number]) {
+  const allocations = Object.entries(image.allocations).toSorted(([a], [b]) => a.localeCompare(b));
+  return {
+    ...image,
+    held: Boolean(image.checkpointId && isCrabboxWarmImageHeld(image, image.checkpointId)),
+    allocationCount: allocations.length,
+    allocations: Object.fromEntries(allocations.slice(0, 20)),
+  };
+}
+
+async function snapshotStatus(state: CrabboxState) {
+  return {
+    images: (await listCrabboxWarmImages(state)).map(snapshotSummary),
+    legacyLeases: (await listCrabboxLegacyWarmLeases(state)).map((lease) =>
+      Object.assign(lease, { recoveryHint: crabboxWarmImageRecoveryHint(lease.selector) }),
+    ),
+  };
+}
+
+export async function listCrabboxImages(
+  api: OpenClawPluginApi,
+  { params, respond }: Request,
+): Promise<void> {
+  if (params !== undefined && (!isRecord(params) || Object.keys(params).length > 0)) {
+    sendError(respond, new Error("crabbox.images.list takes no parameters."), true);
+    return;
+  }
+  try {
+    const profiles = Object.entries(api.runtime.config.current().cloudWorkers?.profiles ?? {})
+      .filter(([, profile]) => profile.provider.trim().toLowerCase() === CRABBOX_WORKER_PROVIDER_ID)
+      .toSorted(([a], [b]) => a.localeCompare(b))
+      .map(([id, profile]) => Object.assign({ id }, profileStatus(profile.settings ?? {})));
+    respond(true, { ...(await snapshotStatus(api.runtime.state)), profiles });
+  } catch (error) {
+    sendError(respond, error);
+  }
+}
+
+export async function recoverCrabboxImage(
+  state: CrabboxState,
+  { params, respond }: Request,
+): Promise<void> {
+  const selector = isRecord(params) ? normalizeOptionalString(params.selector) : undefined;
+  if (
+    !selector ||
+    !isRecord(params) ||
+    params.acknowledgeProviderCleanup !== true ||
+    Object.keys(params).some((key) => key !== "selector" && key !== "acknowledgeProviderCleanup")
+  ) {
+    sendError(
+      respond,
+      new Error("Recovery requires a selector and acknowledgeProviderCleanup: true."),
+      true,
+    );
+    return;
+  }
+  try {
+    await recoverCrabboxWarmImageCapture(state, selector, true);
+    respond(true, {
+      ...(await snapshotStatus(state)),
+      recoveredCapture: selector,
+      nextSteps:
+        "Restart the Gateway after manual reconciliation; the next eligible worker can capture again.",
+    });
+  } catch (error) {
+    sendError(respond, error);
+  }
+}

@@ -200,6 +200,9 @@ export function findAssistantTranscriptRoleHeaderSpans(
   text: string,
   excludedRanges: readonly TextRange[] = [],
 ): AssistantTranscriptRoleHeaderSpan[] {
+  if (!text.includes("[") && !text.includes("<")) {
+    return [];
+  }
   const spans: AssistantTranscriptRoleHeaderSpan[] = [];
   const sortedExcludedRanges = [...excludedRanges].toSorted(
     (left, right) => left.start - right.start || left.end - right.end,

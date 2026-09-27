@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { writePersistedInstalledPluginIndexInstallRecords } from "../src/plugins/installed-plugin-index-records.js";
+import { seedInstalledPluginIndex } from "../src/plugins/test-helpers/installed-plugin-index.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 const DEGRADED_PLUGIN_ID = "status-degraded-plugin";
@@ -95,7 +95,7 @@ describe("status shared-state ownership", () => {
       },
     });
     try {
-      await writePersistedInstalledPluginIndexInstallRecords(
+      await seedInstalledPluginIndex(
         {
           [DEGRADED_PLUGIN_ID]: {
             source: "npm",
@@ -148,7 +148,7 @@ describe("status shared-state ownership", () => {
 
       const logs = instance.logs();
       expect(logs).toContain("Secret owner capability:tts is configured-unavailable");
-      expect(logs).toContain(`Plugin \"${DEGRADED_PLUGIN_ID}\"`);
+      expect(logs).toContain(`Plugin "${DEGRADED_PLUGIN_ID}"`);
       expect(logs).not.toContain("STATUS_E2E_MISSING_SECRET");
     } finally {
       await instance.cleanup();

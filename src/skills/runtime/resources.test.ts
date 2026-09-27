@@ -17,9 +17,9 @@ async function writeSkill(workspace: string, name: string, content = markdown) {
   await fs.writeFile(path.join(directory, "SKILL.md"), content);
   return directory;
 }
-function loadSnapshot(workspace: string) {
+async function loadSnapshot(workspace: string) {
   const entries = loadWorkspaceSkills(workspace, { workspaceOnly: true });
-  return buildSkillSnapshot(workspace, { entries });
+  return await buildSkillSnapshot(workspace, { entries });
 }
 
 describe("prepared workspace skill resources", () => {
@@ -29,7 +29,7 @@ describe("prepared workspace skill resources", () => {
       const workspace = temps.make("skill-rollback-");
       const directory = await writeSkill(workspace, "partial");
       await fs.writeFile(path.join(directory, "reference.md"), "supporting resource");
-      const delivery = await prepareSkillResourceDelivery(loadSnapshot(workspace), () => {});
+      const delivery = await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {});
       let artifactRoot: string | undefined;
       let retainedFile: string | undefined;
       const originalWriteFile = fs.writeFile;
@@ -98,7 +98,7 @@ describe("prepared workspace skill resources", () => {
       await fs.mkdir(path.dirname(scriptPath));
       await fs.writeFile(scriptPath, "#!/bin/sh\nprintf before\n");
       const snapshot = {
-        ...loadSnapshot(workspace),
+        ...(await loadSnapshot(workspace)),
         ...(reuse === "rehydrated" ? { version: 1 } : {}),
       };
       const first = await prepareSkillResourceDelivery(snapshot, () => {});
@@ -111,6 +111,8 @@ describe("prepared workspace skill resources", () => {
       const worker = await materializeSkillResources(next!, () => {});
       try {
         const skill = worker.snapshot.resolvedSkills![0]!;
+        expect(skill.contentHash).toBe(next!.skills[0]!.revision);
+        expect(skill.contentHash).not.toBe(first!.skills[0]!.revision);
         expect(await fs.readFile(path.join(skill.baseDir, "scripts/check.sh"), "utf8")).toBe(
           "#!/bin/sh\nprintf after\n",
         );
@@ -127,7 +129,10 @@ describe("prepared workspace skill resources", () => {
     async (rehydrated) => {
       const workspace = await fs.realpath(temps.make("skill-turns-"));
       await writeSkill(workspace, "independent");
-      const snapshot = { ...loadSnapshot(workspace), ...(rehydrated ? { version: 1 } : {}) };
+      const snapshot = {
+        ...(await loadSnapshot(workspace)),
+        ...(rehydrated ? { version: 1 } : {}),
+      };
       let closed = false;
       const cancelled = prepareSkillResourceDelivery(snapshot, () => {
         if (closed) {
@@ -158,7 +163,7 @@ describe("prepared workspace skill resources", () => {
       const workspace = await fs.realpath(temps.make("skill-stale-root-"));
       const healthyDir = await writeSkill(workspace, "healthy");
       const staleDir = await writeSkill(workspace, "stale");
-      const snapshot = loadSnapshot(workspace);
+      const snapshot = await loadSnapshot(workspace);
       expect((await prepareSkillResourceDelivery(snapshot, () => {}))?.skills).toHaveLength(2);
 
       await fs.rm(staleDir, { recursive: true });
@@ -190,7 +195,7 @@ describe("prepared workspace skill resources", () => {
     const missingPath = path.join(workspace, "skills", "missing", "SKILL.md");
 
     await expect(
-      prepareSkillResourceDelivery(loadSnapshot(workspace), () => {}, [
+      prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {}, [
         { name: "missing", path: missingPath },
       ]),
     ).rejects.toMatchObject({
@@ -200,18 +205,106 @@ describe("prepared workspace skill resources", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "keeps nested links fail-closed with selected skill diagnostics",
+    "materializes contained instruction and executable aliases as regular skill files",
     async () => {
       const workspace = await fs.realpath(temps.make("skill-nested-link-"));
       const directory = await writeSkill(workspace, "linked");
-      await fs.symlink("SKILL.md", path.join(directory, "linked-skill"));
+      const instructions = "# Review instructions\nPreserve the user's changes.\n";
+      const script = "#!/bin/sh\nprintf ready\n";
+      await fs.writeFile(path.join(directory, "AGENTS.md"), instructions);
+      await fs.mkdir(path.join(directory, "scripts"));
+      await fs.writeFile(path.join(directory, "scripts/check.sh"), script, { mode: 0o700 });
+      await fs.symlink("AGENTS.md", path.join(directory, "CLAUDE.md"));
+      await fs.symlink("scripts/check.sh", path.join(directory, "check.sh"));
+      const delivery = await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {});
+      const materialized = await materializeSkillResources(delivery!, () => {});
+      try {
+        const skill = materialized.snapshot.resolvedSkills![0]!;
+        for (const name of ["AGENTS.md", "CLAUDE.md"]) {
+          expect(await fs.readFile(path.join(skill.baseDir, name), "utf8")).toBe(instructions);
+          expect((await fs.lstat(path.join(skill.baseDir, name))).isFile()).toBe(true);
+        }
+        for (const name of ["scripts/check.sh", "check.sh"]) {
+          const target = path.join(skill.baseDir, name);
+          expect(await fs.readFile(target, "utf8")).toBe(script);
+          expect((await fs.lstat(target)).isFile()).toBe(true);
+          expect((await fs.stat(target)).mode & 0o777).toBe(0o500);
+        }
+      } finally {
+        await materialized.cleanup();
+      }
+    },
+  );
 
+  it
+    .runIf(process.platform !== "win32")
+    .each(["outside", "broken", "cycle", "directory", "hardlink", "excluded"] as const)(
+    "rejects %s skill aliases with selected skill diagnostics",
+    async (kind) => {
+      const workspace = await fs.realpath(temps.make("skill-unsafe-link-"));
+      const directory = await writeSkill(workspace, "linked");
+      const alias = path.join(directory, "linked-support");
+      if (kind === "hardlink") {
+        const target = path.join(directory, "support.txt");
+        await fs.writeFile(target, "hardlinked support");
+        await fs.link(target, alias);
+      } else {
+        let target = "missing";
+        if (kind === "outside") {
+          target = path.join(workspace, "outside.txt");
+          await fs.writeFile(target, "outside skill boundary");
+        } else if (kind === "cycle") {
+          target = "linked-support";
+        } else if (kind === "directory") {
+          target = "support";
+          await fs.mkdir(path.join(directory, target));
+        } else if (kind === "excluded") {
+          target = ".git/config";
+          await fs.mkdir(path.join(directory, ".git"));
+          await fs.writeFile(path.join(directory, target), "excluded repository metadata");
+        }
+        await fs.symlink(target, alias);
+      }
       await expect(
-        prepareSkillResourceDelivery(loadSnapshot(workspace), () => {}),
+        prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {}),
       ).rejects.toMatchObject({
         code: "INVALID_BUNDLE",
-        message: expect.stringMatching(/skill="linked".*root=.*linked.*path=.*linked-skill/s),
+        message: expect.stringMatching(/skill="linked".*root=.*linked/s),
       });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a file moved into an excluded tree while its alias is opening",
+    async () => {
+      const workspace = await fs.realpath(temps.make("skill-alias-race-"));
+      const directory = await writeSkill(workspace, "linked");
+      const target = path.join(directory, "support.txt");
+      const excluded = path.join(directory, ".git", "support.txt");
+      await fs.mkdir(path.dirname(excluded));
+      await fs.writeFile(target, "supporting instructions");
+      await fs.symlink("support.txt", path.join(directory, "alias.txt"));
+      const snapshot = await loadSnapshot(workspace);
+      const originalOpen = fs.open;
+      let moved = false;
+      const open = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+        const handle = await originalOpen(file, flags, mode);
+        if (file === target && !moved) {
+          moved = true;
+          await fs.rename(target, excluded);
+          await fs.symlink(".git/support.txt", target);
+        }
+        return handle;
+      });
+      try {
+        await expect(prepareSkillResourceDelivery(snapshot, () => {})).rejects.toMatchObject({
+          code: "INVALID_BUNDLE",
+          message: expect.stringContaining("link target is not an included regular file"),
+        });
+        expect(moved).toBe(true);
+      } finally {
+        open.mockRestore();
+      }
     },
   );
 
@@ -221,7 +314,7 @@ describe("prepared workspace skill resources", () => {
     const script = "#!/bin/sh\nprintf ready\n";
     await fs.mkdir(path.join(directory, "scripts"));
     await fs.writeFile(path.join(directory, "scripts/check.sh"), script, { mode: 0o700 });
-    const snapshot = loadSnapshot(workspace);
+    const snapshot = await loadSnapshot(workspace);
     expect(snapshot.resolvedSkills).toMatchObject([
       { name: "directory-name", description: "Workspace procedure" },
     ]);
@@ -261,7 +354,7 @@ describe("prepared workspace skill resources", () => {
     );
     await fs.mkdir(path.join(directory, "node_modules", "dependency"), { recursive: true });
     await fs.writeFile(path.join(directory, "node_modules", "dependency", "index.js"), "excluded");
-    const delivery = await prepareSkillResourceDelivery(loadSnapshot(workspace), () => {});
+    const delivery = await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {});
     expect(delivery?.skills[0]?.files.map((file) => file.path)).toEqual(["SKILL.md"]);
   });
 
@@ -271,7 +364,7 @@ describe("prepared workspace skill resources", () => {
       const name = `skill-${index}`;
       await writeSkill(workspace, name, `---\nname: ${name}\ndescription: Test\n---\n# Guide\n`);
     }
-    const snapshot = loadSnapshot(workspace);
+    const snapshot = await loadSnapshot(workspace);
     expect(snapshot.prompt.match(/<name>/g)).toHaveLength(65);
     const delivery = await prepareSkillResourceDelivery(snapshot, () => {});
     expect(delivery?.skills).toHaveLength(65);
@@ -303,7 +396,7 @@ describe("prepared workspace skill resources", () => {
       "---\nname: z-omitted\ndescription: Test\n---\n# Omitted\n",
     );
     const entries = loadWorkspaceSkills(workspace, { workspaceOnly: true });
-    const snapshot = buildSkillSnapshot(workspace, {
+    const snapshot = await buildSkillSnapshot(workspace, {
       entries,
       config: { skills: { limits: { maxSkillsInPrompt: 1 } } },
     });

@@ -4,7 +4,7 @@ import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { PresenceEntrySchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -190,9 +190,21 @@ describe("gateway presence audience", () => {
       };
       try {
         const watcher = await openRecipient("watcher", ["operator.admin"]);
-        const idle = await openRecipient("idle", ["operator.read"]);
-        // A response on the watcher is a transport barrier, not a presence refresh.
-        expect((await rpcReq(watcher.ws, "health")).ok).toBe(true);
+        // Join publication itself: an RPC response can precede the coalescing window.
+        const firstConnect = onceMessage<{
+          type: string;
+          event: string;
+          payload: { presence: SystemPresence[] };
+        }>(
+          watcher.ws,
+          (frame) =>
+            frame.type === "event" &&
+            frame.event === "presence" &&
+            frame.payload.presence.some(
+              (entry) => entry.instanceId === "presence-idle" && entry.reason === "connect",
+            ),
+        );
+        const [idle] = await Promise.all([openRecipient("idle", ["operator.read"]), firstConnect]);
         expect
           .soft(watcher.events.at(-1), "first connect publishes without activity")
           .toEqual(
@@ -214,6 +226,21 @@ describe("gateway presence audience", () => {
           lastActivityAt: expect.any(Number),
           timeZone: "Europe/Vienna",
         });
+        const idleBefore = structuredClone(idlePerson);
+        const now = vi.spyOn(Date, "now").mockReturnValue(idleBefore.ts + 1000);
+        try {
+          for (const email of ["creator@example.com", "presence-unrelated@example.test"]) {
+            // No await: committed profile notifications settle synchronously,
+            // without a heartbeat interleaving with this unchanged-row check.
+            ensureProfileForEmail(email);
+            expect(
+              listSystemPresence().find((entry) => entry.instanceId === "presence-idle"),
+              `${email} must preserve unrelated presence`,
+            ).toEqual(idleBefore);
+          }
+        } finally {
+          now.mockRestore();
+        }
         const declared = await rpcReq(watcher.ws, "sessions.viewers.set", {
           sessionKeys: watchedKeys,
         });
@@ -265,7 +292,7 @@ describe("gateway presence audience", () => {
                 .filter((key) => watchedKeys.includes(key))
                 .toSorted(),
               `${scenario.name} canonical sessions.list visibility`,
-            ).toEqual(scenario.allowed.toSorted());
+            ).toEqual(scenario.allowed.filter((key) => key !== incognitoKey).toSorted());
             const canReadDraft = scenario.allowed.includes(draftKey);
             const described = await rpcReq<{ session: { sessionId?: string } | null }>(
               recipient.ws,
@@ -306,6 +333,10 @@ describe("gateway presence audience", () => {
         sockets.push(unauthenticated);
         const unauthenticatedEvents = observePresence(unauthenticated);
         const readers = recipients.filter(({ canRead }) => canRead);
+        // The viewer declaration already published activity. Typing within its
+        // 30-second window updates the store without another full roster event.
+        const readNow = Date.now;
+        const activityClock = vi.spyOn(Date, "now").mockImplementation(() => readNow() + 30_000);
         const typingStartedAt = Date.now();
         const eventPromises = readers.map(({ ws }) =>
           onceMessage<{ type: string; event: string; payload: { presence: SystemPresence[] } }>(
@@ -334,7 +365,7 @@ describe("gateway presence audience", () => {
               }),
             )
             .then((response) => expect(response).toMatchObject({ ok: true })),
-        ]);
+        ]).finally(() => activityClock.mockRestore());
         const activeWatcher = listSystemPresence().find(
           (entry) => entry.instanceId === watcherInstanceId,
         )!;
@@ -382,16 +413,26 @@ describe("gateway presence audience", () => {
         expect(preauthRead.payload).toBeUndefined();
         expect(unauthenticatedEvents).toEqual([]);
 
-        const liveIdleRows = async () => {
-          expect((await rpcReq(watcher.ws, "health")).ok).toBe(true);
-          return watcher.events
-            .at(-1)!
-            .filter(
-              (entry) => entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect",
-            );
+        const isLiveIdle = (entry: SystemPresence) =>
+          entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect";
+        const nextIdleRows = async (count: number) => {
+          const event = await onceMessage<{
+            type: string;
+            event: string;
+            payload: { presence: SystemPresence[] };
+          }>(
+            watcher.ws,
+            (frame) =>
+              frame.type === "event" &&
+              frame.event === "presence" &&
+              frame.payload.presence.filter(isLiveIdle).length === count,
+          );
+          return event.payload.presence.filter(isLiveIdle);
         };
-        const overlap = await openRecipient("idle", ["operator.read"]);
-        const overlappingRows = await liveIdleRows();
+        const [overlappingRows, overlap] = await Promise.all([
+          nextIdleRows(2),
+          openRecipient("idle", ["operator.read"]),
+        ]);
         expect.soft(overlappingRows, "overlapping connect publishes both sockets").toHaveLength(2);
         for (const entry of overlappingRows) {
           expect(entry.onlineSince).toBe(idlePerson.onlineSince);
@@ -401,40 +442,29 @@ describe("gateway presence audience", () => {
           [idle, 1],
           [overlap, 0],
         ] as const) {
-          const isLiveIdle = (entry: SystemPresence) =>
-            entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect";
           // A different socket's response cannot join this connection's server close.
-          const disconnected = onceMessage<{
-            type: string;
-            event: string;
-            payload: { presence: SystemPresence[] };
-          }>(
-            watcher.ws,
-            (frame) =>
-              frame.type === "event" &&
-              frame.event === "presence" &&
-              frame.payload.presence.filter(isLiveIdle).length === remaining,
-          );
+          const disconnected = nextIdleRows(remaining);
           const closed = once(connection.ws, "close");
           connection.ws.close();
-          const [, event] = await Promise.all([closed, disconnected]);
-          const rows = event.payload.presence.filter(isLiveIdle);
+          const [, rows] = await Promise.all([closed, disconnected]);
           expect(rows, "disconnect publishes only the surviving sockets").toHaveLength(remaining);
           if (remaining) {
             expect(rows[0]?.onlineSince).toBe(idlePerson.onlineSince);
           }
         }
-        const reconnected = await openRecipient("idle", ["operator.read"]);
+        const [reconnectedRows, reconnected] = await Promise.all([
+          nextIdleRows(1),
+          openRecipient("idle", ["operator.read"]),
+        ]);
         const returnedPerson = reconnected.hello.snapshot.presence.find(
           (entry) => entry.user?.id === idlePerson.user?.id && entry.reason === "connect",
         )!;
         expect(returnedPerson.onlineSince).toBeGreaterThan(idlePerson.onlineSince!);
         expect(returnedPerson.lastActivityAt).toBeUndefined();
         expect(returnedPerson.watchedSessions).toBeUndefined();
-        expect(
-          await liveIdleRows(),
-          "reconnect publishes without profile edit or activity",
-        ).toEqual([returnedPerson]);
+        expect(reconnectedRows, "reconnect publishes without profile edit or activity").toEqual([
+          returnedPerson,
+        ]);
         for (const recipient of recipients.filter(({ canRead }) => !canRead)) {
           expect((await rpcReq(recipient.ws, "health")).ok).toBe(true);
           expect(recipient.events, `${recipient.name} connection-driven frames`).toEqual([]);

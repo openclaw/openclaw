@@ -8,10 +8,12 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.SESSION_LIST_FETCH_LIMIT
 import ai.openclaw.app.chat.selectChatAgentSessionKey
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayHelloSummary
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -43,7 +45,116 @@ import java.util.concurrent.atomic.AtomicReference
 @Config(sdk = [34])
 class NodeRuntimeAgentSelectionTest {
   @Test
-  fun publicationsRereadSelectedAgentModelsWithoutDiscovery() =
+  fun selectedAgentPublishesRefreshFailureAndSuccessfulEmptyResult() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val catalogJobs = Channel<Job>(Channel.UNLIMITED)
+      val response = AtomicReference("""{"models":[{"id":"previous","name":"Previous","provider":"fixture","available":true}]}""")
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          assertEquals(
+            "beta",
+            Json
+              .parseToJsonElement(paramsJson.orEmpty())
+              .jsonObject["agentId"]
+              ?.jsonPrimitive
+              ?.content,
+          )
+          when (method) {
+            "models.list" -> {
+              catalogJobs.send(currentCoroutineContext().job)
+              response.get()
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[{"provider":"current-credential","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected catalog request: $method")
+            }
+          }
+        }
+        runtime.selectChatAgent("beta")
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+        assertEquals(listOf("previous"), runtime.providerModelCatalog.value.map { it.id })
+
+        response.set("""{"models":[{"id":"compatible","name":"Compatible","provider":"fixture","available":true}],"refreshFailed":true}""")
+        runtime.refreshProviderModels(refresh = true)
+        withTimeout(2_000) { catalogJobs.receive().join() }
+
+        assertEquals(listOf("compatible"), runtime.providerModelCatalog.value.map { it.id })
+        assertEquals(listOf("current-credential"), runtime.modelAuthProviders.value.map { it.id })
+        assertFalse("A failed refresh must remain visible alongside its returned rows", runtime.providerModelCatalogErrorText.value.isNullOrBlank())
+        assertFalse(runtime.providerModelCatalogRefreshing.value)
+
+        response.set("""{"models":[],"refreshFailed":false}""")
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels(refresh = true)
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertEquals(null, runtime.providerModelCatalogErrorText.value)
+        assertFalse(runtime.providerModelCatalogRefreshing.value)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+        catalogJobs.close()
+      }
+    }
+
+  @Test
+  fun failedRefreshCannotRestoreRowsWithRejectedAuth() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val catalogJobs = Channel<Job>(Channel.UNLIMITED)
+      val response = AtomicReference("""{"models":[{"id":"retired-private-model","name":"Retired private model","provider":"fixture","available":true}]}""")
+      val authResponse = AtomicReference("""{"providers":[{"provider":"fixture","status":"ok","profiles":[]}]}""")
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "models.list" -> {
+              catalogJobs.send(currentCoroutineContext().job)
+              response.get()
+            }
+
+            "models.authStatus" -> {
+              authResponse.get()
+            }
+
+            else -> {
+              error("Unexpected catalog request: $method")
+            }
+          }
+        }
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+        assertEquals(listOf("retired-private-model"), runtime.modelCatalog.value.map { it.id })
+        assertEquals(listOf("retired-private-model"), runtime.providerModelCatalog.value.map { it.id })
+
+        response.set("""{"models":[],"refreshFailed":true,"providerOutcomes":[{"provider":"fixture","status":"auth-rejected"}]}""")
+        authResponse.set("""{"providers":[{"provider":"fixture","status":"missing","profiles":[]}]}""")
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels(refresh = true)
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertEquals(
+          "missing",
+          runtime.modelAuthProviders.value
+            .single()
+            .status,
+        )
+        assertFalse("An unavailable empty result must show the refresh failure", runtime.providerModelCatalogErrorText.value.isNullOrBlank())
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+        catalogJobs.close()
+      }
+    }
+
+  @Test
+  fun publicationsRevealSelectedAgentModelsWithoutDiscovery() =
     runBlocking {
       for (event in listOf("config.changed", "chat.metadata.changed")) {
         val runtime = createConnectedRuntime()
@@ -54,7 +165,11 @@ class NodeRuntimeAgentSelectionTest {
             when (method) {
               "models.list" -> {
                 catalogRequests.send(Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject to currentCoroutineContext().job)
-                """{"models":[{"id":"model-${revision.get()}","provider":"fixture","name":"Published"}]}"""
+                if (revision.get() == 0) {
+                  """{"models":[]}"""
+                } else {
+                  """{"models":[{"id":"model-1","provider":"fixture","name":"Published","available":true}]}"""
+                }
               }
 
               "models.authStatus" -> {
@@ -79,23 +194,11 @@ class NodeRuntimeAgentSelectionTest {
             }
           }
           runtime.selectChatAgent("beta")
-          runtime.refreshModelCatalog()
-          runtime.refreshProviderModels()
           withTimeout(2_000) {
             repeat(2) { catalogRequests.receive().second.join() }
           }
-          assertEquals(
-            "model-0",
-            runtime.modelCatalog.value
-              .single()
-              .id,
-          )
-          assertEquals(
-            "model-0",
-            runtime.providerModelCatalog.value
-              .single()
-              .id,
-          )
+          assertTrue(runtime.modelCatalog.value.isEmpty())
+          assertTrue(runtime.providerModelCatalog.value.isEmpty())
           assertEquals(
             "credential-0",
             runtime.modelAuthProviders.value
@@ -169,7 +272,7 @@ class NodeRuntimeAgentSelectionTest {
     }
 
   @Test
-  fun modelReadsUseTheSelectedAgent() =
+  fun selectingAgentPublishesItsModelsWithoutAnotherPageRead() =
     runBlocking {
       val runtime = createConnectedRuntime()
       try {
@@ -181,14 +284,20 @@ class NodeRuntimeAgentSelectionTest {
               ?.jsonPrimitive
               ?.content ?: "alpha"
           when (method) {
-            "models.list" -> """{"models":[{"id":"$agentId-model","provider":"fixture","name":"$agentId"}]}"""
-            "models.authStatus" -> """{"providers":[{"provider":"$agentId-credential","status":"ok","profiles":[]}]}"""
-            else -> error("Unexpected model request: $method")
+            "models.list" -> {
+              """{"models":[{"id":"$agentId-model","provider":"fixture","name":"$agentId"}]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[{"provider":"$agentId-credential","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected model request: $method")
+            }
           }
         }
         runtime.selectChatAgent("beta")
-        runtime.refreshModelCatalog()
-        runtime.refreshProviderModels()
 
         val catalog = withTimeout(2_000) { runtime.modelCatalog.first { it.isNotEmpty() } }
         val providerCatalog = withTimeout(2_000) { runtime.providerModelCatalog.first { it.isNotEmpty() } }
@@ -210,31 +319,40 @@ class NodeRuntimeAgentSelectionTest {
       val providerCatalogStarted = CompletableDeferred<Job>()
       val catalogResponse = CompletableDeferred<String>()
       val providerCatalogResponse = CompletableDeferred<String>()
-      val models = """{"models":[{"id":"alpha-model","provider":"fixture","name":"Alpha"}]}"""
+      val newReads = Channel<Job>(Channel.UNLIMITED)
+      val newResponse = CompletableDeferred<Unit>()
       try {
         runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          val params = Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject
+          val agentId = params["agentId"]?.jsonPrimitive?.content ?: "alpha"
           when (method) {
             "models.list" -> {
-              if (phase.get() == 1) {
-                if (Json
-                    .parseToJsonElement(paramsJson.orEmpty())
-                    .jsonObject["view"]
-                    ?.jsonPrimitive
-                    ?.content == "provider-config"
-                ) {
-                  providerCatalogStarted.complete(currentCoroutineContext().job)
-                  providerCatalogResponse.await()
-                } else {
-                  catalogStarted.complete(currentCoroutineContext().job)
-                  catalogResponse.await()
+              when (phase.get()) {
+                1 -> {
+                  if (params["view"]?.jsonPrimitive?.content == "provider-config") {
+                    providerCatalogStarted.complete(currentCoroutineContext().job)
+                    providerCatalogResponse.await()
+                  } else {
+                    catalogStarted.complete(currentCoroutineContext().job)
+                    catalogResponse.await()
+                  }
                 }
-              } else {
-                models
+
+                2 -> {
+                  assertFalse("Owner changes must not request discovery", params.containsKey("refresh"))
+                  newReads.send(currentCoroutineContext().job)
+                  newResponse.await()
+                  """{"models":[{"id":"$agentId-current","name":"$agentId current","provider":"fixture"}]}"""
+                }
+
+                else -> {
+                  """{"models":[{"id":"alpha-model","name":"Alpha","provider":"fixture"}]}"""
+                }
               }
             }
 
             "models.authStatus" -> {
-              """{"providers":[{"provider":"alpha-credential","status":"ok","profiles":[]}]}"""
+              """{"providers":[{"provider":"$agentId-credential","status":"ok","profiles":[]}]}"""
             }
 
             else -> {
@@ -243,8 +361,6 @@ class NodeRuntimeAgentSelectionTest {
           }
         }
         runtime.selectChatAgent("alpha")
-        runtime.refreshModelCatalog()
-        runtime.refreshProviderModels()
         withTimeout(2_000) { runtime.modelCatalog.first { it.isNotEmpty() } }
         withTimeout(2_000) { runtime.modelAuthProviders.first { it.isNotEmpty() } }
 
@@ -253,14 +369,14 @@ class NodeRuntimeAgentSelectionTest {
         runtime.refreshProviderModels()
         val catalogJob = withTimeout(2_000) { catalogStarted.await() }
         val providerCatalogJob = withTimeout(2_000) { providerCatalogStarted.await() }
+        phase.set(2)
         runtime.selectChatAgent("beta")
         runtime.selectChatAgent("alpha")
         assertTrue(runtime.modelCatalog.value.isEmpty())
         assertTrue(runtime.providerModelCatalog.value.isEmpty())
         assertTrue(runtime.modelAuthProviders.value.isEmpty())
 
-        phase.set(2)
-        catalogResponse.complete(models)
+        catalogResponse.complete("""{"models":[{"id":"retired-model","name":"Retired model","provider":"fixture"}],"refreshFailed":true}""")
         providerCatalogResponse.completeExceptionally(IllegalStateException("Retired model read failed"))
         withTimeout(2_000) {
           catalogJob.join()
@@ -270,14 +386,74 @@ class NodeRuntimeAgentSelectionTest {
         assertTrue(runtime.providerModelCatalog.value.isEmpty())
         assertTrue(runtime.modelAuthProviders.value.isEmpty())
         assertEquals(null, runtime.providerModelCatalogErrorText.value)
-        assertFalse(runtime.providerModelCatalogRefreshing.value)
 
-        runtime.refreshModelCatalog()
-        runtime.refreshProviderModels()
-        assertEquals("alpha-model", withTimeout(2_000) { runtime.modelCatalog.first { it.isNotEmpty() } }.single().id)
-        assertEquals("alpha-credential", withTimeout(2_000) { runtime.modelAuthProviders.first { it.isNotEmpty() } }.single().id)
+        newResponse.complete(Unit)
+        withTimeout(2_000) { repeat(4) { newReads.receive().join() } }
+        assertEquals(
+          "alpha-current",
+          runtime.modelCatalog.value
+            .single()
+            .id,
+        )
+        assertEquals(
+          "alpha-current",
+          runtime.providerModelCatalog.value
+            .single()
+            .id,
+        )
+        assertEquals(
+          "alpha-credential",
+          runtime.modelAuthProviders.value
+            .single()
+            .id,
+        )
+        assertEquals(null, runtime.providerModelCatalogErrorText.value)
+        assertFalse(runtime.providerModelCatalogRefreshing.value)
       } finally {
         closeNodeRuntimeTestFixture(runtime)
+        newReads.close()
+      }
+    }
+
+  @Test
+  fun reselectingSameAgentKeepsRowsAndAcceptsItsPendingRefresh() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val jobs = Channel<Job>(Channel.UNLIMITED)
+      val response = CompletableDeferred<String>()
+      val hold = AtomicInteger(0)
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "models.list" -> {
+              jobs.send(currentCoroutineContext().job)
+              if (hold.get() == 1) response.await() else """{"models":[{"id":"retained","name":"Retained","provider":"fixture"}]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[]}"""
+            }
+
+            else -> {
+              error("Unexpected model request: $method")
+            }
+          }
+        }
+        runtime.selectChatAgent("alpha")
+        withTimeout(2_000) { repeat(2) { jobs.receive().join() } }
+        hold.set(1)
+        runtime.refreshProviderModels()
+        val pending = withTimeout(2_000) { jobs.receive() }
+
+        runtime.selectChatAgent("alpha")
+        assertEquals(listOf("retained"), runtime.modelCatalog.value.map { it.id })
+        assertEquals(listOf("retained"), runtime.providerModelCatalog.value.map { it.id })
+        response.complete("""{"models":[{"id":"updated","name":"Updated","provider":"fixture"}]}""")
+        withTimeout(2_000) { pending.join() }
+        assertEquals(listOf("updated"), runtime.providerModelCatalog.value.map { it.id })
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+        jobs.close()
       }
     }
 
@@ -295,11 +471,106 @@ class NodeRuntimeAgentSelectionTest {
       runtime.selectChatAgent(" scout ")
 
       assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
-      assertEquals(runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+      assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
     } finally {
       closeNodeRuntimeTestFixture(runtime)
     }
   }
+
+  @Test
+  fun reconnectKeepsSelectedAgentBeforeTheAgentListReturns() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val releaseList = CompletableDeferred<Unit>()
+      try {
+        val agentRefreshes = answerAgentList(runtime, "main", "scout", beforeAnswer = { releaseList.await() })
+        runtime.selectChatAgent("scout")
+
+        reconnectOperator(runtime, disconnectCallbacks = 2)
+        val refresh = withTimeout(2_000) { agentRefreshes.receive() }
+        // Talk can start as soon as hello publishes connection readiness, before metadata returns.
+        assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+        assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
+
+        releaseList.complete(Unit)
+        withTimeout(2_000) { refresh.join() }
+        assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        releaseList.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun lateAgentListCannotEraseANewerPickerChoice() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val releaseList = CompletableDeferred<Unit>()
+      try {
+        val agentRefreshes = answerAgentList(runtime, "main", "scout", beforeAnswer = { releaseList.await() })
+        runtime.selectChatAgent("scout")
+        reconnectOperator(runtime)
+        val refresh = withTimeout(2_000) { agentRefreshes.receive() }
+
+        runtime.selectChatAgent("ops")
+        assertEquals("ops", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+        releaseList.complete(Unit)
+        withTimeout(2_000) { refresh.join() }
+        assertEquals("ops", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+        assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
+
+        val current = answerAgentList(runtime, "main", "scout", "ops")
+        reconnectOperator(runtime)
+        awaitAgentRefresh(current)
+        assertEquals("ops", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        releaseList.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun removedAgentFallsBackToGatewayDefaultAfterReconnect() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        answerAgentList(runtime, "main", "scout")
+        runtime.selectChatAgent("scout")
+
+        val withoutScout = answerAgentList(runtime, "main")
+        reconnectOperator(runtime)
+        awaitAgentRefresh(withoutScout)
+        assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
+        assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+
+        // The fallback forgets the removed choice instead of resurrecting it later.
+        val withScout = answerAgentList(runtime, "main", "scout")
+        reconnectOperator(runtime)
+        runtime.refreshAgents()
+        awaitAgentRefresh(withScout)
+        assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun switchingGatewayRetiresThePreviousAgentChoice() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        answerAgentList(runtime, "main", "scout")
+        runtime.selectChatAgent("scout")
+        runtime.prepareForGatewaySetup()
+        ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18790))
+
+        reconnectOperator(runtime)
+        assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+        assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
 
   @Test
   fun currentChatHydrationPreservesSelectionPublishedWhileItWaits() =
@@ -330,8 +601,8 @@ class NodeRuntimeAgentSelectionTest {
         }
         withTimeout(2_000) { loaded.await() }
 
-        assertEquals("selected-after-mount", runtime.chatSessionKey.value)
-        assertEquals("scout", runtime.chatSessionOwnerAgentId.value)
+        assertEquals("selected-after-mount", runtime.chat.sessionKey.value)
+        assertEquals("scout", runtime.chat.sessionOwnerAgentId.value)
       } finally {
         loader.join(2_000)
         closeNodeRuntimeTestFixture(runtime)
@@ -369,7 +640,7 @@ class NodeRuntimeAgentSelectionTest {
         releaseResponse.complete(Unit)
 
         assertFalse(withTimeout(2_000) { continuation.await() })
-        assertEquals("agent:main:user", runtime.chatSessionKey.value)
+        assertEquals("agent:main:user", runtime.chat.sessionKey.value)
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
@@ -441,7 +712,7 @@ class NodeRuntimeAgentSelectionTest {
         releaseResponse.complete(Unit)
         withTimeout(2_000) { lookupJob.join() }
 
-        assertEquals("agent:scout:chosen", runtime.chatSessionKey.value)
+        assertEquals("agent:scout:chosen", runtime.chat.sessionKey.value)
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
@@ -496,7 +767,7 @@ class NodeRuntimeAgentSelectionTest {
         }
         runtime.selectChatAgent("scout")
         val lookupJob = withTimeout(2_000) { lookupStarted.await() }
-        val mainSessionKey = runtime.chatSessionKey.value
+        val mainSessionKey = runtime.chat.sessionKey.value
         val entry =
           SessionCatalogEntry(
             catalogId = "codex",
@@ -512,11 +783,11 @@ class NodeRuntimeAgentSelectionTest {
         withTimeout(2_000) { continueStarted.await() }
         releaseLookup.complete(Unit)
         withTimeout(2_000) { lookupJob.join() }
-        assertEquals(mainSessionKey, runtime.chatSessionKey.value)
+        assertEquals(mainSessionKey, runtime.chat.sessionKey.value)
 
         releaseContinue.complete(Unit)
         assertTrue(withTimeout(2_000) { continuation.await() })
-        assertEquals("agent:scout:catalog", runtime.chatSessionKey.value)
+        assertEquals("agent:scout:catalog", runtime.chat.sessionKey.value)
       } finally {
         releaseLookup.complete(Unit)
         releaseContinue.complete(Unit)
@@ -549,7 +820,7 @@ class NodeRuntimeAgentSelectionTest {
         withTimeout(2_000) { lookupJob.join() }
 
         assertEquals("writer", resolveAgentIdFromMainSessionKey(writerMain))
-        assertEquals(writerMain, runtime.chatSessionKey.value)
+        assertEquals(writerMain, runtime.chat.sessionKey.value)
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
@@ -620,7 +891,7 @@ class NodeRuntimeAgentSelectionTest {
         releaseResponse.complete(Unit)
         withTimeout(2_000) { lookupJob.join() }
 
-        assertEquals(scoutMain, runtime.chatSessionKey.value)
+        assertEquals(scoutMain, runtime.chat.sessionKey.value)
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
@@ -658,6 +929,8 @@ class NodeRuntimeAgentSelectionTest {
     val archiveRequested = CompletableDeferred<Unit>()
     val releaseArchive = CompletableDeferred<Unit>()
     val lookupStarted = AtomicReference<CompletableDeferred<Job>?>(null)
+    val mainAdoptionStarted = AtomicReference<CompletableDeferred<Job>?>(null)
+    val releaseInitialAdoption = CompletableDeferred<Unit>()
     val preservesChoice = archiveAckOrder !in setOf(ArchiveAckOrder.Active, ArchiveAckOrder.AfterAgentSwitch)
     val archiveSessionId = if (archiveAckOrder == ArchiveAckOrder.AfterDifferentArchivedIdentity) "replacement-$chosenKey" else "session-$chosenKey"
     var exactLookups = 0
@@ -700,6 +973,7 @@ class NodeRuntimeAgentSelectionTest {
             assertEquals(JsonPrimitive("scout"), request["agentId"])
             assertEquals(JsonPrimitive(archiveSessionId), request["expectedSessionId"])
             assertEquals(JsonPrimitive(true), request["archived"])
+            assertEquals("session-$chosenKey", runtime.chat.sessionId.value)
             description.set(RememberedSessionState.ArchivedAck)
             archiveRequested.complete(Unit)
             releaseArchive.await()
@@ -709,6 +983,10 @@ class NodeRuntimeAgentSelectionTest {
           }
 
           "sessions.describe" -> {
+            mainAdoptionStarted.get()?.complete(currentCoroutineContext().job)
+            if (archiveAckOrder == ArchiveAckOrder.AfterDifferentArchivedIdentity) {
+              releaseInitialAdoption.await()
+            }
             check(request.keys.all { it in setOf("key", "includeDerivedTitles", "includeLastMessage") })
             val key = request.getValue("key").jsonPrimitive.content
             val agentId = requireNotNull(resolveAgentIdFromMainSessionKey(key))
@@ -765,20 +1043,45 @@ class NodeRuntimeAgentSelectionTest {
       }
       installChatGateway(runtime, requestGateway, requestLeaseGeneration = leaseGeneration::get)
 
-      suspend fun selectAgentAndWait(agentId: String) {
+      suspend fun selectAgentAndWait(
+        agentId: String,
+        verifyDelayedAdoption: Boolean = false,
+      ) {
         val started = CompletableDeferred<Job>()
+        val mainAdoption = CompletableDeferred<Job>()
         lookupStarted.set(started)
+        mainAdoptionStarted.set(mainAdoption)
         runtime.selectChatAgent(agentId)
         withTimeout(2_000) {
-          started.await().join()
-          runtime.chatSessionId.first { it != null }
-          runtime.chatHistoryLoading.first { !it }
+          suspend fun awaitSelection() {
+            started.await().join()
+            // Main adoption can refresh the selected chat after the selector has finished.
+            mainAdoption.await().join()
+            runtime.chat.sessionId.first { it != null }
+            runtime.chat.historyLoading.first { !it }
+          }
+
+          if (verifyDelayedAdoption) {
+            val adoption = mainAdoption.await()
+            started.await().join()
+            runtime.chat.sessionId.first { it == "session-$chosenKey" }
+            runtime.chat.historyLoading.first { !it }
+            assertFalse(adoption.isCompleted)
+            // The old waits are already satisfied; run inline to prove adoption still blocks completion.
+            val selection = async(start = CoroutineStart.UNDISPATCHED) { awaitSelection() }
+            assertFalse("Selection must wait for the held main adoption", selection.isCompleted)
+            releaseInitialAdoption.complete(Unit)
+            selection.await()
+          } else {
+            awaitSelection()
+          }
         }
         lookupStarted.compareAndSet(started, null)
+        mainAdoptionStarted.compareAndSet(mainAdoption, null)
       }
 
-      selectAgentAndWait("scout")
-      assertEquals(chosenKey, runtime.chatSessionKey.value)
+      selectAgentAndWait("scout", verifyDelayedAdoption = archiveAckOrder == ArchiveAckOrder.AfterDifferentArchivedIdentity)
+      assertEquals(chosenKey, runtime.chat.sessionKey.value)
 
       runtime.switchChatSession(chosenKey, "scout")
       // More than one full page is newer; absence remains non-authoritative in every outcome.
@@ -815,8 +1118,8 @@ class NodeRuntimeAgentSelectionTest {
               chosenSessionId.set("replacement-$chosenKey")
               chat.refresh()
               withTimeout(2_000) {
-                runtime.chatSessionId.first { it == chosenSessionId.get() }
-                runtime.chatHistoryLoading.first { !it }
+                runtime.chat.sessionId.first { it == chosenSessionId.get() }
+                runtime.chat.historyLoading.first { !it }
               }
               assertEquals(selectionGeneration, chat.selectionGeneration.value)
             }
@@ -831,19 +1134,19 @@ class NodeRuntimeAgentSelectionTest {
           }
         }
         if (archiveAckOrder != ArchiveAckOrder.Active) selectAgentAndWait("writer")
-        val selectedBeforeAck = runtime.chatSessionKey.value
+        val selectedBeforeAck = runtime.chat.sessionKey.value
         releaseArchive.complete(Unit)
         assertTrue(withTimeout(2_000) { archive.await() })
         if (archiveAckOrder == ArchiveAckOrder.Active) {
-          assertEquals("The acknowledged active archive must navigate away", runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+          assertEquals("The acknowledged active archive must navigate away", runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
         } else {
-          assertEquals("Retiring an old owner's memory must not navigate", selectedBeforeAck, runtime.chatSessionKey.value)
+          assertEquals("Retiring an old owner's memory must not navigate", selectedBeforeAck, runtime.chat.sessionKey.value)
         }
       } else {
         description.set(describedState)
       }
-      if (resolveAgentIdFromMainSessionKey(runtime.chatSessionKey.value) != "writer") selectAgentAndWait("writer")
-      assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.chatSessionKey.value))
+      if (resolveAgentIdFromMainSessionKey(runtime.chat.sessionKey.value) != "writer") selectAgentAndWait("writer")
+      assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.chat.sessionKey.value))
       if (describedState == RememberedSessionState.ArchivedEvent) {
         val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
         chat.handleGatewayEvent(
@@ -855,25 +1158,25 @@ class NodeRuntimeAgentSelectionTest {
 
       when (describedState) {
         RememberedSessionState.Active -> {
-          assertEquals("Explicitly selecting the already-visible chat must be remembered", chosenKey, runtime.chatSessionKey.value)
+          assertEquals("Explicitly selecting the already-visible chat must be remembered", chosenKey, runtime.chat.sessionKey.value)
         }
 
         RememberedSessionState.Archived, RememberedSessionState.ArchivedEvent -> {
-          assertEquals("An archived session must not be restored", newestKey, runtime.chatSessionKey.value)
+          assertEquals("An archived session must not be restored", newestKey, runtime.chat.sessionKey.value)
         }
 
         RememberedSessionState.ArchivedAck -> {
           val expectedKey = if (preservesChoice) chosenKey else newestKey
-          assertEquals("The archive ACK may retire only its own remembered occurrence", expectedKey, runtime.chatSessionKey.value)
-          if (preservesChoice) assertEquals(chosenSessionId.get(), runtime.chatSessionId.value)
+          assertEquals("The archive ACK may retire only its own remembered occurrence", expectedKey, runtime.chat.sessionKey.value)
+          if (preservesChoice) assertEquals(chosenSessionId.get(), runtime.chat.sessionId.value)
         }
 
         RememberedSessionState.MissingIdentity, RememberedSessionState.Unavailable -> {
-          assertEquals("An unresolved selection must stay on the agent main chat", runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+          assertEquals("An unresolved selection must stay on the agent main chat", runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
           assertEquals(
             "An unresolved selection must show an action hint",
             "Could not restore the last chat. Select a chat from the sidebar.",
-            runtime.chatError.value,
+            runtime.chat.errorText.value,
           )
         }
       }
@@ -885,12 +1188,13 @@ class NodeRuntimeAgentSelectionTest {
         selectAgentAndWait("writer")
         selectAgentAndWait("scout")
         if (describedState in setOf(RememberedSessionState.Archived, RememberedSessionState.ArchivedEvent, RememberedSessionState.ArchivedAck) && !preservesChoice) {
-          assertEquals("A retired preference must not return when its old session reappears", newestKey, runtime.chatSessionKey.value)
+          assertEquals("A retired preference must not return when its old session reappears", newestKey, runtime.chat.sessionKey.value)
         } else {
-          assertEquals("A later agent return must retry the remembered session", chosenKey, runtime.chatSessionKey.value)
+          assertEquals("A later agent return must retry the remembered session", chosenKey, runtime.chat.sessionKey.value)
         }
       }
     } finally {
+      releaseInitialAdoption.complete(Unit)
       releaseArchive.complete(Unit)
       closeNodeRuntimeTestFixture(runtime)
     }
@@ -936,7 +1240,7 @@ class NodeRuntimeAgentSelectionTest {
           runtime.selectChatAgent("main")
         }
         val destinationJob = withTimeout(2_000) { requestStarted.await() }
-        val selectedKey = runtime.chatSessionKey.value
+        val selectedKey = runtime.chat.sessionKey.value
         val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
         val publicationLock = ReflectionHelpers.getField<Any>(chat, "gatewayScopeApplyLock")
         val newerSelection =
@@ -975,7 +1279,7 @@ class NodeRuntimeAgentSelectionTest {
         withTimeout(2_000) { destinationJob.join() }
         withTimeout(2_000) { selectionFinished.await() }
 
-        assertEquals("The newer explicit session selection must win", selectedKey, runtime.chatSessionKey.value)
+        assertEquals("The newer explicit session selection must win", selectedKey, runtime.chat.sessionKey.value)
       } finally {
         releaseResponse.complete(Unit)
         selectionThread?.join(2_000)
@@ -1042,8 +1346,8 @@ class NodeRuntimeAgentSelectionTest {
         runtime.selectChatAgent("scout")
         val lookupJob = withTimeout(5_000) { lookupStarted.await() }
         withTimeout(5_000) {
-          runtime.chatSessionId.first { it != null }
-          runtime.chatHistoryLoading.first { !it }
+          runtime.chat.sessionId.first { it != null }
+          runtime.chat.historyLoading.first { !it }
         }
         val catalogCreation =
           if (catalogId == null) {
@@ -1062,12 +1366,12 @@ class NodeRuntimeAgentSelectionTest {
         } else {
           releaseCreate.complete(Unit)
           withTimeout(5_000) { createJob.join() }
-          assertEquals(createdKey, runtime.chatSessionKey.value)
+          assertEquals(createdKey, runtime.chat.sessionKey.value)
           releaseLookup.complete(Unit)
           withTimeout(5_000) { lookupJob.join() }
         }
 
-        assertEquals(createdKey, runtime.chatSessionKey.value)
+        assertEquals(createdKey, runtime.chat.sessionKey.value)
         catalogCreation?.let { assertTrue(it.await()) }
       } finally {
         releaseLookup.complete(Unit)
@@ -1147,10 +1451,10 @@ class NodeRuntimeAgentSelectionTest {
       withTimeout(5_000) { lookupJobs.receive().join() }
       runtime.switchChatSession(previousKey, "scout")
       withTimeout(5_000) {
-        runtime.chatSessionId.first { it != null }
-        runtime.chatHistoryLoading.first { !it }
+        runtime.chat.sessionId.first { it != null }
+        runtime.chat.historyLoading.first { !it }
       }
-      assertEquals(previousKey, runtime.chatSessionKey.value)
+      assertEquals(previousKey, runtime.chat.sessionKey.value)
 
       val catalogCreation =
         if (catalogId == null) {
@@ -1167,15 +1471,15 @@ class NodeRuntimeAgentSelectionTest {
         withTimeout(5_000) { createJob.join() }
         catalogCreation?.let { assertTrue(it.await()) }
       }
-      assertEquals(createdKey, runtime.chatSessionKey.value)
+      assertEquals(createdKey, runtime.chat.sessionKey.value)
 
       runtime.selectChatAgent("writer")
       withTimeout(5_000) { lookupJobs.receive().join() }
-      assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.chatSessionKey.value))
+      assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.chat.sessionKey.value))
       runtime.selectChatAgent("scout")
       withTimeout(5_000) { lookupJobs.receive().join() }
 
-      assertEquals("Agent return must restore the newly selected chat", createdKey, runtime.chatSessionKey.value)
+      assertEquals("Agent return must restore the newly selected chat", createdKey, runtime.chat.sessionKey.value)
       releaseCreatedHistory.complete(Unit)
       withTimeout(5_000) { createJob.join() }
     } finally {
@@ -1230,6 +1534,62 @@ class NodeRuntimeAgentSelectionTest {
       }
     }
     ReflectionHelpers.setField(chat, "requestGatewayForGateway", request)
+  }
+
+  // Report the refresh coroutine so the assertion can distinguish hello from metadata settlement.
+  private fun answerAgentList(
+    runtime: NodeRuntime,
+    vararg agentIds: String,
+    beforeAnswer: suspend () -> Unit = {},
+  ): Channel<Job> {
+    val agents = agentIds.joinToString(",") { """{"id":"$it"}""" }
+    val refreshes = Channel<Job>(Channel.UNLIMITED)
+    runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+      when (method) {
+        "agents.list" -> {
+          refreshes.send(currentCoroutineContext().job)
+          beforeAnswer()
+          """{"defaultId":"main","mainKey":"main","agents":[$agents]}"""
+        }
+
+        "models.list" -> {
+          """{"models":[]}"""
+        }
+
+        "models.authStatus" -> {
+          """{"providers":[]}"""
+        }
+
+        else -> {
+          "{}"
+        }
+      }
+    }
+    return refreshes
+  }
+
+  private suspend fun awaitAgentRefresh(refreshes: Channel<Job>) {
+    withTimeout(2_000) { refreshes.receive().join() }
+  }
+
+  // Drives the operator session's own callbacks, as a gateway restart does.
+  private fun reconnectOperator(
+    runtime: NodeRuntime,
+    disconnectCallbacks: Int = 1,
+  ) {
+    val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+    val onDisconnected = ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")
+    repeat(disconnectCallbacks) { onDisconnected("Gateway closed") }
+    ReflectionHelpers.getField<(GatewayHelloSummary) -> Unit>(session, "onConnected")(
+      GatewayHelloSummary(
+        serverName = "Test gateway",
+        remoteAddress = "127.0.0.1:18789",
+        serverVersion = null,
+        mainSessionKey = "agent:main:main",
+        updateAvailable = null,
+        authScopes = listOf("operator.read"),
+      ),
+    )
   }
 
   private fun createConnectedRuntime(): NodeRuntime {

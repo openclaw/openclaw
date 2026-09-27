@@ -13,16 +13,18 @@ private struct NodeInvokeRequestPayload: Codable {
     var sessionKey: String?
 }
 
-private struct NodeInvokeCancelPayload: Codable {
-    var invokeId: String
-}
-
 /// Binds suspended work to one installed gateway channel generation.
 /// Callers use this lease so an actor hop cannot retarget a payload to a replacement gateway.
 public struct GatewayNodeSessionRoute: Sendable, Equatable {
     fileprivate let channelGeneration: UInt64
     fileprivate let admissionGeneration: UInt64
     fileprivate let socketGeneration: UInt64
+
+    /// Compare routes from the same GatewayNodeSession. Socket reconnects retain this context;
+    /// replacing its endpoint, credentials, or connection options creates a different context.
+    public func hasSameConnectionContext(as other: GatewayNodeSessionRoute) -> Bool {
+        self.channelGeneration == other.channelGeneration
+    }
 }
 
 /// Owns a server-event stream until its caller is finished or canceled.
@@ -134,6 +136,7 @@ public actor GatewayNodeSession {
     private var computerInvokeReceiptOrder: [ComputerInvokeReceiptKey] = []
     #if DEBUG
     private var computerInvokeReceiptJoinCounts: [UUID: Int] = [:]
+    var testBeforeChannelShutdown: (@Sendable () async -> Void)?
     #endif
 
     private struct ServerEventSubscriber {
@@ -213,7 +216,7 @@ public actor GatewayNodeSession {
         credentials: GatewayNodeSessionCredentials,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
-        extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
@@ -238,6 +241,7 @@ public actor GatewayNodeSession {
 
         let channelGeneration: UInt64
         if shouldReconnect {
+            self.channel?.retireSocketAdmission()
             let invalidatedAdmissionGeneration = self.admissionGeneration
             self.channelGeneration &+= 1
             self.admissionGeneration &+= 1
@@ -285,13 +289,6 @@ public actor GatewayNodeSession {
                 // without forcing a new channel.
                 extraHeadersProvider: extraHeadersProvider)
             self.channel = channel
-            self.connectOptions = connectOptions
-            self.onConnected = onConnected
-            self.onDisconnected = onDisconnected
-            self.onInvoke = onInvoke
-            self.onInvokeInput = onInvokeInput
-            self.onInvokeCancel = onInvokeCancel
-            self.onRouteInvalidated = onRouteInvalidated
             self.activeURL = url
             self.activeCredentials = credentials
             self.activeConnectOptionsKey = nextOptionsKey
@@ -299,14 +296,15 @@ public actor GatewayNodeSession {
             self.activeTLSRouteMetadataProvider = nextTLSRouteMetadataProvider
         } else {
             channelGeneration = self.channelGeneration
-            self.connectOptions = connectOptions
-            self.onConnected = onConnected
-            self.onDisconnected = onDisconnected
-            self.onInvoke = onInvoke
-            self.onInvokeInput = onInvokeInput
-            self.onInvokeCancel = onInvokeCancel
-            self.onRouteInvalidated = onRouteInvalidated
         }
+
+        self.connectOptions = connectOptions
+        self.onConnected = onConnected
+        self.onDisconnected = onDisconnected
+        self.onInvoke = onInvoke
+        self.onInvokeInput = onInvokeInput
+        self.onInvokeCancel = onInvokeCancel
+        self.onRouteInvalidated = onRouteInvalidated
 
         guard let channel else {
             throw NSError(domain: "Gateway", code: 0, userInfo: [
@@ -314,26 +312,22 @@ public actor GatewayNodeSession {
             ])
         }
 
-        do {
-            // Bind this connect attempt to the admission epoch that owns the socket.
-            // An in-place disconnect keeps the channel object/generation but advances
-            // admission, so a drained snapshot waiter must not report a stale connect.
-            let expectedAdmissionGeneration = self.admissionGeneration
-            try await channel.connect()
-            guard self.channelGeneration == channelGeneration,
-                  self.admissionGeneration == expectedAdmissionGeneration,
-                  self.channel === channel
-            else { throw CancellationError() }
-            _ = await self.waitForSnapshot(timeoutMs: 500)
-            guard self.channelGeneration == channelGeneration,
-                  self.admissionGeneration == expectedAdmissionGeneration,
-                  self.channel === channel
-            else { throw CancellationError() }
-            await self.notifyConnectedIfNeeded(
-                admissionGeneration: expectedAdmissionGeneration)
-        } catch {
-            throw error
-        }
+        // Bind this connect attempt to the admission epoch that owns the socket.
+        // An in-place disconnect keeps the channel object/generation but advances
+        // admission, so a drained snapshot waiter must not report a stale connect.
+        let expectedAdmissionGeneration = self.admissionGeneration
+        try await channel.connect()
+        guard self.channelGeneration == channelGeneration,
+              self.admissionGeneration == expectedAdmissionGeneration,
+              self.channel === channel
+        else { throw CancellationError() }
+        _ = await self.waitForSnapshot(timeoutMs: 500)
+        guard self.channelGeneration == channelGeneration,
+              self.admissionGeneration == expectedAdmissionGeneration,
+              self.channel === channel
+        else { throw CancellationError() }
+        await self.notifyConnectedIfNeeded(
+            admissionGeneration: expectedAdmissionGeneration)
     }
 
     /// Keeps the flat overload source-compatible while credentials remain one reconnect identity.
@@ -344,7 +338,7 @@ public actor GatewayNodeSession {
         password: String? = nil,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
-        extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
@@ -370,6 +364,7 @@ public actor GatewayNodeSession {
     }
 
     public func disconnect() async {
+        self.channel?.retireSocketAdmission()
         let invalidatedAdmissionGeneration = self.admissionGeneration
         self.channelGeneration &+= 1
         self.admissionGeneration &+= 1
@@ -422,7 +417,15 @@ public actor GatewayNodeSession {
         // Stop the detached transport concurrently with owner cleanup. Input release
         // must not wait on socket cancellation, but the old endpoint must not retain
         // automatic reconnect ownership while lifecycle callbacks are suspended.
-        let channelShutdown = Task { await channel.shutdown() }
+        #if DEBUG
+        let beforeChannelShutdown = self.testBeforeChannelShutdown
+        #endif
+        let channelShutdown = Task {
+            #if DEBUG
+            await beforeChannelShutdown?()
+            #endif
+            await channel.shutdown()
+        }
         let immediateTeardown = Task {
             await Self.$executingLifecycleCallbackID.withValue(invalidationCallbackID) {
                 await onRouteInvalidated?()
@@ -700,6 +703,17 @@ public actor GatewayNodeSession {
         }
         if let edge { connection["cloudflareAccess"] = edge }
         return try? JSONSerialization.data(withJSONObject: connection)
+    }
+
+    /// HTTP readers reuse only credentials accepted by this physical socket.
+    /// Bootstrap enrollment credentials never authorize resource downloads.
+    public func httpResourceAuthorization(ifCurrentRoute route: GatewayNodeSessionRoute) async -> (
+        url: URL, bearer: String?, tlsFingerprint: String?)?
+    {
+        guard self.isCurrentRoute(route), let channel, let url = self.activeURL else { return nil }
+        let bearer = await channel.httpResourceBearer(ifCurrentConnectionGeneration: route.socketGeneration)
+        guard self.isCurrentRoute(route), self.channel === channel else { return nil }
+        return (url, bearer, self.activeTLSRouteMetadataProvider?.effectiveTLSFingerprintSHA256)
     }
 
     public func currentGatewayID(ifCurrentRoute route: GatewayNodeSessionRoute) -> String? {
@@ -1018,22 +1032,18 @@ extension GatewayNodeSession {
     }
 
     private func drainSnapshotWaiters(returning value: Bool) {
-        if !self.snapshotWaiters.isEmpty {
-            let waiters = self.snapshotWaiters.values
-            self.snapshotWaiters.removeAll()
-            for waiter in waiters {
-                waiter.resume(returning: value)
-            }
+        let waiters = self.snapshotWaiters.values
+        self.snapshotWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: value)
         }
     }
 
     private func drainSnapshotReadyWaiters(returning value: Bool) {
-        if !self.snapshotReadyWaiters.isEmpty {
-            let waiters = self.snapshotReadyWaiters
-            self.snapshotReadyWaiters.removeAll()
-            for waiter in waiters {
-                waiter.resume(returning: value)
-            }
+        let waiters = self.snapshotReadyWaiters
+        self.snapshotReadyWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: value)
         }
     }
 
@@ -1132,11 +1142,11 @@ extension GatewayNodeSession {
         if evt.event == "node.invoke.cancel" {
             guard let payload = evt.payload else { return }
             do {
-                let cancel: NodeInvokeCancelPayload = try self.decodeEventPayload(from: payload)
+                let cancel: NodeInvokeCancelEvent = try self.decodeEventPayload(from: payload)
                 self.activeInvokes.cancel(
-                    requestID: cancel.invokeId,
+                    requestID: cancel.invokeid,
                     admissionGeneration: admissionGeneration)
-                await self.onInvokeCancel?(cancel.invokeId)
+                await self.onInvokeCancel?(cancel.invokeid)
             } catch {
                 self.logger.error("node invoke cancel decode failed: \(error.localizedDescription, privacy: .public)")
             }
@@ -1146,7 +1156,7 @@ extension GatewayNodeSession {
         self.logger.info("node invoke request received")
         guard let payload = evt.payload else { return }
         do {
-            let request = try decodeInvokeRequest(from: payload)
+            let request: NodeInvokeRequestPayload = try self.decodeEventPayload(from: payload)
             let timeoutLabel = request.timeoutMs.map(String.init) ?? "none"
             self.logger.info(
                 """
@@ -1587,10 +1597,6 @@ extension GatewayNodeSession {
             #endif
         }
         return true
-    }
-
-    private func decodeInvokeRequest(from payload: OpenClawProtocol.AnyCodable) throws -> NodeInvokeRequestPayload {
-        try self.decodeEventPayload(from: payload)
     }
 
     private func decodeEventPayload<T: Decodable>(from payload: OpenClawProtocol.AnyCodable) throws -> T {

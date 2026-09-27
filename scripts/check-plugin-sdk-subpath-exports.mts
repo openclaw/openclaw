@@ -3,13 +3,16 @@
 // Verifies plugin SDK subpath exports and generated entrypoint metadata.
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { normalizeRepoPath, visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
+import * as ts from "typescript/unstable/ast";
+import { normalizeRepoPath } from "./lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
+  isTestLikeTypeScriptFile,
   resolveSourceRoots,
   toLine,
+  visitModuleSpecifiers,
 } from "./lib/ts-guard-utils.mts";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const scanRoots = resolveSourceRoots(repoRoot, [
@@ -19,6 +22,7 @@ const scanRoots = resolveSourceRoots(repoRoot, [
   "scripts",
   "test",
 ]);
+const extraTestSuffixes = [".test-support.ts", ".test-loader.ts", ".test-fixtures.ts"];
 
 type PluginSdkViolation = {
   file: string;
@@ -79,7 +83,7 @@ function isRuntimeModuleReference(node: ts.Node): boolean {
   // With verbatimModuleSyntax, inline `type` specifiers emit an empty import/export and still
   // resolve the module. Only declaration-level `import type` and `export type` are erased.
   if (ts.isImportDeclaration(node)) {
-    return !node.importClause?.isTypeOnly;
+    return node.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword;
   }
   if (ts.isExportDeclaration(node)) {
     return !node.isTypeOnly;
@@ -104,19 +108,10 @@ function compareEntries(left: PluginSdkViolation, right: PluginSdkViolation): nu
 }
 
 async function collectViolations(): Promise<PluginSdkViolation[]> {
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
   const entrypoints = readEntrypoints();
   const exports = readPackageExports();
   const privateLocalOnlySubpaths = readPrivateLocalOnlySubpaths();
-  // Workspace packages resolve private facades through root TS paths and bundle them into dist;
-  // live jiti source stages inject the same private map. Core src callers must stay relative.
-  const coreRuntimeFiles = new Set(
-    (
-      await collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src"]), {
-        includeTests: false,
-        extraTestSuffixes: [".test-support.ts", ".test-loader.ts", ".test-fixtures.ts"],
-      })
-    ).filter((filePath) => !isGeneratedBuildArtifact(filePath)),
-  );
   const files = (await collectTypeScriptFilesFromRoots(scanRoots, { includeTests: true }))
     .filter((filePath) => !isGeneratedBuildArtifact(filePath))
     .toSorted((left, right) =>
@@ -126,7 +121,15 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
 
   for (const filePath of files) {
     const sourceText = readFileSync(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
+    // Escaped module names need parsing even when the literal SDK prefix is absent.
+    if (!sourceText.includes("plugin-sdk") && !sourceText.includes("\\")) {
+      continue;
+    }
+    const repoPath = normalizeRepoPath(repoRoot, filePath);
+    // Workspace packages resolve private facades through TS paths; core runtime stays relative.
+    const isCoreRuntimeFile =
+      repoPath.startsWith("src/") && !isTestLikeTypeScriptFile(filePath, extraTestSuffixes);
+    const sourceFile = parser.parseSourceFile(filePath, sourceText);
 
     function push(kind: string, node: ts.Node, specifierNode: ts.Node, specifier: string): void {
       const subpath = parsePluginSdkSubpath(specifier);
@@ -134,8 +137,7 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
         return;
       }
       if (privateLocalOnlySubpaths.has(subpath)) {
-        const repoPath = normalizeRepoPath(repoRoot, filePath);
-        if (coreRuntimeFiles.has(filePath) && isRuntimeModuleReference(node)) {
+        if (isCoreRuntimeFile && isRuntimeModuleReference(node)) {
           violations.push({
             file: repoPath,
             line: toLine(sourceFile, specifierNode),
@@ -160,7 +162,7 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
       }
 
       violations.push({
-        file: normalizeRepoPath(repoRoot, filePath),
+        file: repoPath,
         line: toLine(sourceFile, specifierNode),
         kind,
         specifier,
@@ -170,7 +172,6 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
     }
 
     visitModuleSpecifiers(
-      ts,
       sourceFile,
       ({ kind, node, specifier, specifierNode }: ModuleSpecifierVisit) => {
         push(kind, node, specifierNode, specifier);
@@ -197,10 +198,10 @@ async function main(): Promise<void> {
       `- ${violation.file}:${violation.line} [${violation.kind}] ${violation.specifier}: ${violation.reason}`,
     );
   }
-  process.exit(1);
+  process.exitCode = 1;
 }
 
 main().catch((error: unknown) => {
   console.error(error);
-  process.exit(1);
+  process.exitCode = 1;
 });

@@ -56,27 +56,25 @@ export type WorkboardDispatchSummary = {
 
 export type WorkboardRefreshSource = "initial" | "manual" | "live";
 
-export type WorkboardViewPresetId =
-  | "all"
-  | "default_agent"
-  | "ready"
+export type WorkboardHealthKey =
   | "running"
   | "blocked"
-  | "review"
   | "stale"
-  | "missing_proof"
-  | "recently_done";
+  | "readyUnassigned"
+  | "missingProof"
+  | "failedAttempts";
 
-export type WorkboardHealthSummary = {
-  running: number;
-  blocked: number;
-  stale: number;
-  readyUnassigned: number;
-  missingProof: number;
-  failedAttempts: number;
-};
-
-export type WorkboardHealthKey = keyof WorkboardHealthSummary;
+export type WorkboardBulkDialog =
+  | { kind: "delete"; cardIds: string[]; observedCards: WorkboardCard[] }
+  | {
+      kind: "edit";
+      cardIds: string[];
+      observedCards: WorkboardCard[];
+      priority: WorkboardPriority | "";
+      agentId: string;
+      labels: string;
+      labelMode: "keep" | "add" | "replace" | "remove";
+    };
 
 export type WorkboardUiState = {
   loading: boolean;
@@ -92,13 +90,16 @@ export type WorkboardUiState = {
   lastDispatchSummary: WorkboardDispatchSummary | null;
   dispatching: boolean;
   query: string;
-  priorityFilter: "all" | WorkboardPriority;
+  searchOpen: boolean;
+  priorityFilter: Set<WorkboardPriority>;
+  statusFilter: Set<WorkboardStatus>;
+  attentionFilter: Set<"stale" | "missingProof">;
+  donePeriod: "all" | "week";
   agentFilter: string;
   boardFilter: string;
-  viewPreset: WorkboardViewPresetId;
-  activeHealthHighlight: WorkboardHealthKey | null;
   showArchived: boolean;
   layout: "comfortable" | "compact";
+  viewMode: "board" | "list";
   emptyColumnMode: "show" | "collapse" | "hide";
   collapsedStatuses: Set<WorkboardStatus>;
   expandedEmptyStatuses: Set<WorkboardStatus>;
@@ -115,6 +116,7 @@ export type WorkboardUiState = {
   lifecycleConfirmedTaskIds: Set<string>;
   lifecycleTaskConfirmationStartedAt: number | null;
   draftOpen: boolean;
+  draftDiscardOpen: boolean;
   draftSaving: boolean;
   editingCardId: string | null;
   editingCardBase: WorkboardCard | null;
@@ -128,9 +130,17 @@ export type WorkboardUiState = {
   draftTemplateId: WorkboardTemplateId | "";
   draftCommentBody: string;
   detailCardId: string | null;
+  detailTab: "overview" | "activity" | "session" | "details";
   detailCommentBody: string;
+  detailCommentDrafts: Map<string, string>;
   busyCardIds: Set<string>;
+  selectedCardIds: Set<string>;
+  bulkDialog: WorkboardBulkDialog | null;
+  bulkSaving: boolean;
+  bulkResult: { completed: number; total: number } | null;
   draggedCardId: string | null;
+  dragOverStatus: WorkboardStatus | null;
+  dragBeforeCardId: string | null;
   capturingSessionKeys: Set<string>;
 };
 

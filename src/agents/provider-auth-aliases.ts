@@ -70,6 +70,10 @@ function resolveProviderAuthAliasCandidates(
   );
 }
 
+function resolveProviderAuthEndpoint(provider: string, config: OpenClawConfig | undefined) {
+  return resolveMergedModelProviderConfig(config, provider)?.baseUrl?.trim().replace(/\/+$/, "");
+}
+
 function matchesProviderAuthEndpoint(
   provider: string,
   candidate: PluginProviderAuthAliasCandidate,
@@ -81,10 +85,54 @@ function matchesProviderAuthEndpoint(
   if (params?.storedCredential) {
     return false;
   }
-  const baseUrl = resolveMergedModelProviderConfig(params?.config, provider)
-    ?.baseUrl?.trim()
-    .replace(/\/+$/, "");
+  const baseUrl = resolveProviderAuthEndpoint(provider, params?.config);
   return baseUrl !== undefined && candidate.baseUrls.includes(baseUrl);
+}
+
+/** A migration guard cannot select a credential realm without the route's endpoint. */
+export function hasUnresolvedProviderAuthEndpoint(
+  provider: string,
+  params?: ProviderAuthAliasLookupParams,
+): boolean {
+  const normalized = normalizeProviderId(provider);
+  if (resolveProviderAuthEndpoint(normalized, params?.config)) {
+    return false;
+  }
+  return (
+    resolveProviderAuthAliasCandidates(params)
+      .get(normalized)
+      ?.some(
+        (candidate) =>
+          candidate.baseUrls !== undefined && shouldUsePluginAuthAliases(candidate.plugin, params),
+      ) ?? false
+  );
+}
+
+/** Limit missing-endpoint ambiguity to realms an eligible alias can actually select. */
+export function couldResolveProviderIdForAuth(
+  provider: string,
+  target: string,
+  params?: ProviderAuthAliasLookupParams,
+): boolean {
+  if (resolveProviderIdForAuth(provider, params) === target) {
+    return true;
+  }
+  const normalized = normalizeProviderId(provider);
+  if (params?.storedCredential || resolveProviderAuthEndpoint(normalized, params?.config)) {
+    return false;
+  }
+  for (const candidate of resolveProviderAuthAliasCandidates(params).get(normalized) ?? []) {
+    if (!shouldUsePluginAuthAliases(candidate.plugin, params)) {
+      continue;
+    }
+    if (candidate.target === target && (!candidate.baseUrls || candidate.baseUrls.length > 0)) {
+      return true;
+    }
+    if (!candidate.baseUrls) {
+      break;
+    }
+  }
+  return false;
 }
 
 /** Resolve canonical auth provider aliases from plugin metadata. */

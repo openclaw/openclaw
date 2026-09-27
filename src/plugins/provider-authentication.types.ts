@@ -48,6 +48,10 @@ export type ProviderAuthResult = {
 /** Interactive auth context passed to provider login/setup methods. */
 export type ProviderAuthContext = {
   config: OpenClawConfig;
+  /** Host-authorized profiles available for reconnect; personal flows supply only their owner's selection. */
+  existingProfiles?: readonly ProviderAuthProfile[];
+  /** Save connection credentials without discovering or selecting a starter model. */
+  credentialOnly?: boolean;
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
@@ -87,6 +91,11 @@ export type ProviderAuthContext = {
   openUrl: (url: string) => Promise<void>;
   oauth: {
     createVpsAwareHandlers: typeof createVpsAwareOAuthHandlers;
+    authorize?: (params: {
+      state: string;
+      timeoutMs: number;
+      buildAuthorizationUrl: (redirectUrl: string) => string;
+    }) => Promise<{ code: string; state: string }>;
   };
 };
 
@@ -202,11 +211,12 @@ export type ProviderAuthMethod = {
 };
 
 export type ProviderPluginWizardSetup = {
+  modelTarget?: "utility";
   choiceId?: string;
   choiceLabel?: string;
   choiceHint?: string;
   assistantPriority?: number;
-  assistantVisibility?: "visible" | "manual-only";
+  assistantVisibility?: "visible" | "manual-only" | "detected-only";
   onboardingFeatured?: boolean;
   groupId?: string;
   groupLabel?: string;

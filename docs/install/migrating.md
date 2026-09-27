@@ -42,7 +42,7 @@ Run `openclaw status` on the old machine to confirm your state directory path. C
 
 <Steps>
   <Step title="Stop the gateway and back up">
-    On the **old** machine, stop the Gateway, then create and verify a portable
+    On the **old** machine, stop the Gateway, then create and verify a backup
     archive:
 
     ```bash
@@ -75,6 +75,12 @@ Run `openclaw status` on the old machine to confirm your state directory path. C
     restored `manifest.json` mapping to move the state and workspace assets to
     their recorded destinations, or point `OPENCLAW_STATE_DIR` at the restored
     state asset. Confirm ownership matches the user that will run the Gateway.
+
+    Absolute symbolic links keep their original target locations, including
+    links to separately backed-up config or credentials. Before activating
+    state on another machine or at another path, review these links and make
+    sure their targets are correct for the new location. See the
+    [backup symbolic-link caveat](/cli/backup#what-gets-backed-up).
 
     <Warning>
     Restoring older channel state can desynchronize ratcheting credentials such
@@ -148,4 +154,6 @@ In-place plugin upgrades preserve the same plugin id and config keys but may mov
 - [`openclaw migrate`](/cli/migrate): CLI reference for cross-system imports.
 - [Install overview](/install): all installation methods.
 - [Doctor](/gateway/doctor): post-migration health check.
+- [Updating](/install/updating): updating an existing install in place, plus rollback strategy.
 - [Uninstall](/install/uninstall): removing OpenClaw cleanly.
+- [`openclaw backup`](/cli/backup) — create the archive this migration restores

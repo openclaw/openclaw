@@ -3,8 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { buildStatusReplyParts } from "../../status/status-text.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
@@ -25,6 +28,8 @@ type NativeStatusSelectionCase = {
   modelParentSessionKey?: string;
   preparedModel?: string;
   preparedProvider?: string;
+  topicName?: string;
+  overrideKey?: string;
 };
 
 const buildStatusReplyMock = vi.hoisted(() => vi.fn());
@@ -102,6 +107,7 @@ describe("native /status channel model routing", () => {
       selection: "parent group override for a topic",
       source: undefined,
       groupId: "123:topic:77",
+      topicName: "Planning",
       expectedProvider: "anthropic",
       expectedModel: "claude-fable-5",
     },
@@ -112,6 +118,16 @@ describe("native /status channel model routing", () => {
       modelParentSessionKey: "agent:main:telegram:group:123:thread:77",
       expectedProvider: "anthropic",
       expectedModel: "claude-fable-5",
+    },
+    {
+      selection: "group-name override for a topic",
+      source: undefined,
+      groupId: "123:topic:77",
+      topicName: "Planning",
+      overrideKey: "Project Team",
+      channelModel: "xai/grok-4.3",
+      expectedProvider: "xai",
+      expectedModel: "grok-4.3",
     },
     {
       selection: "native direct peer override before wildcard",
@@ -154,7 +170,9 @@ describe("native /status channel model routing", () => {
   it.each(statusSelectionCases)(
     "preserves canonical native /status $selection",
     async (testCase) => {
-      const targetSessionKey = "agent:main:main";
+      const targetSessionKey = testCase.topicName
+        ? "agent:main:telegram:group:123:topic:77"
+        : "agent:main:main";
       const storePath = path.join(tempDirs.make("openclaw-native-status-"), "sessions.json");
       const {
         channelModel = "anthropic/claude-fable-5",
@@ -169,9 +187,10 @@ describe("native /status channel model routing", () => {
         preparedModel = "gpt-5.5",
         preparedProvider = "openai",
         source,
+        topicName,
       } = testCase;
       const isDirect = directUserId !== undefined || directSenderId !== undefined;
-      const overrideKey = directSenderId ?? directUserId ?? "123";
+      const overrideKey = testCase.overrideKey ?? directSenderId ?? directUserId ?? "123";
       const conflictingDirectUserId =
         directSenderId !== undefined && directUserId !== undefined ? directUserId : undefined;
       await replaceSessionEntry(
@@ -187,6 +206,7 @@ describe("native /status channel model routing", () => {
               : {}),
           }),
           ...(isDirect ? {} : { groupId }),
+          ...(topicName ? { subject: "Project Team", topicName: "Previous" } : {}),
           ...(locked ? { modelSelectionLocked: true } : {}),
           ...(source
             ? {
@@ -215,6 +235,17 @@ describe("native /status channel model routing", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: isDirect ? "direct" : "group",
+          ...(topicName
+            ? {
+                GroupSubject: "Project Team",
+                TopicName: topicName,
+                MessageThreadId: 77,
+                IsForum: true,
+              }
+            : {}),
+          ...(!isDirect
+            ? { From: `telegram:group:${groupId}`, OriginatingTo: `telegram:${groupId}` }
+            : {}),
           ...(directSenderId
             ? { From: `telegram:${directSenderId}`, SenderId: directSenderId }
             : {}),
@@ -234,7 +265,7 @@ describe("native /status channel model routing", () => {
           agents: {
             defaults: {
               model: { primary: "openai/gpt-5.5" },
-              modelPolicy: { allow: ["openai/*", "anthropic/*", "xai/*"] },
+              modelPolicy: { allow: source ? ["openai/*"] : ["openai/*", "anthropic/*", "xai/*"] },
               models: {
                 "anthropic/claude-fable-5": {
                   alias: "Fable",
@@ -297,6 +328,126 @@ describe("native /status channel model routing", () => {
         expect(statusCall.sessionEntry).not.toHaveProperty("modelOverride");
       }
       expect(result).toMatchObject({ reply: { text: "selected model status" } });
+      if (topicName) {
+        expect(
+          loadSessionEntry({ agentId: "main", sessionKey: targetSessionKey, storePath }),
+        ).toMatchObject({
+          sessionId: "status-session",
+          subject: "Project Team",
+          topicName: "Planning",
+        });
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "renders parent selection with explicit Default=%s without changing stored pins",
+    async (explicitDefault) => {
+      buildStatusReplyMock.mockImplementation(
+        async (params: Parameters<typeof buildStatusReplyParts>[0]) =>
+          buildStatusReplyParts({
+            ...params,
+            statusChannel: "telegram",
+            resolvedHarness: "openclaw",
+            pluginHealthLineOverride: "",
+            taskLineOverride: "",
+            skipDefaultTaskLookup: true,
+            modelAuthOverride: "api-key",
+            activeModelAuthOverride: "api-key",
+            includeTranscriptUsage: false,
+          }),
+      );
+      const storePath = path.join(tempDirs.make("openclaw-native-status-parent-"), "sessions.json");
+      const parentSessionKey = "agent:main:telegram:group:parent";
+      const sessionKey = "agent:main:telegram:group:parent:topic:77";
+      const parent = {
+        sessionId: "parent",
+        updatedAt: Date.now(),
+        providerOverride: "anthropic",
+        modelOverride: "claude-fable-5",
+        modelOverrideSource: "user" as const,
+      };
+      await replaceSessionEntry(
+        { agentId: "main", storePath, sessionKey: parentSessionKey },
+        parent,
+      );
+      const parentBefore = loadSessionEntry({
+        agentId: "main",
+        storePath,
+        sessionKey: parentSessionKey,
+      });
+      const child: SessionEntry = {
+        sessionId: "child",
+        updatedAt: Date.now(),
+        parentSessionKey,
+      };
+      if (explicitDefault) {
+        child.providerOverride = "xai";
+        child.modelOverride = "stale-child-model";
+        child.modelOverrideSource = "user";
+        applyModelOverrideToSessionEntry({
+          entry: child,
+          selection: { provider: "openai", model: "gpt-5.5", isDefault: true },
+          explicitDefaultSelection: true,
+        });
+      }
+      await replaceSessionEntry({ agentId: "main", storePath, sessionKey }, child);
+      const result = await maybeResolveNativeSlashCommandFastReply({
+        ctx: buildTestCtx({
+          Body: "/status",
+          CommandBody: "/status",
+          CommandSource: "native",
+          CommandAuthorized: true,
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          SessionKey: "telegram:slash:parent",
+          CommandTargetSessionKey: sessionKey,
+          CommandTurn: {
+            kind: "native",
+            source: "native",
+            authorized: true,
+            commandName: "status",
+            body: "/status",
+          },
+        }),
+        cfg: markCompleteReplyConfig({
+          session: { store: storePath },
+          agents: { defaults: { model: "openai/gpt-5.5", modelPolicy: { allow: ["openai/*"] } } },
+          ...(explicitDefault
+            ? {}
+            : { channels: { modelByChannel: { telegram: { "*": "google/channel-model" } } } }),
+        } as OpenClawConfig),
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        agentCfg: undefined,
+        commandAuthorized: true,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        provider: "openai",
+        model: "gpt-5.5",
+        aliasIndex: { byAlias: new Map(), byKey: new Map() },
+        workspaceDir: "/tmp/workspace",
+        typing: createTypingController(),
+      });
+      expect(result).toMatchObject({
+        handled: true,
+        reply: {
+          text: expect.stringContaining(
+            `Model: ${explicitDefault ? "openai/gpt-5.5" : "anthropic/claude-fable-5"}`,
+          ),
+        },
+      });
+      expect(
+        loadSessionEntry({ agentId: "main", storePath, sessionKey: parentSessionKey }),
+      ).toEqual(parentBefore);
+      const persistedChild = loadSessionEntry({ agentId: "main", storePath, sessionKey });
+      expect(persistedChild).toMatchObject({ parentSessionKey });
+      expect(persistedChild?.providerOverride).toBeUndefined();
+      expect(persistedChild?.modelOverride).toBeUndefined();
+      if (explicitDefault) {
+        expect(persistedChild?.modelOverrideSource).toBe("default");
+      }
     },
   );
 });

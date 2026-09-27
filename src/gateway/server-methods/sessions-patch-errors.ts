@@ -10,10 +10,6 @@ import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { sessionLog } from "./sessions-shared.js";
 
-export function invalidSessionPatchOutcome(message: string) {
-  return { ok: false as const, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
-}
-
 export function unexpectedPatchError(key: string, error: unknown): ErrorShape {
   if (error instanceof ModelAccountConnectAuthorityError) {
     return errorShape(ErrorCodes.FORBIDDEN, error.message);
@@ -48,4 +44,22 @@ export function createCommitGuard(key: string, assertCurrent: (() => void) | und
         : unexpectedPatchError(key, error);
     }
   };
+}
+
+/** Every detached preparation must revalidate its exact owners at the synchronous commit. */
+export function assertSessionPatchCommitAllowed(params: {
+  personalModelSelection?: { assertCurrent: () => void };
+  guards: Iterable<() => ErrorShape | undefined>;
+  archiveTransitions: Iterable<{ assertCommitAllowed: () => void }>;
+}): void {
+  params.personalModelSelection?.assertCurrent();
+  for (const guard of params.guards) {
+    const error = guard();
+    if (error) {
+      throw new SessionMutationAuthorizationChangedError(error);
+    }
+  }
+  for (const transition of params.archiveTransitions) {
+    transition.assertCommitAllowed();
+  }
 }

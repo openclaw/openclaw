@@ -2,6 +2,7 @@
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { telegramOutbound } from "../extensions/telegram/api.js";
+import { compileStructuredInputUrl } from "../src/agents/harness/structured-input.js";
 import { buildAgentHarnessQuestionPromptPayload } from "../src/agents/harness/user-input-bridge.js";
 import { QuestionManager } from "../src/gateway/question-manager.js";
 import { createQuestionHandlers } from "../src/gateway/server-methods/question.js";
@@ -32,6 +33,42 @@ afterEach(() => {
 });
 
 describe("Telegram question Gateway resolution", () => {
+  it("opens an external step with a URL button separate from completion callbacks", async () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const url = "https://example.test/connect";
+    const input = compileStructuredInputUrl({
+      url,
+      elicitationId: "connect",
+      message: "Sign in to continue",
+      fallbackMessage: "External step",
+      protocolName: "MCP",
+    });
+    if (input.kind !== "ready" || input.plan.kind !== "url") {
+      throw new Error("expected a URL question");
+    }
+    const payload = buildAgentHarnessQuestionPromptPayload({
+      questionId,
+      questions: [input.plan.question],
+    });
+    if (!payload.presentation) {
+      throw new Error("expected a portable question presentation");
+    }
+    const rendered = await telegramOutbound.renderPresentation?.({
+      payload,
+      presentation: payload.presentation,
+      ctx: { cfg: {}, to: "42", text: payload.text, payload },
+    });
+    const telegram = rendered?.channelData?.telegram as {
+      buttons?: Array<Array<{ text: string; url?: string; callback_data?: string }>>;
+    };
+    expect(telegram.buttons?.flat()).toEqual([
+      { text: "Open link", url },
+      { text: "I've completed this step", callback_data: `tgq1:${questionId}:0` },
+      { text: "Decline", callback_data: `tgq1:${questionId}:1` },
+    ]);
+    expect(payload.text).toContain(url);
+  });
+
   it("resolves canonical option C when rendered option A repeats across blocks", async () => {
     const manager = new QuestionManager();
     const handlers = createQuestionHandlers(

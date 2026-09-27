@@ -585,6 +585,7 @@ suite.define(() => {
       const activePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const thread = activePane.locator(".chat-thread");
       await thread.hover();
+      const previousScrollHeight = await thread.evaluate((element) => element.scrollHeight);
       await page.mouse.wheel(0, -1_000_000);
       await expect
         .poll(() =>
@@ -595,6 +596,16 @@ suite.define(() => {
           ),
         )
         .toBe(140);
+      await expect
+        .poll(() =>
+          thread.evaluate(
+            (element, previousHeight) =>
+              element.scrollHeight > previousHeight && element.scrollTop > 0,
+            previousScrollHeight,
+          ),
+        )
+        .toBe(true);
+      await waitForChatScrollIdle(page);
       // Prepending preserves the visible anchor. A renewed upward gesture
       // reaches the newly loaded start instead of teleporting the reader.
       await page.mouse.wheel(0, -1_000_000);
@@ -729,11 +740,7 @@ suite.define(() => {
       await composer.waitFor({ state: "visible", timeout: 10_000 });
 
       await gateway.setOnline(false);
-      await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
-        .waitFor({ timeout: 10_000 });
+      await page.locator(".agent-chat__input--offline").waitFor({ timeout: 10_000 });
 
       const prompt = "send this when the Gateway returns";
       const attachmentName = "offline-proof.txt";
@@ -832,6 +839,7 @@ suite.define(() => {
         {
           content: attachmentBase64,
           fileName: attachmentName,
+          origin: "file",
           mimeType: attachmentMimeType,
           type: "file",
         },
@@ -857,11 +865,7 @@ suite.define(() => {
           return proof.attachment || proof.prompt || proof.runId === runId;
         })
         .toBe(false);
-      await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
-        .waitFor({ state: "detached" });
+      await page.locator(".agent-chat__input--offline").waitFor({ state: "detached" });
       await expectRequestCountStable(gateway, "chat.send", 1);
       if (artifactDir) {
         await writeFile(

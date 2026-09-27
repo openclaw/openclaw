@@ -1,3 +1,4 @@
+import { classifyGatewayStaleInstall } from "../../gateway/stale-install.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -18,8 +19,12 @@ import type { AgentAttemptResult } from "./runtime-loaders.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
-const formatLifecycleError = (error: unknown): string =>
-  formatErrorMessageForDisplay(error, renderFailoverCodeUserCopy(getFailoverErrorCode(error)));
+const formatLifecycleError = (error: unknown): string => {
+  const staleInstall = classifyGatewayStaleInstall(error);
+  return staleInstall
+    ? staleInstall.error.message
+    : formatErrorMessageForDisplay(error, renderFailoverCodeUserCopy(getFailoverErrorCode(error)));
+};
 
 function resolveTerminalLogLevel(
   outcome: AgentRunTerminalOutcome,
@@ -65,7 +70,7 @@ export function createAgentCommandLifecycle(params: {
           (payload) => payload.isError === true && typeof payload.text === "string",
         )?.text
       : undefined) ??
-    (runResult.meta.error ? "Agent run failed" : undefined);
+    (runResult.meta.error ? runResult.meta.error.message.trim() || "Agent run failed" : undefined);
   const resolveTerminalError = (
     runResult: AgentAttemptResult,
     fallbackExhausted: boolean,

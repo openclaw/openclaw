@@ -19,7 +19,7 @@ import {
   wireMessageText,
   type PublishedWireWorkspace,
 } from "./paired-node-worker-wire-fixture.js";
-import { startSkillLibraryNodeProcess } from "./skill-library-node-process.js";
+import { prepareSkillLibraryNodeProcess } from "./skill-library-node-process.js";
 import {
   createSkillLibraryWireInstance,
   decodedSkillLibraryFiles,
@@ -74,7 +74,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
     async () => {
       const instance = await createSkillLibraryWireInstance();
       let provider: Awaited<ReturnType<typeof startSkillLibraryWireProvider>> | undefined;
-      let node: Awaited<ReturnType<typeof startSkillLibraryNodeProcess>> | undefined;
+      let node: Awaited<ReturnType<typeof prepareSkillLibraryNodeProcess>> | undefined;
       let published: PublishedWireWorkspace | undefined;
       const clients: SkillLibraryWireClient[] = [];
       await runQaGatewayFixture(
@@ -236,7 +236,8 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           });
           expect(outside(localFirst.directory, localCwd)).toBe(true);
           console.info("[skill-library-wire] pairing real node");
-          node = await startSkillLibraryNodeProcess(instance, admin);
+          node = await prepareSkillLibraryNodeProcess(instance);
+          await node.start(admin);
           console.info("[skill-library-wire] dispatching managed session to node");
           const dispatched = await admin.request<{
             placement: { state: string; remoteWorkspaceDir: string; workerBundleHash: string };

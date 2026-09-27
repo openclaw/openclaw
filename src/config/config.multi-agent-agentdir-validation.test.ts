@@ -1,4 +1,5 @@
 // Verifies multi-agent agent directory validation and rejection paths.
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +11,21 @@ import type { OpenClawConfig } from "./types.js";
 import { validateConfigObject } from "./validation.js";
 
 describe("multi-agent agentDir validation", () => {
+  it("validates one referenced agent without resolving its filesystem identity", () => {
+    const agentDir = path.join(tmpdir(), "openclaw-single-agentdir");
+    using realpath = vi.spyOn(syncFs.realpathSync, "native");
+
+    const result = validateConfigObject({
+      agents: {
+        entries: { alpha: { agentDir, default: true } },
+      },
+      bindings: [{ agentId: "alpha", match: { channel: "forum" } }],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(realpath.mock.calls.filter(([target]) => target === agentDir)).toEqual([]);
+  });
+
   it.each(["HOME", "USERPROFILE", "OPENCLAW_HOME", "homedir", "relative OPENCLAW_HOME"] as const)(
     "keeps config validation and runtime paths in the selected %s",
     async (homeSource) => {

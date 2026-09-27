@@ -13,6 +13,7 @@ import {
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
+import { extractResolvedApplyPatchTargetPaths } from "./apply-patch-paths.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
@@ -70,12 +71,13 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
               ...createSandboxFsBridgeFromResolver((filePath, cwd) => {
                 const resolved = resolvePath({ filePath, cwd });
                 return { ...resolved, hostPath: path.join(remoteRoot, resolved.relativePath) };
-              }),
+              }, remoteBridge.pathMappings),
               // Only backing operations see hostPath. Public resolution must keep
               // path policy on asynchronous remote stat, including on Windows.
               resolvePath,
             }
           : remoteBridge;
+      const patchSandbox = { root: hostRoot, bridge, workspaceMounts: bridge.pathMappings };
       const guard = (tool: ReturnType<typeof createSandboxedReadTool>) =>
         wrapToolWorkspaceRootGuardWithOptions(tool, hostRoot, {
           containerWorkdir,
@@ -141,6 +143,44 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
       await expect(fs.readFile(path.join(remoteRoot, "notes.md"), "utf8")).resolves.toBe(
         "sibling original",
       );
+      await expect(
+        readTool.execute("remote-reference-literal-read", { path: "@@notes.md" }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          content: expect.arrayContaining([
+            expect.objectContaining({ type: "text", text: "literal edited" }),
+          ]),
+        }),
+      );
+      await writeTool.execute("remote-reference-literal-write", {
+        path: "@@notes.md",
+        content: "referenced original",
+      });
+      await editTool.execute("remote-reference-literal-edit", {
+        path: "@@notes.md",
+        edits: [{ oldText: "original", newText: "edited" }],
+      });
+      const referencedPatch = [
+        "*** Begin Patch",
+        "*** Update File: @@notes.md",
+        "@@",
+        "-referenced edited",
+        "+referenced patched",
+        "*** End Patch",
+      ].join("\n");
+      const patchOptions = { cwd: hostRoot, sandbox: patchSandbox };
+      await expect(
+        extractResolvedApplyPatchTargetPaths(referencedPatch, patchOptions),
+      ).resolves.toEqual([path.posix.join(containerWorkdir, "@notes.md")]);
+      await createApplyPatchTool(patchOptions).execute("remote-reference-literal-patch", {
+        input: referencedPatch,
+      });
+      await expect(fs.readFile(path.join(remoteRoot, "@notes.md"), "utf8")).resolves.toBe(
+        "referenced patched",
+      );
+      await expect(fs.readFile(path.join(remoteRoot, "notes.md"), "utf8")).resolves.toBe(
+        "sibling original",
+      );
       await writeTool.execute("remote-at-parent-write", {
         path: "@projects/new.md",
         content: "literal child",
@@ -161,7 +201,7 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
       const memoryWriteTool = wrapToolMemoryFlushAppendOnlyWrite(writeTool, {
         root: hostRoot,
         relativePath: journal,
-        sandbox: { root: hostRoot, bridge },
+        sandbox: patchSandbox,
       });
       await expect(
         memoryWriteTool.execute("remote-at-memory", {
@@ -171,7 +211,7 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
       ).rejects.toThrow(/Memory flush writes are restricted/);
       await expect(fs.readFile(path.join(remoteRoot, journal), "utf8")).resolves.toBe("allowed");
 
-      await createApplyPatchTool({ cwd: hostRoot, sandbox: { root: hostRoot, bridge } }).execute(
+      await createApplyPatchTool({ cwd: hostRoot, sandbox: patchSandbox }).execute(
         "remote-at-patch",
         {
           input: ["*** Begin Patch", "*** Delete File: @notes.md", "*** End Patch"].join("\n"),
@@ -183,7 +223,7 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
       await expect(fs.readFile(path.join(remoteRoot, "notes.md"), "utf8")).resolves.toBe(
         "sibling original",
       );
-      await createApplyPatchTool({ cwd: hostRoot, sandbox: { root: hostRoot, bridge } }).execute(
+      await createApplyPatchTool({ cwd: hostRoot, sandbox: patchSandbox }).execute(
         "remote-at-shorthand-patch",
         {
           input: [
@@ -217,7 +257,7 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
       await expect(fs.readFile(path.join(remoteRoot, "moved.md"), "utf8")).resolves.toBe(
         "move target",
       );
-      await createApplyPatchTool({ cwd: hostRoot, sandbox: { root: hostRoot, bridge } }).execute(
+      await createApplyPatchTool({ cwd: hostRoot, sandbox: patchSandbox }).execute(
         "remote-at-replace-patch",
         {
           input: [
@@ -280,7 +320,7 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
           await expectQuarantine("edited");
           await createApplyPatchTool({
             cwd: hostRoot,
-            sandbox: { root: hostRoot, bridge },
+            sandbox: patchSandbox,
             memoryWriteProvenance,
           }).execute("remote-memory-patch", {
             input: [
@@ -297,7 +337,7 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
             root: hostRoot,
             relativePath,
             containerWorkdir,
-            sandbox: { root: hostRoot, bridge },
+            sandbox: patchSandbox,
             memoryWriteProvenance,
           }).execute("remote-memory-flush", { path: memoryPath, content: "flushed" });
           await expectQuarantine("patched\nflushed");

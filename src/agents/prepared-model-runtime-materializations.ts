@@ -2,7 +2,7 @@ import {
   getPreparedRuntimeAuthMaterializations,
   registerRuntimeAuthMaterializationMutationListener,
 } from "./auth-profiles/runtime-materializations.js";
-import { setPreparedModelRuntimeAuthMaterializations } from "./prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import {
   normalizeOptionalDir,
   type PreparedModelRuntimeOwner,
@@ -29,14 +29,14 @@ export function configuredOwnersAreRequestVisible(
 
 export function registerPreparedRuntimeAuthMaterializationPublisher(
   owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
-  notify: (event: { phase: "invalidated" | "published" }) => void,
+  notify: (event: { phase: "invalidated" | "published"; modelFactsChanged: false }) => void,
 ): () => void {
   return registerRuntimeAuthMaterializationMutationListener((event) => {
     publishPreparedRuntimeAuthMaterializations({
       event,
       owners,
-      onInvalidated: () => notify({ phase: "invalidated" }),
-      onPublished: () => notify({ phase: "published" }),
+      onInvalidated: () => notify({ phase: "invalidated", modelFactsChanged: false }),
+      onPublished: () => notify({ phase: "published", modelFactsChanged: false }),
     });
   });
 }
@@ -66,10 +66,11 @@ function publishPreparedRuntimeAuthMaterializations(params: {
   for (const { owner, snapshot } of affectedOwners) {
     // A successful route only changes this bounded secret-free fact set. Rebuilding the model
     // catalog here would pull plugin lifecycle work into the turn-completion boundary.
-    setPreparedModelRuntimeAuthMaterializations(
-      snapshot,
-      Object.freeze([...getPreparedRuntimeAuthMaterializations(owner.input.agentDir)]),
-    );
+    bindPreparedModelRuntimeAuth(snapshot, {
+      materializations: Object.freeze([
+        ...getPreparedRuntimeAuthMaterializations(owner.input.agentDir),
+      ]),
+    });
   }
   // Chat metadata treats published as "every configured owner is capturable".
   // A bind on one agent must not announce while a sibling is stale or a replacement

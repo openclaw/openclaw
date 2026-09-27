@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayStartupPluginPlan } from "./gateway-startup-plugin-contracts.js";
 import { createGatewayStartupMetadataPluginIdScope } from "./gateway-startup-plugin-metadata.js";
 import { resolveGatewayStartupPluginPlanFromRegistry } from "./gateway-startup-plugin-plan.js";
-import type { PluginManifestRegistry } from "./manifest-registry.js";
 import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -17,18 +16,6 @@ export function resolveChannelPluginIds(params: {
   env: NodeJS.ProcessEnv;
 }): string[] {
   return [...loadGatewayStartupPluginPlan(params).channelPluginIds];
-}
-
-export function resolveGatewayStartupPluginIdsFromRegistry(params: {
-  config: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  index: PluginRegistrySnapshot;
-  manifestRegistry: PluginManifestRegistry;
-  workerProviderIds?: readonly string[];
-  platform?: NodeJS.Platform;
-}): string[] {
-  return [...resolveGatewayStartupPluginPlanFromRegistry(params).pluginIds];
 }
 
 type GatewayStartupPluginPlanParams = {
@@ -46,6 +33,7 @@ type GatewayStartupPluginPlanParams = {
 export function loadGatewayStartupPluginPlanWithMetadata(params: GatewayStartupPluginPlanParams): {
   plan: GatewayStartupPluginPlan;
   metadataSnapshot: PluginMetadataSnapshot;
+  startupPlanMs: number;
 } {
   const snapshotConfig = params.activationSourceConfig ?? params.config;
   // Activation may change, but a supplied inventory still belongs to its boot.
@@ -70,6 +58,7 @@ export function loadGatewayStartupPluginPlanWithMetadata(params: GatewayStartupP
           : {}),
       }),
     });
+  const startupPlanStartedAt = performance.now();
   const plan = resolveGatewayStartupPluginPlanFromRegistry({
     config: params.config,
     ...(params.activationSourceConfig !== undefined
@@ -84,7 +73,7 @@ export function loadGatewayStartupPluginPlanWithMetadata(params: GatewayStartupP
     platform: params.platform,
     ambientEnvTriggers: params.ambientEnvTriggers,
   });
-  return { plan, metadataSnapshot };
+  return { plan, metadataSnapshot, startupPlanMs: performance.now() - startupPlanStartedAt };
 }
 
 export function loadGatewayStartupPluginPlan(

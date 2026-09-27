@@ -1,5 +1,6 @@
 /** Shared durable channel-ingress admission, pump, retention, and shutdown lifecycle. */
-import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
@@ -8,20 +9,16 @@ import {
   waitForGatewayRestartFenceSettlement,
 } from "../../process/gateway-work-admission.js";
 import { sleep } from "../../utils/sleep.js";
-import {
-  createChannelIngressDrain,
-  type ChannelIngressDrain,
-  type CreateChannelIngressDrainOptions,
-} from "./ingress-drain.js";
+import { createChannelIngressDrain, type ChannelIngressDrain } from "./ingress-drain.js";
+import { createAdmissionClaimLock, waitForPending } from "./ingress-monitor-tasks.js";
 import type {
   ChannelIngressMonitorDeliveryResult,
   ChannelIngressMonitorFacts,
-  ChannelIngressMonitorInspectionContext,
   ChannelIngressMonitorLifecycle,
-  ChannelIngressMonitorPayloadCodec,
   ChannelIngressMonitorRetention,
+  CreateChannelIngressMonitorOptions,
 } from "./ingress-monitor-types.js";
-import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.js";
+import type { ChannelIngressQueue } from "./ingress-queue.js";
 import {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
@@ -32,9 +29,11 @@ const DEFAULT_APPEND_RETRY_DELAYS_MS = [0, 100, 300] as const;
 
 export type {
   ChannelIngressMonitorDeliveryResult,
+  ChannelIngressMonitorDrainOptions,
   ChannelIngressMonitorFacts,
   ChannelIngressMonitorLifecycle,
   ChannelIngressMonitorPayloadCodec,
+  CreateChannelIngressMonitorOptions,
 } from "./ingress-monitor-types.js";
 
 /** Replay-guard retention defaults; changing a value requires a per-channel keyspace audit. */
@@ -45,58 +44,6 @@ export const CHANNEL_INGRESS_RETENTION_DEFAULTS = Object.freeze({
   failedTtlMs: 30 * 24 * 60 * 60 * 1_000,
   failedMaxEntries: 20_000,
 } satisfies ChannelIngressMonitorRetention);
-
-export type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
-  CreateChannelIngressDrainOptions<TStoredPayload, TMetadata>,
-  "queue" | "dispatchClaimedEvent" | "abortSignal" | "now" | "ownerId" | "claimLeaseMs"
->;
-
-export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> = {
-  queue:
-    | ChannelIngressQueue<TStoredPayload, TMetadata>
-    | (() => ChannelIngressQueue<TStoredPayload, TMetadata>);
-  inspect: (
-    raw: TRaw,
-    context: ChannelIngressMonitorInspectionContext,
-  ) => ChannelIngressMonitorFacts | null;
-  payload: ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata>;
-  deliver: (
-    raw: TRaw,
-    lifecycle: ChannelIngressMonitorLifecycle,
-    claim: ChannelIngressQueueClaim<TStoredPayload, TMetadata>,
-  ) =>
-    | Promise<ChannelIngressMonitorDeliveryResult | void>
-    | ChannelIngressMonitorDeliveryResult
-    | void;
-  pollIntervalMs: number;
-  retention: "standard" | Partial<ChannelIngressMonitorRetention>;
-  appendRetryDelaysMs?: readonly number[];
-  /**
-   * Runs after every durable enqueue. `isNew` means this admission inserted the queue
-   * row; a pruned event can become new again. It does not imply claim or delivery.
-   */
-  onDurableAdmission?: (
-    raw: TRaw,
-    context: { facts: ChannelIngressMonitorFacts; receivedAt: number; isNew: boolean },
-  ) => void | Promise<void>;
-  onAdmissionFailure?: (raw: TRaw, error: unknown) => void | Promise<void>;
-  /** False lets repeated requests fill drain capacity while earlier claims remain active. */
-  waitForDeliveryIdleBeforeRepump?: boolean;
-  /** Runs each pump under a channel-owned async context such as a detached request root. */
-  runPumpTask?: (work: () => Promise<void>) => Promise<void>;
-  /** False lets a channel apply its own bounded delivery grace before final disposal. */
-  waitForDeliveryIdleOnStop?: boolean;
-  /** Tracks deferred reply ownership through stop, abort, or an explicit channel-owned wait. */
-  deferredClaims?: "wait-on-stop" | "settle-on-abort" | "manual";
-  drain?: ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata>;
-  abortSignal?: AbortSignal;
-  now?: () => number;
-  onError?: (error: unknown) => void;
-  onActivityChange?: (active: boolean) => void;
-  createStoppedError?: () => Error;
-  /** Durable-after-stop preserves append-only admission for handlers selected before unregister. */
-  admissionMode?: "until-stopped" | "while-running" | "durable-after-stop";
-};
 
 /**
  * Creates the shared monitor around a durable queue and ingress drain.
@@ -117,12 +64,31 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     ? AbortSignal.any([shutdown.signal, options.abortSignal])
     : shutdown.signal;
   const activeDeliveries = new Set<Promise<unknown>>();
+  const activeInspections = new Set<Promise<unknown>>();
+  // Deliveries that deferred: still live work awaited by stop, but no longer
+  // holding a start slot. Deferral already released the lane and handed the
+  // claim off, so counting them against startLimit would let a few waiting
+  // deliveries stall every other lane until they finish.
+  //
+  // Only for a drain that actually releases the lane on deferral - that release
+  // is the whole reason the slot is safe to lend, and a "hold" drain still
+  // serializes its lane, so widening its ceiling would buy nothing and raise
+  // concurrency for a channel that never asked.
+  //
+  // The discount is bounded: past this many, a deferral keeps its slot, so
+  // open delivery callbacks stay within startLimit + this budget. The bound's
+  // subject is open callbacks - a callback that defers and returns settles its
+  // borrow immediately, and how much handed-off deferred work may be pending at
+  // once is the drain owner's semantics, unchanged from before this discount.
+  const deferredStartCapacityLimit =
+    options.drain?.deferredLaneOccupancy === "release" ? (options.drain.startLimit ?? 0) : 0;
+  let deferredStartCapacity = 0;
   const deferredClaims = new Set<Promise<void>>();
   type Queue = ChannelIngressQueue<TStoredPayload, TMetadata>;
   const queueFactory: () => Queue =
     typeof options.queue === "function" ? options.queue : () => options.queue as Queue;
   let queue: Queue | undefined = typeof options.queue === "function" ? undefined : options.queue;
-  let drain: ChannelIngressDrain | undefined;
+  let drain: ReturnType<typeof createChannelIngressDrain> | undefined;
   let running = false;
   let stopped = false;
   let requested = false;
@@ -136,8 +102,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let lastPrunedAt = 0;
   let admissionTail: Promise<void> = Promise.resolve();
-  let admissionClaimLocked = false;
-  const admissionClaimWaiters: Array<() => void> = [];
+  const withAdmissionClaimLock = createAdmissionClaimLock();
   let stopTask: Promise<void> | undefined;
   let lastReportedActive = false;
 
@@ -156,7 +121,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   };
 
   const publishActivity = (): void => {
-    const active = activeDeliveries.size > 0 || (running && (requested || pumping !== undefined));
+    const active =
+      activeInspections.size + activeDeliveries.size > 0 ||
+      (running && (requested || pumping !== undefined));
     if (active === lastReportedActive) {
       return;
     }
@@ -166,34 +133,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     } catch (error) {
       reportError(error);
     }
-  };
-
-  const withAdmissionClaimLock = <T>(task: () => Promise<T>): Promise<T> => {
-    const run = (): Promise<T> => {
-      admissionClaimLocked = true;
-      let result: Promise<T>;
-      try {
-        result = Promise.resolve(task());
-      } catch (error) {
-        result = Promise.reject(toErrorObject(error, "Channel ingress admission task failed"));
-      }
-      return result.finally(() => {
-        const next = admissionClaimWaiters.shift();
-        if (next) {
-          next();
-        } else {
-          admissionClaimLocked = false;
-        }
-      });
-    };
-    if (!admissionClaimLocked) {
-      return run();
-    }
-    return new Promise<T>((resolve, reject) => {
-      admissionClaimWaiters.push(() => {
-        void run().then(resolve, reject);
-      });
-    });
   };
 
   const createStoppedError = () =>
@@ -214,179 +153,240 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 
   const isAborted = () => drainAbortSignal.aborted;
 
-  const waitForPending = async (read: () => Iterable<Promise<unknown>>, reject = false) => {
-    for (;;) {
-      const pending = [...read()];
-      if (pending.length === 0) {
-        return;
-      }
-      await (reject ? Promise.all(pending) : Promise.allSettled(pending));
-    }
-  };
+  const inspect = options.inspectAsync ?? options.inspect;
   const waitForActiveDeliveries = () => waitForPending(() => activeDeliveries);
   // A rejected pump wrapper remains caller-visible; delivery joins observe every outcome.
   const waitForPumpIdle = () => waitForPending(() => (pumping ? [pumping] : []), true);
   const waitForDeferredClaims = () => waitForPending(() => deferredClaims);
 
-  const getDrain = (): ChannelIngressDrain => {
-    drain ??= createChannelIngressDrain<TStoredPayload, TMetadata>({
-      ...options.drain,
-      queue: getQueue(),
-      abortSignal: drainAbortSignal,
-      now,
-      retryPolicy: options.drain?.retryPolicy ?? {
-        maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-        deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-      },
-      formatError: options.drain?.formatError ?? formatErrorMessage,
-      dispatchClaimedEvent: async (claim, lifecycle) => {
-        if (!running || isAborted() || lifecycle.abortSignal.aborted) {
-          return { kind: "failed-retryable", error: createStoppedError() };
-        }
-        let decoded: { version: unknown; body: TBody };
-        if (options.payload.storage === "raw-event") {
-          const stored = claim.payload as { version?: unknown; rawEvent?: unknown };
-          if (!stored || typeof stored.rawEvent !== "string") {
-            throw options.payload.createClaimError("invalid-version", claim);
-          }
-          decoded = { version: stored.version, body: stored.rawEvent as TBody };
-        } else {
-          decoded = options.payload.decode(claim.payload, { claim });
-        }
-        if (decoded.version !== options.payload.version) {
-          throw options.payload.createClaimError("invalid-version", claim);
-        }
-        const raw = options.payload.deserialize(decoded.body, { claim });
-        const claimedLaneKey = claim.laneKey ?? options.drain?.deriveLaneKey?.(claim);
-        const facts = options.inspect(raw, {
-          phase: "claim",
-          claimedId: claim.id,
-          claimedLaneKey,
-        });
-        if (!facts || facts.eventId !== claim.id || facts.laneKey !== claimedLaneKey) {
-          throw options.payload.createClaimError("identity-mismatch", claim);
-        }
-
-        let handedOff = false;
-        let deferredHandoff = false;
-        let resolveDeferredClaim = () => {};
-        const deferredClaim = options.deferredClaims
-          ? new Promise<void>((resolve) => {
-              resolveDeferredClaim = resolve;
-            })
-          : undefined;
-        let deferredClaimSettled = false;
-        const settleDeferredClaim = () => {
-          if (!deferredClaim || deferredClaimSettled) {
-            return;
-          }
-          deferredClaimSettled = true;
-          lifecycle.abortSignal.removeEventListener("abort", settleDeferredClaim);
-          deferredClaims.delete(deferredClaim);
-          resolveDeferredClaim();
-        };
-        if (options.deferredClaims === "settle-on-abort") {
-          lifecycle.abortSignal.addEventListener("abort", settleDeferredClaim, { once: true });
-          if (lifecycle.abortSignal.aborted) {
-            settleDeferredClaim();
-          }
-        }
-        const settleDeferredLifecycle = async (settle: () => void | Promise<void>) => {
-          handedOff = true;
-          deferredHandoff = true;
+  const getDrain = (): ReturnType<typeof createChannelIngressDrain> => {
+    drain ??= createChannelIngressDrain<TStoredPayload, TMetadata>(
+      {
+        ...options.drain,
+        queue: getQueue(),
+        abortSignal: drainAbortSignal,
+        now,
+        retryPolicy: options.drain?.retryPolicy ?? {
+          maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+          deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+        },
+        formatError: options.drain?.formatError ?? formatErrorMessage,
+        dispatchClaimedEvent: async (claim, lifecycle) => {
+          // Preparation owns cancellation settlement as well as the inspection read.
+          const inspection = (async () => {
+            if (!running || isAborted() || lifecycle.abortSignal.aborted) {
+              await lifecycle.onCancelled?.();
+              return undefined;
+            }
+            let decoded: { version: unknown; body: TBody };
+            if (options.payload.storage === "raw-event") {
+              const stored = claim.payload as { version?: unknown; rawEvent?: unknown };
+              if (!stored || typeof stored.rawEvent !== "string") {
+                throw options.payload.createClaimError("invalid-version", claim);
+              }
+              decoded = { version: stored.version, body: stored.rawEvent as TBody };
+            } else {
+              decoded = options.payload.decode(claim.payload, { claim });
+            }
+            if (decoded.version !== options.payload.version) {
+              throw options.payload.createClaimError("invalid-version", claim);
+            }
+            const raw = options.payload.deserialize(decoded.body, { claim });
+            const claimedLaneKey = claim.laneKey ?? options.drain?.deriveLaneKey?.(claim);
+            const facts = await inspect(raw, {
+              phase: "claim",
+              claimedId: claim.id,
+              claimedLaneKey,
+            });
+            if (!running || isAborted() || lifecycle.abortSignal.aborted) {
+              await lifecycle.onCancelled?.();
+              return undefined;
+            }
+            if (!facts || facts.eventId !== claim.id || facts.laneKey !== claimedLaneKey) {
+              throw options.payload.createClaimError("identity-mismatch", claim);
+            }
+            return { raw };
+          })();
+          activeInspections.add(inspection);
+          publishActivity();
+          let prepared: Awaited<typeof inspection>;
           try {
-            await settle();
-            requestDrain();
+            prepared = await inspection;
           } finally {
-            settleDeferredClaim();
+            activeInspections.delete(inspection);
+            if (!prepared) {
+              publishActivity();
+            }
           }
-        };
-        const wrappedLifecycle: ChannelIngressMonitorLifecycle = {
-          ...lifecycle,
-          admission: "exclusive",
-          onAdopted: async () => {
+          if (!prepared) {
+            return { kind: "deferred" };
+          }
+          const { raw } = prepared;
+
+          let handedOff = false;
+          let deferredHandoff = false;
+          let releasedStartCapacity = false;
+          let deliverySettled = false;
+          const releaseStartCapacity = () => {
+            if (
+              releasedStartCapacity ||
+              deliverySettled ||
+              deferredStartCapacity >= deferredStartCapacityLimit
+            ) {
+              return;
+            }
+            releasedStartCapacity = true;
+            deferredStartCapacity += 1;
+            // A slot just freed; wake the pump so a waiting lane can use it.
+            requestDrain();
+          };
+          let resolveDeferredClaim = () => {};
+          const deferredClaim = options.deferredClaims
+            ? new Promise<void>((resolve) => {
+                resolveDeferredClaim = resolve;
+              })
+            : undefined;
+          let deferredClaimSettled = false;
+          const settleDeferredClaim = () => {
+            if (!deferredClaim || deferredClaimSettled) {
+              return;
+            }
+            deferredClaimSettled = true;
+            lifecycle.abortSignal.removeEventListener("abort", settleDeferredClaim);
+            deferredClaims.delete(deferredClaim);
+            resolveDeferredClaim();
+          };
+          if (options.deferredClaims === "settle-on-abort") {
+            lifecycle.abortSignal.addEventListener("abort", settleDeferredClaim, { once: true });
+            if (lifecycle.abortSignal.aborted) {
+              settleDeferredClaim();
+            }
+          }
+          const trackDeferredClaim = () => {
+            if (deferredClaim && !deferredClaimSettled) {
+              deferredClaims.add(deferredClaim);
+            }
+          };
+          const settleDeferredLifecycle = async (settle: () => void | Promise<void>) => {
             handedOff = true;
+            deferredHandoff = true;
+            // Settlement can start before delivery returns its deferred handoff.
+            trackDeferredClaim();
             try {
-              await lifecycle.onAdopted();
+              await settle();
               requestDrain();
             } finally {
               settleDeferredClaim();
             }
-          },
-          onDeferred: () => {
-            handedOff = true;
-            deferredHandoff = true;
-            if (deferredClaim && !deferredClaimSettled) {
-              deferredClaims.add(deferredClaim);
-            }
-            lifecycle.onDeferred();
-          },
-          onAdoptionFinalizing: () => {
-            handedOff = true;
-            deferredHandoff = true;
-            lifecycle.onAdoptionFinalizing();
-          },
-          onFailed: (error) => settleDeferredLifecycle(() => lifecycle.onFailed?.(error)),
-          onCancelled: () => settleDeferredLifecycle(() => lifecycle.onCancelled?.()),
-          onAbandoned: () => settleDeferredLifecycle(() => lifecycle.onAbandoned()),
-        };
+          };
+          const wrappedLifecycle: ChannelIngressMonitorLifecycle = {
+            ...lifecycle,
+            admission: "exclusive",
+            onAdopted: async () => {
+              handedOff = true;
+              trackDeferredClaim();
+              try {
+                await lifecycle.onAdopted();
+                requestDrain();
+              } finally {
+                settleDeferredClaim();
+              }
+            },
+            onDeferred: () => {
+              handedOff = true;
+              deferredHandoff = true;
+              trackDeferredClaim();
+              lifecycle.onDeferred();
+              releaseStartCapacity();
+            },
+            onAdoptionFinalizing: () => {
+              handedOff = true;
+              deferredHandoff = true;
+              trackDeferredClaim();
+              lifecycle.onAdoptionFinalizing();
+            },
+            onFailed: (error) => settleDeferredLifecycle(() => lifecycle.onFailed?.(error)),
+            onCancelled: () => settleDeferredLifecycle(() => lifecycle.onCancelled?.()),
+            onAbandoned: () => settleDeferredLifecycle(() => lifecycle.onAbandoned()),
+          };
 
-        // Adoption can complete before delivery returns; track both lifetimes so stop
-        // never drops channel work merely because the durable claim already settled.
-        const delivery = Promise.resolve().then(() =>
-          options.deliver(raw, wrappedLifecycle, claim),
-        );
-        activeDeliveries.add(delivery);
-        publishActivity();
-        let result: ChannelIngressMonitorDeliveryResult | void;
-        try {
-          result = await delivery;
-        } catch (error) {
-          if (isAborted() || lifecycle.abortSignal.aborted) {
-            return { kind: "failed-retryable", error };
-          }
-          throw error;
-        } finally {
-          activeDeliveries.delete(delivery);
+          // Adoption can complete before delivery returns; track both lifetimes so stop
+          // never drops channel work merely because the durable claim already settled.
+          const delivery = Promise.resolve()
+            .then(() => {
+              if (!running || isAborted() || lifecycle.abortSignal.aborted) {
+                return wrappedLifecycle.onCancelled?.();
+              }
+              return options.deliver(raw, wrappedLifecycle, claim);
+            })
+            .finally(() => {
+              // Remove the settled delivery before failure handling awaits a worker write.
+              deliverySettled = true;
+              activeDeliveries.delete(delivery);
+              if (releasedStartCapacity) {
+                releasedStartCapacity = false;
+                deferredStartCapacity -= 1;
+              }
+              publishActivity();
+            });
+          activeDeliveries.add(delivery);
           publishActivity();
-        }
-        if (result?.kind === "failed-retryable") {
-          return result;
-        }
-        // Terminal and handoff outcomes must reach the drain even when stop
-        // races the return: the drain settles terminal results under abort and
-        // keeps deferred claims for their owner. Rewriting them to
-        // failed-retryable here would release claims whose side effects already
-        // ran, replaying delivered work on restart.
-        if (result?.kind === "completed") {
-          // A deferred handoff recorded during delivery stays authoritative:
-          // the drain already placed the claim in deferred and only settles a
-          // completed result from dispatching, so a conflicting terminal return
-          // would strand the claim until later recovery.
+          let result: ChannelIngressMonitorDeliveryResult | void;
+          try {
+            result = await delivery;
+          } catch (error) {
+            if (deferredHandoff && deferredClaim && !deferredClaimSettled) {
+              await wrappedLifecycle.onFailed?.(error);
+              return { kind: "deferred" };
+            }
+            if (isAborted() || lifecycle.abortSignal.aborted) {
+              return { kind: "failed-retryable", error };
+            }
+            throw error;
+          }
+          if (result?.kind === "failed-retryable") {
+            if (deferredHandoff && deferredClaim && !deferredClaimSettled) {
+              await wrappedLifecycle.onFailed?.(result.error);
+              return { kind: "deferred" };
+            }
+            return result;
+          }
+          // Terminal and handoff outcomes must reach the drain even when stop
+          // races the return: the drain settles terminal results under abort and
+          // keeps deferred claims for their owner. Rewriting them to
+          // failed-retryable here would release claims whose side effects already
+          // ran, replaying delivered work on restart.
+          if (result?.kind === "completed") {
+            // A deferred handoff recorded during delivery stays authoritative:
+            // the drain already placed the claim in deferred and only settles a
+            // completed result from dispatching, so a conflicting terminal return
+            // would strand the claim until later recovery.
+            if (deferredHandoff) {
+              return { kind: "deferred" };
+            }
+            return result;
+          }
+          if (result?.kind === "deferred") {
+            if (!deferredHandoff) {
+              wrappedLifecycle.onDeferred();
+            }
+            return { kind: "deferred" };
+          }
           if (deferredHandoff) {
             return { kind: "deferred" };
           }
-          return result;
-        }
-        if (result?.kind === "deferred") {
-          if (!deferredHandoff) {
-            wrappedLifecycle.onDeferred();
+          if (isAborted() || lifecycle.abortSignal.aborted) {
+            return { kind: "failed-retryable", error: createStoppedError() };
           }
-          return { kind: "deferred" };
-        }
-        if (deferredHandoff) {
-          return { kind: "deferred" };
-        }
-        if (isAborted() || lifecycle.abortSignal.aborted) {
-          return { kind: "failed-retryable", error: createStoppedError() };
-        }
-        if (!handedOff) {
-          // A policy gate or deliberate no-dispatch is terminal for transport replay.
-          await wrappedLifecycle.onAdopted();
-        }
-        return { kind: "completed" };
+          if (!handedOff) {
+            // A policy gate or deliberate no-dispatch is terminal for transport replay.
+            await wrappedLifecycle.onAdopted();
+          }
+          return { kind: "completed" };
+        },
       },
-    });
+      true,
+    );
     return drain;
   };
 
@@ -453,7 +453,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
               isAborted() ||
               getGatewaySuspendAdmissionPhase() !== "accepting" ||
               (options.drain?.startLimit !== undefined &&
-                activeDeliveries.size >= options.drain.startLimit),
+                activeDeliveries.size + activeInspections.size - deferredStartCapacity >=
+                  options.drain.startLimit),
           }),
         );
         if (waitForDeliveryIdleBeforeRepump) {
@@ -566,12 +567,14 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         await sleep(delayMs);
       }
       try {
-        const result = await getQueue().enqueue(params.facts.eventId, params.payload, {
+        return await getQueue().enqueue(params.facts.eventId, params.payload, {
           receivedAt: params.receivedAt,
           laneKey: params.facts.laneKey,
         });
-        return result;
       } catch (error) {
+        if (hasSqliteWorkerOutcomeUnknown(error)) {
+          throw error;
+        }
         lastError = error;
       }
     }
@@ -607,7 +610,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     },
   ) => {
     try {
-      const facts = admitOptions.facts ?? options.inspect(raw, { phase: "admission" });
+      const facts = admitOptions.facts ?? (await inspect(raw, { phase: "admission" }));
       if (!facts) {
         return { kind: "ignored" } as const;
       }
@@ -739,17 +742,18 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         await admissionTail;
         shutdown.abort(createStoppedError());
         await waitForPumpIdle();
+        await waitForPending(() => activeInspections);
         if (options.waitForDeliveryIdleOnStop !== false) {
           await waitForActiveDeliveries();
         }
-        // A pump may have created the lazy drain just before observing running=false.
-        drain?.dispose();
         if (options.waitForDeliveryIdleOnStop !== false) {
           await drain?.waitForIdle();
         }
         if (options.deferredClaims && options.deferredClaims !== "manual") {
           await waitForDeferredClaims();
         }
+        // Callback grace may expire, but already accepted writes still own their claims.
+        await drain?.dispose({ waitForSettlements: true });
       })();
       return stopTask;
     },
@@ -757,10 +761,19 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       for (;;) {
         await admissionTail;
         await waitForPumpIdle();
+        await waitForPending(() => activeInspections);
         await waitForActiveDeliveries();
         await drain?.waitForIdle();
+        // A settled claim may still own a wake for the next queued event.
+        await drainIdleWake;
         await restartFenceWake;
-        if (!pumping && activeDeliveries.size === 0 && !requested) {
+        if (
+          !drainIdleWake &&
+          !pumping &&
+          activeInspections.size === 0 &&
+          activeDeliveries.size === 0 &&
+          !requested
+        ) {
           return;
         }
       }

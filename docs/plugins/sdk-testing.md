@@ -57,6 +57,22 @@ alias was removed with it. `pnpm run lint:plugins:no-extension-test-core-imports
 (`scripts/check-no-extension-test-core-imports.ts`) keeps extension tests on
 the focused test subpaths above.
 
+Bundled channel integration tests can use `agent-runtime-test-contracts` for
+real session and subscriber fixtures, `reply-payload-testing` for payload
+construction and delivery settlement, and `plugin-test-runtime` for hook
+runners and registries. These helpers reuse their core owners; register the
+session fixture lifecycle explicitly. Use published runtime subpaths when
+they already expose the needed operation.
+
+Await `listChannelIngressQueueAccountIdsForTests` from
+`channel-ingress-test-runtime` or `plugin-state-test-runtime`. It uses the shared
+read-only worker and leaves missing state uncreated. Join asynchronous database
+cleanup before removing a fixture's state directory.
+
+For direct worker fixtures, pair `resolveRuntimeWorkerUrl` from `process-runtime`
+with `resolveRuntimeWorkerThreadExecArgv` from `test-env`. This keeps source and
+built workers on the runtime owner's startup arguments.
+
 ### Available exports
 
 | Export                                                                    | Purpose                                                                                                                                     |
@@ -86,7 +102,6 @@ the focused test subpaths above.
 | `createTestWizardPrompter`                                                | Build a mocked setup wizard prompter. Import from `plugin-sdk/plugin-test-runtime`                                                          |
 | `createRuntimeTaskFlow`                                                   | Create isolated runtime task-flow state. Import from `plugin-sdk/plugin-test-runtime`                                                       |
 | `runProviderCatalog`                                                      | Execute a provider catalog hook with test dependencies. Import from `plugin-sdk/plugin-test-runtime`                                        |
-| `resolveProviderWizardOptions`                                            | Resolve provider setup wizard choices in contract tests. Import from `plugin-sdk/plugin-test-runtime`                                       |
 | `resolveProviderModelPickerEntries`                                       | Resolve provider model-picker entries in contract tests. Import from `plugin-sdk/plugin-test-runtime`                                       |
 | `buildProviderPluginMethodChoice`                                         | Build provider wizard choice ids for assertions. Import from `plugin-sdk/plugin-test-runtime`                                               |
 | `setProviderWizardProvidersResolverForTest`                               | Inject provider wizard providers for isolated tests. Import from `plugin-sdk/plugin-test-runtime`                                           |
@@ -116,6 +131,7 @@ the focused test subpaths above.
 | `withFetchPreconnect`                                                     | Run fetch tests with preconnect hooks installed. Import from `plugin-sdk/test-env`                                                          |
 | `withEnv` / `withEnvAsync`                                                | Temporarily patch environment variables. Import from `plugin-sdk/test-env`                                                                  |
 | `createTempHomeEnv` / `withTempHome` / `withTempDir`                      | Create isolated filesystem test fixtures. Import from `plugin-sdk/test-env`                                                                 |
+| `createStagedInputOwnershipFixture`                                       | Create owner-staged attachment files and unowned lookalikes. Import from `plugin-sdk/test-env`                                              |
 | `createMockServerResponse`                                                | Create a minimal HTTP server response mock. Import from `plugin-sdk/test-env`                                                               |
 | `createProviderUsageFetch`                                                | Build provider usage fetch fixtures. Import from `plugin-sdk/test-env`                                                                      |
 | `useFrozenTime` / `useRealTime`                                           | Freeze and restore timers for time-sensitive tests. Import from `plugin-sdk/test-env`                                                       |
@@ -246,6 +262,18 @@ describe("my-channel plugin", () => {
 ```
 
 ### Unit testing a provider plugin
+
+For bundled catalog tests that resolve provider endpoint capabilities, call
+`useProviderCatalogMetadata(new URL(".", import.meta.url))` from
+`openclaw/plugin-sdk/plugin-test-runtime` at file or suite scope. It prepares
+the plugin's manifest metadata once, installs and clears that snapshot around
+each test, and rejects Jiti loading during assertions. This keeps cold runtime
+discovery out of catalog test deadlines without changing provider behavior.
+
+Pass additional manifest roots when a case exercises another provider's endpoints,
+for example `useProviderCatalogMetadata(new URL(".", import.meta.url), new URL("../google/", import.meta.url))`.
+Assert the endpoint class in route-specific cases so missing metadata cannot turn
+a provider route into an unintended custom-endpoint case.
 
 ```typescript
 import { describe, it, expect } from "vitest";

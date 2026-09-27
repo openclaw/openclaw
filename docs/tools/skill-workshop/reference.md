@@ -37,13 +37,45 @@ current installed skill's `name`, `skillKey`, `description`, and complete `conte
 An unknown agent or a skill outside that agent's Workshop inventory returns an
 error. It never reads a retained proposal as a substitute for a missing skill.
 
+### Workshop inventory and usage
+
 `skills.curator.status` reports live skill usage recorded from trusted
 `skill.used` events, retained pre-cron collection review records, and per-workspace
 experience review outcomes. Current collection reviews use automation run history.
-Age-based skill lifecycle curation is retired.
+No skill is archived or expired by age. Every skill reports as `active`.
+
+Clients that advertise the `skill-curator-live-inventory` connection capability
+receive `inventory: "live-workshop"`. This view discovers current skills in each
+configured agent's Workshop root, including custom agent directories and directly
+created skills with no proposal history. Disabled skills and skills filtered from
+an agent's prompt remain inventory members. Discovery keeps the existing loader's
+file-size, per-source count, and link limits. Invalid skills are excluded; a read
+failure is an error, not an empty inventory.
+
+Membership and names come from current files. Usage joins by canonical absolute
+file path, not skill name. Renaming metadata at the same path retains usage;
+moving a file does not transfer its history. Removed roots, agents, and files do
+not return through retained proposals. Applied create proposals supply the
+earliest known creation date only. Without that history, `createdAtMs` and
+`stateChangedAtMs` are `null`; filesystem dates are not substitutes.
+
+A zero `useCount` or null `lastUsedAtMs` means use is not recorded, not that the
+skill was never used. Tracking includes successful known skill reads through
+OpenClaw tools registered with the Codex dynamic-tool bridge and explicit
+tool-dispatched skill commands. It does not infer native Codex skill activation
+or reads made outside the OpenClaw tool boundary. There is no historical backfill.
+
+During upgrades, clients without the capability receive the unchanged legacy
+response shape: no marker, numeric creation dates, and only current entries whose
+dates are known. Counts describe that returned subset. New clients also accept
+older Gateways' unmarked responses. The legacy view has limited coverage and must
+not be treated as a complete inventory or used to infer inactivity.
+
 `skills.curator.pin`, `skills.curator.unpin`, and `skills.curator.restore` remain
 registered for existing clients, but always return an error explaining that the
 weekly collection review manages the skill collection.
+
+### Revision and history methods
 
 `requestRevision` is Gateway-only (no CLI or agent-tool equivalent): it
 forwards free-text revision instructions to the owning agent's chat session
@@ -127,8 +159,31 @@ files stay in place, and restore reports why it cannot use them. Completed
 history archives do not block migration of the remaining backups.
 If cleanup stops after publishing a restorable backup, the next migration
 verifies the saved manifest and all copied files before removing the old copy.
+If no configured agent uses a legacy backup's recorded workspace, Doctor checks
+its post-cleanup result hashes against every configured agent's Workshop skills.
+Exactly one complete match identifies the owner even when the old workspace is
+gone. Empty, partial, changed, or ambiguous matches stay preserved; Doctor names
+the agents considered and their verification results. Follow the
+[manual backup recovery procedure](/tools/skill-workshop/collection-review#when-an-older-backup-cannot-be-restored-automatically)
+without changing the current workspace or rewriting the backup manifest.
+After a successful repair, restart the Gateway to clear its startup warning.
 Skills that were symlinked into a workspace stay where they are as workspace
 skills; the migration marks their proposals stale instead of moving them.
+
+Doctor also checks saved automation command arguments, working directories,
+condition scripts, and agent messages for literal references to relocated
+Workshop skills. It names each affected automation and field during Doctor
+repair and on later checks. Retained apply history must establish the original
+skill directory; Doctor does not guess it from the current workspace or skill
+name when that history is unavailable.
+
+Review each reported field before updating the automation. Doctor offers a
+replacement for a complete argument or working-directory path only when the
+mapped target exists inside the relocated skill. For paths embedded in scripts
+or messages, it reports the directory relocation separately and leaves the
+complete target unresolved for manual review. Missing or ambiguous targets also
+stay unresolved. Doctor does not rewrite automation content, change schedules,
+or run the automation to check it.
 
 If moving the skills empties a workspace, migration retires obsolete
 workspace-survival evidence only when saved pre-move facts prove that the same

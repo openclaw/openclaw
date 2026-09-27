@@ -5,12 +5,18 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
+import type { ImageContent as LlmImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
+import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   UserTurnInput,
@@ -27,12 +33,7 @@ import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
-/** Image content block for Claude API multimodal messages. */
-export type ImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
-};
+export type ImageContent = Pick<LlmImageContent, "type" | "data" | "mimeType">;
 
 /** ACP turn source markers accepted by trusted command callsites. */
 type AcpTurnSource = "manual_spawn";
@@ -106,6 +107,14 @@ export type AgentCommandOpts = {
   accountId?: string;
   /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;
+  /** Client capabilities captured by trusted Gateway ingress. */
+  clientCaps?: string[];
+  /** Exact Control UI destination captured by trusted Gateway ingress. */
+  gatewayUiCommandTarget?: GatewayUiCommandTarget;
+  /** Tool bindings admitted by the originating Gateway request. */
+  toolBindings?: Readonly<Record<string, unknown>>;
+  /** Follow-up task action sink admitted by the originating Gateway client. */
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Internal trusted exec approval follow-up elevated defaults. */
@@ -142,13 +151,16 @@ export type AgentCommandOpts = {
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;
   /** Private source-owner fence; cancellation alone does not establish current authority. */
-  assertSourceCurrent?: () => void;
+  assertSourceCurrent?: import("../../auto-reply/command-owner-authority.js").CommandOwnerAssertion;
+  /** Original operator restriction; host-only and never accepted from public ingress. */
+  operatorAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
   lane?: string;
+  swarmExecutionLane?: CommandLaneConfiguration;
   runId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
   lifecycleGeneration?: string;
-  /** Called once when the selected runtime actually admits the prompt for execution. */
-  onExecutionStarted?: () => void;
+  /** Startup awaits returned work; incidental synchronous return values are ignored. */
+  onExecutionStarted?: () => unknown;
   extraSystemPrompt?: string;
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";
@@ -219,7 +231,9 @@ export type AgentCommandOpts = {
   /** Private owner binding hook invoked only after exact admission has resolved. */
   onPostAdmittedRunContext?: (
     context: import("../admitted-run-context.js").AdmittedRunContext,
-  ) => void;
+  ) => void | Promise<void>;
+  /** Gateway joins terminal transcript writes before delivery or failed-command cleanup. */
+  beforeTerminalDelivery?: () => Promise<void>;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when every candidate in the run's model fallback chain failed. */
@@ -240,23 +254,30 @@ export type AgentCommandOpts = {
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 };
 
-/** Restricted option surface for external ingress callsites. */
-export type AgentCommandIngressOpts = Omit<
-  AgentCommandOpts,
+type AgentCommandGatewayOnlyKey =
+  | "clientCaps"
+  | "gatewayUiCommandTarget"
+  | "toolBindings"
+  | "taskSuggestionDeliveryMode"
   | "runtimeContextFragments"
-  | "senderIsOwner"
-  | "allowModelOverride"
   | "mainRestartRecoveryOwnerLease"
   | "mainRestartRecoveryAdmitted"
   | "mainRestartRecoveryAttempt"
   | "pinnedWidgetAuthoring"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
+  | "operatorAuthority"
   | "assertSourceCurrent"
   | "skillLibraryAuthoring"
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
   | "onPostAdmittedRunContext"
+  | "beforeTerminalDelivery";
+
+/** Restricted option surface for external ingress callsites. */
+export type AgentCommandIngressOpts = Omit<
+  AgentCommandOpts,
+  AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride"
 > & {
   /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
   senderIsOwner?: boolean;
@@ -266,17 +287,4 @@ export type AgentCommandIngressOpts = Omit<
 
 /** Gateway-only ingress extends the public Plugin SDK surface with private recovery correlation. */
 export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
-  Pick<
-    AgentCommandOpts,
-    | "runtimeContextFragments"
-    | "mainRestartRecoveryOwnerLease"
-    | "mainRestartRecoveryAdmitted"
-    | "mainRestartRecoveryAttempt"
-    | "pinnedWidgetAuthoring"
-    | "executionIdentityAdmission"
-    | "operationalRunInstance"
-    | "skillLibraryAuthoring"
-    | "cronCreatorAuthorityCapability"
-    | "onAdmittedRunContext"
-    | "onPostAdmittedRunContext"
-  >;
+  Pick<AgentCommandOpts, AgentCommandGatewayOnlyKey>;

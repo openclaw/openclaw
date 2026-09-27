@@ -39,6 +39,7 @@ function searchPayload() {
       ...PUBLISHERS.map((ownerHandle, index) => ({
         score: 6120 - index,
         slug: SLUG,
+        registry: "https://unrelated.example",
         ownerHandle,
         displayName: SLUG,
         summary: `Email skill by ${ownerHandle}`,
@@ -68,6 +69,18 @@ function fakeClawHub(input: string): Response {
   requestedUrls.push(input);
   if (url.pathname === "/api/v1/search") {
     return Response.json(searchPayload());
+  }
+  if (url.pathname === "/api/v1/trending") {
+    return Response.json({
+      items: searchPayload()
+        .results.filter((_, index) => index !== 1)
+        .map(({ ownerHandle, score: _score, ...entry }) =>
+          Object.assign(entry, {
+            publisher: entry.source === "clawhub" ? { handle: ownerHandle } : null,
+            metrics: { updatedAt: 123 },
+          }),
+        ),
+    });
   }
   if (url.pathname === `/api/v1/skills/${SLUG}`) {
     const ownerHandle = url.searchParams.get("ownerHandle");
@@ -101,22 +114,37 @@ describe("ClawHub publisher identity across skills.search, skills.detail, and sk
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
-  it("gives each same-slug publisher its own install reference", async () => {
-    const { ok, response } = await callSkillsHandler("skills.search", { query: SLUG });
+  it.each([
+    { configured: undefined, registry: "https://clawhub.ai" },
+    { configured: "https://registry.example/", registry: "https://registry.example" },
+  ])(
+    "preserves publisher and registry identity from $registry",
+    async ({ configured, registry }) => {
+      vi.stubEnv("OPENCLAW_CLAWHUB_URL", configured);
+      vi.stubEnv("CLAWHUB_URL", undefined);
+      const { ok, response } = await callSkillsHandler("skills.search", { query: SLUG });
 
-    expect(ok).toBe(true);
-    const results = (response as { results: { installRef?: string; installOnly?: true }[] })
-      .results;
-    expect(results.map((r) => r.installRef)).toEqual([
-      `@gzlicanyi/${SLUG}`,
-      `@wangchenyu8/${SLUG}`,
-      `skills-sh:acme/tools/${SLUG}`,
-    ]);
-    // Only the external row is install-only; the registry rows keep the review flow.
-    expect(results.map((r) => r.installOnly)).toEqual([undefined, undefined, true]);
-  });
+      expect(ok).toBe(true);
+      const results = (
+        response as {
+          results: { registry: string; installRef?: string; installOnly?: true }[];
+        }
+      ).results;
+      expect(requestedUrls).toHaveLength(1);
+      expect(new URL(expectDefined(requestedUrls[0], "search request")).origin).toBe(registry);
+      expect(results.map((r) => r.registry)).toEqual([registry, registry, registry]);
+      expect(results.map((r) => r.installRef)).toEqual([
+        `@gzlicanyi/${SLUG}`,
+        `@wangchenyu8/${SLUG}`,
+        `skills-sh:acme/tools/${SLUG}`,
+      ]);
+      // Only the external row is install-only; the registry rows keep the review flow.
+      expect(results.map((r) => r.installOnly)).toEqual([undefined, undefined, true]);
+    },
+  );
 
   it.each(PUBLISHERS)("reads detail for the selected publisher %s", async (ownerHandle) => {
     const { ok, response, error } = await callSkillsHandler("skills.detail", {
@@ -132,6 +160,35 @@ describe("ClawHub publisher identity across skills.search, skills.detail, and sk
     );
     expect(new URL(detailUrl).searchParams.get("ownerHandle")).toBe(ownerHandle);
   });
+
+  it.each([{}, { query: "   ", limit: 2 }])(
+    "browses source-qualified trending skills for an empty query: %j",
+    async (params) => {
+      vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://registry.example/");
+      const { ok, response } = await callSkillsHandler("skills.search", params);
+
+      expect(ok).toBe(true);
+      expect(requestedUrls).toEqual([
+        `https://registry.example/api/v1/trending?kind=skills&limit=${params.limit ?? 20}`,
+      ]);
+      expect(response).toMatchObject({
+        results: [
+          {
+            registry: "https://registry.example",
+            ownerHandle: PUBLISHERS[0],
+            installRef: `@${PUBLISHERS[0]}/${SLUG}`,
+            updatedAt: 123,
+          },
+          {
+            registry: "https://registry.example",
+            installRef: `skills-sh:acme/tools/${SLUG}`,
+            installOnly: true,
+            trustState: "not-scanned-by-clawhub",
+          },
+        ],
+      });
+    },
+  );
 
   it("surfaces the ambiguous-slug error instead of picking a publisher for a bare slug", async () => {
     const { ok, error } = await callSkillsHandler("skills.detail", { slug: SLUG });

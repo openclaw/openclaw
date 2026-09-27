@@ -46,6 +46,7 @@ export async function installFromValidatedNpmSpecArchive<
 >(params: {
   spec: string;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   tempDirPrefix: string;
   expectedIntegrity?: string;
   onIntegrityDrift?: (payload: NpmIntegrityDriftPayload) => boolean | Promise<boolean>;
@@ -71,6 +72,7 @@ export async function installFromValidatedNpmSpecArchive<
     const packedResult = await packNpmSpecToArchive({
       spec,
       timeoutMs: params.timeoutMs,
+      workTimeoutMs: params.workTimeoutMs,
       cwd: tmpDir,
     });
     if (!packedResult.ok) {

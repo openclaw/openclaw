@@ -2,6 +2,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 
 type GitSourceFailure = {
   action: "clone" | "checkout" | "resolve ref" | "resolve commit for";
@@ -17,17 +18,20 @@ export async function acquireGitSource(params: {
   ref?: string;
   refMode: "detached" | "resolve-remote" | "shallow-branch";
   timeoutMs?: number;
+  workTimeoutMs?: number | null;
   commandEnv?: () => { baseEnv?: NodeJS.ProcessEnv; env?: NodeJS.ProcessEnv };
   cloneSeparator?: boolean;
   recordCommit?: boolean;
   formatFailure?: (failure: GitSourceFailure) => string;
   cleanupOnFailure?: () => Promise<void>;
 }): Promise<{ ok: true; commit?: string } | { ok: false; error: string }> {
-  const run = (argv: string[], cwd?: string) =>
+  const run = (argv: string[], cwd?: string, work = false) =>
     runCommandWithTimeout(argv, {
       ...params.commandEnv?.(),
       ...(cwd ? { cwd } : {}),
-      timeoutMs: params.timeoutMs ?? 120_000,
+      timeoutMs: work
+        ? resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs ?? 120_000)
+        : (params.timeoutMs ?? 120_000),
     });
   const failure = async (details: GitSourceFailure) => {
     await params.cleanupOnFailure?.();
@@ -58,7 +62,7 @@ export async function acquireGitSource(params: {
     argv.push("--");
   }
   argv.push(params.url, params.repoDir);
-  const clone = await run(argv);
+  const clone = await run(argv, undefined, true);
   if (clone.code !== 0) {
     return await failure({ action: "clone", ...clone });
   }
@@ -86,7 +90,11 @@ export async function acquireGitSource(params: {
       }
       checkoutRef = commitish;
     }
-    const checkout = await run(["git", "switch", "--detach", "--", checkoutRef], params.repoDir);
+    const checkout = await run(
+      ["git", "switch", "--detach", "--", checkoutRef],
+      params.repoDir,
+      true,
+    );
     if (checkout.code !== 0) {
       return await failure({ action: "checkout", ...checkout });
     }

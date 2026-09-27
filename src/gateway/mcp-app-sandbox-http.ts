@@ -7,8 +7,7 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import {
-  buildSandboxHostContentSecurityPolicy,
-  buildSandboxHostProxyHtml,
+  buildSandboxHostDocument,
   decodeSandboxHostCsp,
   SANDBOX_HOST_PATH,
 } from "../agents/sandbox-host.js";
@@ -20,7 +19,6 @@ import {
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 
-const MCP_APP_PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=(), clipboard-write=()";
 type PublicResourceReader = NonNullable<
   PluginBoardWidgetContentKind["resources"]["readPublicResource"]
 >;
@@ -45,16 +43,17 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
     return true;
   }
 
+  const { html, headers, version } = buildSandboxHostDocument(csp);
   res.statusCode = 200;
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Content-Security-Policy", buildSandboxHostContentSecurityPolicy(csp));
-  res.setHeader("Permissions-Policy", MCP_APP_PERMISSIONS_POLICY);
-  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-  res.setHeader("Origin-Agent-Cluster", "?1");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  const html = buildSandboxHostProxyHtml(csp);
+  for (const [name, value] of Object.entries(headers)) {
+    res.setHeader(name, value);
+  }
+  // A mismatched URL can come from another Gateway version sharing this host.
+  // Serve the current shell, but never retain it under a different content hash.
+  res.setHeader(
+    "Cache-Control",
+    url.searchParams.get("v") === version ? "public, max-age=31536000, immutable" : "no-store",
+  );
   // Keep GET and HEAD representation metadata aligned while suppressing the HEAD body.
   res.setHeader("Content-Length", String(Buffer.byteLength(html)));
   res.end(req.method === "HEAD" ? undefined : html);

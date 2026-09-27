@@ -32,7 +32,12 @@ Ten scenarios, defined in `qa/scenarios/personal/*.yaml`:
 
 The machine-readable `personal-agent` profile lives in root `taxonomy.yaml` as
 semantic coverage IDs. QA Lab resolves every primary owner from the catalog;
-there is no second scenario-ID list. Run it with:
+there is no second scenario-ID list.
+
+Running the pack needs a source checkout of the OpenClaw repository — `pnpm
+openclaw` is a workspace script, not the published CLI — and
+`OPENCLAW_ENABLE_PRIVATE_QA_CLI=1`, which is what exposes the private `qa`
+command group. Run it with:
 
 ```bash
 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 pnpm openclaw qa run \

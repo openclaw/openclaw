@@ -432,6 +432,15 @@ export async function resolveExecWorkdir(params: {
   if (!requestedCwd) {
     return unavailable("current working directory");
   }
-  const resolved = resolveExistingHostWorkdir(requestedCwd);
+  let hostPath = requestedCwd;
+  if (explicitWorkdir.kind === "specified" && defaultCwd && !path.isAbsolute(requestedCwd)) {
+    const baseCwd = resolveExistingHostWorkdir(defaultCwd);
+    if (!baseCwd) {
+      return unavailable(defaultCwd);
+    }
+    // Preserve filesystem traversal through symlinks and reject missing path segments.
+    hostPath = `${baseCwd}${path.sep}${requestedCwd}`;
+  }
+  const resolved = resolveExistingHostWorkdir(hostPath);
   return resolved ? { kind: "local", hostCwd: resolved } : unavailable(requestedCwd);
 }

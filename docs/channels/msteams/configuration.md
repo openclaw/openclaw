@@ -40,8 +40,8 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.appId`, `channels.msteams.appPassword`, `channels.msteams.tenantId`: bot credentials.
 - `channels.msteams.cloud`: Teams SDK cloud environment (`Public`, `USGov`, `USGovDoD`, or `China`; default `Public`). Set with `serviceUrl` for USGov/DoD SDK clouds; China uses the SDK preset and stored Azure China Bot Framework conversation references, with Graph-backed helpers disabled until Azure China Graph routing ships.
 - `channels.msteams.serviceUrl`: Bot Connector service URL boundary for SDK proactive operations. Public cloud uses the SDK default; set for GCC (`https://smba.infra.gcc.teams.microsoft.com/teams`), GCC High, or DoD. China accepts Azure China Bot Framework channel hosts when the stored conversation reference comes from Teams operated by 21Vianet.
-- `channels.msteams.webhook.port` (default `3978`).
-- `channels.msteams.webhook.path` (default `/api/messages`).
+- `channels.msteams.webhook.path`: Gateway HTTP route (omitted or empty uses `/api/messages`), served on `gateway.port` (default `18789`).
+- `channels.msteams.legacyWebhook`: compatibility listener. Omitted retains port `3978` with the previous wildcard bind; `{ port, host? }` selects an endpoint; `false` closes the old listener.
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default `pairing`).
 - `channels.msteams.allowFrom`: DM allowlist (AAD object IDs recommended). Stable AAD object IDs also authorize approval actions. The wizard resolves names to IDs during setup when Graph access is available.
 - `channels.msteams.defaultTo`: default outbound target; a stable AAD object ID can also authorize approval actions.
@@ -73,3 +73,55 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.responsePrefix`: text prefixed to outbound replies.
 - `channels.msteams.feedbackEnabled` (default `true`), `channels.msteams.feedbackReflection` (default `true`), `channels.msteams.feedbackReflectionCooldownMs`: thumbs-up/down feedback on replies and the negative-feedback reflection follow-up.
 - `channels.msteams.sso`, `channels.msteams.delegatedAuth`: Bot Framework OAuth connection and delegated Graph scopes for SSO-backed flows; `sso.enabled: true` requires `sso.connectionName`.
+
+## Migrating an existing webhook endpoint
+
+Teams webhooks now share the Gateway HTTP listener. The Teams SDK still verifies
+Azure JWT signatures; callers do not supply a Gateway token. Keep the public
+HTTPS messaging endpoint in Azure Bot and change its reverse-proxy upstream to
+Gateway port `18789` (or your `gateway.port`), preserving `/api/messages` or your
+configured `webhook.path`. If you expose a port directly, update Azure Bot's
+messaging endpoint to the public HTTPS URL that reaches this Gateway route.
+
+Existing installs keep receiving callbacks on port `3978` when no listener setting
+was written. An explicitly configured `webhook.port` moves to `legacyWebhook.port`
+through Doctor's normal config backup and write flow. Both implicit and explicit
+compatibility listeners forward into the same Gateway route and JWT validation;
+OpenClaw does not silently remove either listener.
+
+The deprecated TypeScript `webhook.port` input remains source-compatible until
+the next Plugin SDK major. Runtime config uses `legacyWebhook`; run
+`openclaw doctor --fix` to migrate the old key.
+
+After confirming a delivery through the Gateway port, set
+`channels.msteams.legacyWebhook: false` and remove any old firewall or Compose
+port mapping. Removing the setting restores the default compatibility listener,
+so use `false` to close it. There is no scheduled cutoff; retiring this
+compatibility behavior requires a separate change. Doctor and startup print the
+Gateway route and the exact setting to disable the old listener.
+
+A custom path also accepts the older `/api/messages` alias with its existing
+deprecation warning when that route is available. If another plugin owns the
+alias, startup logs the conflict and keeps serving the configured path. Update
+Azure Bot to the configured path.
+
+The Gateway reserves `/health`, `/healthz`, `/ready`, `/readyz`, `/startup`, and
+`/startupz` for probes, including URLs with query strings. If your former Teams
+callback uses one of these paths, set `webhook.path` to `/api/messages` and update
+Azure Bot or the proxy upstream to match. Doctor reports this conflict. The
+compatibility listener keeps the old endpoint working; startup refuses the
+unusable Gateway route only when `legacyWebhook` is `false`. Verify the replacement
+before disabling that listener.
+
+Paths under `/api/channels` require Gateway authentication on the main listener,
+including encoded spellings. Teams callbacks authenticate with Azure JWTs, so
+use `/api/messages` instead. Doctor and startup report the same callback-change
+action; the compatibility listener continues serving the old path until that
+cutover is complete.
+
+Express parameter, wildcard, and brace patterns continue working on the legacy
+port. Gateway route registration uses literal paths. Before disabling the legacy
+listener for a pattern, change the existing `webhook.path` to `/api/messages` and
+update Azure Bot or your proxy. Doctor and startup identify these patterns; with
+`legacyWebhook: false`, startup reports the required change instead of silently
+dropping callbacks.

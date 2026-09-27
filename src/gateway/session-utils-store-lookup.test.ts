@@ -1,17 +1,20 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { err } from "@openclaw/normalization-core/result";
 import { describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareCurrentGitHubPublicationIdentity } from "./github-publication-availability.js";
+import { prepareCurrentGitHubPublicationOptionsIdentity } from "./github-publication-availability.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
@@ -32,21 +35,20 @@ import type {
   GatewayRequestHandler,
   RespondFn,
 } from "./server-methods/types.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
   createGatewaySessionEntryReader,
   prepareGatewaySessionStoreTargetsReadOnly,
+  resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
   resolveGatewaySessionStoreTargetsReadOnly,
+  type GatewaySessionStoreCache,
 } from "./session-utils-store-lookup.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
-import {
-  loadCombinedSessionStoreForGatewayCore,
-  loadGatewaySessionLifecycleSnapshot,
-  loadGatewaySessionRow,
-} from "./session-utils.js";
+import { loadCombinedSessionStoreForGatewayCore } from "./session-utils.js";
 
 vi.mock("./github-publication-availability.js", () => ({
-  prepareCurrentGitHubPublicationIdentity: vi.fn(async (agentId: string) => ({
+  prepareCurrentGitHubPublicationOptionsIdentity: vi.fn(async (agentId: string) => ({
     source: "system",
     account: { accountId: `account-${agentId}`, login: `synthetic-${agentId}` },
   })),
@@ -82,8 +84,104 @@ async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) =>
 }
 
 describe("global session lookup ownership", () => {
+  it("retains alias rejection after a canonical row becomes malformed in a warm store", async () => {
+    await withGlobalSessions("main", async (cfg) => {
+      const alias = "agent:main:main";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: alias },
+        { sessionId: "retained-alias", updatedAt: 1 },
+      );
+      resolveGatewaySessionStoreTargetWithStore({ cfg, key: "agent:main:global" });
+      openOpenClawAgentDatabase({ agentId: "main" })
+        .db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run("{", "global");
+
+      expect(() => resolveGatewaySessionStoreTarget({ cfg, key: alias })).toThrow(
+        "non-canonical persisted row resolves to session key global",
+      );
+    });
+  });
+
+  it("keeps different candidate listings separate within the same store cache", async () => {
+    await withGlobalSessions("main", async (cfg) => {
+      const storeCache: GatewaySessionStoreCache = new Map();
+      for (const key of ["global", "agent:main:global", "global"]) {
+        const target = resolveGatewaySessionStoreTargetWithStore({
+          cfg,
+          key,
+          agentId: "main",
+          projection: "list",
+          listCandidatesOnly: true,
+          storeCache,
+        });
+        expect(Object.keys(target.store)).toEqual([key]);
+        expect(target.store[key]?.sessionId).toBe(`main-${key}`);
+      }
+    });
+  });
+
+  it.each<{
+    agentId: string;
+    clone: false | undefined;
+    createsDatabase: boolean;
+    unreadableRegistry?: true;
+  }>([
+    { agentId: "main", clone: undefined, createsDatabase: true },
+    { agentId: "main", clone: false, createsDatabase: false },
+    { agentId: "retired", clone: undefined, createsDatabase: false },
+    { agentId: "main", clone: false, createsDatabase: false, unreadableRegistry: true },
+    { agentId: "retired", clone: false, createsDatabase: false, unreadableRegistry: true },
+  ])(
+    "preserves scalar database admission for $agentId (clone: $clone, unreadable registry: $unreadableRegistry)",
+    async (scenario) => {
+      await withStateDirEnv("gateway-scalar-store-admission-", async ({ stateDir }) => {
+        const cfg: OpenClawConfig = {
+          agents: { ownership: "explicit", entries: { main: {} } },
+          session: {
+            store: path.join(
+              stateDir,
+              "agents",
+              scenario.unreadableRegistry ? scenario.agentId : "{agentId}",
+              "sessions",
+              "sessions.json",
+            ),
+          },
+        };
+        const key = `agent:${scenario.agentId}:dashboard:new-session`;
+        if (scenario.unreadableRegistry) {
+          mkdirSync(path.join(stateDir, "state", "openclaw.sqlite"), { recursive: true });
+        }
+        const resolve = () =>
+          resolveGatewaySessionStoreTarget({
+            cfg,
+            key,
+            clone: scenario.clone,
+          });
+        if (scenario.unreadableRegistry) {
+          expect(resolve).toThrow();
+        } else {
+          expect(resolve()).toEqual({
+            agentId: scenario.agentId,
+            canonicalKey: key,
+            storeKeys: [key],
+            storePath: path.join(stateDir, "agents", scenario.agentId, "sessions", "sessions.json"),
+          });
+        }
+        expect(existsSync(resolveOpenClawAgentSqlitePath({ agentId: scenario.agentId }))).toBe(
+          scenario.createsDatabase,
+        );
+      });
+    },
+  );
+
   it("keeps a child-relative parent distinct from qualified parent owners", async () => {
     await withGlobalSessions("main", async (cfg) => {
+      for (const agentId of ["main", "research"]) {
+        await replaceSessionEntry(
+          { agentId, sessionKey: `agent:${agentId}:main` },
+          { sessionId: `${agentId}-literal-main`, updatedAt: 1 },
+        );
+      }
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "unknown" },
         { sessionId: "main-unknown", updatedAt: 1 },
@@ -102,9 +200,15 @@ describe("global session lookup ownership", () => {
       ).toEqual([
         "main-global",
         "main-unknown",
-        "research-global",
+        "research-literal-main",
         "research-agent:research:global",
       ]);
+      const readRetiredParent = createGatewaySessionEntryReader({
+        cfg: { ...cfg, agents: { ownership: "explicit", entries: { research: {} } } },
+        agentId: "research",
+        store: {},
+      });
+      expect(readRetiredParent("agent:main:main")?.sessionId).toBe("main-literal-main");
     });
   });
 
@@ -118,21 +222,60 @@ describe("global session lookup ownership", () => {
           skillsSnapshot: { prompt: "selected synthetic prompt", skills: [] },
         },
       );
-      const results = prepareGatewaySessionStoreTargetsReadOnly({
-        cfg,
-        projection: "full",
-        targets: [{ key: "agent:research:main" }, { key: "agent:main:main", agentId: "research" }],
-      });
-      expect(results).toMatchObject([
-        {
-          ok: true,
-          value: {
-            agentId: "research",
-            store: { global: { skillsSnapshot: { prompt: "selected synthetic prompt" } } },
+      const failure = new Error("metadata unavailable", { cause: new Error("SQLITE_IOERR") });
+      const readMetadata = sessionAccessor.loadExactSessionEntryCandidatesReadOnlyBatch;
+      const failingRead = vi
+        .spyOn(sessionAccessor, "loadExactSessionEntryCandidatesReadOnlyBatch")
+        .mockImplementation((scopes) =>
+          readMetadata(scopes).map((result, index) =>
+            scopes[index]?.agentId === "main" ? err(failure) : result,
+          ),
+        );
+      try {
+        const results = prepareGatewaySessionStoreTargetsReadOnly({
+          cfg,
+          projection: "full",
+          targets: [
+            { key: "agent:main:main" },
+            { key: "agent:research:main" },
+            { key: "agent:main:main", agentId: "research" },
+          ],
+        });
+        expect(results[0]).toEqual(err(failure));
+        expect(results.slice(1)).toMatchObject([
+          {
+            ok: true,
+            value: {
+              agentId: "research",
+              store: { global: { skillsSnapshot: { prompt: "selected synthetic prompt" } } },
+            },
           },
-        },
-        { ok: false, error: { message: expect.stringContaining('belongs to "main"') } },
-      ]);
+          { ok: false, error: { message: expect.stringContaining('belongs to "main"') } },
+        ]);
+        const failingSingleRead = vi
+          .spyOn(sessionAccessor, "loadExactSessionEntryCandidates")
+          .mockImplementation(() => {
+            throw failure;
+          });
+        try {
+          expect(() =>
+            resolveGatewaySessionStoreTargetWithStore({
+              cfg,
+              key: "agent:main:main",
+              exactRead: true,
+            }),
+          ).toThrow(failure);
+          failingSingleRead.mockClear();
+          const readParent = createGatewaySessionEntryReader({ cfg, agentId: "main", store: {} });
+          expect(() => readParent("agent:research:main")).toThrow(failure);
+          // A failed exact read must not become absence followed by an alias lookup.
+          expect(failingSingleRead).toHaveBeenCalledOnce();
+        } finally {
+          failingSingleRead.mockRestore();
+        }
+      } finally {
+        failingRead.mockRestore();
+      }
     });
   });
 
@@ -211,11 +354,13 @@ describe("global session lookup ownership", () => {
       await withGlobalSessions("work", async (cfg) => {
         // Revisit Research after Main so shared sentinels cannot adopt the previous owner.
         const requests = ["research", "main", "research"].flatMap((agentId) =>
-          ["main", "work", "global"].map((suffix) => ({
-            key: `agent:${agentId}:${suffix}`,
-            agentId,
-            canonicalKey: suffix === "global" ? `agent:${agentId}:global` : "global",
-          })),
+          ["main", "work", "global"].flatMap((suffix) =>
+            ["", " "].map((padding) => ({
+              key: `${padding}agent:${agentId}:${suffix}${padding}`,
+              agentId,
+              canonicalKey: suffix === "global" ? `agent:${agentId}:global` : "global",
+            })),
+          ),
         );
         const targets =
           mode === "batch"
@@ -245,7 +390,7 @@ describe("global session lookup ownership", () => {
     },
   );
 
-  it.each(["single", "batch", "read-only"] as const)(
+  it.each(["single", "target", "batch", "read-only"] as const)(
     "rejects contradictory key and fixed-store owners through %s reads",
     async (mode) => {
       await withGlobalSessions("main", async (cfg) => {
@@ -258,7 +403,9 @@ describe("global session lookup ownership", () => {
               })
             : mode === "single"
               ? resolveGatewaySessionStoreTargetWithStore({ cfg: config, key, agentId })
-              : loadGatewaySessionEntryReadOnly(key, { agentId });
+              : mode === "target"
+                ? resolveGatewaySessionStoreTarget({ cfg: config, key, agentId })
+                : loadGatewaySessionEntryReadOnly(key, { agentId });
         };
         for (const key of ["agent:main:main", "agent:main:global"]) {
           expect.soft(() => read(cfg, key, "research")).toThrow('belongs to "main"');
@@ -284,7 +431,13 @@ describe("global session lookup ownership", () => {
 
   it("routes GitHub options and its access recheck to the qualified alias owner", async () => {
     await withGlobalSessions("main", async (cfg) => {
-      const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
+      const latestShared = vi.fn<
+        NonNullable<GatewayRequestContext["githubPublicationService"]>["latestShared"]
+      >(() => null);
+      const context = {
+        getRuntimeConfig: () => cfg,
+        githubPublicationService: { latestShared },
+      } as unknown as GatewayRequestContext;
       for (const agentId of ["research", "main", "research"]) {
         const respond = vi.fn<RespondFn>();
         await handleGatewayRequest({
@@ -305,13 +458,22 @@ describe("global session lookup ownership", () => {
         expect(respond.mock.calls[0]?.[1]).toEqual({
           personal: null,
           pendingPersonal: null,
+          latestShared: null,
           shared: {
             source: "system",
             accountId: `account-${agentId}`,
             login: `synthetic-${agentId}`,
           },
         });
-        expect(prepareCurrentGitHubPublicationIdentity).toHaveBeenLastCalledWith(agentId);
+        expect(prepareCurrentGitHubPublicationOptionsIdentity).toHaveBeenLastCalledWith(agentId);
+        expect(latestShared).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            agentId,
+            sessionKey: "global",
+            sessionId: agentId + "-global",
+          }),
+          undefined,
+        );
       }
     });
   });
@@ -372,8 +534,9 @@ describe("exact session model projections", () => {
           request: { agentId: "main", limit: 10 },
         });
         expect(listed.sessions.find((row) => row.key === childKey)).toMatchObject(expected);
-        expect.soft(loadGatewaySessionRow(childKey)).toMatchObject(expected);
-        expect.soft(loadGatewaySessionLifecycleSnapshot(childKey).row).toMatchObject(expected);
+        expect
+          .soft(getSessionRowProjection(context)?.snapshot({ key: childKey, agentId: "main" }).row)
+          .toMatchObject(expected);
 
         const described = vi.fn();
         await sessionByKeyReadHandlers["sessions.describe"]!({
@@ -392,7 +555,9 @@ describe("exact session model projections", () => {
           params: { sessionKey: childKey },
           req: { type: "req", id: "model-history", method: "chat.history" },
           client: null,
-          context: createDirectChatContext(),
+          context: createDirectChatContext({
+            sessionRowProjectionOwner: context.sessionRowProjectionOwner,
+          }),
           isWebchatConnect: () => false,
           respond: history,
         });
@@ -411,10 +576,11 @@ describe("exact session model projections", () => {
             agentId: "main",
             reason: "patch",
           });
+          await flushPendingSessionsChangedEvents(eventContext);
           expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
-          expect.soft(broadcast.mock.calls[0]?.[1]).toMatchObject(expected);
+          expect.soft(broadcast.mock.calls[0]?.[1]).toMatchObject({ session: expected });
         } finally {
-          flushPendingSessionsChangedEvents(eventContext);
+          await flushPendingSessionsChangedEvents(eventContext);
         }
       });
     },
@@ -457,7 +623,15 @@ it.each([
       }));
       const context = createDirectChatContext({
         getRuntimeConfig: () => cfg,
-        loadGatewayModelCatalog: async () => catalog,
+        loadGatewayModelCatalogSnapshot: async () => ({
+          entries: catalog,
+          routeVariants: catalog,
+          agentId: "main",
+          agentDir: "/tmp/fixture-agent",
+          workspaceDir: "/tmp/fixture-workspace",
+          config: cfg,
+          catalogComplete: true,
+        }),
         readPreparedGatewayModelCatalog: async () => ({ entries: catalog }),
       });
       const request = async (
@@ -561,9 +735,9 @@ it.each([
         });
         expect.soft(searched.sessions.some((row) => row.key === created.key)).toBe(true);
       }
-      await expect
-        .soft(Promise.resolve().then(() => loadGatewaySessionRow(created.key)))
-        .resolves.toMatchObject(expected);
+      expect
+        .soft(getSessionRowProjection(context)?.snapshot({ key: created.key, agentId: "work" }).row)
+        .toMatchObject(expected);
       await expect
         .soft(
           request(sessionByKeyReadHandlers["sessions.describe"]!, "sessions.describe", {

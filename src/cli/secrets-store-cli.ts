@@ -1,6 +1,5 @@
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
+import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -10,6 +9,7 @@ import type {
   SecretStoreEntryMetadata,
   SecretStoreValidationError,
 } from "../secrets/store/secret-store.js";
+import { formatDocsHelp } from "./help-format.js";
 import { runSecretsCommand } from "./secrets-cli-output.js";
 
 type OutputOptions = { json?: boolean; plain?: boolean; scope?: string };
@@ -78,6 +78,7 @@ function mapStoreError(error: unknown): SecretStoreCliFailure {
     (validation.code === "SECRET_STORE_INVALID_NAME" ||
       validation.code === "SECRET_STORE_VALUE_TOO_LARGE" ||
       validation.code === "SECRET_STORE_VALUE_EMPTY" ||
+      validation.code === "SECRET_STORE_VALUE_REDACTED" ||
       validation.code === "SECRET_STORE_INVALID_ALLOWED_HOST")
   ) {
     return new SecretStoreCliFailure(2, validation.message ?? "Invalid secret store input.");
@@ -163,11 +164,7 @@ export function registerSecretStoreCli(secrets: Command): void {
   const store = secrets
     .command("store")
     .description("Manage the team-scoped SQLite secret and environment store")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/secrets", "docs.openclaw.ai/cli/secrets")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/secrets"));
 
   store
     .command("list")
@@ -272,7 +269,14 @@ export function registerSecretStoreCli(secrets: Command): void {
               ).readSecretStoreInput({
                 valueFile: options.valueFile,
               });
-        storeModule.assertSecretStoreValue(value, kind);
+        if (isRedactedSecretValue(value)) {
+          const current = storeModule.readSecretStoreValue({ scope, name });
+          if (current.ok && !isRedactedSecretValue(current.value)) {
+            defaultRuntime.log(`Skipped redacted value for ${name}; existing entry unchanged.`);
+            return;
+          }
+        }
+        storeModule.assertSecretStoreValue(value, kind, name);
         if (options.dryRun) {
           defaultRuntime.log(`Would ${kind === "secret" ? "write" : "set"} ${name} (${kind}).`);
           return;
@@ -285,7 +289,7 @@ export function registerSecretStoreCli(secrets: Command): void {
           ...(allowedHosts !== undefined ? { allowedHosts } : {}),
           updatedBy: "cli",
         });
-        storeModule.purgeExpiredSecretStoreEntries();
+        await storeModule.purgeExpiredSecretStoreEntries();
         defaultRuntime.log(`Stored ${name} (${kind}).`);
         await noteGatewayReload();
       }),
@@ -362,7 +366,7 @@ export function registerSecretStoreCli(secrets: Command): void {
         for (const name of names) {
           deleteSecretStoreEntry({ scope, name });
         }
-        purgeExpiredSecretStoreEntries();
+        await purgeExpiredSecretStoreEntries();
         defaultRuntime.log(
           `Removed ${names.length} team store entr${names.length === 1 ? "y" : "ies"}.`,
         );
@@ -396,19 +400,32 @@ export function registerSecretStoreCli(secrets: Command): void {
           return { name, value, kind: storeKind(options.kind, name) };
         });
         const storeModule = await import("../secrets/store/secret-store.js");
-        for (const entry of normalized) {
-          storeModule.assertSecretStoreValue(entry.value, entry.kind);
-        }
+        const writable = normalized.filter((entry) => {
+          if (isRedactedSecretValue(entry.value)) {
+            const current = storeModule.readSecretStoreValue({ scope, name: entry.name });
+            if (current.ok && !isRedactedSecretValue(current.value)) {
+              defaultRuntime.log(
+                `Skipped redacted value for ${entry.name}; existing entry unchanged.`,
+              );
+              return false;
+            }
+          }
+          storeModule.assertSecretStoreValue(entry.value, entry.kind, entry.name);
+          return true;
+        });
         if (options.dryRun) {
-          defaultRuntime.log(`Would import ${normalized.length} team store entries.`);
+          defaultRuntime.log(`Would import ${writable.length} team store entries.`);
           return;
         }
-        await confirmMutation(`Import ${normalized.length} team store entries?`, options.yes);
-        for (const entry of normalized) {
+        if (writable.length === 0) {
+          return;
+        }
+        await confirmMutation(`Import ${writable.length} team store entries?`, options.yes);
+        for (const entry of writable) {
           storeModule.writeSecretStoreEntry({ scope, ...entry, updatedBy: "cli" });
         }
-        storeModule.purgeExpiredSecretStoreEntries();
-        defaultRuntime.log(`Imported ${normalized.length} team store entries.`);
+        await storeModule.purgeExpiredSecretStoreEntries();
+        defaultRuntime.log(`Imported ${writable.length} team store entries.`);
         await noteGatewayReload();
       }),
     );

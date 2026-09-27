@@ -242,7 +242,9 @@ export async function workspaceContainsUntrackedEntries(
   try {
     return await walk(workspaceRoot);
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+    const filesystemError = error as NodeJS.ErrnoException;
+    // A missing child leaves the remaining workspace entries unexamined.
+    return filesystemError.code !== "ENOENT" || filesystemError.path !== workspaceRoot;
   }
 }
 
@@ -294,7 +296,7 @@ export async function cleanupClawAgentFilesystem(params: {
           params.runtime.log(warning);
         }
         params.assertCurrent();
-        deleteWorkspaceState(statePlan);
+        await deleteWorkspaceState(statePlan, { assertCurrent: params.assertCurrent });
       } catch (error) {
         errors.push(coerceErrorMessage(error));
       }
@@ -397,7 +399,7 @@ export async function inspectClawBootstrap(
   options: OpenClawStateDatabaseOptions,
 ): Promise<ClawBootstrapStatus> {
   const nativeState = await resolveWorkspaceBootstrapStatus(install.workspace, options);
-  const setupState = readWorkspaceStateSnapshot(install.workspace, options).setup;
+  const setupState = (await readWorkspaceStateSnapshot(install.workspace, options)).setup;
   const base = {
     workspace: install.workspace,
     path: DEFAULT_BOOTSTRAP_FILENAME,

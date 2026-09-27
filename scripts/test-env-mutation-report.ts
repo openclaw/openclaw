@@ -4,8 +4,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
+import { renderFindingGroups } from "./lib/grouped-findings.js";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
 
 type EnvMutationOperation = "assign" | "delete" | "replace" | "stubEnv";
 
@@ -118,10 +121,6 @@ function envKeysFromObjectLiteral(node: ts.Expression): string[] {
     .filter((key): key is string => key !== null && TRACKED_ENV_KEYS.has(key));
 }
 
-function isAssignmentOperator(kind: ts.SyntaxKind): boolean {
-  return kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment;
-}
-
 function stubEnvKeyFromCall(node: ts.CallExpression): string | null {
   const expression = node.expression;
   if (
@@ -161,12 +160,10 @@ function createFinding(params: {
 function scanFile(params: {
   allowedFiles: ReadonlyMap<string, string>;
   file: string;
-  repoRoot: string;
+  sourceFile: ts.SourceFile;
 }): TestEnvMutationFinding[] {
-  const absolutePath = path.join(params.repoRoot, params.file);
-  const source = fs.readFileSync(absolutePath, "utf8");
-  const sourceFile = ts.createSourceFile(params.file, source, ts.ScriptTarget.Latest);
-  const lines = source.split(/\r?\n/u);
+  const { sourceFile } = params;
+  const lines = sourceFile.text.split(/\r?\n/u);
   const findings: TestEnvMutationFinding[] = [];
 
   function addFinding(node: ts.Node, key: string, operation: EnvMutationOperation): void {
@@ -187,7 +184,7 @@ function scanFile(params: {
   }
 
   function visit(node: ts.Node): void {
-    if (ts.isBinaryExpression(node) && isAssignmentOperator(node.operatorToken.kind)) {
+    if (ts.isBinaryExpression(node) && ts.isAssignmentOperator(node.operatorToken.kind)) {
       if (
         node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
         isProcessEnvExpression(node.left)
@@ -212,7 +209,7 @@ function scanFile(params: {
         addFinding(node, key, "stubEnv");
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -228,7 +225,20 @@ export function collectTestEnvMutationReport(
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const allowedFiles = params.allowedFiles ?? DEFAULT_ALLOWED_FILES;
   const files = listCandidateFiles(repoRoot);
-  const findings = files.flatMap((file) => scanFile({ allowedFiles, file, repoRoot }));
+  const findings: TestEnvMutationFinding[] = [];
+  const parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  try {
+    const sources = files.map((fileName) => ({
+      fileName,
+      text: fs.readFileSync(path.join(repoRoot, fileName), "utf8"),
+    }));
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      const file = path.relative(repoRoot, sourceFile.fileName).split(path.sep).join("/");
+      findings.push(...scanFile({ allowedFiles, file, sourceFile }));
+    }
+  } finally {
+    parser.close();
+  }
   const activeFindings = findings.filter((finding) => !finding.allowed);
   const allowedFindings = findings.filter((finding) => finding.allowed);
   const activeFileCount = new Set(activeFindings.map((finding) => finding.file)).size;
@@ -250,45 +260,10 @@ export function collectTestEnvMutationReport(
   };
 }
 
-function groupFindingsByFile(
-  findings: TestEnvMutationFinding[],
-): Map<string, TestEnvMutationFinding[]> {
-  const grouped = new Map<string, TestEnvMutationFinding[]>();
-  for (const finding of findings) {
-    const fileFindings = grouped.get(finding.file);
-    if (fileFindings) {
-      fileFindings.push(finding);
-    } else {
-      grouped.set(finding.file, [finding]);
-    }
-  }
-  return grouped;
-}
-
-function renderFindingGroups(findings: TestEnvMutationFinding[], limit: number): string[] {
-  const lines: string[] = [];
-  let shown = 0;
-  for (const [file, fileFindings] of groupFindingsByFile(findings)) {
-    if (shown >= limit) {
-      break;
-    }
-    lines.push(`- ${file} (${fileFindings.length})`);
-    for (const finding of fileFindings) {
-      if (shown >= limit) {
-        break;
-      }
-      const action =
-        finding.operation === "stubEnv" ? "vi.stubEnv" : `${finding.operation} process.env`;
-      lines.push(`  L${finding.line} ${finding.key} ${action}: ${finding.excerpt}`);
-      shown += 1;
-    }
-  }
-  if (findings.length > shown) {
-    lines.push(
-      `... ${findings.length - shown} more finding(s) not shown; pass --limit 0 to show all.`,
-    );
-  }
-  return lines;
+function renderEnvMutationFinding(finding: TestEnvMutationFinding): string {
+  const action =
+    finding.operation === "stubEnv" ? "vi.stubEnv" : `${finding.operation} process.env`;
+  return `  L${finding.line} ${finding.key} ${action}: ${finding.excerpt}`;
 }
 
 export function renderTestEnvMutationReport(
@@ -307,76 +282,15 @@ export function renderTestEnvMutationReport(
     lines.push("Active findings: none");
   } else {
     lines.push("Active findings:");
-    lines.push(...renderFindingGroups(report.activeFindings, limit));
+    lines.push(...renderFindingGroups(report.activeFindings, limit, renderEnvMutationFinding));
   }
 
   if (options.includeAllowed && report.allowedFindings.length > 0) {
     lines.push("", "Allowed harness findings:");
-    lines.push(...renderFindingGroups(report.allowedFindings, limit));
+    lines.push(...renderFindingGroups(report.allowedFindings, limit, renderEnvMutationFinding));
   }
 
   return `${lines.join("\n")}\n`;
-}
-
-function parseArgs(argv: string[]): {
-  help: boolean;
-  includeAllowed: boolean;
-  json: boolean;
-  limit: number;
-  repoRoot: string;
-} {
-  let help = false;
-  let includeAllowed = false;
-  let json = false;
-  let limit = 120;
-  let repoRoot = process.cwd();
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      continue;
-    }
-    if (arg === "--help" || arg === "-h") {
-      help = true;
-      continue;
-    }
-    if (arg === "--include-allowed") {
-      includeAllowed = true;
-      continue;
-    }
-    if (arg === "--json") {
-      json = true;
-      continue;
-    }
-    if (arg === "--limit") {
-      limit = readNonNegativeIntArg(argv[index + 1]);
-      index += 1;
-      continue;
-    }
-    if (arg === "--repo-root") {
-      const value = argv[index + 1];
-      if (!value || value.startsWith("-")) {
-        throw new Error("--repo-root expects a path");
-      }
-      repoRoot = value;
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-
-  return { help, includeAllowed, json, limit, repoRoot };
-}
-
-function readNonNegativeIntArg(raw: string | undefined): number {
-  if (!raw || raw.startsWith("--") || !/^\d+$/u.test(raw)) {
-    throw new Error("--limit expects a non-negative integer");
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    throw new Error("--limit expects a non-negative integer");
-  }
-  return value;
 }
 
 function printHelp(): void {
@@ -395,7 +309,7 @@ Options:
 }
 
 export function main(argv = process.argv.slice(2)): number {
-  const args = parseArgs(argv);
+  const args = parseInventoryReportCliArgs(argv, { allowIncludeAllowed: true });
   if (args.help) {
     printHelp();
     return 0;

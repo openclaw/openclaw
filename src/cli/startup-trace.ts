@@ -24,6 +24,74 @@ type PendingTimelineEvent =
 
 const CLI_STARTUP_TIMELINE_PHASE = "cli.startup";
 
+type GatewayBootstrapStep = {
+  name: string;
+  startedAt: number;
+  completedAt: number;
+  durationMs: number;
+  calls: number;
+  metrics: Record<string, number>;
+};
+
+const MAX_BOOTSTRAP_STEPS = 128;
+let bootstrapSteps: Map<string, GatewayBootstrapStep> | undefined = new Map();
+
+/** Collect process facts once; Gateway startup consumes them before serving. */
+export function recordGatewayBootstrapStep(
+  name: string,
+  startedAt: number,
+  completedAt: number,
+  metrics: Readonly<Record<string, number>> = {},
+): void {
+  if (!bootstrapSteps || !isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE)) {
+    return;
+  }
+  const stepName =
+    bootstrapSteps.has(name) || bootstrapSteps.size < MAX_BOOTSTRAP_STEPS ? name : "omitted-steps";
+  let step = bootstrapSteps.get(stepName);
+  if (!step) {
+    step = { name: stepName, startedAt, completedAt, durationMs: 0, calls: 0, metrics: {} };
+    bootstrapSteps.set(stepName, step);
+  }
+  step.startedAt = Math.min(step.startedAt, startedAt);
+  step.completedAt = Math.max(step.completedAt, completedAt);
+  step.durationMs += completedAt - startedAt;
+  step.calls += 1;
+  for (const [key, value] of Object.entries(metrics)) {
+    step.metrics[key] = (step.metrics[key] ?? 0) + value;
+  }
+}
+
+export function consumeGatewayBootstrapSteps(): GatewayBootstrapStep[] {
+  const steps = [...(bootstrapSteps?.values() ?? [])];
+  bootstrapSteps = undefined;
+  return steps.toSorted((a, b) => a.startedAt - b.startedAt || a.name.localeCompare(b.name));
+}
+
+export async function measureGatewayBootstrapStep<T>(
+  name: string,
+  run: () => T | Promise<T>,
+  metrics?: () => Readonly<Record<string, number>>,
+): Promise<T> {
+  if (!isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE)) {
+    return await run();
+  }
+  const startedAt = performance.now();
+  try {
+    return await run();
+  } finally {
+    const completedAt = performance.now();
+    const facts = metrics?.() ?? {};
+    recordGatewayBootstrapStep(name, startedAt, completedAt, facts);
+    const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
+    const counts = Object.entries(facts)
+      .map(([key, value]) => ` ${key}=${value}`)
+      .join("");
+    const message = `[gateway] startup trace: ${name} ${(completedAt - startedAt).toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms${counts}`;
+    process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
+  }
+}
+
 function hasDiagnosticsTimelinePath(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH?.trim());
 }
@@ -47,6 +115,10 @@ export function createGatewayDispatchStartupTrace(
     isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) &&
     argv.slice(2).includes("gateway");
   const started = performance.now();
+  if (source === "entry" && enabled) {
+    bootstrapSteps = new Map();
+    recordGatewayBootstrapStep("entry.imports", 0, started);
+  }
   let last = started;
   let lineFormatter: GatewayStartupTraceLineFormatter | null = null;
   let pendingMessages: string[] = [];
@@ -168,12 +240,14 @@ export function createGatewayDispatchStartupTrace(
     }
     process.stderr.write(`${lineFormatter(message)}\n`);
   };
-  const emit = (name: string, durationMs: number, totalMs: number) => {
+  const emit = (name: string, durationMs: number, completedAt: number) => {
     if (!enabled) {
       return;
     }
+    const startedAt = completedAt - durationMs;
+    recordGatewayBootstrapStep(`${source}.${name}`, startedAt, completedAt);
     writeMessage(
-      `[gateway] startup trace: ${source}.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`,
+      `[gateway] startup trace: ${source}.${name} ${durationMs.toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms`,
     );
   };
   return {
@@ -197,7 +271,7 @@ export function createGatewayDispatchStartupTrace(
       const now = performance.now();
       const durationMs = now - last;
       const totalMs = now - started;
-      emit(name, durationMs, totalMs);
+      emit(name, durationMs, now);
       enqueueTimelineEvent({
         type: "mark",
         name: timelineName(name),
@@ -244,19 +318,47 @@ export function createGatewayDispatchStartupTrace(
             durationMs: now - before,
           });
         }
-        emit(name, now - before, now - started);
+        emit(name, now - before, now);
         last = now;
       }
     },
   };
 }
 
+export async function configureCliStartupDiagnostics(
+  traces: Array<ReturnType<typeof createGatewayDispatchStartupTrace> | undefined>,
+  readConfig?: () => Promise<OpenClawConfig>,
+): Promise<void> {
+  const activeTraces = traces.filter(
+    (trace): trace is ReturnType<typeof createGatewayDispatchStartupTrace> => Boolean(trace),
+  );
+  if (
+    !(await Promise.all(activeTraces.map((trace) => trace.requiresDiagnosticsConfig()))).some(
+      Boolean,
+    )
+  ) {
+    return;
+  }
+  const { withConsoleLogsRoutedToStderr } = await import("./json-output-mode.js");
+  const { readSourceConfigBestEffort } = await import("../config/io.js");
+  // Clients need authored flags; Gateway admission supplies its isolated config reader.
+  const config = await withConsoleLogsRoutedToStderr(readConfig ?? readSourceConfigBestEffort);
+  await Promise.all(activeTraces.map((trace) => trace.configureDiagnosticsTimeline(config)));
+}
+
+export async function prepareGatewayStartupTraceConsoleFormatting(
+  trace: ReturnType<typeof createGatewayDispatchStartupTrace>,
+): Promise<() => void> {
+  if (!trace.enabled) {
+    return () => {};
+  }
+  const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
+  return () =>
+    trace.setLineFormatter((message) => formatConsoleDiagnosticLine({ level: "info", message }));
+}
+
 export async function configureGatewayStartupTraceConsoleFormatting(
   trace: ReturnType<typeof createGatewayDispatchStartupTrace>,
 ): Promise<void> {
-  if (!trace.enabled) {
-    return;
-  }
-  const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
-  trace.setLineFormatter((message) => formatConsoleDiagnosticLine({ level: "info", message }));
+  (await prepareGatewayStartupTraceConsoleFormatting(trace))();
 }

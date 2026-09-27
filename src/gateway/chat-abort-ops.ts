@@ -14,6 +14,9 @@ export function createChatAbortOps(
     getRuntimeConfig: context.getRuntimeConfig,
     broadcast: context.broadcast,
     nodeSendToSession: context.nodeSendToSession,
-    onRunAborted: context.cancelRunBoundApprovals,
+    onRunAborted: (runId) => {
+      // Each manager retains the write; abort itself must not wait for SQLite.
+      void context.cancelRunBoundApprovals?.(runId).catch(() => {});
+    },
   };
 }

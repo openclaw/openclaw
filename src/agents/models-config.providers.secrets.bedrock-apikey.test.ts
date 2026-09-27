@@ -1,6 +1,6 @@
 // Covers Bedrock AWS SDK auth markers and marker-backed discovery secret guardrails.
 import { describe, expect, it } from "vitest";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import type { ProviderConfig } from "./models-config.providers.secret-helpers.js";
 import {
   resolveApiKeyFromCredential,

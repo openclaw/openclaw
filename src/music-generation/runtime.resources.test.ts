@@ -11,6 +11,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { captureAsyncWorkTracker, trackAsyncWork } from "../shared/async-work-scope.js";
@@ -135,8 +136,10 @@ async function waitForProviderStart(
 ): Promise<void> {
   await Promise.race([
     started,
-    operation.then(() => {
-      throw new Error("Music operation settled before invoking the native provider");
+    operation.then((outcome) => {
+      throw new Error("Music operation settled before invoking the native provider", {
+        cause: outcome,
+      });
     }),
   ]);
 }
@@ -332,7 +335,7 @@ describe("music generation registration resources", () => {
   });
 
   it.each(["managed", "managed-getter", "raw"] as const)(
-    "preserves the existing %s registration owner during generation",
+    "keeps %s registration resources until the operation settles",
     async (ownership) => {
       const fixture = createNativeMusicFixture();
       try {
@@ -371,16 +374,27 @@ describe("music generation registration resources", () => {
             }
             await inspection?.release();
             expect(fixture.connections[0]!.database.isOpen).toBe(true);
+            expect(fixture.connections[0]!.disposals).toBe(0);
+            expect(fixture.connections[0]!.reads).toEqual([42]);
             fixture.resume.resolve();
             const outcome = await settled;
             expect(outcome.error).toBeUndefined();
             expect(outcome.value?.tracks[0]?.buffer.toString()).toBe("native music 42");
+            expect(outcome.value?.provider).toBe("native-music-alias");
             expect(fixture.connections[0]!.database.isOpen).toBe(ownership === "raw");
             expect(fixture.connections[0]!.disposals).toBe(ownership === "raw" ? 0 : 1);
+            expect(fixture.connections[0]!.reads).toEqual(
+              ownership === "raw" ? [42, 42] : [42, 42, 42],
+            );
           } finally {
             fixture.resume.resolve();
             await settled;
             await inspection?.release();
+            if (ownership === "raw") {
+              clearPluginMetadataLifecycleCaches();
+              const cleanup = await waitForPluginCacheRetirement();
+              expect(cleanup.failures).toEqual([]);
+            }
           }
         });
       } finally {

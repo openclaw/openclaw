@@ -1,5 +1,6 @@
 {
   "id": "cohere",
+  "categories": ["models"],
   "name": "Cohere",
   "description": "OpenClaw Cohere provider plugin.",
   "activation": {

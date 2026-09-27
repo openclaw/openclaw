@@ -101,9 +101,7 @@ describe("renderAgentScopeControl", () => {
       "retired",
       "writer",
     ]);
-    expect(select?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
-      "🦞",
-    );
+    expect(select?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
 
     select?.onSelect("retired");
     select?.onSelect("");

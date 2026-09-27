@@ -1,6 +1,7 @@
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
@@ -17,6 +18,7 @@ import {
   materializePreparedModelCatalog,
   prepareFullCatalogFacts,
 } from "./prepared-model-runtime.full-catalog.js";
+import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
@@ -25,10 +27,11 @@ import type {
 
 const MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 
-async function prepareScopedReadOnlyModelCatalogWithMode(
+/** Builds a request-scoped read-only catalog; live discovery requires an explicit mode. */
+export async function prepareScopedReadOnlyModelCatalog(
   input: PreparedModelRuntimeInput,
   providerDiscoveryProviderIds: readonly string[],
-  catalogMode: PreparedModelRuntimeCatalogMode,
+  catalogMode: PreparedModelRuntimeCatalogMode = "static",
 ): Promise<ModelCatalogSnapshot> {
   const scopedInput = input.readOnly ? input : { ...input, readOnly: true };
   const { agentFacts, pluginGeneration } = await prepareWorkspaceBuildGroup(
@@ -36,6 +39,9 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
     catalogMode,
     { providerDiscoveryProviderIds },
   );
+  await using _ = {
+    [Symbol.asyncDispose]: () => discardPreparedPluginGeneration(pluginGeneration),
+  };
   const agentFactsForInput = agentFacts[0];
   if (!agentFactsForInput) {
     throw new Error("scoped prepared model catalog facts are missing");
@@ -56,34 +62,21 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
   return materializePreparedModelCatalog(
     modelCatalog,
     agentFactsForInput.runtimeCapabilityModels,
-    configuredRuntimeModels,
+    scopedInput.config.models?.mode === "replace"
+      ? []
+      : configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model)),
   );
 }
 
-/** Builds a request-scoped read-only catalog without executing live provider discovery. */
-export function prepareScopedReadOnlyModelCatalog(
-  input: PreparedModelRuntimeInput,
-  providerDiscoveryProviderIds: readonly string[],
-): Promise<ModelCatalogSnapshot> {
-  return prepareScopedReadOnlyModelCatalogWithMode(input, providerDiscoveryProviderIds, "static");
-}
-
-/** Builds a request-scoped read-only catalog with live discovery for selected providers. */
-export function prepareScopedReadOnlyLiveModelCatalog(
-  input: PreparedModelRuntimeInput,
-  providerDiscoveryProviderIds: readonly string[],
-): Promise<ModelCatalogSnapshot> {
-  return prepareScopedReadOnlyModelCatalogWithMode(input, providerDiscoveryProviderIds, "live");
-}
-
 export async function prepareAgentCatalogSource(
-  agentFacts: PreparedModelRuntimeAgentFacts,
+  agentFacts: Pick<PreparedModelRuntimeAgentFacts, "input" | "env" | "providerIds">,
   pluginGeneration: PreparedModelRuntimePluginGeneration,
   catalogMode: PreparedModelRuntimeCatalogMode,
   persist = true,
   sourceOptions: {
     authStore?: AuthProfileStore;
     providerDiscoveryProviderIds?: readonly string[];
+    providerDiscoveryTimeoutMs?: number;
   } = {},
 ): Promise<PreparedModelRuntimeCatalogSource> {
   const { env, input, providerIds } = agentFacts;
@@ -118,7 +111,8 @@ export async function prepareAgentCatalogSource(
           providerDiscoveryEntriesOnly: true as const,
         }
       : {
-          providerDiscoveryTimeoutMs: MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS,
+          providerDiscoveryTimeoutMs:
+            sourceOptions.providerDiscoveryTimeoutMs ?? MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS,
         }),
   };
   const prepareSource = async () => {

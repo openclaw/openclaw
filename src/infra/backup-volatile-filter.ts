@@ -1,5 +1,6 @@
 // Filters volatile files from backup manifests.
 import path from "node:path";
+import { isLegacyAuditMigrationBackupPath } from "./backup-audit-paths.js";
 
 /**
  * Paths that are known to change during a live backup and commonly trigger
@@ -12,7 +13,6 @@ import path from "node:path";
  * partial tail of a live log has no restoration value.
  */
 
-const STATE_TRANSIENT_EXTENSIONS = new Set([".sock", ".pid", ".tmp"]);
 const CHROMIUM_SINGLETON_FILES = new Set(["SingletonCookie", "SingletonLock", "SingletonSocket"]);
 const SQLITE_MEMORY_TRANSIENT_PATH_PATTERN =
   /(?:^|\/)(?:[^/]+\.sqlite\.(?:generation-(?:lock|writer)|reindex-lock)\.sqlite|[^/]+\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-wal|-shm|-journal)?$/iu;
@@ -39,8 +39,9 @@ function hasExtension(filePosix: string, extensions: readonly string[]): boolean
   return extensions.includes(ext);
 }
 
-function hasExtensionInSet(filePosix: string, extensions: ReadonlySet<string>): boolean {
-  return extensions.has(path.posix.extname(filePosix).toLowerCase());
+/** Transient names apply to every selected backup root, not just OpenClaw state. */
+export function isTransientBackupPath(filePath: string): boolean {
+  return /.+\.(?:sock$|pid$|tmp(?:\.|$))/iu.test(path.posix.basename(normalizePosix(filePath)));
 }
 
 export function isTransientSqliteBackupPath(filePath: string): boolean {
@@ -111,20 +112,25 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
     const stateDirPosix = normalizePosix(stateDir);
 
     for (const filePosix of candidates) {
+      if (
+        isUnder(filePosix, stateDirPosix) &&
+        isLegacyAuditMigrationBackupPath(filePosix, stateDirPosix)
+      ) {
+        return true;
+      }
       if (isManagedBrowserSingletonPath(filePosix, stateDirPosix)) {
         return true;
       }
 
-      const sandboxSkillsRoot = path.posix.join(stateDirPosix, "sandbox", "skills-workspaces");
-      if (isUnder(filePosix, sandboxSkillsRoot)) {
-        return true;
-      }
-
-      // Rebuildable, manifest-verified bundles bridge already-open Control UI
-      // documents across updates; restoring them would only copy stale package bytes.
-      const controlUiAssetCacheRoot = path.posix.join(stateDirPosix, "cache", "control-ui-assets");
-      if (isUnder(filePosix, controlUiAssetCacheRoot)) {
-        return true;
+      for (const parts of [
+        ["sandbox", "skills-workspaces"],
+        // Rebuildable bundles bridge open Control UI documents across updates.
+        ["cache", "control-ui-assets"],
+        ["tmp", "plugin-captures"],
+      ]) {
+        if (isUnder(filePosix, path.posix.join(stateDirPosix, ...parts))) {
+          return true;
+        }
       }
 
       const sessionsRoot = path.posix.join(stateDirPosix, "sessions");
@@ -159,10 +165,7 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
         }
       }
 
-      if (
-        isUnder(filePosix, stateDirPosix) &&
-        hasExtensionInSet(filePosix, STATE_TRANSIENT_EXTENSIONS)
-      ) {
+      if (isUnder(filePosix, stateDirPosix) && isTransientBackupPath(filePosix)) {
         return true;
       }
     }

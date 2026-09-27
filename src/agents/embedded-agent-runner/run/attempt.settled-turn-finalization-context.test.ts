@@ -78,6 +78,11 @@ describe("settled post-tool turn finalization context", () => {
       captures: true,
     },
     {
+      kind: "responses-eof-with-unresolved-tools",
+      error: new Error("Responses stream ended with unresolved tool calls"),
+      captures: true,
+    },
+    {
       kind: "terminated-word-variant",
       error: new Error("the request was terminated by the server"),
       captures: false,

@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetLogger } from "../logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
+import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import { startGatewayServerCore as startGatewayServer } from "./server-start.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 
@@ -28,8 +30,84 @@ describe("config security policy before persistence", () => {
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         OPENCLAW_SKIP_PROVIDERS: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        CONFIG_PROVENANCE_API_KEY: "synthetic-included-env-key",
       },
     });
+  });
+
+  it("keeps authored provenance out of valid and invalid read-scoped config.get responses", async () => {
+    const token = "synthetic-gateway-auth-token";
+    const inlineKey = "synthetic-provider-key";
+    const envKey = "synthetic-included-env-key";
+    const models = {
+      providers: {
+        inline: { baseUrl: "https://example.test", apiKey: inlineKey, models: [] },
+        referenced: {
+          baseUrl: "https://example.test",
+          apiKey: "${CONFIG_PROVENANCE_API_KEY}",
+          models: [],
+        },
+      },
+    };
+    await state.writeJson("models.json", models);
+    const initialConfig = {
+      agents: { defaults: { workspace: state.workspaceDir } },
+      logging: { level: "silent", consoleLevel: "silent" },
+      gateway: {
+        mode: "local",
+        auth: { mode: "token", token },
+        controlUi: { enabled: false },
+        reload: { mode: "off" },
+      },
+    };
+    await state.writeConfig(initialConfig);
+    const port = await getFreePort();
+    server = await startGatewayServer(port);
+    await server.startupSettled;
+    let grantedScopes: string[] | undefined;
+    client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token,
+      scopes: ["operator.read"],
+      onHelloOk: (hello) => {
+        grantedScopes = hello.auth.scopes;
+      },
+    });
+    expect(grantedScopes).toEqual(["operator.read"]);
+
+    // Keep one admitted reader while the on-disk snapshot becomes invalid.
+    // Direct fixture writes must invalidate cached config.get responses.
+    for (const useInclude of [false, true]) {
+      for (const valid of [true, false]) {
+        await state.writeConfig({
+          gateway: { reload: { mode: "off" } },
+          models: useInclude ? { $include: "models.json" } : models,
+          ...(valid ? {} : { nodeHost: { browserProxy: { enabled: "invalid" } } }),
+        });
+        invalidateConfigGetResponseCache();
+        const snapshot = await readConfigFileSnapshot({ observe: false });
+        expect(snapshot.valid).toBe(valid);
+        expect(snapshot.authoredConfig?.models).toEqual(models);
+        expect(snapshot.sourceConfigBeforeMigrations?.models?.providers?.referenced?.apiKey).toBe(
+          envKey,
+        );
+        const before = structuredClone(snapshot);
+        const response = await client.request("config.get", {});
+        const serialized = JSON.stringify(response);
+
+        expect(response.valid).toBe(valid);
+        expect(response).not.toHaveProperty("authoredConfig");
+        expect(response).not.toHaveProperty("sourceConfigBeforeMigrations");
+        for (const canary of [token, inlineKey, envKey]) {
+          expect(serialized).not.toContain(canary);
+        }
+        expect(snapshot).toEqual(before);
+        expect(await readConfigFileSnapshot({ observe: false })).toMatchObject({
+          authoredConfig: snapshot.authoredConfig,
+          sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+        });
+      }
+    }
   });
 
   afterEach(async () => {

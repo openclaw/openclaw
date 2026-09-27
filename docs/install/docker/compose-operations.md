@@ -51,7 +51,7 @@ needed. See [Manual flow](/install/docker#manual-flow) for setup and extra mount
 | Inspect config   | `docker compose run --rm openclaw-cli config get <path>`           |
 
 Start the gateway before using the shell or CLI commands. For a custom host port,
-adjust the printed dashboard URL as described in [Containerized gateway](/install/docker#containerized-gateway).
+adjust the printed dashboard URL as described in [Containerized Gateway](/install/docker#containerized-gateway).
 Use [Health checks](/install/docker#health-checks) to verify the gateway and
 [Update OpenClaw](/install/docker-vm-runtime#update-openclaw) for image updates.
 

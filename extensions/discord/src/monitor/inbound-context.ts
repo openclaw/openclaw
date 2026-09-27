@@ -1,4 +1,3 @@
-// Discord plugin module implements inbound context behavior.
 import { resolveInboundSupplementalSenderAllowed } from "openclaw/plugin-sdk/channel-inbound";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {

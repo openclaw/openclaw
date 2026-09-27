@@ -1,6 +1,8 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../components/command-palette-contract.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  LINK_READER_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   HOME_PANEL_TOGGLE_EVENT,
   DEBUG_OVERLAY_REQUEST_EVENT,
@@ -18,6 +20,7 @@ const eventTypes = [
   KEYBOARD_SHORTCUTS_REQUEST_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   BROWSER_PANEL_TOGGLE_EVENT,
+  LINK_READER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   HOME_PANEL_TOGGLE_EVENT,
@@ -34,33 +37,24 @@ export function lazyShellEvent(
   event?: Event,
 ): LazyShellEvent {
   const detail = event instanceof CustomEvent ? event.detail : null;
-  return detail !== null && typeof detail === "object" && !Array.isArray(detail)
-    ? { eventType, detail }
-    : { eventType };
+  return isRecord(detail) ? { eventType, detail } : { eventType };
 }
 
 export function readLazyShellAction(): LazyShellEvent | null {
   try {
     const stored = getSafeSessionStorage()?.getItem(STORAGE_KEY);
     const parsed: unknown = stored ? JSON.parse(stored) : null;
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (!isRecord(parsed) || !Object.hasOwn(parsed, "eventType")) {
       clearLazyShellAction();
       return null;
     }
-    const entries = Object.entries(parsed);
-    const eventTypeValue = entries.find(([key]) => key === "eventType")?.[1];
-    const eventType = eventTypes.find((candidate) => candidate === eventTypeValue);
-    if (eventType && entries.length === 1) {
+    const keyCount = Object.keys(parsed).length;
+    const eventType = eventTypes.find((candidate) => candidate === parsed.eventType);
+    if (eventType && keyCount === 1) {
       return { eventType };
     }
-    const detail = entries.find(([key]) => key === "detail")?.[1];
-    if (
-      eventType &&
-      entries.length === 2 &&
-      detail !== null &&
-      typeof detail === "object" &&
-      !Array.isArray(detail)
-    ) {
+    const detail = parsed.detail;
+    if (eventType && keyCount === 2 && Object.hasOwn(parsed, "detail") && isRecord(detail)) {
       return { eventType, detail };
     }
   } catch {}

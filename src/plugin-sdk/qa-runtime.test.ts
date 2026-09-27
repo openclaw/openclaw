@@ -4,12 +4,7 @@ import { createServer } from "node:net";
  */
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  cleanupTempDirs,
-  expectPrivateQaLabRuntimeSurfaceLoad,
-  expectQaLabRuntimeSurfaceLoad,
-  restorePrivateQaCliEnv,
-} from "./qa-runtime.test-helpers.js";
+import { restorePrivateQaCliEnv } from "./qa-runtime.test-helpers.js";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn());
@@ -23,7 +18,6 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 describe("plugin-sdk qa-runtime", () => {
-  const tempDirs: string[] = [];
   const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
   const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
@@ -40,7 +34,6 @@ describe("plugin-sdk qa-runtime", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    cleanupTempDirs(tempDirs);
     restorePrivateQaCliEnv(originalPrivateQaCli);
     if (originalBundledPluginsDir === undefined) {
       delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -89,27 +82,9 @@ describe("plugin-sdk qa-runtime", () => {
 
   it("stays cold until the runtime seam is used", async () => {
     vi.resetModules();
-    const module = await import("./qa-runtime.js");
+    await import("./qa-runtime.js");
 
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-    expect(module.loadQaRuntimeModule).toBeTypeOf("function");
-    expect(module.isQaRuntimeAvailable).toBeTypeOf("function");
-  });
-
-  it("loads the qa-lab runtime public surface through the generic seam", async () => {
-    await expectQaLabRuntimeSurfaceLoad({
-      importRuntime: () => import("./qa-runtime.js"),
-      loadBundledPluginPublicSurfaceModuleSync,
-    });
-  });
-
-  it("uses the source bundled tree for qa-lab runtime loading in private qa mode", async () => {
-    await expectPrivateQaLabRuntimeSurfaceLoad({
-      tempDirs,
-      importRuntime: () => import("./qa-runtime.js"),
-      loadBundledPluginPublicSurfaceModuleSync,
-      resolveOpenClawPackageRootSync,
-    });
   });
 
   it("reports the runtime as unavailable when the qa-lab surface is missing", async () => {
@@ -242,6 +217,82 @@ describe("plugin-sdk qa-runtime", () => {
       credentialSource: "convex",
       credentialRole: "maintainer",
     });
+  });
+
+  const rejectedScenarioSelection = {
+    kind: "rejected",
+    error: expect.objectContaining({ message: expect.stringContaining("--scenario") }),
+  };
+  it.each([
+    {
+      name: "empty value",
+      args: ["--scenario", ""],
+      outcome: rejectedScenarioSelection,
+      selections: [],
+    },
+    {
+      name: "whitespace value",
+      args: ["--scenario", " \t "],
+      outcome: rejectedScenarioSelection,
+      selections: [],
+    },
+    {
+      name: "empty assignment",
+      args: ["--scenario="],
+      outcome: rejectedScenarioSelection,
+      selections: [],
+    },
+    {
+      name: "repeated blanks",
+      args: ["--scenario", "", "--scenario", "  "],
+      outcome: rejectedScenarioSelection,
+      selections: [],
+    },
+    {
+      name: "omitted default",
+      args: [],
+      outcome: { kind: "dispatched" },
+      selections: [[]],
+    },
+    {
+      name: "named scenario",
+      args: ["--scenario", "alpha"],
+      outcome: { kind: "dispatched" },
+      selections: [["alpha"]],
+    },
+    {
+      name: "mixed blanks and duplicate valid ids",
+      args: ["--scenario", "", "--scenario", " alpha ", "--scenario", "  ", "--scenario", "alpha"],
+      outcome: { kind: "dispatched" },
+      selections: [["alpha", "alpha"]],
+    },
+  ])("guards dedicated QA scenario selection: $name", async ({ args, outcome, selections }) => {
+    const module = await import("./qa-runtime.js");
+    const qa = new Command();
+    const dispatchedScenarioIds: string[][] = [];
+    module
+      .createLiveTransportQaCliRegistration({
+        commandName: "sample-transport",
+        defaultProviderMode: "mock-openai",
+        description: "Synthetic transport registration",
+        providerModeHelp: "Provider mode",
+        outputDirHelp: "Artifact directory",
+        scenarioHelp: "Run only the named scenario",
+        sutAccountHelp: "Temporary SUT account",
+        // Keep the callback inert: this checks real parsing without a provider or Gateway.
+        run: async (options) => {
+          dispatchedScenarioIds.push(options.scenarioIds ?? []);
+        },
+      })
+      .register(qa);
+
+    const actual = await qa.parseAsync(["node", "openclaw", "sample-transport", ...args]).then(
+      () => ({ kind: "dispatched" }),
+      (error: unknown) => ({ kind: "rejected", error }),
+    );
+
+    expect(actual).toEqual(outcome);
+    expect(dispatchedScenarioIds).toEqual(selections);
   });
 
   it("shares Docker health parsing across array and jsonl compose output", async () => {

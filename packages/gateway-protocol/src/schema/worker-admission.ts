@@ -47,6 +47,8 @@ export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-comm
 export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
 export const WORKER_LAUNCH_V2_PROTOCOL_FEATURE = "worker-launch-v2";
 export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-context-v2";
+export const WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE = "worker-execution-authority-v1";
+export const WORKER_LINEAGE_START_PROTOCOL_FEATURE = "worker-lineage-start-v1";
 export const WORKER_SESSION_TOOLS_PROTOCOL_FEATURE = "worker-session-tools-v1";
 export const WORKER_PORTAL_PROTOCOL_FEATURE = "worker-portal-v1";
 export const WORKER_PROTOCOL_FEATURES = [
@@ -58,6 +60,8 @@ export const WORKER_PROTOCOL_FEATURES = [
   // Execution context is a build-bound V2 dialect. Do not advertise legacy
   // launch V2: an older gateway would adopt this worker and send the old shape.
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_COMPUTER_PROTOCOL_FEATURE,

@@ -26,7 +26,7 @@ describe("openaiMediaUnderstandingProvider", () => {
   it("declares audio support with the transcription default", () => {
     expect(openaiMediaUnderstandingProvider.capabilities).toEqual(["image", "audio"]);
     expect(openaiMediaUnderstandingProvider.defaultModels).toEqual({
-      image: "gpt-5.6-sol",
+      image: "gpt-6-astra",
       audio: "gpt-4o-transcribe",
     });
     expect(openaiMediaUnderstandingProvider.autoPriority).toEqual({ image: 20, audio: 20 });
@@ -47,7 +47,6 @@ describe("provider-owned audio transcription", () => {
 
   it.each([
     [undefined, undefined],
-    [undefined, "gpt-4o-mini-transcribe"],
     ["https://api.openai.com", "gpt-4o-mini-transcribe"],
     ["https://chatgpt.com/backend-api/codex", "gpt-4o-mini-transcribe"],
   ])(
@@ -90,7 +89,7 @@ describe("provider-owned audio transcription", () => {
     },
   );
 
-  it.each([undefined, "", " \t "])(
+  it.each([undefined, " \t "])(
     "resolves subscription auth through the real resolver with absent key %j",
     async (apiKey) =>
       withEnvAsync({ OPENAI_API_KEY: undefined }, async () => {

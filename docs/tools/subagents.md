@@ -40,6 +40,13 @@ with `visible: true` are ordinary sessions in the session tree: they keep their
 parent for navigation and completion announcements, and you can always type in
 them and steer them like any other session.
 
+Use ordinary subagents for internal QA, research, coding, review, and test lanes,
+with results returning to the parent task. Create a persistent visible session
+only when the user requests a separate session or needs to return to and steer
+that work independently. A PR or report, a long run, or an isolated worktree alone
+does not make a worker a separate user-facing task. Asking for subagents does not
+ask for new sidebar sessions or categories.
+
 This page is an index. Sub-agents are documented on seven pages, one per
 reader job. Open the page that matches your task.
 
@@ -88,6 +95,8 @@ the page that now holds the content.
 - <a id="param-expects-completion-message" />[`expectsCompletionMessage`](/tools/subagents/tool-reference#param-expects-completion-message)
 - <a id="param-sandbox" />[`sandbox`](/tools/subagents/tool-reference#param-sandbox)
 - <a id="param-context" />[`context`](/tools/subagents/tool-reference#param-context)
+- <a id="param-project-id" />[`projectId`](/tools/subagents/tool-reference#param-project-id)
+- <a id="param-project-git-url" />[`projectGitUrl`](/tools/subagents/tool-reference#param-project-git-url)
 - <a id="param-visible" />[`visible`](/tools/subagents/tool-reference#param-visible)
 - <a id="param-group" />[`group`](/tools/subagents/tool-reference#param-group)
 - <a id="param-worktree" />[`worktree`](/tools/subagents/tool-reference#param-worktree)
@@ -139,3 +148,5 @@ the page that now holds the content.
 - [Agent send](/tools/agent-send)
 - [Background tasks](/automation/tasks)
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
+- [Parallel specialist lanes](/concepts/parallel-specialist-lanes) — role-scoped lanes for a single job
+- [Steer](/tools/steer) — redirect a running agent mid-task

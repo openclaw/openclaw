@@ -1,10 +1,10 @@
-// Discord plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithTimeout, runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DiscordApiError, fetchDiscord } from "./api.js";
+import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "./endpoint-runtime.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
@@ -49,6 +49,7 @@ async function fetchDiscordApplicationMe(
   token: string,
   timeoutMs: number,
   fetcher: typeof fetch,
+  endpointRuntime: DiscordEndpointRuntime | null,
 ): Promise<{ id?: string; flags?: number } | undefined> {
   try {
     const normalized = normalizeDiscordToken(token, "channels.discord.token");
@@ -59,7 +60,7 @@ async function fetchDiscordApplicationMe(
       "/oauth2/applications/@me",
       normalized,
       fetcher,
-      { retry: { attempts: 1 }, timeoutMs },
+      { endpointRuntime, retry: { attempts: 1 }, timeoutMs },
     );
   } catch {
     return undefined;
@@ -95,8 +96,11 @@ export async function fetchDiscordApplicationSummary(
   token: string,
   timeoutMs: number,
   fetcher: typeof fetch = fetch,
+  endpointRuntime?: DiscordEndpointRuntime | null,
 ): Promise<DiscordApplicationSummary | undefined> {
-  const json = await fetchDiscordApplicationMe(token, timeoutMs, fetcher);
+  const retainedEndpoint =
+    endpointRuntime === undefined ? getDiscordEndpointRuntime() : endpointRuntime;
+  const json = await fetchDiscordApplicationMe(token, timeoutMs, fetcher, retainedEndpoint ?? null);
   if (!json) {
     return undefined;
   }
@@ -151,7 +155,8 @@ export async function probeDiscord(
   return await runChannelProbe(
     undefined,
     async ({ startedAt }) => {
-      const fetcher = opts?.fetcher ?? fetch;
+      const endpoint = getDiscordEndpointRuntime();
+      const fetcher = endpoint?.fetch ?? opts?.fetcher ?? fetch;
       const includeApplication = opts?.includeApplication === true;
       const normalized = normalizeDiscordToken(token, "channels.discord.token");
       const result: Omit<DiscordProbe, "elapsedMs"> = {
@@ -164,7 +169,7 @@ export async function probeDiscord(
       }
       let res: Response | undefined;
       try {
-        const getMeUrl = `${DISCORD_API_BASE}/users/@me`;
+        const getMeUrl = `${endpoint?.descriptor.restApiBaseUrl ?? DISCORD_API_BASE}/users/@me`;
         const getMeDeadlineMs = Date.now() + timeoutMs;
         res = await fetchWithTimeout(
           getMeUrl,
@@ -192,8 +197,12 @@ export async function probeDiscord(
           const applicationTimeoutMs = Math.floor(timeoutMs - elapsedMs - completionReserveMs);
           if (applicationTimeoutMs > 0) {
             result.application =
-              (await fetchDiscordApplicationSummary(normalized, applicationTimeoutMs, fetcher)) ??
-              undefined;
+              (await fetchDiscordApplicationSummary(
+                normalized,
+                applicationTimeoutMs,
+                fetcher,
+                endpoint ?? null,
+              )) ?? undefined;
           }
         }
         return result;
@@ -253,10 +262,11 @@ export async function probeDiscordApplicationId(
     return { kind: "resolved", applicationId: parsedApplicationId };
   }
   try {
+    const endpoint = getDiscordEndpointRuntime();
     const json = await fetchDiscord<{ id?: string }>(
       "/oauth2/applications/@me",
       normalized,
-      fetcher,
+      endpoint?.fetch ?? fetcher,
       { timeoutMs },
     );
     if (json?.id) {

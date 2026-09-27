@@ -2,6 +2,11 @@
  * Sanitizes and validates replayed session history before model calls.
  */
 import { isDeepStrictEqual } from "node:util";
+import {
+  hasOnlyAssistantReasoningContent,
+  isReasoningOnlyLengthAssistantTurn,
+  isStreamErrorFallbackContent,
+} from "@openclaw/ai/internal/shared";
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -34,11 +39,12 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../embedded-agent-helpers.js";
-import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
-  hasOnlyAssistantReasoningContent,
-  isReasoningOnlyLengthAssistantTurn,
-} from "../replay-turn-classification.js";
+  providerRequiresSignedThinking,
+  shouldAllowProviderOwnedThinkingReplay,
+  shouldMergeConsecutiveUserTurns,
+} from "../embedded-agent-helpers/turns.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
@@ -46,7 +52,6 @@ import {
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
 import type { SessionManager } from "../sessions/index.js";
-import { isStreamErrorFallbackContent } from "../stream-message-shared.js";
 import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
 import {
   extractToolCallsFromAssistant,
@@ -54,12 +59,7 @@ import {
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
-import {
-  providerRequiresSignedThinking,
-  resolveTranscriptPolicy,
-  shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveUserTurns,
-} from "../transcript-policy.js";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
   hasNonzeroUsage,
   makeZeroUsageSnapshot,

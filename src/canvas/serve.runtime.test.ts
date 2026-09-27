@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCanvasDocument, resolveCanvasDocumentsDir } from "./documents.js";
 import { handleCanvasDocumentHttpRequest } from "./serve.runtime.js";
+import { buildWidgetDocument } from "./wrap.js";
 
 const tempDirs: string[] = [];
 
@@ -43,6 +44,36 @@ async function capture(url: string, method = "GET") {
 }
 
 describe("core canvas document host", () => {
+  it.each([
+    [
+      "stored",
+      `<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'self'"><script src="/__openclaw__/a2ui/a2ui.bundle.js"></script>`,
+    ],
+    [
+      "new",
+      buildWidgetDocument(
+        "Registered renderer",
+        '<script src="/__openclaw__/a2ui/a2ui-v0.9.bundle.js"></script>',
+        { scriptOrigins: ["'self'"] },
+      ),
+    ],
+  ])("preserves document-approved renderer sources for %s documents", async (_, html) => {
+    const stateDir = await createStateDir();
+    const document = await createCanvasDocument(
+      { kind: "html_bundle", entrypoint: { type: "html", value: html }, cspSandbox: "scripts" },
+      { stateDir },
+    );
+    const response = await capture(document.entryUrl);
+    const policy = String(response.headers["content-security-policy"]);
+    const scripts = policy
+      .split(";")
+      .find((directive) => directive.trim().startsWith("script-src "));
+    expect(scripts?.split(/\s+/)).toContain("'self'");
+    expect(policy).toContain("connect-src 'none'");
+    expect(policy).toContain("sandbox allow-scripts");
+    expect(response.text).toBe(html);
+  });
+
   it("serves sandbox-marked HTML with the stable CSP header and no mutation", async () => {
     const stateDir = await createStateDir();
     const html = "<html><body>widget</body></html>";
@@ -61,7 +92,13 @@ describe("core canvas document host", () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
     expect(response.headers["cache-control"]).toBe("no-store");
-    expect(response.headers["content-security-policy"]).toBe("sandbox allow-scripts");
+    const csp = String(response.headers["content-security-policy"]);
+    expect(csp).toContain("sandbox allow-scripts");
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("https://cdn.jsdelivr.net");
+    expect(csp).toContain("font-src data:");
+    expect(csp).toContain("connect-src 'none'");
+    expect(response.headers["referrer-policy"]).toBe("no-referrer");
     expect(response.text).toBe(html);
   });
 
@@ -107,7 +144,9 @@ describe("core canvas document host", () => {
     expect(headHtml.headers["content-length"]).toBe(String(getHtml.body.byteLength));
     expect(headHtml.body.byteLength).toBe(0);
     expect(headHtml.headers["content-type"]).toBe("text/html; charset=utf-8");
-    expect(headHtml.headers["content-security-policy"]).toBe("sandbox allow-scripts");
+    expect(headHtml.headers["content-security-policy"]).toBe(
+      getHtml.headers["content-security-policy"],
+    );
 
     const getCss = await capture(cssUrl);
     const headCss = await capture(cssUrl, "HEAD");

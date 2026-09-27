@@ -9,7 +9,7 @@ import type { SystemPromptRuntimeInfo } from "../system-prompt.js";
 
 type EmbeddedSystemPromptParams = Omit<
   Parameters<typeof buildConfiguredAgentSystemPrompt>[0],
-  "toolNames" | "fsWorkspaceOnly"
+  "toolNames" | "fsWorkspaceOnly" | "messageTool"
 > & {
   reasoningTagHint: boolean;
   runtimeInfo: SystemPromptRuntimeInfo & {
@@ -32,6 +32,7 @@ export function buildEmbeddedSystemPrompt(params: EmbeddedSystemPromptParams): s
     ...promptParams,
     agentId: params.agentId ?? params.runtimeInfo.agentId,
     toolNames: tools.map((tool) => tool.name),
+    messageTool: tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
   });
 }
 

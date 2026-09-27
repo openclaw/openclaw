@@ -2,41 +2,21 @@ import { buffer } from "node:stream/consumers";
 import { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramCallbackMessageActions } from "./bot-handlers.callback-actions.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import { telegramPlugin } from "./channel.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
-import { setTelegramRuntime } from "./runtime.js";
+import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
   resetTelegramMessageCacheForTest,
 } from "./runtime.test-support.js";
-import type { TelegramRuntime } from "./runtime.types.js";
 import { sendTypingTelegram } from "./send-actions.js";
 import { sendMessageTelegram } from "./send-message.js";
 import { sendPollTelegram } from "./send-special.js";
-
-const richMarkdownProjection = vi.hoisted(() => ({ count: 0 }));
-
-vi.mock("./rich-blocks.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./rich-blocks.js")>();
-  return {
-    ...actual,
-    markdownToTelegramRichBlocks: (
-      ...args: Parameters<typeof actual.markdownToTelegramRichBlocks>
-    ) => {
-      richMarkdownProjection.count += 1;
-      return actual.markdownToTelegramRichBlocks(...args);
-    },
-  };
-});
 
 type CapturedRequest = {
   body: Buffer;
@@ -70,24 +50,6 @@ function directMessagesMessage(overrides: Record<string, unknown> = {}): Record<
     text: "button",
     ...overrides,
   };
-}
-
-function installTelegramStateRuntimeForTest(): void {
-  setTelegramRuntime({
-    state: {
-      openKeyedStore: ((options) =>
-        createPluginStateKeyedStoreForTests(
-          "telegram",
-          options,
-        )) as TelegramRuntime["state"]["openKeyedStore"],
-      openSyncKeyedStore: ((options) =>
-        createPluginStateSyncKeyedStoreForTests(
-          "telegram",
-          options,
-        )) as TelegramRuntime["state"]["openSyncKeyedStore"],
-    },
-    channel: {},
-  } as TelegramRuntime);
 }
 
 function parseJsonBody(request: CapturedRequest): Record<string, unknown> {
@@ -157,19 +119,16 @@ describe("Telegram topic transport payloads", () => {
             text: "accepted",
           }
         : true;
-      return new Response(JSON.stringify({ ok: true, result }), {
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json({ ok: true, result });
     },
   );
   const bot = new Bot(TOKEN, { client: { fetch } });
 
   beforeEach(() => {
     requests.length = 0;
-    richMarkdownProjection.count = 0;
     resetPluginStateStoreForTests();
     resetTelegramMessageCacheForTest();
-    installTelegramStateRuntimeForTest();
+    setTelegramPluginStateRuntimeForTests();
   });
 
   afterEach(() => {
@@ -244,7 +203,7 @@ describe("Telegram topic transport payloads", () => {
     if (!target?.to) {
       throw new Error("expected persisted direct-topic delivery target");
     }
-    installTelegramStateRuntimeForTest();
+    setTelegramPluginStateRuntimeForTests();
     await sendMessageTelegram(target.to, "roundtrip", {
       cfg,
       token: TOKEN,
@@ -275,7 +234,6 @@ describe("Telegram topic transport payloads", () => {
       direct_messages_topic_id: DIRECT_TOPIC_ID,
     });
     expect(request && parseJsonBody(request)).not.toHaveProperty("message_thread_id");
-    expect(richMarkdownProjection.count).toBe(1);
   });
 
   it("rejects poll and typing for channel Direct Messages without transport", async () => {

@@ -1,4 +1,3 @@
-// Voice Call plugin module implements plivo behavior.
 import crypto from "node:crypto";
 import {
   normalizeLowercaseStringOrEmpty,

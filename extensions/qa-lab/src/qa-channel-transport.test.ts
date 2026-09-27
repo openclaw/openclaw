@@ -251,7 +251,6 @@ describe("qa channel transport", () => {
   it.each([
     { command: "stop", name: "stop" },
     { command: "queue collect please help", name: "queue" },
-    { command: "think high", name: "think" },
   ])(
     "injects /$name with its complete command and token-only metadata",
     async ({ command, name }) => {

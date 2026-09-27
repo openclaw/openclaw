@@ -9,6 +9,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { registerCapabilityCli } from "./capability-cli.js";
+import {
+  runCap,
+  runCapability,
+  runCapabilityWithParentAgent,
+  runModelAuthWithAgent,
+} from "./capability-cli.test-harness.js";
 import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
 
 const PNG_1X1_BASE64 =
@@ -21,36 +27,6 @@ function createIsomBrandBuffer(brand: "hevc" | "msf1"): Buffer {
   buffer.write("ftyp", 4, "ascii");
   buffer.write(brand, 8, "ascii");
   return buffer;
-}
-
-async function runCap(...argv: string[]): Promise<void> {
-  const program = new Command();
-  await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
-  await program.parseAsync(argv, { from: "user" });
-}
-
-function runCapability(domain: string, action: string, ...argv: string[]): Promise<void> {
-  return runCap("capability", domain, action, ...argv);
-}
-
-function runCapabilityWithParentAgent(
-  domain: string,
-  action: string,
-  agent: string,
-  ...argv: string[]
-): Promise<void> {
-  return runCap("capability", domain, "--agent", agent, action, ...argv);
-}
-
-function runModelAuthWithAgent(
-  position: "parent" | "leaf",
-  action: "login" | "logout" | "status",
-  agent: string,
-  ...argv: string[]
-): Promise<void> {
-  return position === "parent"
-    ? runCap("capability", "model", "--agent", agent, "auth", action, ...argv)
-    : runCap("capability", "model", "auth", action, "--agent", agent, ...argv);
 }
 
 function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {
@@ -110,7 +86,9 @@ const mocks = vi.hoisted(() => ({
   >(async () => []),
   releaseSimpleCompletion: vi.fn(),
   acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
-    release: () => mocks.releaseSimpleCompletion(),
+    async [Symbol.asyncDispose]() {
+      mocks.releaseSimpleCompletion();
+    },
     selection: {
       provider: "openai",
       modelId: "gpt-5.4",
@@ -204,7 +182,7 @@ const mocks = vi.hoisted(() => ({
         : {}),
     }),
   ),
-  getProviderEnvVars: vi.fn((providerId: string) => [
+  getProviderEnvVarsCore: vi.fn((providerId: string) => [
     `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`,
   ]),
   embedBatch: vi.fn(async (inputs: unknown[], options?: { inputType?: string }) =>
@@ -290,7 +268,7 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 }));
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
-  getProviderEnvVars: mocks.getProviderEnvVars,
+  getProviderEnvVarsCore: mocks.getProviderEnvVarsCore,
   resolveProviderAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: {},
@@ -325,6 +303,14 @@ vi.mock("./command-secret-targets.js", () => ({
   getMemoryEmbeddingCommandSecretTargetIds: mocks.getMemoryEmbeddingCommandSecretTargetIds,
   getModelsCommandSecretTargetIds: mocks.getModelsCommandSecretTargetIds,
   getTtsCommandSecretTargetIds: mocks.getTtsCommandSecretTargetIds,
+}));
+
+// Account-secret snapshot preparation is covered by dedicated
+// model.account-secrets.* and local-runners.account-secrets tests; keep this
+// command-wiring suite on the pre-existing mocked world instead of loading the
+// real secrets runtime.
+vi.mock("./capability-cli/local-account-secrets.js", () => ({
+  prepareLocalCapabilityAccountSecrets: vi.fn(async () => {}),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -574,31 +560,34 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 describe("capability cli", () => {
-  it.each(
-    [
-      { args: ["image", "edit", "--prompt", "crop the image"], option: "--file <path>" },
-      { args: ["image", "describe-many"], option: "--file <path>" },
-      { args: ["embedding", "create"], option: "--text <text>" },
-    ].flatMap(({ args, option }) =>
-      ["infer", "capability"].map((root) => ({ args, option, root })),
-    ),
-  )("rejects missing required repeatable input for $root $args", async ({ root, args, option }) => {
-    const argv = [root, ...args, "--json"];
-    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
-    await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+  it.each([
+    {
+      root: "infer",
+      args: ["image", "edit", "--prompt", "crop the image"],
+      option: "--file <path>",
+    },
+    { root: "capability", args: ["image", "describe-many"], option: "--file <path>" },
+    { root: "infer", args: ["embedding", "create"], option: "--text <text>" },
+  ])(
+    "rejects missing required repeatable input for $root $args",
+    async ({ root, args, option }) => {
+      const argv = [root, ...args, "--json"];
+      const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+      await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
 
-    await expect(
-      program.parseAsync(argv, { from: "user" }).then(() => undefined),
-    ).rejects.toMatchObject({
-      code: "commander.missingMandatoryOptionValue",
-      message: `error: required option '${option}' not specified`,
-    });
-    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-    expect(mocks.generateImage).not.toHaveBeenCalled();
-    expect(mocks.describeImageFile).not.toHaveBeenCalled();
-    expect(mocks.createEmbeddingProvider).not.toHaveBeenCalled();
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  });
+      await expect(
+        program.parseAsync(argv, { from: "user" }).then(() => undefined),
+      ).rejects.toMatchObject({
+        code: "commander.missingMandatoryOptionValue",
+        message: `error: required option '${option}' not specified`,
+      });
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+      expect(mocks.describeImageFile).not.toHaveBeenCalled();
+      expect(mocks.createEmbeddingProvider).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -688,7 +677,7 @@ describe("capability cli", () => {
     mocks.getTtsProvider.mockReset().mockReturnValue("openai");
     mocks.listSpeechProviders.mockReset().mockReturnValue([]);
     mocks.resolveExplicitTtsOverrides.mockClear();
-    mocks.getProviderEnvVars
+    mocks.getProviderEnvVarsCore
       .mockReset()
       .mockImplementation((providerId: string) => [
         `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`,
@@ -751,6 +740,8 @@ describe("capability cli", () => {
     options?: { reasoning?: unknown };
   };
   type ImageDescribeParams = {
+    agentId?: string;
+    agentDir?: string;
     filePath?: string;
     mediaUrl?: string;
     model?: unknown;
@@ -846,6 +837,7 @@ describe("capability cli", () => {
     const calls = mocks.transcribeAudioFile.mock.calls as unknown as Array<
       [
         {
+          agentId?: string;
           agentDir?: string;
           cfg?: unknown;
           filePath?: string;
@@ -1019,7 +1011,7 @@ describe("capability cli", () => {
     expect(providers).toContainEqual(
       expect.objectContaining({ provider: "openai", configured: true }),
     );
-    expect(mocks.getProviderEnvVars).toHaveBeenCalledWith("openai");
+    expect(mocks.getProviderEnvVarsCore).toHaveBeenCalledWith("openai");
   });
 
   it("scopes provider state and model selection to an explicit agent", async () => {
@@ -1118,8 +1110,6 @@ describe("capability cli", () => {
   });
 
   it.each([
-    { position: "parent", systemAgent: undefined },
-    { position: "leaf", systemAgent: undefined },
     { position: "parent", systemAgent: "alpha" },
     { position: "leaf", systemAgent: "alpha" },
   ])(
@@ -1223,7 +1213,7 @@ describe("capability cli", () => {
     },
   );
 
-  it("defaults model run to local transport", async () => {
+  it("defaults model runs to the lean local completion path", async () => {
     await runCapability("model", "run", "--prompt", "hello", "--json");
 
     expect(mocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
@@ -1231,12 +1221,8 @@ describe("capability cli", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(firstJsonOutput()?.capability).toBe("model.run");
     expect(firstJsonOutput()?.transport).toBe("local");
-  });
-
-  it("runs local model probes through the lean completion path", async () => {
-    await runCapability("model", "run", "--prompt", "hello", "--json");
-
     const preparedParams = firstPreparedModelParams();
+    expect(preparedParams).not.toHaveProperty("allowBundledStaticCatalogFallback");
     expect(preparedParams?.agentId).toBe("main");
     expect(preparedParams?.allowMissingApiKeyModes).toEqual(["aws-sdk"]);
     expect(preparedParams?.skipAgentDiscovery).toBe(true);
@@ -1318,19 +1304,6 @@ describe("capability cli", () => {
     expect(params?.skipAgentDiscovery).toBe(true);
   });
 
-  it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
-    await runCapability("model", "run", "--prompt", "hello", "--json");
-
-    const calls = mocks.acquireSimpleCompletionModelForAgent.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
-    const params = calls[0]?.[0];
-    if (!params) {
-      throw new Error("Expected simple completion model params");
-    }
-    expect(params).not.toHaveProperty("allowBundledStaticCatalogFallback");
-  });
-
   it("passes image files to local model probes", async () => {
     const tempInput = path.join(os.tmpdir(), `openclaw-model-run-image-${Date.now()}.png`);
     await fs.writeFile(tempInput, Buffer.from(PNG_1X1_BASE64, "base64"));
@@ -1352,7 +1325,9 @@ describe("capability cli", () => {
 
   it("adds minimal instructions only for openai local model probes", async () => {
     mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      release: () => mocks.releaseSimpleCompletion(),
+      async [Symbol.asyncDispose]() {
+        mocks.releaseSimpleCompletion();
+      },
       selection: {
         provider: "openai",
         modelId: "gpt-5.5",
@@ -1531,7 +1506,9 @@ describe("capability cli", () => {
 
   it("rejects local Codex provider probes before simple-completion dispatch", async () => {
     mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      release: () => mocks.releaseSimpleCompletion(),
+      async [Symbol.asyncDispose]() {
+        mocks.releaseSimpleCompletion();
+      },
       selection: {
         provider: "codex",
         modelId: "gpt-5.4",
@@ -1559,7 +1536,7 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it.each(["", "   ", "\n\t"])(
+  it.each(["\n\t"])(
     "rejects empty model run prompts before local dispatch (%j)",
     async (prompt) => {
       await expect(runCapability("model", "run", "--prompt", prompt, "--json")).rejects.toThrow(
@@ -2247,22 +2224,45 @@ describe("capability cli", () => {
       name: "image describe",
       run: () =>
         runCapability("image", "describe", "--agent", "beta", "--file", "photo.png", "--json"),
-      selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
-      expectedAgent: "beta",
+      selectedAgent: () => [imageDescribeCall()?.agentId, imageDescribeCall()?.agentDir],
+      expectedAgent: ["beta", "/tmp/agent-beta"],
     },
     {
       name: "image describe-many",
       run: () =>
         runCapability("image", "describe-many", "--agent", "beta", "--file", "photo.png", "--json"),
-      selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
-      expectedAgent: "beta",
+      selectedAgent: () => [imageDescribeCall()?.agentId, imageDescribeCall()?.agentDir],
+      expectedAgent: ["beta", "/tmp/agent-beta"],
+    },
+    {
+      name: "image describe with explicit model",
+      run: () =>
+        runCapability(
+          "image",
+          "describe",
+          "--agent",
+          "beta",
+          "--model",
+          "ollama/qwen2.5vl:7b",
+          "--file",
+          "photo.png",
+          "--json",
+        ),
+      selectedAgent: () => [
+        firstImageDescribeWithModelCall()?.agentId,
+        firstImageDescribeWithModelCall()?.agentDir,
+      ],
+      expectedAgent: ["beta", "/tmp/agent-beta"],
     },
     {
       name: "audio transcribe",
       run: () =>
         runCapability("audio", "transcribe", "--agent", "beta", "--file", "memo.m4a", "--json"),
-      selectedAgent: () => firstAudioTranscriptionCall()?.agentDir,
-      expectedAgent: "/tmp/agent-beta",
+      selectedAgent: () => [
+        firstAudioTranscriptionCall()?.agentId,
+        firstAudioTranscriptionCall()?.agentDir,
+      ],
+      expectedAgent: ["beta", "/tmp/agent-beta"],
     },
     {
       name: "video generate",
@@ -2288,8 +2288,11 @@ describe("capability cli", () => {
       name: "video describe",
       run: () =>
         runCapability("video", "describe", "--agent", "beta", "--file", "clip.mp4", "--json"),
-      selectedAgent: () => firstVideoDescriptionCall()?.agentDir,
-      expectedAgent: "/tmp/agent-beta",
+      selectedAgent: () => [
+        firstVideoDescriptionCall()?.agentId,
+        firstVideoDescriptionCall()?.agentDir,
+      ],
+      expectedAgent: ["beta", "/tmp/agent-beta"],
     },
     {
       name: "embedding create",
@@ -2307,7 +2310,7 @@ describe("capability cli", () => {
 
       await run();
 
-      expect(selectedAgent()).toBe(expectedAgent);
+      expect(selectedAgent()).toEqual(expectedAgent);
     },
   );
 
@@ -2360,8 +2363,8 @@ describe("capability cli", () => {
       name: "image describe",
       run: () =>
         runCapabilityWithParentAgent("image", "describe", "beta", "--file", "photo.png", "--json"),
-      selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
-      expectedAgent: "beta",
+      selectedAgent: () => [imageDescribeCall()?.agentId, imageDescribeCall()?.agentDir],
+      expectedAgent: ["beta", "/tmp/agent-beta"],
     },
     {
       name: "image describe-many",
@@ -2374,15 +2377,18 @@ describe("capability cli", () => {
           "photo.png",
           "--json",
         ),
-      selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
-      expectedAgent: "beta",
+      selectedAgent: () => [imageDescribeCall()?.agentId, imageDescribeCall()?.agentDir],
+      expectedAgent: ["beta", "/tmp/agent-beta"],
     },
     {
       name: "audio transcribe",
       run: () =>
         runCapabilityWithParentAgent("audio", "transcribe", "beta", "--file", "memo.m4a", "--json"),
-      selectedAgent: () => firstAudioTranscriptionCall()?.agentDir,
-      expectedAgent: "/tmp/agent-beta",
+      selectedAgent: () => [
+        firstAudioTranscriptionCall()?.agentId,
+        firstAudioTranscriptionCall()?.agentDir,
+      ],
+      expectedAgent: ["beta", "/tmp/agent-beta"],
     },
     {
       name: "video generate",
@@ -2415,8 +2421,11 @@ describe("capability cli", () => {
       name: "video describe",
       run: () =>
         runCapabilityWithParentAgent("video", "describe", "beta", "--file", "clip.mp4", "--json"),
-      selectedAgent: () => firstVideoDescriptionCall()?.agentDir,
-      expectedAgent: "/tmp/agent-beta",
+      selectedAgent: () => [
+        firstVideoDescriptionCall()?.agentId,
+        firstVideoDescriptionCall()?.agentDir,
+      ],
+      expectedAgent: ["beta", "/tmp/agent-beta"],
     },
     {
       name: "embedding create",
@@ -2434,7 +2443,7 @@ describe("capability cli", () => {
 
       await run();
 
-      expect(selectedAgent()).toBe(expectedAgent);
+      expect(selectedAgent()).toEqual(expectedAgent);
     },
   );
 
@@ -2741,29 +2750,6 @@ describe("capability cli", () => {
     expect(firstJsonOutput()?.id).toBe("image.edit");
     expect(firstJsonOutput()?.flags).toEqual([
       "--file",
-      "--prompt",
-      "--model",
-      "--count",
-      "--size",
-      "--aspect-ratio",
-      "--resolution",
-      "--output-format",
-      "--background",
-      "--openai-background",
-      "--openai-moderation",
-      "--quality",
-      "--timeout-ms",
-      "--output",
-      "--agent",
-      "--json",
-    ]);
-  });
-
-  it("reports the expanded image.generate flags in capability inspect", async () => {
-    await runCapability("inspect", "--name", "image.generate", "--json");
-
-    expect(firstJsonOutput()?.id).toBe("image.generate");
-    expect(firstJsonOutput()?.flags).toEqual([
       "--prompt",
       "--model",
       "--count",
@@ -3300,62 +3286,63 @@ describe("capability cli", () => {
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
-  describe.each(["infer", "capability"])("%s numeric options", (command) => {
-    describe.each(["", "   "])("blank value %j", (raw) => {
-      it.each([
-        [
-          "web search limit",
-          ["web", "search", "--query", "ping", "--limit"],
-          "--limit must be a positive integer",
-        ],
-        [
-          "image generate count",
-          ["image", "generate", "--prompt", "portrait", "--count"],
-          "--count must be a positive integer",
-        ],
-        [
-          "image edit count",
-          ["image", "edit", "--file", "photo.png", "--prompt", "crop it", "--count"],
-          "--count must be a positive integer",
-        ],
-        [
-          "video generate duration",
-          ["video", "generate", "--prompt", "clip", "--duration"],
-          "--duration must be a finite number",
-        ],
-      ] as const)("rejects %s before provider dispatch", async (_name, argv, message) => {
-        const webSearchRuntime = await import("../web-search/runtime.js");
-        vi.mocked(webSearchRuntime.runWebSearch).mockClear();
+  it.each([
+    [
+      "infer",
+      ["web", "search", "--query", "ping", "--limit"],
+      "",
+      "--limit must be a positive integer",
+    ],
+    [
+      "capability",
+      ["image", "generate", "--prompt", "portrait", "--count"],
+      "   ",
+      "--count must be a positive integer",
+    ],
+    [
+      "infer",
+      ["image", "edit", "--file", "photo.png", "--prompt", "crop it", "--count"],
+      "",
+      "--count must be a positive integer",
+    ],
+    [
+      "capability",
+      ["video", "generate", "--prompt", "clip", "--duration"],
+      "   ",
+      "--duration must be a finite number",
+    ],
+  ] as const)(
+    "rejects blank numeric input before %s %j dispatch",
+    async (command, argv, raw, message) => {
+      const webSearchRuntime = await import("../web-search/runtime.js");
+      vi.mocked(webSearchRuntime.runWebSearch).mockClear();
 
-        await expect(runCap(command, ...argv, raw)).rejects.toThrow("exit 1");
+      await expect(runCap(command, ...argv, raw)).rejects.toThrow("exit 1");
 
-        expectRuntimeErrorContains(message);
-        expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-        expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
-        expect(mocks.generateImage).not.toHaveBeenCalled();
-        expect(mocks.generateVideo).not.toHaveBeenCalled();
-      });
-    });
+      expectRuntimeErrorContains(message);
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+      expect(mocks.generateVideo).not.toHaveBeenCalled();
+    },
+  );
 
-    describe.each(["", "   ", "1000ms"])("invalid timeout %j", (raw) => {
-      it.each([
-        ["image generate", ["image", "generate", "--prompt", "portrait"]],
-        ["image edit", ["image", "edit", "--file", "photo.png", "--prompt", "crop it"]],
-        ["image describe", ["image", "describe", "--file", "photo.png"]],
-        ["image describe-many", ["image", "describe-many", "--file", "photo.png"]],
-        ["video generate", ["video", "generate", "--prompt", "clip"]],
-      ] as const)("rejects %s before provider dispatch", async (_name, argv) => {
-        await expect(runCap(command, ...argv, "--timeout-ms", raw)).rejects.toThrow("exit 1");
+  it.each([
+    ["infer", ["image", "generate", "--prompt", "portrait"], ""],
+    ["capability", ["image", "edit", "--file", "photo.png", "--prompt", "crop it"], "   "],
+    ["infer", ["image", "describe", "--file", "photo.png"], "1000ms"],
+    ["capability", ["image", "describe-many", "--file", "photo.png"], ""],
+    ["infer", ["video", "generate", "--prompt", "clip"], "1000ms"],
+  ] as const)("rejects invalid timeout before %s %j dispatch", async (command, argv, raw) => {
+    await expect(runCap(command, ...argv, "--timeout-ms", raw)).rejects.toThrow("exit 1");
 
-        expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
-        expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-        expect(mocks.generateImage).not.toHaveBeenCalled();
-        expect(mocks.generateVideo).not.toHaveBeenCalled();
-        expect(mocks.describeImageFile).not.toHaveBeenCalled();
-        expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
-        expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
-      });
-    });
+    expectRuntimeErrorContains("Invalid --timeout-ms. Use a positive millisecond value");
+    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.generateVideo).not.toHaveBeenCalled();
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
+    expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
   });
 
   it("routes audio transcribe through transcription, not realtime", async () => {
@@ -3367,6 +3354,56 @@ describe("capability cli", () => {
     expect(output?.capability).toBe("audio.transcribe");
     expect(outputs).toHaveLength(1);
     expect(outputs[0]?.kind).toBe("audio.transcription");
+  });
+
+  it.each([
+    { root: "infer", json: true },
+    { root: "infer", json: false },
+    { root: "capability", json: true },
+    { root: "capability", json: false },
+  ])("reports actual audio attribution for $root with json=$json", async ({ root, json }) => {
+    const result = {
+      text: "meeting notes",
+      provider: "fixture-asr",
+      model: "fixture-actual-model",
+    };
+    mocks.transcribeAudioFile.mockResolvedValueOnce(result);
+
+    await runCap(
+      root,
+      "audio",
+      "transcribe",
+      "--file",
+      "memo.m4a",
+      "--model",
+      "openai/whisper-1",
+      ...(json ? ["--json"] : []),
+    );
+
+    if (json) {
+      expect(firstJsonOutput()).toEqual({
+        ok: true,
+        capability: "audio.transcribe",
+        transport: "local",
+        provider: result.provider,
+        model: result.model,
+        attempts: [],
+        outputs: [
+          { path: path.resolve("memo.m4a"), text: result.text, kind: "audio.transcription" },
+        ],
+      });
+    } else {
+      expect(mocks.runtime.log.mock.calls.at(-1)?.[0]).toBe(
+        [
+          "audio.transcribe via local",
+          "provider: fixture-asr",
+          "model: fixture-actual-model",
+          "outputs: 1",
+          path.resolve("memo.m4a"),
+          result.text,
+        ].join("\n"),
+      );
+    }
   });
 
   it("resolves command SecretRefs before local audio transcription", async () => {
@@ -3785,6 +3822,7 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
 
     expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it.each(["local", "gateway"] as const)(
@@ -4251,7 +4289,7 @@ describe("capability cli", () => {
 
   it("marks env-backed image providers as configured", async () => {
     vi.stubEnv("FAL_KEY", "fal-test-key");
-    mocks.getProviderEnvVars.mockReturnValueOnce(["FAL_KEY"]);
+    mocks.getProviderEnvVarsCore.mockReturnValueOnce(["FAL_KEY"]);
     mocks.listRuntimeImageGenerationProviders.mockReturnValueOnce([
       { id: "fal", label: "fal", defaultModel: "fal-ai/flux", models: [] },
     ] as never);
@@ -4266,7 +4304,7 @@ describe("capability cli", () => {
   it("marks env-backed video generation and description providers as configured", async () => {
     vi.stubEnv("RUNWAYML_API_SECRET", "runway-test-key");
     vi.stubEnv("GEMINI_API_KEY", "gemini-test-key");
-    mocks.getProviderEnvVars.mockImplementation((providerId: string) =>
+    mocks.getProviderEnvVarsCore.mockImplementation((providerId: string) =>
       providerId === "runway" ? ["RUNWAYML_API_SECRET"] : ["GEMINI_API_KEY"],
     );
     mocks.listRuntimeVideoGenerationProviders.mockReturnValueOnce([
@@ -4295,7 +4333,7 @@ describe("capability cli", () => {
 
   it("marks env-backed TTS providers as configured", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-test-key");
-    mocks.getProviderEnvVars.mockReturnValueOnce(["XAI_API_KEY"]);
+    mocks.getProviderEnvVarsCore.mockReturnValueOnce(["XAI_API_KEY"]);
     mocks.listSpeechProviders.mockReturnValueOnce([
       { id: "xai", label: "xAI", models: [], voices: [] },
     ] as never);

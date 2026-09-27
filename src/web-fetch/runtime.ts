@@ -47,7 +47,7 @@ type WebFetchProviderCacheEntry = {
   providers: PluginWebFetchProviderEntry[];
 };
 
-let webFetchProviderCache = new WeakMap<OpenClawConfig, WebFetchProviderCacheEntry>();
+const webFetchProviderCache = new WeakMap<OpenClawConfig, WebFetchProviderCacheEntry>();
 
 function resolveFetchConfig(config: OpenClawConfig | undefined): WebFetchConfig | undefined {
   return resolveWebProviderConfig(config, "fetch") as NonNullable<WebFetchConfig> | undefined;
@@ -201,10 +201,6 @@ function resolveCachedWebFetchProviders(params: {
     });
   }
   return loaded;
-}
-
-export function clearWebFetchRuntimeCachesForTest(): void {
-  webFetchProviderCache = new WeakMap();
 }
 
 function resolveWebFetchProvidersForOptions(

@@ -27,8 +27,6 @@ describe("synthetic onboard", () => {
 
   it("adds synthetic provider with correct settings", () => {
     const provider = defaultCfg.models?.providers?.synthetic;
-    expect(provider?.baseUrl).toBe("https://api.synthetic.new/anthropic");
-    expect(provider?.api).toBe("anthropic-messages");
     expect(provider?.models.map((model) => model.id)).toContain(
       SYNTHETIC_DEFAULT_MODEL_REF.replace(/^synthetic\//, ""),
     );

@@ -237,14 +237,16 @@ export function formatMessageCliText(
     const rows = results.map((entry) => ({
       Channel: resolveChannelLabel(entry.channel),
       Target: shortenText(formatTargetDisplay({ channel: entry.channel, target: entry.to }), 36),
-      Status: entry.ok ? "ok" : "error",
+      Status: entry.ok ? "ok" : entry.attempted === false ? "not attempted" : "error",
       Error: entry.ok ? "" : shortenText(entry.error ?? "unknown error", 48),
     }));
     const okCount = results.filter((entry) => entry.ok).length;
+    const notAttemptedCount = results.filter((entry) => entry.attempted === false).length;
+    const failedCount = results.length - okCount - notAttemptedCount;
     const total = results.length;
     const successful = outcome.ok;
     const headingLine = (successful ? ok : fail)(
-      `${successful ? "✅ Broadcast complete" : "❌ Broadcast failed"} (${okCount}/${total} succeeded, ${total - okCount} failed)`,
+      `${successful ? "✅ Broadcast complete" : notAttemptedCount ? "❌ Broadcast incomplete" : "❌ Broadcast failed"} (${okCount}/${total} succeeded, ${failedCount} failed${notAttemptedCount ? `, ${notAttemptedCount} not attempted` : ""})`,
     );
     return [
       headingLine,
@@ -294,31 +296,22 @@ export function formatMessageCliText(
       const poll = result.pollResult;
       const pollId = (poll.result as { pollId?: string } | undefined)?.pollId;
       const msgId = poll.result?.messageId ?? null;
+      let summary: string;
       if (poll.via === "direct") {
         const directResult = poll.result
           ? ({ ...poll.result, channel: poll.channel } satisfies OutboundDeliveryResult)
           : undefined;
-        const lines = [
-          ok(
-            formatOutboundDeliverySummary(poll.channel, directResult, {
-              action: "Poll sent",
-            }),
-          ),
-        ];
-        if (pollId) {
-          lines.push(ok(`Poll id: ${pollId}`));
-        }
-        return lines;
+        summary = formatOutboundDeliverySummary(poll.channel, directResult, {
+          action: "Poll sent",
+        });
+      } else {
+        summary = formatGatewaySummary({
+          action: "Poll sent",
+          channel: poll.channel,
+          messageId: msgId,
+        });
       }
-      const lines = [
-        ok(
-          formatGatewaySummary({
-            action: "Poll sent",
-            channel: poll.channel,
-            messageId: msgId,
-          }),
-        ),
-      ];
+      const lines = [ok(summary)];
       if (pollId) {
         lines.push(ok(`Poll id: ${pollId}`));
       }

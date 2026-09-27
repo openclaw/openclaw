@@ -70,27 +70,19 @@ export function buildTaskSystemAuditFindings(params: {
     })),
   ];
   const filteredFindings = allFindings
-    .filter((finding) => {
-      if (params.severityFilter && finding.severity !== params.severityFilter) {
-        return false;
-      }
-      if (params.codeFilter && finding.code !== params.codeFilter) {
-        return false;
-      }
-      return true;
-    })
+    .filter(
+      (finding) =>
+        (!params.severityFilter || finding.severity === params.severityFilter) &&
+        (!params.codeFilter || finding.code === params.codeFilter),
+    )
     .toSorted(compareSystemAuditFindings);
-  // Keep summary counts based on the full sorted set; filters only affect displayed findings.
-  const sortedAllFindings = [...allFindings].toSorted(compareSystemAuditFindings);
+  // Filters only affect displayed findings; summary counts cover the full set.
   return {
-    allFindings: sortedAllFindings,
     filteredFindings,
-    taskFindings: params.taskFindings,
-    flowFindings: params.flowFindings,
     summary: {
-      total: sortedAllFindings.length,
-      errors: sortedAllFindings.filter((finding) => finding.severity === "error").length,
-      warnings: sortedAllFindings.filter((finding) => finding.severity !== "error").length,
+      total: allFindings.length,
+      errors: allFindings.filter((finding) => finding.severity === "error").length,
+      warnings: allFindings.filter((finding) => finding.severity !== "error").length,
       tasks: summarizeTaskAuditFindings(params.taskFindings),
       taskFlows: summarizeTaskFlowAuditFindings(params.flowFindings),
     },
@@ -107,13 +99,12 @@ export function buildTaskSystemAuditJsonPayload(
     limit?: number;
   },
 ) {
-  const { allFindings, filteredFindings, taskFindings, summary } = result;
+  const { filteredFindings, summary } = result;
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
   const displayed = limit ? filteredFindings.slice(0, limit) : filteredFindings;
   // Preserve the legacy task-only summary while adding combined task-flow counts.
-  const legacySummary = summarizeTaskAuditFindings(taskFindings);
   return {
-    count: allFindings.length,
+    count: summary.total,
     filteredCount: filteredFindings.length,
     displayed: displayed.length,
     filters: {
@@ -122,7 +113,7 @@ export function buildTaskSystemAuditJsonPayload(
       limit: limit ?? null,
     },
     summary: {
-      ...legacySummary,
+      ...summary.tasks,
       taskFlows: summary.taskFlows,
       combined: {
         total: summary.total,

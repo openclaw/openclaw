@@ -1,11 +1,12 @@
 import { consume } from "@lit/context";
 import { nothing } from "lit";
-import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import type { SkillWorkshopProposalDecision } from "../../lib/skill-workshop/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -16,12 +17,14 @@ import { SKILL_WORKSHOP_LEARNING_PROMPT } from "./learning-prompt.ts";
 import type { SkillWorkshopRevisionRequest } from "./page-types.ts";
 import { renderSkillWorkshopPage } from "./page-view.ts";
 import {
+  requestSkillWorkshopRevision,
+  runSkillWorkshopEvaluation,
+  runSkillWorkshopLifecycleAction,
+} from "./proposal-actions.ts";
+import {
   createSkillWorkshopState,
   loadSkillWorkshopProposals,
   resolveSkillWorkshopAgentId,
-  requestSkillWorkshopRevision,
-  runSkillWorkshopEvaluation,
-  type SkillWorkshopRouteData,
   type SkillWorkshopState,
 } from "./proposals.ts";
 import {
@@ -37,10 +40,11 @@ import {
 } from "./source-scope.ts";
 import { loadSkillWorkshopMode } from "./storage.ts";
 
+registerSkillWorkshopEnglish();
+
 class SkillWorkshopPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: SkillWorkshopPageContext;
-  @property({ attribute: false }) data?: SkillWorkshopRouteData;
 
   private state?: SkillWorkshopState;
   private operationEpoch = 0;
@@ -204,14 +208,29 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     });
   };
 
+  private readonly handleLifecycleAction = (
+    scope: SkillWorkshopSourceScope,
+    action: "apply" | "reject",
+    decision: SkillWorkshopProposalDecision,
+  ) => {
+    if (!this.isCurrentSourceScope(scope)) {
+      return;
+    }
+    void runSkillWorkshopLifecycleAction(scope.state, scope.context, action, decision, {
+      isCurrent: () => this.isCurrentSourceScope(scope),
+      onProgress: this.requestPageUpdate,
+    }).finally(this.requestPageUpdate);
+  };
+
   private readonly handleEvaluation = (proposalId: string) => {
     const scope = this.captureSourceScope();
     if (!scope) {
       return;
     }
-    void runSkillWorkshopEvaluation(scope.state, scope.context, proposalId, () =>
-      this.isCurrentSourceScope(scope),
-    ).finally(this.requestPageUpdate);
+    void runSkillWorkshopEvaluation(scope.state, scope.context, proposalId, {
+      isCurrent: () => this.isCurrentSourceScope(scope),
+      onProgress: this.requestPageUpdate,
+    }).finally(this.requestPageUpdate);
   };
 
   private readonly handleRevisionSubmit = (proposalId: string) => {
@@ -224,7 +243,10 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       scope.context,
       proposalId,
       this.handleRevisionRequest,
-      () => this.isCurrentSourceScope(scope),
+      {
+        isCurrent: () => this.isCurrentSourceScope(scope),
+        onProgress: this.requestPageUpdate,
+      },
     )
       .then((outcome) => {
         if (!outcome || outcome.status !== "admitted" || !this.isCurrentSourceScope(scope)) {
@@ -244,15 +266,12 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
 
   override willUpdate() {
     if (!this.state && this.context) {
-      this.state = createSkillWorkshopState(this.data);
+      this.state = createSkillWorkshopState();
       this.state.skillWorkshopMode = loadSkillWorkshopMode();
     }
   }
 
   override updated() {
-    if (this.state && this.context) {
-      this.revisionRecovery.sync(this.context, this.state);
-    }
     // Only kick a load when none is in flight and the last attempt did not
     // fail: loadProposals early-returns resolve immediately and their finally
     // schedules another update, so re-kicking here would spin forever when a
@@ -265,6 +284,11 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       !state.skillWorkshopError;
     if (this.gatewayConnected && canLoad) {
       this.loadProposals(false);
+    }
+    // Establish the proposal scope before restoring a revision notice: recovery
+    // must neither block the first list load nor lose its draft to the scope reset.
+    if (this.state && this.context) {
+      this.revisionRecovery.sync(this.context, this.state);
     }
     this.ensureWorkshopAgentIdentity();
     const runtimeConfig = this.context?.runtimeConfig;
@@ -480,21 +504,24 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   }
 
   override render() {
-    return this.state && this.context
+    const scope = this.captureSourceScope();
+    return scope
       ? renderSkillWorkshopPage(
-          this.state,
+          scope.state,
           {
-            context: this.context,
+            context: scope.context,
             revisionRecoveryActive: this.revisionRecovery.active,
             workshopAgentName:
-              this.context.agentIdentity.get(this.state.skillWorkshopAgentId)?.name?.trim() ?? "",
+              scope.context.agentIdentity.get(scope.state.skillWorkshopAgentId)?.name?.trim() ?? "",
+            onLifecycleAction: (action, decision) =>
+              this.handleLifecycleAction(scope, action, decision),
             onEvaluate: this.handleEvaluation,
             onRevisionSubmit: this.handleRevisionSubmit,
             selfLearning: resolveSelfLearning(
-              this.context.runtimeConfig,
+              scope.context.runtimeConfig,
               this.selfLearningBusy,
               this.selfLearningError,
-              canCallWorkshopAdminMethod(this.context.gateway.snapshot, "config.patch"),
+              canCallWorkshopAdminMethod(scope.context.gateway.snapshot, "config.patch"),
             ),
             onSelfLearningToggle: this.handleSelfLearningToggle,
             learningBusy: this.learningBusy,

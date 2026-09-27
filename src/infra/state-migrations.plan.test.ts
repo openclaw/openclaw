@@ -6,7 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAppliedLegacyProposal } from "../commands/doctor-skill-workshop-sqlite.test-support.js";
 import { importLegacySkillProposal } from "../skills/workshop/store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { planLegacyStateMigrationsReadOnly } from "./state-migrations.doctor.js";
@@ -68,6 +71,7 @@ async function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>, sta
 }
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
 });
@@ -86,7 +90,8 @@ describe("legacy state migration plan identity", () => {
     });
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(record.target.skillFile, content);
-    importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: fixture.env } });
+    await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: fixture.env } });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const before = await captureLegacyStateSnapshotIdentity(fixture);
 

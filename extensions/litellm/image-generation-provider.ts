@@ -1,7 +1,6 @@
 import { isIP } from "node:net";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 // Litellm provider module implements model/runtime integration.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createOpenAiCompatibleImageGenerationProvider,
   imageSourceUploadFileName,
@@ -26,20 +25,6 @@ const LITELLM_SUPPORTED_SIZES = [
   "2160x3840",
 ] as const;
 const LITELLM_MAX_INPUT_IMAGES = 5;
-
-type LitellmProviderConfig = NonNullable<
-  NonNullable<OpenClawConfig["models"]>["providers"]
->[string];
-
-function resolveLitellmProviderConfig(
-  cfg: OpenClawConfig | undefined,
-): LitellmProviderConfig | undefined {
-  return cfg?.models?.providers?.litellm;
-}
-
-function resolveConfiguredLitellmBaseUrl(cfg: OpenClawConfig | undefined): string {
-  return normalizeOptionalString(resolveLitellmProviderConfig(cfg)?.baseUrl) ?? LITELLM_BASE_URL;
-}
 
 // LiteLLM's default proxy is loopback. Auto-enable private-network access only
 // for loopback-style hosts; LAN/custom private endpoints should use the
@@ -107,7 +92,6 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
       },
     },
     defaultBaseUrl: LITELLM_BASE_URL,
-    resolveBaseUrl: ({ req }) => resolveConfiguredLitellmBaseUrl(req.cfg),
     resolveAllowPrivateNetwork: ({ baseUrl }) =>
       shouldAutoAllowPrivateLitellmEndpoint(baseUrl) ? true : undefined,
     useConfiguredRequest: true,

@@ -24,6 +24,7 @@ import type { AgentEventPayload } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
@@ -305,17 +306,6 @@ export function defaultReadSession(
   return loadSessionEntryReadOnly({ sessionKey, agentId, ...(storePath ? { storePath } : {}) });
 }
 
-// sessions.list cache fence input. Both production writers (live/preamble
-// persist via createSessionObserverDigestPersister and terminal-digest
-// synthesis via synthesizeSessionObserverTerminalDigest) route through this
-// shared mutator; without its own fence a list computed mid-write caches the
-// pre-update digest indefinitely.
-let sessionObserverDigestVersion = 0;
-
-export function readSessionObserverDigestVersion(): number {
-  return sessionObserverDigestVersion;
-}
-
 export async function defaultPersistDigest(params: {
   sessionKey: string;
   sessionId?: string;
@@ -357,11 +347,17 @@ export async function defaultPersistDigest(params: {
       applied = true;
       return { observerDigest: params.digest };
     },
-    { preserveActivity: true },
+    {
+      preserveActivity: true,
+      onCommitted: () =>
+        sessionChanges.emit({
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          storePath: params.storePath,
+          facts: { kind: "unchanged" },
+        }),
+    },
   );
-  if (applied) {
-    sessionObserverDigestVersion += 1;
-  }
   return result === null ? null : applied;
 }
 

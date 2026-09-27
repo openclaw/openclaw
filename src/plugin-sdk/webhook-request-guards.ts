@@ -15,11 +15,14 @@ import {
   waitForHttpRequestRejection,
 } from "../infra/http-request-lifecycle.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 
 export { resolveAcceptedBrowserOrigin } from "../gateway/origin-check.js";
-export { sendHttpRequestRejection } from "../infra/http-request-lifecycle.js";
+export {
+  runHttpConnectionRequest,
+  sendHttpRequestRejection,
+} from "../infra/http-request-lifecycle.js";
 
 /** Body-read profile for webhook payload limits before or after authentication. */
 export type WebhookBodyReadProfile = "pre-auth" | "post-auth";
@@ -260,17 +263,7 @@ export function beginWebhookRequestPipelineOrReject(params: {
   /** Response body returned when the in-flight guard rejects. */
   inFlightLimitMessage?: string;
 }): { ok: true; release: () => void } | { ok: false } {
-  if (
-    !applyBasicWebhookRequestGuards({
-      req: params.req,
-      res: params.res,
-      allowMethods: params.allowMethods,
-      rateLimiter: params.rateLimiter,
-      rateLimitKey: params.rateLimitKey,
-      nowMs: params.nowMs,
-      requireJsonContentType: params.requireJsonContentType,
-    })
-  ) {
+  if (!applyBasicWebhookRequestGuards(params)) {
     return { ok: false };
   }
 
@@ -306,7 +299,8 @@ export function beginWebhookRequestPipelineOrReject(params: {
 }
 
 /**
- * Run post-ack webhook processing on its own admitted gateway work root.
+ * Run post-ack webhook processing on its own admitted gateway work root with
+ * an independently owned async work scope.
  *
  * Ack-first handlers respond before processing events, so the continued work
  * outlives the HTTP request admission it inherited; once that admission is
@@ -314,9 +308,12 @@ export function beginWebhookRequestPipelineOrReject(params: {
  * gateway were draining. Call this synchronously from the request handler
  * (while the request is still admitted): it reserves an independent root that
  * keeps the detached processing accepted and lets a restart drain wait for it.
+ * The callback also runs inside a fresh detached async work scope, so work
+ * started here (for example deferred embedded-agent runs) keeps tracking even
+ * after the caller's own scope closes.
  */
 export function runDetachedWebhookWork<T>(run: () => Promise<T>): Promise<T> {
-  return runWithGatewayIndependentRootWorkContinuation(async () => {
+  return runWithGatewayDetachedWorkContinuation(async () => {
     // Reserve the root now, but let the request handler write its acknowledgement
     // before any synchronous prefix in the detached callback can run.
     await Promise.resolve();
@@ -339,11 +336,7 @@ export async function readWebhookBodyOrReject(params: {
   /** Response body for invalid request bodies. */
   invalidBodyMessage?: string;
 }): Promise<{ ok: true; value: string } | { ok: false }> {
-  const limits = resolveWebhookBodyReadLimits({
-    maxBytes: params.maxBytes,
-    timeoutMs: params.timeoutMs,
-    profile: params.profile,
-  });
+  const limits = resolveWebhookBodyReadLimits(params);
 
   try {
     const raw = await readRequestBodyWithLimit(params.req, {
@@ -352,19 +345,13 @@ export async function readWebhookBodyOrReject(params: {
     });
     return { ok: true, value: raw };
   } catch (error) {
-    if (isRequestBodyLimitError(error)) {
-      return respondWebhookBodyReadError({
-        req: params.req,
-        res: params.res,
-        code: error.code,
-        invalidMessage: params.invalidBodyMessage,
-      });
-    }
+    const limited = isRequestBodyLimitError(error);
     return respondWebhookBodyReadError({
       req: params.req,
       res: params.res,
-      code: "INVALID_BODY",
-      invalidMessage: params.invalidBodyMessage ?? formatErrorMessage(error),
+      code: limited ? error.code : "INVALID_BODY",
+      invalidMessage:
+        params.invalidBodyMessage ?? (limited ? undefined : formatErrorMessage(error)),
     });
   }
 }
@@ -388,11 +375,7 @@ export async function readJsonWebhookBodyOrReject(params: {
   /** Response status for malformed JSON. */
   invalidJsonStatusCode?: number;
 }): Promise<{ ok: true; value: unknown } | { ok: false }> {
-  const limits = resolveWebhookBodyReadLimits({
-    maxBytes: params.maxBytes,
-    timeoutMs: params.timeoutMs,
-    profile: params.profile,
-  });
+  const limits = resolveWebhookBodyReadLimits(params);
   const body = await readJsonBodyWithLimit(params.req, {
     maxBytes: limits.maxBytes,
     timeoutMs: limits.timeoutMs,

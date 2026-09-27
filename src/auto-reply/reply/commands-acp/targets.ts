@@ -2,7 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpSessionTarget } from "../../../acp/control-plane/manager.types.js";
 import { resolveAcpSessionTarget } from "../../../acp/control-plane/manager.utils.js";
-import { callGateway } from "../../../gateway/call.js";
+import { bindAgentToolGatewayRequest } from "../../../agents/tools/in-process-gateway.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { SESSION_ID_RE } from "../../../sessions/session-id.js";
@@ -25,6 +25,7 @@ async function resolveSessionKeyByToken(
   }
   attempts.push({ label: trimmed });
 
+  const callGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
   for (const params of attempts) {
     const resolved = await callGateway({
       method: "sessions.resolve",
@@ -50,19 +51,21 @@ async function resolveSessionKeyByToken(
   return null;
 }
 
-export function resolveBoundAcpThreadSessionKey(
+export async function resolveBoundAcpThreadSessionKey(
   params: Parameters<typeof resolveAcpCommandBindingContext>[0],
-): string | undefined {
-  const commandTargetSessionKey = normalizeOptionalString(params.ctx.CommandTargetSessionKey) ?? "";
+  commandTargetSessionKey?: string,
+): Promise<string | undefined> {
   const activeSessionKey =
-    commandTargetSessionKey || (normalizeOptionalString(params.sessionKey) ?? "");
+    normalizeOptionalString(params.ctx.CommandTargetSessionKey) ??
+    normalizeOptionalString(params.sessionKey);
   const bindingContext = resolveAcpCommandBindingContext(params);
-  return resolveEffectiveResetTargetSessionKey({
+  return await resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,
     conversationId: bindingContext.conversationId,
     parentConversationId: bindingContext.parentConversationId,
+    commandTargetSessionKey,
     activeSessionKey,
     allowNonAcpBindingSessionKey: true,
     skipConfiguredFallbackWhenActiveSessionNonAcp: false,
@@ -89,7 +92,8 @@ export async function resolveAcpTargetSessionKey(params: {
     // reach the correct session via the binding context.
   }
 
-  const threadBound = resolveBoundAcpThreadSessionKey(params.commandParams);
+  const threadBound = await resolveBoundAcpThreadSessionKey(params.commandParams);
+  params.commandParams.opts?.abortSignal?.throwIfAborted();
   if (threadBound) {
     return {
       ok: true,

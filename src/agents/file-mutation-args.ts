@@ -34,6 +34,19 @@ function countNewlines(value: unknown): number {
   return count;
 }
 
+function countCompletedLines(text: string): number {
+  if (!text) {
+    return 0;
+  }
+  let count = countNewlines(text) + 1;
+  for (let index = text.indexOf("\r"); index >= 0; index = text.indexOf("\r", index + 1)) {
+    if (text[index + 1] !== "\n") {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /** Counts only newline-terminated content so partial streamed JSON never guesses a line. */
 export function countStreamingFileMutationLines(
   kind: FileMutationToolName,
@@ -125,7 +138,7 @@ export function readCompletedFileMutationDelta(
       ? undefined
       : {
           files: [target],
-          added: content.length === 0 ? 0 : content.split(/\r\n|\r|\n/).length,
+          added: countCompletedLines(content),
           removed: 0,
         };
   }
@@ -149,8 +162,8 @@ export function readCompletedFileMutationDelta(
       continue;
     }
     hasCompleteEdit = true;
-    added += newText.length === 0 ? 0 : newText.split(/\r\n|\r|\n/).length;
-    removed += oldText.length === 0 ? 0 : oldText.split(/\r\n|\r|\n/).length;
+    added += countCompletedLines(newText);
+    removed += countCompletedLines(oldText);
   }
   return hasCompleteEdit ? { files: [target], added, removed } : undefined;
 }

@@ -20,9 +20,24 @@ const nodeHostMocks = vi.hoisted(() => ({
   userShellPaths: new Map<string, string>(),
 }));
 
-vi.mock("./command-rpc.js", () => ({
-  codexControlRequest: commandRpcMocks.codexControlRequest,
-}));
+vi.mock("./command-rpc.js", async () => {
+  const { codexCatalogSourceForClient, getCodexCatalogSource, recordCodexCatalogResponseSource } =
+    await import("./session-catalog-source.js");
+  return {
+    codexControlRequest: async (...args: unknown[]) => {
+      const response = await commandRpcMocks.codexControlRequest(...args);
+      if (typeof args[1] === "string") {
+        recordCodexCatalogResponseSource(
+          args[1],
+          response,
+          getCodexCatalogSource(response) ??
+            codexCatalogSourceForClient(commandRpcMocks.codexControlRequest),
+        );
+      }
+      return response;
+    },
+  };
+});
 vi.mock("./app-server/request.js", () => ({
   requestCodexAppServerClientJson: pinnedConnectionMocks.request,
 }));

@@ -1,43 +1,31 @@
-// Demand-driven catalog discovery for the Models settings page.
-//
-// The initial page load uses the fast prepared catalog
-// so full discovery stays out of first navigation. Opening a default-model picker
-// signals interest; the first open for this core-data snapshot and explicit retries
-// refresh the Gateway-owned catalog. Completed reopens read its current publication.
-// Pending opens share this page's request without disturbing the saved selection.
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+// Picker reads consume the Gateway publication; only an explicit retry starts discovery.
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
+import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { ModelProvidersData } from "./load.ts";
 
-type DiscoveryGateway = {
-  connected: boolean;
-  client: GatewayBrowserClient | null;
-  epoch: number;
-  isCurrent: (params: { client: GatewayBrowserClient; epoch: number }) => boolean;
-};
-
 export type CatalogDiscoveryController = {
+  /** Latest explicit Retry, including one that has already settled. */
+  readonly generation: number;
   /** Whether a discovery request is currently in flight. */
   readonly discovering: boolean;
   /** A user-facing retry hint when discovery failed; null while clean. */
   readonly error: string | null;
-  /** Fired when a default-model picker opens. */
-  openPicker: () => void;
   /** Retries a failed discovery. */
   retry: () => void;
-  /** Resets request history and pending/error state when core data or its owner changes. */
+  /** Retires pending results and errors when core data or its owner changes. */
   reset: () => void;
 };
 
 type CreateOptions = {
-  getGateway: () => DiscoveryGateway;
+  getGateway: () => Pick<GatewayPageController, "connected" | "client" | "epoch" | "isCurrent">;
   getAgentId: () => string;
   getAgentEpoch: () => number;
   getData: () => ModelProvidersData | null;
   setData: (data: ModelProvidersData) => void;
   requestUpdate: () => void;
+  onSettled: () => void;
 };
 
 export function createCatalogDiscoveryController(
@@ -45,32 +33,31 @@ export function createCatalogDiscoveryController(
 ): CatalogDiscoveryController {
   let pending: AbortController | null = null;
   let error: string | null = null;
-  let requestedDiscovery = false;
+  let generation = 0;
 
   const controller: CatalogDiscoveryController = {
+    get generation() {
+      return generation;
+    },
     get discovering() {
       return pending !== null;
     },
     get error() {
       return error;
     },
-    openPicker() {
-      void discover(!requestedDiscovery);
-    },
     retry() {
-      void discover(true);
+      void discover();
     },
     reset() {
       const retired = pending;
       pending = null;
       error = null;
-      requestedDiscovery = false;
       retired?.abort();
       options.requestUpdate();
     },
   };
 
-  async function discover(refresh: boolean): Promise<void> {
+  async function discover(): Promise<void> {
     const agentId = options.getAgentId();
     if (!agentId || pending) {
       return;
@@ -89,13 +76,13 @@ export function createCatalogDiscoveryController(
       options.getAgentId() === agentId &&
       options.getAgentEpoch() === agentEpoch;
     pending = request;
+    generation += 1;
     error = null;
-    requestedDiscovery = true;
     options.requestUpdate();
     try {
       const result = await loadModelCatalog(client, {
         agentId,
-        ...(refresh ? { refresh: true } : {}),
+        refresh: true,
         signal: request.signal,
       });
       if (ownsResult()) {
@@ -104,7 +91,6 @@ export function createCatalogDiscoveryController(
         if (data) {
           options.setData({
             ...data,
-            models: result.models,
             providerOutcomes: result.providerOutcomes ?? [],
             catalogError: null,
           });
@@ -118,6 +104,7 @@ export function createCatalogDiscoveryController(
       if (pending === request) {
         pending = null;
         options.requestUpdate();
+        options.onSettled();
       }
     }
   }

@@ -1,16 +1,21 @@
 // Shared assertions and exercises for the fake-backend TUI PTY harness.
 import { readFile } from "node:fs/promises";
 import { expect } from "vitest";
-import * as ansiSequences from "../../packages/terminal-core/src/ansi-sequences.js";
-import * as ansi from "../../packages/terminal-core/src/ansi.js";
 import { sleep } from "../utils/sleep.js";
 import { formatTuiFooter, sanitizeRenderableLine } from "./tui-formatters.js";
 import {
-  PtyTestScreen,
-  type PtyRun,
-  type PtyTerminalDimensions,
-  waitFor,
-} from "./tui-pty-test-support.js";
+  hasHistoricalSynchronizedFrameRow,
+  hasSynchronizedFrameRow,
+  synchronizedFrameLinks,
+  waitForSynchronizedFrameRows,
+} from "./tui-pty-terminal-evidence-test-support.js";
+import { type PtyRun, waitFor } from "./tui-pty-test-support.js";
+
+export {
+  hasHistoricalSynchronizedFrameRow,
+  synchronizedFrameRows,
+  waitForSynchronizedFrameRows,
+} from "./tui-pty-terminal-evidence-test-support.js";
 
 export type FixtureLogEntry = { method: string; payload?: unknown };
 type FixtureLogPredicate = (entry: FixtureLogEntry) => boolean;
@@ -72,9 +77,10 @@ type StartedTuiPtyFixture = {
   run: PtyRun;
   logPath: string;
   waitForLogEntry: (predicate: FixtureLogPredicate, timeoutMs?: number) => Promise<FixtureLogEntry>;
+  releaseReconnect: () => Promise<void>;
   cleanup: () => Promise<void>;
 };
-type TuiPtyFixtureOptions = { env?: NodeJS.ProcessEnv };
+type TuiPtyFixtureOptions = { env?: NodeJS.ProcessEnv; holdReconnect?: boolean };
 export type StartTuiPtyFixture = (opts?: TuiPtyFixtureOptions) => Promise<StartedTuiPtyFixture>;
 type TerminalAttackPayload = {
   text: string;
@@ -103,244 +109,6 @@ function buildInlineTerminalAttackPayload(tag: string, attack: string): Terminal
     attacks: [attack],
     expectedLine: `${markers[0]}${markers[1]} café 東京 👩🏽‍💻 مرحبا שלום ${markers[2]}`,
   };
-}
-
-const STALE_CELL_SENTINEL = "\u0000";
-
-function assertEvidence(condition: boolean, message: string) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-const lifecycleCsiBody = /^(?:\?25[hl]|\?2004[hl]|>7u|\?u|c|<u|>4;[02]m)$/u;
-const screenMutationCsiBody = /^(?:[02]?J|[02]?K)$/u;
-
-function assertAllowedCsi(screen: PtyTestScreen, value: string, controls: string[] = []) {
-  const body = value.startsWith("\x1b[") ? value.slice(2) : "";
-  const move = body.match(/^([1-9]\d*)?([ABG])$/u);
-  const moveCount = Number(move?.[1] ?? "1");
-  const allowed =
-    controls.length === 0 &&
-    ((move !== null &&
-      Number.isSafeInteger(moveCount) &&
-      moveCount <= Math.max(screen.cols, screen.rows)) ||
-      value === "\x1b[H" ||
-      /^(?:0|2|3)?J$/u.test(body) ||
-      /^(?:0|2)?K$/u.test(body) ||
-      lifecycleCsiBody.test(body) ||
-      value === "\x1b[?2026h" ||
-      value === "\x1b[?2026l" ||
-      /^(?:\d+(?:;\d+)*)?m$/u.test(body));
-  assertEvidence(allowed, `unsupported CSI in TUI PTY evidence: ${JSON.stringify(value)}`);
-}
-
-function applyScreenCsi(screen: PtyTestScreen, value: string, synchronized: boolean) {
-  if (synchronized && lifecycleCsiBody.test(value.slice(2))) {
-    throw new Error(`lifecycle CSI inside synchronized frame: ${JSON.stringify(value)}`);
-  }
-  screen.applyCsi(value, synchronized);
-}
-
-function scanOsc(raw: string, bodyStart: number) {
-  const candidates: Array<[index: number, length: number]> = [
-    [raw.indexOf("\x07", bodyStart), 1],
-    [raw.indexOf("\x1b\\", bodyStart), 2],
-    [raw.indexOf("\u009c", bodyStart), 1],
-  ];
-  const terminator = candidates
-    .filter(([index]) => index >= 0)
-    .toSorted(([left], [right]) => left - right)[0];
-  if (!terminator) {
-    return undefined;
-  }
-  const [index, length] = terminator;
-  const body = raw.slice(bodyStart, index);
-  if (raw[index] === "\u009c" || ansi.sanitizeForLog(body) !== body) {
-    throw new Error("unsupported terminal control in TUI PTY OSC evidence");
-  }
-  return { body, end: index + length };
-}
-
-function assertAllowedOsc(body: string) {
-  const target = body.startsWith("8;;") ? body.slice(3) : undefined;
-  if (
-    target === undefined ||
-    (target !== "" &&
-      (!/^(?:https?:\/\/|mailto:)\S+$/u.test(target) ||
-        ansi.sanitizeForLog(target) !== target ||
-        !URL.canParse(target)))
-  ) {
-    throw new Error(`unsupported OSC in TUI PTY evidence: ${JSON.stringify(body)}`);
-  }
-  return target;
-}
-
-function terminalOutputIsComplete(raw: string) {
-  const oscStart = Math.max(raw.lastIndexOf("\x1b]"), raw.lastIndexOf("\u009d"));
-  if (oscStart >= 0 && !scanOsc(raw, oscStart + (raw[oscStart] === "\x1b" ? 2 : 1))) {
-    return false;
-  }
-  const csiStart = Math.max(raw.lastIndexOf("\x1b["), raw.lastIndexOf("\u009b"));
-  const csi = csiStart >= 0 ? ansiSequences.scanAnsiCsiAt(raw, csiStart) : undefined;
-  return csi?.ended !== false && !raw.endsWith("\x1b");
-}
-
-type TerminalReplay = {
-  completedFrame: boolean;
-  matchedFrame: boolean;
-  osc8Open: boolean;
-  screen: PtyTestScreen;
-  synchronized: boolean;
-};
-
-function replayTerminalState(
-  raw: string,
-  dimensions: PtyTerminalDimensions,
-  framePredicate?: (screen: PtyTestScreen) => boolean,
-): TerminalReplay | undefined {
-  const start = "\x1b[?2026h";
-  const end = "\x1b[?2026l";
-  const screen = new PtyTestScreen(dimensions);
-  let completedFrame = false;
-  let matchedFrame = false;
-  let synchronized = false;
-  let osc8Open = false;
-  if (!terminalOutputIsComplete(raw)) {
-    return undefined;
-  }
-  for (const segment of ansiSequences.iterateAnsiSegments(raw)) {
-    if (segment.kind === "text") {
-      // pi-tui expands visible tabs and does not use literal HT/BS for output layout.
-      // Captured HT/BS bytes are invalid evidence, not terminal operations to replay.
-      if (segment.value.includes("\t") || segment.value.includes("\b")) {
-        return undefined;
-      }
-      if (!synchronized && completedFrame && segment.value) {
-        completedFrame = false;
-      }
-      screen.write(segment.value, synchronized);
-    } else if (segment.controls.length > 0 || !segment.value.startsWith("\x1b")) {
-      throw new Error("unsupported terminal sequence in TUI PTY evidence");
-    } else if (segment.value === start) {
-      assertEvidence(!synchronized, "nested synchronized frame");
-      completedFrame = false;
-      synchronized = true;
-    } else if (segment.value === end) {
-      assertEvidence(synchronized, "unmatched synchronized frame end");
-      assertEvidence(!osc8Open, "unclosed OSC 8 hyperlink in synchronized frame");
-      synchronized = false;
-      completedFrame = true;
-      matchedFrame ||= framePredicate?.(screen) ?? false;
-    } else if (segment.value.startsWith("\x1b]")) {
-      const target = assertAllowedOsc(
-        segment.value.slice(2, segment.value.endsWith("\x1b\\") ? -2 : -1),
-      );
-      assertEvidence(synchronized || target === "", "OSC 8 open outside synchronized frame");
-      if (!synchronized) {
-        continue;
-      }
-      assertEvidence(
-        target === "" || !osc8Open,
-        "unbalanced OSC 8 hyperlink in synchronized frame",
-      );
-      osc8Open = target !== "";
-    } else if (segment.value.startsWith("\x1b[")) {
-      assertAllowedCsi(screen, segment.value, segment.controls);
-      if (!synchronized && completedFrame && screenMutationCsiBody.test(segment.value.slice(2))) {
-        completedFrame = false;
-      }
-      applyScreenCsi(screen, segment.value, synchronized);
-    } else {
-      throw new Error(`unsupported ESC sequence in TUI PTY evidence: ${segment.value}`);
-    }
-  }
-  return { completedFrame, matchedFrame, osc8Open, screen, synchronized };
-}
-
-function parseTerminalState(
-  raw: string,
-  dimensions: PtyTerminalDimensions,
-): PtyTestScreen | undefined {
-  const replay = replayTerminalState(raw, dimensions);
-  return replay && !replay.synchronized && !replay.osc8Open && replay.completedFrame
-    ? replay.screen
-    : undefined;
-}
-
-function authenticatedRowText(cells: PtyTestScreen["cells"][number]) {
-  return cells
-    .slice(0, cells.findLastIndex((cell) => cell.authenticated) + 1)
-    .map((cell) => (cell.text === "" || cell.authenticated ? cell.text : STALE_CELL_SENTINEL))
-    .join("")
-    .trimEnd();
-}
-
-export function synchronizedFrameRows(raw: string, dimensions: PtyTerminalDimensions): string[][] {
-  const screen = parseTerminalState(raw, dimensions);
-  if (!screen) {
-    return [];
-  }
-  const rows = screen.cells.map(authenticatedRowText);
-  while (rows.length > 1 && rows.at(-1) === "") {
-    rows.pop();
-  }
-  return [rows];
-}
-
-export async function waitForSynchronizedFrameRows(
-  run: PtyRun,
-  predicate: (rows: string[]) => boolean,
-  timeoutMs: number,
-) {
-  return await waitFor({
-    timeoutMs,
-    read: () => {
-      const rows = synchronizedFrameRows(run.output(), run).at(0);
-      return rows && predicate(rows) ? rows : null;
-    },
-    onTimeout: () => new Error(`expected completed synchronized frame\n${run.output()}`),
-  });
-}
-
-function screenHasRow(screen: PtyTestScreen, predicate: (row: string) => boolean) {
-  return screen.cells.some((cells) => predicate(authenticatedRowText(cells)));
-}
-
-function latestFrameHasRow(
-  raw: string,
-  dimensions: PtyTerminalDimensions,
-  predicate: (row: string) => boolean,
-) {
-  const screen = parseTerminalState(raw, dimensions);
-  return screen ? screenHasRow(screen, predicate) : false;
-}
-
-function terminalAttackRowMatches(markers: string[], expectedText: string, row: string) {
-  return markers.every((marker) => row.includes(marker)) && row.includes(expectedText);
-}
-
-export function hasSynchronizedFrameRow(
-  raw: string,
-  markers: string[],
-  expectedText: string,
-  dimensions: PtyTerminalDimensions,
-) {
-  return latestFrameHasRow(raw, dimensions, (row) =>
-    terminalAttackRowMatches(markers, expectedText, row),
-  );
-}
-
-export function hasHistoricalSynchronizedFrameRow(
-  raw: string,
-  markers: string[],
-  expectedText: string,
-  dimensions: PtyTerminalDimensions,
-) {
-  const replay = replayTerminalState(raw, dimensions, (screen) =>
-    screenHasRow(screen, (row) => terminalAttackRowMatches(markers, expectedText, row)),
-  );
-  return replay !== undefined && !replay.synchronized && !replay.osc8Open && replay.matchedFrame;
 }
 
 async function assertTerminalAttackSanitized(
@@ -534,9 +302,17 @@ export async function exerciseNarrowTerminalRendering(
       (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
     );
     expect(sent.payload).toMatchObject({ message });
-    const raw = fixture.run.output();
-    expect(raw.split(`\x1b]8;;${url}\x07`).length - 1).toBeGreaterThan(1);
-    expect(raw).not.toContain("\uFFFD");
+    const links = await waitFor({
+      timeoutMs: startupTimeoutMs,
+      read: () => {
+        const current = synchronizedFrameLinks(fixture.run.output(), fixture.run);
+        return current.map((link) => link.text).join("") === url ? current : null;
+      },
+      onTimeout: () => new Error(`expected complete linked URL on screen\n${fixture.run.output()}`),
+    });
+    expect(new Set(links.map((link) => link.row)).size).toBeGreaterThan(1);
+    expect(links.every((link) => link.target === url)).toBe(true);
+    expect(fixture.run.output()).not.toContain("\uFFFD");
   } finally {
     await fixture.cleanup();
   }
@@ -556,6 +332,7 @@ async function exerciseGatewayOutputSafety(
   ];
   const idlePayload = buildCompactTerminalAttackPayload("T08I", "\x1b[?7775h");
   const fixture = await startFixture({
+    holdReconnect: true,
     env: {
       OPENCLAW_TUI_PTY_COLS: "120",
       OPENCLAW_TUI_PTY_ROWS: "18",
@@ -567,9 +344,7 @@ async function exerciseGatewayOutputSafety(
   try {
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
     await fixture.run.write("/gateway-status\r", { delay: false });
-    await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
     await fixture.waitForLogEntry((entry) => entry.method === "disconnect");
-    await fixture.run.waitForOutput("(no output)", startupTimeoutMs);
     // Replay omits zero-width bidi isolates but preserves authenticated cells.
     // The complete disconnect row must exist before reconnect replaces it.
     await assertHistoricalTerminalAttackSanitized(
@@ -579,6 +354,13 @@ async function exerciseGatewayOutputSafety(
       `local runtime stopped: ${idlePayload.expectedLine} | idle`,
       startupTimeoutMs,
     );
+    await waitForSynchronizedFrameRows(
+      fixture.run,
+      (rows) => rows.some((row) => row.includes("(no output)")),
+      startupTimeoutMs,
+    );
+    // Reconnect rebuilds history; release it only after both sanitized outputs were painted.
+    await fixture.releaseReconnect();
     await waitForSynchronizedFrameRows(
       fixture.run,
       (rows) =>
@@ -625,26 +407,24 @@ async function exerciseMarkdownAndAutocompleteOutputSafety(
   try {
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
     await fixture.waitForLogEntry((entry) => entry.method === "listCommands");
-    const inFlightAssertion = assertHistoricalTerminalAttackSanitized(
+    await fixture.run.write("\x14", { delay: false });
+    await assertHistoricalTerminalAttackSanitized(
       fixture,
       inFlight,
       inFlight.markers,
       inFlight.expectedLine,
       5_000,
     );
-    await fixture.run.write("\x14", { delay: false });
-    await inFlightAssertion;
 
     await fixture.run.write("/t08d", { delay: false });
-    const commandAssertion = assertHistoricalTerminalAttackSanitized(
+    await fixture.run.write("\x14", { delay: false });
+    await assertHistoricalTerminalAttackSanitized(
       fixture,
       command,
       command.markers,
       command.expectedLine,
       5_000,
     );
-    await fixture.run.write("\x14", { delay: false });
-    await commandAssertion;
 
     // Ctrl+U replaces the input without a lone Escape absorbing it as an Alt chord over SSH.
     await fixture.run.write("\x15/think ", { delay: false });
@@ -699,12 +479,16 @@ export async function exerciseTerminalOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
-  await Promise.all([
+  const results = await Promise.allSettled([
     exerciseGatewayOutputSafety(startFixture, startupTimeoutMs),
     exerciseInteractiveOutputSafety(startFixture, startupTimeoutMs),
     exerciseMarkdownAndAutocompleteOutputSafety(startFixture, startupTimeoutMs),
     exerciseSelectorOutputSafety(startFixture, startupTimeoutMs),
   ]);
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure) {
+    throw failure.reason;
+  }
 }
 
 /** Proves fixture-local fragmentation preserves a Unicode prompt through the real TUI loop. */

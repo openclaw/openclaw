@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { mergeDeep } from "../infra/deep-merge.js";
+import { resolveChannelAccountKey } from "../routing/account-lookup.js";
 import {
   asObjectRecord,
   type CompatMutationResult,
@@ -192,9 +193,9 @@ export function materializeInheritedAccountStreaming(params: {
     return params.cfg;
   }
   const rootStreaming = asObjectRecord(entry.streaming);
-  const defaultKey = Object.hasOwn(accounts, "default")
-    ? "default"
-    : Object.keys(accounts).find((key) => key.trim().toLowerCase() === "default");
+  const defaultKey = resolveChannelAccountKey(accounts, "default", params.channelId, (key) =>
+    key.trim().toLowerCase(),
+  );
   let changed = false;
   const nextAccounts = { ...accounts };
   const accountIds = Object.keys(accounts).toSorted((left, right) =>

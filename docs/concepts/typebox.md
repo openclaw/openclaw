@@ -47,13 +47,18 @@ The authoritative advertised **discovery** inventory lives in `src/gateway/serve
 ## Where the schemas live
 
 - Source barrels: `packages/gateway-protocol/src/schema-modules.ts` owns the canonical domain-module list, while the public `schema.ts` wrapper also exposes `ProtocolSchemas`.
-- Generator registry: ordered `protocol-schema-fragment-*.ts` files map stable names to the canonical TypeBox objects from their owner modules. `protocol-schemas.ts` composes those fragments in a fixed order and rejects duplicate keys.
+- Generator selection: `packages/gateway-protocol/src/schema/protocol-schema-selection.ts` derives registry names from the canonical barrel's `*Schema` exports and explicit `skill-library.ts` imports, removing the `Schema` suffix. `EXCLUDED_SCHEMA_EXPORTS` keeps helpers and schemas with supplemental registry owners out of this derived selection.
+- Generator registry: `protocol-schemas.ts` composes the derived selection, `MigrationProtocolSchemas`, and `SessionPlacementProtocolSchemas`, rejecting duplicate keys and retaining the canonical TypeBox objects. `protocol-schema-types.ts` preserves each member's schema type and public readonly/writable modifiers.
 - Runtime validators: `packages/gateway-protocol/src/validator-registry.ts`, using the lazy TypeBox Compile owner in `protocol-validator.ts`
 - Advertised feature/discovery registry: `src/gateway/server-methods-list.ts`
 - Server handshake and method dispatch: `src/gateway/server-core-runtime.ts`
 - Node client: `src/gateway/client.ts`
 - Generated JSON Schema: `dist/protocol.schema.json` (build output, not committed)
 - Generated Swift models: `apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift`
+
+The derived selection uses lexical order of the full source export names **before** removing the `Schema` suffix. The migration and session-placement maps follow it in their own insertion order. This replaces the former manually ordered registration fragments; JSON definition order and Swift declaration placement can change without changing schema data or native declaration bodies.
+
+Membership is now opt-out for eligible source exports: a new `*Schema` export in the canonical barrel enters the generator registry unless explicitly excluded. Review each new export for intended generated-protocol membership, and add helper-only exports to `EXCLUDED_SCHEMA_EXPORTS`. The registry guard checks selection consistency, canonical objects, exclusions, and composition; it cannot independently determine whether a newly exported schema belongs in the public generated protocol.
 
 ## Current pipeline
 
@@ -198,20 +203,9 @@ export const SystemEchoResultSchema = Type.Object(
 );
 ```
 
-Add both entries to the closest semantic `packages/gateway-protocol/src/schema/protocol-schema-fragment-*.ts` file. Import the owner module as a namespace when that fragment does not already use it, then map the stable registry names to the canonical schema objects:
+`system-info.ts` is already exported by `packages/gateway-protocol/src/schema-modules.ts`, so both schemas enter `ProtocolSchemas` automatically as `SystemEchoParams` and `SystemEchoResult`. For a new owner module, add its export to that canonical barrel. Review any other `*Schema` exports it introduces and exclude helper-only schemas in `protocol-schema-selection.ts`. Keep schemas owned by the migration or session-placement maps in those maps and excluded from the derived selection.
 
-```ts
-import * as system from "./system.js";
-
-export const OperationsProtocolSchemas = {
-  // Existing entries stay in their current order.
-  // ...
-  SystemEchoParams: system.SystemEchoParamsSchema,
-  SystemEchoResult: system.SystemEchoResultSchema,
-} as const;
-```
-
-Do not sort fragment keys or move existing entries: native code generation follows registry insertion order. `protocol-schemas.ts` owns the deliberate fragment order and should change only when introducing a new semantic fragment.
+Export the corresponding static types from the owner module:
 
 ```ts
 export type SystemEchoParams = Static<typeof SystemEchoParamsSchema>;
@@ -263,6 +257,10 @@ The Swift generator emits:
 
 Unknown frame types are preserved as raw payloads for forward compatibility.
 
+Some registry names alias the same canonical schema object. The explicit canonical alias preferences in `scripts/protocol-gen-swift.ts` preserve the existing public Swift type names when registry enumeration changes. Review generated declaration bodies, including field types, initializers, and encoding/decoding behavior; moving declarations must not silently select different nominal types.
+
+The published JSON Schema's `oneOf` frame order is a separate contract: `req`, `res`, then `event`, with the matching `type` discriminator mapping. `scripts/lib/protocol-schema-document.mts` owns and checks that order independently of registry definition order.
+
 ## Versioning and compatibility
 
 - `PROTOCOL_VERSION` lives in `packages/gateway-protocol/src/version.ts` (current value: `4`).
@@ -285,7 +283,7 @@ Generated JSON Schema is a build artifact, not committed to the repo. During the
 
 ## When you change schemas
 
-1. Update the TypeBox schemas in the owning `packages/gateway-protocol/src/schema/*.ts` module and register them in the closest `protocol-schema-fragment-*.ts` file without reordering existing keys.
+1. Update the TypeBox schemas in the owning `packages/gateway-protocol/src/schema/*.ts` module. Ensure a new module is exported by `schema-modules.ts`, review its automatic `*Schema` membership, and update helper exclusions or existing supplemental owner maps as needed.
 2. Register the method/event in `src/gateway/server-methods-list.ts`.
 3. Update `src/gateway/method-scopes.ts` when the new RPC needs operator or node scope classification.
 4. Run `pnpm protocol:check`.

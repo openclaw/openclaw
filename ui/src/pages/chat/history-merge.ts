@@ -14,9 +14,11 @@ import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type {
-  ApplicationChatSubmissions,
-  RetainedChatSubmission,
+import type { GatewaySessionRow } from "../../api/types.ts";
+import {
+  type ApplicationChatSubmissions,
+  type RetainedChatSubmission,
+  retireInitialChatSubmission,
 } from "../../app/chat-submissions.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
@@ -25,14 +27,20 @@ import {
   resolveUiSelectedSessionAgentId,
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
+import type { ChatHistoryCursor } from "./chat-history-pagination.ts";
 import { matchesCompactionOperation } from "./chat-progress.ts";
-import type { CompactionStatus } from "./tool-stream-contract.ts";
+import type { CompactionStatus, ProviderPolicyNotice } from "./tool-stream-contract.ts";
 
 const chatSessionProjections = new WeakMap<
   object,
   {
     projection?: SessionProjectionState;
     runId?: string;
+    modelObservation?: {
+      runId: string;
+      model: string | undefined;
+      provider: string | undefined;
+    };
   }
 >();
 // Display ownership outlives active-state cleanup. It is not the foreground
@@ -48,11 +56,13 @@ const CHAT_PROJECTION_SCOPE_KEYS = [
 type ChatSessionProjectionOwner = ChatComposerScope & {
   sessionKey: string;
   chatMessages: unknown[];
+  chatHistoryCursor?: ChatHistoryCursor;
   chatSubmissions?: ApplicationChatSubmissions;
   currentSessionId?: string | null;
   chatDisplayedLeafEntryId?: string | null;
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: number | null;
+  providerPolicyNotice?: ProviderPolicyNotice | null;
 };
 
 function resetCompactionProjection(owner: ChatSessionProjectionOwner): void {
@@ -67,6 +77,21 @@ type ChatSessionProjectionScopeOptions = Omit<SessionProjectionScope, "sessionId
   sessionId?: string | null;
 };
 
+function isInitialSubmissionReceipt(
+  submission: RetainedChatSubmission | null | undefined,
+  identity: SessionMessageIdentity | null,
+): boolean {
+  return (
+    submission?.kind === "initial" &&
+    identity?.role === "user" &&
+    !identity.isImported &&
+    ((submission.consumedByEventId && identity.id === submission.consumedByEventId) ||
+      ((identity.id !== null || identity.sequence !== null) &&
+        (identity.idempotencyKey === submission.pendingRunId ||
+          identity.idempotencyKey === `${submission.pendingRunId}:user`)))
+  );
+}
+
 function readChatSubmissionBatch(owner: ChatSessionProjectionOwner, scope: SessionProjectionScope) {
   const submissions = owner.chatSubmissions;
   if (!submissions) {
@@ -74,7 +99,7 @@ function readChatSubmissionBatch(owner: ChatSessionProjectionOwner, scope: Sessi
   }
   const sessionKey = scope.sessionKey ?? owner.sessionKey;
   const client = owner.client;
-  const handoff = submissions.readInitial(sessionKey, client ?? null);
+  const handoff = submissions.readInitial(sessionKey, client ?? null, scope.sessionId);
   // The pane captures one client and delivery key for the synchronous receipt batch.
   const key = chatOutboxDeliveryKey(owner, {
     sessionKey,
@@ -94,17 +119,34 @@ function readChatSubmissionBatch(owner: ChatSessionProjectionOwner, scope: Sessi
     accept: (runIds: ReadonlySet<string>) => {
       runIds.forEach(retire);
       if (handoff && runIds.has(handoff.pendingRunId)) {
-        handoff.pending = false;
+        retireInitialChatSubmission(handoff);
       }
     },
     receive: (message: unknown, identity: SessionMessageIdentity | null, persisted = false) => {
       const runId = identity?.idempotencyKey?.replace(/:user$/u, "");
+      if (handoff && isInitialSubmissionReceipt(handoff, identity)) {
+        if (runId) {
+          retire(runId);
+        }
+        retireInitialChatSubmission(handoff);
+        return message;
+      }
       if (identity?.role !== "user" || !runId) {
         return message;
       }
       const receipt = persisted || identity.id !== null || identity.sequence !== null;
       if (receipt) {
         retire(runId);
+      }
+      const delivered = submissions.readDelivered(key + runId, client ?? owner);
+      if (
+        !receipt &&
+        !identity.isImported &&
+        delivered?.kind === "delivered" &&
+        !delivered.pending &&
+        (!delivered.sessionId || !scope.sessionId || delivered.sessionId === scope.sessionId)
+      ) {
+        return undefined;
       }
       if (!handoff || identity.isImported || runId !== handoff.pendingRunId) {
         return message;
@@ -115,7 +157,7 @@ function readChatSubmissionBatch(owner: ChatSessionProjectionOwner, scope: Sessi
       if (!receipt) {
         return undefined;
       }
-      handoff.pending = false;
+      retireInitialChatSubmission(handoff);
       return message;
     },
   };
@@ -195,8 +237,46 @@ export function getChatRunOwner(owner: object): string | undefined {
   return chatSessionProjections.get(owner)?.runId;
 }
 
+export function getChatRunOwnerSessionKey(owner: object): string | undefined {
+  const current = chatSessionProjections.get(owner);
+  return current?.runId ? current.projection?.scope.sessionKey : undefined;
+}
+
 export function setChatRunOwner(owner: object, runId: string | undefined): void {
-  chatSessionProjections.set(owner, { ...chatSessionProjections.get(owner), runId });
+  const current = chatSessionProjections.get(owner);
+  chatSessionProjections.set(owner, {
+    ...current,
+    runId,
+    modelObservation:
+      current?.modelObservation && current.modelObservation.runId === runId
+        ? current.modelObservation
+        : undefined,
+  });
+}
+
+export function observeChatRunModel(
+  owner: object,
+  runId: string | undefined,
+  row?: GatewaySessionRow,
+): void {
+  chatSessionProjections.set(owner, {
+    ...chatSessionProjections.get(owner),
+    modelObservation:
+      runId && row
+        ? { runId, model: row.activeModel, provider: row.activeModelProvider }
+        : undefined,
+  });
+}
+
+export function getChatModelObservedRunId(
+  owner: object,
+  row: GatewaySessionRow | undefined,
+): string | undefined {
+  const observation = chatSessionProjections.get(owner)?.modelObservation;
+  return observation?.model === row?.activeModel &&
+    observation?.provider === row?.activeModelProvider
+    ? observation?.runId
+    : undefined;
 }
 
 /** The only mutation boundary for the reducer and its rendered message array. */
@@ -206,19 +286,20 @@ export function publishChatSessionProjection(
 ): void {
   const current = chatSessionProjections.get(owner);
   const runId = current?.runId;
-  if (
-    current?.projection &&
-    chatProjectionScopeChanged(current.projection.scope, projection.scope)
-  ) {
+  const previousScope = current?.projection?.scope;
+  const scopeChanged = previousScope && chatProjectionScopeChanged(previousScope, projection.scope);
+  if (scopeChanged) {
     const status = owner.compactionStatus;
     const sessionKeys = ["sessionKey", "sessionId", "agentId"] as const;
-    const previousScope = current.projection.scope;
     const sessionChanged = sessionKeys.some(
       (key) =>
         Object.hasOwn(projection.scope, key) &&
         previousScope[key] !== undefined &&
         previousScope[key] !== projection.scope[key],
     );
+    if (sessionChanged) {
+      owner.providerPolicyNotice = null;
+    }
     // Appending the completed marker advances the active leaf. Retain its live
     // identity through that refresh, but never carry it into another session or branch.
     if (
@@ -229,15 +310,15 @@ export function publishChatSessionProjection(
       resetCompactionProjection(owner);
     }
   }
+  const retainedRunId =
+    runId && Object.hasOwn(projection.runs, runId) && !scopeChanged ? runId : undefined;
   chatSessionProjections.set(owner, {
     projection,
-    runId:
-      runId &&
-      Object.hasOwn(projection.runs, runId) &&
-      (!current.projection ||
-        !chatProjectionScopeChanged(current.projection.scope, projection.scope))
-        ? runId
-        : undefined,
+    modelObservation:
+      scopeChanged || (current?.modelObservation?.runId === runId && !retainedRunId)
+        ? undefined
+        : current?.modelObservation,
+    runId: retainedRunId,
   });
   // Run-only transitions share the transcript array. Preserve their ownership
   // updates above without traversing or republishing every displayed row.
@@ -339,7 +420,8 @@ export function selectChatInputDisplay(
           !sendKeys.has(item.sendRunId) &&
           !sendKeys.has(`${item.sendRunId}:user`)),
     ),
-    pendingInputs: inputs.filter((input) => !userIds.has(input.id)),
+    pendingInputs: inputs.filter((input) => !userIds.has(input.id) && !input.queued),
+    queuedInputs: inputs.filter((input) => !userIds.has(input.id) && input.queued),
   };
 }
 
@@ -349,40 +431,54 @@ export function reconcileChatInputCustody(
   page: ChatPendingInputsPage | undefined,
   receipts: ChatInputReceipts = [],
 ) {
-  const scope = readChatSessionProjectionScope(owner, {
-    agentId: resolveUiSelectedSessionAgentId(owner),
-  });
   const acceptedRunIds = new Set(
     [...(page?.items ?? []), ...receipts]
       .map((item) => item.runId)
       .filter((runId) => typeof runId === "string"),
   );
-  const submissions = readChatSubmissionBatch(owner, scope);
-  submissions?.accept(acceptedRunIds);
-  if (acceptedRunIds.size) {
-    const projection = getChatSessionProjection(owner, scope);
-    const entries = projection.entries.filter(
-      (entry) =>
-        !(
-          entry.pending &&
-          entry.identity?.role === "user" &&
-          entry.identity.id === null &&
-          entry.identity.sequence === null &&
-          acceptedRunIds.has(entry.pendingRunId ?? "")
-        ),
-    );
-    if (entries.length !== projection.entries.length) {
-      publishChatSessionProjection(owner, {
-        ...projection,
-        entries,
-        messages: entries.map((entry) => entry.message),
-      });
-    }
-  }
+  retireChatSubmissionDisplay(owner, acceptedRunIds);
   return {
     acceptedRunIds,
     page: page ?? { items: [], total: 0 },
   };
+}
+
+/** Canonical custody retires local display ownership even outside the loaded history page. */
+export function retireChatSubmissionDisplay(
+  owner: ChatSessionProjectionOwner,
+  acceptedRunIds: ReadonlySet<string>,
+): void {
+  const scope = readChatSessionProjectionScope(owner, {
+    agentId: resolveUiSelectedSessionAgentId(owner),
+  });
+  const submissions = readChatSubmissionBatch(owner, scope);
+  submissions?.accept(acceptedRunIds);
+  if (acceptedRunIds.size) {
+    const projection = getChatSessionProjection(owner, scope);
+    const retired = retirePendingUserEntries(projection, acceptedRunIds);
+    if (retired !== projection) {
+      publishChatSessionProjection(owner, retired);
+    }
+  }
+}
+
+function retirePendingUserEntries(
+  projection: SessionProjectionState,
+  acceptedRunIds: ReadonlySet<string>,
+): SessionProjectionState {
+  const entries = projection.entries.filter(
+    (entry) =>
+      !(
+        entry.pending &&
+        entry.identity?.role === "user" &&
+        entry.identity.id === null &&
+        entry.identity.sequence === null &&
+        acceptedRunIds.has(entry.pendingRunId ?? "")
+      ),
+  );
+  return entries.length === projection.entries.length
+    ? projection
+    : { ...projection, entries, messages: entries.map((entry) => entry.message) };
 }
 
 export function shouldDisplayChatSubmission(
@@ -391,7 +487,11 @@ export function shouldDisplayChatSubmission(
 ): boolean {
   // A local copy suppresses display; only a durable receipt retires ownership.
   if (receipt && (receipt.id !== null || receipt.sequence !== null)) {
-    submission.pending = false;
+    if (submission.kind === "initial") {
+      retireInitialChatSubmission(submission);
+    } else {
+      submission.pending = false;
+    }
   }
   return submission.pending && !receipt;
 }
@@ -399,8 +499,28 @@ export function shouldDisplayChatSubmission(
 /** A retained submission has display ownership only until its own user receipt or custody. */
 export function admitChatSubmission(
   owner: ChatSessionProjectionOwner,
-  submission = owner.chatSubmissions?.readInitial(owner.sessionKey, owner.client ?? null),
+  pendingInputs: ChatPendingInputsPage["items"] | undefined,
+  submission: RetainedChatSubmission | null | undefined = owner.chatSubmissions?.readInitial(
+    owner.sessionKey,
+    owner.client ?? null,
+    owner.currentSessionId,
+  ),
 ): boolean {
+  // A pane can receive custody before the sender hands off its local display.
+  if (
+    submission &&
+    (pendingInputs?.some((input) => input.runId === submission.pendingRunId) ||
+      (submission.kind === "initial" &&
+        owner.chatMessages.some((message) =>
+          isInitialSubmissionReceipt(submission, readSessionMessageIdentity(message)),
+        )))
+  ) {
+    if (submission.kind === "initial") {
+      retireInitialChatSubmission(submission);
+    } else {
+      submission.pending = false;
+    }
+  }
   if (
     !submission?.pending ||
     (submission.kind === "delivered" &&
@@ -436,10 +556,10 @@ export function reduceChatSessionProjection(
 ): SessionProjectionState {
   const scope = options.scope ?? readChatSessionProjectionScope(owner);
   const current = getChatSessionProjection(owner, scope);
-  const sessionKey = scope.sessionKey ?? owner.sessionKey;
   const submissions = readChatSubmissionBatch(owner, scope);
   const handoff = submissions?.initial;
-  const initialPending = handoff?.pending;
+  const initialRunId = handoff?.pending ? handoff.pendingRunId : undefined;
+  const initialMessage = handoff?.pending ? handoff.message : null;
   const receive = (message: unknown, envelope?: SessionMessageEnvelope) =>
     submissions
       ? submissions.receive(
@@ -459,7 +579,10 @@ export function reduceChatSessionProjection(
               .filter((message) => message !== undefined),
           }
         : event;
-  let projection = current;
+  let projection =
+    initialRunId && handoff && !handoff.pending
+      ? retirePendingUserEntries(current, new Set([initialRunId]))
+      : current;
   if (event.type === "snapshotLoaded" && handoff?.pending && options.runActive !== false) {
     projection = reduceSessionProjection(projection, {
       type: "sendPending",
@@ -470,26 +593,25 @@ export function reduceChatSessionProjection(
   }
   projection = reduceSessionProjection(projection, { ...preparedEvent, scope });
   if (event.type === "sessionReset" && projection !== current) {
+    delete owner.chatHistoryCursor;
     resetCompactionProjection(owner);
+    owner.providerPolicyNotice = null;
   }
   // Without a transcript anchor this is best-effort display chronology, assuming
   // comparable browser/Gateway clocks. Never assign a sequence or reorder canonical
   // rows; older or untimestamped history stays ahead until authoritative adoption.
-  const initialIndex =
-    initialPending && handoff
-      ? projection.entries.findIndex(
-          (entry) => entry.pending && entry.pendingRunId === handoff.pendingRunId,
-        )
-      : -1;
+  const initialIndex = initialRunId
+    ? projection.entries.findIndex((entry) => entry.pending && entry.pendingRunId === initialRunId)
+    : -1;
   const initial = projection.entries[initialIndex];
-  if (handoff && initial && initialIndex > 0) {
+  if (handoff && initialMessage && initial && initialIndex > 0) {
     const outputIndex = projection.entries.findIndex((entry, index) => {
       const message = asNullableRecord(entry.message);
       return (
         index < initialIndex &&
         message?.role !== "user" &&
         typeof message?.timestamp === "number" &&
-        message.timestamp >= handoff.message.timestamp
+        message.timestamp >= initialMessage.timestamp
       );
     });
     if (outputIndex >= 0) {
@@ -499,8 +621,5 @@ export function reduceChatSessionProjection(
     }
   }
   publishChatSessionProjection(owner, projection);
-  if (handoff && !handoff.pending && options.runActive === false) {
-    owner.chatSubmissions?.clearInitial(sessionKey);
-  }
   return projection;
 }

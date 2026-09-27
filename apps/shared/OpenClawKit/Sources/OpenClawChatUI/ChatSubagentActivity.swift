@@ -22,6 +22,7 @@ enum ChatSubagentActivitySource: Sendable {
 
 struct ChatSubagentActivity: Identifiable, Equatable, Sendable {
     let id: String
+    let title: String?
     let status: ChatSubagentActivityStatus
     let snippet: String?
     let diffStat: ChatToolDiffStat?
@@ -69,6 +70,7 @@ struct ChatSubagentActivityState: Equatable, Sendable {
         }
         self.activitiesByID[task.id] = ChatSubagentActivity(
             id: task.id,
+            title: ChatPayloadDecoding.trimmedNonEmptyString(task.title),
             status: status,
             snippet: snippet,
             diffStat: Self.diffStat(task.diffstat) ?? previous?.diffStat,

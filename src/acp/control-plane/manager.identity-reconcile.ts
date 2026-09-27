@@ -15,8 +15,9 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
-import type { AcpSessionTarget, SessionAcpMeta, SessionEntry } from "./manager.types.js";
+import type { AcpSessionTarget, SessionAcpMeta, WriteManagerSessionMeta } from "./manager.types.js";
 import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 
 /** Reconciles runtime-reported session identifiers into persisted ACP session metadata. */
@@ -29,22 +30,18 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
   failOnStatusError: boolean;
+  isCurrentActor?: () => boolean;
   setCachedHandle: (target: AcpSessionTarget, handle: AcpRuntimeHandle) => void;
-  writeSessionMeta: (params: {
-    cfg: OpenClawConfig;
-    sessionKey: string;
-    agentId: string;
-    mutate: (
-      current: SessionAcpMeta | undefined,
-      entry: SessionEntry | undefined,
-    ) => SessionAcpMeta | null | undefined;
-    failOnError?: boolean;
-  }) => Promise<SessionEntry | null>;
+  writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<{
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
 }> {
+  const isCurrentActor = params.isCurrentActor ?? (() => true);
+  if (!isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
   let runtimeStatus = params.runtimeStatus;
   if (!runtimeStatus && params.runtime.getStatus) {
     try {
@@ -60,6 +57,9 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
       if (params.failOnStatusError || isAcpOwnerRepairRequired(error)) {
         throw error;
       }
+      if (!isCurrentActor()) {
+        throw createSupersededActorError(params.sessionKey);
+      }
       logVerbose(
         `acp-manager: failed to refresh ACP runtime status for ${params.sessionKey}: ${String(error)}`,
       );
@@ -68,6 +68,9 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
         meta: params.meta,
         runtimeStatus,
       };
+    }
+    if (!isCurrentActor()) {
+      throw createSupersededActorError(params.sessionKey);
     }
   }
 
@@ -114,6 +117,9 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   const metaChanged =
     !identityEquals(currentIdentity, nextIdentity) || hasLegacyAcpIdentityProjection(params.meta);
   if (!metaChanged) {
+    if (!isCurrentActor()) {
+      throw createSupersededActorError(params.sessionKey);
+    }
     return {
       handle: nextHandle,
       meta: params.meta,
@@ -132,6 +138,9 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
     state: params.meta.state,
     ...(params.meta.lastError ? { lastError: params.meta.lastError } : {}),
   };
+  if (!isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
   if (!identityEquals(currentIdentity, nextIdentity)) {
     const currentAgentSessionId = currentIdentity?.agentSessionId ?? "<none>";
     const nextAgentSessionId = nextIdentity?.agentSessionId ?? "<none>";
@@ -150,7 +159,11 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    isCurrentActor,
     mutate: (current, entry) => {
+      if (!isCurrentActor()) {
+        return undefined;
+      }
       if (!entry) {
         return null;
       }
@@ -172,6 +185,9 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
       };
     },
   });
+  if (!isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
   return {
     handle: nextHandle,
     meta: nextMeta,

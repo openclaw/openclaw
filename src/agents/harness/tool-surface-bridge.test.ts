@@ -4,10 +4,13 @@ import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
+import { applyEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
+import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   createToolSearchTools,
+  buildToolSchemaDirectoryPrompt,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
@@ -39,6 +42,119 @@ function createRuntime(config: OpenClawConfig) {
 }
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
+  it.each(["tools", "code", "directory"] as const)(
+    "returns the canonical %s directory only after applying prompt policy",
+    (mode) => {
+      const runtime = createAgentHarnessToolSurfaceRuntime({
+        config: {
+          agents: { defaults: { experimental: { localModelLean: false } } },
+          tools: { codeMode: false, toolSearch: { enabled: true, mode } },
+        },
+        model: { contextWindow: 8_000 },
+        modelToolsEnabled: true,
+        executeTool: async () => ({ content: [], details: {} }),
+      });
+      try {
+        const surface = runtime.compactTools([
+          ...createToolSearchTools({
+            config: runtime.config,
+            catalogRef: runtime.toolSearchCatalogRef,
+          }),
+          ...tools(["fixture_allowed", "fixture_denied"]),
+        ]);
+        const full = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
+        expect(full).toContain("fixture_denied");
+        expect(surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt).toBe(full);
+        const restricted = surface.promptToolPolicy.apply({ toolsAllow: ["fixture_allowed"] });
+        expect(restricted.toolSchemaDirectoryPrompt).toBe(
+          buildToolSchemaDirectoryPrompt(
+            { config: runtime.config, catalogRef: runtime.toolSearchCatalogRef },
+            { contextTokenBudget: 8_000 },
+          ),
+        );
+        expect(restricted.toolSchemaDirectoryPrompt).toContain("fixture_allowed");
+        expect(restricted.toolSchemaDirectoryPrompt).not.toContain("fixture_denied");
+        expect(
+          expectDefined(restricted.toolSchemaDirectoryPrompt, "restricted directory").length,
+        ).toBeLessThanOrEqual(800);
+        expect(
+          surface.promptToolPolicy.apply({ toolsAllow: [] }).toolSchemaDirectoryPrompt,
+        ).toBeUndefined();
+        expect(surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt).toBe(full);
+      } finally {
+        runtime.cleanup();
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "uses structured calls when deferred dispatch support is %s",
+    (supported) => {
+      const config: OpenClawConfig = { tools: { toolSearch: { mode: "directory" } } };
+      const runtime = createAgentHarnessToolSurfaceRuntime({
+        config,
+        supportsDeferredToolCalls: supported,
+        modelToolsEnabled: true,
+        executeTool: async () => ({ content: [], details: {} }),
+      });
+      try {
+        const surface = runtime.compactTools([
+          ...createToolSearchTools({
+            config: runtime.config,
+            catalogRef: runtime.toolSearchCatalogRef,
+          }),
+          ...tools(["fixture_hidden"]),
+        ]);
+        const guidance = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
+        expect(runtime.plan.toolSearchConfig.mode).toBe(supported ? "directory" : "tools");
+        expect(guidance?.includes("Call a unique deferred tool name directly")).toBe(supported);
+        expect(guidance?.includes("Deferred names are not directly callable")).toBe(!supported);
+        expect(config.tools?.toolSearch).toEqual({ mode: "directory" });
+      } finally {
+        runtime.cleanup();
+      }
+    },
+  );
+
+  it.each(["direct", "search", "code"] as const)(
+    "keeps overlapping allowlists callable through the %s surface",
+    (mode) => {
+      const toolsAllow = attachToolAllowlistIntersection([], [["web_*"], ["*_search"]]);
+      const runtime = createAgentHarnessToolSurfaceRuntime({
+        config: {
+          agents: { defaults: { experimental: { localModelLean: false } } },
+          tools: { codeMode: mode === "code", toolSearch: mode === "search" },
+        },
+        executeTool: async () => ({ content: [], details: {} }),
+        modelToolsEnabled: true,
+        toolsAllow,
+        runtimeToolAllowlist: toolsAllow,
+      });
+      try {
+        const allowedTools = applyEmbeddedAttemptToolsAllow(
+          [
+            ...createToolSearchTools({
+              config: runtime.config,
+              catalogRef: runtime.toolSearchCatalogRef,
+              executeTool: runtime.toolSearchCatalogExecutor,
+            }),
+            ...tools(["web_search", "web_fetch", "memory_search"]),
+          ],
+          runtime.runtimeToolAllowlist,
+        );
+        const surface = runtime.compactTools(allowedTools);
+        const callableNames = surface.promptToolPolicy.apply().callableToolNames;
+        expect(callableNames).toContain("web_search");
+        expect(callableNames).not.toContain("web_fetch");
+        expect(callableNames).not.toContain("memory_search");
+        expect(runtime.codeModeControlsEnabled).toBe(mode === "code");
+        expect(runtime.toolSearchControlsEnabled).toBe(mode === "search");
+      } finally {
+        runtime.cleanup();
+      }
+    },
+  );
+
   it.each([
     { name: "automatic replies", delivery: {}, directMessage: false },
     { name: "forced message replies", delivery: { forceMessageTool: true }, directMessage: true },

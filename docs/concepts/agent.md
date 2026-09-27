@@ -41,15 +41,15 @@ Inside the workspace, OpenClaw expects these user-editable files:
 
 On the first turn of a new session, OpenClaw injects the contents of these files into the system prompt's Project Context. `MEMORY.md` is only injected when it exists at the workspace root.
 
-Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content). A missing file (other than `MEMORY.md`) injects a single "missing file" marker line instead; `openclaw setup` creates a safe default template for it.
+Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content). A missing file (other than `MEMORY.md`) injects a single "missing file" marker line instead. `openclaw setup` creates a safe default template for it.
 
-`BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). While it is pending, OpenClaw keeps it in Project Context and adds system-prompt bootstrap guidance for the initial ritual instead of copying it into the user message. If you delete it after completing the ritual, it is not recreated on later restarts.
+`BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). While it is pending, OpenClaw keeps it in Project Context. OpenClaw adds system-prompt bootstrap guidance for the initial ritual, instead of copying the file into the user message. If you delete it after completing the ritual, it is not recreated on later restarts.
 
 After a workspace has been observed, OpenClaw stores its setup state and
 attestation in the shared SQLite database at
 `~/.openclaw/state/openclaw.sqlite`. If a recently attested workspace
-disappears or is wiped, startup refuses to silently reseed `BOOTSTRAP.md`;
-restore the workspace or use a full onboard reset so the workspace and its
+disappears or is wiped, startup refuses to silently reseed `BOOTSTRAP.md`.
+Restore the workspace, or use a full onboard reset, so the workspace and its
 database state are cleared together.
 
 Older releases used workspace JSON and `.attested` sidecar files. Runtime does
@@ -66,7 +66,7 @@ To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 
 Core tools (read/exec/edit/write and related system tools) are always available,
 subject to tool policy. `apply_patch` is on by default for OpenAI models and gated by
-`tools.exec.applyPatch` (`enabled`, `workspaceOnly`, `allowModels`). The `## Tools` section of `AGENTS.md` does **not** control which tools exist; it is guidance for how _you_ want them used.
+`tools.exec.applyPatch` (`enabled`, `workspaceOnly`, `allowModels`). The `## Tools` section of `AGENTS.md` does **not** control which tools exist. It is guidance for how _you_ want them used.
 
 ## Skills
 
@@ -80,7 +80,7 @@ OpenClaw loads skills from these locations (highest precedence first):
 - Extra skill folders: `skills.load.extraDirs`
 
 Skill roots can contain grouped folders such as
-`<workspace>/skills/personal/foo/SKILL.md`; the skill is still exposed by its
+`<workspace>/skills/personal/foo/SKILL.md`. The skill is still exposed by its
 flat frontmatter name, for example `foo`.
 
 Skills can be gated by config/env (see `skills` in [Gateway configuration](/gateway/configuration)).
@@ -107,7 +107,7 @@ OpenClaw. OpenClaw does not read session folders from other tools.
 
 Inbound prompts that arrive mid-run are steered into the current run by default.
 The OpenClaw runtime checks for steering before unstarted tool launches and the
-next model call. A running tool continues; unstarted sequential calls are skipped,
+next model call. A running tool continues. Unstarted sequential calls are skipped,
 while parallel calls continue after their batch crosses its launch checkpoint.
 Skipped calls receive synthetic paired results before the model sees the steer.
 
@@ -116,16 +116,16 @@ Skipped calls receive synthetic paired results before the model sees the steer.
 `/queue interrupt` aborts the active run instead. See [Queue](/concepts/queue)
 and [Steering queue](/concepts/queue-steering) for queue and boundary behavior.
 
-Block streaming sends completed assistant blocks as soon as they finish; it is
+Block streaming sends completed assistant blocks as soon as they finish. It is
 **off by default** (`agents.defaults.blockStreamingDefault: "off"`).
-Tune the boundary via `agents.defaults.blockStreamingBreak` (`text_end` vs `message_end`; defaults to `text_end`).
+Tune the boundary via `agents.defaults.blockStreamingBreak` (`text_end` or `message_end`, default `text_end`).
 Control soft block chunking with `agents.defaults.blockStreamingChunk` (defaults to
-800-1200 chars; prefers paragraph breaks, then newlines; sentences last).
+800-1200 chars, and prefers paragraph breaks, then newlines, then sentences).
 Coalesce streamed chunks with `agents.defaults.blockStreamingCoalesce` to reduce
 single-line spam (idle-based merging before send). Non-Telegram channels require
 explicit `*.streaming.block.enabled: true` to enable block replies (QQ Bot
 instead streams block replies unless `channels.qqbot.streaming.mode` is `"off"`).
-Verbose tool summaries are emitted at tool start (no debounce); Control UI
+Verbose tool summaries are emitted at tool start, with no debounce. Control UI
 streams tool output via agent events when available.
 More details: [Streaming + chunking](/concepts/streaming).
 

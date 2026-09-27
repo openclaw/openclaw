@@ -20,7 +20,6 @@ import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundSessionRoute,
-  ChannelPollResult,
   ChannelSecurityDmPolicy,
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
@@ -29,7 +28,6 @@ import type { ChannelMeta } from "../channels/plugins/types.public.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
-import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
@@ -38,6 +36,7 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
+import { createAttachedChannelResultAdapter } from "./channel-send-result.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 export type {
   AgentPromptGuidance,
@@ -526,21 +525,7 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
   Partial<
     Pick<
       ChannelPlugin<TResolvedAccount>,
-      | "setupWizard"
-      | "setup"
-      | "setupContract"
-      | "capabilities"
-      | "commands"
-      | "doctor"
-      | "agentPrompt"
-      | "streaming"
-      | "reload"
-      | "gatewayMethods"
-      | "gatewayMethodDescriptors"
-      | "configSchema"
-      | "config"
-      | "security"
-      | "groups"
+      Exclude<keyof CreateChannelPluginBaseOptions<TResolvedAccount>, "id" | "meta">
     >
   >;
 
@@ -674,46 +659,8 @@ type ChatChannelThreadingOptions<TResolvedAccount> =
 
 type ChatChannelAttachedOutboundOptions = {
   base: Omit<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll">;
-  attachedResults: {
-    channel: string;
-    sendText?: (
-      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0],
-    ) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
-    sendMedia?: (
-      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0],
-    ) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
-    sendPoll?: (
-      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0],
-    ) => MaybePromise<Omit<ChannelPollResult, "channel">>;
-  };
+  attachedResults: Parameters<typeof createAttachedChannelResultAdapter>[0];
 };
-
-type MaybePromise<T> = T | Promise<T>;
-
-function createInlineAttachedChannelResultAdapter(
-  params: ChatChannelAttachedOutboundOptions["attachedResults"],
-) {
-  return {
-    sendText: params.sendText
-      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0]) => ({
-          channel: params.channel,
-          ...(await params.sendText!(ctx)),
-        })
-      : undefined,
-    sendMedia: params.sendMedia
-      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0]) => ({
-          channel: params.channel,
-          ...(await params.sendMedia!(ctx)),
-        })
-      : undefined,
-    sendPoll: params.sendPoll
-      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0]) => ({
-          channel: params.channel,
-          ...(await params.sendPoll!(ctx)),
-        })
-      : undefined,
-  } satisfies Pick<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll">;
-}
 
 function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: string | null }>(
   security:
@@ -802,7 +749,7 @@ function resolveChatChannelOutbound(
   }
   return {
     ...outbound.base,
-    ...createInlineAttachedChannelResultAdapter(outbound.attachedResults),
+    ...createAttachedChannelResultAdapter(outbound.attachedResults),
   };
 }
 

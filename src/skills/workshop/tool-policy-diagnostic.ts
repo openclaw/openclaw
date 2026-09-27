@@ -7,12 +7,14 @@ import {
 import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveProviderToolPolicyEntry } from "../../agents/provider-tool-policy.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import type { ToolPolicyFilterEvent } from "../../agents/tool-policy-pipeline.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../../config/types.tools.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveSkillWorkshopToolConstructionBlock } from "./tool-availability.js";
 
 const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
 
@@ -29,11 +31,11 @@ type AgentToolsLocation = {
   tools: AgentToolsConfig;
 };
 
-function findAgentTools(config: OpenClawConfig, agentId: string): AgentToolsLocation | undefined {
+function findAgent(config: OpenClawConfig, agentId: string) {
   const listed = listAgentEntriesWithSource(config).find(
     ({ entry }) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
   );
-  if (!listed?.entry.tools) {
+  if (!listed) {
     return undefined;
   }
   // Report the canonical entries path; an id-less legacy list row (which
@@ -41,11 +43,11 @@ function findAgentTools(config: OpenClawConfig, agentId: string): AgentToolsLoca
   // remediation never points at agents.entries.undefined.
   const path =
     listed.source.kind === "entries"
-      ? `agents.entries.${listed.source.key}.tools`
+      ? `agents.entries.${listed.source.key}`
       : typeof listed.entry.id === "string" && listed.entry.id.length > 0
-        ? `agents.entries.${listed.entry.id}.tools`
-        : `agents.list[${listed.source.index}].tools`;
-  return { path, tools: listed.entry.tools };
+        ? `agents.entries.${listed.entry.id}`
+        : `agents.list[${listed.source.index}]`;
+  return { path, entry: listed.entry };
 }
 
 function providerPolicyPath(params: {
@@ -108,7 +110,10 @@ function describeExclusion(params: {
   event: ToolPolicyFilterEvent;
 }): Pick<SkillWorkshopToolPolicyDiagnostic, "source" | "detail" | "fix"> {
   const label = params.event.step.label;
-  const agent = findAgentTools(params.config, params.agentId);
+  const listed = findAgent(params.config, params.agentId);
+  const agent = listed?.entry.tools
+    ? { path: `${listed.path}.tools`, tools: listed.entry.tools }
+    : undefined;
   const globalProvider = providerPolicyPath({
     tools: params.config.tools,
     basePath: "tools",
@@ -231,6 +236,25 @@ export function detectSkillWorkshopToolPolicyDiagnostic(params: {
     return null;
   }
   const agentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
+  const prefix = `Skill Workshop is active, but ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} is hidden for agent ${JSON.stringify(agentId)}:`;
+  const sandbox = resolveSandboxConfigForAgent(params.config, agentId);
+  const constructionBlock = resolveSkillWorkshopToolConstructionBlock({
+    sandboxed: sandbox.mode !== "off",
+  });
+  if (constructionBlock) {
+    const agent = findAgent(params.config, agentId);
+    const source = agent?.entry.sandbox?.mode
+      ? `${agent.path}.sandbox.mode`
+      : "agents.defaults.sandbox.mode";
+    const detail = `${source}: ${JSON.stringify(sandbox.mode)}. ${sandbox.mode === "non-main" ? "In non-main sessions, " : ""}${constructionBlock.detail}`;
+    return {
+      agentId,
+      source,
+      detail,
+      fix: constructionBlock.fix,
+      message: `${prefix} ${detail} ${constructionBlock.fix}`,
+    };
+  }
   const model = resolveDefaultModelForAgent({ cfg: params.config, agentId });
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: params.config,
@@ -251,7 +275,6 @@ export function detectSkillWorkshopToolPolicyDiagnostic(params: {
     capabilityProfile,
     event: availability.exclusion,
   });
-  const prefix = `Skill Workshop is active, but ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} is hidden for agent ${JSON.stringify(agentId)}:`;
   return {
     agentId,
     ...explanation,

@@ -1,7 +1,11 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createWebSocketStream, WebSocket, WebSocketServer, type RawData } from "ws";
+import type { RawData } from "ws";
+import {
+  createWebSocketStream,
+  WebSocketServer as NpmWebSocketServer,
+} from "../../../packages/gateway-client/src/websocket.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -10,8 +14,12 @@ import {
 } from "../../shared/node-desktop-stream.js";
 import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
+import { isWorkerDesktopArdPassword } from "../../shared/worker-desktop-descriptor.js";
+import { hasExactOwnKeys } from "../../worker/protocol-record.js";
 import type { NodeRegistry } from "../node-registry.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
+
+type WebSocket = import("ws").WebSocket;
 
 const DEFAULT_TICKET_TTL_MS = 60_000;
 const MAX_ATTACH_FRAME_BYTES = 64 * 1024;
@@ -19,6 +27,7 @@ const streamLog = createSubsystemLogger("gateway/node-stream");
 
 type NodeDesktopStreamMetadata = {
   auth: "vnc-password" | "ard-account";
+  /** Managed RFB password for VncAuth or ARD; never returned to a browser. */
   vncPassword?: string;
 };
 
@@ -84,14 +93,17 @@ function parseStreamMetadata(
   if (!isRecord(value) || (value.auth !== "vnc-password" && value.auth !== "ard-account")) {
     throw new Error("invalid node desktop attach metadata");
   }
-  const keys = Object.keys(value);
-  if (keys.some((key) => key !== "auth" && key !== "vncPassword")) {
+  if (!hasExactOwnKeys(value, ["auth"], ["vncPassword"])) {
     throw new Error("invalid node desktop attach metadata");
   }
   if (value.vncPassword !== undefined && typeof value.vncPassword !== "string") {
     throw new Error("invalid node desktop attach metadata");
   }
-  if (value.auth === "ard-account" && value.vncPassword !== undefined) {
+  if (
+    value.auth === "ard-account" &&
+    value.vncPassword !== undefined &&
+    !isWorkerDesktopArdPassword(value.vncPassword)
+  ) {
     throw new Error("invalid node desktop attach metadata");
   }
   const vncPassword = typeof value.vncPassword === "string" ? value.vncPassword : undefined;
@@ -159,7 +171,7 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     onExpire: (entry, ticket) =>
       rejectTicket(ticket, new Error(`node ${entry.kind} stream ticket expired`)),
   });
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_ATTACH_FRAME_BYTES });
+  const wss = new NpmWebSocketServer({ noServer: true, maxPayload: MAX_ATTACH_FRAME_BYTES });
 
   const remove = (ticket: string): TicketEntry | undefined => {
     const entry = pending.get(ticket);

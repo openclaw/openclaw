@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
 import { resolveEffectiveToolInventory } from "../../tools-effective-inventory.js";
 
@@ -50,6 +51,7 @@ describe("subagent progress-card availability", () => {
   });
 
   afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 

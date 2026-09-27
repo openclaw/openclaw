@@ -26,9 +26,9 @@ function buildQuery(params: {
     return latest;
   }
   if (params.config.queryMode === "full") {
-    const allTurns = (params.recentTurns ?? [])
-      .map((turn) => `${turn.role}: ${turn.text.trim().replace(/\s+/g, " ")}`)
-      .filter((turn) => turn.length > 0);
+    const allTurns = (params.recentTurns ?? []).map(
+      (turn) => `${turn.role}: ${turn.text.trim().replace(/\s+/g, " ")}`,
+    );
     if (allTurns.length === 0) {
       return latest;
     }
@@ -36,37 +36,22 @@ function buildQuery(params: {
       "\n",
     );
   }
-  let remainingUser = params.config.recentUserTurns;
-  let remainingAssistant = params.config.recentAssistantTurns;
+  const remaining = {
+    user: params.config.recentUserTurns,
+    assistant: params.config.recentAssistantTurns,
+  };
   const selected: ActiveRecallRecentTurn[] = [];
   for (let index = (params.recentTurns ?? []).length - 1; index >= 0; index -= 1) {
     const turn = params.recentTurns?.[index];
-    if (!turn) {
+    if (!turn || remaining[turn.role] <= 0) {
       continue;
     }
-    if (turn.role === "user") {
-      if (remainingUser <= 0) {
-        continue;
-      }
-      remainingUser -= 1;
-      selected.push({
-        role: "user",
-        text: truncateUtf16Safe(
-          turn.text.trim().replace(/\s+/g, " "),
-          params.config.recentUserChars,
-        ),
-      });
-      continue;
-    }
-    if (remainingAssistant <= 0) {
-      continue;
-    }
-    remainingAssistant -= 1;
+    remaining[turn.role] -= 1;
     selected.push({
-      role: "assistant",
+      role: turn.role,
       text: truncateUtf16Safe(
         turn.text.trim().replace(/\s+/g, " "),
-        params.config.recentAssistantChars,
+        turn.role === "user" ? params.config.recentUserChars : params.config.recentAssistantChars,
       ),
     });
   }
@@ -149,7 +134,7 @@ function buildSearchQuery(params: {
   if (latest.length >= 12 || !params.recentTurns?.length) {
     return latest || clampSearchQuery(params.latestUserMessage);
   }
-  const previousUser = [...params.recentTurns]
+  const previousUser = params.recentTurns
     .toReversed()
     .find((turn) => turn.role === "user" && turn.text.trim() !== params.latestUserMessage.trim());
   if (!previousUser) {
@@ -194,71 +179,44 @@ function extractTextContent(content: unknown): string {
   return extractTextContentParts(content).join(" ").trim();
 }
 
-function stripRecalledContextNoise(text: string): string {
+function findActiveMemoryCloseLine(lines: string[], startIndex: number): number {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    if ((lines[index]?.trim() ?? "") === ACTIVE_MEMORY_CLOSE_TAG) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function stripRecalledContextNoise(text: string, injectedPrefixOnly = false): string {
   const lines = text.split("\n");
   const cleanedLines: string[] = [];
-
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]?.trim() ?? "";
     if (!line) {
       continue;
     }
-    if (line === ACTIVE_MEMORY_CONTEXT_HEADER) {
-      continue;
-    }
-    if (line === ACTIVE_MEMORY_OPEN_TAG) {
-      let closeIndex = -1;
-      for (let probe = index + 1; probe < lines.length; probe += 1) {
-        if ((lines[probe]?.trim() ?? "") === ACTIVE_MEMORY_CLOSE_TAG) {
-          closeIndex = probe;
-          break;
-        }
-      }
+    const blockStart = line === ACTIVE_MEMORY_CONTEXT_HEADER ? index + 1 : index;
+    if (
+      (!injectedPrefixOnly || line === ACTIVE_MEMORY_CONTEXT_HEADER) &&
+      lines[blockStart]?.trim() === ACTIVE_MEMORY_OPEN_TAG
+    ) {
+      const closeIndex = findActiveMemoryCloseLine(lines, blockStart + 1);
       if (closeIndex !== -1) {
         index = closeIndex;
         continue;
       }
     }
-    if (line === ACTIVE_MEMORY_CLOSE_TAG) {
-      continue;
-    }
-    if (RECALLED_CONTEXT_LINE_PATTERNS.some((pattern) => pattern.test(line))) {
+    if (
+      !injectedPrefixOnly &&
+      (line === ACTIVE_MEMORY_CONTEXT_HEADER ||
+        line === ACTIVE_MEMORY_CLOSE_TAG ||
+        RECALLED_CONTEXT_LINE_PATTERNS.some((pattern) => pattern.test(line)))
+    ) {
       continue;
     }
     cleanedLines.push(line);
   }
-
-  return cleanedLines.join(" ").replace(/\s+/g, " ").trim();
-}
-
-function stripInjectedActiveMemoryPrefixOnly(text: string): string {
-  const lines = text.split("\n");
-  const cleanedLines: string[] = [];
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]?.trim() ?? "";
-    if (!line) {
-      continue;
-    }
-    if (line === ACTIVE_MEMORY_CONTEXT_HEADER) {
-      const nextLine = lines[index + 1]?.trim() ?? "";
-      if (nextLine === ACTIVE_MEMORY_OPEN_TAG) {
-        let closeIndex = -1;
-        for (let probe = index + 2; probe < lines.length; probe += 1) {
-          if ((lines[probe]?.trim() ?? "") === ACTIVE_MEMORY_CLOSE_TAG) {
-            closeIndex = probe;
-            break;
-          }
-        }
-        if (closeIndex !== -1) {
-          index = closeIndex;
-          continue;
-        }
-      }
-    }
-    cleanedLines.push(line);
-  }
-
   return cleanedLines.join(" ").replace(/\s+/g, " ").trim();
 }
 
@@ -274,10 +232,7 @@ function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
       continue;
     }
     const rawText = extractTextContent(typed.content);
-    const text =
-      role === "assistant"
-        ? stripRecalledContextNoise(rawText)
-        : stripInjectedActiveMemoryPrefixOnly(rawText);
+    const text = stripRecalledContextNoise(rawText, role === "user");
     if (!text) {
       continue;
     }

@@ -2,31 +2,24 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
+  sendUnauthorized,
 } from "./http-common.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   OPENCLAW_DEFAULT_MODEL_ID,
   OPENCLAW_MODEL_ID,
   authorizeGatewayHttpRequestOrReply,
   isOpenClawAgentModelId,
   resolveAgentIdFromModel,
-  type AuthorizedGatewayHttpRequest,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-
-type OpenAiModelsHttpOptions = {
-  auth: ResolvedGatewayAuth;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
-};
+import { READ_SCOPE } from "./operator-scopes.js";
 
 type OpenAiModelObject = {
   id: string;
@@ -44,21 +37,6 @@ function toOpenAiModel(id: string): OpenAiModelObject {
     owned_by: "openclaw",
     permission: [],
   };
-}
-
-async function authorizeRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  opts: OpenAiModelsHttpOptions,
-): Promise<AuthorizedGatewayHttpRequest | null> {
-  return await authorizeGatewayHttpRequestOrReply({
-    req,
-    res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
-  });
 }
 
 function loadAgentModelIds(): string[] {
@@ -82,7 +60,7 @@ function resolveRequestPath(req: IncomingMessage): string {
 export async function handleOpenAiModelsHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: OpenAiModelsHttpOptions,
+  opts: GatewayHttpRequestAuthOptions,
 ): Promise<boolean> {
   const requestPath = resolveRequestPath(req);
   if (requestPath !== "/v1/models" && !requestPath.startsWith("/v1/models/")) {
@@ -94,15 +72,19 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  const requestAuth = await authorizeRequest(req, res, opts);
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({ ...opts, req, res });
   if (!requestAuth) {
     return true;
   }
+  if (!requestAuth.hasCurrentClientAuthority()) {
+    sendUnauthorized(res);
+    return true;
+  }
 
-  const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
-  const scopeAuth = authorizeOperatorScopesForMethod("models.list", requestedScopes);
-  if (!scopeAuth.allowed) {
-    sendMissingScopeForbidden(res, scopeAuth.missingScope);
+  const requestedScopes = resolveSharedSecretHttpOperatorScopes(req, requestAuth);
+  // The compatibility catalog exposes global agent targets and keeps its general read floor.
+  if (!operatorScopeSatisfied(READ_SCOPE, requestedScopes)) {
+    sendMissingScopeForbidden(res, READ_SCOPE);
     return true;
   }
 

@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { normalizeToolPolicyName } from "../../../agents/tool-policy-shared.js";
+import { isToolPolicyPath } from "./legacy-tool-policy-scopes.js";
 
 type LegacyToolNameMigration = {
   legacyName: string;
@@ -62,14 +63,6 @@ export function migrateLegacyToolNameList(
     mutated = true;
   }
   return mutated;
-}
-
-function isToolPolicyPath(path: readonly string[]): boolean {
-  if (path.at(-1) === "tools" || path.includes("toolsBySender")) {
-    return true;
-  }
-  const byProviderIndex = path.lastIndexOf("byProvider");
-  return byProviderIndex >= 0 && path.slice(0, byProviderIndex).includes("tools");
 }
 
 function visitLegacyToolName(

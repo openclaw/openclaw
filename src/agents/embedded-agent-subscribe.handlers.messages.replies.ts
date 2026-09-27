@@ -99,17 +99,17 @@ export function consumePendingToolMediaIntoReply(
   if (payload.isReasoning) {
     return payload;
   }
-  if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
+  const pendingMedia = readPendingToolMediaReply(state);
+  if (!pendingMedia) {
     return payload;
   }
   if (hasReplyMedia(payload)) {
     // Pending tool media is a fallback delivery queue; explicit final media is
     // the assistant's user-visible selection, while tool output remains in the transcript.
-    const alignedPendingMedia = readAlignedPendingToolMedia(state);
     const metadataByUrl = new Map(
-      alignedPendingMedia.mediaUrls.map((url, index) => [
+      (pendingMedia.mediaUrls ?? []).map((url, index) => [
         url,
-        alignedPendingMedia.attachments?.[index] ?? {},
+        pendingMedia.attachments?.[index] ?? {},
       ]),
     );
     const selectedAttachments = (payload.mediaUrls ?? []).map(
@@ -133,16 +133,11 @@ export function consumePendingToolMediaIntoReply(
     clearPendingToolMedia(state);
     return selectedPayload;
   }
-  const pendingMedia = readAlignedPendingToolMedia(state);
-  const allPendingMediaTrusted =
-    pendingMedia.mediaUrls.length > 0 &&
-    pendingMedia.mediaUrls.every((url) => state.pendingToolMediaTrustByUrl.get(url) === true);
   const mergedPayload: BlockReplyPayload = {
     ...payload,
-    mediaUrls: pendingMedia.mediaUrls.length ? pendingMedia.mediaUrls : undefined,
-    attachments: pendingMedia.attachments,
-    audioAsVoice: payload.audioAsVoice || state.pendingToolAudioAsVoice || undefined,
-    ...(payload.trustedLocalMedia || allPendingMediaTrusted ? { trustedLocalMedia: true } : {}),
+    ...pendingMedia,
+    audioAsVoice: payload.audioAsVoice || pendingMedia.audioAsVoice || undefined,
+    ...(payload.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
   };
   clearPendingToolMedia(state);
   return mergedPayload;
@@ -211,16 +206,32 @@ export function readPendingToolMediaReply(
 export function recordPendingAssistantReplyDirectives(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   parsed: ReplyDirectiveParseResult | null | undefined,
+  audioDirectiveCounts?: { previous: number; current: number },
 ) {
-  if (!parsed || !hasReplyDirectiveMetadata(parsed)) {
+  if (!parsed) {
     return;
   }
   const current = state.pendingAssistantReplyDirectives;
+  // Closing an inline span can retract provisional tags. Keep only source
+  // occurrences after the first still-unconsumed voice directive's boundary.
+  const audioAsVoice = Boolean(
+    parsed.audioAsVoice ||
+    (current?.audioAsVoice &&
+      audioDirectiveCounts &&
+      audioDirectiveCounts.current > (current.audioDirectiveStart ?? 0)),
+  );
+  if (!audioAsVoice && !hasReplyDirectiveMetadata(parsed)) {
+    state.pendingAssistantReplyDirectives = undefined;
+    return;
+  }
   state.pendingAssistantReplyDirectives = {
-    audioAsVoice: current?.audioAsVoice || parsed.audioAsVoice || undefined,
-    replyToId: parsed.replyToId ?? current?.replyToId,
-    replyToTag: current?.replyToTag || parsed.replyToTag || undefined,
-    replyToCurrent: current?.replyToCurrent || parsed.replyToCurrent || undefined,
+    audioAsVoice: audioAsVoice || undefined,
+    ...(audioAsVoice && audioDirectiveCounts
+      ? { audioDirectiveStart: current?.audioDirectiveStart ?? audioDirectiveCounts.previous }
+      : {}),
+    replyToId: parsed.replyToId,
+    replyToTag: parsed.replyToTag || undefined,
+    replyToCurrent: parsed.replyToCurrent || undefined,
   };
 }
 

@@ -247,6 +247,7 @@ describe("session progress hovercard ownership", () => {
         expect(harness.request).toHaveBeenCalledWith(
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
           expect.objectContaining({ sessionKeys: [artifactKey] }),
+          { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
         ),
       );
       expect(document.querySelector(".session-progress-hovercard")?.textContent).toContain(

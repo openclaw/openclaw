@@ -1,4 +1,3 @@
-// QA Lab Slack invalid-blocks fallback fixture.
 import { randomUUID } from "node:crypto";
 import {
   SLACK_QA_INVALID_TABLE_DATA_ROW_COUNT,

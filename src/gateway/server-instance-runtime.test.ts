@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
@@ -166,7 +167,7 @@ describe("createGatewayInstanceRuntime", () => {
         await platformDispatchHold;
         await ctx.onPlatformSendDispatch?.();
         visibleSend();
-        return { channel: "signal", messageId: "signal-message-1" };
+        return { channel: "signal", messageId: `signal-message-${visibleSend.mock.calls.length}` };
       });
       const handleAction = vi.fn(async () => {
         throw new Error("recovery notice must not invoke message actions");
@@ -226,7 +227,9 @@ describe("createGatewayInstanceRuntime", () => {
         await runtime.recovery.sendRecoveryNotice(notice);
         await runtime.recovery.sendRecoveryNotice(notice);
 
-        expect(findDeliveryIntentOwner(idempotencyKey)).toMatchObject({ status: "completed" });
+        expect(await findDeliveryIntentOwner(idempotencyKey)).toMatchObject({
+          status: "completed",
+        });
         expect(visibleSend).toHaveBeenCalledOnce();
 
         let ownerCurrent = true;
@@ -236,9 +239,13 @@ describe("createGatewayInstanceRuntime", () => {
         const staleDelivery = runtime.recovery.sendRecoveryNotice({
           ...notice,
           idempotencyKey: "main-session-restart-recovery:run-2:failed-notice",
+          liveOnly: true,
           isCurrent: () => ownerCurrent,
         });
         await vi.waitFor(() => expect(sendText).toHaveBeenCalledTimes(2));
+        const queuedResumption = await findDeliveryIntentOwner(
+          "main-session-restart-recovery:run-2:failed-notice",
+        );
         ownerCurrent = false;
         releasePlatformDispatch?.();
 
@@ -247,6 +254,7 @@ describe("createGatewayInstanceRuntime", () => {
         );
 
         expect(visibleSend).toHaveBeenCalledOnce();
+        expect(queuedResumption).toBeNull();
         expect(sendText).toHaveBeenCalledWith(
           expect.objectContaining({
             to: "+15551234567",
@@ -256,6 +264,21 @@ describe("createGatewayInstanceRuntime", () => {
           }),
         );
         expect(handleAction).not.toHaveBeenCalled();
+
+        const guardedDurableNotice = {
+          ...notice,
+          idempotencyKey: "main-session-restart-recovery:subagent:run-3:resumed-notice",
+          isCurrent: () => true,
+        };
+        await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
+        expect(await findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
+          status: "completed",
+        });
+        await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
+        expect(visibleSend).toHaveBeenCalledTimes(2);
+        expect(await findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
+          status: "completed",
+        });
       } finally {
         runtime.close();
         restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
@@ -331,8 +354,9 @@ describe("createGatewayInstanceRuntime", () => {
   });
 
   it("preserves a trusted approval resolver display name", async () => {
+    const context = createContext();
     const runtime = createGatewayInstanceRuntime({
-      getContext: createContext,
+      getContext: () => context,
       getMethodRegistry: () =>
         createRegistry({
           "exec.approval.list": ({ client, respond }) =>
@@ -354,16 +378,11 @@ describe("createGatewayInstanceRuntime", () => {
   it("preserves the Gateway client's approval request deadline", async () => {
     vi.useFakeTimers();
     try {
-      let markStarted!: () => void;
-      const started = new Promise<void>((resolve) => {
-        markStarted = resolve;
-      });
-      let finishHandler!: () => void;
-      const handlerCanFinish = new Promise<void>((resolve) => {
-        finishHandler = resolve;
-      });
+      const { promise: started, resolve: markStarted } = createDeferred();
+      const { promise: handlerCanFinish, resolve: finishHandler } = createDeferred();
+      const context = createContext();
       const runtime = createGatewayInstanceRuntime({
-        getContext: createContext,
+        getContext: () => context,
         getMethodRegistry: () =>
           createRegistry({
             send: async () => {

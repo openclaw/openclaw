@@ -11,6 +11,8 @@ import {
   parsePackagedBundledPluginPath,
 } from "../../../plugins/bundled-load-path-aliases.js";
 import { resolveBundledPluginSources } from "../../../plugins/bundled-sources.js";
+import { findUninspectedPluginDiagnostic } from "../../../plugins/discovery-availability.js";
+import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
 import { resolveUserPath } from "../../../utils.js";
 
 type BundledPluginLoadPathHit = {
@@ -70,12 +72,27 @@ export function scanBundledPluginLoadPathMigrations(
     }
   }
 
+  const { diagnostics } = discoverConfiguredPluginLoadPaths({
+    loadPaths: rawPaths.filter((rawPath): rawPath is string => typeof rawPath === "string"),
+    env,
+  });
   const hits: BundledPluginLoadPathHit[] = [];
   for (const rawPath of rawPaths) {
     if (typeof rawPath !== "string") {
       continue;
     }
     const normalized = normalizeBundledLookupPath(resolveUserPath(rawPath, env));
+    if (
+      findUninspectedPluginDiagnostic(
+        diagnostics.filter(
+          (diagnostic) =>
+            diagnostic.source !== undefined &&
+            normalizeBundledLookupPath(diagnostic.source) === normalized,
+        ),
+      )
+    ) {
+      continue;
+    }
     const match = bundledPathMap.get(normalized);
     if (!match) {
       const oldPackaged = parsePackagedBundledPluginPath(normalized);
@@ -147,7 +164,6 @@ export function maybeRepairBundledPluginLoadPaths(
   const removable = new Set(
     hits.map((hit) => normalizeBundledLookupPath(resolveUserPath(hit.fromPath, env))),
   );
-  const seen = new Set<string>();
   const rewritten: Array<(typeof paths)[number]> = [];
   for (const entry of paths) {
     if (typeof entry !== "string") {
@@ -158,10 +174,6 @@ export function maybeRepairBundledPluginLoadPaths(
     if (removable.has(resolved)) {
       continue;
     }
-    if (seen.has(resolved)) {
-      continue;
-    }
-    seen.add(resolved);
     rewritten.push(entry);
   }
 

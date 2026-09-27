@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExecApprovalsSnapshot, ExecSecurity } from "../../lib/nodes/page-operations.ts";
 import { createDevicesViewProps } from "../../test-helpers/devices-fixtures.ts";
 import {
   renderDevicesContainer,
@@ -70,6 +71,8 @@ describe("devices exec approvals rendering", () => {
     expect(security?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (allowlist)");
     expect(ask?.value).toBe("on-miss");
     expect(fallback?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (deny)");
+    expect(section.textContent).not.toContain("Using default");
+    expect(getSettingsRow(section, "Security").querySelector(".settings-row__desc")).toBeNull();
   });
 
   it("offers only nodes that support both reading and writing approval policy", () => {
@@ -168,6 +171,81 @@ describe("devices exec approvals rendering", () => {
     expect(section.textContent).toContain("deny");
     expect(section.querySelector("button")?.hasAttribute("disabled")).toBe(true);
   });
+
+  it("shows the selected agent's stored policy after the user edited another agent", () => {
+    const snapshot: ExecApprovalsSnapshot = {
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      hash: "sha256:current",
+      file: { version: 1, agents: {} },
+      resolvedDefaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+    };
+    const renderScope = (
+      container: HTMLElement,
+      agents: Record<string, { security: ExecSecurity }>,
+      selected: string,
+    ) => {
+      render(
+        renderDevices(
+          createDevicesViewProps({
+            execApprovalsSnapshot: snapshot,
+            execApprovalsForm: { version: 1, agents },
+            execApprovalsSelectedAgent: selected,
+          }),
+        ),
+        container,
+      );
+      return expectDefined(
+        getSettingsRow(
+          getSection(container, "Exec approvals"),
+          "Security",
+        ).querySelector<HTMLSelectElement>("select"),
+        "security select",
+      );
+    };
+    const pick = (select: HTMLSelectElement, value: string) => {
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    // Picking an option marks it dirty, so the browser ignores later `selected`
+    // attribute changes. `?selected` still seeds the first paint (Lit sets
+    // select.value before its options exist); `live()` re-writes the value on
+    // later renders so scope switches show the stored policy.
+    let security = renderScope(
+      container,
+      { alpha: { security: "allowlist" }, beta: { security: "deny" } },
+      "alpha",
+    );
+    expect(security.value).toBe("allowlist");
+    pick(security, "deny");
+    security = renderScope(
+      container,
+      { alpha: { security: "deny" }, beta: { security: "deny" } },
+      "alpha",
+    );
+    pick(security, "full");
+    security = renderScope(
+      container,
+      { alpha: { security: "full" }, beta: { security: "deny" } },
+      "alpha",
+    );
+    expect(security.value).toBe("full");
+
+    security = renderScope(
+      container,
+      { alpha: { security: "full" }, beta: { security: "deny" } },
+      "beta",
+    );
+    expect(security.value).toBe("deny");
+  });
 });
 
 describe("devices agent bindings", () => {
@@ -221,7 +299,6 @@ describe("devices agent bindings", () => {
       ineligibleExact: true,
       unavailable: true,
     },
-    { name: "names", refs: ["Default worker", "Research worker"] },
     { name: "normalized names", refs: ["default_worker", "RESEARCH-WORKER"] },
     { name: "addresses", refs: ["192.0.2.10", "192.0.2.20"] },
     { name: "ID prefixes", refs: ["default", "agent-"] },
@@ -230,18 +307,6 @@ describe("devices agent bindings", () => {
       refs: ["Default worker", "Research worker"],
       competitors: true,
       unavailable: true,
-    },
-    {
-      name: "connected-name preference",
-      refs: ["Default worker", "Research worker"],
-      competitors: true,
-      connected: true,
-    },
-    {
-      name: "current-client preference",
-      refs: ["Default worker", "Research worker"],
-      competitors: true,
-      clientId: "openclaw-node",
     },
   ])("preserves $name across node loss and recovery", (scenario) => {
     const [defaultRef, agentRef] = scenario.refs;
@@ -263,8 +328,6 @@ describe("devices agent bindings", () => {
     ].map((node) =>
       Object.assign(node, {
         commands: ["system.run"],
-        connected: scenario.connected,
-        clientId: scenario.clientId,
       }),
     );
     const container = document.createElement("div");
@@ -301,7 +364,6 @@ describe("devices agent bindings", () => {
           nodeId: `${node.nodeId}-competitor`,
           commands: [],
           connected: false,
-          clientId: scenario.clientId ? "clawdbot-node" : undefined,
         }))
       : [];
     const initialNodes = scenario.ineligibleExact

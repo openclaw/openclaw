@@ -139,6 +139,7 @@ class SettingsDetailInsetsTest {
         }
       }
 
+      composeRule.onNodeWithText("Manual Gateway").performScrollTo().performClick()
       assertGatewayInputPresentation("127.0.0.1", "192.168.0.25", secret = false)
       assertGatewayInputPresentation("18789", "18790", secret = false)
       assertGatewayInputPresentation("Setup code", "synthetic-setup-code", secret = true)

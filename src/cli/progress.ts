@@ -102,16 +102,6 @@ export type ProgressTotalsUpdate = {
   label?: string;
 };
 
-/** Decide whether the interactive spinner is safe for the current terminal state. */
-export function shouldUseInteractiveProgressSpinner(params: {
-  fallback?: ProgressOptions["fallback"];
-  streamIsTty?: boolean;
-  stdinIsRaw?: boolean;
-}): boolean {
-  const spinnerRequested = params.fallback === undefined || params.fallback === "spinner";
-  return spinnerRequested && params.streamIsTty === true && params.stdinIsRaw !== true;
-}
-
 const noopReporter: ProgressReporter = {
   setLabel: () => {},
   setPercent: () => {},
@@ -138,11 +128,8 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   const delayMs = resolveTimerTimeoutMs(options.delayMs, DEFAULT_DELAY_MS, 0);
   const canOsc = isTty && supportsOscProgress(process.env, isTty);
   const stdinIsRaw = process.stdin.isRaw;
-  const allowSpinner = shouldUseInteractiveProgressSpinner({
-    fallback: options.fallback,
-    streamIsTty: isTty,
-    stdinIsRaw,
-  });
+  const fallback = options.fallback;
+  const allowSpinner = (fallback === undefined || fallback === "spinner") && isTty && !stdinIsRaw;
   const allowLine = isTty && options.fallback === "line";
   if (isTty && stdinIsRaw && (options.fallback === undefined || options.fallback === "spinner")) {
     // Raw stdin usually means an interactive prompt owns cursor movement.
@@ -270,18 +257,13 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       clearTimeout(timer);
       timer = null;
     }
-    if (!started) {
-      if (isTty) {
-        unregisterActiveProgressLine(stream);
+    if (started) {
+      if (controller) {
+        controller.clear();
       }
-      activeProgress = Math.max(0, activeProgress - 1);
-      return;
+      spin?.stop("");
+      clearActiveProgressLine();
     }
-    if (controller) {
-      controller.clear();
-    }
-    spin?.stop("");
-    clearActiveProgressLine();
     if (isTty) {
       unregisterActiveProgressLine(stream);
     }

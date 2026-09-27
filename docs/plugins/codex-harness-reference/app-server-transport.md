@@ -13,7 +13,7 @@ How OpenClaw starts and reaches the Codex app-server, and every `appServer` fiel
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.153.4`):
+with the official plugin (currently `@openai/codex` `0.155.1`):
 
 ```bash
 codex app-server --listen stdio://
@@ -152,13 +152,14 @@ collision-resistant `openclaw-network-<fingerprint>` profile name from the
 profile body by default; use `profileName` only when a stable local name is
 required.
 
-```js
-export default {
+```json5
+{
   plugins: {
     entries: {
       codex: {
         config: {
           appServer: {
+            approvalPolicy: "never",
             sandbox: "workspace-write",
             networkProxy: {
               enabled: true,
@@ -166,23 +167,27 @@ export default {
                 "api.openai.com": "allow",
                 "blocked.example.com": "deny",
               },
-              allowUpstreamProxy: true,
-              proxyUrl: "http://127.0.0.1:3128",
             },
           },
         },
       },
     },
   },
-};
+}
 ```
+
+Hosts absent from the effective native allowlist are denied. The example's
+`approvalPolicy: "never"` prevents approval-based exceptions; native system
+requirements can still contribute allowed domains. These restrictions apply to
+Codex sandbox commands. See the [network proxy configuration reference](/plugins/codex-harness/config-fields)
+for matching, policy inheritance, scope, and explicit Doctor repair of blank optional fields after updates.
 
 If the normal app-server runtime would be `danger-full-access`, enabling
 `networkProxy` uses workspace-style filesystem access for the generated
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin manages stable Codex app-server `0.153.4`. Explicit custom
+The plugin manages stable Codex app-server `0.155.1`. Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a
 parseable semantic version of `0.149.0` or newer. Older, malformed, and
 unversioned handshakes are rejected. Newer versions log a compatibility warning
@@ -253,7 +258,7 @@ Environment overrides remain available for local testing:
 `OPENCLAW_CODEX_APP_SERVER_BIN` bypasses the managed binary when
 `appServer.command` is unset.
 
-`OPENCLAW_CODEX_APP_SERVER_GUARDIAN=1` was removed. Use
+`OPENCLAW_CODEX_APP_SERVER_GUARDIAN=1` was removed in 2026.4.22. Use
 `plugins.entries.codex.config.appServer.mode: "guardian"` instead, or
 `OPENCLAW_CODEX_APP_SERVER_MODE=guardian` for one-off local testing. Config is
 preferred for repeatable deployments because it keeps the plugin behavior in

@@ -15,11 +15,13 @@ import {
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   type OpenClawConfig,
+  type ConfigFileSnapshot,
   readConfigFileSnapshot,
   transformConfigFile,
 } from "../../config/config.js";
 import { restoreEnvVarRefs } from "../../config/env-preserve.js";
 import { resolveConfigIncludes } from "../../config/includes.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import {
   mergeAgentModelEntryForConfig,
@@ -27,17 +29,20 @@ import {
   toAgentModelListLike,
 } from "../../config/model-input.js";
 import { resolveIncludeRoots } from "../../config/paths.js";
+import { copyRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
-import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { inspectModelReference } from "./model-reference-validation.js";
-import {
-  canonicalizeModelCatalogProviderRef,
-  createModelCatalogProviderAliasCanonicalizer,
-} from "./provider-aliases.js";
+import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
 export { formatTokenK } from "./list.format.js";
-export { ensureFlagCompatibility } from "./list.options.js";
+
+/** Rejects conflicting machine-readable output modes. */
+export function ensureFlagCompatibility(opts: { json?: boolean; plain?: boolean }): void {
+  if (opts.json && opts.plain) {
+    throw new Error("Choose either --json or --plain, not both.");
+  }
+}
 
 /** Formats millisecond durations for model command output. */
 export const formatMs = (value?: number | null) => {
@@ -54,13 +59,13 @@ export const formatMs = (value?: number | null) => {
 };
 
 /** Loads config from disk and throws a formatted error when validation fails. */
-export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
+export async function loadValidConfigSnapshotOrThrow(): Promise<ConfigFileSnapshot> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  return snapshot.runtimeConfig ?? snapshot.config;
+  return snapshot;
 }
 
 /** Runtime config snapshot supplied to model config mutators. */
@@ -88,11 +93,17 @@ export async function updateConfig(
     cfg: OpenClawConfig,
     context: UpdateConfigContext,
   ) => readonly (ModelRef | undefined)[],
+  beforeCommit?: () => void,
+  writeOptions?: ConfigWriteOptions,
 ): Promise<OpenClawConfig> {
   const explicitSetPaths: string[][] = [];
   const result = await transformConfigFile({
     base: "source",
-    writeOptions: { explicitSetPaths },
+    writeOptions: copyRuntimeConfigWriteApplication(writeOptions, {
+      ...writeOptions,
+      explicitSetPaths,
+      beforeCommit,
+    }),
     transform: async (currentConfig, { snapshot }, { envSnapshotForRestore }) => {
       if (!snapshot.valid) {
         const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
@@ -180,7 +191,7 @@ export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig })
   if (!resolved) {
     throw new Error(`Invalid model reference: ${params.raw}`);
   }
-  return canonicalizeModelCatalogProviderRef(resolved.ref, { cfg: params.cfg });
+  return createModelCatalogProviderAliasCanonicalizer({ cfg: params.cfg }).ref(resolved.ref);
 }
 
 function resolveAuthoredModelAliasTarget(params: {
@@ -307,15 +318,13 @@ export function mergePrimaryFallbackConfig(
   existing: PrimaryFallbackConfig | undefined,
   patch: { primary?: string; fallbacks?: string[] },
 ): PrimaryFallbackConfig {
-  const base = existing && typeof existing === "object" ? existing : undefined;
-  const next: PrimaryFallbackConfig = { ...base };
+  const next: PrimaryFallbackConfig = { ...existing };
   if (patch.primary !== undefined) {
     next.primary = normalizeAgentModelRefForConfig(patch.primary);
   }
-  if (patch.fallbacks !== undefined) {
-    next.fallbacks = patch.fallbacks.map((fallback) => normalizeAgentModelRefForConfig(fallback));
-  } else if (next.fallbacks !== undefined) {
-    next.fallbacks = next.fallbacks.map((fallback) => normalizeAgentModelRefForConfig(fallback));
+  const fallbacks = patch.fallbacks ?? next.fallbacks;
+  if (fallbacks !== undefined) {
+    next.fallbacks = fallbacks.map(normalizeAgentModelRefForConfig);
   }
   return next;
 }
@@ -330,15 +339,11 @@ export function applyDefaultModelPrimaryUpdate(params: {
   modelEntryMerge?: ModelEntryMergeOptions;
 }): OpenClawConfig {
   const resolved = params.resolvedTarget ?? resolveDefaultModelPrimaryTarget(params);
-  const nextModels = {
-    ...params.cfg.agents?.defaults?.models,
-  } as Record<string, AgentModelEntryConfig>;
+  const nextModels = { ...params.cfg.agents?.defaults?.models };
   const key = upsertCanonicalModelConfigEntry(nextModels, resolved, params.modelEntryMerge);
 
   const defaults = params.cfg.agents?.defaults ?? {};
-  const existing = toAgentModelListLike(
-    (defaults as Record<string, unknown>)[params.field] as AgentModelConfig | undefined,
-  );
+  const existing = toAgentModelListLike(defaults[params.field]);
 
   return {
     ...params.cfg,
@@ -385,6 +390,8 @@ export async function updateDefaultModelPrimaryConfig(params: {
       }
       if (inspection.status === "unknown-model") {
         warning = `Warning: Model "${inspection.ref}" is not in the local model catalog for provider "${inspection.provider}". The provider is installed or configured, so the selection was saved; verify the model ID if it is not a newly released or self-hosted model.`;
+      } else if (inspection.status === "uncatalogued-provider") {
+        warning = `Note: Provider "${inspection.provider}" has no local model catalog, so "${inspection.ref}" could not be checked offline. The selection was saved.`;
       }
       return applyDefaultModelPrimaryUpdate({
         cfg,
@@ -408,13 +415,3 @@ export async function updateDefaultModelPrimaryConfig(params: {
 
 export { modelKey };
 export { DEFAULT_MODEL, DEFAULT_PROVIDER };
-
-/**
- * Model key format: "provider/model"
- *
- * The model key is displayed in `/model status` and used to reference models.
- * When using `/model <key>`, use the exact format shown (e.g., "openrouter/moonshotai/kimi-k2").
- *
- * For providers with hierarchical model IDs (e.g., OpenRouter), the model ID may include
- * sub-providers (e.g., "moonshotai/kimi-k2"), resulting in a key like "openrouter/moonshotai/kimi-k2".
- */

@@ -21,6 +21,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -245,6 +246,7 @@ describe("agent harness node authority", () => {
       } else {
         resetPluginRuntimeStateForTest();
       }
+      await closeOpenClawAgentDatabasesAsync(root);
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

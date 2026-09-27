@@ -35,6 +35,7 @@ describe("detectAvailableSetupProviderIds", () => {
         choiceId: "ollama",
         choiceLabel: "Ollama",
         appGuidedDiscovery: true,
+        assistantVisibility: "detected-only",
       },
     ]);
     enablePluginInConfig.mockImplementation((config: unknown) => ({

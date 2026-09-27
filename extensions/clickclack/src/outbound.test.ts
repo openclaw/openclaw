@@ -113,11 +113,13 @@ describe("sendClickClackText routing", () => {
       correlationId: "fakeco.case_1",
     });
 
-    expect(createClientOptions).toHaveBeenCalledWith({
-      baseUrl: "http://127.0.0.1:8484",
-      token: "test-token-placeholder",
-      correlationId: "fakeco.case_1",
-    });
+    expect(createClientOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://127.0.0.1:8484",
+        token: "test-token-placeholder",
+        correlationId: "fakeco.case_1",
+      }),
+    );
   });
 
   it("sanitizes replies inside a genuine thread", async () => {
@@ -490,7 +492,7 @@ describe("sendClickClackMedia", () => {
     expect(attachUpload).toHaveBeenCalledWith("msg_out", "upl_existing");
   });
 
-  it("marks dispatch once before upload-first durable delivery", async () => {
+  it("marks dispatch once after upload and before visible message creation", async () => {
     const order: string[] = [];
     const onPlatformSendDispatch = vi.fn(async () => {
       order.push("dispatch");
@@ -514,7 +516,7 @@ describe("sendClickClackMedia", () => {
       onPlatformSendDispatch,
     });
 
-    expect(order).toEqual(["dispatch", "upload", "message"]);
+    expect(order).toEqual(["upload", "dispatch", "message"]);
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
   });
 

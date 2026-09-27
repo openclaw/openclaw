@@ -20,6 +20,8 @@ export type OpenClawPluginToolOptions = {
   agentSessionKey?: string;
   runSessionKey?: string;
   runId?: string;
+  /** Host-bound standalone request/grant authority, never supplied by tool arguments. */
+  assertInvocationCurrent?: () => void;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;

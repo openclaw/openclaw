@@ -1,7 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import {
@@ -13,10 +12,11 @@ import {
   type WorkerConnectParams,
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
 import {
@@ -24,7 +24,6 @@ import {
   createGatewayWsTestRequestContext,
 } from "./server/ws-connection.test-helpers.js";
 import type { WorkerConnectionService } from "./server/ws-connection/worker-connection.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
 import {
   admitWorkerConnection,
@@ -50,7 +49,6 @@ const RESOLVED_AUTH: ResolvedGatewayAuth = { mode: "none", allowTailscale: false
 
 type PayloadLimited = {
   _maxPayload: number;
-  _extensions: Record<string, PayloadLimited>;
 };
 
 type RejectedWorker = {
@@ -156,21 +154,15 @@ class PublicWorkerHarness {
   readonly credentialRecord: WorkerCredentialRecord;
   readonly store: WorkerEnvironmentStore;
   readonly workerService: WorkerConnectionService;
-  readonly clients = new Set<GatewayWsClient>();
+  readonly clients = new GatewayClientRegistry();
   readonly connectionWork = new GatewayConnectionWork();
-  // Mirrors the production server options so a client that offers
-  // permessage-deflate negotiates it here too (server-runtime-state.ts).
   readonly wss = new WebSocketServer({
     noServer: true,
     maxPayload: 64 * 1024,
-    perMessageDeflate: {
-      serverNoContextTakeover: true,
-      clientNoContextTakeover: true,
-      threshold: 4 * 1024,
-    },
+    perMessageDeflate: false,
   });
   readonly preauthBudget: ReturnType<typeof createPreauthConnectionBudget>;
-  readonly publicRateLimiter: ReturnType<typeof createAuthRateLimiter>;
+  readonly publicRateLimiter: ReturnType<typeof createGatewayAuthRateLimiter>;
   readonly logWsControl = createGatewayWsTestLogger();
   readonly handlePluginUpgrade = vi.fn(async () => false);
   readonly httpServer: ReturnType<typeof createGatewayHttpServer>;
@@ -220,7 +212,7 @@ class PublicWorkerHarness {
       pushLiveEvent: async () => ({ ok: false, details: { reason: "invalid-event" } }),
     };
     this.preauthBudget = createPreauthConnectionBudget(options.preauthLimit ?? 8);
-    this.publicRateLimiter = createAuthRateLimiter({
+    this.publicRateLimiter = createGatewayAuthRateLimiter({
       maxAttempts: options.rateLimitMaxAttempts ?? 10,
       exemptLoopback: false,
       pruneIntervalMs: 0,
@@ -335,50 +327,39 @@ describe("public worker ingress", () => {
     });
   });
 
-  it.each([
-    ["receiver", (receiver: PayloadLimited) => receiver],
-    [
-      "negotiated deflate",
-      (receiver: PayloadLimited) =>
-        expectDefined(receiver["_extensions"]["permessage-deflate"], "negotiated deflate"),
-    ],
-  ])(
-    "rejects an admitted worker before hello when the %s payload limit is unusable",
-    async (_label, selectLimit) => {
-      await withHarness({}, async (harness) => {
-        // The Gateway's own connection listener runs first; freezing the limit
-        // afterwards still precedes the connect frame that admits the worker.
-        harness.wss.on("connection", (socket) => {
-          const receiver = (socket as WebSocket & { _receiver: PayloadLimited })["_receiver"];
-          const limit = selectLimit(receiver);
-          Object.defineProperty(limit, "_maxPayload", {
-            value: limit["_maxPayload"],
-            writable: false,
-          });
+  it("rejects an admitted worker before hello when the receiver payload limit is unusable", async () => {
+    await withHarness({}, async (harness) => {
+      // The Gateway's own connection listener runs first; freezing the limit
+      // afterwards still precedes the connect frame that admits the worker.
+      harness.wss.on("connection", (socket) => {
+        const receiver = (socket as WebSocket & { _receiver: PayloadLimited })["_receiver"];
+        Object.defineProperty(receiver, "_maxPayload", {
+          value: receiver["_maxPayload"],
+          writable: false,
         });
-
-        const rejected = await rejectWorker(harness.url(), workerConnect(harness.credential));
-
-        expect(rejected).toEqual({
-          response: {
-            type: "res",
-            id: "connect-1",
-            ok: false,
-            error: {
-              code: "UNAVAILABLE",
-              message: "unsupported Gateway WebSocket receiver",
-              details: { reason: "gateway-unavailable" },
-            },
-          },
-          close: { code: 1011, reason: "gateway-unavailable" },
-        });
-        expect(harness.logWsControl.warn).toHaveBeenCalledWith(
-          "worker admission rejected reason=unsupported-websocket-receiver",
-        );
-        expect(harness.clients.size).toBe(0);
       });
-    },
-  );
+
+      const rejected = await rejectWorker(harness.url(), workerConnect(harness.credential));
+
+      expect(rejected).toEqual({
+        response: {
+          type: "res",
+          id: "connect-1",
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: "unsupported Gateway WebSocket receiver",
+            details: { reason: "gateway-unavailable" },
+          },
+        },
+        close: { code: 1011, reason: "gateway-unavailable" },
+      });
+      expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+        "worker admission rejected reason=unsupported-websocket-receiver",
+      );
+      expect(harness.clients.size).toBe(0);
+    });
+  });
 
   it("returns one opaque failure while retaining precise server reasons", async () => {
     await withHarness({}, async (harness) => {

@@ -1,6 +1,6 @@
 // Tailscale exposure tests cover serve/funnel enablement, preserve-funnel mode,
 // hostname discovery, cleanup handles, and warning paths.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   const stopRouteClaim = vi.fn(async () => undefined);
@@ -24,6 +24,8 @@ vi.mock("../infra/tailscale.js", () => ({
   hasTailscaleFunnelRouteForPort: mocks.hasTailscaleFunnelRouteForPort,
 }));
 
+import { createDeferred } from "../../test/helpers/promise.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { resolveControlUiIdentity } from "./control-ui-identity.js";
 import { startGatewayTailscaleExposure as startGatewayTailscaleExposureBase } from "./server-tailscale.js";
 import {
@@ -49,7 +51,10 @@ function resetTailscalePublishedOrigin() {
   prepareTailscalePublishedOrigin({ origin: "https://reset.test", mode: "serve" })();
 }
 
+beforeEach(resetSecretRedactionRegistryForTest);
+
 afterEach(() => {
+  resetSecretRedactionRegistryForTest();
   resetTailscalePublishedOrigin();
   for (const fn of Object.values(mocks)) {
     fn.mockReset();
@@ -246,10 +251,7 @@ describe("startGatewayTailscaleExposure", () => {
   });
 
   it("clears the published origin and warns when the foreground claim exits", async () => {
-    let resolveExit!: () => void;
-    const exited = new Promise<void>((resolve) => {
-      resolveExit = resolve;
-    });
+    const { promise: exited, resolve: resolveExit } = createDeferred();
     mocks.claimTailscaleRoute.mockResolvedValue({
       exited,
       isActive: () => true,

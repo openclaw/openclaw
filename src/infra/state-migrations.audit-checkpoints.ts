@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sha256FileSync } from "@openclaw/fs-safe/durability";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import type {
   LegacyAuditLogSource,
@@ -103,23 +104,7 @@ function legacyAuditRawCheckpointIsCurrent(
     if (!beforeStat.isFile() || !legacyAuditRawCheckpointsMatch(checkpoint, before)) {
       return false;
     }
-    const hash = createHash("sha256");
-    const chunk = Buffer.allocUnsafe(64 * 1024);
-    let offset = 0;
-    while (offset < checkpoint.size) {
-      const bytesRead = fs.readSync(
-        fd,
-        chunk,
-        0,
-        Math.min(chunk.byteLength, checkpoint.size - offset),
-        offset,
-      );
-      if (bytesRead === 0) {
-        return false;
-      }
-      hash.update(chunk.subarray(0, bytesRead));
-      offset += bytesRead;
-    }
+    const hash = sha256FileSync(fd, { maxBytes: checkpoint.size });
     const afterStat = fs.fstatSync(fd);
     const after = {
       dev: afterStat.dev,
@@ -129,8 +114,8 @@ function legacyAuditRawCheckpointIsCurrent(
     };
     return (
       legacyAuditRawCheckpointsMatch(before, after) &&
-      offset === checkpoint.size &&
-      hash.digest("hex") === checkpoint.contentHash
+      hash.bytes === checkpoint.size &&
+      hash.digest === checkpoint.contentHash
     );
   } catch {
     return false;

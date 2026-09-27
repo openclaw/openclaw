@@ -23,10 +23,14 @@ export function getLoadedChannelPlugin(id: ChannelId): ChannelPlugin | undefined
 /**
  * Resolves the active channel implementation together with host-owned provenance.
  */
-export function resolveChannelPluginRegistration(id: ChannelId):
+export function resolveChannelPluginRegistration(
+  id: ChannelId,
+  options: { loadedOnly?: boolean } = {},
+):
   | {
       plugin: ChannelPlugin;
       origin?: string;
+      captureReadAuthority?: () => (() => boolean) | undefined;
       resolveChannelRuntime?: NonNullable<
         ReturnType<typeof getLoadedChannelPluginEntryById>
       >["resolveChannelRuntime"];
@@ -39,9 +43,10 @@ export function resolveChannelPluginRegistration(id: ChannelId):
   // Resolve implementation and provenance together. Loaded overrides win and
   // must never borrow bundled authority from the fallback with the same id.
   const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  const loadedEntry =
-    (scopedRegistry ? getLoadedChannelPluginEntryById(resolvedId, scopedRegistry) : undefined) ??
-    getLoadedChannelPluginEntryById(resolvedId);
+  const scopedEntry = scopedRegistry
+    ? getLoadedChannelPluginEntryById(resolvedId, scopedRegistry)
+    : undefined;
+  const loadedEntry = scopedEntry ?? getLoadedChannelPluginEntryById(resolvedId);
   if (loadedEntry) {
     const origin = normalizeOptionalString(loadedEntry.origin) ?? undefined;
     return {
@@ -50,7 +55,14 @@ export function resolveChannelPluginRegistration(id: ChannelId):
         ? { resolveChannelRuntime: loadedEntry.resolveChannelRuntime }
         : {}),
       ...(origin ? { origin } : {}),
+      // An explicit scope cannot borrow an official grant from a root fallback.
+      ...((!scopedRegistry || scopedEntry) && loadedEntry.captureReadAuthority
+        ? { captureReadAuthority: loadedEntry.captureReadAuthority }
+        : {}),
     };
+  }
+  if (options.loadedOnly) {
+    return undefined;
   }
   const plugin = getBundledChannelPlugin(resolvedId);
   return plugin ? { plugin, origin: "bundled" } : undefined;

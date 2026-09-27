@@ -8,10 +8,13 @@ type LazyColumn = readonly [
 
 // Added after v6 shipped; first-use-only columns stay absent until their feature writes.
 const lazyColumns = [
+  ["user_profile_identities", "authorization_id", "TEXT"],
+  ["user_profile_identities", "authorization_basis_json", "TEXT"],
   ["claw_installs", "bootstrap_content_digest", "TEXT"],
   ["claw_installs", "bootstrap_source_path", "TEXT"],
   ["worker_environments", "desktop_json", "TEXT"],
   ["worker_environments", "bootstrap_install_kind", "TEXT"],
+  ["worker_environments", "preparation_purpose", "TEXT"],
   ["claw_package_refs", "extension_adapter_identity", "TEXT"],
   ["claw_package_refs", "extension_detected_format", "TEXT"],
   ["claw_package_refs", "extension_format", "TEXT"],
@@ -28,6 +31,7 @@ const lazyColumns = [
   ["worker_session_placement_moves", "target_machine_class", "TEXT", true],
   ["worker_session_placement_moves", "target_os", "TEXT", true],
   ["worktrees", "run_end_cleanup_json", "TEXT"],
+  ["worktrees", "gc_protection_json", "TEXT"],
   ["device_bootstrap_tokens", "setup_id", "TEXT", true],
   ["session_groups", "cwd", "TEXT", true],
   ["session_groups", "worktree", "INTEGER", true],
@@ -35,6 +39,15 @@ const lazyColumns = [
   ["web_push_subscriptions", "device_id", "TEXT", true],
   ["web_push_subscriptions", "user_profile_id", "TEXT", true],
   ["web_push_subscriptions", "preferences_json", "TEXT", true],
+  ["task_runs", "execution_owner_host", "TEXT", true],
+  ["task_runs", "execution_owner_pid", "INTEGER", true],
+  ["task_runs", "execution_owner_start_identity", "INTEGER", true],
+  ["session_watch_cursors", "watcher_store_path", "TEXT", true],
+  ["subagent_runs", "requester_store_path", "TEXT", true],
+  ["subagent_runs", "controller_store_path", "TEXT", true],
+  ["cron_jobs", "grant_definition_revision", "TEXT"],
+  ["cron_jobs", "grant_definition_generation", "INTEGER"],
+  ["cron_jobs", "grant_definition_updated_at", "INTEGER"],
 ] as const satisfies readonly LazyColumn[];
 
 function lazyColumnDefinitions(firstUseOnly?: boolean) {

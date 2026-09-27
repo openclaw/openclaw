@@ -1,4 +1,3 @@
-// Store entry lookup resolves canonical keys and safe legacy aliases.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeConversationPeerId } from "../../routing/conversation-ref.js";
 import {
@@ -9,7 +8,7 @@ import {
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionCanonicalDeliveryEvidence = Pick<SessionEntry, "delivery" | "groupId">;
@@ -43,13 +42,8 @@ function normalizeEntryTarget(value: unknown): string {
     return "";
   }
   const trimmed = value.trim();
-  const sigilIndexes = ["!", "#"]
-    .map((sigil) => trimmed.indexOf(sigil))
-    .filter((index) => index >= 0);
-  if (sigilIndexes.length === 0) {
-    return trimmed;
-  }
-  return trimmed.slice(Math.min(...sigilIndexes));
+  const sigilIndex = trimmed.search(/[!#]/);
+  return sigilIndex < 0 ? trimmed : trimmed.slice(sigilIndex);
 }
 
 function entryDeliveryTargets(entry: SessionCanonicalDeliveryEvidence | undefined): string[] {
@@ -60,9 +54,6 @@ function entryDeliveryTargets(entry: SessionCanonicalDeliveryEvidence | undefine
 }
 
 function normalizeEntryThreadId(value: unknown): string {
-  if (value == null) {
-    return "";
-  }
   if (typeof value !== "string" && typeof value !== "number") {
     return "";
   }
@@ -187,8 +178,10 @@ type SessionEntryCandidate = {
 };
 
 export function resolveSessionEntryCandidates(params: {
-  entries: readonly SessionEntryCandidate[];
+  entries: Iterable<SessionEntryCandidate>;
   sessionKey: string;
+  /** Every consumed candidate has already passed canonical-key validation. */
+  canonicalKeys?: true;
 }): {
   normalizedKey: string;
   existing: SessionEntryCandidate | undefined;
@@ -197,7 +190,15 @@ export function resolveSessionEntryCandidates(params: {
   const trimmedKey = params.sessionKey.trim();
   const normalizedKey = normalizeStoreSessionKey(trimmedKey);
   const foldedLegacyKeys = foldedSessionKeyAliasCandidates(normalizedKey);
-  const entries = new Map(params.entries.map((candidate) => [candidate.sessionKey, candidate]));
+  const lookupKeys = params.canonicalKeys
+    ? new Set([trimmedKey, normalizedKey, ...foldedLegacyKeys])
+    : undefined;
+  const entries = new Map<string, SessionEntryCandidate>();
+  for (const candidate of params.entries) {
+    if (!lookupKeys || lookupKeys.has(candidate.sessionKey)) {
+      entries.set(candidate.sessionKey, candidate);
+    }
+  }
   const legacyKeySet = new Set<string>();
   const trimmedCandidate = entries.get(trimmedKey);
   if (
@@ -251,7 +252,7 @@ export function resolveSessionEntryCandidates(params: {
     }
   }
   for (const [candidateKey, candidate] of entries) {
-    if (candidateKey === normalizedKey) {
+    if (params.canonicalKeys || candidateKey === normalizedKey) {
       continue;
     }
     // Only collapse TRUE canonical aliases (same opaque-preserving key, e.g. a

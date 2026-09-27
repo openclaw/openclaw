@@ -5,6 +5,12 @@ import { capturePluginRegistration } from "../plugins/captured-registration.js";
 import type { ProviderCatalogContext } from "../plugins/types.js";
 import { defineSingleProviderPluginEntry } from "./provider-entry.js";
 
+const demoPlugin = {
+  id: "demo",
+  name: "Demo Provider",
+  description: "Demo provider plugin",
+};
+
 function createModel(id: string, name: string): ModelDefinitionConfig {
   return {
     id,
@@ -103,9 +109,7 @@ describe("defineSingleProviderPluginEntry", () => {
       const { defineSingleProviderPluginEntry: defineColdEntry } =
         await import("./provider-entry.js");
       const entry = defineColdEntry({
-        id: "demo",
-        name: "Demo Provider",
-        description: "Demo provider plugin",
+        ...demoPlugin,
         manifest: createProviderManifest(),
         provider: {
           label: "Demo",
@@ -141,9 +145,7 @@ describe("defineSingleProviderPluginEntry", () => {
   it("derives API-key auth and static and live model catalogs from the provider manifest", async () => {
     const manifest = createProviderManifest();
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       manifest,
       provider: {
         label: "Demo",
@@ -191,9 +193,7 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("gates generated catalogs by canonical and alias provider identities before auth", async () => {
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       manifest: createProviderManifest(),
       provider: {
         label: "Demo",
@@ -224,9 +224,7 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("accepts an alias scope for generated live model discovery", async () => {
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       provider: {
         label: "Demo",
         docsPath: "/providers/demo",
@@ -248,42 +246,41 @@ describe("defineSingleProviderPluginEntry", () => {
     ).resolves.toMatchObject({ provider: { apiKey: "test-key" } });
   });
 
-  it("preserves manifest-owned onboarding scope and assistant metadata", () => {
-    const manifest = createProviderManifest();
-    const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
-      manifest: {
-        ...manifest,
-        providerAuthChoices: [
-          {
-            ...manifest.providerAuthChoices[0]!,
-            assistantPriority: 4,
-            assistantVisibility: "manual-only",
-            onboardingFeatured: true,
-            onboardingScopes: ["text-inference", "music-generation"],
-          },
-        ],
-      },
-      provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
-    });
+  it.each(["manual-only", "detected-only"] as const)(
+    "preserves manifest-owned onboarding scope and %s assistant metadata",
+    (assistantVisibility) => {
+      const manifest = createProviderManifest();
+      const entry = defineSingleProviderPluginEntry({
+        ...demoPlugin,
+        manifest: {
+          ...manifest,
+          providerAuthChoices: [
+            {
+              ...manifest.providerAuthChoices[0]!,
+              assistantPriority: 4,
+              assistantVisibility,
+              onboardingFeatured: true,
+              onboardingScopes: ["text-inference", "music-generation"],
+            },
+          ],
+        },
+        provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
+      });
 
-    expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toMatchObject({
-      assistantPriority: 4,
-      assistantVisibility: "manual-only",
-      onboardingFeatured: true,
-      onboardingScopes: ["text-inference", "music-generation"],
-    });
-  });
+      expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toMatchObject({
+        assistantPriority: 4,
+        assistantVisibility,
+        onboardingFeatured: true,
+        onboardingScopes: ["text-inference", "music-generation"],
+      });
+    },
+  );
 
   it("creates registration-scoped provider state for provider factories", () => {
     let registrations = 0;
     const registrationApis: unknown[] = [];
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       manifest: createProviderManifest(),
       provider(api) {
         registrationApis.push(api);
@@ -311,21 +308,19 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("merges manifest onboarding metadata with provider-owned wizard model policies", () => {
     const manifest = createProviderManifest();
+    const manifestChoice = {
+      ...manifest.providerAuthChoices[0]!,
+      assistantPriority: 4,
+      modelTarget: "utility",
+      assistantVisibility: "manual-only",
+      onboardingFeatured: true,
+      onboardingScopes: ["text-inference", "music-generation"],
+    };
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       manifest: {
         ...manifest,
-        providerAuthChoices: [
-          {
-            ...manifest.providerAuthChoices[0]!,
-            assistantPriority: 4,
-            assistantVisibility: "manual-only",
-            onboardingFeatured: true,
-            onboardingScopes: ["text-inference", "music-generation"],
-          },
-        ],
+        providerAuthChoices: [manifestChoice],
       },
       provider: {
         label: "Demo",
@@ -348,6 +343,7 @@ describe("defineSingleProviderPluginEntry", () => {
       groupLabel: "Demo providers",
       groupHint: "Manifest-owned setup",
       assistantPriority: 4,
+      modelTarget: "utility",
       assistantVisibility: "manual-only",
       onboardingFeatured: true,
       onboardingScopes: ["text-inference", "music-generation"],
@@ -359,9 +355,7 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("allows provider-owned manifest auth to disable the onboarding wizard", () => {
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       manifest: createProviderManifest(),
       provider: {
         label: "Demo",
@@ -376,9 +370,7 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("honors explicit base URLs and provider-owned manifest auth overrides", async () => {
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       manifest: createProviderManifest(),
       provider: {
         label: "Demo",
@@ -410,9 +402,7 @@ describe("defineSingleProviderPluginEntry", () => {
   it("rejects manifest API-key metadata without its declared credential source", () => {
     const manifest = createProviderManifest();
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       manifest: { ...manifest, setup: { providers: [] } },
       provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
     });
@@ -424,9 +414,7 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("rejects a provider catalog without a manifest catalog or explicit builder", () => {
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
     });
 
@@ -435,9 +423,7 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("registers a single provider with default wizard metadata", async () => {
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       provider: {
         label: "Demo",
         docsPath: "/providers/demo",
@@ -774,9 +760,7 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("registers extra non-api-key auth methods", async () => {
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       provider: {
         label: "Demo",
         docsPath: "/providers/demo",

@@ -1,17 +1,7 @@
-// Mattermost helper module supports reactions helpers behavior.
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import type { MattermostFetch } from "./client.js";
-
-export function requestUrl(url: string | URL | Request): string {
-  if (typeof url === "string") {
-    return url;
-  }
-  if (url instanceof URL) {
-    return url.toString();
-  }
-  return url.url;
-}
 
 let testConfigSequence = 0;
 
@@ -45,32 +35,24 @@ export function createMattermostReactionFetchMock(params: {
   const allowAdd = mode === "add" || mode === "both";
   const allowRemove = mode === "remove" || mode === "both";
   const addStatus = params.status ?? 201;
-  const removeStatus = params.status ?? 204;
+  // Mattermost answers reaction removal with 200 {"status":"OK"}, not 204.
+  const removeStatus = params.status ?? 200;
   const removePath = `/api/v4/users/${userId}/posts/${params.postId}/reactions/${encodeURIComponent(params.emojiName)}`;
 
   return vi.fn<typeof fetch>(async (url, init) => {
     const urlText = requestUrl(url);
     if (params.postChannelId !== undefined && urlText.endsWith(`/api/v4/posts/${params.postId}`)) {
-      return new Response(JSON.stringify({ id: params.postId, channel_id: params.postChannelId }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json({ id: params.postId, channel_id: params.postChannelId });
     }
     if (urlText.endsWith("/api/v4/users/me")) {
-      return new Response(JSON.stringify({ id: userId }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json({ id: userId });
     }
     if (params.postChannelId && urlText.endsWith(`/api/v4/channels/${params.postChannelId}`)) {
-      return new Response(
-        JSON.stringify({
-          id: params.postChannelId,
-          type: params.channelType ?? "O",
-          name: params.channelName ?? "fixture-channel",
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      return Response.json({
+        id: params.postChannelId,
+        type: params.channelType ?? "O",
+        name: params.channelName ?? "fixture-channel",
+      });
     }
 
     if (allowAdd && urlText.endsWith("/api/v4/reactions")) {
@@ -96,7 +78,7 @@ export function createMattermostReactionFetchMock(params: {
 
     if (allowRemove && urlText.endsWith(removePath)) {
       expect(init?.method).toBe("DELETE");
-      const responseBody = params.body === undefined ? null : params.body;
+      const responseBody = params.body === undefined ? { status: "OK" } : params.body;
       return new Response(
         responseBody === null ? null : JSON.stringify(responseBody),
         responseBody === null

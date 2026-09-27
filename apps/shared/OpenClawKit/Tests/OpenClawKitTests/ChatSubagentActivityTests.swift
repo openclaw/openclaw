@@ -11,13 +11,16 @@ struct ChatSubagentActivityTests {
             self.task(
                 id: "task-1",
                 status: "running",
+                title: "  Layout review  ",
                 lastActivity: "Applying patch",
                 diffStat: ["files": 1, "added": 7, "removed": 2]),
             nowMilliseconds: 1000)
+        #expect(state.presentation().rows.first?.title == "Layout review")
         state.upsert(
             self.task(
                 id: "task-1",
                 status: "completed",
+                title: "Final layout review",
                 progressSummary: "Earlier milestone",
                 terminalSummary: "Done",
                 endedAt: 2000),
@@ -25,13 +28,29 @@ struct ChatSubagentActivityTests {
 
         let retained = try #require(state.presentation().rows.first)
         #expect(retained.status == .completed)
+        #expect(retained.title == "Final layout review")
         #expect(retained.snippet == "Applying patch")
         #expect(retained.diffStat == ChatToolDiffStat(files: 1, added: 7, removed: 2))
+
+        state.upsert(
+            self.task(id: "task-1", status: "completed", title: "Final layout review", endedAt: 2000),
+            nowMilliseconds: 5000,
+            source: .snapshot)
+        #expect(state.presentation().rows.first?.terminalObservedAt == 2000)
 
         state.removeExpired(nowMilliseconds: 61999)
         #expect(state.presentation().rows.count == 1)
         state.removeExpired(nowMilliseconds: 62000)
         #expect(state.presentation().rows.isEmpty)
+    }
+
+    @Test(arguments: [nil, "", " \n "] as [String?])
+    func `unnamed activity keeps the generic label available`(title: String?) throws {
+        var state = ChatSubagentActivityState()
+        state.upsert(self.task(id: "unnamed", status: "running", title: title), nowMilliseconds: 1000)
+        let activity = try #require(state.presentation().rows.first)
+        #expect(activity.title == nil)
+        #expect(activity.status == .running)
     }
 
     @Test func `caps rows at five and counts only hidden working tasks`() {
@@ -53,6 +72,7 @@ struct ChatSubagentActivityTests {
     private func task(
         id: String,
         status: String,
+        title: String? = nil,
         lastActivity: String? = nil,
         progressSummary: String? = nil,
         terminalSummary: String? = nil,
@@ -65,6 +85,7 @@ struct ChatSubagentActivityTests {
             id: id,
             runtime: "subagent",
             status: AnyCodable(status),
+            title: title,
             agentid: "main",
             sessionkey: "agent:main:main",
             updatedat: AnyCodable(updatedAt ?? startedAt),

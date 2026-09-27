@@ -106,28 +106,54 @@ export async function resolveEmbeddedAgentApiKey(params: {
   return params.authStorage ? await params.authStorage.getApiKey(params.provider) : undefined;
 }
 
-export function resolveEmbeddedAgentStream(
-  params: EmbeddedStreamRuntimeOwner & {
-    providerStreamFn?: StreamFn;
-    sessionId: string;
-    promptCacheKey?: string;
-    signal?: AbortSignal;
-    model: EmbeddedRunAttemptParams["model"];
-    resolvedApiKey?: string;
-    transportAuthAvailable?: boolean;
-    authProfileId?: string;
-    authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
-  },
-): { streamFn: StreamFn; strategy: string } {
+type EmbeddedAgentStreamParams = EmbeddedStreamRuntimeOwner & {
+  providerStreamFn?: StreamFn;
+  sessionId: string;
+  promptCacheKey?: string;
+  signal?: AbortSignal;
+  model: EmbeddedRunAttemptParams["model"];
+  resolvedApiKey?: string;
+  transportAuthAvailable?: boolean;
+  authProfileId?: string;
+  authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
+  assertCurrent?: () => void;
+};
+
+export function resolveEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
+  streamFn: StreamFn;
+  strategy: string;
+} {
+  const { streamFn, strategy, wrapApiKey } = selectEmbeddedAgentStream(params);
+  return { streamFn: wrapApiKey(streamFn), strategy };
+}
+
+/**
+ * Selects the embedded stream and returns its run-credential wrapper separately.
+ * Callers that compose provider wrappers apply wrapApiKey outside them, because
+ * those wrappers classify auth from options.apiKey.
+ */
+export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
+  streamFn: StreamFn;
+  strategy: string;
+  /** Attaches the run credential when the selected transport sends it. */
+  wrapApiKey: (streamFn: StreamFn) => StreamFn;
+} {
   const llmRuntime = resolveEmbeddedStreamRuntime(params);
   const wrapOptions = {
     runSignal: params.signal,
-    resolvedApiKey: params.resolvedApiKey,
     authProfileId: params.authProfileId,
-    authStorage: params.authStorage,
-    providerId: params.model.provider,
     promptCacheKey: params.promptCacheKey,
+    assertCurrent: params.assertCurrent,
   };
+  const wrapRunApiKey = (streamFn: StreamFn) =>
+    wrapEmbeddedAgentStreamApiKey(streamFn, {
+      providerId: params.model.provider,
+      resolvedApiKey: params.resolvedApiKey,
+      authStorage: params.authStorage,
+      assertCurrent: params.assertCurrent,
+    });
+  // Vertex and session-owned streams resolve their own auth.
+  const keepStreamAuth = (streamFn: StreamFn) => streamFn;
   const stripCacheBoundary = (context: Parameters<StreamFn>[1]) =>
     context.systemPrompt
       ? { ...context, systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt) }
@@ -137,6 +163,7 @@ export function resolveEmbeddedAgentStream(
       // Provider stream creation owns the plugin's cache-boundary capability.
       streamFn: wrapEmbeddedAgentStreamFn(params.providerStreamFn, wrapOptions),
       strategy: "provider",
+      wrapApiKey: wrapRunApiKey,
     };
   }
 
@@ -144,13 +171,15 @@ export function resolveEmbeddedAgentStream(
   if (params.model.provider === "anthropic-vertex") {
     const vertexStreamFn = createAnthropicVertexStreamFnForModel(params.model);
     return {
-      streamFn: params.signal
-        ? wrapEmbeddedAgentStreamFn(vertexStreamFn, {
-            runSignal: params.signal,
-            providerId: params.model.provider,
-          })
-        : vertexStreamFn,
+      streamFn:
+        params.signal || params.assertCurrent
+          ? wrapEmbeddedAgentStreamFn(vertexStreamFn, {
+              runSignal: params.signal,
+              assertCurrent: params.assertCurrent,
+            })
+          : vertexStreamFn,
       strategy: "anthropic-vertex",
+      wrapApiKey: keepStreamAuth,
     };
   }
 
@@ -167,6 +196,7 @@ export function resolveEmbeddedAgentStream(
         transformContext: stripCacheBoundary,
       }),
       strategy: "openclaw-native-codex-responses",
+      wrapApiKey: wrapRunApiKey,
     };
   }
 
@@ -191,6 +221,7 @@ export function resolveEmbeddedAgentStream(
           sessionId: params.sessionId,
         }),
         strategy: `boundary-aware:${params.model.api}`,
+        wrapApiKey: wrapRunApiKey,
       };
     }
   }
@@ -198,14 +229,15 @@ export function resolveEmbeddedAgentStream(
   const promptCacheKey = params.promptCacheKey?.trim();
   return {
     streamFn:
-      !promptCacheKey && !params.signal
+      !promptCacheKey && !params.signal && !params.assertCurrent
         ? currentStreamFn
         : wrapEmbeddedAgentStreamFn(currentStreamFn, {
             runSignal: params.signal,
-            providerId: params.model.provider,
             promptCacheKey,
+            assertCurrent: params.assertCurrent,
           }),
     strategy: isDefault ? "stream-simple" : "session-custom",
+    wrapApiKey: keepStreamAuth,
   };
 }
 
@@ -226,13 +258,11 @@ function wrapEmbeddedAgentStreamFn(
   inner: StreamFn,
   params: {
     runSignal: AbortSignal | undefined;
-    resolvedApiKey?: string;
     authProfileId?: string;
-    authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
-    providerId: string;
     sessionId?: string;
     promptCacheKey?: string;
     transformContext?: (context: Parameters<StreamFn>[1]) => Parameters<StreamFn>[1];
+    assertCurrent?: () => void;
   },
 ): StreamFn {
   const transformContext =
@@ -257,20 +287,34 @@ function wrapEmbeddedAgentStreamFn(
     }
     return signal ? { ...merged, signal } : merged;
   };
+  return (m, context, options) => {
+    params.assertCurrent?.();
+    return inner(m, transformContext(context), mergeRunSignal(options));
+  };
+}
+
+/** Resolve the run credential for each request and pass it to every inner wrapper. */
+function wrapEmbeddedAgentStreamApiKey(
+  inner: StreamFn,
+  params: {
+    providerId: string;
+    resolvedApiKey?: string;
+    authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
+    assertCurrent?: () => void;
+  },
+): StreamFn {
   if (!params.authStorage && !params.resolvedApiKey) {
-    return (m, context, options) => inner(m, transformContext(context), mergeRunSignal(options));
+    return inner;
   }
   const { authStorage, providerId, resolvedApiKey } = params;
   return async (m, context, options) => {
+    params.assertCurrent?.();
     const apiKey = await resolveEmbeddedAgentApiKey({
       provider: providerId,
       resolvedApiKey,
       authStorage,
     });
-    const selectedApiKey = apiKey ?? options?.apiKey;
-    return inner(m, transformContext(context), {
-      ...mergeRunSignal(options),
-      apiKey: selectedApiKey,
-    });
+    params.assertCurrent?.();
+    return inner(m, context, { ...options, apiKey: apiKey ?? options?.apiKey });
   };
 }

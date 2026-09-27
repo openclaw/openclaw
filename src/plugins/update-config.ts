@@ -1,4 +1,5 @@
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
@@ -252,14 +253,7 @@ function replacePluginIdInList(
   if (!entries || entries.length === 0 || fromId === toId || !entries.includes(fromId)) {
     return entries;
   }
-  const next: string[] = [];
-  for (const entry of entries) {
-    const value = entry === fromId ? toId : entry;
-    if (!next.includes(value)) {
-      next.push(value);
-    }
-  }
-  return next;
+  return uniqueStrings(entries.map((entry) => (entry === fromId ? toId : entry)));
 }
 
 export function migratePluginConfigId(
@@ -363,12 +357,14 @@ export async function repairRegisteredOpenClawHostLink(params: {
   pluginId: string;
   record: PluginInstallRecord;
   logger: PluginUpdateLogger;
+  beforePersistentEffect?: () => void;
 }): Promise<boolean> {
   const result = await reconcileRegisteredOpenClawHostLinks({
     installRecords: { [params.pluginId]: params.record },
     extensionsDir: resolveDefaultPluginExtensionsDir(),
     mode: "repair",
     logger: params.logger,
+    beforePersistentApply: params.beforePersistentEffect,
   });
   return result.repaired > 0;
 }
@@ -376,12 +372,14 @@ export async function repairRegisteredOpenClawHostLink(params: {
 export async function repairOpenClawPeerLinksForNpmInstalls(params: {
   config: OpenClawConfig;
   logger: PluginUpdateLogger;
+  beforePersistentEffect?: () => void;
 }): Promise<boolean> {
   const result = await reconcileRegisteredOpenClawHostLinks({
     installRecords: params.config.plugins?.installs ?? {},
     extensionsDir: resolveDefaultPluginExtensionsDir(),
     mode: "repair",
     logger: params.logger,
+    beforePersistentApply: params.beforePersistentEffect,
     onPackageReadError: (error, packageDir) => {
       params.logger.warn?.(
         `Could not repair openclaw peer link at ${packageDir}: ${String(error)}`,

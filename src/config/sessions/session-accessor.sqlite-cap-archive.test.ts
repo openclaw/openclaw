@@ -10,14 +10,14 @@ import {
 } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const fixture = useTempSessionsFixture("openclaw-sqlite-cap-archive-");
 
 async function replaceWithoutMaintenance(
   scope: { sessionKey: string; storePath: string },
-  entry: SessionEntry,
+  entry: InternalSessionEntry,
 ): Promise<void> {
   await patchSessionEntryCore(scope, () => entry, {
     fallbackEntry: entry,
@@ -30,11 +30,21 @@ it("persists reasons and caps the least-recently-touched active row after dashbo
   const storePath = fixture.storePath();
   const now = Date.now();
   const agedKey = "agent:main:ordinary:aged";
+  const preservedMetadata = {
+    sandbox: "required",
+    createdVia: "operator",
+    createdActor: { type: "human", source: "profile", id: "maintenance-creator" },
+    createdAt: now - 50 * DAY_MS,
+    publicShare: { id: "a".repeat(48), sessionId: "ordinary-aged", createdAt: now - DAY_MS },
+    skillsSnapshot: { prompt: "Preserve the complete saved prompt", skills: [] },
+  } satisfies Partial<InternalSessionEntry>;
   await replaceWithoutMaintenance(
     { sessionKey: agedKey, storePath },
     {
       sessionId: "ordinary-aged",
       updatedAt: now - 40 * DAY_MS,
+      archivedBy: { type: "human", id: "previous-archiver" },
+      ...preservedMetadata,
     },
   );
   const dashboardKey = "agent:main:dashboard:stale";
@@ -91,6 +101,7 @@ it("persists reasons and caps the least-recently-touched active row after dashbo
   });
   expect(result).toMatchObject({ archived: 3, capArchived: 1, capped: 1, pruned: 0 });
   expect(loadSessionEntry({ sessionKey: agedKey, storePath })).toMatchObject({
+    ...preservedMetadata,
     sessionId: "ordinary-aged",
     updatedAt: now - 40 * DAY_MS,
     archivedAt: expect.any(Number),

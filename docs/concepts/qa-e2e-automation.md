@@ -52,7 +52,7 @@ still resolves. Each entry points at the page that now holds the content.
 - <a id="discord-mantis-scenarios" />[Discord Mantis scenarios](/concepts/qa-e2e-automation/operator-flow#discord-mantis-scenarios)
 - <a id="mantis-slack-desktop-and-visual-task-runners" />[Mantis Slack desktop and visual-task runners](/concepts/qa-e2e-automation/operator-flow#mantis-slack-desktop-and-visual-task-runners)
 - <a id="credential-pool-health-check" />[Credential pool health check](/concepts/qa-e2e-automation/operator-flow#credential-pool-health-check)
-- <a id="canonical-scenario-coverage" />[Canonical scenario coverage](/concepts/qa-e2e-automation/scenario-coverage#canonical-scenario-coverage)
+- <a id="live-transport-coverage" /><a id="canonical-scenario-coverage" />[Canonical scenario coverage](/concepts/qa-e2e-automation/scenario-coverage#canonical-scenario-coverage)
 - <a id="buzz%2C-discord%2C-slack%2C-telegram%2C-and-whatsapp-qa-reference" /><a id="buzz-discord-slack-telegram-and-whatsapp-qa-reference" />[Buzz, Discord, Slack, Telegram, and WhatsApp QA reference](/concepts/qa-e2e-automation/channel-qa-reference#buzz-discord-slack-telegram-and-whatsapp-qa-reference)
 - <a id="shared-cli-flags" />[Shared CLI flags](/concepts/qa-e2e-automation/channel-qa-reference#shared-cli-flags)
 - <a id="buzz-qa" />[Buzz QA](/concepts/qa-e2e-automation/channel-qa-reference#buzz-qa)

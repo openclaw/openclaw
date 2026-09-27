@@ -21,6 +21,7 @@ import {
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
   createMessageCharEstimateCache,
+  estimateMessageChars,
   estimateMessageCharsCached,
   getToolResultText,
   isToolResultMessage,
@@ -140,15 +141,15 @@ function replaceToolResultContent(
   replacement: string | unknown[],
 ): AgentMessage {
   const content = (msg as { content?: unknown }).content;
-  const rest = { ...msg };
-  Reflect.deleteProperty(rest, "details");
-  return {
-    ...rest,
+  const result = {
+    ...msg,
     content:
       typeof replacement === "string" && !(typeof content === "string" || content === undefined)
         ? [{ type: "text", text: replacement }]
         : replacement,
   } as AgentMessage;
+  Reflect.deleteProperty(result, "details");
+  return result;
 }
 
 function estimateBudgetToRawChars(maxChars: number): number {
@@ -187,13 +188,10 @@ function truncateToolResultToChars(
     };
     const projectContent = (retainedContent: unknown[], noticeText?: string) => {
       const notice = noticeText ? [{ type: "text", text: noticeText }] : [];
-      const reservedChars = estimateMessageCharsCached(
-        replaceToolResultContent(msg, [
-          ...retainedContent.filter((block) => !isText(block)),
-          ...notice,
-        ]),
-        cache,
-      );
+      const reservedChars = estimateMessageChars(msg, [
+        ...retainedContent.filter((block) => !isText(block)),
+        ...notice,
+      ]);
       const bounded = truncateToolResultMessage(
         replaceToolResultContent(msg, retainedContent),
         Math.max(0, maxChars - reservedChars),
@@ -233,12 +231,9 @@ function truncateToolResultToChars(
     }
     // Dropping unfit non-text content must not flatten away surviving semantic
     // blocks. Reserve a visible notice even when only omission markers can fit.
-    const omittedChars = estimateMessageCharsCached(
-      replaceToolResultContent(
-        msg,
-        content.filter((block) => !isText(block)),
-      ),
-      cache,
+    const omittedChars = estimateMessageChars(
+      msg,
+      content.filter((block) => !isText(block)),
     );
     return projectContent(
       content.filter(isText),
@@ -370,6 +365,7 @@ export function installContextEngineLoopHook(params: {
       lastSourceMessages = transcriptMessages;
       return lastAssembledView ?? providerMessages;
     }
+    const preassemblyMessages = providerMessages.slice();
     try {
       if (!params.deferredTurn) {
         if (typeof contextEngine.afterTurn === "function") {
@@ -435,18 +431,19 @@ export function installContextEngineLoopHook(params: {
         runtimeSettings: params.runtimeSettings,
       });
       signal?.throwIfAborted();
-      if (assembled && Array.isArray(assembled.messages)) {
-        const modelMessages = pendingMessages.length
-          ? [...assembled.messages, ...pendingMessages]
-          : assembled.messages;
-        lastAssembledView = params.repairAssembledMessages?.(modelMessages) ?? modelMessages;
-        return lastAssembledView;
+      if (!assembled || !Array.isArray(assembled.messages)) {
+        throw new Error("context engine assembly returned invalid messages");
       }
-      lastAssembledView = null;
+      const modelMessages = pendingMessages.length
+        ? [...assembled.messages, ...pendingMessages]
+        : assembled.messages;
+      lastAssembledView = params.repairAssembledMessages?.(modelMessages) ?? modelMessages;
+      return lastAssembledView;
     } catch {
+      // Restore the provider array even when afterTurn mutated it before failing.
+      providerMessages.splice(0, providerMessages.length, ...preassemblyMessages);
       signal?.throwIfAborted();
-      // Best-effort: any engine failure falls through to the raw source
-      // messages so the tool loop still makes forward progress.
+      // Retry from the original fence so failed assembly cannot consume history.
       lastSeenLength = prePromptMessageCount;
       lastAssembledView = null;
       lastSourceMessages = transcriptMessages;

@@ -1,7 +1,7 @@
-// Memory Wiki plugin module implements source sync state behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileWindowFully } from "openclaw/plugin-sdk/file-access-runtime";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import type {
   OpenKeyedStoreOptions,
@@ -131,15 +131,14 @@ function createMemoryFallbackStateStore(): MemoryWikiSourceSyncStateStore {
       return cloneSourceSyncState(memorySourceSyncStateByVault.get(vaultRootKey) ?? EMPTY_STATE);
     },
     async write(vaultRoot, state) {
-      assertSourceSyncStateWithinLimit(state);
+      assertSourceSyncStateWithinLimit(Object.keys(state.entries).length);
       const vaultRootKey = resolveVaultRootKey(vaultRoot);
       memorySourceSyncStateByVault.set(vaultRootKey, cloneSourceSyncState(state));
     },
   };
 }
 
-function assertSourceSyncStateWithinLimit(state: MemoryWikiImportedSourceState): void {
-  const count = Object.keys(state.entries).length;
+function assertSourceSyncStateWithinLimit(count: number): void {
   if (count > MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES) {
     throw new Error(
       `Memory Wiki source sync state exceeds SQLite entry limit (${count}/${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES})`,
@@ -155,12 +154,7 @@ export function assertMemoryWikiSourceSyncStateCapacity(params: {
   const retainedOtherGroupCount = Object.values(params.state.entries).filter(
     (entry) => entry.group !== params.group,
   ).length;
-  const projectedCount = retainedOtherGroupCount + params.incomingCount;
-  if (projectedCount > MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES) {
-    throw new Error(
-      `Memory Wiki source sync state exceeds SQLite entry limit (${projectedCount}/${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES})`,
-    );
-  }
+  assertSourceSyncStateWithinLimit(retainedOtherGroupCount + params.incomingCount);
 }
 
 export function createMemoryWikiSourceSyncStateStore(
@@ -194,7 +188,7 @@ export function createMemoryWikiSourceSyncStateStore(
       return { version: 1, entries };
     },
     async write(vaultRoot, state, plan) {
-      assertSourceSyncStateWithinLimit(state);
+      assertSourceSyncStateWithinLimit(Object.keys(state.entries).length);
       const vaultRootKey = resolveVaultRootKey(vaultRoot);
       const store = openStore();
       if (plan) {
@@ -343,26 +337,12 @@ async function readImportedSourcePageForNotes(
   // Notes; large generated source content must not prevent safe pruning.
   const opened = await vault.open(pagePath);
   try {
-    const readSlice = async (position: number, length: number): Promise<string> => {
-      const buffer = Buffer.alloc(length);
-      let totalBytesRead = 0;
-      while (totalBytesRead < length) {
-        const { bytesRead } = await opened.handle.read(
-          buffer,
-          totalBytesRead,
-          length - totalBytesRead,
-          position + totalBytesRead,
-        );
-        if (bytesRead === 0) {
-          throw new Error("Memory Wiki source page changed during bounded Notes recovery");
-        }
-        totalBytesRead += bytesRead;
-      }
-      return buffer.toString("utf8");
-    };
-
     const headerBytes = Math.min(MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES, opened.stat.size);
-    const header = await readSlice(0, headerBytes);
+    const headerBuffer = Buffer.alloc(headerBytes);
+    if ((await readFileWindowFully(opened.handle, headerBuffer, 0)) !== headerBytes) {
+      throw new Error("Memory Wiki source page changed during bounded Notes recovery");
+    }
+    const header = headerBuffer.toString("utf8");
 
     const contentFence = /(?:^|\r?\n)## Content\r?\n(`+)[^\r\n]*(?=\r?\n|$)/u.exec(header);
     if (!contentFence) {

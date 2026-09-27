@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { X509Certificate } from "node:crypto";
+import { createHash, X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
-import { request as httpRequest, type IncomingMessage } from "node:http";
+import * as http from "node:http";
+import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
+import * as https from "node:https";
 import { createServer as createHttpsServer, type Server } from "node:https";
-import type { Socket } from "node:net";
+import net, { type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
@@ -13,10 +15,15 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as proxyCa from "../../proxy-capture/ca.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { mintSecretSentinel } from "../sentinel.js";
-import { startSecretEgressProxyServer, type SecretEgressProxyHandle } from "./proxy-server.js";
+import {
+  startSecretEgressProxyServer,
+  type SecretEgressProcessGrant,
+  type SecretEgressProxyHandle,
+} from "./proxy-server.js";
 
-const run = { instanceId: "instance-1", runId: "run-1" };
-const sibling = { instanceId: "instance-2", runId: "run-2" };
+vi.mock("node:https", { spy: true });
+vi.mock("node:http", { spy: true });
+
 const value = "synthetic-lifecycle-credential";
 const seedDirs = createTempDirTracker();
 let seedDir: string;
@@ -26,8 +33,12 @@ let proxy: SecretEgressProxyHandle;
 let origin: Server;
 let originPort: number;
 let sentinel: string;
-let proxyEnv: Record<string, string>;
+let grant: SecretEgressProcessGrant;
 let observed: Array<{ authorization: string | undefined; body: string }>;
+let auditEvents: Array<{ kind: string; reason?: string }>;
+let incoming: Map<string, IncomingMessage>;
+let responses: Map<string, ServerResponse>;
+let bodyReceived: Set<string>;
 const sockets = new Set<Socket>();
 
 function trackSocket<T extends Socket>(socket: T): T {
@@ -37,13 +48,15 @@ function trackSocket<T extends Socket>(socket: T): T {
   return socket;
 }
 
-function connectTunnel(env = proxyEnv): Promise<{ status: number; socket?: Socket }> {
+function connectTunnel(env = grant.env): Promise<{ status: number; socket?: Socket }> {
   const url = new URL(env.HTTPS_PROXY!);
   return new Promise((resolve) => {
     const request = httpRequest({
       hostname: url.hostname,
       port: url.port,
       method: "CONNECT",
+      // CONNECT targets this test proxy, never Node's environment proxy.
+      agent: false,
       path: `localhost:${originPort}`,
       headers: {
         "Proxy-Authorization": `Basic ${Buffer.from(`openclaw:${url.password}`).toString("base64")}`,
@@ -58,7 +71,7 @@ function connectTunnel(env = proxyEnv): Promise<{ status: number; socket?: Socke
   });
 }
 
-async function openTlsTunnel(env = proxyEnv): Promise<tls.TLSSocket> {
+async function openTlsTunnel(env = grant.env): Promise<tls.TLSSocket> {
   const connected = await connectTunnel(env);
   expect(connected.status).toBe(200);
   const socket = trackSocket(
@@ -79,16 +92,16 @@ function onClose(socket: Socket | IncomingMessage): Promise<void> {
   });
 }
 
-async function sendCredential(socket: tls.TLSSocket): Promise<void> {
+async function sendCredential(socket: tls.TLSSocket, body?: string): Promise<void> {
   const closed = onClose(socket);
   socket.write(
-    `GET / HTTP/1.1\r\nHost: localhost:${originPort}\r\nConnection: close\r\nAuthorization: Bearer ${sentinel}\r\n\r\n`,
+    `${body === undefined ? "GET" : "POST"} / HTTP/1.1\r\nHost: localhost:${originPort}\r\nConnection: close\r\nAuthorization: Bearer ${sentinel}\r\n${body === undefined ? "" : `Content-Length: ${Buffer.byteLength(body)}\r\n`}\r\n${body ?? ""}`,
   );
   await closed;
 }
 
-function register(targetRun = run): Record<string, string> {
-  return proxy.registerRun(targetRun, [
+function register(): SecretEgressProcessGrant {
+  return proxy.registerProcess([
     { name: "SERVICE_API_KEY", sentinel, allowedHosts: ["localhost"] },
   ]);
 }
@@ -108,12 +121,30 @@ afterAll(() => seedDirs.cleanup());
 beforeEach(async () => {
   vi.stubEnv("OPENCLAW_SECRET_SENTINELS", undefined);
   observed = [];
+  auditEvents = [];
+  incoming = new Map();
+  responses = new Map();
+  bodyReceived = new Set();
+  const { createServer } = await vi.importActual<typeof http>("node:http");
+  vi.spyOn(http, "createServer").mockImplementation((options, listener) =>
+    createServer(options, listener).on("request", (request, response) => {
+      const proof = request.headers["x-upload-proof"];
+      if (typeof proof === "string" && !incoming.has(proof)) {
+        incoming.set(proof, request);
+        responses.set(proof, response);
+        request.once("data", () => bodyReceived.add(proof));
+      }
+    }),
+  );
   caDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-egress-lifecycle-"));
   // Reuse initial material only; request-time issuance and TLS state stay per case.
   for (const file of ["root-ca.pem", "root-ca-key.pem", "leaf-key.pem"]) {
     fs.copyFileSync(path.join(seedDir, file), path.join(caDir, file));
   }
-  proxy = await startSecretEgressProxyServer({ caDir, onAudit: () => {} });
+  proxy = await startSecretEgressProxyServer({
+    caDir,
+    onAudit: (event) => auditEvents.push(event),
+  });
   const leaf = { cert: Buffer.from(originLeaf.cert), key: Buffer.from(originLeaf.key) };
   origin = createHttpsServer(leaf, (request, response) => {
     const record = { authorization: request.headers.authorization, body: "" };
@@ -136,10 +167,11 @@ beforeEach(async () => {
   }
   originPort = address.port;
   sentinel = mintSecretSentinel(value, { label: "egress-lifecycle" });
-  proxyEnv = register();
+  grant = register();
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const socket of sockets) {
@@ -156,6 +188,433 @@ afterEach(async () => {
 });
 
 describe("secret egress registration lifecycle", () => {
+  it.each(["keep-alive", "close"])(
+    "rejects queued credentials after shared revocation before socket assignment (%s)",
+    async (connection) => {
+      const authority = new Int32Array(new SharedArrayBuffer(4));
+      grant = proxy.registerProcess(
+        [{ name: "SERVICE_API_KEY", sentinel, allowedHosts: ["localhost"] }],
+        () => Atomics.load(authority, 0) === 0,
+      );
+      const queued = createDeferredCore<{ request: http.ClientRequest; agent: https.Agent }>();
+      const { request: requestUpstream } = await vi.importActual<typeof https>("node:https");
+      vi.mocked(https.request).mockImplementation((...args) => {
+        const agent = (args[0] as https.RequestOptions).agent;
+        if (!(agent instanceof https.Agent)) {
+          throw new Error("Expected the grant's HTTPS agent");
+        }
+        agent.maxSockets = 1;
+        agent.maxTotalSockets = 1;
+        const request = requestUpstream(...args);
+        if (request.path === "/queued") {
+          queued.resolve({ request, agent });
+        }
+        return request;
+      });
+      const held = createDeferredCore<ServerResponse>();
+      const paths: string[] = [];
+      origin.removeAllListeners("request");
+      origin.on("request", (request, response) => {
+        paths.push(request.url!);
+        expect(request.headers.authorization).toBe(`Bearer ${value}`);
+        request.resume();
+        request.once("end", () => {
+          if (request.url === "/held") {
+            held.resolve(response);
+          } else {
+            response.end("ok");
+          }
+        });
+      });
+      const first = await openTlsTunnel();
+      first.write(
+        `GET /held HTTP/1.1\r\nHost: localhost:${originPort}\r\nConnection: ${connection}\r\nAuthorization: Bearer ${sentinel}\r\nContent-Length: 0\r\n\r\n`,
+      );
+      const heldResponse = await held.promise;
+      const second = await openTlsTunnel();
+      second.write(
+        `GET /queued HTTP/1.1\r\nHost: localhost:${originPort}\r\nAuthorization: Bearer ${sentinel}\r\nContent-Length: 0\r\n\r\n`,
+      );
+      const { request: pending, agent } = await queued.promise;
+      expect(pending.socket).toBeNull();
+      expect(pending.writableEnded).toBe(true);
+      const pendingClosed = new Promise<void>((resolve) => {
+        pending.once("close", resolve);
+      });
+      const secondClosed = onClose(second);
+      expect(Object.values(agent.requests).flat()).toContain(pending);
+      // Revoke after response guards finish, before Node dispatches the socket queue.
+      // The Worker cleanup message deliberately has not called grant.revoke().
+      agent.prependOnceListener("free", () => Atomics.store(authority, 0, 1));
+      heldResponse.end("ok");
+      await pendingClosed;
+      expect(paths).toEqual(["/held"]);
+      await secondClosed;
+      await sendCredential(await openTlsTunnel(register().env));
+      expect(paths).toEqual(["/held", "/"]);
+    },
+  );
+
+  it("reuses upstream TLS only within a live grant and releases idle connections on revocation", async () => {
+    const peers: Socket[] = [];
+    origin.removeAllListeners("request");
+    origin.on("request", (request, response) => {
+      peers.push(request.socket);
+      expect(request.headers.authorization).toBe(`Bearer ${value}`);
+      expect(request.headers["proxy-authorization"]).toBeUndefined();
+      request.resume();
+      response.writeHead(200, { "Content-Length": 2 });
+      response.end("ok");
+    });
+    const send = async (processGrant: SecretEgressProcessGrant, connection = "keep-alive") => {
+      const url = new URL(processGrant.env.HTTPS_PROXY!);
+      return new Promise<void>((resolve, reject) => {
+        const request = httpRequest(
+          {
+            hostname: url.hostname,
+            port: url.port,
+            path: `https://localhost:${originPort}/`,
+            agent: false,
+            headers: {
+              Connection: connection,
+              Authorization: `Bearer ${sentinel}`,
+              "Proxy-Authorization": `Basic ${Buffer.from(`openclaw:${url.password}`).toString("base64")}`,
+            },
+          },
+          (response) => {
+            let body = "";
+            response.on("data", (chunk: Buffer) => (body += chunk.toString()));
+            response.once("end", () => {
+              expect(response.statusCode).toBe(200);
+              expect(body).toBe("ok");
+              resolve();
+            });
+          },
+        );
+        request.once("error", reject);
+        request.end();
+      });
+    };
+    const connect = vi.spyOn(tls, "connect");
+    const sibling = register();
+    await send(grant);
+    await send(grant);
+    await send(sibling);
+    expect(peers[1]).toBe(peers[0]);
+    expect(peers[2]).not.toBe(peers[0]);
+    const revokedPeerClosed = onClose(peers[0]!);
+    grant.revoke();
+    await revokedPeerClosed;
+    await send(sibling);
+    expect(peers[3]).toBe(peers[2]);
+    // Even a peer-requested reconnect must reuse parsed trust, without retaining
+    // request credentials in TLS options or an agent's persistent options.
+    const siblingPeerClosed = onClose(peers[2]!);
+    await send(sibling, "close");
+    await siblingPeerClosed;
+    await send(sibling);
+    expect(peers[5]).not.toBe(peers[2]);
+    const tlsOptions = connect.mock.calls.map(([options]) => options as tls.ConnectionOptions);
+    expect(tlsOptions).toHaveLength(3);
+    expect(tlsOptions[0]?.secureContext).toBeDefined();
+    for (const option of tlsOptions) {
+      expect(option.secureContext).toBe(tlsOptions[0]?.secureContext);
+      expect(option.ca).toBeUndefined();
+      expect(option.key).toBeUndefined();
+      expect(option.cert).toBeUndefined();
+    }
+    for (const [options] of vi.mocked(https.request).mock.calls) {
+      const agent = (options as https.RequestOptions).agent;
+      expect(agent).toBeInstanceOf(https.Agent);
+      if (agent instanceof https.Agent) {
+        expect(JSON.stringify(agent.options)).not.toContain(value);
+        expect(agent.options).not.toHaveProperty("headers");
+      }
+    }
+    const stoppedPeerClosed = onClose(peers[5]!);
+    await proxy.stop();
+    await stoppedPeerClosed;
+  });
+
+  it.each(["header", "body", "url"] as const)(
+    "keeps an in-flight %s credential bound to its process snapshot",
+    async (location) => {
+      const allowedHosts = ["localhost"];
+      const bindings = [{ name: "SERVICE_API_KEY", sentinel, allowedHosts }];
+      grant = proxy.registerProcess(bindings);
+      const socket = await openTlsTunnel();
+      const received: Buffer[] = [];
+      socket.on("data", (chunk: Buffer) => received.push(chunk));
+      const closed = onClose(socket);
+      const prefix = location === "body" ? sentinel + "x".repeat(32) : "prefix";
+      const url = location === "url" ? "/?token=" + sentinel : "/";
+      const auth = location === "header" ? "Authorization: Bearer " + sentinel + "\r\n" : "";
+      socket.write(
+        "POST " +
+          url +
+          " HTTP/1.1\r\nHost: localhost:" +
+          originPort +
+          "\r\nConnection: close\r\nX-Upload-Proof: snapshot\r\n" +
+          auth +
+          "Content-Length: " +
+          (Buffer.byteLength(prefix) + 1) +
+          "\r\n\r\n" +
+          prefix,
+      );
+      await vi.waitFor(() => expect(bodyReceived.has("snapshot")).toBe(true));
+      allowedHosts.length = 0;
+      bindings.length = 0;
+      const sibling = proxy.registerProcess();
+      socket.write("!");
+      await closed;
+      expect(observed).toEqual([
+        {
+          authorization: location === "header" ? `Bearer ${value}` : undefined,
+          body: location === "body" ? value + "x".repeat(32) + "!" : "prefix!",
+        },
+      ]);
+      expect(Buffer.concat(received).toString()).toContain("200");
+      await sendCredential(await openTlsTunnel(sibling.env));
+      expect(observed).toHaveLength(1);
+      expect(auditEvents.at(-1)).toMatchObject({
+        kind: "refused",
+        reason: "unresolved-sentinel",
+      });
+    },
+  );
+
+  it("hardening: does not open upstream transport while collecting", async () => {
+    const socket = await openTlsTunnel();
+    const request = vi.spyOn(https, "request").mockClear();
+    socket.write(
+      "POST / HTTP/1.1\r\nHost: localhost:" +
+        originPort +
+        "\r\nX-Upload-Proof: preparing\r\nContent-Length: 10\r\n\r\nabc",
+    );
+    await vi.waitFor(() => expect(bodyReceived.has("preparing")).toBe(true));
+    expect(request).not.toHaveBeenCalled();
+    expect(auditEvents).toEqual([]);
+  });
+
+  it("hardening: bounds aggregate reservations without blocking mixed small uploads", async () => {
+    const held = await openTlsTunnel();
+    held.write(
+      "POST / HTTP/1.1\r\nHost: localhost:" +
+        originPort +
+        "\r\nX-Upload-Proof: large\r\nContent-Length: 104857600\r\n\r\nx",
+    );
+    await vi.waitFor(() => expect(bodyReceived.has("large")).toBe(true));
+    const rejected = await openTlsTunnel(register().env);
+    const received: Buffer[] = [];
+    rejected.on("data", (chunk: Buffer) => received.push(chunk));
+    rejected.write(
+      "POST / HTTP/1.1\r\nHost: localhost:" + originPort + "\r\nContent-Length: 41943040\r\n\r\nx",
+    );
+    await vi.waitFor(() => expect(Buffer.concat(received).toString()).toContain("503"));
+    const small = await Promise.all(Array.from({ length: 8 }, () => openTlsTunnel()));
+    await Promise.all(small.map((socket) => sendCredential(socket, "ok")));
+    expect(observed).toHaveLength(8);
+    const closed = onClose(held);
+    held.destroy();
+    await closed;
+  });
+
+  it("hardening: expires an incomplete CONNECT upload even without a listening TLS server", async () => {
+    const socket = await openTlsTunnel();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const closed = onClose(socket);
+    socket.write(
+      "POST / HTTP/1.1\r\nHost: localhost:" +
+        originPort +
+        "\r\nX-Upload-Proof: deadline\r\nContent-Length: 104857600\r\n\r\nx",
+    );
+    await vi.waitFor(() => expect(bodyReceived.has("deadline")).toBe(true));
+    await vi.advanceTimersByTimeAsync(300_000);
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(socket.destroyed).toBe(true));
+    await closed;
+    expect(observed).toEqual([]);
+    expect(auditEvents.some((event) => event.kind === "forwarded")).toBe(false);
+    await sendCredential(await openTlsTunnel());
+    expect(observed).toHaveLength(1);
+  });
+
+  it.each([false, true])(
+    "keeps sentinel-bound traffic policy local to each process (restricted: %s)",
+    async (restricted) => {
+      if (restricted) {
+        await proxy.stop();
+        proxy = await startSecretEgressProxyServer({
+          caDir,
+          allowedHosts: [],
+          onAudit: (event) => auditEvents.push(event),
+        });
+        grant = register();
+      }
+      const socket = await openTlsTunnel();
+      const closed = onClose(socket);
+      const received: Buffer[] = [];
+      socket.on("data", (chunk: Buffer) => received.push(chunk));
+      socket.write(
+        "POST / HTTP/1.1\r\nHost: localhost:" +
+          originPort +
+          "\r\nConnection: close\r\nX-Upload-Proof: policy\r\nContent-Length: 2\r\n\r\na",
+      );
+      await vi.waitFor(() => expect(bodyReceived.has("policy")).toBe(true));
+      const sibling = proxy.registerProcess();
+      socket.write("b");
+      await closed;
+      expect(Buffer.concat(received).toString()).toContain("200");
+      expect(observed).toHaveLength(1);
+      const siblingConnection = await connectTunnel(sibling.env);
+      expect(siblingConnection.status).toBe(restricted ? 403 : 200);
+      siblingConnection.socket?.destroy();
+    },
+  );
+
+  it("hardening: bounds tiny-request count and releases all aborted reservations", async () => {
+    const held = await Promise.all(Array.from({ length: 65 }, () => openTlsTunnel()));
+    for (const [index, socket] of held.entries()) {
+      socket.write(
+        "POST / HTTP/1.1\r\nHost: localhost:" +
+          originPort +
+          "\r\nX-Upload-Proof: count-" +
+          index +
+          "\r\nContent-Length: 2\r\n\r\nx",
+      );
+    }
+    await vi.waitFor(() => expect(bodyReceived.size).toBe(65));
+    expect([...responses.values()].filter((response) => response.statusCode === 503)).toHaveLength(
+      1,
+    );
+    expect([...responses.values()].filter((response) => !response.headersSent)).toHaveLength(64);
+    const closed = held.filter((socket) => !socket.destroyed).map((socket) => onClose(socket));
+    for (const socket of held) {
+      socket.destroy();
+    }
+    await Promise.all(closed);
+    await vi.waitFor(() =>
+      expect([...incoming.values()].every((request) => request.destroyed)).toBe(true),
+    );
+    const next = await openTlsTunnel();
+    next.write(
+      "POST / HTTP/1.1\r\nHost: localhost:" +
+        originPort +
+        "\r\nX-Upload-Proof: count-reused\r\nContent-Length: 104857600\r\n\r\nx",
+    );
+    await vi.waitFor(() => expect(bodyReceived.has("count-reused")).toBe(true));
+    expect(responses.get("count-reused")?.headersSent).toBe(false);
+  });
+
+  it("hardening: waits for actual upstream send and expires a stalled TLS handshake", async () => {
+    const peers = new Set<Socket>();
+    const stalled = net.createServer((socket) => {
+      trackSocket(socket);
+      peers.add(socket);
+      socket.once("close", () => peers.delete(socket));
+    });
+    stalled.listen(0, "127.0.0.1");
+    await once(stalled, "listening");
+    const address = stalled.address();
+    if (!address || typeof address === "string") {
+      throw new Error("No stalled origin port");
+    }
+    const previousPort = originPort;
+    originPort = address.port;
+    try {
+      const socket = await openTlsTunnel();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const connected = once(stalled, "connection");
+      const received: Buffer[] = [];
+      socket.on("data", (chunk: Buffer) => received.push(chunk));
+      socket.write(
+        "POST / HTTP/1.1\r\nHost: localhost:" +
+          originPort +
+          "\r\nConnection: close\r\nContent-Length: 5\r\n\r\nhello",
+      );
+      const [peer] = await connected;
+      expect(auditEvents).toEqual([]);
+      await vi.advanceTimersByTimeAsync(300_000);
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(socket.destroyed).toBe(true));
+      expect(Buffer.concat(received).toString()).toContain("504");
+      expect(auditEvents).toEqual([
+        { kind: "refused", host: "localhost", substituted: false, reason: "request-timeout" },
+      ]);
+      peer.destroy();
+    } finally {
+      vi.useRealTimers();
+      originPort = previousPort;
+      for (const peer of peers) {
+        peer.destroy();
+      }
+      await new Promise<void>((resolve) => {
+        stalled.close(() => resolve());
+      });
+    }
+    await sendCredential(await openTlsTunnel());
+    expect(observed).toHaveLength(1);
+  });
+
+  it("hardening: forwards the exact 100 MiB cap under backpressure with byte identity", async () => {
+    origin.removeAllListeners("request");
+    const expectedHash = createHash("sha256");
+    const arrived = createDeferredCore<{
+      bytes: number;
+      hash: string;
+      contentLength?: string;
+      encoding?: string;
+    }>();
+    origin.on("request", (request, response) => {
+      const hash = createHash("sha256");
+      let bytes = 0;
+      request.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
+        hash.update(chunk);
+      });
+      request.once("end", () => {
+        arrived.resolve({
+          bytes,
+          hash: hash.digest("hex"),
+          contentLength: request.headers["content-length"],
+          encoding: request.headers["transfer-encoding"],
+        });
+        response.writeHead(200, { Connection: "close", "Content-Length": 2 });
+        response.end("ok");
+      });
+    });
+    const socket = await openTlsTunnel();
+    const closed = onClose(socket);
+    socket.write(
+      "POST / HTTP/1.1\r\nHost: localhost:" +
+        originPort +
+        "\r\nConnection: close\r\nContent-Length: 104857600\r\n\r\n",
+    );
+    const chunk = Buffer.alloc(64 * 1024, 165);
+    for (let i = 0; i < 1600; i++) {
+      expectedHash.update(chunk);
+      if (!socket.write(chunk)) {
+        await once(socket, "drain");
+      }
+    }
+    await closed;
+    expect(await arrived.promise).toEqual({
+      bytes: 104857600,
+      hash: expectedHash.digest("hex"),
+      contentLength: "104857600",
+      encoding: undefined,
+    });
+    // Completing send releases the full-size reservation, not just collection slots.
+    const next = await openTlsTunnel();
+    next.write(
+      "POST / HTTP/1.1\r\nHost: localhost:" +
+        originPort +
+        "\r\nX-Upload-Proof: cap-reused\r\nContent-Length: 104857600\r\n\r\nx",
+    );
+    await vi.waitFor(() => expect(bodyReceived.has("cap-reused")).toBe(true));
+    expect(responses.get("cap-reused")?.headersSent).toBe(false);
+  });
+
   it("keeps the process CA trusted beyond the first day", () => {
     const cert = new X509Certificate(fs.readFileSync(proxy.caCertPath));
     const afterOneDay = Math.floor(cert.validFromDate.getTime() / 1000) + 25 * 60 * 60;
@@ -220,7 +679,7 @@ describe("secret egress registration lifecycle", () => {
   );
 
   it("reports root expiry without minting leaves or replacing the trust bundle", async () => {
-    const trust = fs.readFileSync(proxyEnv.NODE_EXTRA_CA_CERTS!);
+    const trust = fs.readFileSync(grant.env.NODE_EXTRA_CA_CERTS!);
     const validity = new X509Certificate(fs.readFileSync(proxy.caCertPath));
     const clock = vi.spyOn(Date, "now");
     clock.mockReturnValue(validity.validToDate.getTime() - 60_000);
@@ -230,26 +689,26 @@ describe("secret egress registration lifecycle", () => {
     expect((await connectTunnel()).status).toBe(502);
     expect(proxy.getCertificateStatus().message).toContain("restart the Gateway");
     expect(generateLeaf).not.toHaveBeenCalled();
-    expect(fs.readFileSync(proxyEnv.NODE_EXTRA_CA_CERTS!)).toEqual(trust);
+    expect(fs.readFileSync(grant.env.NODE_EXTRA_CA_CERTS!)).toEqual(trust);
     clock.mockRestore();
     await sendCredential(await openTlsTunnel());
     expect(proxy.getCertificateStatus().state).toBe("ready");
   });
 
-  it.each(["revoke", "replace", "stop"] as const)(
+  it.each(["revoke", "new process", "stop"] as const)(
     "%s closes established TLS before its first credential request",
     async (action) => {
       const oldConnection = await openTlsTunnel();
-      const siblingEnv = register(sibling);
+      const siblingEnv = register().env;
       const siblingConnection = await openTlsTunnel(siblingEnv);
       let stopped: Promise<void> | undefined;
       if (action === "stop") {
         stopped = proxy.stop();
       } else {
-        proxy.revokeRun(run);
+        grant.revoke();
       }
-      if (action === "replace") {
-        proxyEnv = register();
+      if (action === "new process") {
+        grant = register();
       }
       await sendCredential(oldConnection);
       expect(observed).toEqual([]);
@@ -260,7 +719,7 @@ describe("secret egress registration lifecycle", () => {
       }
       await sendCredential(siblingConnection);
       expect(observed).toEqual([{ authorization: `Bearer ${value}`, body: "" }]);
-      if (action === "replace") {
+      if (action === "new process") {
         await sendCredential(await openTlsTunnel());
         expect(observed).toHaveLength(2);
       }
@@ -269,42 +728,103 @@ describe("secret egress registration lifecycle", () => {
 
   it("does not reuse a revoked registration's cached TLS bindings on a fresh connection", async () => {
     await sendCredential(await openTlsTunnel());
-    proxy.revokeRun(run);
-    proxyEnv = proxy.registerRun(run, []);
+    grant.revoke();
+    grant = proxy.registerProcess();
     await sendCredential(await openTlsTunnel());
     expect(observed).toEqual([{ authorization: `Bearer ${value}`, body: "" }]);
   });
 
-  it("revokes streaming substitution and upstream resources between body chunks", async () => {
-    const socket = await openTlsTunnel();
-    const firstChunk = createDeferredCore<IncomingMessage>();
-    origin.once("request", (request) => request.once("data", () => firstChunk.resolve(request)));
-    socket.write(
-      `POST / HTTP/1.1\r\nHost: localhost:${originPort}\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n`,
-    );
-    const prefix = "safe-prefix".repeat(100);
-    const split = Math.floor(sentinel.length / 2);
-    const first = prefix + sentinel.slice(0, split);
-    socket.write(`${Buffer.byteLength(first).toString(16)}\r\n${first}\r\n`);
-    const upstreamRequest = await firstChunk.promise;
-    const upstreamClosed = onClose(upstreamRequest);
-    const clientClosed = onClose(socket);
-    proxy.revokeRun(run);
-    const last = sentinel.slice(split);
-    socket.write(`${Buffer.byteLength(last).toString(16)}\r\n${last}\r\n0\r\n\r\n`);
-    await Promise.all([upstreamClosed, clientClosed]);
-    expect(observed).toEqual([{ authorization: undefined, body: prefix }]);
-    await sendCredential(await openTlsTunnel(register(sibling)));
-    expect(observed.at(-1)?.authorization).toBe(`Bearer ${value}`);
-  });
+  it.each([undefined, 100 * 1024 * 1024 + 1, Number.MAX_SAFE_INTEGER])(
+    "streams declared length %s without buffering the upload and revokes between chunks",
+    async (contentLength) => {
+      const socket = await openTlsTunnel();
+      const firstChunk = createDeferredCore<IncomingMessage>();
+      origin.once("request", (request) => request.once("data", () => firstChunk.resolve(request)));
+      const framing =
+        contentLength === undefined
+          ? "Transfer-Encoding: chunked"
+          : `Content-Length: ${contentLength}`;
+      socket.write(
+        `POST / HTTP/1.1\r\nHost: localhost:${originPort}\r\nConnection: close\r\n${framing}\r\n\r\n`,
+      );
+      const prefix = "safe-prefix".repeat(100);
+      const split = Math.floor(sentinel.length / 2);
+      const first = prefix + sentinel.slice(0, split);
+      socket.write(
+        contentLength === undefined
+          ? `${Buffer.byteLength(first).toString(16)}\r\n${first}\r\n`
+          : first,
+      );
+      // Arrival before sending the rest proves that even enormous declared lengths
+      // do not allocate or wait for a complete fixed-length buffer.
+      const upstreamRequest = await firstChunk.promise;
+      expect(upstreamRequest.headers["content-length"]).toBeUndefined();
+      expect(upstreamRequest.headers["transfer-encoding"]).toBe("chunked");
+      const upstreamClosed = onClose(upstreamRequest);
+      const clientClosed = onClose(socket);
+      grant.revoke();
+      const last = sentinel.slice(split);
+      socket.write(
+        contentLength === undefined
+          ? `${Buffer.byteLength(last).toString(16)}\r\n${last}\r\n0\r\n\r\n`
+          : last,
+      );
+      await Promise.all([upstreamClosed, clientClosed]);
+      expect(observed).toEqual([{ authorization: undefined, body: prefix }]);
+      await sendCredential(await openTlsTunnel(register().env));
+      expect(observed.at(-1)?.authorization).toBe(`Bearer ${value}`);
+    },
+  );
+
+  it.each(["revoke", "new process", "stop", "disconnect", "short body"] as const)(
+    "%s discards an incomplete fixed-length upload and releases its reservation",
+    async (action) => {
+      const socket = await openTlsTunnel();
+      const clientClosed = onClose(socket);
+      const prefix = "safe-prefix".repeat(100) + sentinel.slice(0, Math.floor(sentinel.length / 2));
+      socket.write(
+        `POST / HTTP/1.1\r\nHost: localhost:${originPort}\r\nConnection: close\r\nX-Upload-Proof: cleanup\r\nContent-Length: 104857600\r\n\r\n${prefix}`,
+      );
+      await vi.waitFor(() => expect(bodyReceived.has("cleanup")).toBe(true));
+      expect(responses.get("cleanup")?.headersSent).toBe(false);
+      let stopped: Promise<void> | undefined;
+      if (action === "disconnect") {
+        socket.destroy();
+      } else if (action === "short body") {
+        socket.end();
+      } else if (action === "stop") {
+        stopped = proxy.stop();
+      } else {
+        grant.revoke();
+        if (action === "new process") {
+          grant = register();
+        }
+      }
+      await Promise.all([clientClosed, stopped]);
+      expect(observed).toEqual([]);
+      if (action !== "stop") {
+        const next = await openTlsTunnel(register().env);
+        next.write(
+          "POST / HTTP/1.1\r\nHost: localhost:" +
+            originPort +
+            "\r\nX-Upload-Proof: reused\r\nContent-Length: 104857600\r\n\r\nx",
+        );
+        await vi.waitFor(() => expect(bodyReceived.has("reused")).toBe(true));
+        expect(responses.get("reused")?.headersSent).toBe(false);
+        next.destroy();
+        await sendCredential(await openTlsTunnel(register().env));
+        expect(observed).toHaveLength(1);
+      }
+    },
+  );
 
   it.each([
     { action: "revoke", renewing: false },
     { action: "stop", renewing: false },
-    { action: "replace", renewing: false },
+    { action: "new process", renewing: false },
     { action: "revoke", renewing: true },
     { action: "stop", renewing: true },
-    { action: "replace", renewing: true },
+    { action: "new process", renewing: true },
   ] as const)(
     "$action fences CONNECT while certificate work is pending (renewal: $renewing)",
     async ({ action, renewing }) => {
@@ -334,9 +854,9 @@ describe("secret egress registration lifecycle", () => {
         await entered.promise;
         const stopping = action === "stop" ? proxy.stop() : undefined;
         if (action !== "stop") {
-          proxy.revokeRun(run);
-          if (action === "replace") {
-            proxyEnv = register();
+          grant.revoke();
+          if (action === "new process") {
+            grant = register();
           }
         }
         release.resolve();
@@ -347,7 +867,7 @@ describe("secret egress registration lifecycle", () => {
         }
         expect(observed).toEqual([]);
         if (action !== "stop") {
-          await sendCredential(await openTlsTunnel(register()));
+          await sendCredential(await openTlsTunnel(register().env));
           expect(observed.at(-1)?.authorization).toBe(`Bearer ${value}`);
         }
       } finally {
@@ -365,16 +885,16 @@ describe("secret egress registration lifecycle", () => {
       bypassHosts: ["localhost"],
       onAudit: () => {},
     });
-    proxyEnv = register();
+    grant = register();
     const connected = once(origin, "secureConnection");
     const socket = await openTlsTunnel();
     const [upstreamSocket] = await connected;
     const upstreamClosed = onClose(upstreamSocket);
-    proxy.revokeRun(run);
+    grant.revoke();
     await sendCredential(socket);
     await upstreamClosed;
     expect(observed).toEqual([]);
-    await sendCredential(await openTlsTunnel(register(sibling)));
+    await sendCredential(await openTlsTunnel(register().env));
     expect(observed.at(-1)?.authorization).toBe(`Bearer ${sentinel}`);
   });
 });

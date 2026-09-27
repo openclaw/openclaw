@@ -12,7 +12,11 @@ import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import { createToolPolicyMatcher, isToolAllowedByPolicyName } from "./tool-policy-match.js";
-import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
+import {
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  expandShippedCoreToolPolicyNames,
+  readToolAllowlistIntersection,
+} from "./tool-policy.js";
 import {
   hasSnapshotCapabilityAvailability,
   hasSnapshotCapabilityProviderAvailability,
@@ -68,13 +72,19 @@ export function isToolExplicitlyAllowedByFactoryPolicy(params: {
   allowlist?: string[];
   denylist?: string[];
 }): boolean {
-  if (!params.allowlist?.some((entry) => typeof entry === "string" && entry.trim().length > 0)) {
+  if (!params.allowlist) {
     return false;
   }
-  return isToolAllowedByPolicyName(params.toolName, {
-    allow: params.allowlist,
-    deny: params.denylist,
-  });
+  const restrictions = readToolAllowlistIntersection(params.allowlist) ?? [params.allowlist];
+  const deny = expandShippedCoreToolPolicyNames(params.denylist);
+  return restrictions.every(
+    (allow) =>
+      allow.some((entry) => typeof entry === "string" && entry.trim().length > 0) &&
+      isToolAllowedByPolicyName(params.toolName, {
+        allow: expandShippedCoreToolPolicyNames(allow),
+        deny,
+      }),
+  );
 }
 
 /** Merges factory policy lists while preserving stable unique entries. */

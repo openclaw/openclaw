@@ -117,6 +117,9 @@ export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginC
     const enabled = firstToken === "on";
     const committed = await api.runtime.config.mutateConfigFile({
       afterWrite: { mode: "auto" },
+      writeOptions: {
+        assertCurrent: Array.isArray(ctx.gatewayClientScopes) ? undefined : ctx.assertOwnerCurrent,
+      },
       mutate: (draft) => {
         const nextConfig = updateDreamingEnabledInConfig(draft, enabled);
         Object.assign(draft, nextConfig);

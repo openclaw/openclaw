@@ -1,6 +1,6 @@
 // Gateway CLI session history importer.
 // Augments local chat history with bound external Claude CLI transcripts.
-import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { SessionEntry } from "../config/sessions.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import { readClaudeCliSessionMessagesAsync } from "./cli-session-history.claude-snapshot.js";

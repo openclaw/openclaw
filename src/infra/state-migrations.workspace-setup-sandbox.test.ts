@@ -2,17 +2,21 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { removeRegistryEntry, updateRegistry } from "../agents/sandbox/registry.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
+import { assertConfiguredWorkspaceStateReady } from "../agents/workspace-state-dirs.js";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import {
   listSessionEntryKeysReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -56,6 +60,52 @@ describe("sandbox workspace Doctor migration", () => {
     };
   }
 
+  function createSandboxConfig(
+    workspace: string,
+    sandbox: AgentSandboxConfig = {},
+    entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: { default: true } },
+  ): OpenClawConfig {
+    return {
+      agents: {
+        defaults: {
+          workspace,
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "ro",
+            workspaceRoot: "~/sandboxes",
+            ...sandbox,
+          },
+        },
+        entries,
+      },
+    };
+  }
+
+  function detectWorkspaceState(
+    context: ReturnType<typeof setup>,
+    cfg: OpenClawConfig,
+    overrides: { env?: NodeJS.ProcessEnv; stateDir?: string } = {},
+  ) {
+    return detectLegacyWorkspaceState({
+      cfg,
+      stateDir: context.stateDir,
+      env: context.env,
+      homedir: () => context.homeDir,
+      doctorOnlyStateMigrations: true,
+      ...overrides,
+    });
+  }
+
+  async function writeLegacySetup(setupPath: string, bootstrapSeededAt?: string) {
+    await fsp.mkdir(path.dirname(setupPath), { recursive: true });
+    await fsp.writeFile(
+      setupPath,
+      JSON.stringify({ version: 1, ...(bootstrapSeededAt ? { bootstrapSeededAt } : {}) }),
+      "utf8",
+    );
+  }
+
   async function registerSandboxSession(sessionKey: string) {
     const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "main";
     const sessionHash = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
@@ -76,10 +126,10 @@ describe("sandbox workspace Doctor migration", () => {
     });
   }
 
-  it("does not create an agent database when no sandbox sessions are persisted", () => {
+  it("does not create an agent database when no sandbox sessions are persisted", async () => {
     const context = setup();
 
-    expect(listSessionEntryKeysReadOnly({ agentId: "main", env: context.env })).toEqual([]);
+    expect(await listSessionEntryKeysReadOnly({ agentId: "main", env: context.env })).toEqual([]);
     expect(
       fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main", env: context.env })),
     ).toBe(false);
@@ -93,10 +143,84 @@ describe("sandbox workspace Doctor migration", () => {
     await registerSandboxRuntimeScope("agent:main");
     await registerSandboxRuntimeScope("shared");
 
-    expect(listSessionEntryKeysReadOnly({ agentId: "main", env: context.env }).toSorted()).toEqual(
-      [sessionKey, "global"].toSorted(),
-    );
+    expect(
+      (await listSessionEntryKeysReadOnly({ agentId: "main", env: context.env })).toSorted(),
+    ).toEqual([sessionKey, "global"].toSorted());
   });
+
+  it.each(["discovered workspace", "read failure"] as const)(
+    "awaits persisted session keys before reporting readiness: %s",
+    async (outcome) => {
+      const context = setup();
+      const sandboxRoot = path.join(context.homeDir, "sandboxes");
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: context.workspaceDir,
+            sandbox: {
+              mode: "all",
+              scope: "session",
+              workspaceAccess: "ro",
+              workspaceRoot: sandboxRoot,
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      const sessionKey = "agent:main:telegram:direct:delayed-discovery";
+      const layout = resolveSandboxWorkspaceLayoutPaths({
+        cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
+        agentId: "main",
+        rawSessionKey: sessionKey,
+        workspaceDir: context.workspaceDir,
+      });
+      const legacyPath = path.join(layout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
+      const entered = createDeferred();
+      const release = createDeferred();
+      const unavailable = new Error("Session key storage is unavailable");
+      const readKeys = sessionAccessor.listSessionEntryKeysReadOnly;
+      const read = vi
+        .spyOn(sessionAccessor, "listSessionEntryKeysReadOnly")
+        .mockImplementation(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          if (outcome === "read failure") {
+            throw unavailable;
+          }
+          return readKeys(...args);
+        });
+      let settled = false;
+      const readiness = assertConfiguredWorkspaceStateReady({ cfg, env: context.env });
+      void readiness.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      try {
+        await withTestTimeout(entered.promise, 5_000, "Session-key discovery was not reached");
+        expect(settled).toBe(false);
+        await registerSandboxSession(sessionKey);
+        fs.mkdirSync(layout.sandboxWorkspaceDir, { recursive: true });
+        fs.writeFileSync(legacyPath, JSON.stringify({ version: 1 }));
+        release.resolve();
+        if (outcome === "read failure") {
+          await expect(readiness).rejects.toBe(unavailable);
+        } else {
+          await expect(readiness).rejects.toThrow(
+            "Legacy workspace setup state requires migration",
+          );
+        }
+        expect(fs.existsSync(legacyPath)).toBe(true);
+        expect(await readKeys({ agentId: "main", env: context.env })).toEqual([sessionKey]);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([readiness]);
+        read.mockRestore();
+      }
+    },
+  );
 
   it("detects and removes legacy setup state in reused sandbox workspace copies", async () => {
     const context = setup();
@@ -106,40 +230,19 @@ describe("sandbox workspace Doctor migration", () => {
     };
     const sandboxRoot = path.join(context.homeDir, "sandboxes");
     const configuredSandboxRoot = "~/sandboxes";
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: context.workspaceDir,
-          sandbox: {
-            mode: "all",
-            scope: "agent",
-            workspaceAccess: "ro",
-            workspaceRoot: configuredSandboxRoot,
-          },
-        },
-        entries: { main: { default: true } },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = createSandboxConfig(context.workspaceDir, {
+      scope: "agent",
+      workspaceRoot: configuredSandboxRoot,
+    });
     const sandboxLayout = resolveSandboxWorkspaceLayoutPaths({
       cfg: { scope: "agent", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
       rawSessionKey: "agent:main:main",
       workspaceDir: context.workspaceDir,
     });
     const setupPath = path.join(sandboxLayout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
-    await fsp.mkdir(sandboxLayout.sandboxWorkspaceDir, { recursive: true });
-    await fsp.writeFile(
-      setupPath,
-      JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
-      "utf8",
-    );
+    await writeLegacySetup(setupPath, "2026-07-20T00:00:00.000Z");
 
-    const detected = detectLegacyWorkspaceState({
-      cfg,
-      stateDir: context.stateDir,
-      env,
-      homedir: () => context.homeDir,
-      doctorOnlyStateMigrations: true,
-    });
+    const detected = await detectWorkspaceState(context, cfg, { env });
 
     expect(detected.hasLegacy).toBe(true);
     const detectedSource = detected.sources.find(
@@ -160,7 +263,7 @@ describe("sandbox workspace Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(setupPath)).toBe(false);
-    expect(readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
       setup: {
         bootstrapSeededAt: "2026-07-20T00:00:00.000Z",
       },
@@ -173,20 +276,7 @@ describe("sandbox workspace Doctor migration", () => {
     async (scope) => {
       const context = setup();
       const sandboxRoot = path.join(context.homeDir, "sandboxes");
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: context.workspaceDir,
-            sandbox: {
-              mode: "all",
-              scope,
-              workspaceAccess: "ro",
-              workspaceRoot: "~/sandboxes",
-            },
-          },
-          entries: { main: { default: true } },
-        },
-      } satisfies OpenClawConfig;
+      const cfg = createSandboxConfig(context.workspaceDir, { scope });
       const sandboxLayout = resolveSandboxWorkspaceLayoutPaths({
         cfg: { scope, workspaceAccess: "ro", workspaceRoot: sandboxRoot },
         rawSessionKey: "agent:main:telegram:direct:doctor-proof",
@@ -199,20 +289,9 @@ describe("sandbox workspace Doctor migration", () => {
         sandboxLayout.sandboxWorkspaceDir,
         "openclaw-workspace-state.json",
       );
-      await fsp.mkdir(sandboxLayout.sandboxWorkspaceDir, { recursive: true });
-      await fsp.writeFile(
-        setupPath,
-        JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
-        "utf8",
-      );
+      await writeLegacySetup(setupPath, "2026-07-20T00:00:00.000Z");
 
-      const detected = detectLegacyWorkspaceState({
-        cfg,
-        stateDir: context.stateDir,
-        env: context.env,
-        homedir: () => context.homeDir,
-        doctorOnlyStateMigrations: true,
-      });
+      const detected = await detectWorkspaceState(context, cfg);
 
       expect(detected.sources).toContainEqual(
         expect.objectContaining({
@@ -231,7 +310,7 @@ describe("sandbox workspace Doctor migration", () => {
 
       expect(result.warnings).toEqual([]);
       expect(fs.existsSync(setupPath)).toBe(false);
-      expect(readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
+      expect(await readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
         setup: { bootstrapSeededAt: "2026-07-20T00:00:00.000Z" },
         setupExists: true,
       });
@@ -245,44 +324,20 @@ describe("sandbox workspace Doctor migration", () => {
   ])("repairs durable session %s after its sandbox runtime has been pruned", async (sessionKey) => {
     const context = setup();
     const sandboxRoot = path.join(context.homeDir, "sandboxes");
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: context.workspaceDir,
-          sandbox: {
-            mode: "all",
-            scope: "session",
-            workspaceAccess: "ro",
-            workspaceRoot: "~/sandboxes",
-          },
-        },
-        entries: { main: { default: true } },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = createSandboxConfig(context.workspaceDir);
     const layout = resolveSandboxWorkspaceLayoutPaths({
       cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
       rawSessionKey: sessionKey,
       workspaceDir: context.workspaceDir,
     });
     const setupPath = path.join(layout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
-    await fsp.mkdir(layout.sandboxWorkspaceDir, { recursive: true });
-    await fsp.writeFile(
-      setupPath,
-      JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
-      "utf8",
-    );
+    await writeLegacySetup(setupPath, "2026-07-20T00:00:00.000Z");
     await registerSandboxSession(sessionKey);
     await registerSandboxRuntimeScope(sessionKey);
     const sessionHash = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
     await removeRegistryEntry(`workspace-migration-proof-${sessionHash}`);
 
-    const detected = detectLegacyWorkspaceState({
-      cfg,
-      stateDir: context.stateDir,
-      env: context.env,
-      homedir: () => context.homeDir,
-      doctorOnlyStateMigrations: true,
-    });
+    const detected = await detectWorkspaceState(context, cfg);
 
     expect(detected.sources).toContainEqual(
       expect.objectContaining({ kind: "setup", sourcePath: setupPath }),
@@ -296,7 +351,7 @@ describe("sandbox workspace Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(setupPath)).toBe(false);
-    expect(readWorkspaceStateSnapshot(layout.sandboxWorkspaceDir)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(layout.sandboxWorkspaceDir)).toMatchObject({
       setup: { bootstrapSeededAt: "2026-07-20T00:00:00.000Z" },
       setupExists: true,
     });
@@ -310,20 +365,11 @@ describe("sandbox workspace Doctor migration", () => {
     async ({ mode, workspaceAccess }) => {
       const context = setup();
       const sandboxRoot = path.join(context.homeDir, "sandboxes");
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: context.workspaceDir,
-            sandbox: {
-              mode,
-              scope: "agent",
-              workspaceAccess,
-              workspaceRoot: "~/sandboxes",
-            },
-          },
-          entries: { main: { default: true } },
-        },
-      } satisfies OpenClawConfig;
+      const cfg = createSandboxConfig(context.workspaceDir, {
+        mode,
+        scope: "agent",
+        workspaceAccess,
+      });
       const sandboxLayout = resolveSandboxWorkspaceLayoutPaths({
         cfg: { scope: "agent", workspaceAccess, workspaceRoot: sandboxRoot },
         rawSessionKey: "agent:main:main",
@@ -333,16 +379,9 @@ describe("sandbox workspace Doctor migration", () => {
         sandboxLayout.sandboxWorkspaceDir,
         "openclaw-workspace-state.json",
       );
-      await fsp.mkdir(sandboxLayout.sandboxWorkspaceDir, { recursive: true });
-      await fsp.writeFile(setupPath, JSON.stringify({ version: 1 }), "utf8");
+      await writeLegacySetup(setupPath);
 
-      const detected = detectLegacyWorkspaceState({
-        cfg,
-        stateDir: context.stateDir,
-        env: context.env,
-        homedir: () => context.homeDir,
-        doctorOnlyStateMigrations: true,
-      });
+      const detected = await detectWorkspaceState(context, cfg);
 
       expect(detected.hasLegacy).toBe(false);
       expect(fs.existsSync(setupPath)).toBe(true);
@@ -352,24 +391,15 @@ describe("sandbox workspace Doctor migration", () => {
   it("never imports inactive, overlapping, or unrelated session sandbox copies", async () => {
     const context = setup();
     const sandboxRoot = path.join(context.homeDir, "sandboxes");
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: context.workspaceDir,
-          sandbox: {
-            mode: "all",
-            scope: "session",
-            workspaceAccess: "ro",
-            workspaceRoot: "~/sandboxes",
-          },
-        },
-        entries: {
-          main: { default: true },
-          "main-foo": { sandbox: { mode: "off" } },
-          writer: { sandbox: { workspaceAccess: "rw" } },
-        },
+    const cfg = createSandboxConfig(
+      context.workspaceDir,
+      {},
+      {
+        main: { default: true },
+        "main-foo": { sandbox: { mode: "off" } },
+        writer: { sandbox: { workspaceAccess: "rw" } },
       },
-    } satisfies OpenClawConfig;
+    );
     const activeLayout = resolveSandboxWorkspaceLayoutPaths({
       cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
       rawSessionKey: "agent:main:telegram:direct:doctor-proof",
@@ -409,12 +439,7 @@ describe("sandbox workspace Doctor migration", () => {
       path.join(sandboxRoot, "agent-unknown-12345678", "openclaw-workspace-state.json"),
     ];
     for (const setupPath of [activePath, ...protectedPaths]) {
-      await fsp.mkdir(path.dirname(setupPath), { recursive: true });
-      await fsp.writeFile(
-        setupPath,
-        JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
-        "utf8",
-      );
+      await writeLegacySetup(setupPath, "2026-07-20T00:00:00.000Z");
     }
     await registerSandboxSession("agent:main:telegram:direct:doctor-proof");
     await registerSandboxSession("agent:main-foo:telegram:direct:doctor-proof");
@@ -422,13 +447,7 @@ describe("sandbox workspace Doctor migration", () => {
     await registerSandboxRuntimeScope("agent:main");
     await registerSandboxRuntimeScope("shared");
 
-    const detected = detectLegacyWorkspaceState({
-      cfg,
-      stateDir: context.stateDir,
-      env: context.env,
-      homedir: () => context.homeDir,
-      doctorOnlyStateMigrations: true,
-    });
+    const detected = await detectWorkspaceState(context, cfg);
 
     expect(detected.sources).toContainEqual(
       expect.objectContaining({ kind: "setup", sourcePath: activePath }),
@@ -455,23 +474,14 @@ describe("sandbox workspace Doctor migration", () => {
   it("uses registered session ownership for overlapping main and main-telegram agents", async () => {
     const context = setup();
     const sandboxRoot = path.join(context.homeDir, "sandboxes");
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: context.workspaceDir,
-          sandbox: {
-            mode: "all",
-            scope: "session",
-            workspaceAccess: "ro",
-            workspaceRoot: "~/sandboxes",
-          },
-        },
-        entries: {
-          main: { default: true, sandbox: { mode: "off" } },
-          "main-telegram": {},
-        },
+    const cfg = createSandboxConfig(
+      context.workspaceDir,
+      {},
+      {
+        main: { default: true, sandbox: { mode: "off" } },
+        "main-telegram": {},
       },
-    } satisfies OpenClawConfig;
+    );
     const resolveSetupPath = (rawSessionKey: string) => {
       const layout = resolveSandboxWorkspaceLayoutPaths({
         cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
@@ -488,19 +498,12 @@ describe("sandbox workspace Doctor migration", () => {
     const activePath = resolveSetupPath("agent:main-telegram:signal:direct:doctor-proof");
     const protectedPaths = [inactivePath, activePath];
     for (const setupPath of protectedPaths) {
-      await fsp.mkdir(path.dirname(setupPath), { recursive: true });
-      await fsp.writeFile(setupPath, JSON.stringify({ version: 1 }), "utf8");
+      await writeLegacySetup(setupPath);
     }
     await registerSandboxSession("agent:main:telegram:direct:doctor-proof");
     await registerSandboxSession("agent:main-telegram:signal:direct:doctor-proof");
 
-    const detected = detectLegacyWorkspaceState({
-      cfg,
-      stateDir: context.stateDir,
-      env: context.env,
-      homedir: () => context.homeDir,
-      doctorOnlyStateMigrations: true,
-    });
+    const detected = await detectWorkspaceState(context, cfg);
 
     expect(detected.sources).not.toContainEqual(
       expect.objectContaining({ kind: "setup", sourcePath: inactivePath }),
@@ -525,15 +528,7 @@ describe("sandbox workspace Doctor migration", () => {
     const requestedStateDir = path.join(context.homeDir, "requested-profile");
     const requestedEnv = { ...context.env, OPENCLAW_STATE_DIR: requestedStateDir };
     const sessionKey = "agent:main:telegram:direct:requested-default-root";
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: context.workspaceDir,
-          sandbox: { mode: "all", scope: "session", workspaceAccess: "ro" },
-        },
-        entries: { main: { default: true } },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = createSandboxConfig(context.workspaceDir, { workspaceRoot: undefined });
     const workspaceFor = (stateDir: string) =>
       resolveSandboxWorkspaceLayoutPaths({
         cfg: {
@@ -550,23 +545,15 @@ describe("sandbox workspace Doctor migration", () => {
     );
     const ambientPath = path.join(workspaceFor(context.stateDir), "openclaw-workspace-state.json");
     for (const setupPath of [requestedPath, ambientPath]) {
-      await fsp.mkdir(path.dirname(setupPath), { recursive: true });
-      await fsp.writeFile(
-        setupPath,
-        JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
-        "utf8",
-      );
+      await writeLegacySetup(setupPath, "2026-07-20T00:00:00.000Z");
     }
     setTestEnvValue("OPENCLAW_STATE_DIR", requestedStateDir);
     await registerSandboxSession(sessionKey);
     setTestEnvValue("OPENCLAW_STATE_DIR", context.stateDir);
 
-    const detected = detectLegacyWorkspaceState({
-      cfg,
+    const detected = await detectWorkspaceState(context, cfg, {
       stateDir: requestedStateDir,
       env: requestedEnv,
-      homedir: () => context.homeDir,
-      doctorOnlyStateMigrations: true,
     });
 
     expect(detected.sources).toContainEqual(
@@ -592,20 +579,7 @@ describe("sandbox workspace Doctor migration", () => {
     const requestedStateDir = path.join(context.homeDir, "requested-profile");
     const requestedEnv = { ...context.env, OPENCLAW_STATE_DIR: requestedStateDir };
     const sandboxRoot = path.join(context.homeDir, "sandboxes");
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: context.workspaceDir,
-          sandbox: {
-            mode: "all",
-            scope: "session",
-            workspaceAccess: "ro",
-            workspaceRoot: "~/sandboxes",
-          },
-        },
-        entries: { main: { default: true } },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = createSandboxConfig(context.workspaceDir);
     const requestedSession = "agent:main:telegram:direct:requested-profile";
     const ambientSession = "agent:main:slack:direct:ambient-profile";
     const workspaceFor = (sessionKey: string) =>
@@ -620,8 +594,7 @@ describe("sandbox workspace Doctor migration", () => {
     );
     const ambientPath = path.join(workspaceFor(ambientSession), "openclaw-workspace-state.json");
     for (const setupPath of [requestedPath, ambientPath]) {
-      await fsp.mkdir(path.dirname(setupPath), { recursive: true });
-      await fsp.writeFile(setupPath, JSON.stringify({ version: 1 }), "utf8");
+      await writeLegacySetup(setupPath);
     }
 
     setTestEnvValue("OPENCLAW_STATE_DIR", requestedStateDir);
@@ -629,19 +602,16 @@ describe("sandbox workspace Doctor migration", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", context.stateDir);
     await registerSandboxSession(ambientSession);
 
-    expect(listSessionEntryKeysReadOnly({ agentId: "main", env: requestedEnv })).toEqual([
+    expect(await listSessionEntryKeysReadOnly({ agentId: "main", env: requestedEnv })).toEqual([
       requestedSession,
     ]);
-    expect(listSessionEntryKeysReadOnly({ agentId: "main", env: context.env })).toEqual([
+    expect(await listSessionEntryKeysReadOnly({ agentId: "main", env: context.env })).toEqual([
       ambientSession,
     ]);
 
-    const detected = detectLegacyWorkspaceState({
-      cfg,
+    const detected = await detectWorkspaceState(context, cfg, {
       stateDir: requestedStateDir,
       env: requestedEnv,
-      homedir: () => context.homeDir,
-      doctorOnlyStateMigrations: true,
     });
 
     expect(detected.sources).toContainEqual(
@@ -665,20 +635,7 @@ describe("sandbox workspace Doctor migration", () => {
   it("does not claim an unregistered session copy from a removed agent", async () => {
     const context = setup();
     const sandboxRoot = path.join(context.homeDir, "sandboxes");
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: context.workspaceDir,
-          sandbox: {
-            mode: "all",
-            scope: "session",
-            workspaceAccess: "ro",
-            workspaceRoot: "~/sandboxes",
-          },
-        },
-        entries: { main: { default: true } },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = createSandboxConfig(context.workspaceDir);
     const activeLayout = resolveSandboxWorkspaceLayoutPaths({
       cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
       rawSessionKey: "agent:main:telegram:direct:doctor-proof",
@@ -695,18 +652,11 @@ describe("sandbox workspace Doctor migration", () => {
       "openclaw-workspace-state.json",
     );
     for (const setupPath of [activePath, removedAgentPath]) {
-      await fsp.mkdir(path.dirname(setupPath), { recursive: true });
-      await fsp.writeFile(setupPath, JSON.stringify({ version: 1 }), "utf8");
+      await writeLegacySetup(setupPath);
     }
     await registerSandboxSession("agent:main:telegram:direct:doctor-proof");
 
-    const detected = detectLegacyWorkspaceState({
-      cfg,
-      stateDir: context.stateDir,
-      env: context.env,
-      homedir: () => context.homeDir,
-      doctorOnlyStateMigrations: true,
-    });
+    const detected = await detectWorkspaceState(context, cfg);
 
     expect(detected.sources).toContainEqual(
       expect.objectContaining({ kind: "setup", sourcePath: activePath }),
@@ -729,42 +679,18 @@ describe("sandbox workspace Doctor migration", () => {
   it("repairs the registered global main-session sandbox copy", async () => {
     const context = setup();
     const sandboxRoot = path.join(context.homeDir, "sandboxes");
-    const cfg = {
-      session: { scope: "global" },
-      agents: {
-        defaults: {
-          workspace: context.workspaceDir,
-          sandbox: {
-            mode: "all",
-            scope: "session",
-            workspaceAccess: "ro",
-            workspaceRoot: "~/sandboxes",
-          },
-        },
-        entries: { main: { default: true } },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = createSandboxConfig(context.workspaceDir);
+    cfg.session = { scope: "global" };
     const sandboxLayout = resolveSandboxWorkspaceLayoutPaths({
       cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
       rawSessionKey: "global",
       workspaceDir: context.workspaceDir,
     });
     const setupPath = path.join(sandboxLayout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
-    await fsp.mkdir(sandboxLayout.sandboxWorkspaceDir, { recursive: true });
-    await fsp.writeFile(
-      setupPath,
-      JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
-      "utf8",
-    );
+    await writeLegacySetup(setupPath, "2026-07-20T00:00:00.000Z");
     await registerSandboxSession("global");
 
-    const detected = detectLegacyWorkspaceState({
-      cfg,
-      stateDir: context.stateDir,
-      env: context.env,
-      homedir: () => context.homeDir,
-      doctorOnlyStateMigrations: true,
-    });
+    const detected = await detectWorkspaceState(context, cfg);
 
     expect(detected.sources).toContainEqual(
       expect.objectContaining({ kind: "setup", sourcePath: setupPath }),
@@ -778,7 +704,7 @@ describe("sandbox workspace Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(setupPath)).toBe(false);
-    expect(readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
       setup: { bootstrapSeededAt: "2026-07-20T00:00:00.000Z" },
       setupExists: true,
     });
@@ -787,20 +713,7 @@ describe("sandbox workspace Doctor migration", () => {
   it("does not migrate a main-session copy when sandbox mode is non-main", async () => {
     const context = setup();
     const sandboxRoot = path.join(context.homeDir, "sandboxes");
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: context.workspaceDir,
-          sandbox: {
-            mode: "non-main",
-            scope: "session",
-            workspaceAccess: "ro",
-            workspaceRoot: "~/sandboxes",
-          },
-        },
-        entries: { main: { default: true } },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = createSandboxConfig(context.workspaceDir, { mode: "non-main" });
     const mainLayout = resolveSandboxWorkspaceLayoutPaths({
       cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
       rawSessionKey: "agent:main:main",
@@ -814,23 +727,12 @@ describe("sandbox workspace Doctor migration", () => {
     const mainPath = path.join(mainLayout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
     const activePath = path.join(activeLayout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
     for (const setupPath of [mainPath, activePath]) {
-      await fsp.mkdir(path.dirname(setupPath), { recursive: true });
-      await fsp.writeFile(
-        setupPath,
-        JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
-        "utf8",
-      );
+      await writeLegacySetup(setupPath, "2026-07-20T00:00:00.000Z");
     }
     await registerSandboxSession("agent:main:main");
     await registerSandboxSession("agent:main:telegram:direct:doctor-proof");
 
-    const detected = detectLegacyWorkspaceState({
-      cfg,
-      stateDir: context.stateDir,
-      env: context.env,
-      homedir: () => context.homeDir,
-      doctorOnlyStateMigrations: true,
-    });
+    const detected = await detectWorkspaceState(context, cfg);
 
     expect(detected.sources).toContainEqual(
       expect.objectContaining({ kind: "setup", sourcePath: activePath }),
@@ -860,40 +762,16 @@ describe("sandbox workspace Doctor migration", () => {
       OPENCLAW_CONFIG_PATH: path.join(context.stateDir, "openclaw.json"),
     };
     const sandboxRoot = path.join(effectiveHome, "sandboxes");
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: context.workspaceDir,
-          sandbox: {
-            mode: "all",
-            scope: "agent",
-            workspaceAccess: "ro",
-            workspaceRoot: "~/sandboxes",
-          },
-        },
-        entries: { main: { default: true } },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = createSandboxConfig(context.workspaceDir, { scope: "agent" });
     const sandboxLayout = resolveSandboxWorkspaceLayoutPaths({
       cfg: { scope: "agent", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
       rawSessionKey: "agent:main:main",
       workspaceDir: context.workspaceDir,
     });
     const setupPath = path.join(sandboxLayout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
-    await fsp.mkdir(sandboxLayout.sandboxWorkspaceDir, { recursive: true });
-    await fsp.writeFile(
-      setupPath,
-      JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
-      "utf8",
-    );
+    await writeLegacySetup(setupPath, "2026-07-20T00:00:00.000Z");
 
-    const detected = detectLegacyWorkspaceState({
-      cfg,
-      stateDir: context.stateDir,
-      env,
-      homedir: () => context.homeDir,
-      doctorOnlyStateMigrations: true,
-    });
+    const detected = await detectWorkspaceState(context, cfg, { env });
 
     expect(detected.hasLegacy).toBe(true);
     expect(detected.sources).toContainEqual(
@@ -913,7 +791,7 @@ describe("sandbox workspace Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(setupPath)).toBe(false);
-    expect(readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
       setup: {
         bootstrapSeededAt: "2026-07-20T00:00:00.000Z",
       },

@@ -9,8 +9,6 @@ import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
-  boundInFlightRunSnapshotForChatHistory,
-  isChatStopCommandText,
   registerChatAbortController,
   resolveAgentRunExpiresAtMs,
   resolveChatRunExpiresAtMs,
@@ -21,6 +19,7 @@ import {
 } from "./chat-abort.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import { createChatRunState, type ChatRunPlanSnapshot } from "./server-chat-state.js";
+import { boundInFlightRunSnapshotForChatHistory } from "./server-methods/chat-history-budget.js";
 
 type CreatedChatAbortOps = ChatAbortOps & {
   broadcast: ReturnType<typeof vi.fn>;
@@ -53,10 +52,11 @@ function createOps(params: {
   const nodeSendToSession = vi.fn();
   const removeChatRun = vi.fn();
   const chatRunState = createChatRunState();
+  chatRunState.updateBuffer(runId, { delta: buffer ?? "" });
+  chatRunState.takeBufferDelta(runId, buffer ?? "");
   Object.assign(chatRunState.getOrCreate(runId), {
-    ...(buffer !== undefined ? { buffer, deltaLastBroadcastText: buffer } : {}),
     deltaSentAt: Date.now(),
-    assistantScope: { itemId: "assistant-1", prefix: "" },
+    assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
     agentText: {
       assistant: {
         lastSentAt: Date.now(),
@@ -124,26 +124,6 @@ function expectRunAborted(params: {
   expect(params.entry.controller.signal.aborted).toBe(true);
   expect(params.ops.chatAbortControllers.has(params.runId)).toBe(false);
 }
-
-describe("isChatStopCommandText", () => {
-  it("matches slash and standalone multilingual stop forms", () => {
-    expect(isChatStopCommandText(" /STOP!!! ")).toBe(true);
-    expect(isChatStopCommandText("stop please")).toBe(true);
-    expect(isChatStopCommandText("do not do that")).toBe(true);
-    expect(isChatStopCommandText("停止")).toBe(true);
-    expect(isChatStopCommandText("停下来")).toBe(true);
-    expect(isChatStopCommandText("暂停")).toBe(true);
-    expect(isChatStopCommandText("やめて")).toBe(true);
-    expect(isChatStopCommandText("توقف")).toBe(true);
-    expect(isChatStopCommandText("остановись")).toBe(true);
-    expect(isChatStopCommandText("halt")).toBe(true);
-    expect(isChatStopCommandText("stopp")).toBe(true);
-    expect(isChatStopCommandText("pare")).toBe(true);
-    expect(isChatStopCommandText("/status")).toBe(false);
-    expect(isChatStopCommandText("please do not do that")).toBe(false);
-    expect(isChatStopCommandText("keep going")).toBe(false);
-  });
-});
 
 describe("registerChatAbortController", () => {
   it.each([
@@ -461,7 +441,7 @@ describe("abortChatRunById", () => {
     expect(ops.chatRunState.runs.get(runId)?.buffer).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.deltaSentAt).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.assistantScope).toBeUndefined();
-    expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastText).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.display).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
     expect(ops.agentRunSeq.has(runId)).toBe(false);
@@ -560,12 +540,6 @@ describe("abortChatRunById", () => {
       name: "resolves unscoped global aborts to the default agent subscribers",
       runId: "run-unscoped-global",
       createEntry: () => createActiveEntry("global"),
-      abort: abortChatRunById,
-    },
-    {
-      name: "preserves default-agent global delivery through tracked maintenance aborts",
-      runId: "run-tracked-global",
-      createEntry: () => ({ ...createActiveEntry("global"), agentId: "main" }),
       abort: abortChatRunById,
     },
   ]) {

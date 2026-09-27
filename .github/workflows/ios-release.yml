@@ -1,0 +1,534 @@
+name: iOS Store Release
+
+run-name: iOS Store ${{ inputs.operation }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Upload a new release or reconcile one existing processed build
+        required: true
+        default: release
+        type: choice
+        options:
+          - release
+          - reconcile-and-record
+      target_ref:
+        description: Frozen mobile release branch; reconcile only
+        required: false
+        type: string
+      target_sha:
+        description: Frozen mobile release commit; reconcile only
+        required: false
+        type: string
+      source_run_id:
+        description: Original iOS beta upload run; reconcile only
+        required: false
+        type: string
+      source_job_id:
+        description: Original iOS beta upload job; reconcile only
+        required: false
+        type: string
+      source_receipt_artifact_id:
+        description: Original authority receipt artifact; reconcile only
+        required: false
+        type: string
+      source_receipt_digest:
+        description: SHA-256 of the original authority receipt; reconcile only
+        required: false
+        type: string
+      reconcile_build_number:
+        description: Existing processed build number; reconcile only
+        required: false
+        type: string
+      audited_upload_log_digest:
+        description: SHA-256 provenance pointer for the audited upload log; reconcile only
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ios-release
+  cancel-in-progress: false
+  queue: max
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.21.0"
+
+jobs:
+  release:
+    name: Prepare and upload iOS release
+    if: inputs.operation == 'release' && github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw'
+    permissions:
+      contents: write
+    runs-on: xcode-27
+    timeout-minutes: 360
+    environment: ios-store-release
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "false"
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
+        with:
+          ruby-version: "3.4.10"
+          bundler: "4.0.21"
+          bundler-cache: false
+          working-directory: apps/ios
+
+      - name: Install locked Fastlane bundle
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          bundle _4.0.21_ install --jobs 4 --retry 3
+          bundle _4.0.21_ check
+          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          source scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain
+
+      - name: Install pinned Swift build tools
+        run: |
+          set -euo pipefail
+          swift_tools_dir="${RUNNER_TEMP}/openclaw-swift-tools"
+          ./scripts/install-xcodegen.sh "$swift_tools_dir"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+
+      - name: Install Watch Rust toolchain
+        if: hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != ''
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$watch_toolchain"
+          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+
+      - name: Qualify native iOS pairing and chat
+        id: qualification
+        run: |
+          set -euo pipefail
+          node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
+            --mode stock --target-sha "$(git rev-parse HEAD)" \
+            --output "$RUNNER_TEMP/ios-release-e2e-proof.json"
+
+      - name: Retain sanitized iOS qualification proof
+        if: always() && steps.qualification.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-e2e-stock
+          path: ${{ runner.temp }}/ios-release-e2e-proof.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create apps-signing read token
+        id: apps-signing-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: apps-signing
+          permission-contents: read
+
+      - name: Checkout encrypted iOS signing assets
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/apps-signing
+          ref: main
+          path: apps/ios/build/release-signing/apps-signing
+          token: ${{ steps.apps-signing-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Route readonly match checkout to approved signing assets
+        run: |
+          set -euo pipefail
+          signing_repo="file://${GITHUB_WORKSPACE}/apps/ios/build/release-signing/apps-signing/"
+          git config --global url."${signing_repo}".insteadOf git@github.com:openclaw/apps-signing.git
+
+      - name: Create job-owned iOS signing keychain
+        uses: ./.github/actions/ios-signing-keychain
+
+      - name: Validate readonly iOS signing key access
+        env:
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          source ./scripts/lib/ios-fastlane.sh
+          (cd apps/ios && run_ios_fastlane ios signing_check)
+          node .github/actions/ios-signing-keychain/keychain.mjs probe
+
+      - name: Prepare and upload iOS release
+        id: release
+        env:
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_KEY_CONTENT }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          GH_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          SCAN_APP_NAME: OpenClaw
+          SCAN_DEPLOYMENT_TARGET_VERSION: "18.0"
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          pnpm ios:release:upload -- \
+            --recovery-dir "$RUNNER_TEMP/ios-release-recovery"
+
+      - name: Retain release plan and notes
+        if: always() && steps.release.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ios-release-recovery/ios-plan.json
+            ${{ runner.temp }}/ios-release-recovery/release-notes.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retain signed release artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ios-release-recovery/artifacts/*.ipa
+            ${{ runner.temp }}/ios-release-recovery/artifacts/*.sha256
+            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/app-store/*.ipa
+            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/app-store/*.sha256
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 30
+
+      - name: Retain sanitized screenshot diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-screenshot-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/screenshots/*.png
+            ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/capture-attempts.json
+            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/fastlane/screenshots/en-US/*.png
+            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/SnapshotTestResults/capture-attempts.json
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 30
+
+  reconcile-ios-build:
+    name: Reconcile existing iOS build without mutation
+    if: inputs.operation == 'reconcile-and-record' && github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw'
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    runs-on: xcode-27
+    timeout-minutes: 30
+    environment: ios-store-release
+    outputs:
+      evidence_artifact_digest: ${{ steps.upload-evidence.outputs.artifact-digest }}
+      evidence_artifact_id: ${{ steps.upload-evidence.outputs.artifact-id }}
+    env:
+      BUNDLE_FROZEN: "true"
+      RECONCILE_BUILD_NUMBER: ${{ inputs.reconcile_build_number }}
+      RECONCILE_GROUP_ID: ${{ vars.TESTFLIGHT_INTERNAL_GROUP_ID }}
+      RECONCILE_SOURCE_JOB_ID: ${{ inputs.source_job_id }}
+      RECONCILE_SOURCE_RECEIPT_ARTIFACT_ID: ${{ inputs.source_receipt_artifact_id }}
+      RECONCILE_SOURCE_RECEIPT_DIGEST: ${{ inputs.source_receipt_digest }}
+      RECONCILE_SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      RECONCILE_TARGET_REF: ${{ inputs.target_ref }}
+      RECONCILE_TARGET_SHA: ${{ inputs.target_sha }}
+      RECONCILE_UPLOAD_LOG_DIGEST: ${{ inputs.audited_upload_log_digest }}
+    steps:
+      - name: Checkout trusted reconciliation tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup trusted Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "false"
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup trusted Ruby
+        uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
+        with:
+          ruby-version: "3.4.10"
+          bundler: "4.0.21"
+          bundler-cache: false
+          working-directory: apps/ios
+
+      - name: Install trusted locked Fastlane bundle
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          bundle _4.0.21_ install --jobs 4 --retry 3
+          bundle _4.0.21_ check
+          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+
+      - name: Download exact original authority receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ inputs.source_receipt_artifact_id }}
+          path: ${{ runner.temp }}/ios-reconcile-original
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Fetch frozen candidate data objects
+        run: |
+          set -euo pipefail
+          test "$RECONCILE_TARGET_SHA" = "d69752a1c90715e74a36652b2e64c41e9409c5fd"
+          git fetch \
+            --no-tags \
+            --no-write-fetch-head \
+            --no-auto-maintenance \
+            origin \
+            d69752a1c90715e74a36652b2e64c41e9409c5fd
+
+      - name: Verify original authority attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          receipt="${RUNNER_TEMP}/ios-reconcile-original/receipt.json"
+          test -f "$receipt"
+          test "$(sha256sum "$receipt" | cut -d ' ' -f1)" = "$RECONCILE_SOURCE_RECEIPT_DIGEST"
+          source_sha="$(jq -er '.workflowSha | select(test("^[a-f0-9]{40}$"))' "$receipt")"
+          gh attestation verify "$receipt" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ios-beta-release.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "$source_sha" \
+            --deny-self-hosted-runners
+
+      - name: Revalidate authority immediately before App Store credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -n "$RECONCILE_GROUP_ID"
+          node scripts/ios-release-reconcile.mjs prepare-reader \
+            --original-receipt "$RUNNER_TEMP/ios-reconcile-original/receipt.json" \
+            --original-receipt-artifact-id "$RECONCILE_SOURCE_RECEIPT_ARTIFACT_ID" \
+            --source-run-id "$RECONCILE_SOURCE_RUN_ID" \
+            --source-job-id "$RECONCILE_SOURCE_JOB_ID" \
+            --source-receipt-digest "$RECONCILE_SOURCE_RECEIPT_DIGEST" \
+            --target-ref "$RECONCILE_TARGET_REF" \
+            --target-sha "$RECONCILE_TARGET_SHA" \
+            --build-number "$RECONCILE_BUILD_NUMBER" \
+            --upload-log-digest "$RECONCILE_UPLOAD_LOG_DIGEST" \
+            --group-id "$RECONCILE_GROUP_ID" \
+            --candidate-root "$GITHUB_WORKSPACE"
+
+      - name: Read existing iOS build state
+        env:
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_KEY_CONTENT }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+        run: |
+          set -euo pipefail
+          reconcile_dir="$RUNNER_TEMP/ios-reconcile"
+          mkdir -p "$reconcile_dir"
+          source scripts/lib/ios-fastlane.sh
+          (
+            cd apps/ios
+            run_ios_fastlane ios release_reconcile \
+              app_store_version:2026.9.20 \
+              build_number:"$RECONCILE_BUILD_NUMBER" \
+              group_id:"$RECONCILE_GROUP_ID" \
+              output_path:"$reconcile_dir/store-observation.json"
+          )
+
+      - name: Revalidate authority after App Store read
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          reconcile_dir="$RUNNER_TEMP/ios-reconcile"
+          node scripts/ios-release-reconcile.mjs finalize-reader \
+            --original-receipt "$RUNNER_TEMP/ios-reconcile-original/receipt.json" \
+            --original-receipt-artifact-id "$RECONCILE_SOURCE_RECEIPT_ARTIFACT_ID" \
+            --source-run-id "$RECONCILE_SOURCE_RUN_ID" \
+            --source-job-id "$RECONCILE_SOURCE_JOB_ID" \
+            --source-receipt-digest "$RECONCILE_SOURCE_RECEIPT_DIGEST" \
+            --target-ref "$RECONCILE_TARGET_REF" \
+            --target-sha "$RECONCILE_TARGET_SHA" \
+            --build-number "$RECONCILE_BUILD_NUMBER" \
+            --upload-log-digest "$RECONCILE_UPLOAD_LOG_DIGEST" \
+            --group-id "$RECONCILE_GROUP_ID" \
+            --candidate-root "$GITHUB_WORKSPACE" \
+            --store-observation "$reconcile_dir/store-observation.json" \
+            --evidence-output "$reconcile_dir/evidence.json"
+
+      - name: Attest reconciliation evidence
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/ios-reconcile/evidence.json
+
+      - name: Upload reconciliation evidence
+        id: upload-evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-reconciliation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ios-reconcile/evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+  record-ios-build:
+    name: Record reconciled iOS release ref
+    needs: reconcile-ios-build
+    if: inputs.operation == 'reconcile-and-record' && needs.reconcile-ios-build.result == 'success'
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: ios-store-release
+    env:
+      RECONCILE_BUILD_NUMBER: ${{ inputs.reconcile_build_number }}
+      RECONCILE_EVIDENCE_ARTIFACT_DIGEST: ${{ needs.reconcile-ios-build.outputs.evidence_artifact_digest }}
+      RECONCILE_EVIDENCE_ARTIFACT_ID: ${{ needs.reconcile-ios-build.outputs.evidence_artifact_id }}
+      RECONCILE_GROUP_ID: ${{ vars.TESTFLIGHT_INTERNAL_GROUP_ID }}
+      RECONCILE_SOURCE_JOB_ID: ${{ inputs.source_job_id }}
+      RECONCILE_SOURCE_RECEIPT_ARTIFACT_ID: ${{ inputs.source_receipt_artifact_id }}
+      RECONCILE_SOURCE_RECEIPT_DIGEST: ${{ inputs.source_receipt_digest }}
+      RECONCILE_SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      RECONCILE_TARGET_REF: ${{ inputs.target_ref }}
+      RECONCILE_TARGET_SHA: ${{ inputs.target_sha }}
+      RECONCILE_UPLOAD_LOG_DIGEST: ${{ inputs.audited_upload_log_digest }}
+    steps:
+      - name: Checkout trusted reconciliation recorder
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup trusted Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "false"
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download exact original authority receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ inputs.source_receipt_artifact_id }}
+          path: ${{ runner.temp }}/ios-reconcile-original
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download exact reconciliation evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.reconcile-ios-build.outputs.evidence_artifact_id }}
+          path: ${{ runner.temp }}/ios-reconcile-evidence
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify original and reconciliation attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          receipt="${RUNNER_TEMP}/ios-reconcile-original/receipt.json"
+          evidence="${RUNNER_TEMP}/ios-reconcile-evidence/evidence.json"
+          test "$(sha256sum "$receipt" | cut -d ' ' -f1)" = "$RECONCILE_SOURCE_RECEIPT_DIGEST"
+          source_sha="$(jq -er '.workflowSha | select(test("^[a-f0-9]{40}$"))' "$receipt")"
+          gh attestation verify "$receipt" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ios-beta-release.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "$source_sha" \
+            --deny-self-hosted-runners
+          gh attestation verify "$evidence" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ios-release.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "$GITHUB_WORKFLOW_SHA" \
+            --deny-self-hosted-runners
+
+      - name: Validate reconciliation before write-token access
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/ios-release-reconcile.mjs validate-recorder \
+            --original-receipt "$RUNNER_TEMP/ios-reconcile-original/receipt.json" \
+            --original-receipt-artifact-id "$RECONCILE_SOURCE_RECEIPT_ARTIFACT_ID" \
+            --source-run-id "$RECONCILE_SOURCE_RUN_ID" \
+            --source-job-id "$RECONCILE_SOURCE_JOB_ID" \
+            --source-receipt-digest "$RECONCILE_SOURCE_RECEIPT_DIGEST" \
+            --target-ref "$RECONCILE_TARGET_REF" \
+            --target-sha "$RECONCILE_TARGET_SHA" \
+            --build-number "$RECONCILE_BUILD_NUMBER" \
+            --upload-log-digest "$RECONCILE_UPLOAD_LOG_DIGEST" \
+            --group-id "$RECONCILE_GROUP_ID" \
+            --evidence-artifact-id "$RECONCILE_EVIDENCE_ARTIFACT_ID" \
+            --evidence-artifact-digest "$RECONCILE_EVIDENCE_ARTIFACT_DIGEST" \
+            --evidence-path "$RUNNER_TEMP/ios-reconcile-evidence/evidence.json"
+
+      - name: Create iOS release ref token
+        id: release-ref-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: openclaw
+          permission-contents: write
+
+      - name: Revalidate and record immutable iOS release ref
+        env:
+          GH_TOKEN: ${{ steps.release-ref-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          node scripts/ios-release-reconcile.mjs record \
+            --original-receipt "$RUNNER_TEMP/ios-reconcile-original/receipt.json" \
+            --original-receipt-artifact-id "$RECONCILE_SOURCE_RECEIPT_ARTIFACT_ID" \
+            --source-run-id "$RECONCILE_SOURCE_RUN_ID" \
+            --source-job-id "$RECONCILE_SOURCE_JOB_ID" \
+            --source-receipt-digest "$RECONCILE_SOURCE_RECEIPT_DIGEST" \
+            --target-ref "$RECONCILE_TARGET_REF" \
+            --target-sha "$RECONCILE_TARGET_SHA" \
+            --build-number "$RECONCILE_BUILD_NUMBER" \
+            --upload-log-digest "$RECONCILE_UPLOAD_LOG_DIGEST" \
+            --group-id "$RECONCILE_GROUP_ID" \
+            --evidence-artifact-id "$RECONCILE_EVIDENCE_ARTIFACT_ID" \
+            --evidence-artifact-digest "$RECONCILE_EVIDENCE_ARTIFACT_DIGEST" \
+            --evidence-path "$RUNNER_TEMP/ios-reconcile-evidence/evidence.json"

@@ -8,9 +8,16 @@ title: "Active computer presence"
 ---
 
 Active computer presence tells the Gateway which connected macOS node received
-the most recent physical mouse or keyboard input. OpenClaw uses that signal to
-mark one Mac as `active`, give the agent a stable active-node hint, and route
-node connection alerts to the computer where you are most likely present.
+the most recent activity. Basic presence works when you interact with the
+OpenClaw app, without extra permissions. Optional **System-wide presence
+detection** also includes physical mouse and keyboard activity in other apps.
+OpenClaw uses that signal to mark one Mac as `active`, give the agent a stable
+active-node hint, and route node connection alerts to the computer where you
+are most likely present.
+
+This is a recent-activity hint, not proof of which computer sent a particular
+chat message. The active Mac can differ from the computer running the Gateway
+or agent, and another person's input can change the selection.
 
 This is separate from [system presence](/concepts/presence), which is the live
 roster of Gateway clients, and from durable `node.presence.alive` beacons, which
@@ -19,26 +26,31 @@ record when a mobile node last woke without treating it as connected.
 ## Requirements
 
 - The OpenClaw macOS app is paired and connected in node mode.
-- **Settings -> Permissions -> Active computer detection** is enabled. It is off by default.
-- **Accessibility** permission is granted to the signed OpenClaw app.
+- Interact with the OpenClaw app to provide basic presence. Merely running or
+  foregrounding the app does not count as activity.
+- To include activity in other apps, enable **Settings -> Permissions ->
+  System-wide presence detection** and grant **Accessibility** to the signed
+  OpenClaw app. System-wide detection is off by default.
 - For connection alerts, **Notifications** permission is also granted and the
   Mac node exposes `system.notify`.
 
-Activity reporting is currently implemented by the native macOS node. iOS,
+Activity reporting is implemented only by the native macOS node. iOS,
 Android, watchOS, and headless node hosts can report connection or background
 last-seen state, but they do not compete for the active-computer designation.
 
 ## Check the active computer
 
-1. In the macOS app, open **Settings -> Permissions**, enable
-   **Active computer detection**, and grant **Accessibility** in macOS System Settings.
+1. Interact with the OpenClaw macOS app. No Accessibility permission is needed
+   for this basic presence signal. To detect activity in other apps too, enable
+   **Settings -> Permissions -> System-wide presence detection** and grant
+   **Accessibility** in macOS System Settings.
 2. Confirm the Mac node is connected:
 
    ```bash
    openclaw nodes status --connected
    ```
 
-3. Move the mouse or press a key on that Mac, then run:
+3. Click or type in OpenClaw on that Mac, then run:
 
    ```bash
    openclaw nodes status
@@ -52,24 +64,25 @@ seconds to reflect another input after a recent report.
 
 ## How activity becomes presence
 
-The macOS reporter samples the HID system idle clock every two seconds. It
-reports once when a node connection becomes ready, then reports newer physical
-activity no more than once every 15 seconds. While idle, it sends a keepalive
-every three minutes. Idle duration is capped at 30 days so a very old sample
-cannot drift forward and incorrectly become the newest computer.
+The macOS app records local input events received by OpenClaw. When system-wide
+detection is enabled and Accessibility is granted, it also samples the HID
+system idle clock every two seconds. Reports are coalesced: newer activity is
+sent no more than once every 15 seconds, with a keepalive every three minutes
+while idle. Idle duration is capped at 30 days so a very old sample cannot drift
+forward and incorrectly become the newest computer.
 
-Disabling **Active computer detection** stops sampling and sends an authenticated
-clear event over the current node connection. The Gateway immediately removes
-that Mac's retained activity timestamps and recomputes the active computer;
-other node capabilities and in-flight work stay connected. If the connected
-Gateway predates this clear action, the Mac node reconnects once so disconnect
-cleanup can remove the retained activity instead.
+Disabling **System-wide presence detection**, or losing Accessibility, clears
+the previous system-wide sample and falls back to app-local activity if any has
+been observed. It does not turn off basic presence or disconnect other node
+capabilities. Without an app-local sample, that Mac remains unselected until
+you interact with OpenClaw.
 
 The Gateway accepts activity only when all of these are true:
 
 - the event belongs to the current authenticated connection for that node id;
-- the node has effective `accessibility: true` permission;
-- the payload contains a bounded integer `idleSeconds` value.
+- the payload contains a bounded integer `idleSeconds` value;
+- the source is app-local, or system-wide with effective `accessibility: true`
+  permission. Legacy reports without a source are treated as system-wide.
 
 The Gateway subtracts `idleSeconds` from its own observation time to derive
 `lastActiveAtMs`. It never trusts a node-supplied wall-clock timestamp. Among
@@ -77,27 +90,39 @@ connected eligible Macs, the newest `lastActiveAtMs` wins; a tie uses the most
 recent presence update.
 
 Presence is process-local and connection-bound. Disconnecting the current
-session, replacing it with another session using the same node id, or revoking
-Accessibility clears that node's activity state and recomputes the active Mac.
+session or replacing it with another session using the same node id clears that
+node's activity state and recomputes the active Mac. Revoking Accessibility
+invalidates system-wide activity, but app-local activity remains eligible.
 
 ## Privacy and model context
 
-Activity sharing is off by default and is separate from the Accessibility grant
-used for UI automation. OpenClaw sends idle duration, not input content. It does not send key values,
-mouse coordinates, application names, window titles, or raw input events. The
-macOS reporter reads the hardware HID state, so synthetic computer-control
-events do not make an automated Mac appear to be the computer you physically
-used.
+Basic app-local presence is available without an Accessibility grant. Only
+system-wide detection is opt-in, separately from the Accessibility grant used
+for UI automation. OpenClaw sends idle duration and the activity source, not
+input content. It does not send key values, mouse coordinates, application
+names, window titles, or raw input events.
 
-Continuous activity does not create model-facing system events. The dynamic
-runtime line contains only the authenticated node id:
+System-wide detection reads the hardware HID state, so synthetic
+computer-control events do not count as physical system-wide activity.
+App-local detection records input delivered to OpenClaw and is not proof that
+an event came from a physical device.
+
+Continuous activity does not create model-facing system events. At turn
+preparation, the dynamic context contains a compact hint with only the
+authenticated node id:
 
 ```text
 active_node=<node-id>
 ```
 
+When no eligible connected Mac has current presence, the hint is
+`active_node=unknown`. This clears a previous selection rather than leaving the
+agent to reuse a disconnected Mac. It does not identify the message's source
+device or imply that no one is using a computer.
+
 Exact timestamps and node-controlled display names stay out of the prompt to
-avoid prompt injection and cache churn. When the agent needs current details,
+avoid prompt injection and cache churn. The hint stays byte-for-byte identical
+while the selected node id is unchanged. When the agent needs current details,
 the `nodes` tool can read `node.list` or `node.describe` instead.
 
 ## How connection alerts are routed
@@ -120,13 +145,13 @@ longer connected when delivery runs, the alert is canceled.
 
 ## Troubleshooting
 
-| Symptom                                   | Check                                                                                                                                                                |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No row is marked `active`                 | Confirm active computer detection is enabled, a native macOS node is connected, and `openclaw nodes describe --node <id>` shows `permissions.accessibility: true`.   |
-| The wrong Mac remains active              | Use that Mac physically, wait for the coalescing window, then rerun `openclaw nodes status`. Synthetic computer-control actions do not count.                        |
-| Last-input data disappears                | Check whether the Mac disconnected, its node session was replaced, or Accessibility was revoked. Each condition intentionally clears activity.                       |
-| The alert appears on several Macs         | Primary delivery was unavailable or failed, so the delayed fallback ran. Verify that the active Mac is connected, allows notifications, and exposes `system.notify`. |
-| The agent does not mention the active Mac | Start a new turn after activity changes. The runtime hint is stable and compact; use the `nodes` tool for exact current metadata.                                    |
+| Symptom                                   | Check                                                                                                                                                                                                                       |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No row is marked `active`                 | Confirm a native macOS node is connected, then click or type in OpenClaw. For activity outside OpenClaw, enable system-wide detection and check `permissions.accessibility: true` in `openclaw nodes describe --node <id>`. |
+| The wrong Mac remains active              | Interact with OpenClaw on the Mac you want to use, wait for the coalescing window, then rerun `openclaw nodes status`. With system-wide detection enabled, physical input in other apps also counts.                        |
+| Last-input data disappears                | Check whether the Mac disconnected or its node session was replaced. Disabling system-wide detection or revoking Accessibility clears the system-wide sample; app-local activity can still select the Mac.                  |
+| The alert appears on several Macs         | Primary delivery was unavailable or failed, so the delayed fallback ran. Verify that the active Mac is connected, allows notifications, and exposes `system.notify`.                                                        |
+| The agent does not mention the active Mac | Start a new turn after activity changes. The runtime hint is stable and compact; use the `nodes` tool for exact current metadata.                                                                                           |
 
 For TCC recovery, see [macOS permissions](/platforms/mac/permissions). For node
 connection and command failures, see [Node troubleshooting](/nodes/troubleshooting).

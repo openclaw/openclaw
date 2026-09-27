@@ -267,6 +267,8 @@ For `music_generate`, OpenClaw tries providers in this order:
 
 If a provider fails, the next candidate is tried automatically. If all
 fail, the error includes details from each attempt.
+For reference-image requests, candidates that cannot use images or accept
+the supplied reference count are skipped.
 
 Explicit music model configuration limits fallback to the configured list;
 OpenClaw does not append auto-detected providers.
@@ -392,3 +394,4 @@ sections are configured.
 - [MiniMax](/providers/minimax)
 - [Models](/concepts/models) — model configuration and failover
 - [Tools overview](/tools)
+- [Media overview](/tools/media-overview) — how the media tools fit together

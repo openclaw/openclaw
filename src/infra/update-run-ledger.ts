@@ -1,130 +1,92 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import {
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
 } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
+} from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-  iterateSqliteQuerySync,
 } from "./kysely-sync.js";
+import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import {
-  inspectUpdateRunAbandonment,
+  inspectUpdateRepairDriverAdmission,
   isStaleIdentitylessUpdateRun,
   recordedUpdateRunDrivers,
 } from "./update-run-activity.js";
-import {
-  decodeRun,
-  encodeRun,
-  isRetainedStep,
-  type UpdateRunLedgerOptions as LedgerOptions,
-} from "./update-run-codec.js";
+import { runUpdateRunAdmission } from "./update-run-admission.js";
+import { encodeRun, type UpdateRunLedgerOptions as LedgerOptions } from "./update-run-codec.js";
 import {
   inspectUpdateRunDriver,
   readUpdateRunDriver,
   sameUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
-import type {
-  UpdateFetchFailure,
-  UpdateRunRecord,
-  UpdateRunPhase,
-  UpdateRunStep,
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
+import {
+  decodeRun,
+  hasStoredUpdateRecovery,
+  readUpdateRunRecord as readRun,
+} from "./update-run-read.kernel.js";
+import {
+  inspectUpdateRunReconciliation,
+  readUpdateRunReconciliationCandidates,
+  type UpdateRunReconciliationCandidate,
+  type UpdateRunReconciliationInput,
+} from "./update-run-reader.js";
+import {
+  finishUpdateRunRecord,
+  isAbandonedUpdateRun,
+  isUnacknowledgedPackageOwnerRefusal,
+  type UpdateRunRecord,
+  type UpdateRunPhase,
+  type UpdateRunStep,
 } from "./update-run-record.js";
-import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
+import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
+import { readRecoveries } from "./update-run-recovery-store.js";
+import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
+import {
+  mutateRun,
+  mutateRunInTransaction,
+  persistRun,
+  updateRunLedgerSchema as schema,
+  upsertStep,
+} from "./update-run-write.js";
+
+export {
+  findActiveUpdateRun,
+  getLatestUpdateFetchFailure,
+  getUpdateRun,
+  getUpdateRunAsync,
+  getUpdateRunStatusAsync,
+  listUpdateRuns,
+  listUpdateRunsAsync,
+} from "./update-run-reader.js";
+
+export { finishUpdateRun, recordUpdateRunDiagnostics } from "./update-run-write.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 type RunPatch = Partial<
   Pick<UpdateRunRecord, "origin" | "target" | "before" | "after" | "trigger">
 >;
 
-const schemaStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf("CREATE TABLE IF NOT EXISTS update_runs (");
-const schemaEndMarker = "ON update_runs(status, created_at_ms DESC, run_id);";
-const schemaEnd = OPENCLAW_STATE_SCHEMA_SQL.indexOf(schemaEndMarker, schemaStart);
-if (schemaStart < 0 || schemaEnd < 0) {
-  throw new Error("Update run schema markers are missing");
-}
-const schema = OPENCLAW_STATE_SCHEMA_SQL.slice(schemaStart, schemaEnd + schemaEndMarker.length);
-const readyDatabases = new WeakSet<DatabaseSync>();
-
-function readRun(db: DatabaseSync, runId: string): UpdateRunRecord | undefined {
-  const query = getNodeSqliteKysely<LedgerDatabase>(db)
-    .selectFrom("update_runs")
-    .selectAll()
-    .where("run_id", "=", runId);
-  const row = executeSqliteQueryTakeFirstSync(db, query);
-  return row ? decodeRun(row) : undefined;
-}
-
-function writeRun<T>(operation: (db: DatabaseSync) => T, options: OpenClawStateDatabaseOptions): T {
-  let committedDatabase: DatabaseSync | undefined;
-  const result = runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // Feature-local, idempotent DDL shares the write transaction; a failed write also rolls back first use.
-      if (!readyDatabases.has(db)) {
-        db.exec(schema); // sqlite-allow-raw -- Canonical lazy additive DDL bootstrap only.
-      }
-      committedDatabase = db;
-      return operation(db);
-    },
-    options,
-    { operationLabel: "update.run" },
-  );
-  if (committedDatabase && !committedDatabase.isTransaction) {
-    readyDatabases.add(committedDatabase);
-  }
-  return result;
-}
-
-function persistRun(
-  db: DatabaseSync,
-  record: UpdateRunRecord,
-  options: LedgerOptions,
-): UpdateRunRecord {
-  record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
-  const row = encodeRun(record, options);
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<LedgerDatabase>(db)
-      .updateTable("update_runs")
-      .set(row)
-      .where("run_id", "=", record.runId),
-  );
-  return decodeRun(row);
-}
-
-function mutateRun(
-  runId: string,
-  update: (record: UpdateRunRecord) => void,
-  options: LedgerOptions,
-): UpdateRunRecord {
-  return writeRun((db) => {
-    const record = readRun(db, runId);
-    if (!record) {
-      throw new Error(`Unknown update run: ${runId}`);
-    }
-    const before = JSON.stringify(record);
-    update(record);
-    if (before === JSON.stringify(record)) {
-      return record;
-    }
-    return persistRun(db, record, options);
-  }, options);
-}
-
 export function createUpdateRun(
   input: RunPatch & {
     runId?: string;
     trigger: UpdateRunRecord["trigger"];
     supersedeStaleIdentityless?: boolean;
+    /** Preview history must not repair canonical task data. */
+    preview?: boolean;
   },
   options: LedgerOptions = {},
 ): UpdateRunRecord {
@@ -151,56 +113,67 @@ export function createUpdateRun(
     },
     options,
   );
-  return writeRun((db) => {
-    const existing = readRun(db, row.run_id);
-    if (existing) {
-      return existing;
-    }
-    // Only an explicit new CLI invocation may supersede the single legacy run.
-    // Selection, activity recheck, terminalization, and admission share this transaction.
-    if (input.supersedeStaleIdentityless && !input.runId && input.trigger === "cli") {
-      const active = executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<LedgerDatabase>(db)
-          .selectFrom("update_runs")
-          .selectAll()
-          .where("status", "=", "running")
-          .limit(2),
-      ).rows;
-      const previous = active.length === 1 && active[0] ? decodeRun(active[0]) : undefined;
-      if (previous && isStaleIdentitylessUpdateRun(previous)) {
-        upsertStep(previous, {
-          step: "reconcile:superseded",
-          status: "failed",
-          endedAtMs: now,
-          detail: "operator-started-update-supersedes-inactive-identityless-run",
-        });
-        finishRunRecord(previous, { status: "failed", reason: "superseded" });
-        persistRun(db, previous, options);
+  return runUpdateRunAdmission(
+    (db, recoveryChanges) => {
+      const recordRecovery = (record: UpdateRunRecord) => {
+        if (recoveryChanges.length > 0) {
+          upsertStep(record, {
+            step: "task-delivery-recovery",
+            status: "completed",
+            startedAtMs: now,
+            endedAtMs: Date.now(),
+            detail: recoveryChanges.join("\n"),
+          });
+        }
+        return record;
+      };
+      const existing = readRun(db, row.run_id);
+      if (existing) {
+        return recoveryChanges.length > 0
+          ? persistRun(db, recordRecovery(existing), options)
+          : existing;
       }
-    }
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<LedgerDatabase>(db).insertInto("update_runs").values(row),
-    );
-    return decodeRun(row);
-  }, options);
-}
-
-function upsertStep(record: UpdateRunRecord, step: UpdateRunStep): void {
-  const index = record.steps.findIndex((existing) => existing.step === step.step);
-  if (index >= 0) {
-    record.steps[index] = { ...record.steps[index], ...step };
-  } else {
-    record.steps.push(step);
-  }
-  while (record.steps.length > 128) {
-    const disposable = record.steps.findIndex((entry) => !isRetainedStep(entry));
-    if (disposable < 0) {
-      throw new Error("Update run retained steps exceed the step limit");
-    }
-    record.steps.splice(disposable, 1);
-  }
+      // Only an explicit new CLI invocation may supersede the single legacy run.
+      // Selection, activity recheck, terminalization, and admission share this transaction.
+      if (input.supersedeStaleIdentityless && !input.runId && input.trigger === "cli") {
+        const active = executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<LedgerDatabase>(db)
+            .selectFrom("update_runs")
+            .selectAll()
+            .where("status", "=", "running")
+            .limit(2),
+        ).rows;
+        const previous = active.length === 1 && active[0] ? decodeRun(active[0]) : undefined;
+        if (
+          previous &&
+          !hasStoredUpdateRecovery(db, previous.runId) &&
+          isStaleIdentitylessUpdateRun(previous)
+        ) {
+          upsertStep(previous, {
+            step: "reconcile:superseded",
+            status: "failed",
+            endedAtMs: now,
+            detail: "operator-started-update-supersedes-inactive-identityless-run",
+          });
+          finishUpdateRunRecord(previous, { status: "failed", reason: "superseded" });
+          persistRun(db, previous, options);
+        }
+      }
+      const admittedRow = encodeRun(recordRecovery(decodeRun(row)), options);
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<LedgerDatabase>(db).insertInto("update_runs").values(admittedRow),
+      );
+      return decodeRun(admittedRow);
+    },
+    options,
+    {
+      schemaSql: schema,
+      busyTimeoutMs: options.busyTimeoutMs,
+      recoverTaskDeliveryOrphans: !input.preview,
+    },
+  );
 }
 
 /** Adoption is explicit: reading or reserving an existing run does not make this process its driver. */
@@ -255,7 +228,11 @@ export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): Upda
       }
       record.origin.driver = driver;
       record.origin.previousDrivers = previousDrivers.length ? previousDrivers : undefined;
-      upsertStep(record, { step: "driver:adopted", status: "completed", endedAtMs: Date.now() });
+      upsertStep(record, {
+        step: "driver:adopted",
+        status: "completed",
+        endedAtMs: Date.now(),
+      });
     },
     options,
   );
@@ -290,14 +267,14 @@ export function heartbeatUpdateRun(
   );
 }
 
-/** Record the operator's successful ledger-only repair without changing the failed outcome. */
-export function acknowledgeAbandonedUpdateRun(runId: string, options: LedgerOptions = {}): void {
+/** Record successful repair without changing the failed outcome; report only new acknowledgment. */
+export function acknowledgeAbandonedUpdateRun(runId: string, options: LedgerOptions = {}): boolean {
+  let acknowledged = false;
   mutateRun(
     runId,
     (record) => {
       if (
-        record.status === "failed" &&
-        record.reason === "abandoned" &&
+        isAbandonedUpdateRun(record) &&
         !record.steps.some((step) => step.step === "reconcile:acknowledged")
       ) {
         upsertStep(record, {
@@ -305,83 +282,140 @@ export function acknowledgeAbandonedUpdateRun(runId: string, options: LedgerOpti
           status: "completed",
           endedAtMs: Date.now(),
         });
+        acknowledged = true;
       }
     },
     options,
   );
+  return acknowledged;
 }
 
-/** The writer rechecks activity and process identity in the same transaction as terminalization. */
+function canReconcileCandidates(
+  candidates: UpdateRunReconciliationCandidate[],
+  input: UpdateRunReconciliationInput,
+): boolean {
+  return (
+    candidates.some(
+      ({ rule }) => rule && (!input.legacyOnly || rule === LEGACY_UPDATE_RUN_EXPIRED_REASON),
+    ) &&
+    !(input.explicit && candidates.some(({ record, rule }) => record.status === "running" && !rule))
+  );
+}
+
+/** Prepare eligibility without write access, then revalidate under the writer's transaction. */
 export function reconcileAbandonedUpdateRuns(
-  input: { explicit?: boolean; runIds?: readonly string[]; requireAllActive?: boolean } = {},
+  input: UpdateRunReconciliationInput = {},
   options: LedgerOptions = {},
 ): UpdateRunRecord[] {
   if (input.runIds?.length === 0) {
     return [];
   }
   const candidates =
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
-      if (!tableExists(db, "update_runs")) {
-        return [];
-      }
-      let query = getNodeSqliteKysely<LedgerDatabase>(db)
-        .selectFrom("update_runs")
-        .select("run_id")
-        .where("status", "=", "running");
-      if (!input.explicit) {
-        query = query.where("updated_at_ms", "<", Date.now() - ABANDONED_UPDATE_RUN_MS);
-      }
-      if (input.runIds) {
-        query = query.where("run_id", "in", [...input.runIds]);
-      }
-      return executeSqliteQuerySync(db, query.orderBy("run_id")).rows;
-    }, options) ?? [];
-  if (!candidates.length) {
+    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+      ({ db }) => readUpdateRunReconciliationCandidates(db, input),
+      options,
+    ) ?? [];
+  return reconcileCandidates(candidates, input, options).reconciled;
+}
+
+export async function reconcileAbandonedUpdateRunsAsync(
+  input: UpdateRunReconciliationInput = {},
+  options: LedgerOptions = {},
+): Promise<UpdateRunRecord[]> {
+  if (input.runIds?.length === 0) {
     return [];
   }
-  return writeRun((db) => {
-    if (
-      input.requireAllActive &&
-      executeSqliteQueryTakeFirstSync(
-        db,
-        getNodeSqliteKysely<LedgerDatabase>(db)
-          .selectFrom("update_runs")
-          .select("run_id")
-          .where("status", "=", "running")
-          .where(
-            "run_id",
-            "not in",
-            candidates.map((candidate) => candidate.run_id),
-          )
-          .limit(1),
-      )
-    ) {
-      return [];
-    }
-    const selected = candidates.flatMap((candidate) => {
-      const record = readRun(db, candidate.run_id);
-      return record?.status === "running"
-        ? [{ record, rule: inspectUpdateRunAbandonment(record, input) }]
-        : [];
-    });
-    // Operator recovery is one selection: renewed activity preserves every selected row.
-    if (input.explicit && selected.some(({ rule }) => !rule)) {
-      return [];
-    }
-    return selected.flatMap(({ record, rule }) => {
-      if (!rule) {
-        return [];
-      }
-      upsertStep(record, {
-        step: "reconcile:abandoned",
-        status: "failed",
-        endedAtMs: Date.now(),
-        detail: rule,
+  const candidates =
+    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      ({ db }) => readUpdateRunReconciliationCandidates(db, input),
+      options,
+    )) ?? [];
+  return reconcileCandidates(candidates, input, options).reconciled;
+}
+
+/** History remains readable when best-effort reconciliation cannot obtain write access. */
+export async function getUpdateRunWithReconciliationAsync(
+  runId: string,
+  options: LedgerOptions = {},
+): Promise<{ run: UpdateRunRecord | undefined; reconciliationError?: string }> {
+  const candidate = await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+    ({ db }) => {
+      const run = tableExists(db, "update_runs") ? readRun(db, runId) : undefined;
+      return run ? inspectUpdateRunReconciliation(db, run, {}) : undefined;
+    },
+    options,
+  );
+  if (!candidate) {
+    return { run: undefined };
+  }
+  try {
+    const { current } = reconcileCandidates([candidate], {}, options);
+    return { run: current[0] };
+  } catch (error) {
+    return { run: candidate.record, reconciliationError: formatErrorMessage(error) };
+  }
+}
+
+function reconcileCandidates(
+  candidates: UpdateRunReconciliationCandidate[],
+  input: UpdateRunReconciliationInput,
+  options: LedgerOptions,
+): { current: UpdateRunRecord[]; reconciled: UpdateRunRecord[] } {
+  if (!canReconcileCandidates(candidates, input)) {
+    return { current: candidates.map(({ record }) => record), reconciled: [] };
+  }
+  return runExistingOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const selected = candidates.flatMap(({ record }) => {
+        const current = readRun(db, record.runId);
+        return current ? [inspectUpdateRunReconciliation(db, current, input)] : [];
       });
-      finishRunRecord(record, { status: "failed", reason: "abandoned" });
-      return [persistRun(db, record, options)];
-    });
-  }, options);
+      const current = selected.map(({ record }) => record);
+      if (
+        !canReconcileCandidates(selected, input) ||
+        (input.requireAllActive &&
+          executeSqliteQueryTakeFirstSync(
+            db,
+            getNodeSqliteKysely<LedgerDatabase>(db)
+              .selectFrom("update_runs")
+              .select("run_id")
+              .where("status", "=", "running")
+              .where(
+                "run_id",
+                "not in",
+                candidates.map(({ record }) => record.runId),
+              )
+              .limit(1),
+          ))
+      ) {
+        return { current, reconciled: [] };
+      }
+      const reconciled: UpdateRunRecord[] = [];
+      return {
+        current: selected.map(({ record, rule }) => {
+          if (!rule || (input.legacyOnly && rule !== LEGACY_UPDATE_RUN_EXPIRED_REASON)) {
+            return record;
+          }
+          upsertStep(record, {
+            step: "reconcile:abandoned",
+            status: "failed",
+            endedAtMs: Date.now(),
+            detail: rule,
+          });
+          finishUpdateRunRecord(record, {
+            status: "failed",
+            reason: rule === LEGACY_UPDATE_RUN_EXPIRED_REASON ? rule : "abandoned",
+          });
+          const saved = persistRun(db, record, options);
+          reconciled.push(saved);
+          return saved;
+        }),
+        reconciled,
+      };
+    },
+    options,
+    { schemaSql: schema, operationLabel: "update.run", busyTimeoutMs: options.busyTimeoutMs },
+  );
 }
 
 export function recordUpdateRunPhase(
@@ -389,6 +423,7 @@ export function recordUpdateRunPhase(
   phase: UpdateRunPhase,
   patch: RunPatch & { step?: UpdateRunStep } = {},
   options: LedgerOptions = {},
+  captureBefore?: Parameters<typeof mutateRun>[3],
 ): UpdateRunRecord {
   return mutateRun(
     runId,
@@ -436,12 +471,13 @@ export function recordUpdateRunPhase(
       }
     },
     options,
+    captureBefore,
   );
 }
 
 export function recordUpdateRunStep(
   runId: string,
-  step: UpdateRunStep,
+  { reason, ...step }: UpdateRunStep & { reason?: string },
   options: LedgerOptions = {},
 ): UpdateRunRecord {
   return mutateRun(
@@ -449,7 +485,43 @@ export function recordUpdateRunStep(
     (record) => {
       if (record.status === "running") {
         upsertStep(record, step);
+        if (reason !== undefined) {
+          record.reason = reason;
+        }
       }
+    },
+    options,
+  );
+}
+
+export function recordUpdateRunRepairContinuation(
+  runId: string,
+  inheritedRunId: string | undefined,
+  options: LedgerOptions = {},
+): void {
+  mutateRun(
+    runId,
+    (record) => {
+      const admission = inspectUpdateRepairDriverAdmission([record], inheritedRunId);
+      if (admission.kind === "conflict") {
+        throw new Error(admission.message);
+      }
+      const step =
+        admission.kind === "continuation"
+          ? "finalize:repair-continuation"
+          : "finalize:repair-takeover";
+      if (record.steps.some((entry) => entry.step === step)) {
+        return;
+      }
+      upsertStep(record, {
+        step,
+        status: "completed",
+        endedAtMs: Date.now(),
+        detail:
+          admission.kind === "continuation"
+            ? `Repair continued within the owning update by PID ${process.pid}.`
+            : `Repair took over Gateway activation by PID ${process.pid} under abandonment admission.`,
+      });
     },
     options,
   );
@@ -460,94 +532,172 @@ export function recordUpdateRunDiagnostic(
   runId: string,
   detail: string,
   options: LedgerOptions = {},
+  step = "finalize:exit",
 ): UpdateRunRecord {
   return mutateRun(
     runId,
     (record) => {
-      upsertStep(record, {
-        step: "finalize:exit",
-        status: "completed",
-        endedAtMs: Date.now(),
-        detail,
-      });
+      upsertStep(record, { step, status: "completed", endedAtMs: Date.now(), detail });
     },
     options,
   );
 }
 
-export function finishUpdateRun(
-  runId: string,
-  result: {
-    status: Exclude<UpdateRunRecord["status"], "running">;
-    reason?: string;
-    after?: UpdateRunRecord["after"];
-    downtimeMs?: number;
-  },
+/** Correct the shipped refusal classification only after its install target was satisfied. */
+export function reconcilePackageOwnerRefusal(
+  expected: UpdateRunRecord,
   options: LedgerOptions = {},
-): UpdateRunRecord {
-  return mutateRun(runId, (record) => finishRunRecord(record, result), options);
+): boolean {
+  if (!isUnacknowledgedPackageOwnerRefusal(expected)) {
+    return false;
+  }
+  return runExistingOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const query = getNodeSqliteKysely<LedgerDatabase>(db).selectFrom("update_runs");
+      const latest = executeSqliteQueryTakeFirstSync(
+        db,
+        query.selectAll().orderBy("created_at_ms", "desc").orderBy("run_id", "desc").limit(1),
+      );
+      if (
+        !latest ||
+        !isDeepStrictEqual(decodeRun(latest), expected) ||
+        executeSqliteQueryTakeFirstSync(
+          db,
+          query.select("run_id").where("status", "=", "running").limit(1),
+        ) ||
+        readRecoveries(db).some(
+          (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
+        )
+      ) {
+        return false;
+      }
+      mutateRunInTransaction(
+        db,
+        expected.runId,
+        (record) => {
+          record.status = "skipped";
+          record.reason = "unmanaged-package-install";
+          for (const step of record.steps) {
+            if (step.step === "requested") {
+              step.status = "skipped";
+            }
+          }
+          upsertStep(record, {
+            step: "reconcile:acknowledged",
+            status: "completed",
+            endedAtMs: Date.now(),
+          });
+        },
+        options,
+      );
+      return true;
+    },
+    options,
+    { schemaSql: schema, operationLabel: "update.run", busyTimeoutMs: options.busyTimeoutMs },
+  );
 }
 
-function finishRunRecord(
-  record: UpdateRunRecord,
-  result: Parameters<typeof finishUpdateRun>[1],
+/** Close only this local preview, excluding recovery in the same stable-schema transaction. */
+export function finishInterruptedUpdatePreview(
+  expected: UpdateRunRecord,
+  options: LedgerOptions,
 ): void {
-  // CLI and the new Gateway may finish together. The first durable terminal outcome wins.
-  if (record.status !== "running") {
-    return;
+  if (expected.status !== "running" || expected.phase !== "requested") {
+    throw new Error("Preview interruption requires an active admission");
   }
-  const now = Date.now();
-  // A thrown command or interrupted updater can miss its completion callback.
-  // Terminal runs cannot retain live steps after their lifecycle closes.
-  for (const step of record.steps) {
-    if (step.step === record.phase || step.status === "in_progress") {
-      step.status =
-        result.status === "failed"
-          ? "failed"
-          : result.status === "skipped"
-            ? "skipped"
-            : "completed";
-      step.endedAtMs = now;
-    }
+  runExistingOpenClawStateWriteTransaction(
+    ({ db }) => {
+      if (
+        readRecoveries(db).some(
+          (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
+        )
+      ) {
+        return;
+      }
+      mutateRunInTransaction(
+        db,
+        expected.runId,
+        (record) => {
+          if (isDeepStrictEqual(record, expected)) {
+            finishUpdateRunRecord(record, { status: "skipped", reason: "interrupted" });
+          }
+        },
+        options,
+      );
+    },
+    options,
+    { schemaSql: schema, operationLabel: "update.preview.interrupted" },
+  );
+}
+
+/** Caller holds fresh local admission and a live executor; retained recovery stays refused. */
+export function finishInterruptedUpdateBeforeActivation(
+  expected: UpdateRunRecord,
+  assertCurrent: () => void,
+  options: LedgerOptions,
+): void {
+  if (
+    expected.status !== "running" ||
+    !["requested", "staging", "validating"].includes(expected.phase)
+  ) {
+    throw new Error("Update interruption requires its live pre-activation transaction");
   }
-  record.status = result.status;
-  record.phase = "finished";
-  record.reason = result.reason ?? null;
-  record.finishedAtMs = now;
-  record.after = { ...record.after, ...result.after };
-  record.downtimeMs = result.downtimeMs ?? record.downtimeMs;
+  const recoveryTable = "config_machine_state";
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(`CREATE TABLE IF NOT EXISTS ${recoveryTable} (`);
+  const marker = ") STRICT;";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < 0) {
+    throw new Error("Interrupted update schema is unavailable.");
+  }
+  const recoverySchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length);
+  assertCurrent();
+  runExistingOpenClawStateWriteTransaction(
+    ({ db, path: pathname }) => {
+      assertCurrent();
+      // Older targets can omit recovery storage and predate STRICT metadata.
+      // The existing writer validates metadata ownership/version; present recovery
+      // storage must still match its canonical shape before excluding recovery.
+      const recoveryObject = executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<{ "main.sqlite_schema": { name: string } }>(db)
+          .selectFrom("main.sqlite_schema")
+          .select("name")
+          .where("name", "=", recoveryTable),
+      );
+      if (recoveryObject) {
+        assertSqliteSchemaContains(db, pathname, recoverySchema);
+      }
+      if (
+        !readRecoveries(db).some(
+          (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
+        )
+      ) {
+        mutateRunInTransaction(
+          db,
+          expected.runId,
+          (record) => {
+            if (isDeepStrictEqual(record, expected)) {
+              finishUpdateRunRecord(record, { status: "failed", reason: "interrupted" });
+            }
+          },
+          options,
+        );
+      }
+      assertCurrent();
+    },
+    options,
+    { schemaSql: schema, operationLabel: "update.interrupted" },
+  );
 }
 
 export function recordUpdateRunVerification(
   runId: string,
   verification: UpdateRunRecord["verification"],
-  options: LedgerOptions = {},
+  options: LedgerOptions & { onlyIfRunning?: true } = {},
 ): UpdateRunRecord {
   return mutateRun(
     runId,
-    (record) => {
-      record.verification = {
-        ...record.verification,
-        ...verification,
-        ...(verification.pluginErrors
-          ? { pluginErrors: verification.pluginErrors.slice(-32) }
-          : {}),
-      };
-      if (record.status === "running" && verification.serviceRunning === false) {
-        record.confirmedAtMs = null;
-      }
-      if (
-        record.verification.serviceRunning &&
-        record.verification.versionMatch &&
-        record.verification.settled === true &&
-        record.verification.readyz === true &&
-        record.verification.channelsReady === true &&
-        record.verification.pluginErrors?.length === 0 &&
-        record.confirmedAtMs === null
-      ) {
-        record.confirmedAtMs = Date.now();
-      }
-    },
+    (record) => recordUpdateRunVerificationRecord(record, verification, options),
     options,
   );
 }
@@ -570,91 +720,4 @@ export function recordUpdateRunRepairAttempt(
     },
     options,
   );
-}
-
-export function getUpdateRun(
-  runId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): UpdateRunRecord | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-    ({ db }) => (tableExists(db, "update_runs") ? readRun(db, runId) : undefined),
-    options,
-  );
-}
-
-export function listUpdateRuns(
-  input: { limit?: number; active?: boolean } = {},
-  options: OpenClawStateDatabaseOptions = {},
-): UpdateRunRecord[] {
-  return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
-      if (!tableExists(db, "update_runs")) {
-        return [];
-      }
-      let query = getNodeSqliteKysely<LedgerDatabase>(db).selectFrom("update_runs").selectAll();
-      if (input.active) {
-        query = query.where("status", "=", "running");
-      }
-      return executeSqliteQuerySync(
-        db,
-        query
-          .orderBy("created_at_ms", "desc")
-          .orderBy("run_id", "desc")
-          .limit(Math.max(1, Math.min(100, Math.trunc(input.limit ?? 20)))),
-      ).rows.map(decodeRun);
-    }, options) ?? []
-  );
-}
-
-export function findActiveUpdateRun(
-  options: OpenClawStateDatabaseOptions = {},
-): UpdateRunRecord | undefined {
-  return listUpdateRuns({ limit: 1, active: true }, options)[0];
-}
-
-/** Only a later recorded fetch completion clears an updater fetch failure. */
-export function getLatestUpdateFetchFailure(
-  options: OpenClawStateDatabaseOptions = {},
-): UpdateFetchFailure | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
-    if (!tableExists(db, "update_runs")) {
-      return undefined;
-    }
-    const query = getNodeSqliteKysely<LedgerDatabase>(db)
-      .selectFrom("update_runs")
-      .selectAll()
-      .orderBy("created_at_ms", "desc")
-      .orderBy("run_id", "desc");
-    for (const row of iterateSqliteQuerySync(db, query)) {
-      const run = decodeRun(row);
-      const fetchSteps = run.steps.filter(
-        ({ step }) =>
-          /^git (?:fetch(?:\s|$)|target inspection fetch$)/u.test(step) ||
-          step === "git import admitted target",
-      );
-      const failed = fetchSteps.findLast((step) => step.status === "failed");
-      // A run can complete its branch fetch and then fail fetching tags.
-      if (run.reason === "fetch-failed" || failed) {
-        const detail = failed?.detail ?? "";
-        return {
-          reason: "fetch-failed",
-          failedAtMs: failed?.endedAtMs ?? run.finishedAtMs ?? run.updatedAtMs,
-          detail: /would clobber existing tag/iu.test(detail)
-            ? "tag conflict"
-            : /authentication|permission denied|could not read Username|access denied/iu.test(
-                  detail,
-                )
-              ? "authentication failed"
-              : /resolve host|network|timed? out|timeout|unreachable/iu.test(detail)
-                ? "network error"
-                : "fetch-failed",
-          runId: run.runId,
-        };
-      }
-      if (fetchSteps.some((step) => step.status === "completed")) {
-        return undefined;
-      }
-    }
-    return undefined;
-  }, options);
 }

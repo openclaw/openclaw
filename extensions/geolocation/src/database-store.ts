@@ -8,40 +8,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { gunzip } from "node:zlib";
 import { type CityResponse, Reader } from "maxmind";
+import { tempFile } from "openclaw/plugin-sdk/file-access-runtime";
+import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { expandDatabaseUrls, type GeolocationSettings } from "./config.js";
 
 const gunzipAsync = promisify(gunzip);
-
-/**
- * Reads the body chunk by chunk and fails as soon as the running total passes
- * the cap, so an oversized response is rejected mid-flight instead of after it
- * has already been allocated in full.
- */
-async function readBoundedBody(response: Response, limit: number): Promise<Buffer> {
-  const body = response.body;
-  if (!body) {
-    throw new Error("response had no body");
-  }
-  const reader = body.getReader();
-  const chunks: Buffer[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      total += value.byteLength;
-      if (total > limit) {
-        throw new Error(`response exceeded the ${limit} byte cap`);
-      }
-      chunks.push(Buffer.from(value));
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
-  return Buffer.concat(chunks);
-}
 
 // A city-level MMDB is ~125 MB today and its gzip is ~20 MB. Both ceilings are
 // enforced while reading, not after: a replaced or compromised source must not
@@ -94,7 +65,13 @@ async function downloadDatabase(deps: StoreDeps, target: string): Promise<Reader
         failures.push(`${url} -> HTTP ${response.status}`);
         continue;
       }
-      const raw = await readBoundedBody(response, MAX_COMPRESSED_BYTES);
+      if (!response.body) {
+        throw new Error("response had no body");
+      }
+      const raw = await readByteStreamWithLimit(response.body.values(), {
+        maxBytes: MAX_COMPRESSED_BYTES,
+        onOverflow: ({ maxBytes }) => new Error(`response exceeded the ${maxBytes} byte cap`),
+      });
       // maxOutputLength makes zlib stop inflating at the ceiling rather than
       // allocating whatever the compressed stream claims to expand into.
       const body = url.endsWith(".gz")
@@ -104,10 +81,23 @@ async function downloadDatabase(deps: StoreDeps, target: string): Promise<Reader
       // a working database on disk. The reader is returned so the caller does
       // not read and parse the same bytes a second time.
       const reader = new Reader<CityResponse>(body);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      const staging = `${target}.partial`;
-      await fs.writeFile(staging, body);
-      await fs.rename(staging, target);
+      try {
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        const directory = await fs.realpath(path.dirname(target));
+        await using staged = await tempFile({
+          rootDir: directory,
+          prefix: "ip-city",
+          onCleanupError: (error) => {
+            throw error;
+          },
+        });
+        await fs.writeFile(staged.path, body, { flag: "wx" });
+        await fs.rename(staged.path, path.join(directory, path.basename(target)));
+      } catch (err) {
+        deps.logger?.warn(
+          `geolocation: could not cache the downloaded database, serving it from memory: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
       deps.logger?.info(`geolocation: downloaded ${body.byteLength} bytes from ${url}`);
       return reader;
     } catch (err) {

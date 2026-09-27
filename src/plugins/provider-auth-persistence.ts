@@ -39,7 +39,7 @@ type PersistProviderAuthProfileBatchParams = Omit<
   env?: NodeJS.ProcessEnv;
 };
 
-export type ProviderAuthProtectedProfilesReceipt = {
+type ProviderAuthProtectedProfilesReceipt = {
   profiles: ProviderAuthProfile[];
   commit: () => Promise<void>;
   rollback: (retainProfileIds?: ReadonlySet<string>) => Promise<void>;
@@ -302,16 +302,18 @@ async function throwAfterStageFailure(params: {
 }
 
 /** Stages protected provider credentials while retaining their per-profile writer locks. */
-export async function stageProviderAuthProfilesForPersistence(params: {
+async function stageProviderAuthProfilesForPersistence(params: {
   profiles: readonly ProviderAuthProfile[];
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
+  beforeWrite?: () => void;
 }): Promise<ProviderAuthProtectedProfilesReceipt> {
   const env = resolvePersistenceEnv(params);
   const locks = await acquireProviderAuthLocks(params.profiles, env);
   let prepared: ReturnType<typeof materializeProviderAuthProfiles>;
   try {
+    params.beforeWrite?.();
     prepared = materializeProviderAuthProfiles({
       profiles: params.profiles,
       config: params.config,
@@ -412,6 +414,7 @@ async function stageProviderAuthProfileBatchCore(
       ...(params.stateDir ? { stateDir: params.stateDir } : {}),
       ...(params.resetFailureState ? { resetFailureState: true } : {}),
       allowOAuthGenerationReplacement: true,
+      beforeWrite: params.beforeWrite,
     });
   } catch (error) {
     try {

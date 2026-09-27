@@ -133,9 +133,6 @@ export function createTelegramCallbackMessageActions(params: {
   };
 }
 type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
-type QuestionResolver = (
-  params: ResolveQuestionParams,
-) => ReturnType<typeof questionGatewayRuntime.resolveOption>;
 type QuestionFeedbackMode = "terminal" | "retry" | "custom-input";
 
 export async function sendTelegramQuestionFeedback(params: {
@@ -185,17 +182,19 @@ export async function handleTelegramQuestionCallback(params: {
   cfg: ResolveQuestionParams["cfg"];
   senderId: string;
   feedback: (text: string, mode: QuestionFeedbackMode) => Promise<unknown>;
-  resolveQuestion?: QuestionResolver;
+  resolveQuestion?: typeof questionGatewayRuntime.resolveOption;
 }): Promise<void> {
   try {
+    const result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
+      cfg: params.cfg,
+      questionId: params.callback.questionId,
+      ...(params.callback.intent === "custom-input"
+        ? { customInput: true }
+        : { optionIndex: params.callback.optionIndex }),
+      senderId: params.senderId,
+      clientDisplayName: "Telegram question",
+    });
     if (params.callback.intent === "custom-input") {
-      const result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
-        cfg: params.cfg,
-        questionId: params.callback.questionId,
-        customInput: true,
-        senderId: params.senderId,
-        clientDisplayName: "Telegram question",
-      });
       if (result.status === "already-terminal") {
         await params.feedback("This question was already answered.", "terminal");
         return;
@@ -203,13 +202,6 @@ export async function handleTelegramQuestionCallback(params: {
       await params.feedback("Reply with your own answer.", "custom-input");
       return;
     }
-    const result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
-      cfg: params.cfg,
-      questionId: params.callback.questionId,
-      optionIndex: params.callback.optionIndex,
-      senderId: params.senderId,
-      clientDisplayName: "Telegram question",
-    });
     await params
       .feedback(
         result.status === "answered" ? "Answer submitted." : "This question was already answered.",

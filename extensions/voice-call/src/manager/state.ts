@@ -1,4 +1,3 @@
-// Voice Call plugin module implements state behavior.
 import { TerminalStates, type CallRecord, type CallState, type TranscriptEntry } from "../types.js";
 
 const ConversationStates = new Set<CallState>(["speaking", "listening"]);
@@ -46,4 +45,14 @@ export function addTranscriptEntry(call: CallRecord, speaker: "bot" | "user", te
     isFinal: true,
   };
   call.transcript.push(entry);
+}
+
+/** Stage persisted changes without exposing uncommitted state through active-call getters. */
+export function copyCallRecord(call: CallRecord): CallRecord {
+  return {
+    ...call,
+    transcript: [...call.transcript],
+    processedEventIds: [...call.processedEventIds],
+    ...(call.metadata ? { metadata: { ...call.metadata } } : {}),
+  };
 }

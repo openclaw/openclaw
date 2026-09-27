@@ -1,10 +1,11 @@
 // Runtime LLM helpers adapt plugin provider hooks into the core model runtime.
 import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
-import { normalizeModelRef } from "../../agents/model-ref-shared.js";
+import { normalizeModelRef, type ModelRef } from "../../agents/model-ref-shared.js";
 import type { UsageLike } from "../../agents/usage.js";
-import { normalizeUsage } from "../../agents/usage.js";
+import { hasRecordedUsageCost, normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { markHostPluginUsageDiagnosticEvent } from "../../infra/diagnostic-plugin-usage-provenance.js";
@@ -22,12 +23,17 @@ import {
 import { normalizePluginsConfig } from "../config-state.js";
 import { compileModelAllowlist, type CompiledModelAllowlist } from "../model-allowlist.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
-import { createLlmCompleteError as completionError } from "./runtime-llm-error.js";
+import {
+  createLlmCompleteError as completionError,
+  isLlmOperatorAuthorizationError,
+} from "./runtime-llm-error.js";
 import {
   assertSupportedExecutionMode,
   isIsolatedAgentRuntimeRequest,
   runIsolatedAgentRuntimeCompletion,
 } from "./runtime-llm-isolated.js";
+import { bindLlmOperatorAuthority } from "./runtime-llm-operator-authority.js";
+import { writeRuntimeLog } from "./runtime-logging.js";
 import type {
   LlmCompleteCaller,
   LlmCompleteParams,
@@ -72,10 +78,10 @@ const defaultLogger = getChildLogger({ capability: "runtime.llm" });
 
 function toRuntimeLogger(logger: typeof defaultLogger): RuntimeLogger {
   return {
-    debug: (message, meta) => logger.debug?.(meta, message),
-    info: (message, meta) => logger.info(meta, message),
-    warn: (message, meta) => logger.warn(meta, message),
-    error: (message, meta) => logger.error(meta, message),
+    debug: (message, meta) => writeRuntimeLog(logger, "debug", message, meta),
+    info: (message, meta) => writeRuntimeLog(logger, "info", message, meta),
+    warn: (message, meta) => writeRuntimeLog(logger, "warn", message, meta),
+    error: (message, meta) => writeRuntimeLog(logger, "error", message, meta),
   };
 }
 
@@ -199,19 +205,17 @@ function readFiniteNonNegativeNumber(value: unknown): number | undefined {
 }
 
 function readExplicitCostUsd(raw: unknown): number | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  const cost = (raw as { cost?: unknown }).cost;
+  const cost = asOptionalRecord(raw)?.cost;
   if (typeof cost === "number") {
     return readFiniteNonNegativeNumber(cost);
   }
-  if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
+  const record = asOptionalRecord(cost);
+  if (!record) {
     return undefined;
   }
   return (
-    readFiniteNonNegativeNumber((cost as { total?: unknown; totalUsd?: unknown }).totalUsd) ??
-    readFiniteNonNegativeNumber((cost as { total?: unknown }).total)
+    readFiniteNonNegativeNumber(record.totalUsd) ??
+    (hasRecordedUsageCost(record) ? readFiniteNonNegativeNumber(record.total) : undefined)
   );
 }
 
@@ -458,7 +462,7 @@ export function createRuntimeLlm(
 ): Pick<PluginRuntimeCore["llm"], "complete"> {
   const logger = options.logger ?? toRuntimeLogger(defaultLogger);
   return {
-    complete: async (params: LlmCompleteParams): Promise<LlmCompleteResult> => {
+    complete: bindLlmOperatorAuthority(options.authority?.caller, async (params, source) => {
       const caller = resolveTrustedCaller(options.authority);
       if (options.authority?.allowComplete === false) {
         const reason = options.authority.denyReason ?? "capability denied";
@@ -473,6 +477,8 @@ export function createRuntimeLlm(
         );
       }
       assertSupportedExecutionMode(params);
+      const { operatorAuthority, signal: requestSignal, assertCurrent } = source;
+      assertCurrent();
 
       const [
         {
@@ -517,6 +523,8 @@ export function createRuntimeLlm(
         throw completionError("LLM_COMPLETION_FAILED", `No model configured for agent ${agentId}.`);
       }
       const normalizedSelection = normalizeModelRef(selection.provider, selection.modelId);
+      assertCurrent();
+      source.assertModelAllowed(normalizedSelection);
       const resolvedModelRef = modelKey(normalizedSelection.provider, normalizedSelection.model);
       assertModelAllowed({ kind: "completion", resolvedModelRef, policy: authorityPolicy });
       assertModelAllowed({
@@ -555,7 +563,7 @@ export function createRuntimeLlm(
           pluginPolicy,
         });
         const result = await runIsolatedAgentRuntimeCompletion({
-          request: params,
+          request: requestSignal === params.signal ? params : { ...params, signal: requestSignal },
           cfg,
           agentId,
           provider: selection.provider,
@@ -564,7 +572,10 @@ export function createRuntimeLlm(
           // an unbound call may fall back to the agent's configured selection.
           authProfileId:
             executionProfile ?? requestedModelProfile ?? preferredProfile ?? modelProfile,
+          operatorAuthority,
+          assertCurrent,
         });
+        assertCurrent();
         return finalizePluginLlmCompletion({
           cfg,
           hostPluginId: pluginPolicyId,
@@ -585,24 +596,71 @@ export function createRuntimeLlm(
       const trackOwner = captureAsyncWorkTracker();
       // Admit drainage with the parent before acquisition; the caller only waits for its result.
       void trackOwner(async () => {
-        const prepared = await acquireSimpleCompletionModelForAgent({
+        assertCurrent();
+        let preparedLogicalModel: ModelRef | undefined;
+        const preparation = await acquireSimpleCompletionModelForAgent({
           cfg,
           agentId,
           modelRef: params.model,
           preferredProfile,
+          ...(requestedModelProfile ? { bindAuthOwner: true } : {}),
           allowBundledStaticCatalogFallback: true,
           allowMissingApiKeyModes: ["aws-sdk"],
           skipAgentDiscovery: true,
+          signal: requestSignal,
+          modelResolver: operatorAuthority
+            ? async (...args) => {
+                const { resolveModelAsync } =
+                  await import("../../agents/embedded-agent-runner/model.js");
+                assertCurrent();
+                const resolved = await resolveModelAsync(...args);
+                if (resolved.model) {
+                  preparedLogicalModel = resolved.logicalRef;
+                  source.assertModelAllowed(preparedLogicalModel);
+                }
+                return resolved;
+              }
+            : undefined,
         });
 
-        if ("error" in prepared) {
-          throw new Error(`Plugin LLM completion failed: ${prepared.error}`);
+        if ("error" in preparation) {
+          throw new Error(`Plugin LLM completion failed: ${preparation.error}`);
         }
+        await using prepared = preparation;
+        const modelExecution = source.bindModelExecution(
+          preparedLogicalModel ?? {
+            provider: prepared.selection.provider,
+            model: prepared.selection.modelId,
+          },
+        );
+        const modelSignal = modelExecution
+          ? requestSignal
+            ? AbortSignal.any([requestSignal, modelExecution.signal])
+            : modelExecution.signal
+          : requestSignal;
+        const assertPreparedCurrent = () => {
+          assertCurrent();
+          modelExecution?.assertCurrent();
+        };
+        assertPreparedCurrent();
 
         const work = new AsyncWorkScope();
         try {
           callerResult.resolve(
             await work.track(async () => {
+              if (params.requiredAuthMode && prepared.auth.mode !== params.requiredAuthMode) {
+                throw completionError(
+                  "LLM_COMPLETION_NOT_AUTHORIZED",
+                  "Plugin LLM completion selected a credential with the wrong authentication mode.",
+                );
+              }
+              if (requestedModelProfile && prepared.auth.profileId !== requestedModelProfile) {
+                throw completionError(
+                  "LLM_COMPLETION_NOT_AUTHORIZED",
+                  "Plugin LLM completion selected a different authentication profile.",
+                );
+              }
+
               const context = {
                 systemPrompt: buildSystemPrompt(params),
                 messages: buildMessages({
@@ -614,6 +672,7 @@ export function createRuntimeLlm(
               };
 
               const result = await completeWithPreparedSimpleCompletionModel({
+                assertCurrent: assertPreparedCurrent,
                 model: prepared.model,
                 auth: prepared.auth,
                 cfg,
@@ -621,10 +680,14 @@ export function createRuntimeLlm(
                 options: {
                   maxTokens: asFiniteNumber(params.maxTokens),
                   temperature: asFiniteNumber(params.temperature),
+                  ...(params.responseFormat !== undefined
+                    ? { responseFormat: params.responseFormat }
+                    : {}),
                   ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
-                  signal: params.signal,
+                  signal: modelSignal,
                 },
               });
+              assertPreparedCurrent();
 
               const text = result.content
                 .filter((c): c is { type: "text"; text: string } => c.type === "text")
@@ -642,6 +705,8 @@ export function createRuntimeLlm(
                   text,
                   provider: prepared.selection.provider,
                   model: prepared.selection.modelId,
+                  responseModel: result.responseModel,
+                  stopReason: result.stopReason,
                   agentId,
                   execution: {
                     mode: "direct-provider",
@@ -653,13 +718,28 @@ export function createRuntimeLlm(
             }),
           );
         } catch (error) {
-          callerResult.reject(error);
+          try {
+            if (!isLlmOperatorAuthorizationError(error)) {
+              assertPreparedCurrent();
+            }
+            callerResult.reject(error);
+          } catch (authorizationError) {
+            callerResult.reject(authorizationError);
+          }
         } finally {
           await work.drain();
-          prepared.release();
         }
-      }).catch((error: unknown) => callerResult.reject(error));
+      }).catch((error: unknown) => {
+        try {
+          if (!isLlmOperatorAuthorizationError(error)) {
+            assertCurrent();
+          }
+          callerResult.reject(error);
+        } catch (authorizationError) {
+          callerResult.reject(authorizationError);
+        }
+      });
       return await callerResult.promise;
-    },
+    }),
   };
 }

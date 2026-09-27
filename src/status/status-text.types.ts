@@ -36,7 +36,11 @@ export type BuildStatusTextParams = {
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;
-  resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+  resolveDefaultThinkingLevel: (selection?: {
+    provider: string;
+    model: string;
+    agentRuntime?: string | null;
+  }) => Promise<ThinkLevel | undefined>;
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];

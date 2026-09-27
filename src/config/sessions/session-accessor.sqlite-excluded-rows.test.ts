@@ -14,7 +14,10 @@ import {
   readSessionEntryCount,
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-store.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import {
+  projectSessionEntryLifecycleMutation,
+  readReferencedSessionIds,
+} from "./session-accessor.sqlite-lifecycle-state.js";
 import { readSessionMaintenanceCapCandidates } from "./session-accessor.sqlite-maintenance-candidates.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -45,12 +48,37 @@ function openDatabase(encoding?: "UTF-8" | "UTF-16le" | "UTF-16be") {
   });
 }
 
-function insertEntry(database: OpenClawAgentDatabase, key: string, id: string, json?: string) {
+function insertEntry(
+  database: OpenClawAgentDatabase,
+  key: string,
+  id: string,
+  json?: string | Buffer,
+) {
   database.db
     .prepare(
-      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, CAST(? AS TEXT), ?)",
     )
     .run(key, id, json ?? JSON.stringify({ sessionId: id, updatedAt: 1 }), 1);
+}
+
+function trackMaterializedKeys(database: OpenClawAgentDatabase) {
+  const materializedKeys: string[] = [];
+  const prepare = database.db.prepare.bind(database.db);
+  vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+    const statement = prepare(sql);
+    const iterate = statement.iterate.bind(statement);
+    vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
+      for (const row of iterate(...args)) {
+        if (typeof row.session_key === "string") {
+          materializedKeys.push(row.session_key);
+        }
+        yield row;
+      }
+      return undefined;
+    });
+    return statement;
+  });
+  return materializedKeys;
 }
 
 const readers = [
@@ -62,9 +90,13 @@ const readers = [
   {
     name: "cap candidates",
     read: (database: OpenClawAgentDatabase, excludedKeys: ReadonlySet<string>) =>
-      Object.values(readSessionMaintenanceCapCandidates({ database, excludedKeys })).map(
-        (entry) => entry.sessionId,
-      ),
+      Object.values(
+        readSessionMaintenanceCapCandidates({
+          database,
+          overflow: Number.MAX_SAFE_INTEGER,
+          excludedKeys,
+        }),
+      ).map((entry) => entry.sessionId),
   },
 ];
 
@@ -82,22 +114,7 @@ describe.each(readers)("SQLite $name exclusions", ({ read }) => {
       }),
     );
     insertEntry(database, "agent:main:kept", "kept");
-    const materializedKeys: string[] = [];
-    const prepare = database.db.prepare.bind(database.db);
-    vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
-      const statement = prepare(sql);
-      const iterate = statement.iterate.bind(statement);
-      vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
-        for (const row of iterate(...args)) {
-          if (typeof row.session_key === "string") {
-            materializedKeys.push(row.session_key);
-          }
-          yield row;
-        }
-        return undefined;
-      });
-      return statement;
-    });
+    const materializedKeys = trackMaterializedKeys(database);
 
     expect(read(database, new Set(["agent:main:excluded"]))).toEqual(["kept"]);
     expect(materializedKeys).toEqual(["agent:main:kept"]);
@@ -164,46 +181,108 @@ describe.each(readers)("SQLite $name exclusions", ({ read }) => {
 describe("SQLite exclusion survivor semantics", () => {
   describe.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)("%s JSON boundaries", (encoding) => {
     it.each([
-      ["literal NUL", "\u0000"],
-      ["literal NUL and suffix", "\u0000garbage"],
-      ["valid escaped NUL", ""],
-    ])("keeps %s metadata reads consistent with full rows", (_name, suffix) => {
-      const database = openDatabase(encoding);
-      const key = "agent:main:survivor";
-      const json =
-        JSON.stringify({
-          sessionId: "raw",
-          updatedAt: 1,
-          previousSessionId: "historical",
-          label: "escaped\u0000日本語🦞",
-        }) + suffix;
-      insertEntry(database, key, "raw", json);
-      // Compare the actual full-reader contract, including older Node TEXT bindings.
-      const full = readSessionEntryStore(database, { allowCanonicalRepair: true });
-      const fullEntry = full[key];
-      expect(readSessionMaintenanceCapCandidates({ database, excludedKeys: new Set() })).toEqual(
-        full,
-      );
-      expect([...readReferencedSessionIds(database)].toSorted()).toEqual(
-        fullEntry ? ["historical", "raw"] : ["raw"],
-      );
-      expect(readSessionEntryCount(database)).toBe(Object.keys(full).length);
-      expect([...iterateSessionEntryKeys(database)]).toEqual(Object.keys(full));
-      if (fullEntry) {
-        expect(readExactSessionEntryRow(database, key, "list")?.entry).toEqual(fullEntry);
-      } else {
-        expect(() => readExactSessionEntryRow(database, key)).toThrow(
-          "invalid persisted session row",
+      ["literal NUL", "\u0000", undefined],
+      ["literal NUL and suffix", "\u0000garbage", undefined],
+      ["valid escaped NUL", "", undefined],
+      ["raw noncharacters", "", "noncharacters"],
+      ["raw high surrogate", "", "high"],
+      ["raw low surrogate", "", "low"],
+      ["raw noncharacters with NUL", "\u0000", "noncharacters"],
+      ["raw high surrogate with NUL", "\u0000", "high"],
+      ["raw low surrogate with NUL", "\u0000", "low"],
+    ] as const)(
+      "preserves %s metadata parsing and prompt projection",
+      (_name, suffix, rawLabel) => {
+        const database = openDatabase(encoding);
+        const key = "agent:main:survivor";
+        const prompt = "unused saved prompt".repeat(32);
+        const json =
+          JSON.stringify({
+            sessionId: "raw",
+            updatedAt: 1,
+            previousSessionId: "historical",
+            label: rawLabel ? "RAW_LABEL" : "escaped\u0000日本語🦞",
+            skillsSnapshot: { prompt, skills: [] },
+          }) + suffix;
+        let stored: string | Buffer = json;
+        if (rawLabel) {
+          const bytes = {
+            noncharacters: {
+              "UTF-8": "efbfbeefbfbf",
+              "UTF-16le": "feffffff",
+              "UTF-16be": "fffeffff",
+            },
+            high: { "UTF-8": "eda080", "UTF-16le": "00d8", "UTF-16be": "d800" },
+            low: { "UTF-8": "edb080", "UTF-16le": "00dc", "UTF-16be": "dc00" },
+          }[rawLabel][encoding];
+          const encode = (value: string) => {
+            const buffer = Buffer.from(value, encoding === "UTF-8" ? "utf8" : "utf16le");
+            return encoding === "UTF-16be" ? buffer.swap16() : buffer;
+          };
+          const marker = json.indexOf("RAW_LABEL");
+          stored = Buffer.concat([
+            encode(json.slice(0, marker)),
+            Buffer.from(bytes, "hex"),
+            encode(json.slice(marker + "RAW_LABEL".length)),
+          ]);
+        }
+        insertEntry(database, key, "raw", stored);
+        const storedBytes = database.db.prepare(
+          "SELECT hex(entry_json) AS bytes FROM session_nodes",
         );
-        expect(() => readExactSessionEntryRow(database, key, "list")).toThrow(
-          "invalid persisted session row",
+        const bytesBefore = storedBytes.get()?.bytes;
+        // Compare the actual full-reader contract, including older Node TEXT bindings.
+        const full = readSessionEntryStore(database, { allowCanonicalRepair: true });
+        const fullEntry = full[key];
+        const metadata = fullEntry ? { ...fullEntry } : undefined;
+        if (metadata) {
+          delete metadata.skillsSnapshot;
+          // SQLite's JSON projection normalizes raw UTF-16 noncharacters; full TEXT reads retain them.
+          if (rawLabel === "noncharacters" && encoding !== "UTF-8" && !suffix) {
+            metadata.label = "\uFFFD\uFFFD";
+          }
+        }
+        expect(
+          readSessionMaintenanceCapCandidates({
+            database,
+            overflow: Number.MAX_SAFE_INTEGER,
+            excludedKeys: new Set(),
+          }),
+        ).toEqual(metadata ? { [key]: metadata } : {});
+        expect([...readReferencedSessionIds(database)].toSorted()).toEqual(
+          fullEntry ? ["historical", "raw"] : ["raw"],
         );
-      }
-      expect(
-        readSessionMaintenanceCapCandidates({ database, excludedKeys: new Set([key]) }),
-      ).toEqual({});
-      expect([...readReferencedSessionIds(database, new Set([key]))]).toEqual([]);
-    });
+        expect(readReferencedSessionIds(database, undefined, ["historical"])).toEqual(
+          new Set(fullEntry ? ["historical"] : []),
+        );
+        expect(readReferencedSessionIds(database, undefined, ["raw"])).toEqual(new Set(["raw"]));
+        expect(readSessionEntryCount(database)).toBe(Object.keys(full).length);
+        expect([...iterateSessionEntryKeys(database)]).toEqual(Object.keys(full));
+        if (fullEntry) {
+          const listed = readExactSessionEntryRow(database, key, "list");
+          expect(listed?.entry).toEqual(metadata);
+          if (!suffix) {
+            expect(listed?.row.entry_json).not.toContain(prompt);
+          }
+        } else {
+          expect(() => readExactSessionEntryRow(database, key)).toThrow(
+            "invalid persisted session row",
+          );
+          expect(() => readExactSessionEntryRow(database, key, "list")).toThrow(
+            "invalid persisted session row",
+          );
+        }
+        expect(
+          readSessionMaintenanceCapCandidates({
+            database,
+            overflow: Number.MAX_SAFE_INTEGER,
+            excludedKeys: new Set([key]),
+          }),
+        ).toEqual({});
+        expect([...readReferencedSessionIds(database, new Set([key]))]).toEqual([]);
+        expect(storedBytes.get()?.bytes).toBe(bytesBefore);
+      },
+    );
   });
 
   it.each([
@@ -228,9 +307,14 @@ describe("SQLite exclusion survivor semantics", () => {
     insertEntry(database, "excluded", "excluded");
     const excludedKeys = new Set(["excluded"]);
     expect([...readReferencedSessionIds(database, excludedKeys)]).toEqual(["raw"]);
-    expect(readSessionMaintenanceCapCandidates({ database, excludedKeys })).toEqual(
-      readable ? { survivor: JSON.parse(json) } : {},
-    );
+    expect(readReferencedSessionIds(database, excludedKeys, ["raw"])).toEqual(new Set(["raw"]));
+    expect(
+      readSessionMaintenanceCapCandidates({
+        database,
+        overflow: Number.MAX_SAFE_INTEGER,
+        excludedKeys,
+      }),
+    ).toEqual(readable ? { survivor: JSON.parse(json) } : {});
   });
 
   it("retains surviving historical references, including archived entries", () => {
@@ -260,6 +344,283 @@ describe("SQLite exclusion survivor semantics", () => {
     expect([...readReferencedSessionIds(database, excludedKeys)].toSorted()).toEqual(
       ["current", "previous", "family", "checkpoint", "pre", "post"].toSorted(),
     );
-    expect(readSessionMaintenanceCapCandidates({ database, excludedKeys })).toEqual({});
+    expect(
+      readSessionMaintenanceCapCandidates({
+        database,
+        overflow: Number.MAX_SAFE_INTEGER,
+        excludedKeys,
+      }),
+    ).toEqual({});
+  });
+});
+
+describe("SQLite candidate reference reads", () => {
+  it("bounds reference rows when planning removal among 5,000 unrelated entries", async () => {
+    const database = openDatabase();
+    const removedKey = "agent:main:removed";
+    const entry = { sessionId: "removed", updatedAt: 1, previousSessionId: "shared" };
+    database.db.exec("BEGIN");
+    try {
+      for (let index = 0; index < 5_000; index += 1) {
+        insertEntry(database, `agent:main:unrelated-${index}`, `unrelated-${index}`);
+      }
+      insertEntry(database, removedKey, entry.sessionId, JSON.stringify(entry));
+      insertEntry(database, "agent:main:survivor", "shared");
+      database.db.exec("UPDATE session_nodes SET entry_valid = 1");
+      database.db.exec("COMMIT");
+    } catch (error) {
+      database.db.exec("ROLLBACK");
+      throw error;
+    }
+    // Admit the fixture before measuring the hot lifecycle planning path.
+    readSessionEntryStore(database);
+    const fullReferences = readReferencedSessionIds(database, new Set([removedKey]));
+    const keys = trackMaterializedKeys(database);
+    const startedAt = performance.now();
+    const result = await projectSessionEntryLifecycleMutation(
+      { agentId: database.agentId, path: database.path },
+      {
+        archiveDirectory: path.dirname(database.path),
+        removals: [{ sessionKey: removedKey, expectedEntry: entry }],
+        upserts: [],
+      },
+    );
+    console.log({ lifecycleReferenceRows: keys.length, planningMs: performance.now() - startedAt });
+    expect(result.removals).toHaveLength(1);
+    expect(result.deletePlans.map((plan) => plan.sessionId)).toEqual(
+      [entry.sessionId, entry.previousSessionId].filter((id) => !fullReferences.has(id)),
+    );
+    expect(result.deletePlans.map((plan) => plan.sessionId)).toEqual(["removed"]);
+    expect(keys.length).toBeLessThan(50);
+  });
+
+  it("preserves surviving and same-call references to generations absent from the removed entry", async () => {
+    const database = openDatabase();
+    const removedKey = "agent:main:removed";
+    insertEntry(database, removedKey, "removed");
+    insertEntry(database, "agent:main:survivor", "retained-history");
+    database.db.exec("UPDATE session_nodes SET entry_valid = 1");
+    const insertWindow = database.db.prepare(
+      "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
+    );
+    for (const id of ["retained-history", "upsert-history", "unreferenced-history"]) {
+      insertWindow.run(id, removedKey);
+    }
+    const result = await projectSessionEntryLifecycleMutation(
+      { agentId: database.agentId, path: database.path },
+      {
+        archiveDirectory: path.dirname(database.path),
+        removals: [{ sessionKey: removedKey, archiveRemovedTranscript: true }],
+        upserts: [
+          {
+            sessionKey: "agent:main:new-owner",
+            entry: { sessionId: "upsert-history", updatedAt: 2 },
+          },
+        ],
+      },
+    );
+    expect(result.deletePlans.map((plan) => plan.sessionId).toSorted()).toEqual([
+      "removed",
+      "unreferenced-history",
+    ]);
+  });
+
+  it.each(["current ", "current\0 ", "\u00a0current\ufeff"])(
+    "retains normalized current IDs for %j",
+    (current) => {
+      const database = openDatabase();
+      insertEntry(database, "owner", current);
+      expect(readReferencedSessionIds(database)).toEqual(new Set([current, current.trim()]));
+      expect(readReferencedSessionIds(database, undefined, [current.trim()])).toEqual(
+        new Set([current.trim()]),
+      );
+    },
+  );
+
+  it("extracts ordinary references without decoding entry JSON in JavaScript", () => {
+    const database = openDatabase();
+    const expected = new Set<string>();
+    for (let index = 0; index < 32; index += 1) {
+      const ids = [
+        `current-${index}`,
+        `previous-${index}`,
+        `family-${index}`,
+        `checkpoint-${index}`,
+        `pre-${index}`,
+        `post-${index}`,
+      ] as const;
+      for (const id of ids) {
+        expected.add(id);
+      }
+      insertEntry(
+        database,
+        `owner-${index}`,
+        ids[0],
+        JSON.stringify({
+          sessionId: ids[0],
+          updatedAt: 1,
+          previousSessionId: ` ${ids[1]} `,
+          usageFamilySessionIds: [ids[2]],
+          compactionCheckpoints: [
+            {
+              sessionId: ids[3],
+              preCompaction: { sessionId: ids[4] },
+              postCompaction: { sessionId: ids[5] },
+              unrelated: { nested: [{ sessionId: "not-a-reference" }] },
+            },
+          ],
+          skillsSnapshot: { prompt: "large saved prompt".repeat(1024), skills: [] },
+        }),
+      );
+    }
+    const parse = vi.spyOn(JSON, "parse");
+    expect(readReferencedSessionIds(database)).toEqual(expected);
+    expect(readReferencedSessionIds(database, undefined, [...expected, "missing"])).toEqual(
+      expected,
+    );
+    expect(readReferencedSessionIds(database, undefined, ["pre-0", "post-31", "missing"])).toEqual(
+      new Set(["pre-0", "post-31"]),
+    );
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it("does not materialize unrelated node metadata for one candidate", () => {
+    const database = openDatabase();
+    for (let index = 0; index < 32; index += 1) {
+      insertEntry(
+        database,
+        `unrelated-${index}`,
+        `current-${index}`,
+        JSON.stringify({
+          sessionId: `current-${index}`,
+          updatedAt: 1,
+          skillsSnapshot: { prompt: 'escaped "prompt"\\\n'.repeat(4096), skills: [] },
+        }),
+      );
+    }
+    insertEntry(database, "matched", "\u00a0candidate\ufeff");
+    const keys = trackMaterializedKeys(database);
+    expect(readReferencedSessionIds(database, undefined, ["candidate"])).toEqual(
+      new Set(["candidate"]),
+    );
+    expect(keys).toEqual(["matched"]);
+  });
+
+  it.each([
+    ["literal", '"previousSessionId":" candidate "'],
+    ["escaped key", '"previous\\u0053essionId":" candidate "'],
+    ["duplicate key", '"previousSessionId":null,"previousSessionId":" candidate "'],
+    ["usage family", '"usageFamilySessionIds":[" candidate "]'],
+    ["escaped surrogate", '"previousSessionId":"candidate","label":"\\ud800"'],
+    [
+      "duplicate identity",
+      '"sessionId":"wrong","sessionId":"current","previousSessionId":"candidate"',
+    ],
+    [
+      "duplicate checkpoint",
+      '"compactionCheckpoints":[{"sessionId":"wrong","sessionId":"candidate","preCompaction":{},"postCompaction":{}}]',
+    ],
+    [
+      "checkpoint",
+      '"compactionCheckpoints":[{"sessionId":"candidate","preCompaction":{},"postCompaction":{}}]',
+    ],
+    [
+      "pre-compaction",
+      '"compactionCheckpoints":[{"preCompaction":{"sessionId":" candidate "},"postCompaction":{}}]',
+    ],
+    [
+      "post-compaction",
+      '"compactionCheckpoints":[{"preCompaction":{},"postCompaction":{"sessionId":" candidate "}}]',
+    ],
+    [
+      "overdepth",
+      `"previousSessionId":"candidate","unknown":${"[".repeat(1001)}0${"]".repeat(1001)}`,
+    ],
+  ])("protects %s references using the entry parser", (_name, fields) => {
+    const database = openDatabase();
+    insertEntry(database, "owner", "current", `{"sessionId":"current","updatedAt":1,${fields}}`);
+    expect(readReferencedSessionIds(database, undefined, ["candidate"])).toEqual(
+      new Set(["candidate"]),
+    );
+    expect(readReferencedSessionIds(database, new Set(["owner"]), ["candidate"])).toEqual(
+      new Set(),
+    );
+  });
+
+  it.each(['"previousSessionId":1', '"usageFamilySessionIds":[1]', '"compactionCheckpoints":[{}]'])(
+    "retains parser failures for malformed references: %s",
+    (fields) => {
+      const database = openDatabase();
+      insertEntry(database, "owner", "current", `{"sessionId":"current","updatedAt":1,${fields}}`);
+      expect(() => readReferencedSessionIds(database, undefined, ["candidate"])).toThrow(TypeError);
+      expect(readReferencedSessionIds(database, new Set(["owner"]), ["candidate"])).toEqual(
+        new Set(),
+      );
+    },
+  );
+
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
+    "protects raw current IDs after %s text conversion",
+    (encoding) => {
+      const database = openDatabase(encoding);
+      const bytes = {
+        "UTF-8": ["eda080", "edb080", "ff", "c080", "efbfbe", "efbfbf", "610062"],
+        "UTF-16le": ["00d8", "00dc", "feff", "ffff", "610000006200"],
+        "UTF-16be": ["d800", "dc00", "fffe", "ffff", "006100000062"],
+      }[encoding];
+      insertEntry(database, "owner", "current");
+      for (const hex of bytes) {
+        database.db
+          .prepare("UPDATE session_nodes SET current_session_id = CAST(? AS TEXT)")
+          .run(Buffer.from(hex, "hex"));
+        const returnedId = String(
+          database.db.prepare("SELECT current_session_id FROM session_nodes").get()
+            ?.current_session_id,
+        );
+        expect(readReferencedSessionIds(database, undefined, [returnedId])).toEqual(
+          new Set([returnedId]),
+        );
+        expect(readReferencedSessionIds(database, new Set(["owner"]), [returnedId])).toEqual(
+          new Set(),
+        );
+      }
+    },
+  );
+
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
+    "preserves exact excluded-key membership for candidates in %s",
+    (encoding) => {
+      const database = openDatabase(encoding);
+      const keys = ["nul\0tail", "a\uFFFE", "b\uFFFF", "c\uFFFD", "日本語🦞"];
+      for (const [index, key] of keys.entries()) {
+        insertEntry(database, key, `current-${index}`);
+      }
+      const returned = database.db
+        .prepare("SELECT session_key, current_session_id FROM session_nodes")
+        .all();
+      for (const row of returned) {
+        const candidate = String(row.current_session_id);
+        const excluded = new Set(keys);
+        expect(readReferencedSessionIds(database, excluded, [candidate])).toEqual(
+          new Set(excluded.has(String(row.session_key)) ? [] : [candidate]),
+        );
+      }
+    },
+  );
+
+  it("reads references added during a transaction freshly", () => {
+    const database = openDatabase();
+    insertEntry(database, "owner", "current");
+    expect(readReferencedSessionIds(database, undefined, ["late"])).toEqual(new Set());
+    database.db.exec("BEGIN IMMEDIATE");
+    try {
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ?")
+        .run(JSON.stringify({ sessionId: "current", updatedAt: 1, previousSessionId: "late" }));
+      expect(readReferencedSessionIds(database, undefined, ["late"])).toEqual(new Set(["late"]));
+    } finally {
+      database.db.exec("ROLLBACK");
+    }
+    expect(readReferencedSessionIds(database, undefined, ["late"])).toEqual(new Set());
   });
 });
