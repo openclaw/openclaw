@@ -153,7 +153,9 @@ function dispatch(
 async function prepareClickDocument(view: SessionNavigationPluginPage, signal: AbortSignal) {
   signal.throwIfAborted();
   const session: CDPSession = cdp();
-  const ready = createDeferred<void>();
+  // Vitest initializes its CDP handler lazily; finish that before listener and command RPCs race.
+  await session.send("Page.enable");
+  const ready = createDeferred();
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = () =>
     (cleanupPromise ??= (async () => {
