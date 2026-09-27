@@ -6,7 +6,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../../agents/embedded-agent-runner/runs.test-support.js";
-import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.js";
+import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { replyRunRegistry } from "../../../auto-reply/reply/reply-run-registry.js";
 import {
   listSessionEntriesReadOnly,

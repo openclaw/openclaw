@@ -8,7 +8,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/runs.test-support.js";
-import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.js";
+import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { resolveCommandAuthorization } from "../../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../../config/types.secrets.js";
@@ -202,15 +202,9 @@ vi.mock("../../../plugins/runtime/index.js", () => ({
   createPluginRuntime: () => ({ agent: mocks.agentRuntime }),
 }));
 
-vi.mock("../../../agents/realtime-bootstrap-context.js", async (importOriginal) => {
-  const { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } =
-    await importOriginal<typeof import("../../../agents/realtime-bootstrap-context.js")>();
-  return {
-    REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS,
-    resolveRealtimeVoiceAgentContextInstructions:
-      mocks.resolveRealtimeVoiceAgentContextInstructions,
-  };
-});
+vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
+  resolveRealtimeVoiceAgentContextInstructions: mocks.resolveRealtimeVoiceAgentContextInstructions,
+}));
 
 vi.mock("../../../agents/agent-scope.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../agents/agent-scope.js")>();

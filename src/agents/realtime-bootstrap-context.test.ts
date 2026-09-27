@@ -6,10 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as bootstrapFiles from "./bootstrap-files.js";
 import * as identity from "./identity.js";
 import {
-  REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS,
   resolveRealtimeBootstrapContextInstructions,
   resolveRealtimeVoiceAgentContextInstructions,
 } from "./realtime-bootstrap-context.js";
+import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "./realtime-bootstrap-context.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
