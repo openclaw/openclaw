@@ -131,13 +131,10 @@ jobs remain unknown. Codex sees only the diff and candidate inventory; result
 logs are fetched afterward by the report step, whose read-only Actions token is
 not passed to Codex. These observations inform a later decision about enforcement.
 
-For offline evaluation, `node scripts/ci-codex-test-selection.mjs prepare --base <base> --head <head>` produces the prompt and an all-candidate selection without
-calling Codex. `backtest` with the same arguments invokes `codex exec` in a
-read-only sandbox and finalizes the proposal; `--model` selects a local model.
-`--output-dir` chooses the artifact directory. Historical heads use a temporary
-checkout and the current planner's policy over that checkout; they require
-compatible installed dependencies. CI instead replays preflight's exact planner
-options and uses its emitted matrix as the candidate source.
+`node scripts/ci-codex-test-selection.mjs prepare --base <base> --head <head>` produces the prompt and an all-candidate selection without calling Codex.
+The head must match the current checkout. `--output-dir` chooses the artifact
+directory. CI replays preflight's exact planner options and uses its emitted
+matrix as the candidate source.
 
 `node scripts/ci-codex-test-selection.mjs summarize --limit 200` summarizes the
 latest 200 `pull_request` CI runs by default. `--repo owner/name` selects another

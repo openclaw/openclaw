@@ -1,17 +1,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   appendFileSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseArgs, stripVTControlCharacters } from "node:util";
 import { z } from "zod";
 import outputSchema from "../.github/codex/prompts/ci-test-selection.schema.json" with { type: "json" };
@@ -640,7 +637,6 @@ async function main() {
       base: { type: "string" },
       head: { type: "string" },
       "output-dir": { type: "string", default: "artifacts/codex-test-selection" },
-      model: { type: "string" },
       limit: { type: "string", default: "200" },
       repo: { type: "string", default: "openclaw/openclaw" },
       "cache-dir": { type: "string", default: path.join(tmpdir(), "openclaw-codex-selection") },
@@ -676,9 +672,9 @@ async function main() {
     await finalize(dir);
     return;
   }
-  if (command !== "prepare" && command !== "backtest") {
+  if (command !== "prepare") {
     throw new Error(
-      "usage: prepare|finalize|report|backtest|summarize [--base ref --head ref --output-dir path --model model --limit count --repo owner/name --cache-dir path]",
+      "usage: prepare|finalize|report|summarize [--base ref --head ref --output-dir path --limit count --repo owner/name --cache-dir path]",
     );
   }
   if (!values.base || !values.head) {
@@ -686,68 +682,10 @@ async function main() {
   }
   const base = git(["rev-parse", "--verify", `${values.base}^{commit}`]),
     head = git(["rev-parse", "--verify", `${values.head}^{commit}`]);
-  const origin = process.cwd();
-  let temporary: string | undefined;
-  try {
-    if (head !== git(["rev-parse", "HEAD"])) {
-      if (process.env.GITHUB_ACTIONS === "true") {
-        throw new Error("checkout-head-mismatch");
-      }
-      temporary = mkdtempSync(path.join(tmpdir(), "openclaw-selection-head-"));
-      const checkout = path.join(temporary, "checkout");
-      git(["worktree", "add", "--detach", checkout, head]);
-      if (existsSync(path.join(origin, "node_modules"))) {
-        symlinkSync(path.join(origin, "node_modules"), path.join(checkout, "node_modules"), "dir");
-      }
-      process.chdir(checkout);
-    }
-    const prepared = await prepare(base, head, dir);
-    if (command === "backtest") {
-      let outcome = "skipped";
-      if (prepared.status === "ready") {
-        const args = [
-          "exec",
-          "--sandbox",
-          "read-only",
-          "--output-schema",
-          fileURLToPath(
-            new URL("../.github/codex/prompts/ci-test-selection.schema.json", import.meta.url),
-          ),
-          "--output-last-message",
-          path.join(dir, "codex-output.json"),
-          "-c",
-          'model_reasoning_effort="medium"',
-          ...(values.model ? ["--model", values.model] : []),
-          "-",
-        ];
-        const result = spawnSync("codex", args, {
-          input: readFileSync(path.join(dir, "prompt.md"), "utf8"),
-          encoding: "utf8",
-          timeout: 8 * 60_000,
-          stdio: ["pipe", "ignore", "ignore"],
-        });
-        outcome =
-          result.error && "code" in result.error && result.error.code === "ETIMEDOUT"
-            ? "timeout"
-            : result.status === 0
-              ? "success"
-              : "failure";
-      }
-      await finalize(dir, outcome);
-    }
-  } finally {
-    process.chdir(origin);
-    if (temporary) {
-      const checkout = path.join(temporary, "checkout");
-      if (existsSync(path.join(checkout, ".git"))) {
-        if (existsSync(path.join(checkout, "node_modules"))) {
-          rmSync(path.join(checkout, "node_modules"));
-        }
-        git(["worktree", "remove", checkout]);
-      }
-      rmSync(temporary, { recursive: true });
-    }
+  if (head !== git(["rev-parse", "HEAD"])) {
+    throw new Error("checkout-head-mismatch");
   }
+  await prepare(base, head, dir);
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
