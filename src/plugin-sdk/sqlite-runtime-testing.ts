@@ -39,3 +39,4 @@ export {
 } from "../state/openclaw-state-db.js";
 
 export { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+export { observeSqliteWorkerAdmission } from "../../test/helpers/sqlite-worker-admission.js";

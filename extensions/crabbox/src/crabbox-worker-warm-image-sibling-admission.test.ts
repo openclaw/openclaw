@@ -619,7 +619,9 @@ describe("Crabbox sibling native commit authority", () => {
     expect(options.prepareNodeRuntime).not.toHaveBeenCalled();
     expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
     expect(
-      f.calls.filter(({ argv }) => argv[1] === "run").map(({ options }) => options.input),
+      f.calls
+        .filter(({ argv }) => argv[1] === "run")
+        .map(({ options: commandOptions }) => commandOptions.input),
     ).toEqual(["project-checkout"]);
     expect(f.calls.some(({ argv }) => argv[1] === "checkpoint" && argv[2] === "create")).toBe(
       false,

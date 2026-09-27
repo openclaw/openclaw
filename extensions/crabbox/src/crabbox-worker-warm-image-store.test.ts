@@ -1,16 +1,12 @@
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenAsyncKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
-// First-party call-through instrumentation; never replace the worker or its grant.
-import * as mutationAdmission from "../../../src/infra/sqlite-worker-operation-admission.js";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
+import { observeWarmComparisonAdmission } from "./crabbox-worker-warm-image-admission.test-support.js";
 import {
   listCrabboxWarmImages,
   openCrabboxWarmImageStore,
@@ -98,62 +94,15 @@ const snapshotRecord: WarmProfileRecord = {
 };
 
 function afterComparisonGrant(afterGrant: () => void) {
-  const posting = vi.spyOn(Worker.prototype, "postMessage");
-  const submissions = () =>
-    posting.mock.calls.flatMap(([message]) => {
-      if (
-        !isRecord(message) ||
-        message.type !== "execute" ||
-        !(message.input instanceof Uint8Array)
-      ) {
-        return [];
+  return observeWarmComparisonAdmission({
+    key: "profile",
+    afterAdmit: (stage) => {
+      if (stage === "commit") {
+        // Disposal joins this operation; start it without awaiting in the native callback.
+        afterGrant();
       }
-      const command: unknown = deserialize(message.input);
-      if (!isRecord(command) || command.type !== "pluginState.compareUpdate") {
-        return [];
-      }
-      const input = command.input;
-      return isRecord(input) &&
-        input.pluginId === "crabbox" &&
-        input.namespace === "warm-images" &&
-        input.key === "profile" &&
-        input.action === "set"
-        ? [input]
-        : [];
-    });
-  const stages: string[] = [];
-  let selected = false;
-  const original = mutationAdmission.createSqliteWorkerOperationAdmission;
-  const admission = vi
-    .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) => {
-      let target = false;
-      return original((request, grant) => {
-        // One serial mutation: select its admission at transaction entry, never
-        // its preceding observation or a later cleanup/readback operation.
-        if (!selected && request.stage === "transaction" && submissions().length > 0) {
-          selected = true;
-          target = true;
-        }
-        admit(request, grant);
-        if (target) {
-          stages.push(request.stage);
-          if (request.stage === "commit") {
-            // Successful ORIGINAL admit/grant has returned. Do not await the
-            // disposal that joins this very operation inside the native callback.
-            afterGrant();
-          }
-        }
-      }, attachment);
-    });
-  return {
-    stages,
-    submissions,
-    restore() {
-      admission.mockRestore();
-      posting.mockRestore();
     },
-  };
+  });
 }
 
 describe("Crabbox asynchronous warm-image mutations", () => {

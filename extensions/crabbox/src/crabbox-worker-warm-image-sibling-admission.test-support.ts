@@ -1,5 +1,3 @@
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
 import type {
   OpenAsyncKeyedStoreOptions,
   PluginStateCompareIntent,
@@ -8,16 +6,14 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, vi } from "vitest";
-// Existing first-party native-admission instrumentation; no replacement worker or grant.
-import * as admissionModule from "../../../src/infra/sqlite-worker-operation-admission.js";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   parseCrabboxProfile,
   resolveCrabboxWarmImageProfileKey,
 } from "./crabbox-worker-profile.js";
+import { observeWarmComparisonAdmission } from "./crabbox-worker-warm-image-admission.test-support.js";
 import type {
   WarmAllocationRecord,
   WarmImageRecord,
@@ -40,7 +36,7 @@ export function currentAuthority(label = "invocation") {
   return {
     signal: controller.signal,
     closed,
-    close() {
+    close: () => {
       active = false;
     },
     assertCurrent: vi.fn(() => {
@@ -166,77 +162,24 @@ export function atWarmComparisonCommit(
   timing: "before grant" | "after grant" = "before grant",
   key = profileKey,
 ) {
-  const posting = vi.spyOn(Worker.prototype, "postMessage");
-  const matchingSubmissions = () =>
-    posting.mock.calls.flatMap(([message]) => {
-      if (
-        !isRecord(message) ||
-        message.type !== "execute" ||
-        !(message.input instanceof Uint8Array)
-      ) {
-        return [];
-      }
-      const command: unknown = deserialize(message.input);
-      if (
-        !isRecord(command) ||
-        command.type !== "pluginState.compareUpdate" ||
-        !isRecord(command.input)
-      ) {
-        return [];
-      }
-      const input = command.input;
-      if (
-        input.pluginId !== "crabbox" ||
-        input.namespace !== "warm-images" ||
-        input.key !== key ||
-        input.action !== "set" ||
-        typeof input.valueJson !== "string"
-      ) {
-        return [];
-      }
-      // These bytes are the test's canonical namespace values, not an untrusted API input.
-      const candidate = JSON.parse(input.valueJson) as WarmProfileRecord;
-      return matches(candidate) ? [candidate] : [];
-    });
-  const decisions: Array<{ stage: string; granted: boolean; error?: unknown }> = [];
-  let selected = false;
   let matchingCount = 0;
   let closures = 0;
-  const original = admissionModule.createSqliteWorkerOperationAdmission;
-  const spy = vi
-    .spyOn(admissionModule, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) => {
-      let target = false;
-      return original((request, grant) => {
-        // One serial writer: select its admission on entry, not a later cleanup's
-        // admission. Observations and nonmatching CAS requests always call through.
-        if (!selected && request.stage === "transaction" && matchingSubmissions().length > 0) {
-          selected = true;
-          target = true;
-        }
-        if (!target) {
-          admit(request, grant);
-          return;
-        }
-        try {
-          if (request.stage === "commit" && timing === "before grant") {
-            closures += 1;
-            close();
-          }
-          admit(request, grant);
-          decisions.push({ stage: request.stage, granted: true });
-        } catch (error) {
-          decisions.push({ stage: request.stage, granted: false, error });
-          throw error;
-        }
-        if (request.stage === "commit" && timing === "after grant") {
-          // The original callback has granted and returned. Close before the
-          // caller continuation, without replacing grant or fabricating a receipt.
-          closures += 1;
-          close();
-        }
-      }, attachment);
-    });
+  const observation = observeWarmComparisonAdmission({
+    key,
+    matches,
+    beforeAdmit: (stage) => {
+      if (stage === "commit" && timing === "before grant") {
+        closures += 1;
+        close();
+      }
+    },
+    afterAdmit: (stage) => {
+      if (stage === "commit" && timing === "after grant") {
+        closures += 1;
+        close();
+      }
+    },
+  });
   return {
     async run<T>(operation: () => Promise<T>) {
       try {
@@ -245,9 +188,8 @@ export function atWarmComparisonCommit(
           (error: unknown) => ({ status: "rejected" as const, error }),
         );
       } finally {
-        matchingCount = matchingSubmissions().length;
-        spy.mockRestore();
-        posting.mockRestore();
+        matchingCount = observation.submissions().length;
+        observation.restore();
       }
     },
     expectDecision(error?: Error) {
@@ -256,7 +198,7 @@ export function atWarmComparisonCommit(
       // A transient unauthorized claim can later be cleared. Its actual native
       // admission decision, not final row equality alone, must therefore refuse.
       expect
-        .soft(decisions)
+        .soft(observation.decisions)
         .toEqual([
           { stage: "transaction", granted: true },
           error ? { stage: "commit", granted: false, error } : { stage: "commit", granted: true },

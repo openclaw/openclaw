@@ -1,21 +1,17 @@
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-// First-party test instrumentation only: preserve the original host admission and worker.
-import * as mutationAdmission from "../../../src/infra/sqlite-worker-operation-admission.js";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   parseCrabboxProfile,
   resolveCrabboxWarmImageProfileKey,
 } from "./crabbox-worker-profile.js";
+import { observeWarmComparisonAdmission } from "./crabbox-worker-warm-image-admission.test-support.js";
 import {
   openCrabboxWarmImageStore,
   type WarmAllocationRecord,
@@ -89,62 +85,19 @@ function invocationAuthority() {
 type Boundary = "transaction" | "commit" | "after commit grant";
 
 function closeAtComparisonAdmission(boundary: Boundary, close: () => void) {
-  // A call-through spy proves the serialized compare reaches the real worker;
-  // observe/lookup and fixture writes must never trigger the closure.
-  const posting = vi.spyOn(Worker.prototype, "postMessage");
-  const submissions = () =>
-    posting.mock.calls.flatMap(([message]) => {
-      if (
-        !isRecord(message) ||
-        message.type !== "execute" ||
-        !(message.input instanceof Uint8Array)
-      ) {
-        return [];
+  return observeWarmComparisonAdmission({
+    key,
+    beforeAdmit: (stage) => {
+      if (stage === boundary) {
+        close();
       }
-      const command: unknown = deserialize(message.input);
-      if (!isRecord(command) || command.type !== "pluginState.compareUpdate") {
-        return [];
-      }
-      const input = command.input;
-      return isRecord(input) &&
-        input.pluginId === "crabbox" &&
-        input.namespace === "warm-images" &&
-        input.key === key &&
-        input.action === "set"
-        ? [input]
-        : [];
-    });
-  const stages: string[] = [];
-  const original = mutationAdmission.createSqliteWorkerOperationAdmission;
-  const admission = vi
-    .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      original((request, grant) => {
-        // Tests run one mutation at a time; restore before independent readback.
-        if (submissions().length === 0) {
-          admit(request, grant);
-          return;
-        }
-        stages.push(request.stage);
-        if (request.stage === boundary) {
-          close();
-        }
-        admit(request, grant);
-        // The owner's successful final grant linearizes the write. Do not replace
-        // grant(), fabricate a receipt, or reclassify an already-admitted result.
-        if (request.stage === "commit" && boundary === "after commit grant") {
-          close();
-        }
-      }, attachment),
-    );
-  return {
-    stages,
-    submissions,
-    restore() {
-      admission.mockRestore();
-      posting.mockRestore();
     },
-  };
+    afterAdmit: (stage) => {
+      if (stage === "commit" && boundary === "after commit grant") {
+        close();
+      }
+    },
+  });
 }
 
 const actions = ["record allocation", "mark prepared", "mark enrolled", "pin", "rollback"] as const;
@@ -188,25 +141,19 @@ describe("Crabbox warm-image final write authority", () => {
       });
       const warm = openCrabboxWarmImageStore(crabboxState);
       const baseCommit = "b".repeat(40);
-      const invoke = () => {
-        switch (action) {
-          case "record allocation":
-            return warm.recordAllocation({
-              key,
-              id: "cbx_new",
-              allocation,
-              assertCurrent: authority.assertCurrent,
-            });
-          case "mark prepared":
-            return manager.markPrepared(leaseId, baseCommit, authority.assertCurrent);
-          case "mark enrolled":
-            return manager.markEnrolled(leaseId, authority.assertCurrent);
-          case "pin":
-            return manager.pin(image.checkpointId, true, authority.assertCurrent);
-          case "rollback":
-            return manager.rollback(previous.checkpointId, authority.assertCurrent);
-        }
-      };
+      const invoke = {
+        "record allocation": () =>
+          warm.recordAllocation({
+            key,
+            id: "cbx_new",
+            allocation,
+            assertCurrent: authority.assertCurrent,
+          }),
+        "mark prepared": () => manager.markPrepared(leaseId, baseCommit, authority.assertCurrent),
+        "mark enrolled": () => manager.markEnrolled(leaseId, authority.assertCurrent),
+        pin: () => manager.pin(image.checkpointId, true, authority.assertCurrent),
+        rollback: () => manager.rollback(previous.checkpointId, authority.assertCurrent),
+      }[action];
       const gate = closeAtComparisonAdmission(boundary, authority.close);
       let outcome: { status: "fulfilled" } | { status: "rejected"; error: unknown };
       let stages: string[];
