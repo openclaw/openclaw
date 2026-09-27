@@ -79,13 +79,14 @@ export function createCrabboxWarmImageCapture(dependencies: {
     prepareAndScrubSource?: (scrubScript: string) => Promise<void>,
   ): Promise<boolean> {
     assertCurrent(context);
+    const authority = captureCrabboxCheckpointAuthority(context);
     const captureId = randomUUID();
     const owner = await lookupLease(context.id);
     const key = owner?.key;
     let pendingCapture = false;
     let createDispatched = false;
     let preparing = false;
-    let captured = false;
+    let createdCheckpointId: string | undefined;
     const attemptCapture = async () => {
       try {
         if (key) {
@@ -221,7 +222,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
               },
             };
           },
-          captureCrabboxCheckpointAuthority(context),
+          authority,
         );
         if (!claimed) {
           pendingCapture = false;
@@ -258,7 +259,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
             current.allocations[context.id]?.purpose === owner.purpose
               ? { ...current, operation: { ...current.operation, phase: "creating" } }
               : undefined,
-          captureCrabboxCheckpointAuthority(context),
+          authority,
         );
         if (!creating) {
           await clearCrabboxWarmImageCapture(openStore(), key, captureId);
@@ -298,69 +299,75 @@ export function createCrabboxWarmImageCapture(dependencies: {
           ),
           context.id,
         );
-        captured = true;
-        const published = await openStore().update(key, (current) => {
-          if (current?.operation?.type !== "capture" || current.operation.id !== captureId) {
-            return undefined;
-          }
-          const next = withoutCrabboxWarmImageOperation(current);
-          delete next.captureUnsupported;
-          // Pin mutations cannot race capture. Retain at most one previous image;
-          // the displaced unpinned generation becomes durable deletion debt.
-          const predecessor = current.image;
-          let retiredCheckpointId: string | undefined;
-          if (predecessor && predecessor.checkpointId !== created.checkpointId) {
-            if (current.previous?.pinned) {
-              retiredCheckpointId = predecessor.checkpointId;
-            } else if (predecessor.pinned || dependencies.policy.keepPrevious === 1) {
-              next.previous = predecessor;
-              retiredCheckpointId = current.previous?.checkpointId;
-            } else {
-              retiredCheckpointId = predecessor.checkpointId;
+        createdCheckpointId = created.checkpointId;
+        // Physical completion owns custody, not reusable eligibility. Fence publication
+        // at the final store admission; reconcile refused results independently below.
+        const published = await openStore().update(
+          key,
+          (current) => {
+            if (current?.operation?.type !== "capture" || current.operation.id !== captureId) {
+              return undefined;
             }
-          }
-          const allocation = current.allocations[context.id];
-          // A late capture still owns its image; it must not recreate a released lease.
-          if (
-            allocation &&
-            allocation.phase === owner.phase &&
-            allocation.machineClass === owner.machineClass &&
-            allocation.os === owner.os &&
-            allocation.preparationKey === owner.preparationKey &&
-            allocation.cacheKey === owner.cacheKey &&
-            allocation.purpose === owner.purpose &&
-            allocation.demandAtMs === owner.demandAtMs
-          ) {
-            next.allocations = {
-              ...next.allocations,
-              [context.id]: {
-                ...allocation,
-                imageGeneration: { checkpointId: created.checkpointId, createdAtMs: now },
+            const next = withoutCrabboxWarmImageOperation(current);
+            delete next.captureUnsupported;
+            // Pin mutations cannot race capture. Retain at most one previous image;
+            // the displaced unpinned generation becomes durable deletion debt.
+            const predecessor = current.image;
+            let retiredCheckpointId: string | undefined;
+            if (predecessor && predecessor.checkpointId !== created.checkpointId) {
+              if (current.previous?.pinned) {
+                retiredCheckpointId = predecessor.checkpointId;
+              } else if (predecessor.pinned || dependencies.policy.keepPrevious === 1) {
+                next.previous = predecessor;
+                retiredCheckpointId = current.previous?.checkpointId;
+              } else {
+                retiredCheckpointId = predecessor.checkpointId;
+              }
+            }
+            const allocation = current.allocations[context.id];
+            // A late capture still owns its image; it must not recreate a released lease.
+            if (
+              allocation &&
+              allocation.phase === owner.phase &&
+              allocation.machineClass === owner.machineClass &&
+              allocation.os === owner.os &&
+              allocation.preparationKey === owner.preparationKey &&
+              allocation.cacheKey === owner.cacheKey &&
+              allocation.purpose === owner.purpose &&
+              allocation.demandAtMs === owner.demandAtMs
+            ) {
+              next.allocations = {
+                ...next.allocations,
+                [context.id]: {
+                  ...allocation,
+                  imageGeneration: { checkpointId: created.checkpointId, createdAtMs: now },
+                },
+              };
+            }
+            return {
+              ...next,
+              image: {
+                ...created,
+                createdAtMs: now,
+                preparationKey: owner.preparationKey,
+                cacheKey: owner.cacheKey,
+                purpose: owner.purpose,
+                lastDemandAtMs: owner.purpose === "session" ? null : owner.demandAtMs,
+                runtimeIdentity: structuredClone(owner.runtimeIdentity),
+                ...(owner.baseCommit ? { baseCommit: owner.baseCommit } : {}),
               },
+              ...(retiredCheckpointId
+                ? {
+                    operation: {
+                      type: "retire" as const,
+                      checkpointId: retiredCheckpointId,
+                    },
+                  }
+                : {}),
             };
-          }
-          return {
-            ...next,
-            image: {
-              ...created,
-              createdAtMs: now,
-              preparationKey: owner.preparationKey,
-              cacheKey: owner.cacheKey,
-              purpose: owner.purpose,
-              lastDemandAtMs: owner.purpose === "session" ? null : owner.demandAtMs,
-              runtimeIdentity: structuredClone(owner.runtimeIdentity),
-              ...(owner.baseCommit ? { baseCommit: owner.baseCommit } : {}),
-            },
-            ...(retiredCheckpointId
-              ? {
-                  operation: {
-                    type: "retire" as const,
-                    checkpointId: retiredCheckpointId,
-                  },
-                }
-              : {}),
-          };
-        });
+          },
+          authority,
+        );
         if (!published) {
           warnOnce(
             "capture ownership changed",
@@ -383,7 +390,6 @@ export function createCrabboxWarmImageCapture(dependencies: {
           error,
           failedProjectAttempt: pendingCapture && Boolean(owner?.projectKey),
         };
-        let recoveryRequired = pendingCapture;
         if (pendingCapture && key) {
           try {
             if (unsupported) {
@@ -407,13 +413,18 @@ export function createCrabboxWarmImageCapture(dependencies: {
             if (createDispatched && !notSubmitted) {
               await openStore().update(key, (current) =>
                 current?.operation?.type === "capture" && current.operation.id === captureId
-                  ? { ...current, operation: { ...current.operation, phase: "uncertain" } }
+                  ? {
+                      ...current,
+                      operation: createdCheckpointId
+                        ? { type: "retire", checkpointId: createdCheckpointId }
+                        : { ...current.operation, phase: "uncertain" },
+                    }
                   : undefined,
               );
+              pendingCapture = !createdCheckpointId;
             } else {
               await clearCrabboxWarmImageCapture(openStore(), key, captureId);
               pendingCapture = false;
-              recoveryRequired = false;
             }
           } catch {
             // Keep persisted ownership recoverable; physical lease cleanup still belongs to stop.
@@ -427,12 +438,14 @@ export function createCrabboxWarmImageCapture(dependencies: {
         if (notSubmitted && owner?.projectKey) {
           return captureFailure;
         }
-        warnOnce(
-          "capture",
-          recoveryRequired
-            ? `${coerceErrorMessage(error)}. ${crabboxWarmImageRecoveryHint(captureId)}`
-            : error,
-        );
+        let warning = coerceErrorMessage(error);
+        if (createdCheckpointId) {
+          warning += `. Checkpoint ${createdCheckpointId} returned for capture ${captureId}.`;
+        }
+        if (pendingCapture) {
+          warning += `. ${crabboxWarmImageRecoveryHint(captureId)}`;
+        }
+        warnOnce("capture", warning);
         return captureFailure;
       }
       return undefined;
@@ -458,6 +471,6 @@ export function createCrabboxWarmImageCapture(dependencies: {
         `${captureFailure ? `${coerceErrorMessage(captureFailure.error)}. ` : ""}Crabbox project image capture is unresolved. ${crabboxWarmImageRecoveryHint(operation.id)}`,
       );
     }
-    return captured;
+    return Boolean(createdCheckpointId);
   };
 }
