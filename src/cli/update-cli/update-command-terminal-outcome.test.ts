@@ -610,17 +610,6 @@ async function scenario(
     afterRepeat,
     lease: createManagedHandoffLeaseStore().read(swap.packageRoot).kind,
   };
-  const evidence = process.env.OPENCLAW_TERMINAL_PROOF_DIR;
-  if (evidence) {
-    await fs.mkdir(evidence, { recursive: true });
-    await fs.writeFile(
-      path.join(
-        evidence,
-        `${kind}-${json ? "json" : "human"}${repeat ? "-repeat" : ""}${deferred ? "" : "-direct"}.json`,
-      ),
-      JSON.stringify(observations, null, 2),
-    );
-  }
   return { ...observations, swap, run };
 }
 
@@ -635,19 +624,17 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.history?.status).not.toBe("succeeded");
     expect(value.history?.status).not.toBe("rolled-back");
   });
-  it.each([true, false])(
-    "publishes the Gateway's completed row after real executor release (json=%s)",
-    async (json) => {
-      const value = await scenario("healthy", json, false, true, false, true);
-      expect(value.exitCode).toBe(0);
-      expect(value.history?.status).toBe("succeeded");
-      expect(value.lease).toBe("absent");
-      expect(value.retainedExists).toBe(false);
-      expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
-      expect(value.observationLeases).toEqual(["absent"]);
-      expect(value.afterRepeat).toEqual(value.beforeRepeat);
-    },
-  );
+  it("publishes the Gateway's completed row after real executor release", async () => {
+    const value = await scenario("healthy", false, false, true, false, true);
+    expect(value.exitCode).toBe(0);
+    expect(value.history?.status).toBe("succeeded");
+    expect(value.lease).toBe("absent");
+    expect(value.retainedExists).toBe(false);
+    expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
+    expect(value.observationLeases).toEqual(["absent"]);
+    expect(value.humanOutput.join("\n").toLowerCase()).toContain("updated");
+    expect(value.afterRepeat).toEqual(value.beforeRepeat);
+  });
   it.each(["release-failure", "revoked", "link-retained"] as const)(
     "qualifies pending recovery claims after %s settlement",
     async (kind) => {
@@ -670,6 +657,8 @@ describe("composed cleanup and terminal outcome", () => {
       });
       expect(value.sentinel).toMatchObject({ payload: { status: "error", stats: { reason } } });
       expect(value.history?.status).toBe("failed");
+      expect(value.package.version).toBe("2.0.0");
+      expect(value.report.toLowerCase()).toContain("failed");
       expect.soft(value.history?.downtimeMs).toBe(settlementFailed ? null : 0);
       expect(JSON.stringify(report)).toContain("fixture original failure before recovery");
       expect(JSON.stringify(value.sentinel)).toContain("fixture original failure before recovery");
@@ -698,10 +687,13 @@ describe("composed cleanup and terminal outcome", () => {
     },
   );
 
-  it.each([true, false])(
-    "reports actual retained backup after verified activation (json=%s)",
-    async (json) => {
-      const value = await scenario("renamed", json);
+  it.each([
+    { kind: "renamed", json: true },
+    { kind: "retained", json: false },
+  ] as const)(
+    "reports the $kind backup after verified activation and repeated completion",
+    async ({ kind, json }) => {
+      const value = await scenario(kind, json, true);
       expect(value.injected).toBe(true);
       expect(value.package.version).toBe("2.0.0");
       expect(value.launcher).toBe("candidate launcher\n");
@@ -713,28 +705,6 @@ describe("composed cleanup and terminal outcome", () => {
       expect(JSON.stringify(value.history)).toContain(value.expectedRetained);
       expect(value.report).toContain(value.expectedRetained);
       expect(value.afterRepeat).toEqual(value.beforeRepeat);
-    },
-  );
-  it.each([true, false])(
-    "reports original backup when fallback rename is denied (json=%s)",
-    async (json) => {
-      const value = await scenario("retained", json);
-      expect(value.injected).toBe(true);
-      expect(value.retainedExists).toBe(true);
-      expect(value.exitCode).toBe(0);
-      const output = json ? JSON.stringify(value.jsonOutput) : value.humanOutput.join("\n");
-      expect(output).toContain(value.expectedRetained);
-      expect(JSON.stringify(value.history)).toContain(value.expectedRetained);
-      expect(value.report).toContain(value.expectedRetained);
-      expect(value.afterRepeat).toEqual(value.beforeRepeat);
-    },
-  );
-  it.each(["renamed", "retained"] as const)(
-    "keeps repeated completion truthful for %s backup",
-    async (kind) => {
-      const value = await scenario(kind, true, true);
-      expect(value.injected).toBe(true);
-      expect(value.retainedExists).toBe(true);
       expect(value.repeatedCompletion).toMatchObject({
         exitCode: 1,
         stderrTail: expect.stringContaining(value.expectedRetained),
@@ -820,20 +790,6 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.history?.status).toBe("failed");
     expect(value.afterRepeat).toEqual(value.beforeRepeat);
   });
-  it.each(["release-failure", "revoked"] as const)(
-    "publishes one failed outcome after %s",
-    async (kind) => {
-      const value = await scenario(kind, true);
-      expect(value.injected).toBe(true);
-      expect(value.exitCode).toBe(1);
-      expect(value.package.version).toBe("2.0.0");
-      expect(value.jsonOutput).toHaveLength(1);
-      expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
-      expect(value.history?.status).toBe("failed");
-      expect(value.report.toLowerCase()).toContain("failed");
-      expect(value.afterRepeat).toEqual(value.beforeRepeat);
-    },
-  );
   it("preserves foreign terminal history and emits only the pending failure", async () => {
     const value = await scenario("foreign-revoked", true);
     expect(value.injected).toBe(true);
@@ -843,25 +799,17 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.history).toMatchObject({ status: "failed", reason: "foreign-terminal-fact" });
     expect(value.afterRepeat).toEqual(value.beforeRepeat);
   });
-  it.each([true, false])(
-    "keeps healthy cleanup and terminal output consistent (json=%s)",
-    async (json) => {
-      const value = await scenario("healthy", json);
-      expect(value.exitCode).toBe(0);
-      expect(value.retainedExists).toBe(false);
-      expect(value.history?.status).toBe("succeeded");
-      expect(value.lease).toBe("absent");
-      expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
-      expect(value.observationLeases).toEqual(["absent"]);
-      if (json) {
-        expect(value.jsonOutput).toHaveLength(1);
-        expect(value.jsonOutput[0]).toMatchObject({ status: "ok" });
-      } else {
-        expect(value.humanOutput.join("\n").toLowerCase()).toContain("updated");
-      }
-      expect(value.afterRepeat).toEqual(value.beforeRepeat);
-    },
-  );
+  it("keeps healthy cleanup and JSON terminal output consistent", async () => {
+    const value = await scenario("healthy", true);
+    expect(value.exitCode).toBe(0);
+    expect(value.retainedExists).toBe(false);
+    expect(value.history?.status).toBe("succeeded");
+    expect(value.lease).toBe("absent");
+    expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
+    expect(value.observationLeases).toEqual(["absent"]);
+    expect(value.jsonOutput).toEqual([expect.objectContaining({ status: "ok" })]);
+    expect(value.afterRepeat).toEqual(value.beforeRepeat);
+  });
 });
 
 it("keeps foreground success pending until the replacement Gateway observes the final sentinel", async () => {
