@@ -187,6 +187,10 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
   };
   const source = prepareOpenClawStateReadSource(options);
   const context = source.workerContext();
+  const assertCurrent = () => {
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
+  };
   const readSnapshot = async (readContext: typeof context) => {
     const assertReadCurrent = () => {
       readContext.maintenanceScope?.assertAdmission();
@@ -220,7 +224,7 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
       try {
         for (;;) {
           changed = false;
-          const { snapshot, assertCurrent } = await read();
+          const { snapshot } = await read();
           assertCurrent();
           if (changed) {
             continue;
