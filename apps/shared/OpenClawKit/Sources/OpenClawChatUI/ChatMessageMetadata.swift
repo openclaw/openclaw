@@ -12,13 +12,14 @@ extension ChatTranscriptRow {
     static func footerMetadata(
         in rows: [Self],
         activeRunIDs: Set<String>,
-        runWorking: Bool) -> [UUID: ChatMessageMetadata]
+        runWorking: Bool,
+        isMessageVisible: (OpenClawChatMessage) -> Bool) -> [UUID: ChatMessageMetadata]
     {
         var result: [UUID: ChatMessageMetadata] = [:]
         var group: [OpenClawChatMessage] = []
         func flush(isTrailing: Bool = false) {
             defer { group.removeAll(keepingCapacity: true) }
-            guard let first = group.first, let last = group.last else { return }
+            guard let first = group.first, let last = group.last(where: isMessageVisible) else { return }
             let role = first.role.lowercased()
             guard role == "user" || role == "assistant" else { return }
             if role == "assistant" {

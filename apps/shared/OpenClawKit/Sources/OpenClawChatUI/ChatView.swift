@@ -934,7 +934,11 @@ extension OpenClawChatView {
         let runWorking = self.viewModel.hasBlockingRunActivity || self.viewModel.streamingAssistantText != nil
         let activeRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
         // Footers and visible rows share the merged, onboarding-trimmed input, before work moves into disclosures.
-        let metadata = ChatTranscriptRow.footerMetadata(in: rows, activeRunIDs: activeRunIDs, runWorking: runWorking)
+        let metadata = ChatTranscriptRow.footerMetadata(
+            in: rows,
+            activeRunIDs: activeRunIDs,
+            runWorking: runWorking,
+            isMessageVisible: self.shouldDisplayMessage)
         if self.collapsesCompletedWork {
             rows = ChatTranscriptRow.collapseCompletedWork(
                 rows,

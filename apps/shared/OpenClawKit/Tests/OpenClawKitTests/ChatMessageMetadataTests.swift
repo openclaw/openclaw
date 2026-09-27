@@ -43,6 +43,16 @@ struct ChatMessageMetadataTests {
         #expect(metadata[last.id] == ChatMessageMetadata(timestamp: 1000, model: "provider/model-b"))
     }
 
+    @Test
+    func `a hidden trailing group member cannot take the visible reply footer`() throws {
+        let reply = try self.message(fields: #""phase":"final_answer""#)
+        var hidden = try self.message(timestamp: 2000, model: "\"provider/model-b\"", fields: #""phase":"final_answer""#)
+        hidden.content = []
+        let metadata = self.footers([reply, hidden], hiddenIDs: [hidden.id])
+        #expect(Set(metadata.keys) == [reply.id])
+        #expect(metadata[reply.id] == ChatMessageMetadata(timestamp: 1000, model: "provider/model-b"))
+    }
+
     @Test(arguments: [
         #""__openclaw":{"runId":"other"}"#,
         #""__openclaw":{"turnBoundary":true}"#,
@@ -91,10 +101,12 @@ struct ChatMessageMetadataTests {
         let active = try self.message(fields: #""__openclaw":{"runId":"active"}"#)
         let user = try self.message(role: "user")
         let rows = ChatTranscriptRow.build(from: [first, active, user])
-        let metadata = ChatTranscriptRow.footerMetadata(in: rows, activeRunIDs: ["active"], runWorking: true)
+        let metadata = ChatTranscriptRow.footerMetadata(
+            in: rows, activeRunIDs: ["active"], runWorking: true, isMessageVisible: { _ in true })
         #expect(Set(metadata.keys) == [first.id, user.id])
         #expect(ChatTranscriptRow.footerMetadata(
-            in: ChatTranscriptRow.build(from: [first]), activeRunIDs: [], runWorking: true).isEmpty)
+            in: ChatTranscriptRow.build(from: [first]), activeRunIDs: [], runWorking: true,
+            isMessageVisible: { _ in true }).isEmpty)
     }
 
     private struct TimestampCase: Sendable {
@@ -155,11 +167,15 @@ struct ChatMessageMetadataTests {
         #expect(ChatMessageTimestampPresentation.make(timestamp: .infinity) == nil)
     }
 
-    private func footers(_ messages: [OpenClawChatMessage]) -> [UUID: ChatMessageMetadata] {
+    private func footers(
+        _ messages: [OpenClawChatMessage],
+        hiddenIDs: Set<UUID> = []) -> [UUID: ChatMessageMetadata]
+    {
         ChatTranscriptRow.footerMetadata(
             in: ChatTranscriptRow.build(from: messages),
             activeRunIDs: [],
-            runWorking: false)
+            runWorking: false,
+            isMessageVisible: { !hiddenIDs.contains($0.id) })
     }
 
     private func message(
