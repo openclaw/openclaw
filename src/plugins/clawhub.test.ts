@@ -2042,7 +2042,8 @@ describe("installPluginFromClawHub", () => {
       { kind: "case collision", names: ["README.md", "readme.md"] },
       { kind: "Unicode normalization collision", names: ["caf\u00e9.md", "cafe\u0301.md"] },
     ].map((collision) => ({
-      ...collision,
+      kind: collision.kind,
+      names: collision.names,
       mode: undefined,
       error: expect.stringContaining(
         "ClawHub archive fallback verification rejected the downloaded archive: archive entries collide at output path",
