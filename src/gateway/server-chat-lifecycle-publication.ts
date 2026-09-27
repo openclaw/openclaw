@@ -65,8 +65,12 @@ export function createSessionLifecyclePublisher(deps: {
       phase === "model" && runContext
         ? JSON.stringify([sessionKey, agentId, projectedAgentRunInputKey(runContext)])
         : undefined;
-    const modelInput = readModelInput();
-    if (runContext && modelInput && publishedModelInputs.get(runContext) === modelInput) {
+    const observedModelInput = readModelInput();
+    if (
+      runContext &&
+      observedModelInput &&
+      publishedModelInputs.get(runContext) === observedModelInput
+    ) {
       return;
     }
     const publish = () => {
