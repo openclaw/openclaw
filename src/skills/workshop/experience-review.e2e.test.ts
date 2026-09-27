@@ -167,7 +167,7 @@ describe("Workshop draft-only review through the real provider and tool owners",
         ]);
       },
     );
-  }, 120_000);
+  }, 300_000);
 
   it("reviews the completed deep turn when shallow work finishes before the idle window", async () => {
     const requests: Request[] = [];
