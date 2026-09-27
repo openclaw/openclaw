@@ -434,65 +434,88 @@ it.each(["npm", "clawhub"] as const)(
   },
 );
 
-it("captures managed native packages that share a companion dependency", async () => {
-  await withOpenClawTestState({ label: "native-shared-companion" }, async (state) => {
-    const fixture = createFixture(state.path("installed"), true);
-    fs.rmSync(fixture.filename);
-    fs.writeFileSync(
-      path.join(fixture.root, "package.json"),
-      JSON.stringify({ dependencies: { "a-library": "1.0.0", "b-addon": "1.0.0" } }),
-    );
-    const files = {
-      "a-library/package.json": '{"name":"a-library","version":"1.0.0","main":"lib/helper.cjs"}',
-      "a-library/lib/library.so": "native library bytes",
-      "a-library/lib/helper.cjs": "module.exports = 'companion';",
-      "b-addon/package.json": JSON.stringify({
-        name: "b-addon",
-        main: "lib/addon.node",
-        dependencies: { "a-library": "1.0.0" },
-      }),
-      "b-addon/lib/addon.node": "native addon bytes",
-      "c-addon/package.json": JSON.stringify({
-        name: "c-addon",
-        dependencies: { "a-library": "1.0.0" },
-      }),
-      "c-addon/lib/addon.node": "another native addon",
-    };
-    for (const [name, content] of Object.entries(files)) {
-      const filename = path.join(fixture.root, "node_modules", name);
-      fs.mkdirSync(path.dirname(filename), { recursive: true });
-      fs.writeFileSync(filename, content);
-    }
-    const cache = createPluginCache();
-    preparePluginNativeAdmissions(fixture.index, cache);
-    const library = path.join(fixture.root, "node_modules/a-library/lib/library.so");
-    const timestamp = new Date("2020-01-01T00:00:00Z");
-    fs.utimesSync(library, timestamp, timestamp);
-    let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
-    let sibling: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
-    try {
-      artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
-      artifact.assertSourceCurrent();
-      const require = createRequire(path.join(artifact.rootDir, "index.js"));
-      expect(require("a-library")).toBe("companion");
-      expect(fs.readFileSync(require.resolve("a-library/lib/library.so"), "utf8")).toBe(
-        "native library bytes",
+it.each([false, true])(
+  "captures managed native packages that share a companion dependency (copied=%s)",
+  async (copied) => {
+    await withOpenClawTestState({ label: "native-shared-companion" }, async (state) => {
+      const fixture = createFixture(state.path("installed"), true);
+      fs.rmSync(fixture.filename);
+      fs.writeFileSync(
+        path.join(fixture.root, "package.json"),
+        JSON.stringify({ dependencies: { "a-library": "1.0.0", "b-addon": "1.0.0" } }),
       );
-      fs.writeFileSync(library, "edited library bytes");
+      if (copied) {
+        const manifest = JSON.stringify({
+          id: "fixture",
+          configSchema: { type: "object" },
+          providerCatalogEntry: "node_modules/a-library/lib/library.so",
+        });
+        fs.writeFileSync(fixture.index.plugins[0]!.manifestPath, manifest);
+        fixture.index.plugins[0]!.manifestHash = createHash("sha256")
+          .update(manifest)
+          .digest("hex");
+      }
+      const files = {
+        "a-library/package.json": '{"name":"a-library","version":"1.0.0","main":"lib/helper.cjs"}',
+        "a-library/lib/library.so": "native library bytes",
+        "a-library/lib/helper.cjs": "module.exports = 'companion';",
+        "b-addon/package.json": JSON.stringify({
+          name: "b-addon",
+          main: "lib/addon.node",
+          dependencies: { "a-library": "1.0.0" },
+        }),
+        "b-addon/lib/addon.node": "native addon bytes",
+        "c-addon/package.json": JSON.stringify({
+          name: "c-addon",
+          dependencies: { "a-library": "1.0.0" },
+        }),
+        "c-addon/lib/addon.node": "another native addon",
+      };
+      for (const [name, content] of Object.entries(files)) {
+        const filename = path.join(fixture.root, "node_modules", name);
+        fs.mkdirSync(path.dirname(filename), { recursive: true });
+        fs.writeFileSync(filename, content);
+      }
+      const cache = createPluginCache();
+      preparePluginNativeAdmissions(fixture.index, cache);
+      const library = path.join(fixture.root, "node_modules/a-library/lib/library.so");
+      const timestamp = new Date("2020-01-01T00:00:00Z");
       fs.utimesSync(library, timestamp, timestamp);
-      expect(() => {
-        sibling = withPluginCache(cache, () =>
-          capturePluginGenerationArtifact(path.join(fixture.root, "node_modules/c-addon")),
+      let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+      let sibling: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+      try {
+        artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
+        artifact.assertSourceCurrent();
+        const require = createRequire(path.join(artifact.rootDir, "index.js"));
+        expect(require("a-library")).toBe("companion");
+        expect(fs.readFileSync(require.resolve("a-library/lib/library.so"), "utf8")).toBe(
+          "native library bytes",
         );
-      }).toThrow("Native plugin companion changed during admission");
-      expect(artifact.assertSourceCurrent).toThrow("Plugin source changed");
-    } finally {
-      await sibling?.disposeAsync();
-      await artifact?.disposeAsync();
-      await retirePluginCache(cache);
-    }
-  });
-});
+        const retained = fs.statSync(require.resolve("a-library/lib/library.so"), { bigint: true });
+        const installed = fs.statSync(library, { bigint: true });
+        expect(retained.dev === installed.dev && retained.ino === installed.ino).toBe(!copied);
+        fs.writeFileSync(library, "edited library bytes");
+        fs.utimesSync(library, timestamp, timestamp);
+        expect(fs.statSync(library, { bigint: true })).toMatchObject({
+          dev: installed.dev,
+          ino: installed.ino,
+          size: installed.size,
+          mtimeNs: installed.mtimeNs,
+        });
+        expect(() => {
+          sibling = withPluginCache(cache, () =>
+            capturePluginGenerationArtifact(path.join(fixture.root, "node_modules/c-addon")),
+          );
+        }).toThrow("Native plugin companion changed during admission");
+        expect(artifact.assertSourceCurrent).toThrow("Plugin source changed");
+      } finally {
+        await sibling?.disposeAsync();
+        await artifact?.disposeAsync();
+        await retirePluginCache(cache);
+      }
+    });
+  },
+);
 
 it("snapshots a mutable native edit once while retained generations keep their previous bytes", async () => {
   await withOpenClawTestState({ label: "native-admission-mutable" }, async (state) => {

@@ -244,27 +244,34 @@ export function createPluginNativeAdmission(
     for (const namespace of state.namespaces.values()) {
       for (const [relative, member] of Object.entries(namespace.members)) {
         const identity = changed.get(member.source);
-        if (
-          !identity ||
-          (!pluginSourceIdentityChangedOnlyByCtime(member.sourceIdentity, identity) &&
-            !pluginSourceIdentityChangedOnlyByCtime(member.capturedIdentity, identity))
-        ) {
+        const sourceChanged =
+          identity !== undefined &&
+          pluginSourceIdentityChangedOnlyByCtime(member.sourceIdentity, identity);
+        const captureChanged =
+          identity !== undefined &&
+          pluginSourceIdentityChangedOnlyByCtime(member.capturedIdentity, identity);
+        if (!identity || (!sourceChanged && !captureChanged)) {
           continue;
         }
-        if (
-          namespace !== previous &&
-          member.contentHash &&
-          hashPluginSourceFile(
+        if (namespace !== previous || !captureChanged) {
+          const capturedHash = hashPluginSourceFile(
             pluginNativeNamespaceMemberPath(namespace, relative),
             pluginNativeNamespaceBoundary(namespace),
-          ).contentHash !== member.contentHash
-        ) {
-          throw new Error("Native plugin companion changed during admission");
+          ).contentHash;
+          if (
+            (member.contentHash && capturedHash !== member.contentHash) ||
+            (sourceChanged &&
+              hashPluginSourceFile(member.source, path.dirname(member.source)).contentHash !==
+                capturedHash)
+          ) {
+            throw new Error("Native plugin companion changed during admission");
+          }
+          member.contentHash ??= capturedHash;
         }
-        if (pluginSourceIdentityChangedOnlyByCtime(member.sourceIdentity, identity)) {
+        if (sourceChanged) {
           member.sourceIdentity = identity;
         }
-        if (pluginSourceIdentityChangedOnlyByCtime(member.capturedIdentity, identity)) {
+        if (captureChanged) {
           member.capturedIdentity = identity;
         }
       }
