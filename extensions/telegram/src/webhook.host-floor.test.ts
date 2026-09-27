@@ -203,6 +203,8 @@ it.each(["stop", "abort"] as const)(
 it("settles owned resources before joining an unfinished request on shutdown", async () => {
   const port = await freePort();
   const webhook = await start(port);
+  const cleanupSettled = createDeferred<void>();
+  mocks.settleIngress.mockImplementationOnce(() => cleanupSettled.resolve());
   const body = '{"update_id":4}';
   const response = createDeferred<
     { statusCode: number | undefined; accepted: string | string[] | undefined } | Error
@@ -238,11 +240,14 @@ it("settles owned resources before joining an unfinished request on shutdown", a
     stopping = webhook.stop().then(() => {
       stopped = true;
     });
-    await vi.waitFor(() => {
-      expect(mocks.stopBot).toHaveBeenCalledOnce();
-      expect(mocks.closeTransport).toHaveBeenCalledOnce();
-      expect(mocks.stopIngress).toHaveBeenCalledOnce();
-      expect(mocks.settleIngress).toHaveBeenCalledOnce();
+    await cleanupSettled.promise;
+    expect(mocks.stopBot).toHaveBeenCalledOnce();
+    expect(mocks.closeTransport).toHaveBeenCalledOnce();
+    expect(mocks.stopIngress).toHaveBeenCalledOnce();
+    expect(mocks.settleIngress).toHaveBeenCalledOnce();
+    // Cross an I/O boundary before checking that stop still joins the held request.
+    await expect(fetch(webhookUrl(port, "/healthz"))).rejects.toMatchObject({
+      cause: { code: "ECONNREFUSED" },
     });
     expect(stopped).toBe(false);
     req.end(body);

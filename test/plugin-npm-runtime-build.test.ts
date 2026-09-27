@@ -43,14 +43,19 @@ function expectPluginNpmRuntimeBuildPlan(
 }
 
 describe("plugin npm runtime build planning", () => {
-  it.each(["esm", "cjs"])(
-    "bundles pure SDK additions for an older host while retaining %s host bindings",
-    async (runtimeFormat) => {
+  it.each([
+    ["esm", "@openclaw/telegram"],
+    ["cjs", "@openclaw/telegram"],
+    ["esm", "@openclaw/old-host-fixture"],
+    ["cjs", "@openclaw/old-host-fixture"],
+  ])(
+    "bundles compatible SDK operations while retaining host ownership (%s, %s)",
+    async (runtimeFormat, packageName) => {
       const packageDir = tempDirs.make("openclaw-plugin-runtime-old-host-");
       writeFileSync(
         path.join(packageDir, "package.json"),
         JSON.stringify({
-          name: "@openclaw/old-host-fixture",
+          name: packageName,
           version: "1.0.0",
           type: "module",
           openclaw: {
@@ -65,6 +70,8 @@ describe("plugin npm runtime build planning", () => {
           'export { createLegacyWebhookListenerDoctorContract, normalizeChannelConfigEntries } from "openclaw/plugin-sdk/runtime-doctor-migrations";',
           'export { classifyGatewayProbePath, resolvePluginRoutePathContext, isProtectedPluginRoutePathFromContext, resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";',
           'export { resolveBotThreadMentionPolicy, resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-mention-gating";',
+          'export { createLivePreviewLifecycle, createPreviewMessageReceipt } from "openclaw/plugin-sdk/channel-outbound";',
+          'export { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";',
         ].join("\n"),
       );
       const hostDir = path.join(packageDir, "node_modules", "openclaw");
@@ -73,6 +80,8 @@ describe("plugin npm runtime build planning", () => {
         "runtime-doctor-migrations": "normalizeChannelConfigEntries",
         "gateway-config-runtime": "resolveGatewayPort",
         "channel-mention-gating": "resolveInboundMentionDecision",
+        "channel-outbound": "createPreviewMessageReceipt",
+        "error-runtime": "formatErrorMessage",
       };
       writeFileSync(
         path.join(hostDir, "package.json"),
@@ -86,6 +95,16 @@ describe("plugin npm runtime build planning", () => {
       for (const [name, binding] of Object.entries(hostBindings)) {
         writeFileSync(path.join(hostDir, `${name}.cjs`), `exports.${binding} = () => 31337;\n`);
       }
+      writeFileSync(
+        path.join(hostDir, "channel-outbound.cjs"),
+        "exports.createPreviewMessageReceipt = () => 31337;\n" +
+          "exports.createLivePreviewLifecycle = () => ({ finalStarted: false });\n",
+      );
+      writeFileSync(
+        path.join(hostDir, "error-runtime.cjs"),
+        "let calls = 0; exports.formatErrorMessage = () => { calls++; return 'host-redacted'; };\n" +
+          "exports.formatterCalls = () => calls;\n",
+      );
 
       const plan = expectPluginNpmRuntimeBuildPlan(
         await buildPluginNpmRuntime({ repoRoot, packageDir, logLevel: "silent" }),
@@ -100,7 +119,32 @@ describe("plugin npm runtime build planning", () => {
           const migrated = entry.createLegacyWebhookListenerDoctorContract({
             channelKey: "telegram", defaultPort: 8787,
           }).normalizeCompatibilityConfig({ cfg });
+          let preview;
+          if (workerData.packageName === "@openclaw/telegram") {
+            const lifecycle = entry.createLivePreviewLifecycle();
+            lifecycle.beginFinalDelivery();
+            lifecycle.observeSuppression();
+            const suppressed = lifecycle.finalSuppressed;
+            lifecycle.reset();
+            const accepted = entry.createLivePreviewLifecycle({
+              onFinalStarted: () => { throw new Error("private fixture diagnostic"); },
+            });
+            let failure;
+            try {
+              await accepted.observeDelivery({ visibleReplySent: true, messageIds: ["accepted"] });
+            } catch (error) {
+              failure = { message: error.message, code: error.code,
+                acceptedIds: error.deliveryResult.messageIds };
+            }
+            preview = { suppressed, reset: !lifecycle.finalStarted,
+              accepted: accepted.finalSucceeded, failure,
+              formatterCalls: require(workerData.hostDir + "/error-runtime.cjs").formatterCalls() };
+          } else {
+            preview = { hostFactoryPreserved: entry.createLivePreviewLifecycle ===
+              require(workerData.hostDir + "/channel-outbound.cjs").createLivePreviewLifecycle };
+          }
           parentPort.postMessage({
+            preview,
             hostBindingsPreserved: Object.entries(workerData.hostBindings).every(
               ([name, binding]) => entry[binding] === require(workerData.hostDir + "/" + name + ".cjs")[binding],
             ),
@@ -123,6 +167,7 @@ describe("plugin npm runtime build planning", () => {
             entry: pathToFileURL(path.join(packageDir, plan.runtimeExtensions[0]!)).href,
             hostDir,
             hostBindings,
+            packageName,
           },
         },
       );
@@ -135,6 +180,20 @@ describe("plugin npm runtime build planning", () => {
           );
         });
         expect(result).toEqual({
+          preview:
+            packageName === "@openclaw/telegram"
+              ? {
+                  suppressed: true,
+                  reset: true,
+                  accepted: true,
+                  failure: {
+                    message: "host-redacted",
+                    code: "CHANNEL_PARTIAL_DELIVERY",
+                    acceptedIds: ["accepted"],
+                  },
+                  formatterCalls: 1,
+                }
+              : { hostFactoryPreserved: true },
           hostBindingsPreserved: true,
           config: { channels: { telegram: { legacyWebhook: { port: 8123 } } } },
           sourceUnchanged: true,

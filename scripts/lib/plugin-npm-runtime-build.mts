@@ -51,11 +51,25 @@ const BUNDLED_SDK_EXPORTS: Record<string, Record<string, string[]>> = {
 const BUNDLED_SDK_PREFIX = "\0openclaw:bundled-sdk:";
 const HOST_SDK_PREFIX = "\0openclaw:host-sdk:";
 
-function createBundledSdkExportsPlugin(repoRoot: string): TsdownPlugin {
+function createBundledSdkExportsPlugin(
+  repoRoot: string,
+  bundledSdkExports: typeof BUNDLED_SDK_EXPORTS,
+  bundleTelegramLifecycle: boolean,
+): TsdownPlugin {
   return {
-    name: "openclaw:bundled-pure-sdk-exports",
-    resolveId(id) {
-      if (Object.hasOwn(BUNDLED_SDK_EXPORTS, id)) {
+    name: "openclaw:bundled-sdk-exports",
+    resolveId(id, importer) {
+      // Partial-delivery errors must use the host's configured redactor and secret registry.
+      if (
+        bundleTelegramLifecycle &&
+        id === "../../infra/errors.js" &&
+        importer &&
+        path.resolve(importer) ===
+          path.join(repoRoot, "src/channels/turn/partial-delivery-error.ts")
+      ) {
+        return { id: "openclaw/plugin-sdk/error-runtime", external: true };
+      }
+      if (Object.hasOwn(bundledSdkExports, id)) {
         return `${BUNDLED_SDK_PREFIX}${id}`;
       }
       if (id.startsWith(HOST_SDK_PREFIX)) {
@@ -71,7 +85,7 @@ function createBundledSdkExportsPlugin(repoRoot: string): TsdownPlugin {
         return undefined;
       }
       const specifier = id.slice(BUNDLED_SDK_PREFIX.length);
-      const sources = BUNDLED_SDK_EXPORTS[specifier];
+      const sources = bundledSdkExports[specifier];
       if (!sources) {
         return undefined;
       }
@@ -552,6 +566,20 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     return null;
   }
 
+  // The 9.6 host lacks Telegram's final-observation contract. This canonical factory
+  // owns isolated per-turn state; its host error formatter stays external below.
+  // Retire this binding when Telegram's declared host floor includes that contract.
+  const bundleTelegramLifecycle = plan.packageJson.name === "@openclaw/telegram";
+  const bundledSdkExports = {
+    ...BUNDLED_SDK_EXPORTS,
+    ...(bundleTelegramLifecycle
+      ? {
+          "openclaw/plugin-sdk/channel-outbound": {
+            "src/channels/message/live.ts": ["createLivePreviewLifecycle"],
+          },
+        }
+      : {}),
+  };
   const bundledSdkImports = {
     [BUNDLED_GRAPHEME_SDK_IMPORT]: path.join(
       plan.repoRoot,
@@ -568,7 +596,7 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
   };
   const bundledSdkSpecifiers = new Set([
     ...Object.keys(bundledSdkImports),
-    ...Object.keys(BUNDLED_SDK_EXPORTS),
+    ...Object.keys(bundledSdkExports),
   ]);
   const { build } = await import("tsdown");
   assertRealOutputRoot(plan.outDir);
@@ -584,7 +612,7 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     },
     entry: plan.entry,
     plugins: [
-      createBundledSdkExportsPlugin(plan.repoRoot),
+      createBundledSdkExportsPlugin(plan.repoRoot, bundledSdkExports, bundleTelegramLifecycle),
       createPluginInventoryModuleRefsPlugin(plan.packageDir),
     ],
     outputOptions: {
