@@ -1,6 +1,5 @@
 // Normalizes Chrome MCP profile options and subprocess arguments.
 import { createRequire } from "node:module";
-import { resolveNodeRuntimeExecutable } from "openclaw/plugin-sdk/process-runtime";
 import {
   hasNonEmptyString,
   normalizeOptionalString,
@@ -28,9 +27,10 @@ export function normalizeChromeMcpOptions(
     return input;
   }
   const options = typeof input === "string" ? { userDataDir: input } : (input ?? {});
-  const customCommand = normalizeOptionalString(options.mcpCommand);
+  const configuredCommand = normalizeOptionalString(options.mcpCommand);
   // Explicit npx has always selected OpenClaw's pinned server, including its package prefix.
-  const managedServer = customCommand === undefined || customCommand === "npx";
+  const customCommand = configuredCommand === "npx" ? undefined : configuredCommand;
+  const managedServer = customCommand === undefined;
   const extraArgs = Array.isArray(options.mcpArgs) ? options.mcpArgs.filter(hasNonEmptyString) : [];
   // Match Chrome MCP's Yargs grammar, including short groups and camel-case
   // aliases. Policy and direct CDP operations must use the endpoint it launches.
@@ -74,12 +74,9 @@ export function normalizeChromeMcpOptions(
   const defaultFeatureArgs = extraArgs.some((arg) => CHROME_MCP_USAGE_STATISTICS_FLAG_RE.test(arg))
     ? DEFAULT_CHROME_MCP_FEATURE_ARGS.filter((arg) => arg !== "--no-usage-statistics")
     : DEFAULT_CHROME_MCP_FEATURE_ARGS;
-  const command = managedServer ? resolveNodeRuntimeExecutable() : customCommand;
-  if (!command) {
-    throw new BrowserProfileUnavailableError("Chrome MCP requires a Node.js executable on PATH.");
-  }
   return {
-    command,
+    // The pinned server runs on the Gateway's own runtime, Node or Bun.
+    command: customCommand ?? process.execPath,
     userDataDir,
     browserUrl,
     args: [
