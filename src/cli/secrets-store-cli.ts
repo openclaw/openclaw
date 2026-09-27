@@ -168,7 +168,7 @@ export function registerSecretStoreCli(secrets: Command): void {
 
   store
     .command("list")
-    .description("List stored names and non-secret metadata")
+    .description("List stored names and metadata; env-kind values are printed in full")
     .option("--scope <team>", "Store scope", "team")
     .option("--json", "Output JSON", false)
     .option("--plain", "Output tab-separated rows", false)
