@@ -215,7 +215,10 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
             // using the same 2000ms deadline / 25ms interval as waitForPidToExit,
             // instead of assuming it follows immediately from PID liveness.
             await expect
-              .poll(() => isChildProcessTreeAlive(child), { timeout: 2_000, interval: 25 })
+              .poll(() => isChildProcessTreeAlive(command.nodeChildProcess), {
+                timeout: 2_000,
+                interval: 25,
+              })
               .toBe(false);
             const kill = process.kill.bind(process);
             let groupReads = 0;
