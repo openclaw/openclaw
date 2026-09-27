@@ -138,7 +138,7 @@ export async function createNativeDependencies(options: {
   if (options.mode === "compare" && (!binary || !path.isAbsolute(binary))) {
     throw new OperationError("simslim-version", "not-found");
   }
-  if (binary && (await command("simslim-version", binary, ["--version"])) !== "simslim 0.8.0") {
+  if (binary && (await command("simslim-version", binary, ["--version"])) !== "simslim 0.10.0") {
     throw new OperationError("simslim-version", "identity-mismatch");
   }
   const runtimes: {
@@ -174,7 +174,7 @@ export async function createNativeDependencies(options: {
     runtime: runtime.version,
     runtimeIdentifier: runtime.identifier,
     deviceType: DEVICE_TYPE,
-    simslim: binary ? "0.8.0" : null,
+    simslim: binary ? "0.10.0" : null,
   });
   const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-release-e2e-"));
   // Never export raw xcresults or fixture logs: they can contain pairing credentials.
