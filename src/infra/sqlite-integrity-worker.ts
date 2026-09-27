@@ -3,6 +3,7 @@ import { fork } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";
@@ -267,12 +268,10 @@ function assertSqliteIntegrityWithProcess(
       killSignal: "SIGKILL",
       ...(scope ? {} : { signal }),
     });
-    let onClosed!: () => void;
+    const { promise: closed, resolve: onClosed } = createDeferredCore();
     active = {
       child,
-      closed: new Promise<void>((resolve) => {
-        onClosed = resolve;
-      }),
+      closed,
       retired: false,
       closeBudgetMs: timeoutMs,
     };
