@@ -33,6 +33,7 @@ import {
 } from "../../scripts/lib/ci-test-runtime.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 import { resolveLocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
+import * as workerOwner from "../../scripts/lib/vitest-worker-run.mts";
 import * as groupOwner from "../../scripts/vitest-process-group.mts";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { getUnitFastIsolatedTestFiles } from "../vitest/vitest.unit-fast-paths.mjs";
@@ -1268,33 +1269,47 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   );
 
   it.each([
-    { portable: true, exclusive: true, callerLeaf: false, expected: 1 },
-    { portable: true, exclusive: false, callerLeaf: false, expected: 2 },
-    { portable: false, exclusive: true, callerLeaf: true, expected: 1 },
-    { portable: false, exclusive: false, callerLeaf: true, expected: 1 },
+    { portable: true, exclusive: true, callerLeaf: "none", expected: 1 },
+    { portable: true, exclusive: false, callerLeaf: "none", expected: 2 },
+    { portable: false, exclusive: true, callerLeaf: "base", expected: 1 },
+    { portable: false, exclusive: true, callerLeaf: "group", expected: 1 },
+    { portable: false, exclusive: false, callerLeaf: "base", expected: 1 },
+    { portable: false, exclusive: true, callerLeaf: "none", expected: 2 },
   ])(
-    "retains portable/cache ownership admission $portable/$exclusive/$callerLeaf",
+    "retains portable/cache ownership admission and worker sizing $portable/$exclusive/$callerLeaf",
     async ({ portable, exclusive, callerLeaf, expected }) => {
       vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(!portable);
       vi.spyOn(os, "availableParallelism").mockReturnValue(8);
-      vi.spyOn(os, "totalmem").mockReturnValue(24 * 1024 ** 3);
+      vi.spyOn(os, "totalmem").mockReturnValue(31 * 1024 ** 3);
+      const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
       const scratchDir = makeScratchDir();
       let active = 0;
       let peak = 0;
+      const workers: Array<string | undefined> = [];
       const log = vi.spyOn(console, "log").mockImplementation(() => {});
       await expect(
         runShardPlans(
           resolveShardPlans({
-            OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
-              { configs: [exclusive ? gatewayCoreConfig : "a.config.ts"] },
-              { configs: ["b.config.ts"] },
-              { configs: ["c.config.ts"] },
-            ]),
+            OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
+              [exclusive ? gatewayCoreConfig : "a.config.ts", "b.config.ts", "c.config.ts"].map(
+                (config) => ({
+                  configs: [config],
+                  fallbackMaxWorkers: 2,
+                  env:
+                    callerLeaf === "group"
+                      ? { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(scratchDir, "caller") }
+                      : undefined,
+                }),
+              ),
+            ),
           }),
           {
             env: {
               CI: "true",
-              ...(callerLeaf
+              RUNNER_ENVIRONMENT: "self-hosted",
+              OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "2",
+              OPENCLAW_VITEST_MAX_WORKERS: "8",
+              ...(callerLeaf === "base"
                 ? {
                     OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: scratchDir,
                     OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(scratchDir, "caller"),
@@ -1302,7 +1317,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
                 : {}),
             },
             scratchDir,
-            runChild: async () => {
+            runChild: async (_args, env) => {
+              workers.push(env.OPENCLAW_VITEST_MAX_WORKERS);
               active += 1;
               peak = Math.max(peak, active);
               await nextTurn();
@@ -1313,7 +1329,18 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         ),
       ).resolves.toBe(0);
       expect(peak).toBe(expected);
+      expect(active).toBe(0);
+      expect(workers).toEqual(expected === 1 ? ["8", "8", "8"] : [exclusive ? "8" : "2", "2", "2"]);
       expect(log).toHaveBeenCalledWith(expect.stringContaining(`admitted plans=${expected}`));
+      expect(createWorker).toHaveBeenCalledTimes(portable ? 0 : 1);
+      if (!portable) {
+        expect(createWorker.mock.calls[0]?.[0]).toMatchObject({
+          RAYON_NUM_THREADS: expected === 1 ? "4" : "2",
+          TOKIO_WORKER_THREADS: expected === 1 ? "4" : "2",
+        });
+        const run = createWorker.mock.results[0]!.value;
+        expect(existsSync(run.descriptor.directory)).toBe(false);
+      }
     },
   );
 

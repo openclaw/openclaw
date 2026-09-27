@@ -380,7 +380,7 @@ export function resolveShardChildCommand(
   };
 }
 
-async function createWorkerContext(env: NodeJS.ProcessEnv, plans: ShardPlan[]) {
+async function loadWorkerOwner() {
   const ownedRunner = join(process.cwd(), "scripts/ci-run-node-test-shard.mts");
   // ci.yml's frozen-release adapter must execute the old target,
   // never load a modern compiler from its workflow-owned .ci-workflow checkout.
@@ -401,18 +401,32 @@ async function createWorkerContext(env: NodeJS.ProcessEnv, plans: ShardPlan[]) {
     return undefined;
   }
   const { resolveSharedVitestCompilerEnv } = await import("./lib/vitest-process-env.mts");
-  const compilerEnv = resolveSharedVitestCompilerEnv(
-    plans.length > 0 ? plans.map((plan) => prepareChildEnv(plan, env)) : [env],
-  );
   const [worker, processOwner] = await Promise.all([
     import("./lib/vitest-worker-run.mts"),
     import("./lib/vitest-process.mts"),
   ]);
   return {
-    workerRun: worker.createVitestWorkerRun(compilerEnv),
+    createWorkerRun: worker.createVitestWorkerRun,
+    resolveCompilerEnv: resolveSharedVitestCompilerEnv,
     spawn: processOwner.spawnOwnedVitestProcess,
     exitBySignal: processOwner.exitVitestBySignal,
     installCleanup: groupOwner.installVitestProcessGroupCleanup,
+  };
+}
+
+function createWorkerContext(
+  owner: NonNullable<Awaited<ReturnType<typeof loadWorkerOwner>>>,
+  env: NodeJS.ProcessEnv,
+  plans: ShardPlan[],
+) {
+  const compilerEnv = owner.resolveCompilerEnv(
+    plans.length > 0 ? plans.map((plan) => prepareChildEnv(plan, env)) : [env],
+  );
+  return {
+    workerRun: owner.createWorkerRun(compilerEnv),
+    spawn: owner.spawn,
+    exitBySignal: owner.exitBySignal,
+    installCleanup: owner.installCleanup,
   };
 }
 
@@ -558,6 +572,24 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     baseEnv.FROZEN_TARGET !== "true"
       ? hostResources
       : null;
+  const workerOwner = await loadWorkerOwner();
+  // A portable close receipt cannot release a shared lane, and a caller's
+  // final cache leaf cannot be split into scheduler-owned writer slots.
+  const callerCacheLeaf =
+    Boolean(
+      baseEnv[FS_MODULE_CACHE_ROOT_ENV_KEY]?.trim() &&
+      baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim(),
+    ) ||
+    plans.some(
+      (entry) =>
+        entry.kind === "group" &&
+        typeof entry.plan.env?.[FS_MODULE_CACHE_PATH_ENV_KEY] === "string" &&
+        entry.plan.env[FS_MODULE_CACHE_PATH_ENV_KEY].trim(),
+    );
+  if ((!workerOwner && plans.some(exclusive)) || callerCacheLeaf) {
+    concurrency = Math.min(plans.length, 1);
+  }
+  // Final plan admission owns both compiler and child worker budgets.
   const admittedPlans = plans.map((entry): ShardPlan => {
     if (entry.kind !== "group" || entry.plan.fallbackMaxWorkers === undefined) {
       return entry;
@@ -588,7 +620,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const persistentCacheRoot =
     baseEnv[FS_MODULE_CACHE_ROOT_ENV_KEY]?.trim() || baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
   const nodeCompileCacheRoot = baseEnv[NODE_COMPILE_CACHE_PATH_ENV_KEY]?.trim();
-  let context: Awaited<ReturnType<typeof createWorkerContext>>;
+  let context: ReturnType<typeof createWorkerContext> | undefined;
   let unverifiedChild = false;
   let scratchCleanupPending = options.scratchDir === undefined;
   let interrupted: NodeJS.Signals | undefined;
@@ -596,23 +628,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     interrupted ??= signal;
   };
   try {
-    context = await createWorkerContext(baseEnv, admittedPlans);
-    // A portable close receipt cannot release a shared lane, and a caller's
-    // final cache leaf cannot be split into scheduler-owned writer slots.
-    const callerCacheLeaf =
-      Boolean(
-        baseEnv[FS_MODULE_CACHE_ROOT_ENV_KEY]?.trim() &&
-        baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim(),
-      ) ||
-      plans.some(
-        (entry) =>
-          entry.kind === "group" &&
-          typeof entry.plan.env?.[FS_MODULE_CACHE_PATH_ENV_KEY] === "string" &&
-          entry.plan.env[FS_MODULE_CACHE_PATH_ENV_KEY].trim(),
-      );
-    if ((!context && plans.some(exclusive)) || callerCacheLeaf) {
-      concurrency = Math.min(plans.length, 1);
-    }
+    context = workerOwner ? createWorkerContext(workerOwner, baseEnv, admittedPlans) : undefined;
     if (hostResources) {
       console.log(
         `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
