@@ -23,6 +23,7 @@ import {
   startControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { readControlUiProofOption } from "./lib/control-ui-proof-args.mts";
+import { formatErrorMessage } from "./lib/error-format.mts";
 
 const OBSERVER_KEY = "agent:main:main";
 const UNREAD_KEY = "agent:main:dashboard:synthetic-restart-unread";
@@ -147,7 +148,7 @@ try {
   await server.close();
 }
 if (failure) {
-  console.error(`[capture-mock] FAILED: ${failure instanceof Error ? failure.message : failure}`);
+  console.error(`[capture-mock] FAILED: ${formatErrorMessage(failure)}`);
   process.exitCode = 1;
 } else {
   process.exit(0);
