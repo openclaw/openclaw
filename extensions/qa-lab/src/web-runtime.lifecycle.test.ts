@@ -532,4 +532,21 @@ describe("QA web teardown ownership", () => {
     expect(second.closeOrder).toEqual(["context", "browser"]);
     expect(later.closeOrder).toEqual(["context", "browser"]);
   });
+
+  it("attempts every selected session even when an earlier context close fails", async () => {
+    const first = makeBrowser();
+    const second = makeBrowser();
+    const failure = new Error("first context failed");
+    expectedTeardownErrors = [failure];
+    first.context.close.mockRejectedValueOnce(failure);
+    launch.mockResolvedValueOnce(first.browser).mockResolvedValueOnce(second.browser);
+    const firstPage = await webRuntime.qaWebOpenPage(pageParams);
+    const secondPage = await webRuntime.qaWebOpenPage(pageParams);
+
+    await expect(
+      webRuntime.closeQaWebSessions([firstPage.pageId, secondPage.pageId]),
+    ).rejects.toMatchObject({ errors: [failure] });
+    expect(first.browser.close).toHaveBeenCalledOnce();
+    expect(second.closeOrder).toEqual(["context", "browser"]);
+  });
 });

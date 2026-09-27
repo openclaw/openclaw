@@ -234,6 +234,7 @@ describe("Radius OAuth", () => {
     { device_code: "" },
     { expires_in: -1 },
     { interval: 0 },
+    { verification_uri: "javascript:alert(1)" },
     { verification_uri: "https://example.com/device" },
   ])("rejects malformed pairing data before browser effects: %j", async (invalid) => {
     device(invalid);
