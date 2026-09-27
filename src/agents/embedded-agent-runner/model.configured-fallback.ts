@@ -1,8 +1,10 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { findConfiguredProviderModel } from "../../config/model-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createProviderModelCatalogIdNormalizer } from "../../plugins/provider-model-routes.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
@@ -21,7 +23,6 @@ import {
   resolveConfiguredProviderConfig,
   resolveConfiguredProviderDefaultApi,
   shouldSuppressConfiguredModel,
-  type StaticCatalogFallbackModel,
 } from "./model.configured-overrides.js";
 import {
   normalizeResolvedTransportApi,
@@ -30,7 +31,6 @@ import {
 } from "./model.inline-provider.js";
 import {
   normalizeResolvedModel,
-  normalizeTransportBaseUrl,
   type ProviderRuntimeHooks,
   resolveProviderRequestTimeoutMs,
   resolveProviderTransport,
@@ -44,7 +44,7 @@ export function buildConfiguredFallbackModel(params: {
   agentDir?: string;
   manifestAlias: ManifestModelCatalogProviderAliasMetadata;
   providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
-  getStaticCatalogModel?: () => StaticCatalogFallbackModel | undefined;
+  getStaticCatalogModel?: () => ProviderRuntimeModel | undefined;
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model | undefined {
@@ -85,11 +85,11 @@ export function buildConfiguredFallbackModel(params: {
     configuredParams: configuredModel?.params,
   });
   const providerConfiguredApi = normalizeResolvedTransportApi(providerConfig?.api);
-  const configuredModelBaseUrl = normalizeTransportBaseUrl(configuredModel?.baseUrl);
-  const providerConfiguredBaseUrl = normalizeTransportBaseUrl(providerConfig?.baseUrl);
+  const configuredModelBaseUrl = normalizeOptionalString(configuredModel?.baseUrl);
+  const providerConfiguredBaseUrl = normalizeOptionalString(providerConfig?.baseUrl);
   const manifestAliasTransport = params.manifestAlias.transport;
-  const manifestAliasBaseUrl = normalizeTransportBaseUrl(manifestAliasTransport?.baseUrl);
-  const staticCatalogBaseUrl = normalizeTransportBaseUrl(staticCatalogModel?.baseUrl);
+  const manifestAliasBaseUrl = normalizeOptionalString(manifestAliasTransport?.baseUrl);
+  const staticCatalogBaseUrl = normalizeOptionalString(staticCatalogModel?.baseUrl);
   const fallbackTransport = resolveProviderTransport({
     provider,
     modelId,

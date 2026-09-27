@@ -10,7 +10,11 @@ import {
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
-import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
+import {
+  sessionChanges,
+  isSessionStoreTopologyChange,
+  type SessionRowChange,
+} from "../sessions/session-row-changes.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
 import { retainUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureSessionGroupCatalog } from "./session-group-catalog.js";
@@ -33,7 +37,6 @@ import {
 } from "./session-row-projection-archive.js";
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
 import { createSessionRowProjectionCatalog } from "./session-row-projection-catalog.js";
-import { isIdentityScopesOnlyConfigChange } from "./session-row-projection-config.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
 import { createSessionRowGenerationObservations } from "./session-row-projection-generation.js";
 import { createSessionRowCreatorIndex } from "./session-row-projection-identities.js";
@@ -252,6 +255,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       // Every stored identity must be visible before an earlier store selects a later parent.
       for (const { row, entry } of acquisitions) {
         enqueue(acquireEntry(row, entry));
+        markRelated(row);
       }
       storeRead.updateMembership();
       scope = prepareSessionRowScopes(
@@ -267,15 +271,15 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     }));
   }
   function mark(change: SessionRowChange) {
-    if ("all" in change && change.scope === "config") {
+    if (
+      "all" in change &&
+      (change.scope === "config" ||
+        change.scope === "config-presentation" ||
+        change.scope === "config-profiles")
+    ) {
       generations.invalidate();
-    }
-    if ("all" in change && change.scope === "config" && !change.factsInvalidated) {
-      const next = inOwnerContext(() => params.getConfig?.() ?? cfg);
-      if (isIdentityScopesOnlyConfigChange(cfg, next)) {
-        cfg = next;
-        void ensureMaterialized().catch(() => {});
-        return;
+      if (change.scope !== "config") {
+        cfg = inOwnerContext(() => params.getConfig?.() ?? cfg);
       }
     }
     epoch++;
@@ -289,7 +293,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         databaseRevision++;
       }
       placementFacts.invalidateChange(change);
-      if (change.scope === "stores" || change.scope === "config") {
+      if (isSessionStoreTopologyChange(change) || change.scope === "config") {
         topologyDirty = true;
         topologyEpoch = epoch;
       }
@@ -542,6 +546,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       if (!records.ready(row)) {
         return undefined;
       }
+      row.materialized.source.cfg = cfg;
       metadata.preparePresentation(row, readChildLinks);
       return row;
     });

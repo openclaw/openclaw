@@ -7,7 +7,6 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
-import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
@@ -18,7 +17,10 @@ import {
   refreshPluginRegistryAfterConfigMutation,
 } from "./registry-refresh.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
-import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
+import {
+  readPersistedInstalledPluginIndexRowSync,
+  seedInstalledPluginIndex,
+} from "./test-helpers/installed-plugin-index.js";
 
 const runtimeCache = vi.hoisted(() => ({ clear: vi.fn() }));
 vi.mock("./loader.js", () => ({ clearPluginRegistryLoadCache: runtimeCache.clear }));

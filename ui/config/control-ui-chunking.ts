@@ -63,6 +63,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/sidebar-update-card.ts":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
+    case "ui/src/pages/chat/session-snapshot-database.ts":
+      // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
+      return "session-snapshot-database";
   }
 
   if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
@@ -96,7 +99,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
   if (
     moduleIdIncludesPackage(id, "highlight.js") ||
     moduleIdIncludesPackage(id, "markdown-it") ||
-    moduleIdIncludesPackage(id, "markdown-it-task-lists") ||
     moduleIdIncludesPackage(id, "dompurify") ||
     moduleIdIncludesPackage(id, "entities") ||
     moduleIdIncludesPackage(id, "linkify-it") ||

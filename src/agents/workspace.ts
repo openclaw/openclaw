@@ -1,9 +1,3 @@
-/**
- * Workspace bootstrap, template, state, and attestation helpers. This module
- * creates and reads AGENTS/SOUL/TOOLS-style bootstrap files while guarding
- * filesystem boundaries and recently-attested workspaces.
- */
-import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -35,6 +29,7 @@ import {
   hasGlobPattern,
   normalizeWorkspacePatternPath,
   resolveGlobWalkRoot,
+  resolveWorkspaceBootstrapPath,
   type WorkspaceBootstrapFile,
   type WorkspaceBootstrapFileName,
 } from "./workspace-bootstrap-policy.js";
@@ -162,7 +157,6 @@ export type ExtraBootstrapLoadDiagnostic = {
   detail: string;
 };
 
-/** Set of recognized bootstrap filenames for runtime validation */
 const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set(WORKSPACE_BOOTSTRAP_FILENAMES);
 
 const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set(
@@ -354,23 +348,10 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     return { repaired: false, bootstrapExists, state: params.state };
   }
 
-  if (params.state.bootstrapSeededAt && !bootstrapExists) {
-    const completedState: WorkspaceSetupState = {
-      ...params.state,
-      setupCompletedAt: new Date().toISOString(),
-    };
-    params.beforePersistentApply?.();
-    const persistedState = await mergeWorkspaceSetupState(params.dir, completedState, undefined, {
-      assertCurrent: params.beforePersistentApply,
-    });
-    return { repaired: true, bootstrapExists: false, state: persistedState };
-  }
-
   if (
-    !bootstrapExists ||
-    !(await workspaceProfileLooksConfigured({
-      dir: params.dir,
-    }))
+    bootstrapExists
+      ? !(await workspaceProfileLooksConfigured({ dir: params.dir }))
+      : !params.state.bootstrapSeededAt
   ) {
     return { repaired: false, bootstrapExists, state: params.state };
   }
@@ -385,6 +366,9 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   const persistedState = await mergeWorkspaceSetupState(params.dir, repairedState, undefined, {
     assertCurrent: params.beforePersistentApply,
   });
+  if (!bootstrapExists) {
+    return { repaired: true, bootstrapExists: false, state: persistedState };
+  }
   params.beforePersistentApply?.();
   try {
     await fs.rm(params.bootstrapPath, { force: true });
@@ -609,17 +593,16 @@ export async function seedWorkspaceBootstrap(params: {
   }
 
   if (!created) {
+    const statExistingBootstrap = () =>
+      fs.stat(bootstrapPath).catch((error: unknown) => {
+        throw new WorkspaceBootstrapSeedConflictError(
+          "Existing BOOTSTRAP.md could not be read safely.",
+          { cause: error },
+        );
+      });
     await retryAsync(
       async () => {
-        let statBefore: syncFs.Stats;
-        try {
-          statBefore = await fs.stat(bootstrapPath);
-        } catch (error) {
-          throw new WorkspaceBootstrapSeedConflictError(
-            "Existing BOOTSTRAP.md could not be read safely.",
-            { cause: error },
-          );
-        }
+        const statBefore = await statExistingBootstrap();
         const existing = await readWorkspaceFileWithGuards({
           filePath: bootstrapPath,
           workspaceDir: dir,
@@ -636,15 +619,7 @@ export async function seedWorkspaceBootstrap(params: {
           );
         }
         await delay(20);
-        let statAfter: syncFs.Stats;
-        try {
-          statAfter = await fs.stat(bootstrapPath);
-        } catch (error) {
-          throw new WorkspaceBootstrapSeedConflictError(
-            "Existing BOOTSTRAP.md could not be read safely.",
-            { cause: error },
-          );
-        }
+        const statAfter = await statExistingBootstrap();
         if (
           statBefore.size !== statAfter.size ||
           statBefore.mtimeMs !== statAfter.mtimeMs ||
@@ -862,21 +837,16 @@ export async function ensureAgentWorkspace(params?: {
   const identityPath = path.join(dir, DEFAULT_IDENTITY_FILENAME);
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
 
-  const isBrandNewWorkspace = await (async () => {
-    const templatePaths = [agentsPath, soulPath, identityPath, userPath];
-    const paths = [...templatePaths, path.join(dir, "memory")];
-    const existing = await Promise.all(
-      paths.map(async (p) => {
-        try {
-          await fs.access(p);
-          return true;
-        } catch {
-          return false;
-        }
-      }),
-    );
-    return existing.every((v) => !v) && !(await hasWorkspaceUserContentEvidence(dir));
-  })();
+  const existing = await Promise.all(
+    [agentsPath, soulPath, identityPath, userPath, path.join(dir, "memory")].map((filePath) =>
+      fs.access(filePath).then(
+        () => true,
+        () => false,
+      ),
+    ),
+  );
+  const isBrandNewWorkspace =
+    existing.every((exists) => !exists) && !(await hasWorkspaceUserContentEvidence(dir));
 
   if (isBrandNewWorkspace) {
     if (recentAttestation) {
@@ -1109,7 +1079,6 @@ export async function loadWorkspaceBootstrapFiles(
   }
   return result;
 }
-
 async function* walkWorkspaceFiles(
   workspaceDir: string,
   initialRelativeDir: string,

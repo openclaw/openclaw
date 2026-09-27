@@ -738,6 +738,27 @@ describe("buildExecApprovalPendingToolResult", () => {
 });
 
 describe("buildHeadlessExecApprovalDeniedMessage", () => {
+  it.each([
+    { host: "gateway" as const, target: "--gateway" },
+    { host: "node" as const, target: "--node <id|name|ip>" },
+  ])("names the current policy surfaces and inspection target for $host", ({ host, target }) => {
+    const text = buildHeadlessExecApprovalDeniedMessage({
+      host,
+      security: "allowlist",
+      ask: "on-miss",
+      askFallback: "deny",
+    });
+
+    expect(text).toContain('tools.exec.mode="full"');
+    expect(text).toContain('host approvals to security="full" and ask="off"');
+    expect(text).toContain(`openclaw approvals get ${target}`);
+    expect(text).not.toContain("both files");
+    expect(text).not.toContain("openclaw.sqlite");
+    if (host === "node") {
+      expect(text).not.toContain("--gateway");
+    }
+  });
+
   it("points gateway automation runs at card-capable approval clients, not the TUI", () => {
     const text = buildHeadlessExecApprovalDeniedMessage({
       trigger: "cron",
@@ -764,7 +785,8 @@ describe("buildHeadlessExecApprovalDeniedMessage", () => {
 
     expect(text).toContain("Headless runs cannot wait for interactive exec approval");
     expect(text).toContain("rerun interactively");
-    expect(text).toContain("Control UI, TUI, or a chat channel with exec approvals");
+    expect(text).toContain("Control UI or a chat channel with exec approvals");
+    expect(text).not.toContain("TUI");
     expect(text).not.toContain("standing grant");
   });
 });

@@ -381,27 +381,17 @@ export function resolveCommandEnv(params: {
 }): NodeJS.ProcessEnv {
   const baseEnv = params.baseEnv ?? process.env;
   const platform = params.platform ?? process.platform;
-  const argv = params.argv;
-  const shouldSuppressNpmFund = (() => {
-    const cmd = path.basename(argv[0] ?? "");
-    if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") {
-      return true;
-    }
-    if (cmd === "node" || cmd === "node.exe") {
-      const script = argv[1] ?? "";
-      return script.includes("npm-cli.js");
-    }
-    return false;
-  })();
+  const cmd = path.basename(params.argv[0] ?? "");
+  const shouldSuppressNpmFund =
+    cmd === "npm" ||
+    cmd === "npm.cmd" ||
+    cmd === "npm.exe" ||
+    ((cmd === "node" || cmd === "node.exe") && (params.argv[1] ?? "").includes("npm-cli.js"));
 
   const resolvedEnv = mergeProcessEnv([baseEnv, params.env], platform);
   if (shouldSuppressNpmFund) {
-    if (resolvedEnv.NPM_CONFIG_FUND == null) {
-      resolvedEnv.NPM_CONFIG_FUND = "false";
-    }
-    if (resolvedEnv.npm_config_fund == null) {
-      resolvedEnv.npm_config_fund = "false";
-    }
+    resolvedEnv.NPM_CONFIG_FUND ??= "false";
+    resolvedEnv.npm_config_fund ??= "false";
   }
   return markOpenClawExecEnv(resolvedEnv);
 }

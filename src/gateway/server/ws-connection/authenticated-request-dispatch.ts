@@ -395,7 +395,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           // deadline. Operator requests share bounded starts without serializing completion.
           if (client.connect.role === "operator") {
             diagnostics?.startQueue();
-            const start = scheduleGatewayRequestStart(frameBytes);
+            const start = scheduleGatewayRequestStart(frameBytes, req, connId);
             if (!start) {
               respondWithAuthority(
                 false,

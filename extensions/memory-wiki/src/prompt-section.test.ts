@@ -1,4 +1,5 @@
 // Memory Wiki tests cover synchronous guidance and async compiled prompt preparation.
+import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -9,7 +10,6 @@ import type { OpenClawConfig } from "../api.js";
 import {
   activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
-  createMemoryWikiCompiledCachePublicationId,
   resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
@@ -114,8 +114,8 @@ async function seedCompiledDigest(params: {
       },
     },
   };
-  const publicationId = createMemoryWikiCompiledCachePublicationId();
-  const reservationId = createMemoryWikiCompiledCachePublicationId();
+  const publicationId = randomUUID();
+  const reservationId = randomUUID();
   const parentPublicationId = (await loadMemoryWikiVaultIdentity(params.config.vault.path))
     .compiledCachePublicationId;
   await appendMemoryWikiLog(params.config.vault.path, {

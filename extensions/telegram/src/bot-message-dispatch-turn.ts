@@ -16,12 +16,12 @@ import {
   beginDraftQueuedFollowup,
   cleanupDrafts,
   enqueueDraftEvent,
+  handleBeforeDeliverCancelled,
   ingestDraftLaneSegments,
   prepareQueuedAnswerBlock,
   repositionLaneForNewMessage,
   resetLaneState,
   rotateLaneForNewMessage,
-  waitForDraftEvents,
 } from "./bot-message-dispatch-draft.js";
 import { formatTelegramGroupThreadReply } from "./bot-message-dispatch-payload.js";
 import {
@@ -39,7 +39,6 @@ import {
 import {
   deliverReply,
   deliverPreparedReply,
-  handleBeforeDeliverCancelled,
   handleReplyError,
   handleReplySkip,
   resetReasoningStepState,
@@ -192,7 +191,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             suppressTyping: isRoomEvent,
             onObservedReplyDelivery: async () => {
               turn.previewLifecycle.beginFinalDelivery();
-              await waitForDraftEvents(turn);
+              await turn.draftEventQueue;
               turn.deliveryState.markDelivered();
               await turn.previewLifecycle.observeDelivery({ visibleReplySent: true });
             },
@@ -293,7 +292,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             },
             onQueuedFollowupSettled: async () => {
               turn.progressCompositor.cancel();
-              await waitForDraftEvents(turn);
+              await turn.draftEventQueue;
               await cleanupDrafts(turn, turn.isSuperseded());
             },
             suppressDefaultToolProgressMessages:

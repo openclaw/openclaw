@@ -84,18 +84,18 @@ vi.mock("./agentsapi-files.js", async () => {
     await vi.importActual<typeof import("./agentsapi-files.js")>("./agentsapi-files.js");
   return {
     ...files,
-    collectOutputs: async () => ({ toolMediaUrls: [], hostOwnedToolMediaUrls: [] }),
+    collectOutputs: async () => [],
   };
 });
 
 vi.mock("./agentsapi-messages.js", () => ({
-  createAgentsApiMessageProjection: () => ({
-    reply: {},
-    recordUsage: vi.fn(),
-    commit: vi.fn(),
-    toolMetas: [],
-    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-  }),
+  AgentsApiMessageProjection: class {
+    reply = {};
+    recordUsage = vi.fn();
+    commit = vi.fn();
+    toolMetas = [];
+    itemLifecycle = { startedCount: 0, completedCount: 0, activeCount: 0 };
+  },
 }));
 
 vi.mock("./agentsapi-session.js", () => ({

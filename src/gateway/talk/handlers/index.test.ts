@@ -15,7 +15,10 @@ import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../../../secrets/runtime-degraded-state.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
-import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../../talk/agent-consult-tool.js";
+import {
+  REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS,
+  resolveRealtimeVoiceAgentConsultToolsAllow,
+} from "../../../talk/agent-consult-tool.js";
 import { checkClientVoiceToolConfirmationPolicy } from "../../../talk/client-voice-confirmation.js";
 import {
   noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance,
@@ -3834,7 +3837,9 @@ describe("talk.client.create handler", () => {
     });
 
     const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
-    expect(createInput.instructions).toBe("Speak warmly.\n\nBounded profile context.");
+    expect(createInput.instructions).toBe(
+      `Speak warmly.\n\n${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}\n\nBounded profile context.`,
+    );
     expect(createInput.initialItems).toEqual([]);
     expect(createInput).not.toHaveProperty("tools");
     expect(createInput.instructions).not.toContain("openclaw_agent_consult");

@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   hasSessionPresenceViewers,
   presenceUserLabel,
+  presenceViewerActivity,
   projectOnlinePresenceViewers,
   projectPresencePayload,
   projectPresenceViewers,
@@ -144,4 +145,39 @@ it.each([
   expect(viewers.map((user) => user.identity)).toEqual(
     identity?.type === "profile" ? [undefined] : [payload.presence[0]!.user.identity, undefined],
   );
+});
+
+it("ages person interaction independently of connection beacons and native input recency", () => {
+  const now = 1_000_000;
+  const viewer = (entries: Parameters<typeof presenceViewerActivity>[0]["entries"]) => ({
+    id: "person",
+    watchedSessions: [],
+    entries,
+  });
+  expect(presenceViewerActivity(viewer([{ ts: now, lastInputSeconds: 0 }]), now)).toBe("unknown");
+  expect(presenceViewerActivity(viewer([{ ts: now, lastActivityAt: now - 120_000 }]), now)).toBe(
+    "idle",
+  );
+  expect(presenceViewerActivity(viewer([{ ts: now, lastActivityAt: now - 119_999 }]), now)).toBe(
+    "active",
+  );
+  expect(
+    presenceViewerActivity(
+      viewer([
+        { ts: now, lastActivityAt: now - 600_000 },
+        { ts: now, lastActivityAt: now - 5_000 },
+        { ts: now },
+      ]),
+      now,
+    ),
+  ).toBe("active");
+  expect(
+    presenceViewerActivity(
+      viewer([
+        { ts: now, lastActivityAt: now - 600_000 },
+        { ts: now, lastActivityAt: now, reason: "disconnect" },
+      ]),
+      now,
+    ),
+  ).toBe("idle");
 });

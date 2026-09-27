@@ -27,6 +27,7 @@ export type ChatHistoryResult = {
   pendingInputs?: ChatPendingInputsPage;
   inputReceipts?: ChatInputReceipts;
   deltaCursor?: string;
+  windowReset?: boolean;
   messages?: Array<unknown>;
   offset?: number;
   nextOffset?: number;

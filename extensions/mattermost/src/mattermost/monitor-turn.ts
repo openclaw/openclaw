@@ -132,9 +132,7 @@ export async function dispatchMattermostInboundTurn(
     : createDisabledMattermostDraftStream();
   const previewBoundaryController = createMattermostDraftPreviewBoundaryController({
     enabled: draftPreviewEnabled && account.streamingMode === "block",
-    forceNewMessage: async () => {
-      await draftStream.forceNewMessage();
-    },
+    forceNewMessage: draftStream.forceNewMessage,
   });
   let lastPartialText = "";
   let firstAssistantPreviewPrefix: string | undefined;

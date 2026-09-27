@@ -483,6 +483,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-db.integrity-lease.test.ts",
   "src/state/openclaw-agent-execution.integrity.test.ts",
   "src/state/openclaw-agent-execution.creation-witness.test.ts",
+  "src/state/openclaw-agent-execution.close-wedge.test.ts",
   "src/state/openclaw-agent-execution-cleanup.test.ts",
   "src/sessions/session-state-events.test.ts",
   "src/state/openclaw-state-ownership.test.ts",

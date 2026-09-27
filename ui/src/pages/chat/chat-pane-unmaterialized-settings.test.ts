@@ -220,7 +220,7 @@ it.each(
         });
         latestReply.resolve({ ok: true, key, path: "", entry: committed });
         await expect(latestOperation).resolves.toBe(true);
-        expect(selectedChatSessionRow(pane.state)).toMatchObject(committed);
+        expect(selectedChatSessionRow(pane.state)).toEqual(committed);
       } else {
         reply.reject(new Error("Synthetic unmaterialized selection rejection"));
         await expect(operation).resolves.toBe(false);

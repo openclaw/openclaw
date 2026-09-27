@@ -10,16 +10,14 @@ import {
   type BaseMessageInteractiveComponent,
   type DiscordCommand,
   type Modal,
-  type Plugin,
+  type RegisteredPlugin,
 } from "../internal/discord.js";
-import type { GatewayPlugin } from "../internal/gateway.js";
 import { VoicePlugin } from "../internal/voice.js";
 import { parseApplicationIdFromToken } from "../probe.js";
 import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import type { DiscordDmPolicy } from "./dm-command-auth.js";
-import type { MutableDiscordGateway } from "./gateway-handle.js";
 import {
   createDiscordGatewayPlugin,
   waitForDiscordGatewayPluginRegistration,
@@ -55,10 +53,10 @@ type CreateClientFn = (
 ) => Client;
 type DiscordEventQueueOptions = NonNullable<ConstructorParameters<typeof Client>[0]["eventQueue"]>;
 
-function registerLatePlugin(client: Client, plugin: Plugin) {
+function registerLatePlugin(client: Client, plugin: RegisteredPlugin) {
   void plugin.registerClient?.(client);
   if (!client.plugins.some((entry) => entry.id === plugin.id)) {
-    client.plugins.push({ id: plugin.id, plugin });
+    client.plugins.push(plugin);
   }
 }
 
@@ -74,7 +72,7 @@ function createDiscordStatusReadyListener(params: {
         return;
       }
 
-      const gateway = client.getPlugin<GatewayPlugin>("gateway");
+      const gateway = client.getPlugin("gateway");
       if (!gateway) {
         return;
       }
@@ -103,7 +101,7 @@ export async function createDiscordMonitorClient(params: {
   isDisallowedIntentsError: (err: unknown) => boolean;
 }) {
   let autoPresenceController: DiscordAutoPresenceController | null = null;
-  const constructorPlugins: Plugin[] = [
+  const constructorPlugins: RegisteredPlugin[] = [
     params.createGatewayPlugin({
       discordConfig: params.discordConfig,
       runtime: params.runtime,
@@ -142,7 +140,7 @@ export async function createDiscordMonitorClient(params: {
   if (voicePlugin) {
     registerLatePlugin(client, voicePlugin);
   }
-  const gateway = client.getPlugin<GatewayPlugin>("gateway") as MutableDiscordGateway | undefined;
+  const gateway = client.getPlugin("gateway");
   await waitForDiscordGatewayPluginRegistration(gateway);
   const gatewaySupervisor = params.createGatewaySupervisor({
     gateway,

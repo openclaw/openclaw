@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 // Gateway connection and run registries.
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -17,9 +18,14 @@ import { GatewayConnectionWork } from "./server-connection-work.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
+import {
+  prepareSessionAncestor,
+  SessionAncestorReferences,
+} from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
-import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
+import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "./session-sharing.js";
 
@@ -32,15 +38,35 @@ export function createGatewayConnectionState(params: {
 }) {
   const loadRuntimeConfig = params.getRuntimeConfig ?? (() => params.cfg);
   let sessionRowProjection: SessionRowProjection | undefined;
-  const clients = new GatewayClientRegistry();
+  let ancestorReferences = new WeakMap<GatewayWsClient, SessionAncestorReferences>();
+  const clients = new GatewayClientRegistry(undefined, (client) => {
+    ancestorReferences.delete(client);
+  });
+  const forgetConnectionAncestors = (connId: string) => {
+    const client = clients.getByConnectionId(connId);
+    if (client) {
+      ancestorReferences.delete(client);
+    }
+  };
+  const forgetAncestor = (key: string) => {
+    for (const client of clients) {
+      ancestorReferences.get(client)?.forget(key);
+    }
+  };
   // RPCs survive ordinary disconnects, so connection-owned projections still
   // validate the live transport before publishing into a retired connection.
   const isConnectionActive = (connId: string) => {
     const client = clients.getByConnectionId(connId);
     return Boolean(client && !client.invalidated);
   };
-  const sessionEventSubscribers = createSessionEventSubscriberRegistry(isConnectionActive);
-  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry(isConnectionActive);
+  const sessionEventSubscribers = createSessionEventSubscriberRegistry(
+    isConnectionActive,
+    forgetConnectionAncestors,
+  );
+  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry(
+    isConnectionActive,
+    forgetConnectionAncestors,
+  );
   const eventWebPush = createEventWebPushDelivery({ getRuntimeConfig: loadRuntimeConfig });
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
@@ -95,6 +121,11 @@ export function createGatewayConnectionState(params: {
       }
       const source = payload;
       if (source.reason === "delete" || typeof source.sessionKey !== "string") {
+        if (typeof source.sessionKey === "string") {
+          forgetAncestor(source.sessionKey);
+        } else {
+          ancestorReferences = new WeakMap();
+        }
         return undefined;
       }
       const scope = resolveSessionEventAgentScope(
@@ -132,7 +163,9 @@ export function createGatewayConnectionState(params: {
       ) {
         return () => undefined;
       }
-      const now = Date.now();
+      const presentRecipient = prepareSessionRowPublication(projection, Date.now());
+      const encodedRows = new WeakMap<object, string>();
+      const preparedAncestors = new WeakMap<object, ReturnType<typeof prepareSessionAncestor>>();
       const ancestors = projection.ancestorRows(record);
       let projectedAgentRuns = projection.state.rowContext.projectedAgentRuns;
       let registrations: (readonly [string, ChatAbortControllerEntry])[] = [];
@@ -168,29 +201,44 @@ export function createGatewayConnectionState(params: {
             projectedAgentRuns,
           );
         }
-        const presentation = prepareProjectedSessionPresentation(
-          projection,
-          client,
-          now,
-          projectRun,
-        );
+        const presentation = presentRecipient(client, projectRun);
         const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
         const { row } = presentation.snapshot(query, enrichment);
         if (!row) {
           return undefined;
         }
+        let references = ancestorReferences.get(client);
+        if (!references) {
+          references = new SessionAncestorReferences();
+          ancestorReferences.set(client, references);
+        }
+        const ancestorRows = ancestors?.every((ancestor) => projection.isCurrent(ancestor))
+          ? ancestors.flatMap((ancestor) => {
+              if (presentation.sharing.entryFilter?.(ancestor.key, ancestor.entry) === false) {
+                references.forget(ancestor.key);
+                return [];
+              }
+              const presented = presentation.present(ancestor, enrichment);
+              if (!presented) {
+                return [];
+              }
+              let prepared = preparedAncestors.get(presented);
+              if (!prepared) {
+                prepared = prepareSessionAncestor(presented);
+                preparedAncestors.set(presented, prepared);
+              }
+              return [prepared];
+            })
+          : undefined;
+        const ancestorDelivery = ancestorRows && references.prepare(ancestorRows);
+        if (!ancestorDelivery) {
+          ancestorReferences.delete(client);
+        }
         const projected: Record<string, unknown> = {
           ...base,
           session: row,
-          ancestorSessions: ancestors?.every((ancestor) => projection.isCurrent(ancestor))
-            ? ancestors.flatMap((ancestor) => {
-                if (presentation.sharing.entryFilter?.(ancestor.key, ancestor.entry) === false) {
-                  return [];
-                }
-                const presented = presentation.present(ancestor, enrichment);
-                return presented ? [presented] : [];
-              })
-            : undefined,
+          ancestorSessions: ancestorDelivery?.ancestorSessions,
+          ancestorSessionRefs: ancestorDelivery?.ancestorSessionRefs,
           visibility: row.visibility,
           sharingRole: row.sharingRole,
           ...(isRecord(base.activitySummary) && row.activitySummary
@@ -205,7 +253,21 @@ export function createGatewayConnectionState(params: {
         if (Object.hasOwn(projected, "childSessions")) {
           projected.childSessions = row.childSessions;
         }
-        return projected;
+        return {
+          payload: projected,
+          serializeSession: () => {
+            let encoded = encodedRows.get(row);
+            if (encoded === undefined) {
+              encoded = JSON.stringify(row);
+              encodedRows.set(row, encoded);
+            }
+            return encoded;
+          },
+          delivered: () => {
+            references.forget(row.key);
+            ancestorDelivery?.delivered();
+          },
+        };
       };
     },
     onBroadcast: (event, payload, opts) => eventWebPush.handleEvent(event, payload, opts),
@@ -244,9 +306,19 @@ export function createGatewayConnectionState(params: {
     getSessionRowProjection: () => sessionRowProjection,
     attachSessionRowProjection(this: void, projection: SessionRowProjection) {
       sessionRowProjection = projection;
+      ancestorReferences = new WeakMap();
+      const unsubscribe = sessionChanges.subscribeFacts((change) => {
+        if ("all" in change) {
+          ancestorReferences = new WeakMap();
+        } else if (change.factsInvalidated || (change.facts && change.facts.kind !== "unchanged")) {
+          forgetAncestor(change.sessionKey);
+        }
+      });
       return () => {
+        unsubscribe();
         if (sessionRowProjection === projection) {
           sessionRowProjection = undefined;
+          ancestorReferences = new WeakMap();
         }
       };
     },

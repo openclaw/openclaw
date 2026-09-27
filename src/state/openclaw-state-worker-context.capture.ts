@@ -26,6 +26,7 @@ export function captureOpenClawStateReadContextWithAdmission(
     const inCapturedScope = AsyncLocalStorage.snapshot();
     admission = {
       databasePath: capturedAdmission.databasePath,
+      coordinationKey: capturedAdmission.coordinationKey,
       get identity() {
         return capturedAdmission.identity;
       },

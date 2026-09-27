@@ -909,6 +909,60 @@ describe("chat pane native history pagination", () => {
     expect(pane.hasOlderMessages()).toBe(false);
   });
 
+  it.each(["tail", "older"] as const)(
+    "replaces a reset window from a %s read and adopts its cursor",
+    async (read) => {
+      const messages = [
+        nativeHistoryMessage(3, "current user"),
+        nativeHistoryMessage(4, "current reply"),
+      ];
+      const sessionInfo = { sessionId: "session-current" };
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({
+          messages,
+          windowReset: true,
+          deltaCursor: "cursor-current",
+          hasMore: true,
+          nextOffset: 2,
+          totalMessages: 4,
+          sessionInfo,
+        })
+        .mockResolvedValueOnce({
+          kind: "delta",
+          messages: [],
+          deltaCursor: "cursor-next",
+          sessionInfo,
+        });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const { pane, state } = createTestChatPane({ client });
+      applyChatCacheSnapshot(state, {
+        sessionId: "session-current",
+        messages: [1, 2, 3, 4].map((seq) => nativeHistoryMessage(seq)),
+        pagination:
+          read === "older"
+            ? { hasMore: true, nextOffset: 2, totalMessages: 4 }
+            : { hasMore: false, totalMessages: 4 },
+      });
+
+      await (read === "older" ? pane.loadOlderMessages() : loadChatHistory(state));
+
+      expect(request).toHaveBeenCalledOnce();
+      expect(state.chatMessages).toEqual(messages);
+      expect(state.chatHistoryPagination).toEqual({
+        hasMore: true,
+        nextOffset: 2,
+        totalMessages: 4,
+      });
+      await loadChatHistory(state);
+      expect(request).toHaveBeenLastCalledWith(
+        "chat.history",
+        expect.objectContaining({ cursor: "cursor-current" }),
+        { signal: expect.any(AbortSignal) },
+      );
+    },
+  );
+
   it("keeps projected siblings while replacing the overlapping tail", async () => {
     const firstProjection = nativeHistoryMessage(3, "first projection");
     const secondProjection = nativeHistoryMessage(3, "second projection");

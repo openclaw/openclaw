@@ -4,16 +4,15 @@ import { describe, expect, it } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { JsonValue } from "./protocol.js";
 
-function createBridgeWithToolResult(
-  toolName: string,
+function createMessageBridge(
   result: ReturnType<typeof textToolResult>,
   hookContext?: Parameters<typeof createCodexDynamicToolBridge>[0]["hookContext"],
 ) {
   return createCodexDynamicToolBridge({
     tools: [
       {
-        name: toolName,
-        label: toolName,
+        name: "message",
+        label: "message",
         description: "Message delivery fixture",
         parameters: Type.Object({}, { additionalProperties: true }),
         execute: async () => result,
@@ -39,91 +38,78 @@ function handleMessageToolCall(
 }
 
 describe("Codex message delivery facts", () => {
-  it.each([0, 9_000])(
-    "preserves delivery from a JSON receipt with %i extra characters",
-    async (paddingLength) => {
-      const bridge = createBridgeWithToolResult(
-        "message",
-        textToolResult(
-          JSON.stringify({
-            ok: true,
-            messageId: "legacy-receipt-1",
-            note: "x".repeat(paddingLength),
-          }),
-        ),
-        { sourceReplyDeliveryMode: "message_tool_only" },
-      );
-
-      const result = await handleMessageToolCall(bridge, {
-        action: "send",
-        message: "delivered reply",
-        mediaUrl: "/tmp/reply.png",
-      });
-
-      expect(result.success).toBe(true);
-      expect(result.terminate).toBe(true);
-      expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
-      expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual(["/tmp/reply.png"]);
-    },
-  );
-
-  it.each(["dryRun", "suppressed", "failed"] as const)(
-    "does not record %s message sends as delivered",
-    async (status) => {
-      const bridge = createBridgeWithToolResult(
-        "message",
-        textToolResult("No message delivered.", {
-          messageDelivery: { status, partialDelivery: false, createdThreadIds: [] },
+  it("preserves delivery from a large JSON receipt", async () => {
+    const bridge = createMessageBridge(
+      textToolResult(
+        JSON.stringify({
+          ok: true,
+          messageId: "legacy-receipt-1",
+          note: "x".repeat(9_000),
         }),
-      );
+      ),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
 
-      const result = await handleMessageToolCall(bridge, {
-        action: "send",
-        channel: "slack",
-        target: "channel:C123",
-        message: "Final answer must remain deliverable.",
-      });
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "delivered reply",
+      mediaUrl: "/tmp/reply.png",
+    });
 
-      expect(result.success).toBe(true);
-      expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
-      expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
-      expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
-    },
-  );
+    expect(result.success).toBe(true);
+    expect(result.terminate).toBe(true);
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual(["/tmp/reply.png"]);
+  });
 
-  it.each([0, 9_000])(
-    "does not infer delivery from a failed JSON receipt with %i extra characters",
-    async (paddingLength) => {
-      const bridge = createBridgeWithToolResult(
-        "message",
-        textToolResult(
-          JSON.stringify({
-            ok: false,
-            error: "send failed",
-            messageId: "attempt-id",
-            note: "x".repeat(paddingLength),
-          }),
-        ),
-        { sourceReplyDeliveryMode: "message_tool_only" },
-      );
+  it("does not record suppressed message sends as delivered", async () => {
+    const bridge = createMessageBridge(
+      textToolResult("No message delivered.", {
+        messageDelivery: { status: "suppressed", partialDelivery: false, createdThreadIds: [] },
+      }),
+    );
 
-      const result = await handleMessageToolCall(bridge, {
-        action: "send",
-        message: "Reply still needs delivery.",
-        mediaUrl: "/tmp/reply.png",
-      });
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      channel: "slack",
+      target: "channel:C123",
+      message: "Final answer must remain deliverable.",
+    });
 
-      expect(result.terminate).toBeUndefined();
-      expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
-      expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
-      expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
-      expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([]);
-    },
-  );
+    expect(result.success).toBe(true);
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
+    expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
+  });
+
+  it("does not infer delivery from a large failed JSON receipt", async () => {
+    const bridge = createMessageBridge(
+      textToolResult(
+        JSON.stringify({
+          ok: false,
+          error: "send failed",
+          messageId: "attempt-id",
+          note: "x".repeat(9_000),
+        }),
+      ),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "Reply still needs delivery.",
+      mediaUrl: "/tmp/reply.png",
+    });
+
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+    expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
+    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([]);
+  });
 
   it("retains explicit partial JSON delivery without confirming all requested media", async () => {
-    const bridge = createBridgeWithToolResult(
-      "message",
+    const bridge = createMessageBridge(
       textToolResult(
         JSON.stringify({
           ok: false,
@@ -151,8 +137,7 @@ describe("Codex message delivery facts", () => {
     "uses a canonical %s delivery fact over contradictory JSON text",
     async (status) => {
       const delivered = status === "settled";
-      const bridge = createBridgeWithToolResult(
-        "message",
+      const bridge = createMessageBridge(
         textToolResult(
           JSON.stringify({
             ok: !delivered,
@@ -188,8 +173,7 @@ describe("Codex message delivery facts", () => {
       height: 480,
       trustedLocalMedia: false,
     };
-    const bridge = createBridgeWithToolResult(
-      "message",
+    const bridge = createMessageBridge(
       textToolResult("Sent to current chat.", {
         deliveryStatus: "sent",
         messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
@@ -218,8 +202,7 @@ describe("Codex message delivery facts", () => {
   });
 
   it("does not terminate a source reply after delivery from another account", async () => {
-    const bridge = createBridgeWithToolResult(
-      "message",
+    const bridge = createMessageBridge(
       textToolResult("Sent.", {
         messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
       }),

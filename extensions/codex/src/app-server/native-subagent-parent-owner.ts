@@ -46,7 +46,7 @@ type ParentDependencies = {
   isClosed: () => boolean;
   isRetired: (state: ParentState) => boolean;
   runtime: Pick<NativeSubagentMonitorRuntime, "captureAgentHarnessCompletionCustody">;
-  prepare: (state: ParentState) => void;
+  prepare: (state: ParentState) => Promise<void>;
   reconcile: (state: ParentState, owner: ParentOwner) => Promise<void>;
   submissions: Pick<CodexNativeSubagentSubmissionOwner, "restore" | "bind" | "drain">;
   closes: Pick<CodexNativeSubagentCloseOwner, "bind" | "prune" | "settlements">;
@@ -197,7 +197,18 @@ export async function registerNativeSubagentParent(
     state.historyOwner ??= params.historyOwner;
     state.submissionStore ??= params.submissionStore;
     state.agentId ??= params.agentId;
-    dependencies.prepare(state);
+    await dependencies.prepare(state);
+    params.assertCurrent?.();
+    params.modelSource?.assertCurrent();
+    if (
+      dependencies.isClosed() ||
+      dependencies.isRetired(state) ||
+      dependencies.states.get(parentThreadId) !== state ||
+      state.requesterSessionKey !== requesterSessionKey ||
+      (owner.completionCustody && !owner.completionCustody.isCurrent())
+    ) {
+      throw new Error("Codex native parent registration is no longer current");
+    }
     state.owners.set(ownerKey, owner);
     state.preparing = undefined;
     for (const child of dependencies.children.values()) {
@@ -317,10 +328,16 @@ export async function registerNativeSubagentParent(
       owner.modelSource?.release();
       notifyNativeModelSourceWaiters(registeredState);
       dependencies.prune(registeredState);
-      settlement = Promise.allSettled([
-        dependencies.submissions.drain(registeredState),
-        ...dependencies.closes.settlements(registeredState),
-      ]).then(() => {});
+      settlement = (async () => {
+        do {
+          await Promise.allSettled([
+            registeredState.mirror?.drain(),
+            dependencies.submissions.drain(registeredState),
+            ...dependencies.closes.settlements(registeredState),
+          ]);
+        } while (registeredState.mirror?.hasPendingWrites);
+        dependencies.prune(registeredState);
+      })();
       return settlement;
     },
   };

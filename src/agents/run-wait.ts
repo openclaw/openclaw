@@ -3,11 +3,6 @@ import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-/**
- * Gateway-backed agent run wait helpers.
- * Normalizes run wait responses, reads the latest assistant reply, and drains
- * pending run sets for tools that need synchronous completion semantics.
- */
 import {
   addTimerTimeoutGraceMs,
   asDateTimestampMs,
@@ -16,6 +11,8 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
@@ -145,14 +142,7 @@ function isRecoverableAgentWaitError(error: string | undefined): boolean {
 }
 
 function normalizePendingRunIds(runIds: Iterable<string>): Set<string> {
-  const seen = new Set<string>();
-  for (const runId of runIds) {
-    const normalized = runId.trim();
-    if (normalized) {
-      seen.add(normalized);
-    }
-  }
-  return seen;
+  return new Set(normalizeStringEntries([...runIds]));
 }
 
 function isAssistantReplyTranscriptArtifact(message: unknown): boolean {
@@ -164,15 +154,8 @@ function isAssistantReplyTranscriptArtifact(message: unknown): boolean {
 }
 
 function isInterSessionInputMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return false;
-  }
-  const provenance = (message as { provenance?: unknown }).provenance;
   return (
-    Boolean(provenance) &&
-    typeof provenance === "object" &&
-    !Array.isArray(provenance) &&
-    (provenance as { kind?: unknown }).kind === "inter_session"
+    isRecord(message) && isRecord(message.provenance) && message.provenance.kind === "inter_session"
   );
 }
 

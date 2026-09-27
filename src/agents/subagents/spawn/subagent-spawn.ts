@@ -22,7 +22,7 @@ import {
 } from "../../spawn-pipeline.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
-import { activateSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { activateSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { materializeSubagentAttachments } from "./subagent-attachments.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
@@ -107,6 +107,7 @@ export async function spawnSubagentDirect(
       launchReplayKey: swarmLaunchReplayKey,
       soleImplicitMember,
       reservationPending,
+      reservation: swarmReservation,
     },
     admission: {
       resolve: resolveAdmission,
@@ -121,7 +122,6 @@ export async function spawnSubagentDirect(
   let hasBoundThreadDeliveryOrigin = false;
   let childRunId: string = childIdem;
   let swarmReservationPending = reservationPending;
-  const swarmReservation = reservationPending ? holdQueuedSwarmRun(childIdem) : undefined;
   let canCleanupCreatedSession: (() => boolean) | undefined;
   let canRetireReservation: (() => boolean) | undefined;
   let releaseOperatorAuthority: (() => void) | undefined;
@@ -129,7 +129,7 @@ export async function spawnSubagentDirect(
   let contextEnginePreparation: PreparedContextEngineSubagentSpawn | undefined;
   try {
     assertActive?.();
-    if (reservationPending && !swarmReservation) {
+    if (reservationPending && !swarmReservation?.isCurrent()) {
       return { status: "error", error: "Collector FIFO reservation is no longer current" };
     }
     if (operatorAuthority && !gatewayContextResolver) {

@@ -212,14 +212,10 @@ export function observeTranscriptOffset(
       touching: owner.state.touching,
       programmatic,
     });
-    const changed = offset !== instance.scrollOffset;
+    // Row range changes notify through the virtualizer; the position rail
+    // follows offset observations itself, so scrolling within the rendered
+    // rows does not re-render the pane.
     callback(offset, scrolling);
-    // Range notifications are memoized: the viewport midpoint can cross
-    // a rail landmark without changing the visible rows. Lit coalesces
-    // this request with the virtualizer's own update when both fire.
-    if (changed) {
-      owner.requestUpdate();
-    }
   };
   const syncOffset = () => {
     if (!element || element !== owner.getScrollElement() || instance.scrollElement !== element) {
@@ -251,7 +247,8 @@ export function observeTranscriptOffset(
     owner.requestUpdate();
   };
   const finishScroll = () => {
-    if (!owner.state.touching) {
+    // Only touch scrolling holds history; wheel and trackpad settles need no render.
+    if (!owner.state.touching && owner.state.touchScrolling) {
       owner.state.touchScrolling = false;
       owner.requestUpdate();
     }

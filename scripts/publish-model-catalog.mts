@@ -23,6 +23,7 @@ import type {
   RemoteModelCatalogPricing,
   RemoteModelCatalogPricingV2,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
+import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
@@ -969,20 +970,6 @@ export async function enrichModelCatalogPricing(options: {
   return { modelsEnriched: enriched, pricingEntries: hosted.size };
 }
 
-function sortCatalogValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sortCatalogValue);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [key, sortCatalogValue(entry)]),
-  );
-}
-
 export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle): string {
   const providers = Object.fromEntries(
     Object.entries(bundle.providers)
@@ -995,7 +982,7 @@ export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle)
         },
       ]),
   );
-  return `${JSON.stringify(sortCatalogValue({ ...bundle, providers }), null, 2)}\n`;
+  return `${JSON.stringify(sortJsonValueKeys({ ...bundle, providers }), null, 2)}\n`;
 }
 
 function serializeStandalonePricing(prices: Map<string, SourcedPricing> | undefined) {
@@ -1097,7 +1084,7 @@ export function serializeModelCatalogBundleV2(bundle: RemoteModelCatalogBundleV2
         Object.fromEntries(
           Object.entries(metadata)
             .toSorted(([left], [right]) => left.localeCompare(right))
-            .map(([key, value]) => [key, sortCatalogValue(value)]),
+            .map(([key, value]) => [key, sortJsonValueKeys(value)]),
         ),
       ),
     );
@@ -1105,7 +1092,7 @@ export function serializeModelCatalogBundleV2(bundle: RemoteModelCatalogBundleV2
     Object.fromEntries(
       Object.entries(bundle)
         .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, value]) => [key, key === "models" ? models : sortCatalogValue(value)]),
+        .map(([key, value]) => [key, key === "models" ? models : sortJsonValueKeys(value)]),
     ),
     null,
     2,

@@ -221,39 +221,7 @@ async function resolvePickerLogicalCatalog(params: {
 }
 
 function normalizeModelKeys(values: string[]): string[] {
-  const seen = new Set<string>();
-  const next: string[] = [];
-  for (const raw of values) {
-    const value = normalizeAgentModelRefForConfig(raw);
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    next.push(value);
-  }
-  return next;
-}
-
-function resolveFallbackModelKey(params: {
-  cfg: OpenClawConfig;
-  raw: string;
-  defaultProvider: string;
-  aliasIndex: ModelAliasIndex;
-}): string | undefined {
-  const raw = normalizeOptionalString(params.raw);
-  if (!raw) {
-    return undefined;
-  }
-  const resolved = resolveModelRefFromString({
-    cfg: params.cfg,
-    raw,
-    defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-  });
-  if (!resolved) {
-    return undefined;
-  }
-  return modelKey(resolved.ref.provider, resolved.ref.model);
+  return [...new Set(Array.from(values, normalizeAgentModelRefForConfig).filter(Boolean))];
 }
 
 function resolveFallbackModelKeys(params: {
@@ -263,16 +231,19 @@ function resolveFallbackModelKeys(params: {
   aliasIndex: ModelAliasIndex;
 }): string[] {
   return normalizeModelKeys(
-    params.rawFallbacks
-      .map((raw) =>
-        resolveFallbackModelKey({
-          cfg: params.cfg,
-          raw,
-          defaultProvider: params.defaultProvider,
-          aliasIndex: params.aliasIndex,
-        }),
-      )
-      .filter((key): key is string => Boolean(key)),
+    params.rawFallbacks.flatMap((value) => {
+      const raw = normalizeOptionalString(value);
+      if (!raw) {
+        return [];
+      }
+      const resolved = resolveModelRefFromString({
+        cfg: params.cfg,
+        raw,
+        defaultProvider: params.defaultProvider,
+        aliasIndex: params.aliasIndex,
+      });
+      return resolved ? [modelKey(resolved.ref.provider, resolved.ref.model)] : [];
+    }),
   );
 }
 
@@ -944,7 +915,6 @@ export async function promptModelAllowlist(params: {
   const existingKeys = resolveConfiguredModelKeys(cfg);
   const configuredRaw = resolveConfiguredModelRaw(cfg);
   const allowedKeys = normalizeModelKeys(params.allowedKeys ?? []);
-  const allowedKeySet = allowedKeys.length > 0 ? new Set(allowedKeys) : null;
   const preferredProviderRaw = normalizeOptionalString(params.preferredProvider);
   const preferredProvider = preferredProviderRaw
     ? normalizeProviderId(preferredProviderRaw)
@@ -1099,7 +1069,7 @@ export async function promptModelAllowlist(params: {
     view: "all",
     hasAuth,
   });
-  if (catalog.length === 0 && allowedKeys.length === 0) {
+  if (catalog.length === 0) {
     const noCatalogInitialKeys =
       existingKeys.length > 0 ? normalizeModelKeys([...existingKeys, ...fallbackKeys]) : [];
     const raw = await params.prompter.text({
@@ -1134,42 +1104,32 @@ export async function promptModelAllowlist(params: {
 
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
-  const allowedCatalog = (
-    allowedKeySet
-      ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
-      : catalog
-  ).filter((entry) => isVisibleProvider(entry.provider));
+  const allowedCatalog = catalog.filter((entry) => isVisibleProvider(entry.provider));
   const filteredCatalog =
     preferredProvider && allowedCatalog.some((entry) => matchesPreferredProvider?.(entry.provider))
       ? allowedCatalog.filter((entry) => matchesPreferredProvider?.(entry.provider))
       : allowedCatalog;
-  const scopedConfiguredKeys =
-    preferredProvider && !allowedKeySet
-      ? existingKeys.filter((key) => {
-          if (!isVisibleModelRef(key)) {
-            return false;
-          }
-          const entry = splitModelKey(key);
-          return entry ? matchesPreferredProvider?.(entry.provider) === true : false;
-        })
-      : [];
+  const scopedConfiguredKeys = preferredProvider
+    ? existingKeys.filter((key) => {
+        if (!isVisibleModelRef(key)) {
+          return false;
+        }
+        const entry = splitModelKey(key);
+        return entry ? matchesPreferredProvider?.(entry.provider) === true : false;
+      })
+    : [];
 
-  const scopeKeys = allowedKeySet
-    ? allowedKeys
-    : preferredProvider
-      ? normalizeModelKeys([
-          ...filteredCatalog.map((entry) => modelKey(entry.provider, entry.id)),
-          ...scopedConfiguredKeys,
-        ])
-      : undefined;
+  const scopeKeys = preferredProvider
+    ? normalizeModelKeys([
+        ...filteredCatalog.map((entry) => modelKey(entry.provider, entry.id)),
+        ...scopedConfiguredKeys,
+      ])
+    : undefined;
   const scopeKeySet = scopeKeys ? new Set(scopeKeys) : null;
-  const selectableInitialSeeds =
-    scopeKeySet && !allowedKeySet
-      ? initialSeeds.filter((key) => scopeKeySet.has(key))
-      : initialSeeds;
-  const initialKeys = allowedKeySet
-    ? initialSeeds.filter((key) => allowedKeySet.has(key))
-    : selectableInitialSeeds.filter(isVisibleModelRef);
+  const selectableInitialSeeds = scopeKeySet
+    ? initialSeeds.filter((key) => scopeKeySet.has(key))
+    : initialSeeds;
+  const initialKeys = selectableInitialSeeds.filter(isVisibleModelRef);
 
   for (const entry of filteredCatalog) {
     await addModelSelectOption({
@@ -1184,19 +1144,14 @@ export async function promptModelAllowlist(params: {
     });
   }
 
-  const supplementalKeys = (allowedKeySet ? allowedKeys : selectableInitialSeeds).filter(
-    isVisibleModelRef,
-  );
-  for (const key of supplementalKeys) {
+  for (const key of initialKeys) {
     if (seen.has(key)) {
       continue;
     }
     options.push({
       value: key,
       label: key,
-      hint: allowedKeySet
-        ? t("wizard.model.allowedNotInCatalog")
-        : t("wizard.model.configuredNotInCatalog"),
+      hint: t("wizard.model.configuredNotInCatalog"),
     });
     seen.add(key);
   }

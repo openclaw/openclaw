@@ -671,7 +671,7 @@ puts JSON.generate(rows)
     expect(iosJob).not.toContain("Install locked Fastlane bundle");
     expect(shardJob).toContain('BUNDLE_DEPLOYMENT: "true"');
     expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
-    expect(shardJob).toContain("ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4");
+    expect(shardJob).toContain("ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073");
     expect(shardJob).toContain('ruby-version: "3.4.10"');
     expect(shardJob).toContain('bundler: "4.0.21"');
     expect(shardJob).toContain("bundler-cache: false");
@@ -1001,6 +1001,10 @@ puts JSON.generate(rows)
 
   it("preserves the first screenshot failure and records one capture without retrying", () => {
     const fastfile = readFastfile();
+    const screenshotArguments = fastfile.slice(
+      fastfile.indexOf("IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS ="),
+      fastfile.indexOf("PNG_SIGNATURE ="),
+    );
     const source = `
 require "json"
 require "fileutils"
@@ -1012,7 +1016,7 @@ module UI
 end
 SNAPSHOT_STATUS_BAR_ARGUMENTS = "fixture"
 APP_STORE_APP_IDENTIFIER = "fixture.app"
-IOS_SCREENSHOT_XCARGS = "fixture"
+${screenshotArguments}
 ${[
   "archive_snapshot_test_result!",
   "write_release_ios_screenshot_attempts!",
@@ -1041,6 +1045,7 @@ def sh(*arguments, **options)
   raise "missing test selection" unless command.include?("-only-testing:OpenClawUITests/OpenClawSnapshotUITests/fixture-test")
   raise "not using built products" unless command.include?("test-without-building")
   parts = Shellwords.split(command)
+  @xcode_arguments = parts.drop(parts.index("xcodebuild") + 1)
   log_path = parts.fetch(parts.index("run_apple_command_logged") + 1)
   FileUtils.mkdir_p(File.dirname(log_path))
   File.write(log_path, "native capture log")
@@ -1079,6 +1084,7 @@ rows = %w[capture result success].map do |scenario|
       error = failure.message
     end
     { scenario: scenario, calls: @calls, checks: @checks, uninstalls: @uninstalls, error: error,
+      xcodeArguments: @xcode_arguments,
       attempts: JSON.parse(File.read(ledger)).fetch("attempts"),
       evidenceEntries: Dir.children(archive).sort,
       log: File.read(File.join(logs, "fixture-device-fixture-screen.log")),
@@ -1095,6 +1101,7 @@ puts JSON.generate(rows)
       checks: number;
       uninstalls: number;
       error: string | null;
+      xcodeArguments: string[];
       attempts: { attempt: number; captureOutcome: string }[];
       archived: string;
       evidenceEntries: string[];
@@ -1108,6 +1115,11 @@ puts JSON.generate(rows)
       { scenario: "success", calls: 1, checks: 1, error: null },
     ]);
     for (const row of rows) {
+      const diagnosticsIndex = row.xcodeArguments.indexOf("-collect-test-diagnostics");
+      expect(row.xcodeArguments.slice(diagnosticsIndex, diagnosticsIndex + 2)).toEqual([
+        "-collect-test-diagnostics",
+        "never",
+      ]);
       expect(row.uninstalls).toBe(1);
       expect(row.attempts).toEqual([
         expect.objectContaining({

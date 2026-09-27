@@ -7,8 +7,9 @@ interpretation, persistent fixtures, forum topics, or a failed run. The primary 
 ## Published-driver topic-binding upgrade
 
 The npm Telegram lane's standalone `telegram-published-upgrade-bindings` selector
-proves an actual binding created by an installed published Gateway survives its
-own updater and the candidate's next restart. Run it only in the lane's isolated
+proves that a topic an installed published Gateway handed to a spawned worker
+returns to its parent session after that Gateway's own updater and the
+candidate's next restart. Run it only in the lane's isolated
 container: the secretless install phase owns the published prefix, and the
 validated candidate tarball is mounted read-only for the live phase.
 
@@ -29,13 +30,17 @@ the pinned TDLib through the maintained loader. It uses existing Python 3 and
 the driver's standard-library implementation, without `uv` or a source build.
 
 One maintained credential/run scope owns fixture setup, the proxy, recorder,
-mock provider, installed Gateway children, and updater. The published Gateway
+mock provider, installed Gateway children, and updater. The published baseline
 must accept a real `sessions_spawn` with `thread:true` and `mode:session`, and
-both parent and child must reply in the actual topic before shutdown. The
-genuine published CLI then runs `update --tag file:<candidate> --yes --no-restart
---json` with the same runner-created config, token file, workspace, and databases.
-The candidate must route the next topic turn to that same child, restart, and
-continue routing to it. Each of the three Gateway stops requires a joined exit
+both parent and child must reply in the actual topic before shutdown; this
+legacy spawn binding hands the current topic to the child. The genuine published
+CLI then runs `update --tag file:<candidate> --yes --no-restart --json` with the
+same runner-created config, token file, workspace, and databases. The candidate
+no longer honors spawn-created bindings on the current Telegram conversation, so
+the next topic turn and its reply must land in the parent topic session
+transcript, not the child's, both after activation and after another restart.
+The child keeps its canonical identity and spawn-phase history, and no later
+turn reaches it. Each of the three Gateway stops requires a joined exit
 code 0 with no signal; forced process cleanup cannot qualify orderly shutdown.
 Artifact hashes, native observations, accepted tool-result correlation, canonical
 session identity, and receipt-scoped cleanup all participate in the verdict.

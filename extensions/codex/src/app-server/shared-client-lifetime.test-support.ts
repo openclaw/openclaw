@@ -1,8 +1,10 @@
 import { once } from "node:events";
 import { setImmediate } from "node:timers/promises";
-import type {
-  AgentHarnessTaskRecord,
-  AgentHarnessTaskRuntime,
+import {
+  matchesAgentHarnessTaskAssignment,
+  type AgentHarnessScopedFinalizeTaskRunParams,
+  type AgentHarnessTaskRecord,
+  type AgentHarnessTaskRuntime,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
@@ -221,12 +223,28 @@ export function registerSharedClientLifetimeTests(
       created = true;
       return task;
     });
+    const matchesTask = (
+      params: Pick<AgentHarnessScopedFinalizeTaskRunParams, "runId" | "expectedTask">,
+    ) =>
+      created &&
+      task.runId === params.runId &&
+      (!params.expectedTask || matchesAgentHarnessTaskAssignment(task, params.expectedTask));
     const taskRuntime: AgentHarnessTaskRuntime = {
       assertTaskAssignmentSupported: vi.fn(),
       createRunningTaskRun: createTask,
       tryCreateRunningTaskRun: createTask,
-      recordTaskRunProgressByRunId: vi.fn(() => []),
+      recordTaskRunProgressByRunId: vi.fn((params) => {
+        if (!matchesTask(params)) {
+          return [];
+        }
+        const { expectedTask: _expectedTask, completionCustody: _custody, ...progress } = params;
+        Object.assign(task, progress);
+        return [task];
+      }),
       finalizeTaskRunByRunId: vi.fn((params) => {
+        if (!matchesTask(params)) {
+          return [];
+        }
         task.status = params.status;
         task.endedAt = params.endedAt;
         task.terminalSummary = params.terminalSummary ?? undefined;
@@ -234,9 +252,22 @@ export function registerSharedClientLifetimeTests(
       }),
       listTaskRecords: vi.fn(() => (created ? [task] : [])),
       setDetachedTaskDeliveryStatusByRunId: vi.fn((params) => {
+        if (!matchesTask(params)) {
+          return [];
+        }
         task.deliveryStatus = params.deliveryStatus;
         return [task];
       }),
+      createRunningTaskRunAsync: async (params) => taskRuntime.createRunningTaskRun(params),
+      tryCreateRunningTaskRunAsync: async (params) => taskRuntime.tryCreateRunningTaskRun(params),
+      recordTaskRunProgressByRunIdAsync: async (params) =>
+        taskRuntime.recordTaskRunProgressByRunId(params),
+      finalizeTaskRunByRunIdAsync: async (params) => taskRuntime.finalizeTaskRunByRunId(params),
+      setDetachedTaskDeliveryStatusByRunIdAsync: async (params) =>
+        taskRuntime.setDetachedTaskDeliveryStatusByRunId(params),
+      prepareTaskRecordsRead: async () => () => taskRuntime.listTaskRecords(),
+      prepareTaskRunRead: async (runId) => () =>
+        taskRuntime.listTaskRecords().filter((record) => record.runId === runId),
     };
     const retainClient = vi.fn(() => retainSharedCodexAppServerClientIfCurrent(client));
     const monitor = new codexNativeSubagentMonitorRuntime.Monitor(

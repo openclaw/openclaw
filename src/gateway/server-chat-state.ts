@@ -81,6 +81,7 @@ export type ChatRunPlanSnapshot = {
 type ChatRunAgentTextState = {
   lastSentAt?: number;
   bufferedEvent?: BufferedAgentEvent;
+  snapshot?: { text: string; itemId?: string };
 };
 
 type ChatRunToolRecipientState = {
@@ -111,6 +112,7 @@ type ChatRunRecord = {
   bufferIsCurrent?: () => boolean;
   /** Retire queued connection snapshots when this buffering generation is cleared. */
   liveTextGroup?: AbortController;
+  liveTextEpoch?: object;
   display?: LiveDisplayState;
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
@@ -263,6 +265,7 @@ export function createChatRunState(): ChatRunState {
     delete record.bufferIsCurrent;
     record.liveTextGroup?.abort();
     delete record.liveTextGroup;
+    delete record.liveTextEpoch;
     delete record.display;
     delete record.planSnapshot;
     delete record.progressSnapshot;
@@ -451,7 +454,7 @@ export type SessionMessageSubscriberRegistry = {
   unsubscribeAll: (connId: string) => void;
   get: (sessionKey: string) => ReadonlySet<string>;
   getApprovals: (sessionKey: string) => ReadonlySet<string>;
-  onChange: (listener: (sessionKey: string) => void) => () => void;
+  onChange: (listener: (sessionKey: string, connId: string) => void) => () => void;
 };
 
 type SessionMessageSubscription = (() => void) & { commit: () => void };
@@ -468,6 +471,7 @@ const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 /** Create the broad sessions.changed subscriber registry. */
 export function createSessionEventSubscriberRegistry(
   isConnectionActive?: (connId: string) => boolean,
+  onSubscriptionChange?: (connId: string) => void,
 ): SessionEventSubscriberRegistry {
   const connIds = new Set<string>();
   const empty = new Set<string>();
@@ -478,6 +482,7 @@ export function createSessionEventSubscriberRegistry(
       if (!normalized || isConnectionActive?.(normalized) === false) {
         return;
       }
+      onSubscriptionChange?.(normalized);
       connIds.add(normalized);
     },
     unsubscribe: (connId: string) => {
@@ -485,6 +490,7 @@ export function createSessionEventSubscriberRegistry(
       if (!normalized) {
         return;
       }
+      onSubscriptionChange?.(normalized);
       connIds.delete(normalized);
     },
     getAll: () => (connIds.size > 0 ? connIds : empty),
@@ -494,13 +500,14 @@ export function createSessionEventSubscriberRegistry(
 /** Create the per-session message subscriber registry. */
 export function createSessionMessageSubscriberRegistry(
   isConnectionActive?: (connId: string) => boolean,
+  onSubscriptionChange?: (connId: string) => void,
 ): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
   // Booleans retain committed approval mode; records own unsettled replays.
   // Replacing a record fences late settlements, including connection/session reuse.
   const connections = new Map<string, Map<string, boolean | ProvisionalSubscriptionState>>();
   const approvalSessionToConnIds = new Map<string, Set<string>>();
-  const changeListeners = new Set<(sessionKey: string) => void>();
+  const changeListeners = new Set<(sessionKey: string, connId: string) => void>();
   const empty = new Set<string>();
   let subscriptionSequence = 0;
 
@@ -513,7 +520,7 @@ export function createSessionMessageSubscriberRegistry(
       sessionToConnIds.set(sessionKey, nextConnIds);
       if (!wasSubscribed) {
         for (const listener of changeListeners) {
-          listener(sessionKey);
+          listener(sessionKey, connId);
         }
       }
       return;
@@ -524,7 +531,7 @@ export function createSessionMessageSubscriberRegistry(
     }
     if (wasSubscribed) {
       for (const listener of changeListeners) {
-        listener(sessionKey);
+        listener(sessionKey, connId);
       }
     }
   };
@@ -553,6 +560,7 @@ export function createSessionMessageSubscriberRegistry(
       ) {
         return undefined;
       }
+      onSubscriptionChange?.(normalizedConnId);
       const states =
         connections.get(normalizedConnId) ??
         new Map<string, boolean | ProvisionalSubscriptionState>();
@@ -591,6 +599,7 @@ export function createSessionMessageSubscriberRegistry(
         }
         const committed = state.lastSuccess?.includeApprovals ?? state.base;
         if (committed === undefined) {
+          onSubscriptionChange?.(normalizedConnId);
           states.delete(normalizedSessionKey);
           setMessageSubscription(normalizedConnId, normalizedSessionKey, false);
           setApprovalSubscription(normalizedConnId, normalizedSessionKey, false);
@@ -617,6 +626,7 @@ export function createSessionMessageSubscriberRegistry(
       if (!normalizedConnId || !normalizedSessionKey) {
         return;
       }
+      onSubscriptionChange?.(normalizedConnId);
       const states = connections.get(normalizedConnId);
       states?.delete(normalizedSessionKey);
       if (states?.size === 0) {
@@ -630,6 +640,7 @@ export function createSessionMessageSubscriberRegistry(
       if (!normalizedConnId) {
         return;
       }
+      onSubscriptionChange?.(normalizedConnId);
       const states = connections.get(normalizedConnId);
       if (!states) {
         return;

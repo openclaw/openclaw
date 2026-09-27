@@ -46,10 +46,6 @@ export type ControlUiAssetRetention = {
   resolveAsset: (assetPath: string) => ResolvedRetainedControlUiAsset | null;
 };
 
-function resolveControlUiAssetCacheDir(): string {
-  return path.join(resolveStateDir(), "cache", "control-ui-assets");
-}
-
 async function readCachedGeneration(
   directory: string,
   signal?: AbortSignal,
@@ -421,7 +417,7 @@ async function pruneRetainedGenerations(params: {
 }
 
 export function createControlUiAssetRetention(root: string): ControlUiAssetRetention {
-  const cacheDir = resolveControlUiAssetCacheDir();
+  const cacheDir = path.join(resolveStateDir(), "cache", "control-ui-assets");
   let generations: RetainedGeneration[] = [];
   let preparing: Promise<void> | undefined;
 

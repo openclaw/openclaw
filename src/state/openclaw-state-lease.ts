@@ -15,6 +15,7 @@ import type {
 import {
   createOpenClawStateLeaseError as leaseError,
   createOpenClawStateLeaseAbortError as abortError,
+  createOpenClawStateLeaseLostError,
   OpenClawStateLeaseError,
 } from "./openclaw-state-lease-error.js";
 import { createOpenClawStateLeaseExclusion } from "./openclaw-state-lease-exclusion.js";
@@ -130,7 +131,7 @@ async function runStateLeaseOwnerInScope<T>(
       : undefined;
   const workerStorage =
     invocation.kind === "worker"
-      ? createOpenClawStateLeaseWorkerStorage(invocation.context)
+      ? createOpenClawStateLeaseWorkerStorage(invocation.context, validated.processBound)
       : undefined;
   let workerOperations: ReturnType<typeof createOpenClawStateLeaseWorkerOwner> | undefined;
   let assertAcquisitionCurrent: (() => void) | undefined;
@@ -147,11 +148,7 @@ async function runStateLeaseOwnerInScope<T>(
       leaseLost.abort(
         cause instanceof OpenClawStateLeaseError
           ? cause
-          : leaseError(
-              "OPENCLAW_STATE_LEASE_LOST",
-              `${validated.leaseLabel} ${validated.scope}/${validated.key} was lost`,
-              cause,
-            ),
+          : createOpenClawStateLeaseLostError(validated, cause),
       );
     }
   };
@@ -301,7 +298,12 @@ async function runStateLeaseOwnerInScope<T>(
               )
             : acquireLease(
                 validated.database,
-                { identity, operationLabel: validated.operationLabel, leaseMs: validated.leaseMs },
+                {
+                  identity,
+                  operationLabel: validated.operationLabel,
+                  leaseMs: validated.leaseMs,
+                  processBound: validated.processBound,
+                },
                 assertCurrent,
                 signal,
               );
@@ -380,11 +382,10 @@ async function runStateLeaseOwnerInScope<T>(
         renewAndSchedule();
       } catch (error) {
         if (
-          error instanceof OpenClawStateLeaseError &&
-          error.code === "OPENCLAW_STATE_LEASE_LOST"
+          (error instanceof OpenClawStateLeaseError &&
+            error.code === "OPENCLAW_STATE_LEASE_LOST") ||
+          (confirmedExpiresAt !== undefined && Date.now() >= confirmedExpiresAt)
         ) {
-          abortLost(error);
-        } else if (confirmedExpiresAt !== undefined && Date.now() >= confirmedExpiresAt) {
           abortLost(error);
         }
       }

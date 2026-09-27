@@ -104,6 +104,13 @@ import type {
 } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
+import {
+  buildSignalReactionSystemEventText,
+  isSignalReactionMessage,
+  resolveSignalReactionTargets,
+  resolveSignalStatusReactionTimestamp,
+  shouldEmitSignalReactionNotification,
+} from "./reactions.js";
 
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 const RETRYABLE_FLUSH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
@@ -134,17 +141,6 @@ function resolveSignalInboundRoute(params: {
       id: params.isGroup ? (params.groupId ?? "unknown") : params.senderPeerId,
     },
   });
-}
-
-function resolveSignalStatusReactionTimestamp(params: {
-  timestamp?: number;
-  messageId?: string;
-}): number | null {
-  if (typeof params.timestamp === "number") {
-    return Number.isFinite(params.timestamp) && params.timestamp > 0 ? params.timestamp : null;
-  }
-  const parsed = Number(params.messageId);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 type SignalStatusDispatchResult = {
@@ -896,8 +892,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     ) {
       return true;
     }
-    const targets = deps.resolveSignalReactionTargets(params.reaction);
-    const shouldNotify = deps.shouldEmitSignalReactionNotification({
+    const targets = resolveSignalReactionTargets(params.reaction);
+    const shouldNotify = shouldEmitSignalReactionNotification({
       mode: deps.reactionMode,
       account: deps.account,
       accountUuid: deps.accountUuid,
@@ -918,7 +914,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       senderPeerId,
     });
     const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
-    const text = deps.buildSignalReactionSystemEventText({
+    const text = buildSignalReactionSystemEventText({
       emojiLabel,
       actorLabel: senderName,
       messageId,
@@ -993,9 +989,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
-    const reaction = deps.isSignalReactionMessage(envelope.reactionMessage)
+    const reaction = isSignalReactionMessage(envelope.reactionMessage)
       ? envelope.reactionMessage
-      : deps.isSignalReactionMessage(dataMessage?.reaction)
+      : isSignalReactionMessage(dataMessage?.reaction)
         ? dataMessage?.reaction
         : null;
 

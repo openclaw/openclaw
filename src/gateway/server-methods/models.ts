@@ -22,11 +22,11 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import { resolveChatMetadataReadParams } from "./chat-metadata-handler.js";
 import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
+import { UnknownModelCatalogProviderError } from "./models-list-capabilities.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
-export { buildModelsListResult };
 
 // Ordinary reads return saved rows while expired provider inventory refreshes in the background.
 export const modelsHandlers: GatewayRequestHandlers = {
@@ -126,6 +126,10 @@ export const modelsHandlers: GatewayRequestHandlers = {
       })?.forAgent(resolved.agentId, projected.models);
       respond(true, policy ? policy.catalog(projected) : projected, undefined);
     } catch (error) {
+      if (error instanceof UnknownModelCatalogProviderError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
       if (error instanceof SessionMutationAuthorizationChangedError) {
         respond(false, undefined, error.error);
         return;

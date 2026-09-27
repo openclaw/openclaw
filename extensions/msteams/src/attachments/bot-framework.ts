@@ -25,10 +25,6 @@ import type {
   MSTeamsInboundMedia,
 } from "./types.js";
 
-/**
- * Bot Framework Service token scope for requesting a token used against
- * the Bot Connector (v3) REST endpoints such as `/v3/attachments/{id}`.
- */
 const BOT_FRAMEWORK_SCOPE = "https://api.botframework.com";
 
 /**
@@ -56,12 +52,6 @@ type BotFrameworkAttachmentInfo = {
   type?: string | null;
   views?: BotFrameworkView[] | null;
 };
-
-function normalizeServiceUrl(serviceUrl: string): string {
-  // Bot Framework service URLs sometimes carry a trailing slash; normalize so
-  // we can safely append `/v3/attachments/...` below.
-  return serviceUrl.replace(/\/+$/, "");
-}
 
 type BotFrameworkAttachmentRequest = {
   url: string;
@@ -210,7 +200,7 @@ async function downloadMSTeamsBotFrameworkAttachment(
     allowHosts: params.allowHosts,
     authAllowHosts: params.authAllowHosts,
   });
-  const baseUrl = `${normalizeServiceUrl(params.serviceUrl)}/v3/attachments/${encodeURIComponent(params.attachmentId)}`;
+  const baseUrl = `${params.serviceUrl.replace(/\/+$/, "")}/v3/attachments/${encodeURIComponent(params.attachmentId)}`;
   if (!isUrlAllowed(baseUrl, policy.allowHosts)) {
     return undefined;
   }

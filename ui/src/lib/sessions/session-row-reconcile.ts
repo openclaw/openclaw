@@ -67,9 +67,10 @@ export type SessionChangedEventInfo = {
   status: SessionRunStatus | null;
   archived: boolean | null;
   isChatTurn: boolean;
+  isAncestorReference: boolean;
 };
 
-function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
+export function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
   const next = { ...row };
   for (const [key, value] of Object.entries(row)) {
     if (
@@ -213,6 +214,45 @@ type ParsedSessionChangedEvent = readonly [
   reason: string | null,
 ];
 
+// Receipt admission is synchronous: the next event may already reference this row.
+// Copies and local edits cannot certify references by copying a wire revision.
+const ancestorRevisions = new WeakMap<GatewaySessionRow, string>();
+
+function rememberAncestor(row: GatewaySessionRow, offered: GatewaySessionRow, revision: string) {
+  if (isShallowEqualSessionRow(row, offered)) {
+    ancestorRevisions.set(row, revision);
+  }
+}
+
+function reconcileAncestorReference(
+  existing: GatewaySessionRow | undefined,
+  info: SessionChangedEventInfo,
+  source: Record<string, unknown>,
+  options: SessionReconcileOptions,
+  project?: SessionChangedRowProjection,
+): SessionChangedRowResult {
+  const { key } = info;
+  if (
+    !existing ||
+    !info.sessionId ||
+    existing.sessionId !== info.sessionId ||
+    typeof source.revision !== "string" ||
+    ancestorRevisions.get(existing) !== source.revision ||
+    info.snapshotAt === undefined ||
+    !matchesExistingSession(existing, key, info.agentId) ||
+    isSessionRowOutsideResultScope(existing, options)
+  ) {
+    return { applied: false, key, row: existing };
+  }
+  const retained = {
+    ...existing,
+    snapshotAt: Math.max(existing.snapshotAt ?? 0, info.snapshotAt),
+  };
+  const row = project?.(retained, existing, Object.keys(existing), info) ?? retained;
+  rememberAncestor(row, retained, source.revision);
+  return { applied: true, key, row, admittedRow: row, reconciled: true };
+}
+
 export function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent | null {
   const event = recordOrNull(payload);
   if (!event) {
@@ -290,6 +330,7 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
         phase === "error" ||
         reason === "send" ||
         reason === "steer",
+      isAncestorReference: event.ancestorSessionRef === true,
     },
     event,
     source,
@@ -305,7 +346,12 @@ export function sessionChangedSnapshots(payload: unknown): unknown[] {
   }
   return [
     payload,
-    ...event.ancestorSessions.flatMap((value) => {
+    ...[
+      ...event.ancestorSessions.map((value) => [value, false] as const),
+      ...(Array.isArray(event.ancestorSessionRefs)
+        ? event.ancestorSessionRefs.map((value) => [value, true] as const)
+        : []),
+    ].flatMap(([value, reference]) => {
       const row = recordOrNull(value);
       const key = stringValue(row?.key);
       if (!row || !key) {
@@ -317,6 +363,7 @@ export function sessionChangedSnapshots(payload: unknown): unknown[] {
           agentId: stringValue(row.agentId) ?? parseAgentSessionKey(key)?.agentId,
           ts: event.ts,
           ancestorSessions: [],
+          ...(reference ? { ancestorSessionRef: true } : {}),
         },
       ];
     }),
@@ -453,9 +500,14 @@ export function reconcileSessionChangedRow(
   }
   const [info, event, source, reason] = parsed;
   const { key } = info;
+  if (info.isAncestorReference) {
+    return reconcileAncestorReference(existing, info, source, options, project);
+  }
   const {
     agentId: _agentId,
+    ancestorRevision: _ancestorRevision,
     ancestorSessions: _ancestorSessions,
+    ancestorSessionRefs: _ancestorSessionRefs,
     catalogChanged: _catalogChanged,
     clientRunId: _clientRunId,
     compacted: _compacted,
@@ -566,6 +618,9 @@ export function reconcileSessionChangedRow(
       : undefined,
   );
   const previousOwner = existing.owner?.actor;
+  if (typeof source.ancestorRevision === "string" && reduced.admittedRow) {
+    rememberAncestor(reduced.admittedRow, sanitizeSessionRow(offered), source.ancestorRevision);
+  }
   const nextOwner = reduced.admittedRow?.owner?.actor;
   const ownershipChanged =
     Boolean(reduced.admittedRow) &&

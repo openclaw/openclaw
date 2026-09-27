@@ -167,11 +167,7 @@ function resolveUrlHostname(value: unknown): string | undefined {
   const candidate = /^[a-z0-9.[\]-]+(?::\d+)?(?:[/?#].*)?$/i.test(trimmed)
     ? `https://${trimmed}`
     : trimmed;
-  try {
-    return normalizeOptionalLowercaseString(new URL(candidate).hostname);
-  } catch {
-    return undefined;
-  }
+  return normalizeOptionalLowercaseString(URL.parse(candidate)?.hostname);
 }
 
 type ProviderMetadataOwners = {
@@ -287,19 +283,9 @@ function resolveKnownProviderFamily(
   if (manifestFamily) {
     return manifestFamily;
   }
-  switch (provider) {
-    case "openai":
-    case "azure-openai":
-    case "azure-openai-responses":
-      return "openai-family";
-    default:
-      return provider || "unknown";
-  }
-}
-
-function isOpenAIResponsesApi(api: string | null | undefined): boolean {
-  const normalizedApi = normalizeOptionalLowercaseString(api);
-  return normalizedApi !== undefined && OPENAI_RESPONSES_APIS.has(normalizedApi);
+  return provider && OPENAI_RESPONSES_PROVIDERS.has(provider)
+    ? "openai-family"
+    : provider || "unknown";
 }
 
 function resolveProviderAttributionPolicy(
@@ -406,11 +392,8 @@ export function resolveProviderRequestPolicy(
     endpointClass === "openai-public" ||
     endpointClass === "openai" ||
     endpointClass === "azure-openai";
-  const usesOpenAIPublicAttributionHost = endpointClass === "openai-public";
-  const usesOpenAICodexAttributionHost = endpointClass === "openai";
   const usesVerifiedOpenAIAttributionHost =
-    usesOpenAIPublicAttributionHost || usesOpenAICodexAttributionHost;
-  const usesXaiNativeAttributionHost = endpointClass === "xai-native";
+    endpointClass === "openai-public" || endpointClass === "openai";
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
 
   let attributionProvider: string | undefined;
@@ -424,7 +407,7 @@ export function resolveProviderRequestPolicy(
     }
   } else if (provider === "xai" && policy?.enabledByDefault) {
     // Default (unset baseUrl) maps to api.x.ai; custom baseUrls are treated as proxies and withheld.
-    if (usesXaiNativeAttributionHost || endpointClass === "default") {
+    if (endpointClass === "xai-native" || endpointClass === "default") {
       attributionProvider = "xai";
     }
   } else if (
@@ -513,7 +496,7 @@ export function resolveProviderRequestCapabilities(
   });
   const compatibilityFamily = manifestProviderRequest?.compatibilityFamily;
 
-  const isResponsesApi = isOpenAIResponsesApi(api);
+  const isResponsesApi = api !== undefined && OPENAI_RESPONSES_APIS.has(api);
   const promptCacheKeySupport = readCompatBoolean(input.compat, "supportsPromptCacheKey");
   // Default strip behavior (proxy-like endpoints with responses APIs) is
   // preserved as a safety net for providers that reject prompt_cache_key,
@@ -595,19 +578,17 @@ function describeProviderRequestRoutingPolicy(
 function describeProviderRequestRouteClass(
   policy: ProviderRequestPolicyResolution,
 ): "default" | "native" | "proxy-like" | "local" | "invalid" {
-  if (policy.endpointClass === "default") {
-    return "default";
+  switch (policy.endpointClass) {
+    case "default":
+    case "invalid":
+    case "local":
+      return policy.endpointClass;
+    case "custom":
+    case "openrouter":
+      return "proxy-like";
+    default:
+      return "native";
   }
-  if (policy.endpointClass === "invalid") {
-    return "invalid";
-  }
-  if (policy.endpointClass === "local") {
-    return "local";
-  }
-  if (policy.endpointClass === "custom" || policy.endpointClass === "openrouter") {
-    return "proxy-like";
-  }
-  return "native";
 }
 
 export function describeProviderRequestRoutingSummary(

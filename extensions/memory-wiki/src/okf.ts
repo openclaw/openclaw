@@ -1,9 +1,9 @@
-// Memory Wiki plugin module implements Open Knowledge Format import behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
+  asNullableRecord,
   normalizeOptionalString,
   normalizeSingleOrTrimmedStringList,
   uniqueStrings,
@@ -12,6 +12,7 @@ import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
+import { forEachMarkdownCodeRange } from "./markdown-links.js";
 import {
   createWikiPageFilename,
   parseWikiMarkdown,
@@ -26,7 +27,6 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const OKF_RESERVED_FILENAMES = new Set(["index.md", "log.md"]);
 const OKF_MARKDOWN_LINK_PATTERN = /(!?)\[([^\]]*)\]\(([^)]+)\)/g;
-const OKF_FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})/;
 const OKF_RELATED_SECTION_PATTERN = new RegExp(
   `\\n+## Related\\n${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}\\n?`,
   "g",
@@ -222,6 +222,8 @@ function normalizeOkfConcept(params: {
 
   const conceptId = trimMarkdownExtension(params.relativePath);
   const timestamp = normalizeOptionalString(parsed.frontmatter.timestamp);
+  const description = normalizeOptionalString(parsed.frontmatter.description);
+  const resource = normalizeOptionalString(parsed.frontmatter.resource);
   return {
     concept: {
       conceptId,
@@ -231,12 +233,8 @@ function normalizeOkfConcept(params: {
       body: parsed.body,
       type,
       title: deriveOkfTitle(params.relativePath, parsed.frontmatter),
-      ...(normalizeOptionalString(parsed.frontmatter.description)
-        ? { description: normalizeOptionalString(parsed.frontmatter.description) }
-        : {}),
-      ...(normalizeOptionalString(parsed.frontmatter.resource)
-        ? { resource: normalizeOptionalString(parsed.frontmatter.resource) }
-        : {}),
+      ...(description ? { description } : {}),
+      ...(resource ? { resource } : {}),
       tags: normalizeSingleOrTrimmedStringList(parsed.frontmatter.tags),
       ...(timestamp ? { timestamp } : {}),
     },
@@ -298,14 +296,7 @@ function safeDecodeOkfLinkPath(value: string | undefined): string {
 }
 
 function getMarkdownDestinationSuffix(destination: string): string {
-  const queryIndex = destination.indexOf("?");
-  const fragmentIndex = destination.indexOf("#");
-  const suffixIndex =
-    queryIndex === -1
-      ? fragmentIndex
-      : fragmentIndex === -1
-        ? queryIndex
-        : Math.min(queryIndex, fragmentIndex);
+  const suffixIndex = destination.search(/[?#]/);
   return suffixIndex === -1 ? "" : destination.slice(suffixIndex);
 }
 
@@ -316,6 +307,9 @@ function rewriteOkfMarkdownLinks(params: {
   pageByConceptId: Map<string, { pageId: string; pagePath: string; title: string }>;
 }): { body: string; linkedConceptIds: string[] } {
   const linkedConceptIds: string[] = [];
+  if (!params.body.includes("[")) {
+    return { body: params.body, linkedConceptIds };
+  }
   const rewriteLinks = (markdown: string) =>
     markdown.replace(
       OKF_MARKDOWN_LINK_PATTERN,
@@ -342,63 +336,19 @@ function rewriteOkfMarkdownLinks(params: {
   return { body, linkedConceptIds: uniqueStrings(linkedConceptIds) };
 }
 
-function rewriteMarkdownLineOutsideInlineCode(
-  line: string,
-  rewriteLinks: (markdown: string) => string,
-): string {
-  let result = "";
-  let cursor = 0;
-  while (cursor < line.length) {
-    const codeStart = line.indexOf("`", cursor);
-    if (codeStart === -1) {
-      result += rewriteLinks(line.slice(cursor));
-      break;
-    }
-    result += rewriteLinks(line.slice(cursor, codeStart));
-    const delimiter = line.slice(codeStart).match(/^`+/)?.[0] ?? "`";
-    const codeEnd = line.indexOf(delimiter, codeStart + delimiter.length);
-    if (codeEnd === -1) {
-      result += line.slice(codeStart);
-      break;
-    }
-    result += line.slice(codeStart, codeEnd + delimiter.length);
-    cursor = codeEnd + delimiter.length;
-  }
-  return result;
-}
-
 function rewriteMarkdownOutsideCode(
   markdown: string,
   rewriteLinks: (markdown: string) => string,
 ): string {
-  const lines = markdown.split(/(\n)/);
-  let inFence = false;
-  let fenceDelimiter = "";
-  return lines
-    .map((line) => {
-      if (line === "\n") {
-        return line;
-      }
-      const fenceMatch = line.match(OKF_FENCE_PATTERN);
-      if (fenceMatch) {
-        const delimiter = fenceMatch[1] ?? "";
-        const closesFence =
-          inFence &&
-          delimiter.startsWith(fenceDelimiter[0] ?? "") &&
-          delimiter.length >= fenceDelimiter.length;
-        const opensFence = !inFence;
-        if (opensFence) {
-          inFence = true;
-          fenceDelimiter = delimiter;
-        } else if (closesFence) {
-          inFence = false;
-          fenceDelimiter = "";
-        }
-        return line;
-      }
-      return inFence ? line : rewriteMarkdownLineOutsideInlineCode(line, rewriteLinks);
-    })
-    .join("");
+  const parts: string[] = [];
+  const rewriteLines = (text: string) => text.split("\n").map(rewriteLinks).join("\n");
+  let cursor = 0;
+  forEachMarkdownCodeRange(markdown, (start, end) => {
+    parts.push(rewriteLines(markdown.slice(cursor, start)), markdown.slice(start, end));
+    cursor = end;
+  });
+  parts.push(rewriteLines(markdown.slice(cursor)));
+  return parts.join("");
 }
 
 function normalizeOkfRenderedPageForComparison(content: string): string {
@@ -471,13 +421,7 @@ async function removeStaleOkfConceptPages(params: {
     }
     const raw = await vault.readText(pagePath).catch(() => "");
     const parsed = parseWikiMarkdown(raw);
-    const okf = parsed.frontmatter.okf;
-    if (
-      okf &&
-      typeof okf === "object" &&
-      !Array.isArray(okf) &&
-      (okf as Record<string, unknown>).bundleKey === params.bundleKey
-    ) {
+    if (asNullableRecord(parsed.frontmatter.okf)?.bundleKey === params.bundleKey) {
       await vault.remove(pagePath);
       removedPagePaths.push(pagePath);
     }
@@ -490,33 +434,21 @@ function readRootOkfMetadata(params: {
   bundleName: string;
   bundlePath: string;
 }): OkfBundleMetadata {
-  if (!params.rootIndex) {
-    return {
-      key: createOkfBundleKey({
-        rootFrontmatter: {},
-        bundleName: params.bundleName,
-        bundlePath: params.bundlePath,
-      }),
-    };
-  }
-  const parsed = parseOkfMarkdown(params.rootIndex, "index.md");
+  const parsed = parseOkfMarkdown(params.rootIndex ?? "", "index.md");
+  const version = normalizeOptionalString(parsed.frontmatter.okf_version);
   return {
     key: createOkfBundleKey({
       rootFrontmatter: parsed.frontmatter,
       bundleName: params.bundleName,
       bundlePath: params.bundlePath,
     }),
-    ...(normalizeOptionalString(parsed.frontmatter.okf_version)
-      ? { version: normalizeOptionalString(parsed.frontmatter.okf_version) }
-      : {}),
+    ...(version ? { version } : {}),
   };
 }
 
-function formatOkfImportSummary(result: ImportMemoryWikiOkfResult): string {
+export function formatOkfImportSummary(result: ImportMemoryWikiOkfResult): string {
   return `Imported ${result.importedCount} OKF concept${result.importedCount === 1 ? "" : "s"} from ${result.bundlePath} into memory wiki. Updated ${result.updatedCount}; removed ${result.removedCount}; skipped ${result.skippedCount}; refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
 }
-
-export { formatOkfImportSummary };
 
 export async function importMemoryWikiOkfBundle(params: {
   config: ResolvedMemoryWikiConfig;
