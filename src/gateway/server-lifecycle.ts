@@ -381,6 +381,8 @@ export async function prepareGatewayLifecycle(params: {
     const notice = resolveGatewayShutdownNotice(options);
     lifecycle.closePreludeStarted = true;
     markGatewaySuspendExiting();
+    authRateLimiter.dispose();
+    browserAuthRateLimiter.dispose();
     runtime.scheduler.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();
     // Publish the exact cancellation before withdrawing capabilities or running
