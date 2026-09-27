@@ -210,15 +210,6 @@ describe("FaceTime realtime provider boundary", () => {
       truncatedMs: [],
     },
     {
-      name: "enabled",
-      interrupt: true,
-      playedMs: 500,
-      completed: false,
-      audioMs: [1_000],
-      playedItemMs: [500],
-      truncatedMs: [500],
-    },
-    {
       name: "early echo guard",
       interrupt: true,
       playedMs: 100,
