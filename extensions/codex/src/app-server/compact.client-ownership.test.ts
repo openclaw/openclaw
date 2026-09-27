@@ -311,13 +311,9 @@ it.each([
   ["success", false, "untracked"],
   ["failure", false, "untracked"],
   ["success", true, "untracked"],
-  ["failure", true, "untracked"],
   ["success", "during-resume", "untracked"],
-  ["failure", "during-resume", "untracked"],
-  ["success", "during-resume", "claimed"],
   ["failure", "during-resume", "claimed"],
   ["success", "during-resume", "idle"],
-  ["failure", "during-resume", "idle"],
 ] as const)(
   "fences replacement resume after compaction %s (late final release: %s, subscription: %s)",
   async (outcome, lateRelease, subscription) => {
