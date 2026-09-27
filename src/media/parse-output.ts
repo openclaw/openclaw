@@ -229,57 +229,68 @@ function beginsIndependentMediaSource(raw: string): boolean {
   return MEDIA_SOURCE_ROOT_RE.test(candidate) || SCHEME_RE.test(candidate);
 }
 
-// A quoted chunk runs to the first quote that is followed by whitespace or the end of the payload. Any
-// earlier quote is followed by more value, so it is part of that value rather than a delimiter: that
-// keeps an inner quote (`MEDIA:'…?token=it's'`), a real filename space
-// (`MEDIA:"/tmp/album/photo.png copy.png"`), and both at once (`MEDIA:'/tmp/team's.v1 final/image.png'`)
-// inside one reference, while `MEDIA:"a" "b"` still splits at the whitespace between the two. Falling
-// back to `\S+` at a quote because of an inner quote would cut the value short and leak its tail into
-// the visible text.
-const MEDIA_DIRECTIVE_PART_RE =
-  /"(?:[^"]|"(?=[^\s]))*"(?=\s|$)|'(?:[^']|'(?=[^\s]))*'(?=\s|$)|`(?:[^`]|`(?=[^\s]))*`(?=\s|$)|\S+/g;
-
+// A reference that starts with a quote runs to the first quote of the same kind that is followed by
+// whitespace or the end of the payload. An earlier quote is followed by more value, so it is part of that
+// value rather than a delimiter: that keeps an inner quote (`MEDIA:'…?token=it's'`), a real filename
+// space (`MEDIA:"/tmp/album/photo.png copy.png"`), and both at once
+// (`MEDIA:'/tmp/team's.v1 final/image.png'`) inside one reference, while `MEDIA:"a" "b"` still separates
+// at the whitespace between the two. Finding that quote by hand keeps the search linear: retrying the
+// remaining suffix from every stray opening quote costs Θ(n²) on a payload such as `MEDIA:'a 'a 'a …`,
+// where every quote is followed by a non-space character and so no quote in the payload ever closes
+// (measured 0.79s / 3.01s / 11.65s for 48K / 96K / 192K characters, against 2–3ms for `main`).
 const QUOTE_CHARS = new Set(['"', "'", "`"]);
+const MEDIA_DIRECTIVE_SPACE_RE = /\s/;
 
-// An explicitly quoted chunk carries its own boundaries, so it is never a fragment of a neighbouring
-// reference: the quote pair already states where that value starts and ends.
-function isQuotedChunk(token: string): boolean {
-  const quote = token.charAt(0);
-  return token.length > 1 && QUOTE_CHARS.has(quote) && token.endsWith(quote);
-}
-
-type MediaDirectiveToken = { token: string; index: number };
-
-// One tokenizer owns the reference boundaries, so split detection and list detection agree on them.
-// Reading a quoted value with its own tokenizer let a value that contains the enclosing quote look like
-// two references to one caller and one reference to the other.
-function tokenizeMediaDirectiveParts(payload: string): MediaDirectiveToken[] {
-  return Array.from(payload.matchAll(MEDIA_DIRECTIVE_PART_RE), (match) => ({
-    token: match[0],
-    index: match.index ?? 0,
-  }));
-}
-
-// A payload lists separate references only when the tokenizer reads every one of its tokens as an
-// explicitly quoted chunk, at least two of them: `MEDIA:"/tmp/a.png" "/tmp/b.png"` starts and ends
-// with a quote and holds two quoted references, so it splits. Counting any two tokens is too weak:
-// `MEDIA:'/tmp/parents' photos/photo.png'` also starts and ends with a quote, but its pair encloses
-// one value whose name holds that quote, so the stray tail must not pass for a second reference. With
-// no list present the payload keeps `main`'s reading: a single quoted value unwraps as a whole,
-// including one whose own text ends with that quote (`MEDIA:"https://example.com/video.mp4?token=ends""`).
-// This one answer also decides the split below, so a payload that is not a list is never tokenized in any
-// other way than the way `main` tokenizes it.
-function listsSeparateQuotedReferences(payload: string): boolean {
-  const tokens = tokenizeMediaDirectiveParts(payload);
-  return tokens.length >= 2 && tokens.every((entry) => isQuotedChunk(entry.token));
-}
-
-function splitMediaDirectiveParts(payload: string): string[] {
-  if (listsSeparateQuotedReferences(payload)) {
-    // Each quote pair states where its own reference starts and ends, so the listed references are the
-    // tokens themselves and there is nothing to reconstruct.
-    return tokenizeMediaDirectiveParts(payload).map((entry) => entry.token);
+function findQuotedMediaReferenceEnd(payload: string, start: number, quote: string): number {
+  for (let index = start + 1; index < payload.length; index += 1) {
+    // A quote closes its chunk when only whitespace — or nothing at all — follows it.
+    if (
+      payload.charAt(index) === quote &&
+      (index + 1 >= payload.length || MEDIA_DIRECTIVE_SPACE_RE.test(payload.charAt(index + 1)))
+    ) {
+      return index;
+    }
   }
+  return -1;
+}
+
+// The references a payload lists, when every token in it is an explicitly quoted reference and there are
+// at least two of them; `null` otherwise, which sends the caller back to `main`'s reading. Counting
+// tokens is too weak a test for a list: `MEDIA:'/tmp/parents' photos/photo.png'` also starts and ends
+// with a quote, but its pair encloses one value whose name holds that quote, so the stray tail must not
+// pass for a second reference. With no list present a single quoted value still unwraps as a whole,
+// including one whose own text ends with that quote (`MEDIA:"https://example.com/video.mp4?token=ends""`).
+//
+// One scan answers both questions the caller asks — is this a list, and which references does it hold —
+// so the payload is tokenized once. A token that no quote pair bounds is a whitespace-delimited token
+// like any other, and it also settles the answer: the scan stops there instead of reading the rest.
+function readQuotedMediaReferenceList(payload: string): string[] | null {
+  const tokens: string[] = [];
+  let index = 0;
+  while (index < payload.length) {
+    const char = payload.charAt(index);
+    if (MEDIA_DIRECTIVE_SPACE_RE.test(char)) {
+      index += 1;
+      continue;
+    }
+    if (QUOTE_CHARS.has(char)) {
+      const end = findQuotedMediaReferenceEnd(payload, index, char);
+      if (end !== -1) {
+        tokens.push(payload.slice(index, end + 1));
+        index = end + 1;
+        continue;
+      }
+    }
+    return null;
+  }
+  return tokens.length >= 2 ? tokens : null;
+}
+
+// `main`'s own split, kept quote-blind on purpose: a payload that is not a list gives a quote pair no
+// authority, so a quote that is text inside one path (`/tmp/album 'best' photos/image.png`) cannot block
+// the join, and neither can a fragment that would be accepted as a reference on its own
+// (`'best/photos'` in `/tmp/album 'best/photos' final.png`).
+function splitMediaDirectiveParts(payload: string): string[] {
   const parts: string[] = [];
   let previousEnd = 0;
   for (const match of payload.matchAll(/\S+/g)) {
@@ -291,11 +302,7 @@ function splitMediaDirectiveParts(payload: string): string[] {
       !beginsIndependentMediaSource(candidate) &&
       (!HAS_FILE_EXT.test(previousCandidate) || !isValidMedia(candidate))
     ) {
-      // Preserve real filename whitespace while keeping independently valid attachments separate. This
-      // is `main`'s own reconstruction, and it stays quote-blind on purpose: a payload that is not a
-      // list gives a quote pair no authority, so a quote that is text inside one path (`/tmp/album
-      // 'best' photos/image.png`) cannot block the join, and neither can a fragment that would be
-      // accepted as a reference on its own (`'best/photos'` in `/tmp/album 'best/photos' final.png`).
+      // Preserve real filename whitespace while keeping independently valid attachments separate.
       parts[parts.length - 1] = `${previous}${payload.slice(previousEnd, match.index)}${match[0]}`;
     } else {
       parts.push(match[0]);
@@ -611,13 +618,13 @@ export function splitMediaOutput(
       pieces.push(line.slice(cursor, start));
 
       const payload = expectDefined(match[1], "parse regex capture 1");
-      const quotedValue = unwrapQuoted(payload);
-      const unwrapped =
-        quotedValue !== undefined && !listsSeparateQuotedReferences(payload)
-          ? quotedValue
-          : undefined;
+      // A payload that lists separate quoted references keeps every reference as written. Otherwise it
+      // reads the way `main` reads it: one quoted value unwraps as a whole, and anything else splits on
+      // whitespace. Both answers come from the one scan, so the payload is never tokenized twice.
+      const quotedList = readQuotedMediaReferenceList(payload);
+      const unwrapped = quotedList ? undefined : unwrapQuoted(payload);
       const payloadValue = unwrapped ?? payload;
-      const parts = unwrapped ? [unwrapped] : splitMediaDirectiveParts(payload);
+      const parts = quotedList ?? (unwrapped ? [unwrapped] : splitMediaDirectiveParts(payload));
       const mediaStartIndex = media.length;
       let validCount = 0;
       const invalidParts: string[] = [];

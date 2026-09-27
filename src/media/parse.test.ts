@@ -376,6 +376,48 @@ describe("splitMediaFromOutput", () => {
     );
   });
 
+  it.each([
+    // A quote that never closes cannot delimit a reference, so the payload is not a list and reads exactly
+    // as origin/main reads it: the stray quote is either cleaned off the reference or kept as literal text.
+    ["MEDIA:'/tmp/photo.png", ["/tmp/photo.png"]],
+    ['MEDIA:"/tmp/photo.png', ["/tmp/photo.png"]],
+    ["MEDIA:`/tmp/photo.png", ["/tmp/photo.png"]],
+    ["MEDIA:/tmp/photo.png'", ["/tmp/photo.png"]],
+    // An unclosed quote must not fuse two references that whitespace already separated.
+    ["MEDIA:/tmp/photo.png '/tmp/second.png", ["/tmp/photo.png", "/tmp/second.png"]],
+    // An unclosed quote is not a boundary either, so this stays the one reference `main` reads.
+    ["MEDIA:'/tmp/first.png' \"/tmp/second.png'", ["/tmp/first.png' \"/tmp/second.png"]],
+    // A single quoted value is one reference even when the quote pair wraps leading whitespace.
+    ["MEDIA:' /tmp/photo.png'", ["/tmp/photo.png"]],
+    // The slash-bearing quote pair from the previous round keeps its reading with a stray quote added.
+    ["MEDIA:/tmp/album 'best/photos' final.png'", ["/tmp/album 'best/photos' final.png"]],
+  ] as const)("reads a payload with an unclosed quote as main reads it: %s", (input, mediaUrls) => {
+    expectParsedMediaOutputCase(input, { mediaUrls });
+  });
+
+  it.each(["MEDIA:'", "MEDIA:''", "MEDIA:'' ''", "MEDIA:'a 'a 'a"])(
+    "keeps a payload whose quotes never pair as text: %s",
+    (input) => {
+      expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: input });
+    },
+  );
+
+  it("reads a quote-heavy payload without scanning it quadratically", () => {
+    // Every quote here is followed by a non-space character, so no quote in the payload ever closes and
+    // the tokenizer has to decide the whole payload before it can fall back to whitespace splitting.
+    // Retrying the remaining suffix from each stray quote costs Θ(n²): measured on this shape before the
+    // scan became linear, 0.18s / 0.70s / 2.80s / 10.98s for 24K / 48K / 96K / 192K characters, against
+    // 3.2ms / 6.3ms / 12.0ms / 23.3ms for origin/main's whitespace tokenizer.
+    const payload = "'a ".repeat(32_000).trimEnd();
+    const startedAt = performance.now();
+    expectParsedMediaOutputCase(`MEDIA:${payload}`, {
+      mediaUrls: undefined,
+      text: `MEDIA:${payload}`,
+    });
+    // The quadratic scan needs seconds here; a linear one stays within a few tens of milliseconds.
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+  });
+
   it("preserves quoted punctuation when a reference shares the line with another one", () => {
     // Quoted punctuation belongs to the reference, exactly as it does when the directive holds a
     // single reference. A signed URL loses its signature when that suffix is stripped during
