@@ -10,6 +10,7 @@ import {
 import { getRuntimeConfig } from "../../config/io.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { loadCheckoutDiff } from "../../sessions/session-diff.js";
+import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
 import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
@@ -137,6 +138,17 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
+    // The sharing boundary applies to caller classes that have one: configured operator
+    // roles, or a narrow session grant. A Gateway without roles keeps the access it has
+    // today, matching the exact-key read contract in sessions-read-by-key.ts. The diff
+    // describes the checkout, baseline and session identity captured above, so a concurrent
+    // label or activity update must not fail the read; visibility, caller authority and
+    // session identity still have to hold when the response is built.
+    //
+    // Incognito-sourced sessions have no store row the ordinary read path could see, so they
+    // keep the materialized incognito binding. Every other caller class with a boundary
+    // retains the same metadata-tolerant scoped read as `sessions.branches.list`.
+    const boundaryCfg = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
     const read =
       requestedAgent.agentId &&
       captureIncognitoSessionSource({
@@ -146,7 +158,11 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
         ? retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
             requireMaterialized: true,
           })
-        : undefined;
+        : requestedAgent.agentId && hasOperatorBoundary(options.client, boundaryCfg)
+          ? retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
+              allowMetadataChanges: true,
+            })
+          : undefined;
     try {
       const result = await loadSessionDiff(
         {
