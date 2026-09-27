@@ -1,3 +1,4 @@
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionSuggestionEvent,
   SessionTypingEvent,
@@ -418,10 +419,20 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.subscribeSessionRepositoryContext();
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
+        const state = this.state;
+        if (
+          state &&
+          event.event === "sessions.changed" &&
+          asNonArrayRecord(event.payload).reason === "sharing"
+        ) {
+          // Revoked readers receive only a redacted catalog invalidation. Retire
+          // preview admission before the roster refresh can publish access loss.
+          state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
+          state.requestUpdate?.();
+        }
         if (event.event === "sessions.changed" || event.event === "session.message") {
           return;
         }
-        const state = this.state;
         if (event.event === "presence") {
           const hadMultipleIdentities = this.hasMultipleIdentities();
           const presence = readPresenceEntries(event.payload);

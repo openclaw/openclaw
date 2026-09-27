@@ -298,7 +298,7 @@ enum CloudflareAccessLogin {
         else { throw LoginError.invalidGateway }
     }
 
-    private static func decodeJWT<Claims: Decodable>(_ type: Claims.Type, token: String) throws -> Claims {
+    static func decodeJWT<Claims: Decodable>(_ type: Claims.Type, token: String) throws -> Claims {
         guard token.utf8.count <= 32768 else { throw LoginError.invalidSession }
         let parts = token.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 3,

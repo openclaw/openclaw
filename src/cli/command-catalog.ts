@@ -16,6 +16,12 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
   return false;
 }
 
+const modelRunStartupPolicy: CliCommandCatalogEntry["policy"] = {
+  // Gateway model runs need only non-observing client config validation.
+  configGuard: ({ options }) =>
+    options?.gateway === true && options.local !== true ? "validate" : "run",
+};
+
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
@@ -56,6 +62,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "default",
     },
   },
+  { commandPath: ["infer", "model", "run"], policy: modelRunStartupPolicy },
+  { commandPath: ["capability", "model", "run"], policy: modelRunStartupPolicy },
   {
     commandPath: ["transcripts"],
     // Lists, summaries, and artifact paths own stdout; startup notes must not corrupt them.

@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 
 public enum OpenClawChatTransportEvent: Sendable {
@@ -817,6 +818,7 @@ public protocol OpenClawChatTransport: Sendable {
     /// gateway's advertised method set answers, nil when no catalog is known
     /// (disconnected, pre-catalog gateway, or non-gateway transport).
     func gatewayAdvertisesMethod(_ method: String) async -> Bool?
+    func attachmentLimits() async -> GatewayAttachmentLimits?
     func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
@@ -975,6 +977,10 @@ extension OpenClawChatTransport {
     }
 
     public func gatewayAdvertisesMethod(_: String) async -> Bool? {
+        nil
+    }
+
+    public func attachmentLimits() async -> GatewayAttachmentLimits? {
         nil
     }
 

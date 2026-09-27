@@ -9680,6 +9680,9 @@ internal fun gatewayRegistryEntry(
       stableId = endpoint.stableId,
       kind = GatewayRegistryEntryKind.DISCOVERED,
       name = endpoint.name,
+      host = endpoint.host,
+      port = endpoint.port,
+      contextPath = endpoint.contextPath,
       tls = true,
       lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
     )

@@ -240,6 +240,11 @@ actor GatewayConnection: Observable {
         return connection.lease.endpointRevision
     }
 
+    nonisolated var hasConnectedServer: Bool {
+        guard case let .connected(connection) = self.connectionPublication.value else { return false }
+        return self.serverLeaseMatchesCurrentState(connection.lease)
+    }
+
     private func publishConnectedServerLease() {
         // Retirement clears authority before changing any other actor state.
         // Only a fully admitted handshake may replace that terminal publication.
@@ -1331,6 +1336,14 @@ extension GatewayConnection {
     func connectionSummary() -> (connected: Bool, gatewayVersion: String?) {
         guard case .connected = self.connectionPublication.value else { return (false, nil) }
         return (true, self.cachedGatewayVersion())
+    }
+
+    func currentAttachmentLimits() -> GatewayAttachmentLimits? {
+        // Staging reads the admitted hello; endpoint recovery must not delay local file preparation.
+        guard case let .connected(connection) = self.connectionPublication.value,
+              self.serverLeaseMatchesCurrentState(connection.lease)
+        else { return nil }
+        return self.lastSnapshot?.advertisedAttachmentLimits()
     }
 
     func cachedGatewayVersion(ifCurrentServerLease lease: ServerLease) async -> String? {

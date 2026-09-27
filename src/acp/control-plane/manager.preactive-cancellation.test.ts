@@ -2,7 +2,6 @@
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import {
   AcpSessionManager,
   baseCfg,
@@ -42,8 +41,6 @@ describe("ACP accepted-turn cancellation", () => {
         text: "must not submit",
         mode: "prompt",
         requestId: "preactive-turn",
-        admittedRunContext:
-          phase === "queued" ? createTestAdmittedRunContext("preactive-turn") : undefined,
         onEvent: (event) => {
           events.push(event);
         },

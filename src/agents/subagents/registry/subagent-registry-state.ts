@@ -2,7 +2,6 @@ import {
   emitSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../../../sessions/session-lifecycle-events.js";
-import { isStateDatabaseReadAdmissionInvalidatedError } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import {
@@ -223,14 +222,7 @@ export function getSubagentSessionListReadSnapshotIdentity(): object | undefined
   if (!shouldReadPersistedSubagentRuns()) {
     return subagentRuns;
   }
-  try {
-    return getPersistedSubagentRunsSnapshot(persistedSubagentSessionListRunsReadCache) ?? undefined;
-  } catch (error) {
-    if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
-      throw error;
-    }
-    return undefined;
-  }
+  return getPersistedSubagentRunsSnapshot(persistedSubagentSessionListRunsReadCache) ?? undefined;
 }
 
 export type SubagentSessionListReadView = {
@@ -256,14 +248,7 @@ export function createSubagentSessionListReadView(options: {
       if (!readPersisted) {
         return subagentRuns;
       }
-      try {
-        return getPersistedSubagentRunsSnapshot(cache, source.current()) ?? undefined;
-      } catch (error) {
-        if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
-          throw error;
-        }
-        return undefined;
-      }
+      return getPersistedSubagentRunsSnapshot(cache, source.current()) ?? undefined;
     },
     runs(runIds) {
       if (runIds) {
