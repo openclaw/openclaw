@@ -139,7 +139,7 @@ describe("Claude CLI command progress", () => {
       for (const [toolCallId, name] of [
         ["mcp-generic-1", "mcp__openclaw__exec"],
         ["mcp-gemini-1", "mcp_openclaw_exec"],
-      ]) {
+      ] as const) {
         handlers.emitCliToolUseStart({
           toolCallId,
           name,
