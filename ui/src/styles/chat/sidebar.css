@@ -994,12 +994,14 @@ openclaw-session-discussion {
 
 .sidebar-attachment-preview__loading,
 .chat-video-skeleton,
-.chat-assistant-attachment-card--video[aria-busy="true"] .chat-assistant-attachment-card__header {
+.chat-assistant-attachment-card--video.chat-assistant-attachment-card--loading
+  .chat-assistant-attachment-card__header {
   opacity: 0;
   animation: fade-in 0s 150ms forwards;
 }
 
-.chat-assistant-attachment-card--video[aria-busy="true"] {
+/* Keep loading paint local: aria-busy on large lists must not restyle every SVG. */
+.chat-assistant-attachment-card--video.chat-assistant-attachment-card--loading {
   video {
     opacity: 0;
   }
