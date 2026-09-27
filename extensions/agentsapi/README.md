@@ -12,6 +12,11 @@ subagents. These calls use the prepared model and API key, do not reuse the
 conversation or workspace, and delete the temporary session after settlement.
 Cancellation waits for native work to settle before deletion.
 
+Conversation-only API sessions require initial input during creation. If the
+service accepts creation but its response is lost, the Gateway may not receive
+the session ID needed to cancel or delete that work. Cleanup of known sessions
+does not guarantee cleanup in that case.
+
 Restricted sessions still have a tool-surface gap: the service may expose its
 own built-in helpers even with no supplied functions or executor. Removing those
 helpers is blocked by the Agents API, so a literal zero-tool surface is not
