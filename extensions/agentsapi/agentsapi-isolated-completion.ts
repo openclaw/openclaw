@@ -39,14 +39,17 @@ export async function runAgentsApiIsolatedCompletion(
   // Cleanup retains authority only over this invocation's new session, even
   // after the caller retires. Harness disposal waits for this operation.
   const cleanupClient = new AgentsApiClient(apiKey, assertHarnessCurrent);
+  // Revalidate the caller before sending, but retain the created session ID if
+  // cancellation arrives while receiving the response so cleanup can settle it.
+  const creationClient = new AgentsApiClient(apiKey, assertHarnessCurrent, assertCurrent);
   let sessionId: string | undefined;
   let native: ReturnType<typeof createAgentsApiSession> | undefined;
   try {
     assertCurrent();
     // Conversation-only sessions admit input during creation. Retain the ID
     // after caller cancellation so native cleanup can settle that work.
-    const session = await cleanupClient.createIsolated(
-      AbortSignal.timeout(Math.min(params.timeoutMs, 60_000)),
+    const session = await creationClient.createIsolated(
+      AbortSignal.any([timeout, AbortSignal.timeout(60_000)]),
       params.systemPrompt,
       params.prompt,
       model.id,

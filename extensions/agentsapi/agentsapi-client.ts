@@ -149,6 +149,7 @@ export class AgentsApiClient {
   constructor(
     apiKey: string,
     private readonly assertCurrent: () => void,
+    assertRequestCurrent: () => void = assertCurrent,
   ) {
     const agents = new OpenAI({
       apiKey,
@@ -167,7 +168,7 @@ export class AgentsApiClient {
           url: input instanceof Request ? input.url : String(input),
           init,
           signal: init?.signal ?? undefined,
-          beforeRequest: this.assertCurrent,
+          beforeRequest: assertRequestCurrent,
         });
         const response = responseWithRelease(guarded.response, guarded.release);
         try {
