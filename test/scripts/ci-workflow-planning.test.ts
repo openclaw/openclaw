@@ -9512,6 +9512,93 @@ describe("ci workflow guards", () => {
     ).toEqual(row.groups);
   });
 
+  it.each([
+    { label: "verified release candidate", releaseCandidateCompatibility: true },
+    { label: "unverified manual target", releaseCandidateCompatibility: false },
+  ])("projects current-only test owners only for $label", ({ releaseCandidateCompatibility }) => {
+    const currentConfig = "test/vitest/vitest.current.config.ts";
+    const currentTest = "src/current.test.ts";
+    const missingConfig = "test/vitest/vitest.future.config.ts";
+    const missingTest = "src/future.test.ts";
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      missingTargetFiles: [missingConfig],
+      nodeTestGroupsCodec: false,
+      releaseCandidateCompatibility,
+      targetFiles: [currentConfig],
+      nodeTestShards: [
+        {
+          checkName: "mixed-flat",
+          configs: [currentConfig, missingConfig],
+          includePatterns: [currentTest, missingTest, "src/**/*.integration.test.ts"],
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          shardName: "mixed-flat",
+        },
+        {
+          checkName: "missing-flat",
+          configs: [missingConfig],
+          includePatterns: [missingTest],
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          shardName: "missing-flat",
+        },
+        {
+          checkName: "mixed-groups",
+          groups: [
+            {
+              configs: [currentConfig, missingConfig],
+              includePatterns: [currentTest, missingTest],
+              shard_name: "current-group",
+            },
+            {
+              configs: [missingConfig],
+              includePatterns: [missingTest],
+              shard_name: "missing-group",
+            },
+          ],
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          shardName: "mixed-groups",
+        },
+      ],
+    });
+    expect(result.status, result.output).toBe(0);
+    const rows = JSON.parse(
+      expectDefined(result.outputs.checks_node_core_nondist_matrix, "frozen Node matrix"),
+    ).include;
+    expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual(
+      releaseCandidateCompatibility
+        ? ["mixed-flat", "mixed-groups"]
+        : ["mixed-flat", "missing-flat", "mixed-groups"],
+    );
+    expect(rows[0].configs).toEqual(
+      releaseCandidateCompatibility ? [currentConfig] : [currentConfig, missingConfig],
+    );
+    expect(rows[0].includePatterns).toEqual([
+      currentTest,
+      missingTest,
+      "src/**/*.integration.test.ts",
+    ]);
+    const groupedRow = releaseCandidateCompatibility ? rows[1] : rows[2];
+    expect(groupedRow.groups).toEqual([
+      expect.objectContaining({
+        configs: releaseCandidateCompatibility ? [currentConfig] : [currentConfig, missingConfig],
+        includePatterns: [currentTest, missingTest],
+        shard_name: "current-group",
+      }),
+      ...(releaseCandidateCompatibility
+        ? []
+        : [
+            expect.objectContaining({
+              configs: [missingConfig],
+              shard_name: "missing-group",
+            }),
+          ]),
+    ]);
+  });
+
   it("provisions ripgrep for real filesystem contract selections", () => {
     const contract = "src/agents/filesystem-tools-output-contract.test.ts";
     const nativeTools = "src/agents/sessions/tools/index.test.ts";
