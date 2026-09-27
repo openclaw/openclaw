@@ -9,7 +9,7 @@ import {
   diagnosticHttpStatusCode,
 } from "../infra/diagnostic-error-metadata.js";
 import {
-  emitTrustedDiagnosticEvent,
+  emitTrustedToolExecutionEvent,
   emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
   type DiagnosticEventInput,
@@ -71,14 +71,13 @@ export function startToolExecutionLiveness(
   signal?: AbortSignal,
 ) {
   const liveness = createDiagnosticToolExecutionLiveness(signal);
-  if (emitDiagnostics) {
-    emitTrustedDiagnosticEvent(
-      markToolExecutionLivenessDiagnosticEvent(
-        { type: "tool.execution.started", ...event },
-        liveness.view,
-      ),
-    );
-  }
+  emitTrustedToolExecutionEvent(
+    markToolExecutionLivenessDiagnosticEvent(
+      { type: "tool.execution.started", ...event },
+      liveness.view,
+    ),
+    { emitDiagnostics },
+  );
   return liveness;
 }
 

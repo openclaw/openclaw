@@ -304,3 +304,22 @@ accepts only untrusted events that pass `include`/`exclude`. Event payload field
 cannot override the dispatcher's trust metadata. Accepted events retain their
 individual frozen copies; this filter does not change diagnostic collection or
 queue behavior.
+
+### Tool execution facts
+
+Native execution-owning adapters use the admitted harness host
+`bindToolExecution({ toolName, toolCallId })` capability for raw source starts,
+outcomes, and pre-execution denials. The action handle fixes run, agent, session,
+and plugin identity. See [host execution reporting](/plugins/sdk-agent-harness/user-input-and-execution).
+These metadata-only facts remain available when optional diagnostics are disabled.
+A start describes source execution, not proof of an OS side effect.
+
+The core emitter is internal. Private diagnostic content stays on the diagnostic
+channel and is never accepted by the operational reporter. Existing diagnostic
+and audit collection settings still apply. Neither channel grants execution authority.
+
+Use `emitTrustedDiagnosticEvent` or `emitTrustedDiagnosticEventWithPrivateData`
+for presentation observations, including results rewritten by middleware.
+Diagnostic emission alone never publishes an operational execution fact.
+An adapter executing an OpenClaw-wrapped tool must leave those facts to the
+core wrapper instead of publishing a second terminal from its presentation.

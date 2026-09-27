@@ -146,3 +146,6 @@ export function createCodexDynamicToolSpecsForPromptSnapshot(params: {
   }).specs;
 }
 export { createCanonicalForkFixture as createCanonicalForkFixtureForTest } from "./src/app-server/canonical-fork.test-support.js";
+
+export const loadCodexToolOutcomeFixture = () =>
+  import("./src/app-server/tool-outcome.test-support.js");

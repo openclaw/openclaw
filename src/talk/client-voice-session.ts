@@ -1,5 +1,6 @@
 /** Durable per-agent voice-call records for Talk continuity and mutation evidence. */
 import { createHash, randomUUID } from "node:crypto";
+import { isDefinitiveRunLifecycle } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
@@ -9,8 +10,8 @@ import {
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import {
-  onTrustedInternalDiagnosticEvent,
   onTrustedToolExecutionEvent,
   type TrustedToolExecutionEvent,
 } from "../infra/diagnostic-events.js";
@@ -153,21 +154,23 @@ function recordClientVoiceToolEffect(event: TrustedToolExecutionEvent): void {
 
 function ensureToolEffectSubscription(): void {
   unsubscribeToolEffects ??= onTrustedToolExecutionEvent(recordClientVoiceToolEffect);
-  unsubscribeRunCompletion ??= onTrustedInternalDiagnosticEvent(
-    (event) => {
-      if (event.type !== "run.completed") {
-        return;
-      }
-      const binding = voiceSessionByRunId.get(event.runId);
-      if (!binding) {
-        return;
-      }
-      voiceSessionByRunId.delete(event.runId);
-      releaseClientVoiceConfirmationRun(binding.agentId, binding.voiceSessionId, event.runId);
-      mutationDigestDeliveryOwner.retry(binding);
-    },
-    { include: ["run.completed"] },
-  );
+  // Optional per-attempt diagnostics neither close an admitted consult nor
+  // extend its lifetime when collection is disabled. The run lifecycle owns it.
+  unsubscribeRunCompletion ??= onAgentEvent((event) => {
+    if (
+      event.stream !== "lifecycle" ||
+      !isDefinitiveRunLifecycle({ phase: event.data.phase, data: event.data })
+    ) {
+      return;
+    }
+    const binding = voiceSessionByRunId.get(event.runId);
+    if (!binding) {
+      return;
+    }
+    voiceSessionByRunId.delete(event.runId);
+    releaseClientVoiceConfirmationRun(binding.agentId, binding.voiceSessionId, event.runId);
+    mutationDigestDeliveryOwner.retry(binding);
+  });
 }
 
 /** Create a call record or resume the same open call across transport restarts. */
@@ -643,7 +646,7 @@ async function closeClientVoiceSessionInternal(params: {
     throw new Error("voice session disappeared after close");
   }
   // Transport close does not end consult runs: live bindings keep effect capture active,
-  // approved grants stay valid for those runs, and the digest waits for the last run.completed.
+  // approved grants stay valid for those runs, and the digest waits for the last definitive terminal.
   const liveRunIds = closed.consultRunIds.filter((runId) => {
     const binding = voiceSessionByRunId.get(runId);
     return binding?.voiceSessionId === params.voiceSessionId && binding.agentId === params.agentId;

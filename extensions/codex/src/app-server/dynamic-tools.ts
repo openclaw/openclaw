@@ -43,7 +43,6 @@ import {
   type AcceptedSessionSpawn,
   type AgentHarnessToolExecutionSnapshot,
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
-import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   type JsonSchemaObject,
@@ -237,6 +236,7 @@ export function createCodexDynamicToolBridge(params: {
   loading?: CodexDynamicToolsLoading;
   functionToolsOnly?: boolean;
   directToolNames?: Iterable<string>;
+  bindToolExecution?: EmbeddedRunAttemptParams["hostCapabilities"]["bindToolExecution"];
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
   const contextWindowTokens = params.hookContext?.contextWindowTokens;
@@ -298,7 +298,7 @@ export function createCodexDynamicToolBridge(params: {
     tools: quarantinedTools,
     availableToolCount: availableTools.length,
     registeredToolCount: registeredSpecTools.length,
-    hookContext: params.hookContext,
+    bindToolExecution: params.bindToolExecution,
   });
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
@@ -837,7 +837,7 @@ function reportQuarantinedDynamicTools(params: {
   tools: readonly CodexDynamicToolSchemaQuarantine[];
   availableToolCount: number;
   registeredToolCount: number;
-  hookContext?: CodexDynamicToolHookContext;
+  bindToolExecution?: EmbeddedRunAttemptParams["hostCapabilities"]["bindToolExecution"];
 }): void {
   if (params.tools.length === 0) {
     return;
@@ -851,13 +851,13 @@ function reportQuarantinedDynamicTools(params: {
     },
   );
   for (const tool of params.tools) {
-    emitTrustedDiagnosticEvent({
+    if (!params.bindToolExecution) {
+      throw new Error(
+        "Codex schema quarantine requires host execution reporting; update OpenClaw.",
+      );
+    }
+    params.bindToolExecution({ toolName: tool.tool }).finished({
       type: "tool.execution.blocked",
-      agentId: params.hookContext?.agentId,
-      runId: params.hookContext?.runId,
-      sessionId: params.hookContext?.sessionId,
-      sessionKey: params.hookContext?.sessionKey,
-      toolName: tool.tool,
       deniedReason: "unsupported_tool_schema",
       reason: tool.violations.join(", "),
     });

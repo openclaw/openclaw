@@ -1,5 +1,6 @@
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 
 type ToolsFactory = typeof createOpenClawCodingTools;
 type HostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
@@ -27,11 +28,29 @@ export function getCodexTestToolFactory(
 /** Minimal host authority for tests that do not exercise host policy or approvals. */
 export function createCodexTestHostCapabilities(
   overrides: Partial<Omit<HostCapabilities, "createToolSurface">> = {},
+  identity: Pick<EmbeddedRunAttemptParams, "runId" | "sessionId" | "sessionKey" | "agentId"> = {
+    runId: "run-1",
+    sessionId: "session-1",
+  },
 ): HostCapabilities {
+  const { runId, sessionId, sessionKey, agentId } = identity;
+  const reportIdentity = { runId, sessionId, sessionKey, agentId };
   const host: HostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability",
     version: 1,
     assertActive: () => {},
+    // Presentation-only double. Operational proof uses the real admitted host.
+    bindToolExecution: (action) => ({
+      started: (sourceTimestampMs) =>
+        emitTrustedDiagnosticEvent({
+          type: "tool.execution.started",
+          ...reportIdentity,
+          ...action,
+          sourceTimestampMs,
+        }),
+      finished: (outcome) =>
+        emitTrustedDiagnosticEvent({ ...outcome, ...reportIdentity, ...action }),
+    }),
     retainSourceAuthority: () => undefined,
     bindModelExecution: () => ({
       signal: new AbortController().signal,

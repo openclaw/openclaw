@@ -80,29 +80,32 @@ const execApprovalsRuntimeMocks = vi.hoisted(() => ({
 function createHarnessHostCapabilities(
   params: EmbeddedRunAttemptParams,
 ): EmbeddedRunAttemptParams["hostCapabilities"] {
-  return createCodexTestHostCapabilities({
-    runBeforeToolCall: async ({ nativeOperation: _nativeOperation, approvalMode, ...request }) =>
-      await runBeforeToolCallHook({
-        ...request,
-        approvalMode: approvalMode === "defer" ? "defer" : "request",
-        ctx: Object.freeze({
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          ...(params.config ? { config: params.config } : {}),
-          ...(params.workspaceDir
-            ? { cwd: params.workspaceDir, workspaceDir: params.workspaceDir }
-            : {}),
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-          runId: params.runId,
-          trigger: params.trigger,
-          approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-          turnSourceChannel: params.messageChannel ?? params.messageProvider,
-          turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
-          turnSourceAccountId: params.agentAccountId,
-          turnSourceThreadId: params.currentThreadTs,
+  return createCodexTestHostCapabilities(
+    {
+      runBeforeToolCall: async ({ nativeOperation: _nativeOperation, approvalMode, ...request }) =>
+        await runBeforeToolCallHook({
+          ...request,
+          approvalMode: approvalMode === "defer" ? "defer" : "request",
+          ctx: Object.freeze({
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+            ...(params.config ? { config: params.config } : {}),
+            ...(params.workspaceDir
+              ? { cwd: params.workspaceDir, workspaceDir: params.workspaceDir }
+              : {}),
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+            runId: params.runId,
+            trigger: params.trigger,
+            approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+            turnSourceChannel: params.messageChannel ?? params.messageProvider,
+            turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+            turnSourceAccountId: params.agentAccountId,
+            turnSourceThreadId: params.currentThreadTs,
+          }),
         }),
-      }),
-  });
+    },
+    { ...params, agentId: params.agentId ?? "main" },
+  );
 }
 
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {

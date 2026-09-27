@@ -79,6 +79,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     offAnnounced: false,
     resetAnnounced: false,
   };
+  if (!params.hostCapabilities.bindToolExecution) {
+    throw new Error("Codex requires host execution reporting; update OpenClaw.");
+  }
   const preDynamicStartupStages = createStageTimingTracker();
   const runtimeArtifactRequest =
     params.captureRuntimeArtifact || params.expectedRuntimeArtifact

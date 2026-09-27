@@ -1,4 +1,4 @@
-import { Agent, Server, request } from "node:http";
+import { Agent, Server } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 import * as mutableFileBinding from "../../infra/system-run-approval-binding.js";
 import {
@@ -15,6 +15,10 @@ import { invokeNativeHookRelayBridge } from "./native-hook-relay-client.js";
 import { setNativeHookRelayPreToolUseApproval } from "./native-hook-relay-permissions.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import * as store from "./native-hook-relay-store.js";
+import {
+  postNativeHookFixtureRequest,
+  useNativeHookFixtureHttpAgent,
+} from "./native-hook-relay.http.test-support.js";
 import {
   invokeNativeHookRelay,
   registerNativeHookRelay,
@@ -239,22 +243,16 @@ it("cancels disconnected HTTP policy work without retiring the relay or storing 
     if (!record) {
       throw new Error("fixture bridge missing");
     }
-    const outgoing = request({
-      host: record.hostname,
-      port: record.port,
-      method: "POST",
-      path: "/invoke",
-      headers: { authorization: `Bearer ${record.token}`, "content-type": "application/json" },
-    });
-    outgoing.on("error", () => undefined);
-    outgoing.end(
-      JSON.stringify({
+    const outgoing = postNativeHookFixtureRequest(
+      record,
+      {
         provider: "codex",
         relayId: relay.relayId,
         generation: relay.generation,
         event: "pre_tool_use",
         rawPayload: { tool_name: "Bash", tool_input: {}, tool_use_id: "disconnected-call" },
-      }),
+      },
+      entered.reject,
     );
     try {
       const signal = await entered.promise;
@@ -630,6 +628,7 @@ it("rejects oversized direct bridge responses", async () => {
         },
       });
 
+      useNativeHookFixtureHttpAgent({ hostname: record.hostname, port: address.port });
       // Cold locator startup must not consume this byte-limit fixture's caller deadline.
       const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
       try {
@@ -681,6 +680,7 @@ it("binds direct bridge tokens to the relay they were issued for", async () => {
       await store.writeNativeHookRelayBridgeRecord({
         record: { ...firstRecord, relayId: second.relayId, expiresAtMs: Date.now() + 10_000 },
       });
+      useNativeHookFixtureHttpAgent(firstRecord);
       // Cold locator startup must not consume this token-binding fixture's caller deadline.
       const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
       try {

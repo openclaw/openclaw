@@ -17,6 +17,7 @@ import {
   readAttemptTerminal,
   type DiagnosticEventPayload,
 } from "./event-projector.test-harness.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { codexApprovalTimeoutText } from "./plugin-approval-roundtrip.js";
 
 registerCodexEventProjectorTestLifecycle();
@@ -316,6 +317,10 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       projector.recordNativeToolPreToolUseFailure({
         toolName: "exec",
         toolCallId: "native-no-item",
+        report: createCodexTestHostCapabilities().bindToolExecution!({
+          toolName: "exec",
+          toolCallId: "native-no-item",
+        }),
         disposition: "failed",
         durationMs: 5,
       });
@@ -324,6 +329,10 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       projector.recordNativeToolPreToolUseFailure({
         toolName: "exec",
         toolCallId: "native-late-no-item",
+        report: createCodexTestHostCapabilities().bindToolExecution!({
+          toolName: "exec",
+          toolCallId: "native-late-no-item",
+        }),
         disposition: "failed",
         durationMs: 6,
       });

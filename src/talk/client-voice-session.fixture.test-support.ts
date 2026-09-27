@@ -1,6 +1,7 @@
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import {
-  emitTrustedDiagnosticEvent,
+  emitTrustedToolExecutionEvent,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import {
@@ -30,14 +31,14 @@ export function recordMutation(voiceSessionId: string, runId = `run-${voiceSessi
     voiceSessionId,
     runId,
   });
-  emitTrustedDiagnosticEvent({
+  emitTrustedToolExecutionEvent({
     type: "tool.execution.started",
     runId,
     toolCallId: `call-${runId}`,
     toolName: "message",
     mutatingAction: true,
   });
-  emitTrustedDiagnosticEvent({
+  emitTrustedToolExecutionEvent({
     type: "tool.execution.completed",
     runId,
     toolCallId: `call-${runId}`,
@@ -47,11 +48,6 @@ export function recordMutation(voiceSessionId: string, runId = `run-${voiceSessi
 }
 
 export async function completeRun(runId: string): Promise<void> {
-  emitTrustedDiagnosticEvent({
-    type: "run.completed",
-    runId,
-    durationMs: 5,
-    outcome: "completed",
-  });
+  emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end", executionSettled: true } });
   await waitForDiagnosticEventsDrained();
 }

@@ -157,6 +157,7 @@ export async function resolveNativeHookRelayInvocationBinding(
         ...registration,
         assertActive,
         runBeforeToolCall: retained.runBeforeToolCall,
+        bindToolExecution: retained.bindToolExecution,
         signal,
       },
       assertExecutionAdmissionCurrent: assertRetainedAuthority,

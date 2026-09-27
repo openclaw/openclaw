@@ -20,6 +20,7 @@ import * as approvalBridge from "./approval-bridge.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import { captureNativeFailureReporter } from "./native-hook-relay.test-support.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
@@ -1005,8 +1006,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       if (method === "turn/start") {
         const startRequest = harness.requests.find((request) => request.method === "thread/start");
         const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
-        const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
-        reportPreToolUseFailure = registration?.onPreToolUseFailure;
+        reportPreToolUseFailure = captureNativeFailureReporter(relayId, "turn-start-failure-tool");
         throw new Error("turn start exploded");
       }
       return undefined;

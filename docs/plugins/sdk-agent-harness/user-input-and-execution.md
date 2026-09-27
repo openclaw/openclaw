@@ -126,6 +126,24 @@ binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
 
+For native execution facts, use optional `hostCapabilities.bindToolExecution({
+toolName, toolCallId })`. Bind while the admitted host is active and keep the
+returned action handle with that native operation. Its `started(timestamp?)`
+requires live authority; `finished(outcome)` accepts one source terminal,
+including a failure before start or settlement after cancellation. It cannot
+start new work after closure. Neither method grants execution permission.
+The host fixes run, session, agent, and plugin identity; callers cannot replace
+identity or attach private diagnostic content. Report raw execution outcomes,
+not result middleware or model-facing presentation. A start is not proof of OS
+dispatch. Core-wrapped tools already report at their source boundary; do not
+report their dynamic-tool responses again.
+
+This is an additive SDK contract, not a new free-function export. The capability
+remains optional on host version `1` to preserve existing source compatibility
+and deprecation windows. Native adapters requiring it must explicitly refuse
+an older host with an update instruction, never fall back to diagnostic events.
+Existing accepted handles retain settlement only, not execution authority.
+
 For independently retained native work, call the optional
 `retainSourceAuthority()` while the host capability is active. When an operator
 source exists, the returned `assertCurrent`, optional `signal`, and idempotent

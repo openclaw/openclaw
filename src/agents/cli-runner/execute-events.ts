@@ -1,6 +1,6 @@
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentEventStream } from "../../infra/agent-events.js";
-import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import { emitTrustedToolExecutionEvent } from "../../infra/diagnostic-events.js";
 import { markToolExecutionLivenessDiagnosticEvent } from "../../infra/diagnostic-tool-execution-liveness.js";
 import { projectProgressCardChannelUpdate } from "../../session-cards/progress-card-channel-summary.js";
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
@@ -233,7 +233,7 @@ export function createCliEventHandlers(params: {
     // Claude enforces this MCP response timeout. Keep recovery behind that
     // deadline while the request is still in the CLI's own tool runtime.
     const timeoutMs = context.managedMcpToolTimeoutMs;
-    emitTrustedDiagnosticEvent(
+    emitTrustedToolExecutionEvent(
       timeoutMs !== undefined && event.name.startsWith("mcp__openclaw__")
         ? markToolExecutionLivenessDiagnosticEvent(diagnosticEvent, {
             deadlineAtMs: startedAt + timeoutMs,
@@ -289,7 +289,7 @@ export function createCliEventHandlers(params: {
       (trustedOutcome?.outcome === "unknown" && !useEnclosingTerminalReason) ||
       (event.incomplete && activeTool?.kind === "server_tool_use" && !trustedOutcome)
     ) {
-      emitTrustedDiagnosticEvent({
+      emitTrustedToolExecutionEvent({
         type: "tool.execution.error",
         ...diagnosticBase,
         errorCategory: "cli_tool_ambiguous",
@@ -298,7 +298,7 @@ export function createCliEventHandlers(params: {
       return;
     }
     const trustedFailure = trustedOutcome !== undefined && trustedOutcome.outcome !== "completed";
-    emitTrustedDiagnosticEvent(
+    emitTrustedToolExecutionEvent(
       trustedOutcome?.outcome === "blocked"
         ? {
             type: "tool.execution.blocked",

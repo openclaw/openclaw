@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import {
-  emitTrustedDiagnosticEvent,
+  emitTrustedToolExecutionEvent,
   onTrustedToolExecutionEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
@@ -757,7 +757,7 @@ describe("agent activity audit projection", () => {
     const stop = onTrustedToolExecutionEvent((event) => seen.push(event));
     setDiagnosticsEnabledForProcess(false);
 
-    emitTrustedDiagnosticEvent({
+    emitTrustedToolExecutionEvent({
       type: "tool.execution.started",
       runId: "run-disabled-diagnostics",
       toolName: "message",

@@ -4,7 +4,7 @@
  * Model providers can reject unsupported schema shapes, so runtime projection
  * reports quarantined tools with trusted diagnostics before the model call.
  */
-import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { emitTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { RuntimeToolSchemaDiagnostic } from "./tool-schema-projection.js";
@@ -94,7 +94,7 @@ export function logRuntimeToolSchemaQuarantine(params: {
       const owner = pluginId ? ` plugin=${pluginId}` : "";
       // Emit structured evidence per quarantined tool; the warning below is
       // compact for operator logs.
-      emitTrustedDiagnosticEvent({
+      emitTrustedToolExecutionEvent({
         type: "tool.execution.blocked",
         runId: params.runId,
         agentId: params.agentId,

@@ -1352,9 +1352,6 @@ function emitDiagnosticEventWithTrust(
   options: EmitDiagnosticEventOptions = {},
 ) {
   const state = getDiagnosticEventsState();
-  if (trusted && isToolExecutionEventInput(event)) {
-    dispatchTrustedToolExecutionEvent(state, event);
-  }
   if (!state.enabled) {
     return;
   }
@@ -1412,17 +1409,6 @@ function emitDiagnosticEventWithTrust(
   dispatchDiagnosticEvent(state, enriched, metadata, privateData, { hostPluginId });
 }
 
-function isToolExecutionEventInput(
-  event: DiagnosticDispatchInput,
-): event is TrustedToolExecutionEventInput {
-  return (
-    event.type === "tool.execution.started" ||
-    event.type === "tool.execution.completed" ||
-    event.type === "tool.execution.error" ||
-    event.type === "tool.execution.blocked"
-  );
-}
-
 function dispatchTrustedToolExecutionEvent(
   state: DiagnosticEventsGlobalState,
   event: TrustedToolExecutionEventInput,
@@ -1446,6 +1432,25 @@ function dispatchTrustedToolExecutionEvent(
       console.error(
         `[diagnostic-events] tool execution listener error type=${enriched.type} seq=${enriched.seq}: ${String(error)}`,
       );
+    }
+  }
+}
+
+/**
+ * Publishes an execution-owner fact independently of optional diagnostics.
+ * A source callback starting is not proof of an OS side effect. Terminal facts
+ * describe the raw source outcome, never a harness/middleware presentation.
+ */
+export function emitTrustedToolExecutionEvent(
+  event: TrustedToolExecutionEventInput,
+  options: { emitDiagnostics?: boolean; privateData?: DiagnosticEventPrivateData } = {},
+): void {
+  dispatchTrustedToolExecutionEvent(getDiagnosticEventsState(), event);
+  if (options.emitDiagnostics !== false) {
+    if (options.privateData) {
+      emitTrustedDiagnosticEventWithPrivateData(event, options.privateData);
+    } else {
+      emitTrustedDiagnosticEvent(event);
     }
   }
 }
@@ -1633,7 +1638,7 @@ export function onTrustedInternalDiagnosticEvent(
   });
 }
 
-/** Subscribes to trusted metadata-only tool execution events, even when diagnostics are disabled. */
+/** Subscribes to execution-owner facts, not diagnostic or middleware presentation events. */
 export function onTrustedToolExecutionEvent(
   listener: TrustedToolExecutionEventListener,
 ): () => void {

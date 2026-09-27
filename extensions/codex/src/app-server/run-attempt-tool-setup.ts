@@ -527,6 +527,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         : {}),
     };
     const toolBridge = createCodexDynamicToolBridge({
+      bindToolExecution: params.hostCapabilities.bindToolExecution,
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
       registeredSpecs: nativeSpecs,

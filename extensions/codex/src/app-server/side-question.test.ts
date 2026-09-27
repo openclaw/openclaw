@@ -25,6 +25,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
+import { captureNativeFailureReporter as captureSideFailureReporter } from "./native-hook-relay.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
@@ -2534,10 +2535,10 @@ describe("runCodexAppServerSideQuestion", () => {
         if (!relayId) {
           throw new Error("Expected native hook relay id");
         }
-        reportPreToolUseFailure =
-          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
-            relayId,
-          )?.onPreToolUseFailure;
+        reportPreToolUseFailure = captureSideFailureReporter(
+          relayId,
+          "side-turn-start-failure-tool",
+        );
         throw new Error("side turn start exploded");
       }
       if (method === "thread/unsubscribe" || method === "turn/interrupt") {
@@ -2587,10 +2588,7 @@ describe("runCodexAppServerSideQuestion", () => {
         const relayId = extractRelayIdFromThreadConfig(
           (requestParams as { config?: Record<string, unknown> }).config,
         );
-        reportPreToolUseFailure =
-          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
-            relayId,
-          )?.onPreToolUseFailure;
+        reportPreToolUseFailure = captureSideFailureReporter(relayId, "late-side-tool");
         return threadResult("side-thread");
       }
       if (method === "thread/inject_items") {
@@ -2650,10 +2648,7 @@ describe("runCodexAppServerSideQuestion", () => {
         const relayId = extractRelayIdFromThreadConfig(
           (requestParams as { config?: Record<string, unknown> }).config,
         );
-        reportPreToolUseFailure =
-          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
-            relayId,
-          )?.onPreToolUseFailure;
+        reportPreToolUseFailure = captureSideFailureReporter(relayId, "side-cleanup-failure-tool");
         return threadResult("side-thread");
       }
       if (method === "thread/inject_items") {

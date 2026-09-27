@@ -218,6 +218,7 @@ function registerNativeHookRelayInternal(
       preToolUseFailureProjections: new Map(),
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.runBeforeToolCall ? { runBeforeToolCall: params.runBeforeToolCall } : {}),
+      ...(params.bindToolExecution ? { bindToolExecution: params.bindToolExecution } : {}),
       ...(approvalHost ? { approvalHost } : {}),
       ...(params.assertActive ? { assertActive: params.assertActive } : {}),
       ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
@@ -495,6 +496,13 @@ export async function invokeNativeHookRelay(
   if (event === "pre_tool_use" || event === "permission_request") {
     effectiveRegistration.assertActive?.();
   }
+  const report =
+    event === "pre_tool_use" && normalized.toolUseId
+      ? effectiveRegistration.bindToolExecution?.({
+          toolName: normalizeNativeHookToolName(normalized.toolName),
+          toolCallId: normalized.toolUseId,
+        })
+      : undefined;
   recordNativeHookRelayInvocation(normalized);
   const startedAt = Date.now();
   const response = await racePromiseWithAbortSignal(
@@ -522,6 +530,7 @@ export async function invokeNativeHookRelay(
       toolCallId: normalized.toolUseId,
       disposition: response.failureDisposition,
       durationMs: Date.now() - startedAt,
+      ...(report ? { report } : {}),
     });
   }
   return response;

@@ -88,6 +88,7 @@ export type NativeHookRelayRegistration = {
   signal?: AbortSignal;
   /** Exact host policy capability for authority-bearing native callbacks. */
   runBeforeToolCall?: AgentHarnessHostCapabilities["runBeforeToolCall"];
+  bindToolExecution?: AgentHarnessHostCapabilities["bindToolExecution"];
   /** Foreground-only approval authority supplied by the admitted bundled host. */
   approvalHost?: Pick<AgentHarnessHostCapabilities, "requestApproval" | "waitForApproval">;
   /** Revalidates the exact admitted owner after authority-bearing awaits. */
@@ -97,6 +98,7 @@ export type NativeHookRelayRegistration = {
     toolCallId: string;
     disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">;
     durationMs: number;
+    report?: ReturnType<NonNullable<AgentHarnessHostCapabilities["bindToolExecution"]>>;
   }) => void | Promise<void>;
 };
 
@@ -134,6 +136,7 @@ export type RegisterNativeHookRelayParams = {
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
   runBeforeToolCall?: NativeHookRelayRegistration["runBeforeToolCall"];
+  bindToolExecution?: NativeHookRelayRegistration["bindToolExecution"];
   assertActive?: NativeHookRelayRegistration["assertActive"];
   onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
 };

@@ -22,7 +22,6 @@ import {
   readAdmittedRunOperatorAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
 } from "../admitted-run-context.js";
-import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import { bindAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import {
@@ -35,12 +34,7 @@ import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/type
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
-import { registerTrustedToolNoStartError } from "../tool-result-error.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -65,6 +59,8 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
 import { bindHarnessModelExecution, retainHarnessSource } from "./host-source-authority.js";
+import { bindHarnessToolExecution } from "./host-tool-execution.js";
+import { gateBoundTool } from "./host-tool-surface.js";
 import { bindHarnessTrajectory } from "./host-trajectory.js";
 import { formatHarnessApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
@@ -88,70 +84,6 @@ function freezeSnapshot<T>(value: T, seen = new WeakSet<object>()): T {
 
 function cloneSnapshot<T>(value: T): T {
   return freezeSnapshot(structuredClone(value));
-}
-
-function gateBoundTool(
-  tool: AnyAgentTool,
-  assertActive: () => void,
-  observeResult: (result: unknown) => void,
-): AnyAgentTool {
-  const execute = tool.execute;
-  const sourcePreparer = getInternalToolExecutionPreparer(tool);
-  if (!execute && !sourcePreparer) {
-    return tool;
-  }
-  const gated: AnyAgentTool = {
-    ...tool,
-    ...(execute
-      ? {
-          execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
-            try {
-              assertActive();
-            } catch (error) {
-              // This gate precedes dispatch; a revoked owner must not look like
-              // a tool that started and failed in downstream terminal evidence.
-              throw registerTrustedToolNoStartError(error);
-            }
-            const result = await execute(...args);
-            assertActive();
-            observeResult(result);
-            return result;
-          },
-        }
-      : {}),
-  };
-  copyAgentToolMetadata(tool, gated, (source) =>
-    gateBoundTool(source, assertActive, observeResult),
-  );
-  if (sourcePreparer) {
-    attachInternalToolExecutionPreparer(gated, async (preparationParams) => {
-      assertActive();
-      const prepared = await sourcePreparer(preparationParams);
-      try {
-        assertActive();
-      } catch (error) {
-        prepared.dispose();
-        throw error;
-      }
-      if (prepared.kind === "immediate") {
-        if (prepared.outcome.kind === "result") {
-          observeResult(prepared.outcome.result);
-        }
-        return prepared;
-      }
-      return {
-        ...prepared,
-        execute: async (onImplementationStart) => {
-          assertActive();
-          const result = await prepared.execute(onImplementationStart);
-          assertActive();
-          observeResult(result);
-          return result;
-        },
-      };
-    });
-  }
-  return gated;
 }
 
 /** Creates a closure-bound capability before plugin invocation. */
@@ -178,7 +110,7 @@ export function createAgentHarnessHostCapabilities(params: {
   const workSignal = getAsyncWorkSignal();
   const attemptSignal = attempt.abortSignal;
   const installationTarget = getInstallationTarget();
-  const { sessionKey, onAgentEvent } = attempt;
+  const { agentId, sessionId, sessionKey, onAgentEvent } = attempt;
   // Capture the selected harness declaration before plugin code can mutate it.
   // Full must not cover other commands merely because the same plugin owns them.
   const requiredNodeCommands = new Set(params.requiredNodeCommands);
@@ -193,6 +125,7 @@ export function createAgentHarnessHostCapabilities(params: {
   }
   const { lifecycleGeneration } = delegatedAuthority;
   const { runId } = delegatedAuthority.operationalRunInstance;
+  const executionIdentity = { agentId, sessionId, sessionKey, runId, toolOwner: params.pluginId };
   const coreTtsToolResults = new WeakSet<object>();
   let active = true;
   // Lexical closure must also fence work already past its entry guard. The
@@ -424,6 +357,8 @@ export function createAgentHarnessHostCapabilities(params: {
     return Object.freeze({
       assertActive: assertRecoveryActive,
       release: recovery.release,
+      bindToolExecution: (action) =>
+        bindHarnessToolExecution(executionIdentity, assertRecoveryActive, action),
       runBeforeToolCall: async (request) =>
         await runBeforeToolCallWithAssertion(assertRecoveryActive, request),
     });
@@ -469,6 +404,16 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    bindToolExecution: (action) =>
+      bindHarnessToolExecution(
+        executionIdentity,
+        () => {
+          assertActive();
+          attemptSignal?.throwIfAborted();
+          workSignal?.throwIfAborted();
+        },
+        action,
+      ),
     ...(bindModelExecution ? { bindModelExecution } : {}),
     retainSourceAuthority: () =>
       retainHarnessSource(attempt.admittedRunContext, assertActive, nativeModelPolicySupported),

@@ -36,6 +36,15 @@ describe("Codex native hook Gateway fallback", () => {
   it.each(["disabled", "managed-only"] as const)(
     "preserves a no-policy operator's %s profile until a policy is introduced",
     async (hooks) => {
+      // This synthetic client models the default transport, not the host's CA/proxy profile.
+      // setupRunAttemptTestHooks restores these variables after each case.
+      for (const key of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
+        vi.stubEnv(key, undefined);
+      }
+      for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+        vi.stubEnv(key, undefined);
+        vi.stubEnv(key.toLowerCase(), undefined);
+      }
       const params = createParams(
         path.join(tempDir, "optional-model-hooks.jsonl"),
         path.join(tempDir, "optional-model-hooks-workspace"),

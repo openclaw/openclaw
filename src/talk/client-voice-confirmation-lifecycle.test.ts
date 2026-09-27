@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import {
-  emitTrustedDiagnosticEvent,
   waitForDiagnosticEventsDrained,
+  setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -81,12 +82,7 @@ function authorizeGrant(agentId: string, voiceSessionId: string, runId: string, 
 }
 
 async function completeRun(runId: string): Promise<void> {
-  emitTrustedDiagnosticEvent({
-    type: "run.completed",
-    runId,
-    durationMs: 5,
-    outcome: "completed",
-  });
+  emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end", executionSettled: true } });
   await waitForDiagnosticEventsDrained();
 }
 
@@ -102,32 +98,37 @@ describe("client voice confirmation lifecycle", () => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
+    setDiagnosticsEnabledForProcess(true);
   });
 
-  it("keeps a live run's grant after close and releases it on completion", async () => {
-    const sessionKey = "agent:main:active";
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey,
-      origin: "client",
-    });
-    registerRun("main", voiceSessionId, sessionKey, "run-active");
-    bindGrant("main", voiceSessionId, "run-active", "confirmed action");
+  it.each([true, false])(
+    "keeps a live run's grant after close and releases it on completion (diagnostics %s)",
+    async (enabled) => {
+      setDiagnosticsEnabledForProcess(enabled);
+      const sessionKey = "agent:main:active";
+      const voiceSessionId = createOrResumeClientVoiceSession({
+        agentId: "main",
+        sessionKey,
+        origin: "client",
+      });
+      registerRun("main", voiceSessionId, sessionKey, "run-active");
+      bindGrant("main", voiceSessionId, "run-active", "confirmed action");
 
-    await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey,
-      voiceSessionId,
-      config: {},
-    });
+      await closeClientVoiceSession({
+        agentId: "main",
+        sessionKey,
+        voiceSessionId,
+        config: {},
+      });
 
-    expect(resolveClientVoiceRunBinding("run-active")).toMatchObject({ voiceSessionId });
-    expect(snapshotClientVoiceConfirmationStateForTest().approvedGrants).toBe(1);
+      expect(resolveClientVoiceRunBinding("run-active")).toMatchObject({ voiceSessionId });
+      expect(snapshotClientVoiceConfirmationStateForTest().approvedGrants).toBe(1);
 
-    await completeRun("run-active");
-    expect(resolveClientVoiceRunBinding("run-active")).toBeUndefined();
-    expect(snapshotClientVoiceConfirmationStateForTest().approvedGrants).toBe(0);
-  });
+      await completeRun("run-active");
+      expect(resolveClientVoiceRunBinding("run-active")).toBeUndefined();
+      expect(snapshotClientVoiceConfirmationStateForTest().approvedGrants).toBe(0);
+    },
+  );
 
   it("keeps completion ownership after a close invalidates a detached grant", async () => {
     const sessionKey = "agent:main:stale-bind";

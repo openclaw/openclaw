@@ -2,7 +2,6 @@ import type {
   BeforeToolCallFailureDisposition,
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
@@ -33,7 +32,7 @@ import {
 
 type CodexNativeToolLifecycleContext = Pick<
   EmbeddedRunAttemptParams,
-  "agentId" | "runId" | "sessionId" | "sessionKey" | "allocateToolOutcomeOrdinal" | "onToolOutcome"
+  "hostCapabilities" | "allocateToolOutcomeOrdinal" | "onToolOutcome"
 >;
 
 type CodexNativeToolLifecycleProjectorOptions = {
@@ -68,6 +67,9 @@ export class CodexNativeToolLifecycleProjector {
   private readonly activeItems = new Map<
     string,
     {
+      report: ReturnType<
+        NonNullable<EmbeddedRunAttemptParams["hostCapabilities"]["bindToolExecution"]>
+      >;
       toolName: string;
       unfinishedStatus: CodexNativeToolUnfinishedStatus;
       mcpToolCall?: CodexThreadItem;
@@ -352,6 +354,7 @@ export class CodexNativeToolLifecycleProjector {
     const approvalFailureDisposition = this.approvalFailureDispositionByItem.get(toolCallId);
     this.approvalFailureDispositionByItem.delete(toolCallId);
     this.completedItemIds.add(toolCallId);
+    const report = this.activeItems.get(toolCallId)?.report;
     this.activeItems.delete(toolCallId);
     this.webSearchCompletionByItem.delete(toolCallId);
     const startedAt = this.startedAtByItem.get(toolCallId);
@@ -365,6 +368,7 @@ export class CodexNativeToolLifecycleProjector {
         toolName,
         durationMs,
         options.sourceTimestampMs,
+        report,
       );
       return;
     }
@@ -407,8 +411,7 @@ export class CodexNativeToolLifecycleProjector {
               type: "tool.execution.completed" as const,
               durationMs,
             };
-    emitTrustedDiagnosticEvent({
-      ...this.buildBase(toolCallId, toolName),
+    (report ?? this.bindExecution(toolCallId, toolName)).finished({
       ...terminalEvent,
       ...(options.sourceTimestampMs !== undefined
         ? { sourceTimestampMs: options.sourceTimestampMs }
@@ -464,13 +467,10 @@ export class CodexNativeToolLifecycleProjector {
     toolName: string,
     durationMs: number,
     sourceTimestampMs?: number,
+    report = record.failure.report,
   ): void {
     emitCodexNativePreToolUseFailureDiagnostic({
-      agentId: this.context.agentId,
-      sessionId: this.context.sessionId,
-      sessionKey: this.context.sessionKey,
-      runId: this.context.runId,
-      failure: { ...record.failure, toolName, durationMs },
+      failure: { ...record.failure, toolName, durationMs, report },
       terminalReason: record.terminalReason,
       sourceTimestampMs,
     });
@@ -497,22 +497,22 @@ export class CodexNativeToolLifecycleProjector {
       return;
     }
     this.startedAtByItem.set(toolCallId, sourceTimestampMs ?? Date.now());
-    this.activeItems.set(toolCallId, { toolName, unfinishedStatus, mcpToolCall, commandProcessId });
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.started",
-      ...this.buildBase(toolCallId, toolName),
-      ...(sourceTimestampMs !== undefined ? { sourceTimestampMs } : {}),
+    const report = this.bindExecution(toolCallId, toolName);
+    report.started(sourceTimestampMs);
+    this.activeItems.set(toolCallId, {
+      report,
+      toolName,
+      unfinishedStatus,
+      mcpToolCall,
+      commandProcessId,
     });
   }
 
-  private buildBase(toolCallId: string, toolName: string) {
-    return {
-      agentId: this.context.agentId,
-      runId: this.context.runId,
-      sessionId: this.context.sessionId,
-      sessionKey: this.context.sessionKey,
-      toolName,
-      toolCallId,
-    };
+  private bindExecution(toolCallId: string, toolName: string) {
+    const bind = this.context.hostCapabilities.bindToolExecution;
+    if (!bind) {
+      throw new Error("Codex native tools require host execution reporting; update OpenClaw.");
+    }
+    return bind({ toolCallId, toolName });
   }
 }

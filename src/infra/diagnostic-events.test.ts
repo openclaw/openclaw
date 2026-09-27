@@ -8,6 +8,8 @@ import {
   emitDiagnosticEvent,
   emitInternalDiagnosticEvent,
   emitTrustedDiagnosticEvent,
+  emitTrustedToolExecutionEvent,
+  onTrustedToolExecutionEvent,
   emitTrustedDiagnosticEventWithPrivateData,
   emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
@@ -62,6 +64,59 @@ describe("diagnostic-events", () => {
     expect(typeof message).toBe("string");
     expect((message as string).startsWith(prefix)).toBe(true);
   }
+
+  it.each([true, false])(
+    "separates execution facts from presentation with diagnostics %s",
+    async (enabled) => {
+      setDiagnosticsEnabledForProcess(enabled);
+      const execution = vi.fn();
+      const diagnostics = vi.fn();
+      const stop = onTrustedToolExecutionEvent(execution);
+      const stopDiagnostic = onTrustedInternalDiagnosticEvent(diagnostics, undefined, {
+        includePrivateData: true,
+      });
+      const identity = { toolName: "write", runId: "run-source", toolCallId: "call-source" };
+      const privateData = { toolContent: { toolOutput: "private output" } };
+      try {
+        emitTrustedToolExecutionEvent(
+          { ...identity, type: "tool.execution.started", mutatingAction: true },
+          { emitDiagnostics: false },
+        );
+        emitTrustedToolExecutionEvent(
+          { ...identity, type: "tool.execution.completed", durationMs: 1 },
+          { privateData },
+        );
+        emitTrustedDiagnosticEvent({
+          ...identity,
+          type: "tool.execution.blocked",
+          reason: "presentation only",
+          deniedReason: "presentation",
+        });
+        emitTrustedDiagnosticEventWithPrivateData(
+          {
+            ...identity,
+            type: "tool.execution.error",
+            durationMs: 2,
+            errorCategory: "presentation",
+          },
+          privateData,
+        );
+        await waitForDiagnosticEventsDrained();
+        expect(execution.mock.calls.map(([event]) => event.type)).toEqual([
+          "tool.execution.started",
+          "tool.execution.completed",
+        ]);
+        expect(JSON.stringify(execution.mock.calls)).not.toContain("private output");
+        expect(diagnostics).toHaveBeenCalledTimes(enabled ? 3 : 0);
+        if (enabled) {
+          expect(diagnostics.mock.calls[0]?.[2]).toEqual(privateData);
+        }
+      } finally {
+        stop();
+        stopDiagnostic();
+      }
+    },
+  );
 
   it("reports active internal diagnostic listeners only while dispatch is enabled", () => {
     const hasActiveListeners = () =>

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { emitTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
@@ -881,7 +881,7 @@ describe("client voice session", () => {
         voiceSessionId,
         runId,
       });
-      emitTrustedDiagnosticEvent({
+      emitTrustedToolExecutionEvent({
         type: "tool.execution.started",
         runId,
         toolCallId: "call-1",
@@ -930,21 +930,21 @@ describe("client voice session", () => {
       voiceSessionId,
       runId: "run-1",
     });
-    emitTrustedDiagnosticEvent({
+    emitTrustedToolExecutionEvent({
       type: "tool.execution.started",
       runId: "run-1",
       toolCallId: "read-1",
       toolName: "read",
       mutatingAction: false,
     });
-    emitTrustedDiagnosticEvent({
+    emitTrustedToolExecutionEvent({
       type: "tool.execution.started",
       runId: "run-1",
       toolCallId: "message-1",
       toolName: "message",
       mutatingAction: true,
     });
-    emitTrustedDiagnosticEvent({
+    emitTrustedToolExecutionEvent({
       type: "tool.execution.error",
       runId: "run-1",
       toolCallId: "message-1",

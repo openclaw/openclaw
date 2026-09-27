@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
   assertCodexNativeHookRelayAllowed,
   buildCodexNativeHookRelayConfig,
@@ -771,14 +772,19 @@ describe("Codex native hook relay config", () => {
       const unsubscribe = onInternalDiagnosticEvent((event) => events.push(event));
       try {
         emitCodexNativePreToolUseFailureDiagnostic({
-          agentId: "main",
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-          runId: "run-1",
           signal: controller.signal,
           failure: {
             toolName: "exec",
             toolCallId: "native-no-item",
+            report: createCodexTestHostCapabilities(
+              {},
+              {
+                agentId: "main",
+                sessionId: "session-1",
+                sessionKey: "agent:main:session-1",
+                runId: "run-1",
+              },
+            ).bindToolExecution!({ toolName: "exec", toolCallId: "native-no-item" }),
             disposition: "cancelled",
             durationMs: 5,
           },

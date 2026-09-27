@@ -37,10 +37,8 @@ import {
   handleDynamicToolCallWithTimeout,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
-import {
-  createCodexDynamicToolBridge,
-  projectCodexExecutableDynamicTools,
-} from "./dynamic-tools.js";
+import { projectCodexExecutableDynamicTools } from "./dynamic-tools.js";
+import { createReportedCodexTestBridge as createCodexDynamicToolBridge } from "./dynamic-tools.test-support.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolCallParams,

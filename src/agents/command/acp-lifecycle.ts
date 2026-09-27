@@ -7,7 +7,7 @@ import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
-import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import { emitTrustedToolExecutionEvent } from "../../infra/diagnostic-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
@@ -212,7 +212,7 @@ function emitAcpToolExecutionEvent(
   // Opening on progress would leave an unmatched audit action if the runtime omits its result.
   const startsUnidentifiedTool = toolCallId === undefined && terminalOutcome !== undefined;
   if (!activeTool && (toolCallId !== undefined || startsUnidentifiedTool)) {
-    emitTrustedDiagnosticEvent({
+    emitTrustedToolExecutionEvent({
       type: "tool.execution.started",
       ...acpRunIdentity(params),
       ...(toolCallId ? { toolCallId } : {}),
@@ -247,7 +247,7 @@ function emitAcpToolExecutionEvent(
     toolOwner: "acp",
     durationMs,
   };
-  emitTrustedDiagnosticEvent(
+  emitTrustedToolExecutionEvent(
     terminalOutcome === "completed"
       ? { type: "tool.execution.completed", ...terminalFields }
       : {
@@ -270,7 +270,7 @@ function finalizeAcpToolsForRun(
 ): void {
   const now = Date.now();
   for (const activeTool of toolTracker.active.values()) {
-    emitTrustedDiagnosticEvent({
+    emitTrustedToolExecutionEvent({
       type: "tool.execution.error",
       runId,
       ...(activeTool.sessionKey ? { sessionKey: activeTool.sessionKey } : {}),

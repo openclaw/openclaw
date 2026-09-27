@@ -5,7 +5,6 @@ import type {
   NativeHookRelayEvent,
   registerNativeHookRelay,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
@@ -60,6 +59,9 @@ export type CodexNativePreToolUseFailure = {
   toolCallId: string;
   disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">;
   durationMs: number;
+  report?: ReturnType<
+    NonNullable<EmbeddedRunAttemptParams["hostCapabilities"]["bindToolExecution"]>
+  >;
 };
 
 export type CodexNativeHookRelay = ReturnType<typeof registerNativeHookRelayForBundledRuntime> & {
@@ -145,23 +147,16 @@ function resolveCodexNativeHookRelayUnregisterGraceMs(hookTimeoutSec: number | u
 
 /** Records a native pre-tool failure that Codex does not project as a tool item. */
 export function emitCodexNativePreToolUseFailureDiagnostic(params: {
-  agentId: string | undefined;
-  sessionId: string;
-  sessionKey: string | undefined;
-  runId: string;
   signal?: AbortSignal;
   failure: CodexNativePreToolUseFailure;
   terminalReason?: CodexNativePreToolUseFailure["disposition"];
   sourceTimestampMs?: number;
 }): void {
-  emitTrustedDiagnosticEvent({
+  if (!params.failure.report) {
+    throw new Error("Codex native failure requires its accepted host execution reporter.");
+  }
+  params.failure.report.finished({
     type: "tool.execution.error",
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionId: params.sessionId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    runId: params.runId,
-    toolName: params.failure.toolName,
-    toolCallId: params.failure.toolCallId,
     durationMs: params.failure.durationMs,
     errorCategory: "before_tool_call",
     terminalReason:
@@ -274,6 +269,7 @@ export function createCodexNativeHookRelay(params: {
     }),
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
+    bindToolExecution: params.hostCapabilities.bindToolExecution,
     executionAdmission:
       params.nativeProcessAuthority || params.nativeModelAdmission
         ? {
