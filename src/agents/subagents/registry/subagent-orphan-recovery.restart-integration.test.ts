@@ -274,7 +274,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
           expect(persisted?.execution.interruptionReason).toBe("gateway-restart");
         }
         expect(persisted?.execution.endedAt).toBeUndefined();
-        expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("running");
+        // The retired task registry reported every unended run as running; sessions keep the interruption.
+        expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe(expected);
 
         resetSubagentRegistryForTests({ persist: false });
         resetGatewayWorkAdmission();

@@ -641,6 +641,11 @@ openclaw-pending-session-create {
   width: 100%;
 }
 
+.chat-thread-inner--virtual {
+  /* The owner sets the height; isolate intrinsic row sizing without clipping paint. */
+  contain: size layout;
+}
+
 .chat-virtual-block {
   position: absolute;
   top: 0;

@@ -99,11 +99,11 @@ export function transcriptRows(container: HTMLElement): HTMLElement[] {
 }
 
 export function transcriptSize(container: ParentNode): number {
-  const sizer = expectDefined(
-    container.querySelector<HTMLElement>(".chat-virtual-sizer"),
+  const extent = expectDefined(
+    container.querySelector<HTMLElement>(".chat-thread-inner--virtual"),
     "transcript extent",
   );
-  return Number.parseFloat(sizer.style.height);
+  return Number.parseFloat(extent.style.height);
 }
 
 export async function flushDeferredRowPrune(): Promise<void> {
