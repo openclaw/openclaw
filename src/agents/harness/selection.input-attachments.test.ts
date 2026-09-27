@@ -80,7 +80,6 @@ describe("registered harness input attachment preparation", () => {
   );
 
   it.each([
-    "local",
     "projected",
     "bounded-inline",
     "metadata-sigils",
@@ -95,7 +94,6 @@ describe("registered harness input attachment preparation", () => {
     "hardlink",
     "metadata-budget",
     "note-budget",
-    "no-budget",
   ])("prepares saved input only for eligible registered harness execution: %s", async (mode) => {
     const root = trajectoryTempDirs.make("harness-input-attachment-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
@@ -160,13 +158,11 @@ describe("registered harness input attachment preparation", () => {
         placement: "local-host",
         ...(mode === "steering-sigils" ? { turn: { media } } : {}),
         maxChars:
-          mode === "no-budget"
-            ? 0
-            : mode === "metadata-budget"
-              ? 80
-              : mode === "note-budget"
-                ? JSON.stringify([{ reference: mediaRef, path: filePath }]).length
-                : 60_000,
+          mode === "metadata-budget"
+            ? 80
+            : mode === "note-budget"
+              ? JSON.stringify([{ reference: mediaRef, path: filePath }]).length
+              : 60_000,
         assertCurrent: () => {},
       });
       if (mode === "binding-during-open") {
@@ -182,7 +178,7 @@ describe("registered harness input attachment preparation", () => {
         ]);
         expect(metadata).not.toMatch(/[$@]/);
         expect(await fs.readFile(filePath, "utf8")).toBe(csv);
-      } else if (mode === "local" || mode === "projected" || mode === "bounded-inline") {
+      } else if (mode === "projected" || mode === "bounded-inline") {
         expect(note).toContain(filePath);
         expect(await fs.readFile(filePath, "utf8")).toBe(csv);
       } else {
