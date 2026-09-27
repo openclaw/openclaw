@@ -394,6 +394,14 @@ struct OpenClawChatComposer: View {
 
     @ViewBuilder
     private var composerContextRows: some View {
+        if self.viewModel.hasActiveRunForComposerSettings, self.viewModel.hasDraftToSend {
+            Text("Available after the current response finishes.")
+                .font(OpenClawChatTypography.caption)
+                .foregroundStyle(.secondary)
+                .padding(.top, 8)
+                .accessibilityIdentifier("chat-composer-active-run-notice")
+        }
+
         if let replyTarget = self.viewModel.replyTarget {
             ChatReplyPreview(target: replyTarget) {
                 self.viewModel.clearReplyTarget()
@@ -1206,7 +1214,7 @@ extension OpenClawChatComposer {
 extension OpenClawChatComposer {
     @ViewBuilder
     private var sendButton: some View {
-        if self.viewModel.pendingRunCount > 0, self.shouldShowStopButton {
+        if self.viewModel.pendingRunCount > 0 {
             Button {
                 self.viewModel.abort()
             } label: {
@@ -1582,13 +1590,6 @@ extension OpenClawChatComposer {
         self.pickerItems = []
     }
     #endif
-
-    /// Preserve text and image draft controls while keeping completed voice notes abortable.
-    private var shouldShowStopButton: Bool {
-        !self.viewModel.hasDraftToSend || self.viewModel.attachments.contains {
-            $0.mimeType == "audio/mp4" && $0.durationSeconds != nil
-        }
-    }
 
     private func sendDraftIfEnabled() {
         guard self.canSendMessage else { return }
