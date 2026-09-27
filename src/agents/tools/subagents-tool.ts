@@ -538,7 +538,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         );
         const list = buildSubagentList({
           context: readContext.list,
-          sessionEntries: readSubagentListSessionEntries(cfg, readContext.list),
+          sessionEntries: await readSubagentListSessionEntries(cfg, readContext.list),
         });
         const cutoff = Date.now() - recentMinutes * 60_000;
         const tasks = treeTasks

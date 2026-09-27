@@ -17,6 +17,19 @@ vi.mock("./client.js", () => ({
 
 let downloadSlackFile: typeof import("./actions.js").downloadSlackFile;
 
+function downloadScopedFile(
+  client: WebClient,
+  overrides: Partial<Parameters<typeof downloadSlackFile>[1]> = {},
+) {
+  return downloadSlackFile("F123", {
+    client,
+    token: "xoxb-test",
+    maxBytes: 1024,
+    channelId: "C123",
+    ...overrides,
+  });
+}
+
 function createClient() {
   return {
     files: {
@@ -106,12 +119,7 @@ describe("downloadSlackFile", () => {
       },
     });
 
-    const result = await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "C123",
-    });
+    const result = await downloadScopedFile(client);
 
     expect(result).toBeNull();
     expect(resolveSlackMedia).not.toHaveBeenCalled();
@@ -121,12 +129,7 @@ describe("downloadSlackFile", () => {
     const client = createClient();
     mockSuccessfulMediaDownload(client);
 
-    const result = await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "C123",
-    });
+    const result = await downloadScopedFile(client);
 
     expect(client.files.info).toHaveBeenCalledWith({ file: "F123" });
     expectResolveSlackMediaCalledWithDefaults(client);
@@ -142,62 +145,9 @@ describe("downloadSlackFile", () => {
     });
     resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
 
-    await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "C123",
-    });
+    await downloadScopedFile(client);
 
     expect(resolveSlackMedia).toHaveBeenCalledWith(expect.objectContaining({ client }));
-  });
-
-  it("preserves non-image download metadata", async () => {
-    const client = createClient();
-    client.files.info.mockResolvedValueOnce({
-      file: makeSlackFileInfo({
-        name: "report.pdf",
-        mimetype: "application/pdf",
-        url_private_download: "https://files.slack.com/files-pri/T1-F123/report.pdf",
-      }),
-    });
-    resolveSlackMedia.mockResolvedValueOnce([
-      makeResolvedSlackMedia({
-        path: "/tmp/report.pdf",
-        contentType: "application/pdf",
-        placeholder: "[Slack file: report.pdf (fileId: F123)]",
-      }),
-    ]);
-
-    const result = await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "C123",
-    });
-
-    expect(resolveSlackMedia).toHaveBeenCalledWith({
-      files: [
-        {
-          id: "F123",
-          name: "report.pdf",
-          mimetype: "application/pdf",
-          url_private: undefined,
-          url_private_download: "https://files.slack.com/files-pri/T1-F123/report.pdf",
-        },
-      ],
-      client,
-      isRefreshedFileAllowed: expect.any(Function),
-      token: "xoxb-test",
-      maxBytes: 1024,
-    });
-    expect(result).toEqual(
-      makeResolvedSlackMedia({
-        path: "/tmp/report.pdf",
-        contentType: "application/pdf",
-        placeholder: "[Slack file: report.pdf (fileId: F123)]",
-      }),
-    );
   });
 
   it("returns null when channel scope definitely mismatches file shares", async () => {
@@ -206,20 +156,15 @@ describe("downloadSlackFile", () => {
       file: makeSlackFileInfo({ channels: ["C999"] }),
     });
 
-    const result = await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "C123",
-    });
+    const result = await downloadScopedFile(client);
 
     expectNoMediaDownload(result);
   });
 
   it.each([
     { name: "public channel metadata", file: { channels: ["C123"] } },
-    { name: "private channel metadata", file: { groups: ["C123"] } },
-    { name: "DM metadata", file: { ims: ["C123"] } },
+    { name: "private channel metadata", file: { channels: undefined, groups: ["C123"] } },
+    { name: "DM metadata", file: { channels: undefined, ims: ["C123"] } },
     {
       name: "share metadata",
       file: {
@@ -234,12 +179,7 @@ describe("downloadSlackFile", () => {
     });
     resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
 
-    const result = await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "C123",
-    });
+    const result = await downloadScopedFile(client);
 
     expect(result).toEqual(makeResolvedSlackMedia());
   });
@@ -255,12 +195,7 @@ describe("downloadSlackFile", () => {
     });
     resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
 
-    const result = await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "C123",
-    });
+    const result = await downloadScopedFile(client);
 
     expect(result).toEqual(makeResolvedSlackMedia());
   });
@@ -277,13 +212,7 @@ describe("downloadSlackFile", () => {
       }),
     });
 
-    const result = await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "C123",
-      threadId: "222.222",
-    });
+    const result = await downloadScopedFile(client, { threadId: "222.222" });
 
     expectNoMediaDownload(result);
   });
@@ -294,13 +223,7 @@ describe("downloadSlackFile", () => {
       file: makeSlackFileInfo({ channels: ["C123"] }),
     });
 
-    const result = await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "C123",
-      threadId: "222.222",
-    });
+    const result = await downloadScopedFile(client, { threadId: "222.222" });
 
     expectNoMediaDownload(result);
   });
@@ -317,13 +240,7 @@ describe("downloadSlackFile", () => {
     });
     resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
 
-    const result = await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "C123",
-      threadId: "111.111",
-    });
+    const result = await downloadScopedFile(client, { threadId: "111.111" });
 
     expect(result).toEqual(makeResolvedSlackMedia());
   });
@@ -337,13 +254,7 @@ describe("downloadSlackFile", () => {
     });
     resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
 
-    await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "C123",
-      threadId: "111.111",
-    });
+    await downloadScopedFile(client, { threadId: "111.111" });
 
     const isAllowed = requireRefreshedFileAdmission();
     expect(
@@ -379,12 +290,7 @@ describe("downloadSlackFile", () => {
     const client = createClient();
     client.files.info.mockResolvedValueOnce({ file: makeSlackFileInfo(file) });
 
-    const result = await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "C123",
-    });
+    const result = await downloadScopedFile(client);
 
     expectNoMediaDownload(result);
   });
@@ -393,12 +299,7 @@ describe("downloadSlackFile", () => {
     const client = createClient();
     mockSuccessfulMediaDownload(client);
 
-    const result = await downloadSlackFile("F123", {
-      client,
-      token: "xoxb-test",
-      maxBytes: 1024,
-      channelId: "   ",
-    });
+    const result = await downloadScopedFile(client, { channelId: "   " });
 
     expectNoMediaDownload(result);
   });

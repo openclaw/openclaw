@@ -212,12 +212,6 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   return false;
 }
 
-// Flood waits are owned by the account limiter; a 429 that reaches a send has
-// already outlived the limiter's delivery budget.
-export function shouldRetryTelegramSendError(err: unknown): boolean {
-  return isSafeToRetrySendError(err);
-}
-
 function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     if (!candidate || typeof candidate !== "object" || !("error_code" in candidate)) {

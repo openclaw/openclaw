@@ -4,7 +4,6 @@ import { z } from "zod";
 import type { SpawnResult } from "../process/exec.js";
 import { NodeWorkerWorkspaceTransferInputSchema } from "./node-workspace-transfer-protocol.js";
 import {
-  hasExactOwnKeys,
   WorkerGatewayNamespace,
   workerProtocolIdentifier as identifier,
   workerProtocolObject,
@@ -27,9 +26,10 @@ const TIMEOUT_MAX_MS = 10 * 60 * 1000;
 export const NODE_WORKSPACE_DRAIN_COMMAND = "openclaw-internal-workspace-drain";
 
 const SeedKey = z.string().regex(/^[a-f0-9]{64}$/u);
+const WorkspaceProcessId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u);
 const WorkspaceProcess = workerProtocolObject({
   action: z.enum(["start", "status", "stop"]),
-  processId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u),
+  processId: WorkspaceProcessId,
 });
 export type NodeWorkerWorkspaceProcessInput = z.infer<typeof WorkspaceProcess>;
 type NodeWorkerWorkspaceProcessResult = {
@@ -195,79 +195,38 @@ export function parseNodeWorkerWorkspaceExecInput(
   return input;
 }
 
-function isBoundedText(value: unknown, maxBytes: number): value is string {
-  return typeof value === "string" && Buffer.byteLength(value, "utf8") <= maxBytes;
-}
-
-function isAbsoluteHostPath(value: string): boolean {
-  return path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
-}
+const TruncatedBytes = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional();
+const WorkspaceResult = workerProtocolObject({
+  workspaceDir: z
+    .string()
+    .max(4_096)
+    .refine((value) => path.posix.isAbsolute(value) || path.win32.isAbsolute(value)),
+  stdout: z.string(),
+  stderr: z.string().refine((value) => Buffer.byteLength(value, "utf8") <= STDERR_MAX_BYTES),
+  code: z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER).nullable(),
+  signal: z.string().min(1).max(32).nullable(),
+  killed: z.boolean(),
+  termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]),
+  stdoutTruncatedBytes: TruncatedBytes,
+  stderrTruncatedBytes: TruncatedBytes,
+  noOutputTimedOut: z.boolean().optional(),
+  outputLimitExceeded: z.boolean().optional(),
+  outputErrorStream: z.enum(["stdout", "stderr"]).optional(),
+  process: workerProtocolObject({
+    processId: WorkspaceProcessId,
+    state: z.enum(["running", "exited"]),
+  }).optional(),
+});
 
 export function parseNodeWorkerWorkspaceExecResult(
   value: unknown,
   argv: readonly string[] = [],
 ): NodeWorkerWorkspaceExecResult | null {
+  const parsed = WorkspaceResult.safeParse(value);
   if (
-    !isRecord(value) ||
-    !hasExactOwnKeys(
-      value,
-      ["workspaceDir", "stdout", "stderr", "code", "signal", "killed", "termination"],
-      [
-        "stdoutTruncatedBytes",
-        "stderrTruncatedBytes",
-        "noOutputTimedOut",
-        "outputLimitExceeded",
-        "outputErrorStream",
-        "process",
-      ],
-    ) ||
-    typeof value.workspaceDir !== "string" ||
-    !isAbsoluteHostPath(value.workspaceDir) ||
-    value.workspaceDir.length > 4_096 ||
-    !isBoundedText(
-      value.stdout,
-      isWorkspaceInspectionCommand(argv) ? WORKSPACE_INSPECTION_MAX_BYTES : OUTPUT_MAX_BYTES,
-    ) ||
-    !isBoundedText(value.stderr, STDERR_MAX_BYTES) ||
-    (value.code !== null &&
-      (!Number.isSafeInteger(value.code) || typeof value.code !== "number")) ||
-    (value.signal !== null &&
-      (typeof value.signal !== "string" ||
-        value.signal.length === 0 ||
-        value.signal.length > 32)) ||
-    typeof value.killed !== "boolean" ||
-    (value.termination !== "exit" &&
-      value.termination !== "timeout" &&
-      value.termination !== "no-output-timeout" &&
-      value.termination !== "signal")
-  ) {
-    return null;
-  }
-  if (
-    value.process !== undefined &&
-    (!isRecord(value.process) ||
-      !hasExactOwnKeys(value.process, ["processId", "state"], []) ||
-      typeof value.process.processId !== "string" ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value.process.processId) ||
-      (value.process.state !== "running" && value.process.state !== "exited"))
-  ) {
-    return null;
-  }
-  for (const key of ["stdoutTruncatedBytes", "stderrTruncatedBytes"] as const) {
-    const count = value[key];
-    if (
-      count !== undefined &&
-      (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)
-    ) {
-      return null;
-    }
-  }
-  if (
-    (value.noOutputTimedOut !== undefined && typeof value.noOutputTimedOut !== "boolean") ||
-    (value.outputLimitExceeded !== undefined && typeof value.outputLimitExceeded !== "boolean") ||
-    (value.outputErrorStream !== undefined &&
-      value.outputErrorStream !== "stdout" &&
-      value.outputErrorStream !== "stderr")
+    !parsed.success ||
+    Buffer.byteLength(parsed.data.stdout, "utf8") >
+      (isWorkspaceInspectionCommand(argv) ? WORKSPACE_INSPECTION_MAX_BYTES : OUTPUT_MAX_BYTES)
   ) {
     return null;
   }

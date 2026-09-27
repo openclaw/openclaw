@@ -7,7 +7,6 @@ import {
   isUnknownDiscordVoiceStateError,
   type Client,
 } from "../internal/discord.js";
-import type { VoicePlugin } from "../internal/voice.js";
 import { DECRYPT_FAILURE_WINDOW_MS } from "./receive-recovery.js";
 import { logVoiceVerbose, type VoiceOperationResult, type VoiceSessionEntry } from "./session.js";
 
@@ -598,7 +597,7 @@ export class DiscordVoiceFollowing {
     if (!botChannelId) {
       return;
     }
-    const voicePlugin = this.params.client.getPlugin<VoicePlugin>("voice");
+    const voicePlugin = this.params.client.getPlugin("voice");
     const gateway = voicePlugin?.getGateway(guildId);
     if (!gateway) {
       logger.warn(
@@ -618,9 +617,9 @@ export class DiscordVoiceFollowing {
   }
 
   private resolveVoiceResidencyTarget(guildId: string): VoiceChannelResidency | null {
-    const autoJoinTarget = this.params.autoJoinChannels
-      .toReversed()
-      .find((entry) => entry.guildId === guildId);
+    const autoJoinTarget = this.params.autoJoinChannels.findLast(
+      (entry) => entry.guildId === guildId,
+    );
     if (autoJoinTarget?.whenOccupied) {
       return null;
     }

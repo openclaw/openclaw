@@ -4,6 +4,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SqliteWorkerError, type SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import type { AuditWriterOperations, AuditWriterResult } from "./audit-event-writer.types.js";
@@ -62,6 +66,45 @@ async function advanceDispatch() {
 }
 
 describe("audit writer async settlement", () => {
+  it("coalesces overdue idle maintenance and cancels it after writer shutdown", async () => {
+    vi.useRealTimers();
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    execute.mockResolvedValue({ status: "settled" });
+    const writer = createAuditEventWriter({
+      scheduler,
+      stateDir: tempDirs.make("audit-writer-maintenance-"),
+    });
+    try {
+      await writer.ready;
+      execute.mockClear();
+      const pruned = createDeferred();
+      execute.mockImplementation(async (command) => {
+        if (command.type === "audit.writer.prune" && command.input === "progress") {
+          pruned.resolve();
+        }
+        return { status: "settled" };
+      });
+      await clock.advanceBy(60 * 60_000 - 1);
+      expect(execute).not.toHaveBeenCalled();
+      await clock.advanceBy(2 * 60 * 60_000 + 1);
+      await pruned.promise;
+      expect(
+        execute.mock.calls.filter(
+          ([command]) => command.type === "audit.writer.prune" && command.input === "events",
+        ),
+      ).toHaveLength(1);
+
+      await writer.stop();
+      execute.mockClear();
+      await clock.advanceBy(60 * 60_000);
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      await writer.stop();
+      await scheduler.stop();
+    }
+  });
+
   it("retains in-flight capacity and joins submission after the shutdown deadline", async () => {
     const submitted = createDeferred();
     const finish = createDeferred<AuditWriterResult>();
@@ -79,6 +122,7 @@ describe("audit writer async settlement", () => {
     });
     const errors: string[] = [];
     const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir: tempDirs.make("audit-writer-settlement-"),
       maxPending: 2,
       onError: (error) => errors.push(error),
@@ -146,6 +190,7 @@ describe("audit writer async settlement", () => {
     });
     const errors: string[] = [];
     const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir: tempDirs.make("audit-writer-unknown-outcome-"),
       onError: (error) => errors.push(error),
     });
@@ -200,6 +245,7 @@ describe("audit writer async settlement", () => {
     let offered = false;
     let followUpAccepted: boolean | undefined;
     const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir: tempDirs.make("audit-writer-error-notification-"),
       maxPending: 1,
       onError: (error) => {

@@ -72,20 +72,15 @@ function resolvePairingRecoveryContext(params: {
   };
 }
 
-function normalizeStatusWrapperPath(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
 function resolveServiceWrapperContextHint(params: {
   serviceWrapperPath?: string | null;
   cliWrapperPath?: string | null;
 }): string | null {
-  const serviceWrapperPath = normalizeStatusWrapperPath(params.serviceWrapperPath);
+  const serviceWrapperPath = params.serviceWrapperPath?.trim();
   if (!serviceWrapperPath) {
     return null;
   }
-  if (normalizeStatusWrapperPath(params.cliWrapperPath) === serviceWrapperPath) {
+  if (params.cliWrapperPath?.trim() === serviceWrapperPath) {
     return null;
   }
   return `The installed gateway service uses ${OPENCLAW_WRAPPER_ENV_KEY} (${sanitizeTerminalText(serviceWrapperPath)}), but this CLI process is not running with that same wrapper. Missing-secret diagnostics may describe the current CLI process rather than the installed gateway service context.`;
@@ -143,19 +138,9 @@ export async function statusCommand(
   const {
     cfg,
     osSummary,
-    tailscaleMode,
-    tailscaleDns,
-    tailscaleHttpsUrl,
-    advertisedControlUiLinks,
     update,
-    gatewayConnection,
-    remoteUrlMissing,
-    gatewayMode,
-    gatewayProbeAuth,
-    gatewayProbeAuthWarning,
     gatewayProbe,
     gatewayReachable,
-    gatewaySelf,
     channelIssues,
     agentStatus,
     channels,
@@ -230,7 +215,6 @@ export async function statusCommand(
     throw new Error(health.error);
   }
 
-  const rich = true;
   const {
     buildStatusCommandReportData,
     buildStatusCommandReportLines,
@@ -240,9 +224,7 @@ export async function statusCommand(
     info,
     theme,
   } = await statusCommandTextRuntimeLoader.load();
-  const muted = (value: string) => (rich ? theme.muted(value) : value);
-  const ok = (value: string) => (rich ? theme.success(value) : value);
-  const warn = (value: string) => (rich ? theme.warn(value) : value);
+  const { muted, success: ok, warn } = theme;
   const updateSurface = buildStatusUpdateSurface({
     updateConfigChannel: cfg.update?.channel,
     update,
@@ -294,22 +276,7 @@ export async function statusCommand(
 
   const usageLines = usage ? formatUsageReportLines(usage) : undefined;
   const overviewSurface = buildStatusOverviewSurfaceFromScan({
-    scan: {
-      cfg,
-      update,
-      tailscaleMode,
-      tailscaleDns,
-      tailscaleHttpsUrl,
-      ...(advertisedControlUiLinks ? { advertisedControlUiLinks } : {}),
-      gatewayMode,
-      remoteUrlMissing,
-      gatewayConnection,
-      gatewayReachable,
-      gatewayProbe,
-      gatewayProbeAuth,
-      gatewayProbeAuthWarning,
-      gatewaySelf,
-    },
+    scan,
     gatewayService: daemon,
     nodeService: nodeDaemon,
     nodeOnlyGateway,

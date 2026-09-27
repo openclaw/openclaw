@@ -20,7 +20,6 @@ export class FullscreenController implements ReactiveController {
   errorText: string | null = null;
 
   private restoreFocus = false;
-  private readonly onFullscreenChange = () => this.handleFullscreenChange();
 
   constructor(
     private readonly host: OpenClawLitElement,
@@ -85,7 +84,7 @@ export class FullscreenController implements ReactiveController {
     return document.fullscreenEnabled && typeof Element.prototype.requestFullscreen === "function";
   }
 
-  private handleFullscreenChange(): void {
+  private readonly onFullscreenChange = (): void => {
     const wasActive = this.active;
     this.active = this.fullscreenElement() === this.options.section();
     this.options.onChange();
@@ -98,7 +97,7 @@ export class FullscreenController implements ReactiveController {
         this.restoreFocus = false;
       });
     }
-  }
+  };
 
   private async toggle(): Promise<void> {
     this.setError(null);

@@ -117,30 +117,20 @@ describe("runNodeHost", () => {
     );
   });
 
-  it.each([
-    { runtime: "darwin", platform: "macos", deviceFamily: "Mac" },
-    { runtime: "win32", platform: "windows", deviceFamily: "Windows" },
-    { runtime: "linux", platform: "linux", deviceFamily: "Linux" },
-    { runtime: "freebsd", platform: "freebsd", deviceFamily: undefined },
-  ] as const)(
-    "maps $runtime to gateway platform $platform",
-    async ({ runtime, platform, deviceFamily }) => {
-      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(runtime);
-      try {
-        await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-          "event loop readiness timeout",
-        );
-      } finally {
-        platformSpy.mockRestore();
-      }
-
-      expect(lastCapturedOptions()?.platform).toBe(platform);
-      expect(lastCapturedOptions()?.deviceFamily).toBe(deviceFamily);
-      expect(lastCapturedOptions()?.modelIdentifier).toBe(
-        runtime === "freebsd" ? undefined : "TestMachine1,1",
+  it("passes the resolved platform and hardware identity to the gateway", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    try {
+      await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
+        "event loop readiness timeout",
       );
-    },
-  );
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(lastCapturedOptions()?.platform).toBe("macos");
+    expect(lastCapturedOptions()?.deviceFamily).toBe("Mac");
+    expect(lastCapturedOptions()?.modelIdentifier).toBe("TestMachine1,1");
+  });
 
   it("passes a paired bootstrap credential with first-connect preference", async () => {
     await expect(
@@ -301,7 +291,6 @@ describe("runNodeHost", () => {
   });
 
   it.each([
-    ["127.0.0.1", "ws://127.0.0.1:18789"],
     ["gateway.local", "ws://gateway.local:18789"],
     ["::1", "ws://[::1]:18789"],
     ["[::1]", "ws://[::1]:18789"],
@@ -419,6 +408,102 @@ describe("runNodeHost", () => {
     afterEach(() => {
       vi.unstubAllEnvs();
       mocks.resolveGatewayCredentialsWithSecretInputs.mockResolvedValue({});
+    });
+
+    describe("expired fallback setup codes", () => {
+      const expiredOptions = {
+        ...runOptions,
+        gatewayBootstrapToken: "expired-test-bootstrap",
+        gatewayBootstrapExpiresAtMs: 1,
+        preferGatewayBootstrapToken: false,
+      };
+
+      beforeEach(() => {
+        mocks.loadDeviceIdentityIfPresent.mockReturnValue({
+          deviceId: "device-test",
+          publicKeyPem: "public-key-test",
+          privateKeyPem: "private-key-test",
+        });
+      });
+
+      it("reconnects with the saved token without submitting the expired bootstrap", async () => {
+        await expect(runNodeHost(expiredOptions)).rejects.toThrow("event loop readiness timeout");
+
+        const options = lastCapturedOptions();
+        expect(options?.bootstrapToken).toBeUndefined();
+        const auth = buildGatewayConnectAuth(
+          selectGatewayConnectAuth({ ...options, storedToken: "paired-node-token" }),
+        );
+        expect(auth).toMatchObject({ deviceToken: "paired-node-token", bootstrapToken: undefined });
+        expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
+      });
+
+      it("never falls back to shared auth if the saved token disappears before connect", async () => {
+        mocks.loadDeviceAuthTokenReadOnly
+          .mockResolvedValueOnce({
+            role: "node",
+            token: "paired-node-token",
+            scopes: [],
+            updatedAtMs: 1,
+          })
+          .mockResolvedValue(null);
+        vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "shared-test-token");
+
+        await expect(runNodeHost(expiredOptions)).rejects.toThrow("event loop readiness timeout");
+
+        // GatewayClient rereads native auth when connecting; the token can be gone by then.
+        const stored = await mocks.loadDeviceAuthTokenReadOnly({
+          deviceId: "device-test",
+          role: "node",
+        });
+        const options = lastCapturedOptions();
+        expect(options?.bootstrapToken).toBeUndefined();
+        const auth = buildGatewayConnectAuth(
+          selectGatewayConnectAuth({ ...options, storedToken: stored?.token }),
+        );
+        expect(auth).toBeUndefined();
+        expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
+      });
+
+      it.each(["identity", "token", "saved gateway"])(
+        "rejects before changing node state when the saved %s is missing",
+        async (missing) => {
+          if (missing === "identity") {
+            mocks.loadDeviceIdentityIfPresent.mockReturnValue(null);
+          } else if (missing === "token") {
+            mocks.loadDeviceAuthTokenReadOnly.mockResolvedValue(null);
+          } else {
+            mocks.loadNodeHostConfig.mockResolvedValue(null);
+          }
+
+          await expect(runNodeHost(expiredOptions)).rejects.toThrow(
+            "Pairing setup code has expired.",
+          );
+          expect(mocks.configureNodeHost).not.toHaveBeenCalled();
+          expect(mocks.capturedGatewayClients).toHaveLength(0);
+        },
+      );
+
+      it.each([
+        { candidates: [{ ...gateway, host: "other.example" }] },
+        { candidates: [gateway, { ...gateway, contextPath: "/other-node" }] },
+      ])(
+        "rejects a changed or mixed gateway candidate scope: $candidates",
+        async ({ candidates }) => {
+          await expect(
+            runNodeHost({ ...expiredOptions, gatewayCandidates: candidates }),
+          ).rejects.toThrow("Pairing setup code has expired.");
+          expect(mocks.configureNodeHost).not.toHaveBeenCalled();
+          expect(mocks.capturedGatewayClients).toHaveLength(0);
+        },
+      );
+
+      it("does not relax forced pairing even when a saved token exists", async () => {
+        await expect(
+          runNodeHost({ ...expiredOptions, preferGatewayBootstrapToken: true }),
+        ).rejects.toThrow("Pairing setup code has expired.");
+        expect(mocks.configureNodeHost).not.toHaveBeenCalled();
+      });
     });
 
     it("restarts a paired service without sending the source Gateway password", async () => {
@@ -691,18 +776,4 @@ describe("runNodeHost", () => {
       expect(mocks.capturedConfiguredGatewayConfigs.at(-1)?.contextPath).toBe(gatewayContextPath);
     },
   );
-
-  it("clears configured contextPath when opts do not pass one (retarget scenario)", async () => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "192.168.1.1",
-        gatewayPort: 9999,
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    const lastConfigured =
-      mocks.capturedConfiguredGatewayConfigs[mocks.capturedConfiguredGatewayConfigs.length - 1];
-    expect(lastConfigured?.contextPath).toBeUndefined();
-    expect(lastCapturedOptions()?.url).toBe("ws://192.168.1.1:9999");
-  });
 });

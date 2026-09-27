@@ -110,22 +110,13 @@ export function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, u
   return asNullableRecord(entry?.config) ?? {};
 }
 export function formatAuditCounts(audit: ShortTermAuditSummary): string {
-  const scriptCoverage = audit.conceptTagScripts
-    ? [
-        audit.conceptTagScripts.latinEntryCount > 0
-          ? `${audit.conceptTagScripts.latinEntryCount} latin`
-          : null,
-        audit.conceptTagScripts.cjkEntryCount > 0
-          ? `${audit.conceptTagScripts.cjkEntryCount} cjk`
-          : null,
-        audit.conceptTagScripts.mixedEntryCount > 0
-          ? `${audit.conceptTagScripts.mixedEntryCount} mixed`
-          : null,
-        audit.conceptTagScripts.otherEntryCount > 0
-          ? `${audit.conceptTagScripts.otherEntryCount} other`
-          : null,
-      ]
-        .filter(Boolean)
+  const coverage = audit.conceptTagScripts;
+  const scriptCoverage = coverage
+    ? (["latin", "cjk", "mixed", "other"] as const)
+        .flatMap((script) => {
+          const count = coverage[`${script}EntryCount`];
+          return count > 0 ? [`${count} ${script}`] : [];
+        })
         .join(", ")
     : "";
   const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";

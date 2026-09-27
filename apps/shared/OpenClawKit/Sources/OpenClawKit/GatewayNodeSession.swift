@@ -289,13 +289,6 @@ public actor GatewayNodeSession {
                 // without forcing a new channel.
                 extraHeadersProvider: extraHeadersProvider)
             self.channel = channel
-            self.connectOptions = connectOptions
-            self.onConnected = onConnected
-            self.onDisconnected = onDisconnected
-            self.onInvoke = onInvoke
-            self.onInvokeInput = onInvokeInput
-            self.onInvokeCancel = onInvokeCancel
-            self.onRouteInvalidated = onRouteInvalidated
             self.activeURL = url
             self.activeCredentials = credentials
             self.activeConnectOptionsKey = nextOptionsKey
@@ -303,14 +296,15 @@ public actor GatewayNodeSession {
             self.activeTLSRouteMetadataProvider = nextTLSRouteMetadataProvider
         } else {
             channelGeneration = self.channelGeneration
-            self.connectOptions = connectOptions
-            self.onConnected = onConnected
-            self.onDisconnected = onDisconnected
-            self.onInvoke = onInvoke
-            self.onInvokeInput = onInvokeInput
-            self.onInvokeCancel = onInvokeCancel
-            self.onRouteInvalidated = onRouteInvalidated
         }
+
+        self.connectOptions = connectOptions
+        self.onConnected = onConnected
+        self.onDisconnected = onDisconnected
+        self.onInvoke = onInvoke
+        self.onInvokeInput = onInvokeInput
+        self.onInvokeCancel = onInvokeCancel
+        self.onRouteInvalidated = onRouteInvalidated
 
         guard let channel else {
             throw NSError(domain: "Gateway", code: 0, userInfo: [
@@ -318,26 +312,22 @@ public actor GatewayNodeSession {
             ])
         }
 
-        do {
-            // Bind this connect attempt to the admission epoch that owns the socket.
-            // An in-place disconnect keeps the channel object/generation but advances
-            // admission, so a drained snapshot waiter must not report a stale connect.
-            let expectedAdmissionGeneration = self.admissionGeneration
-            try await channel.connect()
-            guard self.channelGeneration == channelGeneration,
-                  self.admissionGeneration == expectedAdmissionGeneration,
-                  self.channel === channel
-            else { throw CancellationError() }
-            _ = await self.waitForSnapshot(timeoutMs: 500)
-            guard self.channelGeneration == channelGeneration,
-                  self.admissionGeneration == expectedAdmissionGeneration,
-                  self.channel === channel
-            else { throw CancellationError() }
-            await self.notifyConnectedIfNeeded(
-                admissionGeneration: expectedAdmissionGeneration)
-        } catch {
-            throw error
-        }
+        // Bind this connect attempt to the admission epoch that owns the socket.
+        // An in-place disconnect keeps the channel object/generation but advances
+        // admission, so a drained snapshot waiter must not report a stale connect.
+        let expectedAdmissionGeneration = self.admissionGeneration
+        try await channel.connect()
+        guard self.channelGeneration == channelGeneration,
+              self.admissionGeneration == expectedAdmissionGeneration,
+              self.channel === channel
+        else { throw CancellationError() }
+        _ = await self.waitForSnapshot(timeoutMs: 500)
+        guard self.channelGeneration == channelGeneration,
+              self.admissionGeneration == expectedAdmissionGeneration,
+              self.channel === channel
+        else { throw CancellationError() }
+        await self.notifyConnectedIfNeeded(
+            admissionGeneration: expectedAdmissionGeneration)
     }
 
     /// Keeps the flat overload source-compatible while credentials remain one reconnect identity.
@@ -1042,22 +1032,18 @@ extension GatewayNodeSession {
     }
 
     private func drainSnapshotWaiters(returning value: Bool) {
-        if !self.snapshotWaiters.isEmpty {
-            let waiters = self.snapshotWaiters.values
-            self.snapshotWaiters.removeAll()
-            for waiter in waiters {
-                waiter.resume(returning: value)
-            }
+        let waiters = self.snapshotWaiters.values
+        self.snapshotWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: value)
         }
     }
 
     private func drainSnapshotReadyWaiters(returning value: Bool) {
-        if !self.snapshotReadyWaiters.isEmpty {
-            let waiters = self.snapshotReadyWaiters
-            self.snapshotReadyWaiters.removeAll()
-            for waiter in waiters {
-                waiter.resume(returning: value)
-            }
+        let waiters = self.snapshotReadyWaiters
+        self.snapshotReadyWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: value)
         }
     }
 
@@ -1170,7 +1156,7 @@ extension GatewayNodeSession {
         self.logger.info("node invoke request received")
         guard let payload = evt.payload else { return }
         do {
-            let request = try decodeInvokeRequest(from: payload)
+            let request: NodeInvokeRequestPayload = try self.decodeEventPayload(from: payload)
             let timeoutLabel = request.timeoutMs.map(String.init) ?? "none"
             self.logger.info(
                 """
@@ -1611,10 +1597,6 @@ extension GatewayNodeSession {
             #endif
         }
         return true
-    }
-
-    private func decodeInvokeRequest(from payload: OpenClawProtocol.AnyCodable) throws -> NodeInvokeRequestPayload {
-        try self.decodeEventPayload(from: payload)
     }
 
     private func decodeEventPayload<T: Decodable>(from payload: OpenClawProtocol.AnyCodable) throws -> T {

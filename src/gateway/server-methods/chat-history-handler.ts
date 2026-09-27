@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -61,7 +62,6 @@ import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { handleChatStartupRequest } from "./chat-startup-handler.js";
 import { prepareChatStartupRequester } from "./chat-startup-requester.js";
-import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -82,6 +82,7 @@ export async function handleChatHistoryRequest({
     sessionId: string;
     run?: { id: string; maxBytes: number };
     requireCurrentSession?: boolean;
+    verifyRetainedState?: () => Promise<boolean>;
   };
 }) {
   if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
@@ -117,7 +118,7 @@ export async function handleChatHistoryRequest({
     await prepareOptionalSubagentSessionListReadCache();
   }
   signal?.throwIfAborted();
-  const agentIdOverride = normalizeOptionalText(params.agentId);
+  const agentIdOverride = normalizeOptionalString(params.agentId);
   const selection = await prepareChatHistorySessionRead({
     context,
     sessionMutationAuthorization,
@@ -620,6 +621,7 @@ export async function handleChatHistoryRequest({
         pendingInputs,
         ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
         ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
+        ...(historyPage.windowReset ? { windowReset: true } : {}),
         ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
         ...(hasMore ? { nextOffset: candidateNextOffset } : {}),
         ...(hasMore !== undefined ? { hasMore } : {}),
@@ -639,7 +641,9 @@ export async function handleChatHistoryRequest({
       if (retainedTranscript) {
         return () =>
           selection.publishRetainedTranscript({
-            verify: readTranscriptOwner,
+            verify: async () =>
+              (await readTranscriptOwner()) &&
+              ((await retainedTranscript.verifyRetainedState?.()) ?? true),
             requireCurrentSession: retainedTranscript.requireCurrentSession === true,
             sharing: currentSharing,
             publish: () => respond(true, projectOperatorModelRead(modelReadScope, payload)),

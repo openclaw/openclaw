@@ -821,6 +821,7 @@ export function startGatewayConfigReloader(opts: {
       return completeApplication();
     }
     const plan = buildGatewayReloadPlan(changedPaths, {
+      pluginLifecycle,
       noopPaths: [...configInstallMetadata.noopPaths, ...installMetadata.noopPaths],
       forceChangedPaths: [
         ...configInstallMetadata.forceChangedPaths,
@@ -831,20 +832,6 @@ export function startGatewayConfigReloader(opts: {
       previousCompareConfig: currentCompareConfig,
       candidateCompareConfig: nextCompareConfig,
     });
-    if (pluginLifecycle) {
-      plan.pluginLifecycle = pluginLifecycle;
-      plan.reloadPlugins = true;
-      const unrelatedRestart = plan.restartReasons.find(
-        (path) => path !== "plugins" && !path.startsWith("plugins."),
-      );
-      if (unrelatedRestart) {
-        throw new Error(
-          `Cannot apply plugin change while ${unrelatedRestart} requires a Gateway restart.`,
-        );
-      }
-      plan.restartGateway = false;
-      plan.restartReasons = [];
-    }
     if (nextSettings.mode === "off" && !pluginLifecycle) {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
       await commitReloadBaseline({ runtimeApplied: false });
@@ -1292,6 +1279,7 @@ export function startGatewayConfigReloader(opts: {
             pluginIds: params.pluginIds,
             reason: params.reason,
             operationId,
+            ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.drainSignal } : {}),
             expectedSourceDigests: params.expectedSourceDigests,
             expectedInstallHashes: params.expectedInstallHashes,
           },

@@ -178,9 +178,6 @@ export function tokenizeConcreteConfigPath(raw: string): ParsedConcreteConfigPat
         throw new Error(`Invalid path (missing "]"): ${raw}`);
       }
       const inside = trimmed.slice(index + 1, close).trim();
-      if (!inside) {
-        throw new Error(`Invalid path (empty "[]"): ${raw}`);
-      }
       const segment = parseBracketPathSegment(inside, raw);
       if (
         typeof segment === "string" &&

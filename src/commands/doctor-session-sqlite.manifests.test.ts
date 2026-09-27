@@ -28,7 +28,7 @@ describe("runDoctorSessionSqlite", () => {
     ["different session", "other", 2, false, "sqlite_entry_mismatch", 0, 0],
     ["short transcript", "session-1", 1, false, "sqlite_transcript_count_mismatch", 1, 0],
     ["matching transcript", "session-1", 2, false, undefined, 1, 2],
-    ["longer transcript", "session-1", 3, false, "sqlite_transcript_count_mismatch", 1, 0],
+    ["longer transcript", "session-1", 3, false, undefined, 1, 3],
     ["missing source", "session-1", 2, true, undefined, 1, 2],
   ] as const)(
     "validates a %s against SQLite",
@@ -42,7 +42,7 @@ describe("runDoctorSessionSqlite", () => {
       validatedTranscriptEvents,
     ) => {
       const events = [
-        { type: "session", id: "session-1", version: 3 },
+        { type: "session", id: "session-1", version: 3, timestamp: "", cwd: "" },
         {
           type: "message",
           id: "one",

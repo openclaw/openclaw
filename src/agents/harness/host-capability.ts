@@ -12,6 +12,7 @@ import { registerMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-bi
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import {
+  getGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
@@ -139,7 +140,9 @@ function gateBoundTool(
         }
       : {}),
   };
-  copyAgentToolMetadata(tool, gated);
+  copyAgentToolMetadata(tool, gated, (source) =>
+    gateBoundTool(source, assertActive, observeResult),
+  );
   if (sourcePreparer) {
     attachInternalToolExecutionPreparer(gated, async (preparationParams) => {
       assertActive();
@@ -236,13 +239,16 @@ export function createAgentHarnessHostCapabilities(params: {
     );
     return new Error(message);
   };
+  // Only a Gateway captured at admission participates in host liveness.
+  // A supplied resolver that currently returns no context is a retired binding;
+  // only a genuinely absent resolver is exempt from the Gateway liveness fence.
+  const boundGatewayContext = getGatewayContextResolver(attempt.admittedRunContext);
   function assertActive() {
     if (
       !active ||
       attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
       getAdmittedRunDelegatedAuthority(attempt.admittedRunContext) !== delegatedAuthority ||
-      (callerIdentity?.gatewayContextResolver !== undefined &&
-        callerIdentity.gatewayContextResolver() === undefined)
+      (boundGatewayContext && callerIdentity?.gatewayContextResolver?.() === undefined)
     ) {
       throw inactiveError("agent harness host capability is no longer active");
     }
@@ -426,8 +432,7 @@ export function createAgentHarnessHostCapabilities(params: {
       if (
         attempt.abortSignal?.aborted ||
         attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
-        (callerIdentity?.gatewayContextResolver !== undefined &&
-          callerIdentity.gatewayContextResolver() === undefined)
+        (boundGatewayContext && callerIdentity?.gatewayContextResolver?.() === undefined)
       ) {
         throw inactiveError("agent harness retained host policy is no longer active");
       }

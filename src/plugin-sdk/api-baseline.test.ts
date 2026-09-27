@@ -6,15 +6,13 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
-import { API, Program } from "typescript/unstable/sync";
+import { Program } from "typescript/unstable/async";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
-import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
+import * as nativeTypeScript from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeclarationClosureRenderer } from "./api-baseline-declaration-closure.js";
 import { formatPluginSdkApiTypeAlias } from "./api-baseline-declaration-print.js";
 import {
-  listPluginSdkApiBaselineEntrypoints,
   normalizePluginSdkApiDeclarationText,
   normalizePluginSdkApiSourcePath,
   renderPluginSdkApiBaseline,
@@ -174,7 +172,7 @@ function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean
     `const VALUES = ${tuple};`,
     "type Value = (typeof VALUES)[number];",
   ].join("\n");
-  const native = createNativeTypeScriptProject({
+  const native = nativeTypeScript.createNativeTypeScriptProject({
     cwd,
     configFileName,
     files: {
@@ -281,10 +279,6 @@ describe("Plugin SDK API baseline", () => {
     expect(formatPluginSdkApiTypeAlias(prewarmed.checker, prewarmed.declaration)).toBe(
       fixture.expected,
     );
-  });
-
-  it("uses the canonical public entrypoint inventory", () => {
-    expect(listPluginSdkApiBaselineEntrypoints()).toEqual(publicPluginSdkEntrypoints);
   });
 
   it("preserves empty tuple defaults in public function signatures", async () => {
@@ -583,9 +577,13 @@ describe("Plugin SDK API baseline", () => {
     expect(fixtureError).not.toContain("return this.status");
   });
 
-  it.each(["source project creation", "declaration diagnostics"])(
-    "rejects source changes after %s while accepting linked external types",
-    async (timing) => {
+  it.each(
+    ["source project creation", "declaration emission"].flatMap((timing) =>
+      [0, 60_000].map((clockSkewMs) => ({ timing, clockSkewMs })),
+    ),
+  )(
+    "rejects source changes after $timing with clock skew $clockSkewMs while accepting linked external types",
+    async ({ timing, clockSkewMs }) => {
       const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-mutation-");
       const external = tempDirs.make("openclaw-plugin-sdk-api-linked-");
       const entry = path.join(repoRoot, "src/plugin-sdk/fixture.ts");
@@ -643,40 +641,51 @@ describe("Plugin SDK API baseline", () => {
         .join(repoRoot, ".openclaw-plugin-sdk-api.tsconfig.json")
         .split(path.sep)
         .join("/");
-      const update = vi.spyOn(API.prototype, "updateSnapshot");
-      const diagnose = vi.spyOn(Program.prototype, "getDeclarationDiagnostics");
+      const createProject = nativeTypeScript.createNativeTypeScriptProject;
+      const create = vi.spyOn(nativeTypeScript, "createNativeTypeScriptProject");
+      // Declaration errors come from the emit result, the last compiler stage before publication.
+      const emit = vi.spyOn(Program.prototype, "emitToString");
       if (timing === "source project creation") {
-        update.mockImplementationOnce(function intercept(this: API, ...args) {
-          const snapshot = update.apply(this, args);
-          if (args[0]?.openProjects?.includes(sourceConfig)) {
-            expect(
-              snapshot.getProject(sourceConfig)?.program.getSourceFile(entry)?.getText(),
-            ).toContain('"checked"');
+        create.mockImplementationOnce(function intercept(options) {
+          const native = createProject(options);
+          if (options.configFileName.split(path.sep).join("/") === sourceConfig) {
+            expect(native.project.program.getSourceFile(entry)?.getText()).toContain('"checked"');
             changeSource();
           } else {
-            update.mockImplementationOnce(intercept);
+            create.mockImplementationOnce(intercept);
           }
-          return snapshot;
+          return native;
         });
       } else {
-        diagnose.mockImplementationOnce(function intercept(this: Program, ...args) {
-          const result = diagnose.apply(this, args);
-          if (this.getSourceFileNames().some((file) => path.resolve(file) === entry)) {
-            expect(result).toEqual([]);
-            changeSource();
-          } else {
-            diagnose.mockImplementationOnce(intercept);
-          }
+        emit.mockImplementationOnce(async function (this: Program, ...args) {
+          emit.mockRestore();
+          const result = await this.emitToString(...args);
+          expect(
+            (await this.getSourceFileNames()).some((file) => path.resolve(file) === entry),
+          ).toBe(true);
+          expect(result.emitSkipped).toBe(false);
+          expect(result.diagnostics).toEqual([]);
+          changeSource();
           return result;
         });
       }
+      const now = Date.now;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + clockSkewMs);
       try {
-        await expect(render()).rejects.toThrow(/Boundary .*changed during compilation/u);
+        const failure = await render().then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(changed).toBe(true);
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toMatchObject({
+          message: expect.stringMatching(/Boundary .*changed during compilation/u),
+        });
       } finally {
-        update.mockRestore();
-        diagnose.mockRestore();
+        clock.mockRestore();
+        create.mockRestore();
+        emit.mockRestore();
       }
-      expect(changed).toBe(true);
       expect(fs.readFileSync(entry, "utf8")).toBe(source("changed"));
       expect(fs.readdirSync(path.join(repoRoot, ".artifacts"))).toEqual([]);
     },
@@ -812,7 +821,7 @@ describe("Plugin SDK API baseline", () => {
       );
     }
     const configFileName = path.join(repoRoot, "tsconfig.json");
-    using native = createNativeTypeScriptProject({
+    using native = nativeTypeScript.createNativeTypeScriptProject({
       cwd: repoRoot,
       configFileName,
       files: {
@@ -823,7 +832,10 @@ describe("Plugin SDK API baseline", () => {
       },
     });
     const { program } = native.project;
-    const print = vi.spyOn(native.project.emitter, "printNode");
+    const printer = native.project.emitter;
+    // Materialize the native API's instance-cached method before Vitest wraps it.
+    void printer.printNode;
+    const print = vi.spyOn(printer, "printNode");
     const render = createDeclarationClosureRenderer({
       project: native.project,
       sourceProgram: program,

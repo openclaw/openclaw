@@ -178,6 +178,7 @@ extension OpenClawChatViewModel {
                       current: self.sessionKey)
             else { return }
             self.replyTarget = nil
+            self.narration = ChatNarration()
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
             let context = self.beginHistoryRequest()
@@ -398,19 +399,12 @@ extension OpenClawChatViewModel {
             merged.activeRunIds = activeRunIDs
         }
 
-        switch phase {
-        case "start":
-            merged.startedAt = snapshot.startedAt ?? existing.startedAt
+        merged.startedAt = snapshot.startedAt ?? existing.startedAt
+        if phase == "start" {
             merged.endedAt = nil
             merged.runtimeMs = nil
             merged.outputTokens = nil
-        case "end", "error":
-            merged.startedAt = snapshot.startedAt ?? existing.startedAt
-            merged.endedAt = snapshot.endedAt ?? existing.endedAt
-            merged.runtimeMs = snapshot.runtimeMs ?? existing.runtimeMs
-            merged.outputTokens = snapshot.outputTokens ?? existing.outputTokens
-        default:
-            merged.startedAt = snapshot.startedAt ?? existing.startedAt
+        } else {
             merged.endedAt = snapshot.endedAt ?? existing.endedAt
             merged.runtimeMs = snapshot.runtimeMs ?? existing.runtimeMs
             merged.outputTokens = snapshot.outputTokens ?? existing.outputTokens
@@ -661,29 +655,9 @@ extension OpenClawChatViewModel {
 
     private static func messageWithTimestampIfNeeded(_ message: OpenClawChatMessage) -> OpenClawChatMessage {
         guard message.timestamp == nil else { return message }
-        return OpenClawChatMessage(
-            id: message.id,
-            role: message.role,
-            content: message.content,
-            timestamp: Date().timeIntervalSince1970 * 1000,
-            transcriptMessageID: message.transcriptMessageID,
-            transcriptRunID: message.transcriptRunID,
-            isTruncated: message.isTruncated,
-            idempotencyKey: message.idempotencyKey,
-            toolCallId: message.toolCallId,
-            toolName: message.toolName,
-            usage: message.usage,
-            stopReason: message.stopReason,
-            errorMessage: message.errorMessage,
-            details: message.details,
-            isError: message.isError,
-            provenance: message.provenance,
-            historyMarker: message.historyMarker,
-            phase: message.phase,
-            turnBoundary: message.turnBoundary,
-            steerTargetRunID: message.steerTargetRunID,
-            streamFallback: message.streamFallback,
-            activity: message.activity)
+        var timestamped = message
+        timestamped.timestamp = Date().timeIntervalSince1970 * 1000
+        return timestamped
     }
 
     private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
@@ -707,6 +681,10 @@ extension OpenClawChatViewModel {
         }
 
         let isSelectedPendingRun = isPendingRun && self.liveUsageRunID == evt.runId
+        if evt.stream == "item", evt.data["kind"]?.value as? String == "preamble" {
+            self.handleAgentNarration(evt)
+            return
+        }
         guard isSelectedPendingRun || isLegacySessionStream else { return }
         self.invalidateRunSnapshots()
         self.logDiagnostic(
@@ -758,7 +736,8 @@ extension OpenClawChatViewModel {
                     startedAt: evt.ts.map(Double.init) ?? Date().timeIntervalSince1970 * 1000,
                     isError: nil,
                     diffStat: nil,
-                    activity: self.turnToolCallsById[toolCallId]?.activity)
+                    activity: self.turnToolCallsById[toolCallId]?.activity,
+                    runID: evt.runId)
             } else if phase == "input_delta",
                       let pending = self.turnToolCallsById[toolCallId],
                       let diff = evt.data["diff"]?.dictionaryValue,
@@ -775,7 +754,8 @@ extension OpenClawChatViewModel {
                     isError: pending.isError,
                     diffStat: ChatToolDiffStat(added: added, removed: removed),
                     activity: pending.activity,
-                    isComplete: pending.isComplete)
+                    isComplete: pending.isComplete,
+                    runID: pending.runID)
             } else if phase == "result" {
                 if var pending = self.turnToolCallsById[toolCallId], pending.activity != nil {
                     pending.isComplete = true
@@ -900,30 +880,16 @@ extension OpenClawChatViewModel {
     }
 
     func finishPendingRunIfTerminalSendAck(_ response: OpenClawChatSendResponse) -> Bool {
-        switch response.status {
-        case "timeout":
-            self.removePendingLocalUserEcho(for: response.runId)
-            self.turnToolCallsById = [:]
-            self.updateStreamingAssistantText(nil)
-            self.errorText = "Chat failed before the run started; try again."
-            self.retirePendingRun(response.runId, hapticEvent: .runFailed)
-            self.logDiagnostic(
-                "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
-                    + "runId=\(response.runId) status=timeout")
-            return true
-        case "error":
-            self.removePendingLocalUserEcho(for: response.runId)
-            self.turnToolCallsById = [:]
-            self.updateStreamingAssistantText(nil)
-            self.errorText = "Chat failed before the run started; try again."
-            self.retirePendingRun(response.runId, hapticEvent: .runFailed)
-            self.logDiagnostic(
-                "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
-                    + "runId=\(response.runId) status=error")
-            return true
-        default:
-            return false
-        }
+        guard response.status == "timeout" || response.status == "error" else { return false }
+        self.removePendingLocalUserEcho(for: response.runId)
+        self.turnToolCallsById = [:]
+        self.updateStreamingAssistantText(nil)
+        self.errorText = "Chat failed before the run started; try again."
+        self.retirePendingRun(response.runId, hapticEvent: .runFailed)
+        self.logDiagnostic(
+            "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
+                + "runId=\(response.runId) status=\(response.status)")
+        return true
     }
 
     func removePendingLocalUserEcho(for runId: String) {
@@ -1139,15 +1105,7 @@ extension OpenClawChatViewModel {
         guard let lastUserIndex = messages.lastIndex(where: { $0.role.lowercased() == "user" }) else {
             return false
         }
-        guard lastUserIndex < messages.index(before: messages.endIndex) else {
-            return false
-        }
-        return messages[messages.index(after: lastUserIndex)...].contains { message in
-            guard message.role.lowercased() == "assistant", message.streamSegmentID == nil else { return false }
-            let text = message.content.compactMap(\.text).joined(separator: "\n")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return !text.isEmpty || message.errorMessage != nil
-        }
+        return self.hasAssistantMessage(after: lastUserIndex, in: messages)
     }
 
     private static func assistantHapticEvent(

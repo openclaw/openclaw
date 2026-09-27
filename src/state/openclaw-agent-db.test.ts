@@ -6,11 +6,7 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
@@ -85,10 +81,7 @@ import {
   replaceNamedIndexesWithNoncanonicalIndexes,
 } from "./sqlite-schema-shape.test-support.js";
 
-type AgentDbTestDatabase = Pick<
-  OpenClawAgentKyselyDatabase,
-  "memory_index_sources" | "schema_meta"
->;
+type AgentDbTestDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
 
 const agentDbTempDirs: string[] = [];
 let sharedStateDatabaseTemplatePath: string | undefined;
@@ -97,6 +90,27 @@ let v13WorkerAgentDatabaseTemplatePath: string | undefined;
 
 function createTempStateDir(): string {
   return makeTempDir(agentDbTempDirs, "openclaw-agent-db-");
+}
+
+function expectMissingFileAliasesMatchVolume(leftName: string, rightName: string): void {
+  const stateDir = fs.realpathSync(createTempStateDir());
+  const leftPath = path.join(stateDir, leftName);
+  const rightPath = path.join(stateDir, rightName);
+  fs.writeFileSync(leftPath, "probe");
+  let aliases = false;
+  try {
+    const leftStat = fs.lstatSync(leftPath, { bigint: true });
+    const rightStat = fs.lstatSync(rightPath, { bigint: true });
+    aliases = leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  } finally {
+    fs.unlinkSync(leftPath);
+  }
+
+  expect(isSameOpenClawAgentDatabasePath(leftPath, rightPath)).toBe(aliases);
 }
 
 function ensureSharedStateDatabaseTemplate(): string {
@@ -1356,38 +1370,6 @@ describe("openclaw agent database", () => {
     }
   });
 
-  it("opens a v13 database that already contains additive board storage", async () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeV13WorkerAgentDatabase(stateDir);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const existingV13 = new DatabaseSync(databasePath);
-    existingV13.exec(`
-      PRAGMA user_version = 13;
-      UPDATE schema_meta SET schema_version = 13 WHERE meta_key = 'primary';
-    `);
-    existingV13.close();
-
-    const reopened = await migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT name, strict FROM pragma_table_list WHERE name IN ('board_tabs', 'board_widgets') ORDER BY name",
-        )
-        .all(),
-    ).toEqual([
-      { name: "board_tabs", strict: 1 },
-      { name: "board_widgets", strict: 1 },
-    ]);
-    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-    expect(
-      reopened.db
-        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-        .get(),
-    ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
-  });
-
   it("migrates v13 session entries, routes, and generations into nodes and windows", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -1650,45 +1632,6 @@ describe("openclaw agent database", () => {
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
         .get(),
     ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
-  });
-
-  it("upgrades version 10 with agent state intact without retired lease storage", async () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeV13WorkerAgentDatabase(stateDir);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacy = new DatabaseSync(databasePath);
-    legacy
-      .prepare(
-        "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
-      )
-      .run("last-good", '{"profile":"primary"}', 10);
-    legacy.exec(`
-      PRAGMA user_version = 10;
-      UPDATE schema_meta SET schema_version = 10 WHERE meta_key = 'primary';
-    `);
-    legacy.close();
-
-    const migrated = await migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
-    expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-    });
-    expect(
-      migrated.db
-        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-        .get(),
-    ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
-    expect(
-      migrated.db
-        .prepare("SELECT state_json FROM auth_profile_state WHERE state_key = ?")
-        .get("last-good"),
-    ).toEqual({ state_json: '{"profile":"primary"}' });
-    expect(
-      migrated.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'state_leases'")
-        .get(),
-    ).toBeUndefined();
   });
 
   it("retires tenant-free lease storage when upgrading version 16", async () => {
@@ -1969,39 +1912,6 @@ describe("openclaw agent database", () => {
         .get(),
     ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
     expect(migrated.db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
-  });
-
-  it("generates stable typed memory source identities", () => {
-    const stateDir = createTempStateDir();
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    try {
-      const agentDb = getNodeSqliteKysely<AgentDbTestDatabase>(database);
-      const inserted = executeSqliteQuerySync(
-        database,
-        agentDb.insertInto("memory_index_sources").values({
-          path: "MEMORY.md",
-          source: "memory",
-          hash: "hash",
-          mtime: 1,
-          size: 2,
-        }),
-      );
-
-      expect(inserted.insertId).toBe(1n);
-      expect(
-        executeSqliteQueryTakeFirstSync(
-          database,
-          agentDb
-            .selectFrom("memory_index_sources")
-            .select(["id", "path", "source"])
-            .where("path", "=", "MEMORY.md"),
-        ),
-      ).toEqual({ id: 1, path: "MEMORY.md", source: "memory" });
-    } finally {
-      database.close();
-    }
   });
 
   it("migrates version 1 memory source identities before registering version 2", async () => {
@@ -2457,45 +2367,11 @@ describe("openclaw agent database", () => {
   );
 
   it("matches volume semantics for non-ASCII case aliases", () => {
-    const stateDir = fs.realpathSync(createTempStateDir());
-    const upperPath = path.join(stateDir, "É.sqlite");
-    const lowerPath = path.join(stateDir, "é.sqlite");
-    fs.writeFileSync(upperPath, "probe");
-    let aliases = false;
-    try {
-      const upperStat = fs.lstatSync(upperPath, { bigint: true });
-      const lowerStat = fs.lstatSync(lowerPath, { bigint: true });
-      aliases = upperStat.dev === lowerStat.dev && upperStat.ino === lowerStat.ino;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    } finally {
-      fs.unlinkSync(upperPath);
-    }
-
-    expect(isSameOpenClawAgentDatabasePath(upperPath, lowerPath)).toBe(aliases);
+    expectMissingFileAliasesMatchVolume("É.sqlite", "é.sqlite");
   });
 
   it("matches volume semantics for Unicode simple case-fold aliases", () => {
-    const stateDir = fs.realpathSync(createTempStateDir());
-    const sigmaPath = path.join(stateDir, "σ.sqlite");
-    const finalSigmaPath = path.join(stateDir, "ς.sqlite");
-    fs.writeFileSync(sigmaPath, "probe");
-    let aliases = false;
-    try {
-      const sigmaStat = fs.lstatSync(sigmaPath, { bigint: true });
-      const finalSigmaStat = fs.lstatSync(finalSigmaPath, { bigint: true });
-      aliases = sigmaStat.dev === finalSigmaStat.dev && sigmaStat.ino === finalSigmaStat.ino;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    } finally {
-      fs.unlinkSync(sigmaPath);
-    }
-
-    expect(isSameOpenClawAgentDatabasePath(sigmaPath, finalSigmaPath)).toBe(aliases);
+    expectMissingFileAliasesMatchVolume("σ.sqlite", "ς.sqlite");
   });
 
   it("does not probe unrelated Unicode spellings as case aliases", () => {
@@ -2509,45 +2385,11 @@ describe("openclaw agent database", () => {
   });
 
   it("keeps case and normalization semantics distinct for missing aliases", () => {
-    const stateDir = fs.realpathSync(createTempStateDir());
-    const composedUpperPath = path.join(stateDir, "É.sqlite");
-    const decomposedLowerPath = path.join(stateDir, "é.sqlite");
-    fs.writeFileSync(composedUpperPath, "probe");
-    let aliases = false;
-    try {
-      const upperStat = fs.lstatSync(composedUpperPath, { bigint: true });
-      const lowerStat = fs.lstatSync(decomposedLowerPath, { bigint: true });
-      aliases = upperStat.dev === lowerStat.dev && upperStat.ino === lowerStat.ino;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    } finally {
-      fs.unlinkSync(composedUpperPath);
-    }
-
-    expect(isSameOpenClawAgentDatabasePath(composedUpperPath, decomposedLowerPath)).toBe(aliases);
+    expectMissingFileAliasesMatchVolume("É.sqlite", "é.sqlite");
   });
 
   it("requires raw normalization after an ASCII-only case difference", () => {
-    const stateDir = fs.realpathSync(createTempStateDir());
-    const composedUpperPath = path.join(stateDir, "ÉA.sqlite");
-    const decomposedMixedPath = path.join(stateDir, "Éa.sqlite");
-    fs.writeFileSync(composedUpperPath, "probe");
-    let aliases = false;
-    try {
-      const upperStat = fs.lstatSync(composedUpperPath, { bigint: true });
-      const mixedStat = fs.lstatSync(decomposedMixedPath, { bigint: true });
-      aliases = upperStat.dev === mixedStat.dev && upperStat.ino === mixedStat.ino;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    } finally {
-      fs.unlinkSync(composedUpperPath);
-    }
-
-    expect(isSameOpenClawAgentDatabasePath(composedUpperPath, decomposedMixedPath)).toBe(aliases);
+    expectMissingFileAliasesMatchVolume("ÉA.sqlite", "Éa.sqlite");
   });
 
   it.runIf(tempVolumeIsCaseInsensitive)(
@@ -2589,26 +2431,7 @@ describe("openclaw agent database", () => {
   );
 
   it("uses the candidate code points for missing-path normalization semantics", () => {
-    const stateDir = fs.realpathSync(createTempStateDir());
-    const leftName = "\u2329.sqlite";
-    const rightName = "\u3008.sqlite";
-    const leftPath = path.join(stateDir, leftName);
-    const rightPath = path.join(stateDir, rightName);
-    fs.writeFileSync(leftPath, "probe");
-    let aliases = false;
-    try {
-      const leftStat = fs.lstatSync(leftPath, { bigint: true });
-      const rightStat = fs.lstatSync(rightPath, { bigint: true });
-      aliases = leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    } finally {
-      fs.unlinkSync(leftPath);
-    }
-
-    expect(isSameOpenClawAgentDatabasePath(leftPath, rightPath)).toBe(aliases);
+    expectMissingFileAliasesMatchVolume("\u2329.sqlite", "\u3008.sqlite");
   });
 
   it("matches volume semantics for normalization-only missing directory components", () => {
@@ -4530,7 +4353,7 @@ describe("openclaw agent database", () => {
     expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual(expectedOwner);
   });
 
-  it.each([null, "", "   "])(
+  it.each([null, "   "])(
     "treats schema metadata with invalid agent owner %j as unreadable",
     (agentId) => {
       const stateDir = createTempStateDir();

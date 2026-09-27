@@ -35,7 +35,6 @@ export function resolveCopilotForwardCompatModel(
     return undefined;
   }
 
-  // If the model is already in the registry, let the normal path handle it.
   const lowerModelId = normalizeOptionalLowercaseString(trimmedModelId) ?? "";
   const existing = ctx.modelRegistry.find(PROVIDER_ID, lowerModelId);
   if (existing) {
@@ -43,47 +42,29 @@ export function resolveCopilotForwardCompatModel(
   }
 
   const staticOverride = resolveStaticCopilotModelOverride(lowerModelId);
-  if (staticOverride) {
-    const compat = staticOverride.compat ?? resolveCopilotModelCompat(trimmedModelId);
-    return normalizeModelCompat({
-      id: trimmedModelId,
-      name: staticOverride.name ?? trimmedModelId,
-      provider: PROVIDER_ID,
-      api: staticOverride.api ?? resolveCopilotTransportApi(trimmedModelId),
-      reasoning: staticOverride.reasoning ?? false,
-      input: staticOverride.input ?? ["text", "image"],
-      cost: staticOverride.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: staticOverride.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-      ...(staticOverride.contextTokens !== undefined
-        ? { contextTokens: staticOverride.contextTokens }
-        : {}),
-      maxTokens: staticOverride.maxTokens ?? DEFAULT_MAX_TOKENS,
-      ...(staticOverride.thinkingLevelMap
-        ? { thinkingLevelMap: staticOverride.thinkingLevelMap }
-        : {}),
-      ...(compat ? { compat } : {}),
-    } as ProviderRuntimeModel);
-  }
-
-  // Catch-all: create a synthetic model definition for any unknown model ID.
-  // The Copilot API is OpenAI-compatible and will return its own error if the
-  // model isn't available on the user's plan. This lets new models be used
-  // by simply adding them to agents.defaults.models in openclaw.json — no
-  // code change required.
-  const reasoning = /^o[13](\b|$)/.test(lowerModelId) || isCopilotCodexModelId(lowerModelId);
-  const compat = resolveCopilotModelCompat(trimmedModelId);
+  // Unknown configured IDs remain usable; Copilot enforces account availability.
+  const reasoning = staticOverride
+    ? (staticOverride.reasoning ?? false)
+    : /^o[13](\b|$)/.test(lowerModelId) || isCopilotCodexModelId(lowerModelId);
+  const compat = staticOverride?.compat ?? resolveCopilotModelCompat(trimmedModelId);
   return normalizeModelCompat({
     id: trimmedModelId,
-    name: trimmedModelId,
+    name: staticOverride?.name ?? trimmedModelId,
     provider: PROVIDER_ID,
-    api: resolveCopilotTransportApi(trimmedModelId),
+    api: staticOverride?.api ?? resolveCopilotTransportApi(trimmedModelId),
     reasoning,
     // Optimistic: most Copilot models support images, and the API rejects
     // image payloads for text-only models rather than failing silently.
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    input: staticOverride?.input ?? ["text", "image"],
+    cost: staticOverride?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    ...(staticOverride?.contextTokens !== undefined
+      ? { contextTokens: staticOverride.contextTokens }
+      : {}),
+    maxTokens: staticOverride?.maxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(staticOverride?.thinkingLevelMap
+      ? { thinkingLevelMap: staticOverride.thinkingLevelMap }
+      : {}),
     ...(compat ? { compat } : {}),
   } as ProviderRuntimeModel);
 }
@@ -131,14 +112,8 @@ type CopilotModelSelectionMetadata = {
 
 const copilotModelSelectionMetadata = new WeakMap<object, CopilotModelSelectionMetadata>();
 
-function readCopilotModelSelectionMetadata(
-  model: CopilotCatalogModel,
-): CopilotModelSelectionMetadata | undefined {
-  return copilotModelSelectionMetadata.get(model);
-}
-
 export function isCopilotCatalogModelVisible(model: CopilotCatalogModel): boolean {
-  const metadata = readCopilotModelSelectionMetadata(model);
+  const metadata = copilotModelSelectionMetadata.get(model);
   return Boolean(
     metadata?.pickerEnabled &&
     metadata.policyState !== "disabled" &&
@@ -147,7 +122,7 @@ export function isCopilotCatalogModelVisible(model: CopilotCatalogModel): boolea
 }
 
 function isCopilotCatalogModelSelectable(model: CopilotCatalogModel): boolean {
-  const metadata = readCopilotModelSelectionMetadata(model);
+  const metadata = copilotModelSelectionMetadata.get(model);
   return Boolean(
     isCopilotCatalogModelVisible(model) && metadata?.streaming !== false && metadata?.toolCalls,
   );
@@ -163,8 +138,8 @@ function compareCopilotStarterCandidates(
   left: CopilotCatalogModel,
   right: CopilotCatalogModel,
 ): number {
-  const leftMetadata = readCopilotModelSelectionMetadata(left);
-  const rightMetadata = readCopilotModelSelectionMetadata(right);
+  const leftMetadata = copilotModelSelectionMetadata.get(left);
+  const rightMetadata = copilotModelSelectionMetadata.get(right);
   const previewDelta =
     Number(leftMetadata?.preview === true) - Number(rightMetadata?.preview === true);
   if (previewDelta !== 0) {

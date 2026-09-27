@@ -73,11 +73,6 @@ vi.mock("../infra/state-database-coordinator.js", () => ({
     readonly family = "state-lifecycle";
   },
 }));
-vi.mock("../infra/sqlite-coordinator.js", () => ({
-  createSqliteLifecycleAggregateError: (errors: unknown[], message: string, cause: unknown) =>
-    new AggregateError(errors, message, { cause }),
-}));
-
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.isWriteContention.mockReturnValue(false);
@@ -128,6 +123,7 @@ function fixture(
     coordinatorRuntime: { directory: "/synthetic-coordinator", keepAlive: false },
     maintenanceScope: maintenance,
     admission: {
+      coordinationKey: "file:synthetic-state",
       databasePath: "/synthetic-state/lease.sqlite",
       identity: { key: "file:synthetic-state", canonicalPath: "/synthetic-state/lease.sqlite" },
       assertCurrent() {

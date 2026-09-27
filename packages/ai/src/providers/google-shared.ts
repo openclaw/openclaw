@@ -7,9 +7,6 @@ import {
   type ThinkingConfig,
   ThinkingLevel,
 } from "@google/genai";
-/**
- * Shared utilities for Google Generative AI and Google Vertex providers.
- */
 import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
@@ -326,25 +323,12 @@ function getGoogleThinkingLevel<T extends GoogleApiType>(
   effort: ClampedGoogleThinkingLevel,
   model: Model<T>,
 ): ThinkingLevel {
+  const lowEffort = effort === "minimal" || effort === "low";
   if (isGemini3ProModel(model)) {
-    switch (effort) {
-      case "minimal":
-      case "low":
-        return ThinkingLevel.LOW;
-      case "medium":
-      case "high":
-        return ThinkingLevel.HIGH;
-    }
+    return lowEffort ? ThinkingLevel.LOW : ThinkingLevel.HIGH;
   }
   if (isGemma4Model(model)) {
-    switch (effort) {
-      case "minimal":
-      case "low":
-        return ThinkingLevel.MINIMAL;
-      case "medium":
-      case "high":
-        return ThinkingLevel.HIGH;
-    }
+    return lowEffort ? ThinkingLevel.MINIMAL : ThinkingLevel.HIGH;
   }
   switch (effort) {
     case "minimal":
@@ -370,32 +354,13 @@ function getGoogleBudget<T extends GoogleApiType>(
     return customBudgets[effort];
   }
 
-  if (model.id.includes("2.5-pro")) {
+  const isPro = model.id.includes("2.5-pro");
+  if (isPro || model.id.includes("2.5-flash")) {
     const budgets: Record<ClampedGoogleThinkingLevel, number> = {
-      minimal: 128,
+      minimal: !isPro && model.id.includes("2.5-flash-lite") ? 512 : 128,
       low: 2048,
       medium: 8192,
-      high: 32768,
-    };
-    return budgets[effort];
-  }
-
-  if (model.id.includes("2.5-flash-lite")) {
-    const budgets: Record<ClampedGoogleThinkingLevel, number> = {
-      minimal: 512,
-      low: 2048,
-      medium: 8192,
-      high: 24576,
-    };
-    return budgets[effort];
-  }
-
-  if (model.id.includes("2.5-flash")) {
-    const budgets: Record<ClampedGoogleThinkingLevel, number> = {
-      minimal: 128,
-      low: 2048,
-      medium: 8192,
-      high: 24576,
+      high: isPro ? 32768 : 24576,
     };
     return budgets[effort];
   }

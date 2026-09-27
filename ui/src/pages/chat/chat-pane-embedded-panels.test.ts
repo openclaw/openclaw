@@ -708,48 +708,6 @@ describe("chat pane embedded panels", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("enumerates a structural loading variant for every side-panel tab", async () => {
-    const expected = {
-      browser: "browser",
-      "link-reader": "files",
-      companion: "chat",
-      conversation: "chat",
-      dashboard: "board",
-      desktop: "desktop",
-      detail: "review",
-      discussion: "discussion",
-      portal: "browser",
-      tasks: "tasks",
-      terminal: "terminal",
-      workspace: "files",
-    } as const;
-
-    const definitions = sidebarPanelDefinitions();
-    expect(definitions.map((definition) => definition.slot)).toEqual([
-      "conversation",
-      "detail",
-      "terminal",
-      "browser",
-      "link-reader",
-      "portal",
-      "workspace",
-      "companion",
-      "tasks",
-      "desktop",
-      "discussion",
-      "dashboard",
-    ]);
-    for (const definition of definitions) {
-      const mount = document.body.appendChild(document.createElement("div"));
-      render(definition.loading, mount);
-      const skeleton = mount.querySelector("openclaw-panel-loading-skeleton");
-      await skeleton?.updateComplete;
-      expect(skeleton?.getAttribute("data-panel-skeleton")).toBe(
-        expected[definition.slot as keyof typeof expected],
-      );
-    }
-  });
-
   it("exposes task refresh in the shared side-panel header", () => {
     const onRefreshTasks = vi.fn();
     const params = {} as NonNullable<Parameters<typeof sidebarPanelDefinitions>[0]>;

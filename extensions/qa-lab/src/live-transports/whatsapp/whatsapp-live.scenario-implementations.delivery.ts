@@ -1,4 +1,3 @@
-// QA Lab WhatsApp delivery-shape, status, and approval scenarios.
 import { randomUUID } from "node:crypto";
 import type {
   WhatsAppQaApprovalScenarioRun,

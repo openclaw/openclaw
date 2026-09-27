@@ -32,8 +32,6 @@ import {
   type FeishuSendResult,
 } from "./types.js";
 
-export { resolveFeishuCardTemplate };
-
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
@@ -315,10 +313,7 @@ export async function getMessageFeishu(params: {
       responseItems?.[0] ??
       response.data;
     const item =
-      rawItem &&
-      (rawItem.body !== undefined || (rawItem as { message_id?: string }).message_id !== undefined)
-        ? rawItem
-        : null;
+      rawItem && (rawItem.body !== undefined || rawItem.message_id !== undefined) ? rawItem : null;
     if (!item) {
       return null;
     }

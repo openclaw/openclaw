@@ -1,59 +1,38 @@
-// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { GatewayProtocolRequestError } from "../../../packages/gateway-client/src/protocol-request.js";
+import { GatewaySessionMessageSubscriptionCoordinator } from "../../../packages/gateway-client/src/session-subscriptions.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import { SidebarSessionNarrationController } from "./app-sidebar-session-narration.ts";
+import {
+  browserVisibility,
+  createRunningNarrationController,
+  runningRow,
+} from "../test-helpers/app-sidebar-session-narration.ts";
+import {
+  SidebarSessionNarrationController,
+  type SidebarNarrationSyncInput,
+} from "./app-sidebar-session-narration.ts";
 import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
 
 // Mirrors the controller-internal throttle; asserting through timers keeps the
 // constant unexported (production-only export policy).
 const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-
-function runningRow(key: string): SidebarRecentSession {
-  return {
-    key,
-    label: "Run",
-    renameValue: "",
-    updatedAt: Date.now(),
-    active: false,
-    visuallyActive: false,
-    hasActiveRun: true,
-    modelSelectionLocked: false,
-    pinned: false,
-    pinnable: true,
-    cloudWorkerStopAction: null,
-    hasAutomation: false,
-    unread: false,
-    attention: { kind: "none" },
-    startedAt: 1,
-    childSessionKeys: [],
-    children: [],
-    isChild: false,
-    loadingChildren: false,
-    containsActiveDescendant: false,
-    runningChildCount: 0,
-    failedChildCount: 0,
-  };
-}
 
 function gatewayEvent(eventName: string, payload: unknown): GatewayEventFrame {
   return { event: eventName, payload } as GatewayEventFrame;
 }
 
-function createRunningNarrationController(source: SessionCapability) {
-  const updates: Array<ReadonlyMap<string, string>> = [];
-  const controller = new SidebarSessionNarrationController((lines) => updates.push(lines));
-  controller.sync({
-    enabled: true,
-    connected: true,
-    connectionIdentity: {},
-    source,
-    openSessionKey: "",
-    rows: [runningRow("agent:main:run")],
-    agentId: "main",
+function chatDelta(text?: string, deltaText?: string, replace?: boolean): GatewayEventFrame {
+  return gatewayEvent("chat", {
+    sessionKey: "agent:main:run",
+    runId: "run-1",
+    state: "delta",
+    deltaText,
+    replace,
+    ...(text === undefined ? {} : { message: { role: "assistant", content: text } }),
   });
-  return { controller, updates };
 }
 
 describe("sidebar narration derivation", () => {
@@ -83,6 +62,264 @@ describe("SidebarSessionNarrationController", () => {
     // isolate:false shares the worker clock: a leaked fake timer deterministically
     // times out unrelated later files (seen: chat-background-tasks 60s hangs).
     vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("retains pending interests while switching foreground and resets the window on reconnect", async () => {
+    const ready = createDeferred();
+    const source = {
+      subscribeMessages: vi.fn(async (key: string) => {
+        await ready.promise;
+        return { key, agentId: null };
+      }),
+      unsubscribeMessages: vi.fn(() => Promise.resolve()),
+    };
+    const rows = Array.from({ length: 8 }, (_, index) => ({
+      ...runningRow(`agent:main:run-${index}`),
+      startedAt: undefined,
+      updatedAt: index,
+    }));
+    const input: SidebarNarrationSyncInput = {
+      enabled: true,
+      connected: true,
+      connectionIdentity: {},
+      source,
+      rows,
+      openSessionKey: "",
+      agentId: "main",
+    };
+    const controller = new SidebarSessionNarrationController(() => undefined);
+    controller.sync(input);
+    rows[0]!.updatedAt = 100;
+    controller.sync({ ...input, rows: rows.toReversed() });
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(6);
+
+    controller.sync({ ...input, openSessionKey: rows[0]!.key });
+    ready.resolve();
+    await Promise.all(source.subscribeMessages.mock.results.map(({ value }) => value));
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(7);
+    expect(source.unsubscribeMessages).not.toHaveBeenCalled();
+
+    input.openSessionKey = rows[1]!.key;
+    controller.sync(input);
+    await source.subscribeMessages.mock.results.at(-1)?.value;
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(8);
+    expect(source.unsubscribeMessages).toHaveBeenCalledExactlyOnceWith({
+      key: rows[2]!.key,
+      agentId: null,
+    });
+
+    rows[2]!.updatedAt = 200;
+    controller.sync(input);
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(8);
+    controller.sync({ ...input, connectionIdentity: {} });
+    await Promise.all(source.subscribeMessages.mock.results.map(({ value }) => value));
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(15);
+    expect(source.subscribeMessages.mock.calls.slice(8).map(([key]) => key)).toContain(
+      rows[2]!.key,
+    );
+    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(8);
+    controller.disconnect();
+    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(15);
+  });
+
+  it.each([false, true])("retains a failed hidden release (late acquisition: %s)", async (late) => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const visibility = browserVisibility();
+    const subscribed = createDeferred();
+    const released = createDeferred();
+    const wireKeys = new Set<string>();
+    let releases = 0;
+    const request = vi.fn().mockImplementation(async (method: string, params: { key: string }) => {
+      if (method === "sessions.messages.subscribe") {
+        await subscribed.promise;
+        wireKeys.add(params.key);
+      } else {
+        releases += 1;
+        if (releases === 1) {
+          throw new GatewayProtocolRequestError({ retryable: true });
+        }
+        await released.promise;
+        wireKeys.delete(params.key);
+      }
+      return { key: params.key };
+    });
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
+    const source = {
+      subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>((key, options) =>
+        coordinator.acquire(key, options),
+      ),
+      unsubscribeMessages: vi.fn<SessionCapability["unsubscribeMessages"]>((handle) =>
+        coordinator.release(handle),
+      ),
+    };
+    const { controller } = createRunningNarrationController(source);
+    if (late) {
+      visibility("hidden");
+    }
+    subscribed.resolve();
+    const handle = await source.subscribeMessages.mock.results[0]?.value;
+    visibility("hidden");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wireKeys.size).toBe(1);
+
+    visibility("hidden");
+    visibility("hidden");
+    expect(source.unsubscribeMessages.mock.calls).toEqual([[handle]]);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(source.unsubscribeMessages.mock.calls).toEqual([[handle], [handle]]);
+    visibility("visible");
+    expect(releases).toBe(2);
+    released.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wireKeys.size).toBe(1);
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(2);
+
+    controller.disconnect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wireKeys.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("releases hidden narration interests while preserving selected-pane and outbox owners", async () => {
+    const visibility = browserVisibility();
+    const wireKeys = new Set<string>();
+    const request = vi.fn().mockImplementation(async (method: string, params: { key: string }) => {
+      if (method === "sessions.messages.subscribe") {
+        wireKeys.add(params.key);
+      } else if (method === "sessions.messages.unsubscribe") {
+        wireKeys.delete(params.key);
+      }
+      return { key: params.key };
+    });
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
+    const source = {
+      subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>((key, options) =>
+        coordinator.acquire(key, options),
+      ),
+      unsubscribeMessages: vi.fn<SessionCapability["unsubscribeMessages"]>((handle) =>
+        coordinator.release(handle),
+      ),
+    };
+    const selectedPane = await coordinator.acquire("agent:main:open");
+    const outbox = await coordinator.acquire("agent:main:background-0");
+    const updates: Array<ReadonlyMap<string, string>> = [];
+    const controller = new SidebarSessionNarrationController((lines) => updates.push(lines));
+    const input: SidebarNarrationSyncInput = {
+      enabled: true,
+      connected: true,
+      connectionIdentity: coordinator,
+      source,
+      agentId: "main",
+      openSessionKey: selectedPane.key,
+      rows: [
+        runningRow(selectedPane.key),
+        ...Array.from({ length: 8 }, (_, index) => runningRow(`agent:main:background-${index}`)),
+      ],
+    };
+    const settleSubscriptions = () =>
+      Promise.all(source.subscribeMessages.mock.results.map((result) => result.value));
+    const snapshot = (text: string) =>
+      gatewayEvent("chat", {
+        sessionKey: selectedPane.key,
+        runId: "run-1",
+        message: { role: "assistant", content: text },
+      });
+
+    controller.sync(input);
+    const handles = await settleSubscriptions();
+    expect(wireKeys.size).toBe(7);
+    controller.handleEvent(snapshot("Before hiding."));
+    controller.handleEvent(snapshot("Queued old narration."));
+    expect(vi.getTimerCount()).toBe(1);
+
+    visibility("hidden");
+    visibility("hidden");
+    controller.sync(input);
+    expect(source.unsubscribeMessages.mock.calls.map(([handle]) => handle)).toEqual(handles);
+    expect([...wireKeys]).toEqual([selectedPane.key, outbox.key]);
+    expect(vi.getTimerCount()).toBe(0);
+    controller.handleEvent(snapshot("Hidden update from the selected pane."));
+    expect(updates.at(-1)?.size).toBe(0);
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(7);
+
+    // Rows can settle or change while this tab is hidden.
+    controller.sync({
+      ...input,
+      rows: [runningRow(selectedPane.key), runningRow("agent:main:new")],
+    });
+    visibility("visible");
+    visibility("visible");
+    await settleSubscriptions();
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(9);
+    expect([...wireKeys]).toEqual([selectedPane.key, outbox.key, "agent:main:new"]);
+    controller.handleEvent(snapshot("Current narration after returning."));
+    expect(updates.at(-1)?.get(selectedPane.key)).toBe("Current narration after returning.");
+
+    controller.disconnect();
+    visibility("hidden");
+    visibility("visible");
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(9);
+    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(9);
+    expect([...wireKeys]).toEqual([selectedPane.key, outbox.key]);
+    await coordinator.release(selectedPane);
+    await coordinator.release(outbox);
+    expect(wireKeys.size).toBe(0);
+  });
+
+  it("releases a late hidden subscription without retiring its visible replacement", async () => {
+    const visibility = browserVisibility();
+    const first = createDeferred<{ key: string; agentId: null }>();
+    const second = createDeferred<{ key: string; agentId: null }>();
+    const source = {
+      subscribeMessages: vi
+        .fn()
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise),
+      unsubscribeMessages: vi.fn<SessionCapability["unsubscribeMessages"]>(() => Promise.resolve()),
+    };
+    const { controller } = createRunningNarrationController(source);
+    visibility("hidden");
+    visibility("visible");
+    const visibleHandle = { key: "agent:main:run", agentId: null };
+    second.resolve(visibleHandle);
+    await second.promise;
+    const hiddenHandle = { key: "agent:main:run", agentId: null };
+    first.resolve(hiddenHandle);
+    await first.promise;
+    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(1);
+    expect(source.unsubscribeMessages.mock.calls[0]?.[0]).toBe(hiddenHandle);
+    controller.disconnect();
+    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(2);
+    expect(source.unsubscribeMessages.mock.calls[1]?.[0]).toBe(visibleHandle);
+  });
+
+  it("defers initial hidden subscriptions and honors disabled intent on return", async () => {
+    const visibility = browserVisibility("hidden");
+    const source = {
+      subscribeMessages: vi.fn((key: string) => Promise.resolve({ key, agentId: null })),
+      unsubscribeMessages: vi.fn(() => Promise.resolve()),
+    };
+    const { controller } = createRunningNarrationController(source);
+    expect(source.subscribeMessages).not.toHaveBeenCalled();
+    visibility("visible");
+    await Promise.resolve();
+    expect(source.subscribeMessages).toHaveBeenCalledOnce();
+    visibility("hidden");
+    controller.sync({
+      enabled: false,
+      connected: true,
+      connectionIdentity: {},
+      source,
+      rows: [runningRow("agent:main:run")],
+      openSessionKey: "",
+      agentId: "main",
+    });
+    visibility("visible");
+    expect(source.subscribeMessages).toHaveBeenCalledOnce();
+    expect(source.unsubscribeMessages).toHaveBeenCalledOnce();
+    controller.disconnect();
   });
 
   it("subscribes only to sessions with a projected active run", async () => {
@@ -237,14 +474,7 @@ describe("SidebarSessionNarrationController", () => {
     });
     await Promise.resolve();
 
-    controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: { phase: "commentary", text: "**Reading** files.", delta: "**Reading** files." },
-      }),
-    );
+    controller.handleEvent(chatDelta("**Reading** files.", "**Reading** files."));
     controller.handleEvent(
       gatewayEvent("session.tool", {
         sessionKey: "agent:main:run",
@@ -292,7 +522,27 @@ describe("SidebarSessionNarrationController", () => {
     expect(updates.at(-1)?.get("agent:main:run")).toBe("Reading files now.");
   });
 
-  it("normalizes raw assistant events before publishing narration", () => {
+  it("uses chat text once when agent and chat deltas overlap", async () => {
+    const source = {
+      subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
+      unsubscribeMessages: vi.fn(() => Promise.resolve()),
+    } as unknown as SessionCapability;
+    const { controller, updates } = createRunningNarrationController(source);
+    controller.handleEvent(chatDelta("Reading"));
+    controller.handleEvent(
+      gatewayEvent("agent", {
+        sessionKey: "agent:main:run",
+        runId: "run-1",
+        stream: "assistant",
+        data: { delta: " files" },
+      }),
+    );
+    controller.handleEvent(chatDelta(undefined, " files"));
+    await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
+    expect(updates.at(-1)?.get("agent:main:run")).toBe("Reading files");
+  });
+
+  it("normalizes chat snapshots before publishing narration", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
@@ -300,21 +550,17 @@ describe("SidebarSessionNarrationController", () => {
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: {
-          text: [
-            "Visible work is complete.",
-            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-            "private runtime details",
-            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-            "[[audio_as_voice]]",
-            "REPLY_SKIP",
-          ].join("\n"),
-        },
-      }),
+      chatDelta(
+        [
+          "Visible work is complete.",
+          "<think>private reasoning</think>",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "private runtime details",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "[[audio_as_voice]]",
+          "REPLY_SKIP",
+        ].join("\n"),
+      ),
     );
 
     expect(updates.at(-1)?.get("agent:main:run")).toBe("Visible work is complete.");
@@ -328,14 +574,7 @@ describe("SidebarSessionNarrationController", () => {
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: {
-          text: `${"Visible progress continues. ".repeat(16)}Final visible status. HEARTBEAT_OK`,
-        },
-      }),
+      chatDelta(`${"Visible progress continues. ".repeat(16)}Final visible status. HEARTBEAT_OK`),
     );
 
     const line = updates.at(-1)?.get("agent:main:run");
@@ -351,24 +590,14 @@ describe("SidebarSessionNarrationController", () => {
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: {
-          text: `Visible setup.\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n${"private runtime detail ".repeat(1_000)}`,
-        },
-      }),
+      chatDelta(
+        `Visible setup.\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n${"private runtime detail ".repeat(1_000)}`,
+      ),
     );
     expect(updates.at(-1)?.get("agent:main:run")).toBe("Visible setup.");
 
     controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: { delta: "\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nFinal bounded line." },
-      }),
+      chatDelta(undefined, "\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nFinal bounded line."),
     );
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
 
@@ -382,24 +611,10 @@ describe("SidebarSessionNarrationController", () => {
     } as unknown as SessionCapability;
     const { controller, updates } = createRunningNarrationController(source);
 
-    controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: { text: "Visible setup.\n<<<BEGIN_OPENCLAW_INTERNAL_CONT" },
-      }),
-    );
+    controller.handleEvent(chatDelta("Visible setup.\n<<<BEGIN_OPENCLAW_INTERNAL_CONT"));
     expect(updates.at(-1)?.get("agent:main:run")).toBe("Visible setup.");
 
-    controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: { delta: "EXT>>>\nprivate runtime detail" },
-      }),
-    );
+    controller.handleEvent(chatDelta(undefined, "EXT>>>\nprivate runtime detail"));
     expect(updates.at(-1)?.get("agent:main:run")).toBe("Visible setup.");
   });
 
@@ -448,71 +663,40 @@ describe("SidebarSessionNarrationController", () => {
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: {
-          text: [
-            "Visible setup.",
-            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-            "private outer runtime detail ".repeat(1_000),
-            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-            "private nested runtime detail ".repeat(1_000),
-            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-          ].join("\n"),
-        },
-      }),
+      chatDelta(
+        [
+          "Visible setup.",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "private outer runtime detail ".repeat(1_000),
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "private nested runtime detail ".repeat(1_000),
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+      ),
     );
     expect(updates.at(-1)?.get("agent:main:run")).toBe("Visible setup.");
 
-    controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: { delta: "\nStill private after the nested block." },
-      }),
-    );
+    controller.handleEvent(chatDelta(undefined, "\nStill private after the nested block."));
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
     expect(updates.at(-1)?.get("agent:main:run")).toBe("Visible setup.");
 
     controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: { delta: "\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nFinal public line." },
-      }),
+      chatDelta(undefined, "\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nFinal public line."),
     );
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
 
     expect(updates.at(-1)?.get("agent:main:run")).toBe("Final public line.");
   });
 
-  it("replaces stale assistant narration when an agent event requests replacement", async () => {
+  it("replaces stale assistant narration when a chat event requests replacement", async () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
     } as unknown as SessionCapability;
     const { controller, updates } = createRunningNarrationController(source);
 
-    controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: { text: "Draft answer." },
-      }),
-    );
-    controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: { replace: true, text: "Corrected answer." },
-      }),
-    );
+    controller.handleEvent(chatDelta("Draft answer."));
+    controller.handleEvent(chatDelta("Corrected answer.", "Corrected answer.", true));
 
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
     expect(updates.at(-1)?.get("agent:main:run")).toBe("Corrected answer.");
@@ -586,33 +770,12 @@ describe("SidebarSessionNarrationController", () => {
     } as unknown as SessionCapability;
     const { controller, updates } = createRunningNarrationController(source);
 
-    controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: { text: "Draft that gets withdrawn." },
-      }),
-    );
+    controller.handleEvent(chatDelta("Draft that gets withdrawn."));
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
     expect(updates.at(-1)?.get("agent:main:run")).toBe("Draft that gets withdrawn.");
 
-    controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: { replace: true, text: "HEARTBEAT_OK" },
-      }),
-    );
-    controller.handleEvent(
-      gatewayEvent("agent", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "assistant",
-        data: { replace: true, text: "" },
-      }),
-    );
+    controller.handleEvent(chatDelta("HEARTBEAT_OK", "HEARTBEAT_OK", true));
+    controller.handleEvent(chatDelta("", "", true));
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
     expect(updates.at(-1)?.has("agent:main:run")).toBe(false);
   });

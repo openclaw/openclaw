@@ -7,11 +7,11 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
+import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { ReplyResolverOptions } from "./bot-message-dispatch.telegram-http.test-support.js";
 import { createTelegramDispatchHttpFixture } from "./bot-message-dispatch.telegram-http.test-support.js";
 import { deliverReplies, deliverStructuredReplies } from "./bot/delivery.replies.js";
-import * as sendRuntime from "./send.runtime.js";
 import { resolveTelegramTestUpload } from "./send.telegram-http.test-support.js";
 
 const DELIVERY_WARNING =
@@ -80,7 +80,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     async (content) => {
       let adopted = false;
       if (content === "media") {
-        vi.spyOn(sendRuntime, "loadWebMedia").mockResolvedValue({
+        vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
           buffer: Buffer.from("delegated report bytes"),
           contentType: "application/pdf",
           kind: undefined,

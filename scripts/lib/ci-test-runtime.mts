@@ -45,6 +45,7 @@ const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
 const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
 const bunCompatibleConfigs = new Set([
   "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+  "test/vitest/vitest.extension-memory.config.ts",
   gatewayClientConfig,
 ]);
 // Measured whole-file admission; the rest of agents-support retains Node.
@@ -66,6 +67,7 @@ const nativeCompilerTestFiles = [
   "test/scripts/native-typescript.test.ts",
   "test/scripts/nodes-cli-import-closure.test.ts",
   "test/scripts/ts-topology.test.ts",
+  "test/scripts/typecheck-inert.test.ts",
   "test/test-helper-extension-import-boundary.test.ts",
 ];
 // Bun fork 3ff0efc82217775e04094a1d4402d7c6932ecb24 failed or added skips in these files.
@@ -104,7 +106,7 @@ const runtimePartitions = new Map<
     "test/vitest/vitest.unit-fast-isolated.config.ts",
     {
       files: () => getUnitFastIsolatedTestFiles(),
-      nodeRequired: new Set([...nativeCompilerTestFiles, "src/proxy-capture/proxy-server.test.ts"]),
+      nodeRequired: new Set(nativeCompilerTestFiles),
     },
   ],
   [
@@ -114,8 +116,11 @@ const runtimePartitions = new Map<
         globSync(controlUiTestGlobs, { cwd, exclude: controlUiE2eTestGlobs })
           .map((file) => file.replaceAll("\\", "/"))
           .toSorted(),
-      // Overview identity replacement still retains its payload under Bun GC.
-      nodeRequired: new Set(["ui/src/pages/usage/usage-page-details.test.ts"]),
+      // Bun GC can retain released chat and overview payloads; keep their retention proof on Node.
+      nodeRequired: new Set([
+        "ui/src/pages/chat/chat-thread.test.ts",
+        "ui/src/pages/usage/usage-page-details.test.ts",
+      ]),
       includeAfterShard: true,
     },
   ],
@@ -145,7 +150,8 @@ function supportsRuntimePartition(args: string[]): boolean {
   return args.every(
     (arg) =>
       arg === "--testNamePattern=(?!)" ||
-      /^--(?:maxWorkers|testTimeout|hookTimeout)=\d+$/u.test(arg),
+      /^--(?:maxWorkers|testTimeout|hookTimeout)=\d+$/u.test(arg) ||
+      /^--exclude=[\w./-]+\.test\.[cm]?[jt]sx?$/u.test(arg),
   );
 }
 

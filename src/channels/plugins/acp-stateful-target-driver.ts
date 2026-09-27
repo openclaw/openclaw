@@ -1,9 +1,4 @@
 import { resolveAcpSessionTarget } from "../../acp/control-plane/manager.utils.js";
-/**
- * ACP stateful target driver for configured bindings.
- *
- * Ensures ACP-backed bound sessions exist, are ready, and can be reset by Gateway.
- */
 import {
   ensureConfiguredAcpBindingReadyCore,
   ensureConfiguredAcpBindingSession,

@@ -19,6 +19,7 @@ import {
   isSubagentCoordinationHistoryInput,
   type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
+import type { SessionArtifactReadQuery } from "./session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createBoundSessionHistorySubagentSource } from "./session-history-subagent-sources.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
@@ -40,9 +41,7 @@ export function createBoundSessionHistorySubagentProjection(
     readSourceDatabases,
   );
   return {
-    isSubagentSession(sessionKey) {
-      return readSource(sessionKey);
-    },
+    isSubagentSession: readSource,
     isSubagentRunMessage(runId, messageSeq) {
       if (messageSeq === undefined) {
         return false;
@@ -77,8 +76,11 @@ export function createBoundSessionHistorySubagentProjection(
   };
 }
 
-export function createReadonlySessionHistoryReader(target: PreparedSessionHistoryReadTarget) {
-  const sourceDatabases = target.sourceDatabases;
+export function createReadonlySessionHistoryReader(
+  target: Omit<PreparedSessionHistoryReadTarget, "sourceDiscovery">,
+  resolveSourceDatabases?: () => GatewaySessionStoreReadSources | undefined,
+) {
+  let sourceDatabases = target.sourceDatabases;
   const readSnapshot = <T>(read: (projection: CurrentTranscriptProjection) => T): T => {
     const result = withScopedOpenClawAgentDatabaseReadOnly(
       (database) =>
@@ -112,6 +114,10 @@ export function createReadonlySessionHistoryReader(target: PreparedSessionHistor
     return result.value.value;
   };
   return {
+    readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
+      const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");
+      return readSnapshot((projection) => readArtifactSummariesFromProjection(projection, query));
+    },
     readTranscriptBinding: (run?: { id: string; maxBytes: number }) =>
       readSnapshot((projection) => readSessionTranscriptBindingFromProjection(projection, run)),
     readTranscriptDisplayDelta: (limits: SessionTranscriptRawDeltaLimits) =>
@@ -123,7 +129,7 @@ export function createReadonlySessionHistoryReader(target: PreparedSessionHistor
     subagentCoordination: createBoundSessionHistorySubagentProjection(
       readSnapshot,
       target.stateDatabase,
-      () => sourceDatabases,
+      () => (sourceDatabases ??= resolveSourceDatabases?.()),
     ),
   };
 }

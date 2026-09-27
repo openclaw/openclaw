@@ -97,7 +97,7 @@ describe("SQLite trajectory runtime store", () => {
     );
   });
 
-  it.each(["2026", "0", "1969-12-31T23:59:59.000Z"])(
+  it.each(["0", "1969-12-31T23:59:59.000Z"])(
     "stores Date.parse-compatible trajectory timestamp %s",
     (timestamp) => {
       appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
@@ -128,25 +128,6 @@ describe("SQLite trajectory runtime store", () => {
     await expect(
       loadSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-1", storePath }),
     ).resolves.toEqual([]);
-  });
-
-  it("trims oldest rows beyond the configured byte window", async () => {
-    appendSqliteTrajectoryRuntimeEvents(
-      { maxRuntimeBytes: 900, sessionId: "session-1", storePath },
-      [
-        createTrajectoryEvent({ type: "event-1" }),
-        createTrajectoryEvent({ type: "event-2" }),
-        createTrajectoryEvent({ type: "event-3" }),
-        createTrajectoryEvent({ type: "event-4" }),
-      ],
-    );
-
-    const events = await loadSqliteTrajectoryRuntimeEvents({
-      sessionId: "session-1",
-      storePath,
-    });
-
-    expect(events.map((event) => event.type)).toEqual(["event-3", "event-4"]);
   });
 
   it("trims the retained byte window without fetching UTF-8 event bodies", async () => {

@@ -48,6 +48,7 @@ import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.gateway.GatewayLoadedMedia
 import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewaySourcePreviewConfig
+import ai.openclaw.app.gatewayConnectionStatusForDisplay
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -79,7 +80,6 @@ import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.design.sessionColor
 import ai.openclaw.app.ui.foldAwareSheet
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
-import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
@@ -443,7 +443,7 @@ internal fun ChatScreen(
     )
   val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
-  val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
+  val offlineStatus = gatewayConnectionStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
   val gatewayOffline = !gatewayConnectionDisplay.isConnected
   val effectiveGatewayDefaultAgentId =
     resolveGatewayDefaultAgentId(activeGatewayStableId, gatewayDefaultAgentId, gatewayComposerDefaultAgentOwner)
@@ -521,8 +521,6 @@ internal fun ChatScreen(
   val currentPickerOwner by rememberUpdatedState(composerOwner)
   val currentPickerMainSessionKey by rememberUpdatedState(mainSessionKey)
   val sendInFlight = composerOwner in sendStates
-  val pickerActivity = LocalActivity.current
-  val pickerView = LocalView.current
 
   // Admission reads current settings, not the last composed enabled state.
   fun currentEffortSession() =
@@ -562,20 +560,12 @@ internal fun ChatScreen(
     )
 
   val modelPicker =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected) &&
-          viewModel.gatewayConnectionDisplay.value.isConnected &&
-          operatorScopesAllowWrite(viewModel.operatorScopes.value)
-      }
+    rememberChatPicker(viewModel) {
+      viewModel.gatewayConnectionDisplay.value.isConnected && operatorScopesAllowWrite(viewModel.operatorScopes.value)
     }
   val contextPicker =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected) &&
-          viewModel.gatewayConnectionDisplay.value.isConnected &&
-          operatorScopesAllowRead(viewModel.operatorScopes.value)
-      }
+    rememberChatPicker(viewModel) {
+      viewModel.gatewayConnectionDisplay.value.isConnected && operatorScopesAllowRead(viewModel.operatorScopes.value)
     }
   var modelPickerPage by remember { mutableStateOf(ChatComposerPickerPage.Models) }
   var composerAnchor by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -586,12 +576,7 @@ internal fun ChatScreen(
     if (modelPicker.visible !== previous) modelPickerPage = page
   }
 
-  val effortPicker =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected) && (canChangeThinking() || canChangeFastMode(expected))
-      }
-    }
+  val effortPicker = rememberChatPicker(viewModel) { expected -> canChangeThinking() || canChangeFastMode(expected) }
   var effortPreview by remember(
     effortPicker.visible,
     composerOwner,
@@ -601,30 +586,10 @@ internal fun ChatScreen(
     thinkingLevelSelection.options,
     canAdminSessionSettings,
   ) { mutableStateOf<String?>(null) }
-  val backgroundTasks =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected)
-      }
-    }
-  val reviewDiff =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected)
-      }
-    }
-  val attachmentPicker =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected)
-      }
-    }
-  val branchPicker =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected)
-      }
-    }
+  val backgroundTasks = rememberChatPicker(viewModel)
+  val reviewDiff = rememberChatPicker(viewModel)
+  val attachmentPicker = rememberChatPicker(viewModel)
+  val branchPicker = rememberChatPicker(viewModel)
   var branchOpening by remember(branchPicker) { mutableStateOf<ChatBranchOpening?>(null) }
 
   fun isCurrentBranchOpening(opening: ChatBranchOpening): Boolean {
@@ -660,9 +625,9 @@ internal fun ChatScreen(
   DisposableEffect(viewModel) {
     onDispose(viewModel::stopChatMessageSpeech)
   }
-  val modelSections =
+  val modelChoices =
     remember(modelCatalog, modelFavorites, modelRecents) {
-      chatModelPickerSections(
+      chatModelPickerChoices(
         catalog = modelCatalog,
         favorites = modelFavorites,
         recents = modelRecents,
@@ -1400,7 +1365,7 @@ internal fun ChatScreen(
           }
         } else {
           ChatModelPickerContent(
-            sections = modelSections,
+            models = modelChoices,
             favorites = modelFavorites.toSet(),
             selectedModelLabel = selectedModelLabel,
             selectedModelRef = selectedModelRef,
@@ -1490,6 +1455,21 @@ internal fun ChatScreen(
         admit = { backgroundTasks.admit(opening) },
         onDismiss = { if (backgroundTasks.admit(opening)) backgroundTasks.retire(opening) },
       )
+    }
+  }
+}
+
+@Composable
+private fun rememberChatPicker(
+  viewModel: MainViewModel,
+  targetAllowed: (ChatComposerOwner) -> Boolean = { true },
+): ChatModelPickerSessionOwner {
+  val activity = LocalActivity.current
+  val view = LocalView.current
+  val lifecycleOwner = LocalLifecycleOwner.current
+  return remember(viewModel, activity, view, lifecycleOwner) {
+    ChatModelPickerSessionOwner(activity, view, lifecycleOwner.lifecycle) { expected ->
+      viewModel.isCurrentChatComposerOwner(expected) && targetAllowed(expected)
     }
   }
 }
@@ -2114,21 +2094,6 @@ private fun EmptyChatHint(
 }
 
 @Composable
-private fun ChatOfflineActions(
-  onFixConnection: () -> Unit,
-  onCopyDiagnostics: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Column(
-    modifier = modifier.fillMaxWidth(),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    ClawPrimaryButton(text = nativeString("Fix connection"), icon = Icons.Default.Cloud, onClick = onFixConnection, modifier = Modifier.fillMaxWidth())
-    ClawSecondaryButton(text = nativeString("Copy diagnostics"), icon = Icons.Default.ContentCopy, onClick = onCopyDiagnostics, modifier = Modifier.fillMaxWidth())
-  }
-}
-
-@Composable
 private fun StarterPromptList(onStarterPrompt: (String) -> Unit) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
@@ -2340,22 +2305,20 @@ internal fun ChatBubble(
           parts.forEach { part ->
             when {
               part.type == "text" && !collapsibleUserText -> {
-                ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+                ChatMarkdown(
+                  text = part.text.orEmpty(),
+                  textColor = ClawTheme.colors.text,
+                  isStreaming = live,
+                  bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
+                )
               }
 
               part.type == "text" -> {}
 
-              part.isAudioAttachment() && part.hasPlayableMediaArtifact() -> {
-                ChatAudioPlayerCard(
+              (part.isAudioAttachment() || part.isVideoAttachment()) && part.hasPlayableMediaArtifact() -> {
+                ChatMediaPlayerCard(
                   content = part,
-                  playbackBlocked = inlineMediaPlaybackBlocked,
-                  loadMedia = loadMediaArtifact,
-                )
-              }
-
-              part.isVideoAttachment() && part.hasPlayableMediaArtifact() -> {
-                ChatVideoPlayerCard(
-                  content = part,
+                  kind = if (part.isAudioAttachment()) GatewayMediaKind.Audio else GatewayMediaKind.Video,
                   playbackBlocked = inlineMediaPlaybackBlocked,
                   loadMedia = loadMediaArtifact,
                 )
@@ -2524,20 +2487,6 @@ private fun ChatUserMessageText(
       }
     }
   }
-}
-
-@Composable
-private fun ChatText(
-  text: String,
-  textColor: Color,
-  isStreaming: Boolean,
-) {
-  ChatMarkdown(
-    text = text,
-    textColor = textColor,
-    isStreaming = isStreaming,
-    bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
-  )
 }
 
 @Composable
@@ -3979,7 +3928,7 @@ internal fun branchMetadataText(branch: SessionBranch): String {
 
 @Composable
 private fun ChatModelPickerContent(
-  sections: ChatModelPickerSections,
+  models: List<GatewayModelSummary>,
   favorites: Set<String>,
   selectedModelLabel: String,
   selectedModelRef: String?,
@@ -3992,7 +3941,6 @@ private fun ChatModelPickerContent(
 ) {
   var query by remember { mutableStateOf("") }
   var expandedProviders by remember { mutableStateOf(emptySet<String>()) }
-  val models = sections.pinned + sections.recent + sections.remaining
   val defaultModel = models.firstOrNull { it.providerQualifiedRef() == defaultModelRef }
 
   fun matches(model: GatewayModelSummary): Boolean = query.isBlank() || listOf(model.name, model.id, providerDisplayName(model.provider)).any { it.contains(query.trim(), ignoreCase = true) }
@@ -4261,7 +4209,10 @@ private fun ChatOfflineNotice(
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
       )
-      ChatOfflineActions(onFixConnection = onFixConnection, onCopyDiagnostics = onCopyDiagnostics)
+      Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ClawPrimaryButton(text = nativeString("Fix connection"), icon = Icons.Default.Cloud, onClick = onFixConnection, modifier = Modifier.fillMaxWidth())
+        ClawSecondaryButton(text = nativeString("Copy diagnostics"), icon = Icons.Default.ContentCopy, onClick = onCopyDiagnostics, modifier = Modifier.fillMaxWidth())
+      }
     }
   }
 }

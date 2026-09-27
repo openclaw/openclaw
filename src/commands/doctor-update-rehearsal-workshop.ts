@@ -2,10 +2,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pathExists, root } from "../infra/fs-safe.js";
-import {
-  resolveSkillProposalTarget,
-  validateSkillProposalRecord,
-} from "../skills/workshop/store.js";
+import { resolveSkillProposalTarget } from "../skills/workshop/store.js";
 import { listPendingLegacyCollectionBackupRoots } from "./doctor-skill-workshop-collection-backups.js";
 import {
   classifyWorkshopRelocation,
@@ -13,9 +10,7 @@ import {
 } from "./doctor-skill-workshop-relocation.js";
 import {
   LEGACY_WORKSHOP_PROPOSALS_DIR as PROPOSALS_DIR,
-  LEGACY_WORKSHOP_MAX_RECORD_BYTES as MAX_RECORD_BYTES,
-  LEGACY_WORKSHOP_PROPOSAL_ID_PATTERN as PROPOSAL_ID_PATTERN,
-  readLegacyWorkshopJson,
+  readLegacyWorkshopProposals,
   readWorkshopMigrationRecords,
 } from "./doctor-skill-workshop-sources.js";
 const MANIFEST_PATH = "skill-workshop/proposals.json";
@@ -36,25 +31,8 @@ export async function collectDoctorSkillWorkshopBackupResources(params: {
   if (await pathExists(path.join(stateDir, PROPOSALS_DIR))) {
     resources.set(path.join(stateDir, PROPOSALS_DIR), "directory");
     resources.set(path.join(stateDir, RECOVERY_PROPOSALS_DIR), "directory");
-    const stateRoot = await root(stateDir);
-    for (const entry of await stateRoot.list(PROPOSALS_DIR, { withFileTypes: true })) {
-      if (!entry.isDirectory || !PROPOSAL_ID_PATTERN.test(entry.name)) {
-        continue;
-      }
-      try {
-        const record = validateSkillProposalRecord(
-          await readLegacyWorkshopJson(
-            stateRoot,
-            `${PROPOSALS_DIR}/${entry.name}/proposal.json`,
-            MAX_RECORD_BYTES,
-          ),
-        );
-        if (record.ok && record.value.id === entry.name) {
-          records.push({ record: record.value, ownerAgentId: null });
-        }
-      } catch {
-        // Invalid bundles can only be quarantined within the captured proposal roots.
-      }
+    for (const proposal of await readLegacyWorkshopProposals(await root(stateDir))) {
+      records.push(proposal);
     }
   }
   const { external } = classifyWorkshopRelocation(

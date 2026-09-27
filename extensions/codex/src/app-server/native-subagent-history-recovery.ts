@@ -25,7 +25,6 @@ import type {
   RecoveredCompletion,
   ThreadRecovery,
 } from "./native-subagent-monitor-types.js";
-import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
 import {
   normalizeIdentifier,
   readNativeTaskAssignment,
@@ -111,10 +110,22 @@ export class CodexNativeSubagentHistoryRecovery {
     return [...retiring].filter((state) => parents.get(state.parentThreadId) === state);
   }
 
-  selectTaskRecords(state: ParentState, records = state.taskRuntime?.listTaskRecords() ?? []) {
+  selectTaskRecords(state: ParentState, records = state.readTaskRecords?.() ?? []) {
     return records
       .filter((task) => this.acceptsTask(task, state))
       .toSorted((a, b) => (b.startedAt ?? b.createdAt) - (a.startedAt ?? a.createdAt));
+  }
+
+  async readTaskRecords(state: ParentState): Promise<AgentHarnessTaskRecord[]> {
+    const runtime = state.taskRuntime;
+    if (!runtime) {
+      return [];
+    }
+    if (!runtime.prepareTaskRecordsRead) {
+      throw new Error("Codex native task recovery requires prepared task reads.");
+    }
+    const read = await runtime.prepareTaskRecordsRead();
+    return this.selectTaskRecords(state, read());
   }
 
   acceptsParent(
@@ -158,7 +169,7 @@ export class CodexNativeSubagentHistoryRecovery {
   }
 
   readReceiverTask(state: ParentState, childThreadId: string) {
-    const records = state.taskRuntime?.listTaskRecords() ?? [];
+    const records = state.readTaskRecords?.() ?? [];
     const task = records
       .toSorted((a, b) => (b.startedAt ?? b.createdAt) - (a.startedAt ?? a.createdAt))
       .find((record) => readNativeTaskAssignment(record)?.childThreadId === childThreadId);
@@ -251,10 +262,16 @@ export class CodexNativeSubagentHistoryRecovery {
     return task.endedAt >= now - RECENT_TERMINAL_TASK_RECONCILE_GRACE_MS;
   }
 
-  prepareTaskRead(candidate: TaskRecoveryCandidate, child: ChildState | undefined, now: number) {
-    const tasks = candidate.taskRuntime
-      .listTaskRecords()
-      .filter((record) => record.runId === candidate.runId);
+  async prepareTaskRead(
+    candidate: TaskRecoveryCandidate,
+    child: ChildState | undefined,
+    now: number,
+  ) {
+    if (!candidate.taskRuntime.prepareTaskRunRead) {
+      throw new Error("Codex native task recovery requires prepared task reads.");
+    }
+    const read = await candidate.taskRuntime.prepareTaskRunRead(candidate.runId);
+    const tasks = read();
     const task = tasks[0];
     if (
       tasks.length !== 1 ||
@@ -279,16 +296,18 @@ export class CodexNativeSubagentHistoryRecovery {
     };
   }
 
-  isCurrentTask(
+  async isCurrentTask(
     candidate: TaskRecoveryCandidate,
     task: AgentHarnessTaskRecord,
     history: CodexNativeSubagentHistoryOwner | undefined,
     parentThreadId: string,
     now: number,
-  ): boolean {
-    const currentTasks = candidate.taskRuntime
-      .listTaskRecords()
-      .filter((record) => record.runId === candidate.runId);
+  ): Promise<boolean> {
+    if (!candidate.taskRuntime.prepareTaskRunRead) {
+      throw new Error("Codex native task recovery requires prepared task reads.");
+    }
+    const read = await candidate.taskRuntime.prepareTaskRunRead(candidate.runId);
+    const currentTasks = read();
     const current = currentTasks[0];
     if (
       currentTasks.length !== 1 ||
@@ -311,7 +330,6 @@ export class CodexNativeSubagentHistoryRecovery {
       return false;
     }
     return (
-      current &&
       current.taskId === task.taskId &&
       this.acceptsTask(current, candidate.parentState) &&
       this.shouldReconcileTask(current, now) &&
@@ -358,7 +376,7 @@ export class CodexNativeSubagentHistoryRecovery {
         : undefined;
     return this.read(assignment, {
       resumeInterrupted: task.status === "queued" || task.status === "running",
-      getTaskRecords: () => this.selectTaskRecords(candidate.parentState),
+      getTaskRecords: () => this.readTaskRecords(candidate.parentState),
       observedTurns: candidate.observedTurns,
       ...(recordedStatus && task.terminalSummary
         ? {
@@ -378,13 +396,18 @@ export class CodexNativeSubagentHistoryRecovery {
     assignment: NativeSubagentAssignment,
     options: {
       resumeInterrupted: boolean;
-      getTaskRecords: () => readonly AgentHarnessTaskRecord[];
+      getTaskRecords: () =>
+        | readonly AgentHarnessTaskRecord[]
+        | Promise<readonly AgentHarnessTaskRecord[]>;
       recordedCompletion?: RecoveredCompletion;
       observedTurns?: readonly NativeTurnObservation[];
     },
   ): Promise<ThreadRecovery> {
     const { childThreadId } = assignment;
     const { recordedCompletion } = options;
+    let taskRecordsSnapshot: readonly AgentHarnessTaskRecord[] | undefined;
+    // Materialize once, after the last native read, for both absence-based guards.
+    const readTaskRecords = async () => (taskRecordsSnapshot ??= await options.getTaskRecords());
     // Fresh threads can expose lineage before includeTurns history is materialized.
     // Register that lineage now so the normal child backoff owns later full reads.
     const response = await this.requestThreadRead(childThreadId, true).catch(() =>
@@ -498,10 +521,10 @@ export class CodexNativeSubagentHistoryRecovery {
           completion = readTurnCompletion(latestTurn, childThreadId);
         }
       }
+      const taskRecords = !latestTurn ? await readTaskRecords() : [];
       const current = !latestTurn
         ? this.queries.getCurrentAssignmentState(childThreadId)
         : undefined;
-      const taskRecords = !latestTurn ? options.getTaskRecords() : [];
       const task = taskRecords.find((record) => record.runId === assignment.runId);
       // A delivered successor can outlive its monitor state. Its task row still
       // prevents a thread-wide error from being assigned to an older pending result.
@@ -549,7 +572,7 @@ export class CodexNativeSubagentHistoryRecovery {
       parentThreadId: readThreadParentThreadId(thread),
       agentPath: normalizeOptionalString(readString(readThreadSpawnSource(thread), "agent_path")),
     };
-    if (!turnId && !recordedCompletion && hasSavedSuccessor(assignment, options.getTaskRecords())) {
+    if (!turnId && !recordedCompletion && hasSavedSuccessor(assignment, await readTaskRecords())) {
       return {
         ...lineage,
         assignmentUnresolved: true,
@@ -597,20 +620,15 @@ function readThreadTurnRecovery(
   childThreadId: string,
 ): Pick<ThreadRecovery, "completion" | "resumable" | "nativeTurnId" | "nativeTurnState"> {
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index];
-    if (!isJsonObject(turn)) {
-      continue;
-    }
-    const status = normalizeIdentifier(readString(turn, "status"));
-    return {
-      nativeTurnId: readString(turn, "id"),
-      nativeTurnState: readNativeTurnState(turn),
-      completion: readTurnCompletion(turn, childThreadId),
-      resumable: status === "interrupted",
-    };
-  }
-  return { resumable: false };
+  const turn = turns.findLast(isJsonObject);
+  return turn
+    ? {
+        nativeTurnId: readString(turn, "id"),
+        nativeTurnState: readNativeTurnState(turn),
+        completion: readTurnCompletion(turn, childThreadId),
+        resumable: normalizeIdentifier(readString(turn, "status")) === "interrupted",
+      }
+    : { resumable: false };
 }
 
 export function readNativeTurnEnd(
@@ -630,7 +648,7 @@ function readNativeTurnState(
     : readNativeTurnEnd(turn);
 }
 
-export function readTurnErrorMessage(turn: JsonObject): string | undefined {
+function readTurnErrorMessage(turn: JsonObject): string | undefined {
   const error = isJsonObject(turn.error) ? turn.error : undefined;
   return (
     normalizeOptionalString(readString(error, "message")) ??
@@ -649,9 +667,10 @@ export function systemErrorFallbackCompletion(childThreadId: string): RecoveredC
   };
 }
 
-function readTurnCompletion(
+export function readTurnCompletion(
   turn: JsonObject,
   childThreadId: string,
+  source: "history" | "notification" = "history",
 ): RecoveredCompletion | undefined {
   const status = normalizeIdentifier(readString(turn, "status"));
   if (status === "inprogress" || !status) {
@@ -659,15 +678,24 @@ function readTurnCompletion(
   }
   const result = readLastAgentMessage(turn);
   const completedAtSeconds = asFiniteNumber(turn.completedAt);
-  const completedAt =
-    completedAtSeconds === undefined ? undefined : Math.round(completedAtSeconds * 1_000);
+  const timestamp =
+    source === "history"
+      ? {
+          completedAt:
+            completedAtSeconds === undefined ? undefined : Math.round(completedAtSeconds * 1_000),
+        }
+      : {};
   if (status === "completed") {
     return {
       childThreadId,
       status: "succeeded",
-      statusLabel: result ? "task_complete" : "completed_without_final_message",
+      statusLabel: result
+        ? source === "history"
+          ? "task_complete"
+          : "turn_completed"
+        : "completed_without_final_message",
       result: result ?? "Subagent completed without a final assistant message.",
-      completedAt,
+      ...timestamp,
     };
   }
   // Codex keeps interrupted subagents resumable. They remain a running task
@@ -679,15 +707,18 @@ function readTurnCompletion(
     return {
       childThreadId,
       status: "failed",
-      statusLabel: "task_failed",
-      result: readTurnErrorMessage(turn) ?? result ?? "Subagent failed.",
-      completedAt,
+      statusLabel: source === "history" ? "task_failed" : "turn_failed",
+      result:
+        readTurnErrorMessage(turn) ??
+        (source === "history" ? result : undefined) ??
+        "Subagent failed.",
+      ...timestamp,
     };
   }
   return undefined;
 }
 
-export function readLastAgentMessage(turn: JsonObject): string | undefined {
+function readLastAgentMessage(turn: JsonObject): string | undefined {
   const items = Array.isArray(turn.items) ? turn.items : [];
   let legacyResult: string | undefined;
   for (let index = items.length - 1; index >= 0; index -= 1) {
@@ -711,11 +742,4 @@ export function readLastAgentMessage(turn: JsonObject): string | undefined {
     }
   }
   return legacyResult;
-}
-
-export function isNoFinalCompletion(completion: CodexNativeSubagentCompletion): boolean {
-  return (
-    completion.status === "succeeded" &&
-    completion.statusLabel === "completed_without_final_message"
-  );
 }

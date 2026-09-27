@@ -359,11 +359,18 @@ export async function migrateCanonicalTranscriptArchives(
   while (true) {
     const batch = listArchiveBatch(params.database, cursor, params.transformContent);
     if (batch.length === 0) {
-      runSqliteImmediateTransactionSync(params.database, () => {
-        assertAgentDatabaseMaintenanceAuthority();
-        params.writeCursor({ phase: "complete" });
-        assertAgentDatabaseMaintenanceAuthority();
-      });
+      runSqliteImmediateTransactionSync(
+        params.database,
+        () => {
+          assertAgentDatabaseMaintenanceAuthority();
+          params.writeCursor({ phase: "complete" });
+          assertAgentDatabaseMaintenanceAuthority();
+        },
+        {
+          databaseLabel: params.pathname,
+          operationLabel: "historical-transcript-archive.complete",
+        },
+      );
       return rewrittenArchives;
     }
     for (const planned of batch) {

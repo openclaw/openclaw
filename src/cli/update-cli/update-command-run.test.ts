@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
@@ -22,6 +23,7 @@ import {
 } from "../../infra/update-run-recovery.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as existingStateWrite from "../../state/openclaw-state-db-existing-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createUpdateProgress } from "./progress.js";
@@ -440,11 +442,25 @@ it.each(["ok", "error"] as const)(
   },
 );
 
-it.each([false, true])(
-  "prints an unexpected update failure after settlement with an existing report (json=%s)",
-  async (json) => {
+it.each([
+  { json: false, diagnosticsWriteFails: false },
+  { json: true, diagnosticsWriteFails: false },
+  { json: true, diagnosticsWriteFails: true },
+])(
+  "prints an unexpected update failure after settlement with an existing report (json=$json, diagnosticsWriteFails=$diagnosticsWriteFails)",
+  async ({ json, diagnosticsWriteFails }) => {
     const env = { OPENCLAW_STATE_DIR: dirs.make("update-unexpected-failure-") };
     const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const primaryFailure = new Error("Candidate validation unexpectedly stopped.");
+    const warn = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    if (diagnosticsWriteFails) {
+      vi.spyOn(
+        existingStateWrite,
+        "runExistingOpenClawStateWriteTransaction",
+      ).mockImplementationOnce(() => {
+        throw new Error("fixture diagnostics write refused");
+      });
+    }
     const reportPath = path.join(env.OPENCLAW_STATE_DIR, "update-reports", `${run.runId}.md`);
     let savedAtPublication: string | undefined;
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation((value) => {
@@ -456,28 +472,48 @@ it.each([false, true])(
       savedAtPublication = fs.readFileSync(reportPath, "utf8");
     });
     let beforeSettlement: { status?: string; output: number } | undefined;
-    await expect(
-      withUpdateCommandTerminalResult(
-        (registerRun) => {
-          registerRun(run);
-          return withUpdateCommandRecoveryUnwind(
-            { json, run },
-            { triageTarget: { env } },
-            async () => {
-              throw new Error("Candidate validation unexpectedly stopped.");
-            },
-          ).finally(() => {
-            beforeSettlement = {
-              status: getUpdateRun(run.runId, { env })?.status,
-              output: log.mock.calls.length + output.mock.calls.length,
-            };
-          });
-        },
-        { json },
-      ),
-    ).rejects.toMatchObject({ name: "UpdateCommandFailure" });
+    const outcome = await withUpdateCommandTerminalResult(
+      (registerRun) => {
+        registerRun(run);
+        return withUpdateCommandRecoveryUnwind(
+          { json, run },
+          { triageTarget: { env } },
+          async () => {
+            throw primaryFailure;
+          },
+        ).finally(() => {
+          beforeSettlement = {
+            status: getUpdateRun(run.runId, { env })?.status,
+            output: log.mock.calls.length + output.mock.calls.length,
+          };
+        });
+      },
+      { json },
+    ).catch((error: unknown) => error);
+    expect(outcome).toMatchObject({
+      name: "UpdateCommandFailure",
+      exitCode: 1,
+      result: { status: "error", reason: "update-failed" },
+    });
+    expect(collectNestedErrorCandidates(outcome)).toContain(primaryFailure);
     expect(beforeSettlement).toEqual({ status: "running", output: 0 });
-    expect(getUpdateRun(run.runId, { env })?.status).toBe("failed");
+    expect(getUpdateRun(run.runId, { env })).toMatchObject({
+      status: "failed",
+      reason: "update-failed",
+      verification: { rollbackOutcome: { status: "not-needed" } },
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "requested",
+          status: "failed",
+          failureFacts: [expect.objectContaining({ message: primaryFailure.message })],
+        }),
+      ]),
+    });
+    if (diagnosticsWriteFails) {
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("fixture diagnostics write refused"),
+      );
+    }
     expect(savedAtPublication).toContain("Candidate validation unexpectedly stopped.");
     expect(savedAtPublication).toContain("OpenClaw update failed");
     if (json) {

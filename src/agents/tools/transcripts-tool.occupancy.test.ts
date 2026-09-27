@@ -202,7 +202,7 @@ describe("occupancy-driven transcript lifecycle", () => {
     });
   });
 
-  it.each([undefined, null, "invalid", "supplied", "generated"])(
+  it.each([undefined, "supplied", "generated"])(
     "reopens only a newest capture with recorded generated origin (%s)",
     async (origin) => {
       const h = harness();

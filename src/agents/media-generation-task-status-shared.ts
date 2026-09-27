@@ -399,18 +399,6 @@ function getMediaGenerationTaskProviderId(
   return providerId || undefined;
 }
 
-/** Finds the highest-priority active media generation task for a session. */
-async function findActiveMediaGenerationTaskForSession(params: {
-  sessionKey?: string;
-  agentId?: string;
-  taskKind: string;
-  sourcePrefix: string;
-  taskLabel?: string;
-  excludeDeliveringCompletion?: boolean;
-}): Promise<TaskRecord | undefined> {
-  return (await listActiveMediaGenerationTasksForSession(params))[0];
-}
-
 /** Lists active media generation tasks for a session, preferring running tasks. */
 async function listActiveMediaGenerationTasksForSession(params: {
   sessionKey?: string;
@@ -639,17 +627,19 @@ export function createMediaGenerationTaskStatusOwner(params: {
     toolName: params.toolName,
   };
   return {
-    findActiveTaskForSession(
+    async findActiveTaskForSession(
       this: void,
       sessionKey?: string,
       request?: { prompt?: string; agentId?: string },
-    ) {
-      return findActiveMediaGenerationTaskForSession({
-        ...taskIdentity,
-        sessionKey,
-        taskLabel: request?.prompt,
-        agentId: request?.agentId,
-      });
+    ): Promise<TaskRecord | undefined> {
+      return (
+        await listActiveMediaGenerationTasksForSession({
+          ...taskIdentity,
+          sessionKey,
+          taskLabel: request?.prompt,
+          agentId: request?.agentId,
+        })
+      )[0];
     },
     listActiveTasksForSession(this: void, sessionKey?: string, agentId?: string) {
       return listActiveMediaGenerationTasksForSession({ ...taskIdentity, sessionKey, agentId });

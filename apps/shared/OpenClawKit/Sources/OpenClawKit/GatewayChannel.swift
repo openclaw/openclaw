@@ -48,6 +48,7 @@ public actor GatewayChannelActor {
     private var shouldReconnect = true
     private nonisolated let socketAdmission = Mutex(true)
     private var lastSeq: Int?
+    private var liveTextProjection = GatewayLiveTextProjection()
     private var lastTick: Date?
     private var tickIntervalMs: Double = 30000
     private var lastAuthSource: GatewayAuthSource = .none
@@ -143,6 +144,7 @@ public actor GatewayChannelActor {
         self.retireSocketAdmission()
         self.shouldReconnect = false
         self.connected = false
+        self.liveTextProjection.reset()
         self.acceptedHTTPBearer = nil
         self.activeConnectAttemptID = nil
         self.automaticReconnectRequested = false
@@ -335,14 +337,7 @@ public actor GatewayChannelActor {
 
         // External authorization can suspend. A canceled route must never create a socket
         // with a grant returned after its disconnect or replacement.
-        let request: URLRequest
-        do {
-            request = try await self.makeUpgradeRequest()
-        } catch let error as GatewayExternalAuthorizationError {
-            // No physical socket exists yet; pause the watchdog at this admission boundary.
-            self.reconnectPausedForAuthFailure = true
-            throw error
-        }
+        let request = try await self.makeUpgradeRequest()
         try Task.checkCancellation()
         guard self.shouldReconnect else { throw CancellationError() }
         if let disconnectError { throw disconnectError }
@@ -403,6 +398,7 @@ public actor GatewayChannelActor {
         self.backoffMs = 500
         self.connectFailureBackoff.reset()
         self.lastSeq = nil
+        self.liveTextProjection.reset()
         self.listen(connectionGeneration: connectionGeneration)
         self.startTickWatchdog(connectionGeneration: connectionGeneration)
         self.startKeepalive(connectionGeneration: connectionGeneration)
@@ -1086,6 +1082,7 @@ extension GatewayChannelActor {
         // receive failure. Only the owner notifies lifecycle cleanup or reconnects.
         self.disconnectedConnectionGeneration = connectionGeneration
         self.connected = false
+        self.liveTextProjection.reset()
         self.acceptedHTTPBearer = nil
         self.activeConnectAttemptID = nil
         if shouldReconnect {
@@ -1123,12 +1120,7 @@ extension GatewayChannelActor {
         connectionGeneration: UInt64) async
     {
         guard self.isConnected(connectionGeneration: connectionGeneration) else { return }
-        let data: Data? = switch msg {
-        case let .data(d): d
-        case let .string(s): s.data(using: .utf8)
-        @unknown default: nil
-        }
-        guard let data else { return }
+        guard let data = self.decodeMessageData(msg) else { return }
         guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else {
             self.logger.error("gateway decode failed")
             return
@@ -1140,18 +1132,43 @@ extension GatewayChannelActor {
             if evt.event == "connect.challenge" { return }
             if let seq = evt.seq {
                 if let last = lastSeq, seq > last + 1 {
+                    if GatewayPush.event(evt).isTerminalChatEvent,
+                       let terminal = self.liveTextProjection.project(evt)
+                    {
+                        await self.pushHandler?(.event(terminal), connectionGeneration)
+                    }
+                    // Terminal delivery can retire this socket while its callback is suspended.
+                    guard self.isConnected(connectionGeneration: connectionGeneration) else { return }
                     await self.pushHandler?(
                         .seqGap(expected: last + 1, received: seq),
                         connectionGeneration)
-                    // The gap callback can suspend for UI/state recovery. A socket
-                    // loss during that hop must not admit the old socket's event
-                    // under the replacement connection's fresh lifecycle epoch.
-                    guard self.isConnected(connectionGeneration: connectionGeneration) else { return }
+                    let error = NSError(
+                        domain: "Gateway",
+                        code: 8,
+                        userInfo: [NSLocalizedDescriptionKey: "gateway event sequence gap"])
+                    await self.transitionToDisconnected(
+                        reason: error.localizedDescription,
+                        error: error,
+                        connectionGeneration: connectionGeneration,
+                        shouldReconnect: true)
+                    return
                 }
                 self.lastSeq = seq
             }
             if evt.event == "tick" { self.lastTick = Date() }
-            await self.pushHandler?(.event(evt), connectionGeneration)
+            guard let projected = self.liveTextProjection.project(evt) else {
+                let error = NSError(
+                    domain: "Gateway",
+                    code: 8,
+                    userInfo: [NSLocalizedDescriptionKey: "gateway live text baseline missing"])
+                await self.transitionToDisconnected(
+                    reason: error.localizedDescription,
+                    error: error,
+                    connectionGeneration: connectionGeneration,
+                    shouldReconnect: true)
+                return
+            }
+            await self.pushHandler?(.event(projected), connectionGeneration)
         default:
             break
         }
@@ -1317,7 +1334,6 @@ extension GatewayChannelActor {
     }
 
     private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {
-        if error is GatewayExternalAuthorizationError { return true }
         guard let authError = error as? GatewayConnectAuthError else {
             return false
         }
@@ -1609,12 +1625,7 @@ extension GatewayChannelActor {
     {
         let id = UUID().uuidString
         // Encode request using the generated models to avoid JSONSerialization/ObjC bridging pitfalls.
-        let paramsObject: ProtoAnyCodable? = params.map { entries in
-            let dict = entries.reduce(into: [String: ProtoAnyCodable]()) { dict, entry in
-                dict[entry.key] = ProtoAnyCodable(entry.value.value)
-            }
-            return ProtoAnyCodable(dict)
-        }
+        let paramsObject = params.map(ProtoAnyCodable.init)
         let frame = RequestFrame(
             type: "req",
             id: id,
@@ -1650,5 +1661,3 @@ extension GatewayChannelActor {
         waiter.resume(throwing: CancellationError())
     }
 }
-
-// Intentionally no `GatewayChannel` wrapper: the app should use the single shared `GatewayConnection`.

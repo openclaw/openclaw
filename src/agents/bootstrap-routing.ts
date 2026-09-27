@@ -18,8 +18,10 @@ export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
 }
 
 /** Inputs that decide whether this run should inject workspace bootstrap context. */
-type BootstrapRoutingInput = {
-  workspaceBootstrapPending: boolean;
+type WorkspaceBootstrapRoutingInput = {
+  isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
+  bootstrapFiles?: readonly WorkspaceBootstrapFile[];
+  bootstrapFilesProvideAccess?: boolean;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   trigger?: string;
   sessionKey?: string;
@@ -36,31 +38,6 @@ type WorkspaceBootstrapRouting = {
   includeBootstrapInSystemContext: boolean;
   includeBootstrapInRuntimeContext: boolean;
 };
-
-type WorkspaceBootstrapRoutingInput = Omit<BootstrapRoutingInput, "workspaceBootstrapPending"> & {
-  isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
-  bootstrapFiles?: readonly WorkspaceBootstrapFile[];
-  bootstrapFilesProvideAccess?: boolean;
-};
-
-function resolveBootstrapRouting(params: BootstrapRoutingInput): WorkspaceBootstrapRouting {
-  const bootstrapMode = resolveBootstrapMode({
-    bootstrapPending: params.workspaceBootstrapPending,
-    runKind: params.bootstrapContextRunKind ?? "default",
-    isInteractiveUserFacing: params.trigger === "user" || params.trigger === "manual",
-    isPrimaryRun: params.isPrimaryRun,
-    isCanonicalWorkspace:
-      (params.isCanonicalWorkspace ?? true) &&
-      params.effectiveWorkspace === params.resolvedWorkspace,
-    hasBootstrapFileAccess: params.hasBootstrapFileAccess,
-  });
-
-  return {
-    bootstrapMode,
-    includeBootstrapInSystemContext: bootstrapMode === "full",
-    includeBootstrapInRuntimeContext: false,
-  };
-}
 
 /**
  * Resolves workspace bootstrap routing after checking pending state and
@@ -81,11 +58,21 @@ export async function resolveWorkspaceBootstrapRouting(
         typeof file.content === "string" &&
         file.content.trim().length > 0,
     ) ?? false;
-  return resolveBootstrapRouting({
-    ...params,
-    workspaceBootstrapPending: workspaceBootstrapPending || hasBootstrapContent,
+  const bootstrapMode = resolveBootstrapMode({
+    bootstrapPending: workspaceBootstrapPending || hasBootstrapContent,
+    runKind: params.bootstrapContextRunKind ?? "default",
+    isInteractiveUserFacing: params.trigger === "user" || params.trigger === "manual",
+    isPrimaryRun: params.isPrimaryRun,
+    isCanonicalWorkspace:
+      (params.isCanonicalWorkspace ?? true) &&
+      params.effectiveWorkspace === params.resolvedWorkspace,
     hasBootstrapFileAccess:
       params.hasBootstrapFileAccess ||
       (params.bootstrapFilesProvideAccess !== false && hasBootstrapContent),
   });
+  return {
+    bootstrapMode,
+    includeBootstrapInSystemContext: bootstrapMode === "full",
+    includeBootstrapInRuntimeContext: false,
+  };
 }

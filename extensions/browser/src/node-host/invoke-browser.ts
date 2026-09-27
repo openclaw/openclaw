@@ -1,7 +1,3 @@
-/**
- * Node-host browser.proxy command implementation for delegated Browser control
- * requests.
- */
 import fsPromises from "node:fs/promises";
 import { toUSVString } from "node:util";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
@@ -175,17 +171,6 @@ async function ensureBrowserControlService(): Promise<void> {
   return sharedStartup;
 }
 
-function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | null }) {
-  const { allowProfiles, profile } = params;
-  if (!allowProfiles.length) {
-    return true;
-  }
-  if (!profile) {
-    return false;
-  }
-  return allowProfiles.includes(profile.trim());
-}
-
 function collectBrowserProxyPaths(payload: unknown): string[] {
   const paths = new Set<string>();
   visitBrowserProxyFilePaths(payload, (filePath) => {
@@ -311,7 +296,6 @@ function formatBrowserProxyTimeoutMessage(params: {
   return parts.join("; ");
 }
 
-/** Executes a serialized browser.proxy command and returns a serialized result payload. */
 export async function runBrowserProxyCommand(
   paramsJSON?: string | null,
   command = BROWSER_PROXY_COMMAND,
@@ -385,7 +369,8 @@ export async function runBrowserProxyCommand(
     const selected = profile?.name || effectiveProfile || requestedProfile;
     if (
       (path !== "/profiles" || selected) &&
-      !isProfileAllowed({ allowProfiles: current.allowProfiles, profile: selected })
+      current.allowProfiles.length > 0 &&
+      (!selected || !current.allowProfiles.includes(selected.trim()))
     ) {
       throw new Error("INVALID_REQUEST: browser profile not allowed");
     }

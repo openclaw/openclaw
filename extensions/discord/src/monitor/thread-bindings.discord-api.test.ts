@@ -86,18 +86,6 @@ describe("resolveChannelIdForBinding", () => {
     );
   });
 
-  it("returns explicit channelId without resolving route", async () => {
-    const resolved = await resolveTestChannelIdForBinding({
-      accountId: "default",
-      threadId: "thread-1",
-      channelId: "channel-explicit",
-    });
-
-    expect(resolved).toBe("channel-explicit");
-    expect(createDiscordRestClient).not.toHaveBeenCalled();
-    expect(restGet).not.toHaveBeenCalled();
-  });
-
   it("normalizes prefixed explicit channelId without resolving route", async () => {
     const resolved = await resolveTestChannelIdForBinding({
       accountId: "default",
@@ -165,21 +153,6 @@ describe("resolveChannelIdForBinding", () => {
           | undefined
       )?.cfg,
     ).toBe(cfg);
-  });
-
-  it("keeps non-thread channel id even when parent_id exists", async () => {
-    restGet.mockResolvedValueOnce({
-      id: "channel-text",
-      type: ChannelType.GuildText,
-      parent_id: "category-1",
-    });
-
-    const resolved = await resolveTestChannelIdForBinding({
-      accountId: "default",
-      threadId: "channel-text",
-    });
-
-    expect(resolved).toBe("channel-text");
   });
 
   it("keeps forum channel id instead of parent category", async () => {

@@ -8,6 +8,7 @@ import {
   getSqlitePinnedReadSnapshot,
   runSqlitePinnedReadSnapshotSync,
 } from "./sqlite-pinned-read-snapshot.js";
+import { findSqlCharacter } from "./sqlite-schema-sql.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 type NativeSqlite = Pick<typeof import("node:sqlite"), "DatabaseSync" | "StatementSync">;
@@ -103,6 +104,28 @@ function changesSchema(sql: string): boolean {
   );
 }
 
+const transactionControlPrefix =
+  /^(?:\s|;|--[^\n]*(?:\n|$)|\/\*(?:[^*]|\*(?!\/))*\*\/)*(BEGIN|SAVEPOINT|COMMIT|END|RELEASE|ROLLBACK)\b/i;
+
+function batchTransactionControl(sql: string): string | undefined {
+  let control: string | undefined;
+  let remaining = sql;
+  while (remaining) {
+    const next = transactionControlPrefix.exec(remaining)?.[1]?.toUpperCase();
+    if (next === "ROLLBACK") {
+      return next;
+    }
+    control ||= next;
+    // Exec accepts batches; quoted semicolons and comments do not start statements.
+    const end = remaining.includes(";") ? findSqlCharacter(remaining, ";") : -1;
+    if (end < 0) {
+      break;
+    }
+    remaining = remaining.slice(end + 1);
+  }
+  return control;
+}
+
 function callStatement<Result>(
   method: {
     (...parameters: SQLInputValue[]): Result;
@@ -142,15 +165,14 @@ function trackSchemaChanges(
   const execute = <T>(
     operation: () => T,
     schemaChange: boolean,
-    rollback: boolean,
-    boundary: boolean,
+    control: string | undefined,
   ): T => {
     if (owner.transactionalSchema && !owner.scope) {
       bindScope(database, owner);
     }
     // An implicit rollback may be followed by BEGIN before the next schema read.
     settle();
-    const invalidates = schemaChange || (rollback && owner.transactionalSchema);
+    const invalidates = schemaChange || (control === "ROLLBACK" && owner.transactionalSchema);
     if (invalidates) {
       invalidateSqliteSchemaFacts(database);
     }
@@ -161,7 +183,7 @@ function trackSchemaChanges(
       if (invalidates) {
         invalidateSqliteSchemaFacts(database);
       }
-      settle(boundary);
+      settle(Boolean(control));
     }
   };
   // Keep native prototype instrumentation visible after a connection or statement is retained.
@@ -169,16 +191,14 @@ function trackSchemaChanges(
     execute(
       () => native.DatabaseSync.prototype.exec.call(database, sql),
       changesSchema(sql),
-      /\bROLLBACK\b/i.test(sql),
-      /\b(?:BEGIN|SAVEPOINT|COMMIT|END|RELEASE|ROLLBACK)\b/i.test(sql),
+      batchTransactionControl(sql),
     );
   database.prepare = (...prepareArgs) => {
     const [sql] = prepareArgs;
     const statement = native.DatabaseSync.prototype.prepare.call(database, ...prepareArgs);
     const schemaChange = changesSchema(sql);
-    const rollback = /\bROLLBACK\b/i.test(sql);
-    const boundary = /\b(?:BEGIN|SAVEPOINT|COMMIT|END|RELEASE|ROLLBACK)\b/i.test(sql);
-    if (schemaChange || boundary) {
+    const control = transactionControlPrefix.exec(sql)?.[1]?.toUpperCase();
+    if (schemaChange || control) {
       const run = Object.hasOwn(statement, "run") ? statement.run.bind(statement) : undefined;
       const get = Object.hasOwn(statement, "get") ? statement.get.bind(statement) : undefined;
       const all = Object.hasOwn(statement, "all") ? statement.all.bind(statement) : undefined;
@@ -189,29 +209,26 @@ function trackSchemaChanges(
         execute(
           () => callStatement(run ?? native.StatementSync.prototype.run.bind(statement), bindings),
           schemaChange,
-          rollback,
-          boundary,
+          control,
         );
       statement.get = (...bindings) =>
         execute(
           () => callStatement(get ?? native.StatementSync.prototype.get.bind(statement), bindings),
           schemaChange,
-          rollback,
-          boundary,
+          control,
         );
       statement.all = (...bindings) =>
         execute(
           () => callStatement(all ?? native.StatementSync.prototype.all.bind(statement), bindings),
           schemaChange,
-          rollback,
-          boundary,
+          control,
         );
       statement.iterate = function* (...bindings) {
         if (owner.transactionalSchema && !owner.scope) {
           bindScope(database, owner);
         }
         settle();
-        const invalidates = schemaChange || (rollback && owner.transactionalSchema);
+        const invalidates = schemaChange || (control === "ROLLBACK" && owner.transactionalSchema);
         if (invalidates) {
           invalidateSqliteSchemaFacts(database);
         }
@@ -224,7 +241,7 @@ function trackSchemaChanges(
           if (invalidates) {
             invalidateSqliteSchemaFacts(database);
           }
-          settle(boundary);
+          settle(Boolean(control));
         }
         return undefined;
       };

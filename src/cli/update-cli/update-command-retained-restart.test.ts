@@ -172,9 +172,16 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
         });
       let complete = false;
       const work = owned(async (run) => {
-        await expect(commands.restartRetainedUpdateGatewayService(request(run))).resolves.toEqual({
+        const onGatewayStartAttempted = vi.fn();
+        await expect(
+          commands.restartRetainedUpdateGatewayService({
+            ...request(run),
+            onGatewayStartAttempted,
+          }),
+        ).resolves.toEqual({
           outcome: "completed",
         });
+        expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
       }).then(() => {
         complete = true;
       });
@@ -213,12 +220,21 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
     },
   );
 
-  it.each(["A", "B", "caller", "executor", "abort"] as const)(
+  it.each(["A", "B", "caller", "executor", "abort", "binding", "unavailable", "scope"] as const)(
     "refuses after the native lock/config await changes %s",
     async (fault) => {
       const native = vi.spyOn(systemdExec, "execSystemctlUser").mockResolvedValue(success);
       const controller = new AbortController();
       let callerCurrent = true;
+      const onGatewayStartAttempted = vi.fn();
+      let revalidations = 0;
+      if (fault === "unavailable") {
+        vi.mocked(systemdExec.assertSystemdAvailable).mockRejectedValue(new Error("unavailable"));
+      } else if (fault === "scope") {
+        vi.mocked(systemdScope.findInstalledSystemdGatewayScope).mockRejectedValue(
+          new Error("scope"),
+        );
+      }
       const work = owned(async (run) => {
         vi.spyOn(futureConfig, "assertFutureConfigActionAllowed").mockImplementation(async () => {
           await Promise.resolve();
@@ -228,12 +244,18 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
             run.executorFence = { assertCurrent() {} };
           } else if (fault === "abort") {
             controller.abort(new Error("cancelled fixture"));
-          } else {
+          } else if (fault === "caller") {
             callerCurrent = false;
           }
         });
         await commands.restartRetainedUpdateGatewayService({
           ...request(run),
+          onGatewayStartAttempted,
+          revalidate: async () => {
+            if (++revalidations === 2 && fault === "binding") {
+              throw new Error("changed original service binding");
+            }
+          },
           signal: controller.signal,
           assertCurrent() {
             if (!callerCurrent) {
@@ -243,16 +265,18 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
         });
       });
       await expect(work).rejects.toThrow(
-        /executor|ownership|cancelled fixture|changed original service/,
+        /executor|ownership|cancelled fixture|changed original service|unavailable|scope/,
       );
       expect(futureConfig.assertFutureConfigActionAllowed).toHaveBeenCalledOnce();
       expect(native).not.toHaveBeenCalled();
+      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
     },
   );
 
   it.each(["A", "B"] as const)(
     "checks %s again after reset-failed and before restart",
     async (root) => {
+      const onGatewayStartAttempted = vi.fn();
       const native = vi.spyOn(systemdExec, "execSystemctlUser").mockImplementation(async () => {
         await Promise.resolve();
         revoke(root === "A" ? a : b);
@@ -260,11 +284,15 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
       });
       await expect(
         owned(async (run) => {
-          await commands.restartRetainedUpdateGatewayService(request(run));
+          await commands.restartRetainedUpdateGatewayService({
+            ...request(run),
+            onGatewayStartAttempted,
+          });
         }),
       ).rejects.toThrow();
       expect(native).toHaveBeenCalledOnce();
       expect(native.mock.calls[0]?.[1][0]).toBe("reset-failed");
+      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
     },
   );
 

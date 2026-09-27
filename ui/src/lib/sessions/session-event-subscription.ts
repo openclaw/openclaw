@@ -2,28 +2,24 @@ import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { formatUiError } from "../format-error.ts";
-
-type SessionEventSubscriptionScope = {
-  client: GatewayBrowserClient;
-  epoch: number;
-};
+import type { SessionConnectionScope } from "./session-capability.ts";
 
 type SessionEventSubscriptionOwner = {
-  ensure: (scope: SessionEventSubscriptionScope) => Promise<void>;
+  ensure: (scope: SessionConnectionScope) => Promise<void>;
   reset: () => void;
   dispose: () => void;
 };
 
 /** Keeps one acknowledged broad session observer alive for its connection generation. */
 export function createSessionEventSubscriptionOwner(params: {
-  isCurrent: (scope: SessionEventSubscriptionScope) => boolean;
-  onError: (scope: SessionEventSubscriptionScope, error: string | null) => void;
+  isCurrent: (scope: SessionConnectionScope) => boolean;
+  onError: (scope: SessionConnectionScope, error: string | null) => void;
   retryDelayMs: (error: unknown) => number | null;
 }): SessionEventSubscriptionOwner {
   let generation = 0;
-  let confirmed: SessionEventSubscriptionScope | null = null;
+  let confirmed: SessionConnectionScope | null = null;
   let pending: { generation: number; promise: Promise<void> } | null = null;
   let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
@@ -34,10 +30,10 @@ export function createSessionEventSubscriptionOwner(params: {
     }
   };
 
-  const isCurrent = (scope: SessionEventSubscriptionScope, expectedGeneration: number): boolean =>
+  const isCurrent = (scope: SessionConnectionScope, expectedGeneration: number): boolean =>
     generation === expectedGeneration && params.isCurrent(scope);
 
-  const ensure = (scope: SessionEventSubscriptionScope): Promise<void> => {
+  const ensure = (scope: SessionConnectionScope): Promise<void> => {
     if (confirmed?.client === scope.client && confirmed.epoch === scope.epoch) {
       return Promise.resolve();
     }

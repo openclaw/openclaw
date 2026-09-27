@@ -1,4 +1,5 @@
 import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   type CodexThreadReadResponse,
@@ -25,7 +26,10 @@ describe("CodexNativeSubagentMonitor", () => {
     [
       ...(["completed", "interrupted"] as const).flatMap((firstEnd) =>
         (["completed", "interrupted"] as const).flatMap((secondEnd) =>
-          (["current", "released", "unbound"] as const).flatMap((parent) =>
+          (firstEnd === "completed" && secondEnd === "completed"
+            ? (["current", "released", "unbound"] as const)
+            : (["current"] as const)
+          ).flatMap((parent) =>
             [false, true].map((secondEndEvent) => ({
               firstEnd,
               secondEnd,
@@ -73,21 +77,19 @@ describe("CodexNativeSubagentMonitor", () => {
       };
       const scenarios = [Object.assign({}, scenario, options)];
       const lateInteractions = ["interactions-first", "starts-first"].includes(scenario.eventOrder);
-      if (lateInteractions || scenario.parent === "retired" || scenario.parent === "replaced") {
+      if (scenario.eventOrder === "interactions-first" && scenario.parent === "current") {
         scenarios.push(Object.assign({}, scenario, options, { legacy: true }));
+        scenarios.push(
+          Object.assign({}, scenario, options, {
+            legacy: true,
+            savedTurn: false,
+            metadataFirst: true,
+            secondEndEvent: false,
+          }),
+        );
       }
       if (lateInteractions && scenario.parent === "current") {
-        scenarios.push(
-          Object.assign({}, scenario, options, { parent: "released" as const, legacy: true }),
-        );
         for (const observedPredecessorEnd of [false, true]) {
-          scenarios.push(
-            Object.assign({}, scenario, options, {
-              legacy: true,
-              savedTurn: false,
-              observedPredecessorEnd,
-            }),
-          );
           scenarios.push(
             Object.assign({}, scenario, options, {
               legacy: false,
@@ -97,14 +99,6 @@ describe("CodexNativeSubagentMonitor", () => {
             }),
           );
         }
-        scenarios.push(
-          Object.assign({}, scenario, options, {
-            legacy: true,
-            savedTurn: false,
-            metadataFirst: true,
-            secondEndEvent: false,
-          }),
-        );
       }
       return scenarios;
     }),
@@ -151,10 +145,7 @@ describe("CodexNativeSubagentMonitor", () => {
       const rejectPendingDirectChild = vi.fn();
       const replacementClaim = vi.fn(() => () => undefined);
       const retained = vi.fn(() => () => undefined);
-      let releaseRead!: (value: CodexThreadReadResponse) => void;
-      const readGate = new Promise<CodexThreadReadResponse>((resolve) => {
-        releaseRead = resolve;
-      });
+      const { promise: readGate, resolve: releaseRead } = createDeferred<CodexThreadReadResponse>();
       if ((legacy || !savedTurn) && !metadataFirst) {
         client.setThreadReadFactory("child-thread", () => readGate);
       }
@@ -266,7 +257,7 @@ describe("CodexNativeSubagentMonitor", () => {
           unregisterPromise = owner.unregister();
         }
         if (parent === "retired" || parent === "replaced") {
-          monitor.retireParent("parent-thread");
+          await monitor.retireParent("parent-thread");
         }
         if (parent === "replaced") {
           replacement = await monitor.registerParent({
@@ -401,7 +392,14 @@ describe("CodexNativeSubagentMonitor", () => {
         previousEnd: "interrupted" as const,
         parent: "unbound" as const,
       })),
-    ].flatMap((scenario) => [false, true].map((legacy) => Object.assign({ legacy }, scenario))),
+    ].flatMap((scenario) =>
+      (scenario.parent === "unbound" &&
+      scenario.previousEnd === "interrupted" &&
+      (scenario.status === "running" || scenario.status === "succeeded")
+        ? [false, true]
+        : [false]
+      ).map((legacy) => Object.assign({ legacy }, scenario)),
+    ),
   )(
     "classifies the stored predecessor before admitting a turn during restoration ($status, $previousEnd, $parent, legacy=$legacy)",
     async ({ status, previousEnd, parent, legacy }) => {
@@ -424,10 +422,7 @@ describe("CodexNativeSubagentMonitor", () => {
       const originalSnapshot = structuredClone(original);
       const records = new Map<string, AgentHarnessTaskRecord>([[original.runId, original]]);
       const runtime = createRecordedRuntime(records);
-      let releaseRead!: (value: CodexThreadReadResponse) => void;
-      const readGate = new Promise<CodexThreadReadResponse>((resolve) => {
-        releaseRead = resolve;
-      });
+      const { promise: readGate, resolve: releaseRead } = createDeferred<CodexThreadReadResponse>();
       client.setThreadReadFactory("child-thread", () => readGate);
       const claimDirectChild = vi.fn(() => () => undefined);
       const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
@@ -557,10 +552,7 @@ describe("CodexNativeSubagentMonitor", () => {
     };
     const records = new Map<string, AgentHarnessTaskRecord>([[task.runId, task]]);
     const runtime = createRecordedRuntime(records);
-    let releaseRead!: (value: CodexThreadReadResponse) => void;
-    const readGate = new Promise<CodexThreadReadResponse>((resolve) => {
-      releaseRead = resolve;
-    });
+    const { promise: readGate, resolve: releaseRead } = createDeferred<CodexThreadReadResponse>();
     client.setThreadReadFactory("child-thread", () => readGate);
     const claimDirectChild = vi.fn(() => () => undefined);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {

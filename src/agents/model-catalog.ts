@@ -18,10 +18,11 @@ import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runt
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
-import { normalizeCatalogRouteBaseUrl, overlayCatalogMetadata } from "./model-catalog-metadata.js";
+import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-catalog-order.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";

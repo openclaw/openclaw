@@ -130,7 +130,7 @@ export function resolveChannelMessageToolHints(params: {
   if (!resolve) {
     return [];
   }
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
+  const cfg = params.cfg ?? {};
   return normalizeStringEntries(resolve({ cfg, accountId: params.accountId }));
 }
 
@@ -145,18 +145,14 @@ export function resolveChannelPromptCapabilities(params: {
     return [];
   }
   const plugin = getChannelPlugin(channelId);
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
-  const capabilities = normalizePromptCapabilities(
-    plugin?.agentPrompt?.messageToolCapabilities?.({ cfg, accountId: params.accountId }),
+  const cfg = params.cfg ?? {};
+  const capabilities = normalizeStringEntries(
+    plugin?.agentPrompt?.messageToolCapabilities?.({ cfg, accountId: params.accountId }) ?? [],
   );
   if (channelPluginHasNativeApprovalPromptUi(plugin)) {
     capabilities.push(NATIVE_APPROVAL_PROMPT_RUNTIME_CAPABILITY);
   }
   return capabilities;
-}
-
-function normalizePromptCapabilities(capabilities?: readonly string[] | null): string[] {
-  return normalizeStringEntries(capabilities ?? []);
 }
 
 /** Resolve optional channel reaction guidance for assistant replies. */
@@ -173,7 +169,7 @@ export function resolveChannelReactionGuidance(params: {
   if (!resolve) {
     return undefined;
   }
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
+  const cfg = params.cfg ?? {};
   const resolved = resolve({ cfg, accountId: params.accountId });
   if (!resolved?.level) {
     return undefined;

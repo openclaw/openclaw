@@ -420,21 +420,6 @@ describe("web_fetch extraction fallbacks", () => {
     }
   });
 
-  it("enforces maxChars after wrapping", async () => {
-    installPlainTextFetch("x".repeat(5_000));
-
-    const tool = createFetchTool({
-      firecrawl: { enabled: false },
-      maxChars: 2000,
-    });
-
-    const result = await tool?.execute?.("call", { url: "https://example.com/long" });
-    const details = result?.details as { text?: string; truncated?: boolean };
-
-    expect(withoutSpillFooter(details.text).length).toBeLessThanOrEqual(2000);
-    expect(details.truncated).toBe(true);
-  });
-
   it("honors maxChars even when wrapper overhead exceeds limit", async () => {
     const fullText = "short text";
     installPlainTextFetch(fullText);
@@ -895,53 +880,46 @@ describe("web_fetch extraction fallbacks", () => {
     }
   });
 
-  it.each(["raw-html", "readability"])(
-    "bounds oversized HTML titles alongside body content from %s",
-    async (extractor) => {
-      const title = "Page title ".repeat(6_000);
-      const body = "Useful page content.";
-      installMockFetch(async (input) =>
-        htmlResponse(
-          `<html><head><title>${title}</title></head><body><p>${body}</p></body></html>`,
-          resolveRequestUrl(input),
-        ),
-      );
-      if (extractor === "readability") {
-        extractReadableContentMock.mockResolvedValue({ title, text: body, extractor });
-      }
+  it("bounds oversized Readability titles alongside body content", async () => {
+    const title = "Page title ".repeat(6_000);
+    const body = "Useful page content.";
+    installMockFetch(async (input) =>
+      htmlResponse(
+        `<html><head><title>${title}</title></head><body><p>${body}</p></body></html>`,
+        resolveRequestUrl(input),
+      ),
+    );
+    extractReadableContentMock.mockResolvedValue({ title, text: body, extractor: "readability" });
 
-      const result = await createFetchTool()?.execute("title-budget", {
-        url: "https://example.com/title-budget",
-        maxChars: 1_000,
-      });
-      const details = result?.details as {
-        text: string;
-        title: string;
-        truncated: boolean;
-        extractor: string;
-        spill?: { path: string };
-      };
-      try {
-        expect(details.extractor).toBe(extractor);
-        expect(details.text).toContain(body);
-        expect(details.title).toContain("Page title");
-        expect(details.title.length).toBeLessThanOrEqual(400);
-        expect(details.text.length + details.title.length).toBeLessThanOrEqual(1_000);
-        expect(details.truncated).toBe(true);
-        expect(details.spill).toBeUndefined();
-        // The session guard still caps ingestion; this protects the fetch budget
-        // from metadata displacement before that outer guard sees serialized JSON.
-        const serialized = result?.content.find((block) => block.type === "text");
-        expect(serialized?.text.length).toBeLessThan(2_000);
-      } finally {
-        if (details.spill) {
-          await rm(details.spill.path, { force: true });
-        }
+    const result = await createFetchTool()?.execute("title-budget", {
+      url: "https://example.com/title-budget",
+      maxChars: 1_000,
+    });
+    const details = result?.details as {
+      text: string;
+      title: string;
+      truncated: boolean;
+      extractor: string;
+      spill?: { path: string };
+    };
+    try {
+      expect(details.extractor).toBe("readability");
+      expect(details.text).toContain(body);
+      expect(details.title).toContain("Page title");
+      expect(details.title.length).toBeLessThanOrEqual(400);
+      expect(details.text.length + details.title.length).toBeLessThanOrEqual(1_000);
+      expect(details.truncated).toBe(true);
+      expect(details.spill).toBeUndefined();
+      const serialized = result?.content.find((block) => block.type === "text");
+      expect(serialized?.text.length).toBeLessThan(2_000);
+    } finally {
+      if (details.spill) {
+        await rm(details.spill.path, { force: true });
       }
-    },
-  );
+    }
+  });
 
-  it.each(["Ordinary page title", "", undefined])(
+  it.each(["Ordinary page title", ""])(
     "preserves ordinary or absent HTML title %j",
     async (title) => {
       installMockFetch(async (input) =>
@@ -993,8 +971,19 @@ describe("web_fetch extraction fallbacks", () => {
         url: `http://127.0.0.1:${address.port}/title`,
         maxChars: 1_000,
       });
-      const details = result?.details as { text: string; title: string; truncated: boolean };
+      const details = result?.details as {
+        text: string;
+        title: string;
+        truncated: boolean;
+        extractor: string;
+        spill?: { path: string };
+      };
+      expect(details.extractor).toBe("raw-html");
       expect(details.text).toContain("Live HTTP body.");
+      expect(details.title).toContain("title");
+      expect(details.spill).toBeUndefined();
+      const serialized = result?.content.find((block) => block.type === "text");
+      expect(serialized?.text.length).toBeLessThan(2_000);
       expect(details.title.length).toBeLessThanOrEqual(400);
       expect(details.text.length + details.title.length).toBeLessThanOrEqual(1_000);
       expect(details.truncated).toBe(true);

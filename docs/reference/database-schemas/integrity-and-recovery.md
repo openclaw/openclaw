@@ -8,10 +8,34 @@ title: "Integrity, troubleshooting, and recovery"
 
 ## Integrity checks
 
+For current-schema writable agent admission, the gate runs `quick_check` on
+`transcript_events` and per-table `integrity_check` on every other discovered
+table, including shadow tables and `sqlite_schema`. Asynchronous admission uses
+at most four child processes with separate read-only connections; synchronous
+openers run the same checks sequentially. Each table also receives a foreign-key
+check. Any non-`ok` check row or foreign-key violation refuses admission under the
+existing quarantine policy. Cancellation and failure retain the lease until all
+child readers close.
+
+This checks transcript structure without cross-checking its index
+entries or uniqueness. Other tables retain table/index cross-checking;
+`sqlite_schema` includes the freelist check. Partial integrity checks cannot detect
+pages shared between different tables or unused pages that a full-file check
+would find. Doctor and the daily verifier retain full-file `integrity_check`;
+pending migrations, repairs, and copied-file verification also retain full checks.
+No schema, stored data, or configuration changes are required.
+
+Each executed admission gate logs its mode, outcome, per-table durations, process,
+thread, and reason: `revoked` for invalidated proof, `no-proof` for unavailable or
+nonmatching proof, or `lease-class` when a foreign or unknown lease owner prevents
+runtime reuse. Slow-open summaries include the same facts. A dirty restart receipt
+alone does not distinguish a crashed process from a live lease; both use this
+admission gate when no reusable proof remains.
+
 | When                                        | Check                                                                                                                                           |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Every open                                  | Validate the `schema_meta` table and primary metadata row                                                                                       |
-| Writable agent open and Gateway readiness   | Run full integrity and foreign-key checks when neither current runtime proof nor a clean same-version restart receipt is available              |
+| Writable agent open and Gateway readiness   | Run table integrity and foreign-key checks when neither current runtime proof nor a clean same-version restart receipt is available             |
 | Same-process agent reopen                   | Reuse current file-bound runtime proof without another integrity or quick check; recheck owner, version, schema, and canonical indexes          |
 | Clean same-version agent restart            | Recheck owner, version, schema, and canonical indexes; queue a child-process `quick_check` and foreign-key check after the Gateway is listening |
 | Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan                                                                                 |
@@ -37,7 +61,7 @@ Explicit invalidation revokes shared runtime proof as well as durable metadata,
 including stale admission and unsettled Worker cleanup. A successful native close
 with a reader-blocked checkpoint removes restart metadata but preserves live
 runtime proof; failed close or uncertain storage errors revoke both. Cold opens and restarts
-still require matching clean-close metadata or a full check.
+still require matching clean-close metadata or the admission gate.
 Cleanup workers and native agent execution workers borrow that proof under their
 existing writer admission. Cleanup workers return new verification to the Gateway
 after they finish.
@@ -56,7 +80,7 @@ unchanged validation state; revocation during the open rejects the handoff.
 
 Opens borrowing a clean restart receipt queue checks in the existing Gateway
 verifier. Reopens borrowing current runtime proof do not queue another check.
-Background success is logged; only the full-check lease owner
+Background success is logged; only the admission lease owner
 publishes verification metadata. Confirmed corruption uses the existing quarantine
 path and prevents the next open. Ordinary writes do not invalidate the file identity. Same-inode damage
 introduced after a clean close can therefore be detected after readiness by the
@@ -66,7 +90,7 @@ metadata with quarantine. A failed durable dirty-marker write refuses that open
 rather than leaving stale clean proof reusable after a crash.
 
 The table is additive in the quarantine store; agent and shared-state schema
-versions do not change. An update to a different OpenClaw version runs the full
+versions do not change. An update to a different OpenClaw version runs the admission
 gate, and older builds ignore the new table and retain their full checks. Pending
 migrations, index repairs, shared-state readiness, and explicit copied-file
 preflight still perform their existing full checks. Snapshot-based agent
@@ -333,7 +357,7 @@ its duration. These fields are distinct from the calling driver's synchronous
 isolates storage waiting. The parent still waits for child closure and revalidates
 the database and current authority before admission continues.
 
-Startup errors containing `state lease heartbeat did not become ready` include `phase=startup`, the settlement trigger (`timeout` or `message`), and the status observed before the parent marks failure. `status=starting` distinguishes readiness still pending from `status=lost`, where loss was already recorded. `elapsedMs` measures monotonic time since heartbeat startup began; `timeoutMs` is the startup wait budget, capped at five seconds and the latest confirmed durable lease expiry. The live state-lease owner renews during startup until the worker takes over. Expired or replaced owners cannot renew, and host renewal never extends the five-second startup cap. These fields do not establish why startup stalled or ownership was lost.
+Startup errors containing `state lease heartbeat did not become ready` include `phase=startup`, the settlement trigger (`timeout` or `message`), and the status observed before the parent marks failure. `status=starting` distinguishes readiness still pending from `status=lost`, where loss was already recorded. `elapsedMs` measures monotonic time since heartbeat startup began; `timeoutMs` is the startup wait budget, capped at 60 seconds and the latest confirmed durable lease expiry. The live state-lease owner renews during startup until the worker takes over, so a worker that starts slowly on a busy host can still become ready. Expired or replaced owners cannot renew, and host renewal never extends the 60-second startup cap. These fields do not establish why startup stalled or ownership was lost.
 
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 
@@ -512,6 +536,13 @@ the underlying database error.
 ### A database is quarantined after integrity verification failed
 
 The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
+
+Media migration uses the schema admission integrity check first. Healthy agent
+databases do not repeat that full-file scan inside an immediate repair transaction.
+A proven integrity failure still invokes Doctor's preserving index repair before
+retrying admission. Startup diagnostics label schema admission, index repair, and
+quarantine cleanup separately; stored data, schema versions, and update recovery
+semantics are unchanged.
 
 For shared-state or per-agent index-only corruption, `openclaw doctor --fix` is
 the supported repair. Doctor requires every `integrity_check` finding to name missing,

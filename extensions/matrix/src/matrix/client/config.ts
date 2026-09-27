@@ -1,4 +1,3 @@
-// Matrix helper module supports config behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -50,16 +49,12 @@ const loadMatrixCredentialsReadDeps = createLazyRuntimeModule(
 );
 
 const loadMatrixCredentialsWriteRuntime = createLazyRuntimeModule(
-  () => import("../credentials-write.runtime.js"),
+  () => import("../credentials.js"),
 );
 
 const loadMatrixSecretInputDeps = createLazyRuntimeModule(
-  () => import("./config-secret-input.runtime.js"),
+  () => import("openclaw/plugin-sdk/secret-input-runtime"),
 );
-
-function isAbortSignalTriggered(signal?: AbortSignal): boolean {
-  return signal?.aborted === true;
-}
 
 function credentialsMatchBackfillAuthLineage(params: {
   stored: MatrixStoredCredentials | null;
@@ -187,10 +182,6 @@ async function resolveConfiguredMatrixAuthSecretInput(params: {
   throw new Error(
     resolved.unresolvedRefReason ?? `${configured.path} SecretRef could not be resolved.`,
   );
-}
-
-function clampMatrixInitialSyncLimit(value: unknown): number | undefined {
-  return resolveOptionalIntegerOption(value, { min: 0 });
 }
 
 function buildMatrixNetworkFields(params: {
@@ -326,7 +317,9 @@ function resolveMatrixAccountConfigSnapshot(
     }),
     globalEnv,
   });
-  const accountInitialSyncLimit = clampMatrixInitialSyncLimit(account.initialSyncLimit);
+  const accountInitialSyncLimit = resolveOptionalIntegerOption(account.initialSyncLimit, {
+    min: 0,
+  });
   const allowPrivateNetwork =
     isPrivateNetworkOptInEnabled(account) || isPrivateNetworkOptInEnabled(matrix)
       ? true
@@ -340,7 +333,8 @@ function resolveMatrixAccountConfigSnapshot(
       deviceId: resolvedStrings.deviceId || undefined,
       deviceName: resolvedStrings.deviceName || undefined,
       initialSyncLimit:
-        accountInitialSyncLimit ?? clampMatrixInitialSyncLimit(matrix.initialSyncLimit),
+        accountInitialSyncLimit ??
+        resolveOptionalIntegerOption(matrix.initialSyncLimit, { min: 0 }),
       encryption:
         typeof account.encryption === "boolean" ? account.encryption : (matrix.encryption ?? false),
       ...buildMatrixNetworkFields({
@@ -386,9 +380,9 @@ function resolveMatrixAuthState(params: {
   accountId?: string | null;
 }): { context: MatrixAuthContext; authInputs: MatrixAuthInputs } {
   const cfg = requireRuntimeConfig(params.cfg, "Matrix auth context") as CoreConfig;
-  const env = params?.env ?? process.env;
-  const requestedAccountId = params?.accountId?.trim();
-  const explicitAccountId = normalizeOptionalAccountId(params?.accountId);
+  const env = params.env ?? process.env;
+  const requestedAccountId = params.accountId?.trim();
+  const explicitAccountId = normalizeOptionalAccountId(params.accountId);
   if (requestedAccountId && !explicitAccountId) {
     throw new Error(`Matrix account id "${requestedAccountId}" is invalid.`);
   }
@@ -615,7 +609,7 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
   if (knownDeviceId) {
     return knownDeviceId;
   }
-  if (isAbortSignalTriggered(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return undefined;
   }
 
@@ -631,7 +625,7 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     });
   } catch (err) {
     // Cancelled requests yield no device ID; disposal failures remain visible.
-    if (isAbortSignalTriggered(params.abortSignal) && !(err instanceof MatrixWhoamiCleanupError)) {
+    if (params.abortSignal?.aborted && !(err instanceof MatrixWhoamiCleanupError)) {
       return undefined;
     }
     throw err;
@@ -640,7 +634,7 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
   if (!deviceId) {
     return undefined;
   }
-  if (isAbortSignalTriggered(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return undefined;
   }
 
@@ -655,7 +649,7 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     return undefined;
   }
 
-  if (isAbortSignalTriggered(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return undefined;
   }
 
@@ -670,14 +664,14 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
   if (!repairedStorageMeta) {
     throw new Error("Matrix deviceId backfill failed to repair current-token storage metadata");
   }
-  if (isAbortSignalTriggered(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return undefined;
   }
 
   const credentialsWriter = await loadMatrixCredentialsWriteRuntime();
   const currentCredentials = await loadMatrixCredentialsAsync(env, params.auth.accountId);
   if (
-    isAbortSignalTriggered(params.abortSignal) ||
+    params.abortSignal?.aborted ||
     !credentialsMatchBackfillAuthLineage({ stored: currentCredentials, auth: params.auth })
   ) {
     return undefined;

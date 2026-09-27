@@ -59,6 +59,7 @@ beforeAll(async () => {
   ({ GatewayClient } = await import("./client.js"));
 });
 beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
   vi.useFakeTimers();
   MockWebSocket.instances = [];
 });
@@ -67,6 +68,7 @@ afterEach(async () => {
     await client.stopAndWait();
   }
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function connect(

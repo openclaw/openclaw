@@ -90,14 +90,13 @@ enum GatewayRemoteConfig {
     }
 
     static func resolveUrlString(root: [String: Any]) -> String? {
-        guard let gateway = root["gateway"] as? [String: Any],
-              let remote = gateway["remote"] as? [String: Any],
-              let urlRaw = remote["url"] as? String
-        else {
-            return nil
-        }
-        let trimmed = urlRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        self.remoteString("url", root: root)
+    }
+
+    private static func remoteString(_ key: String, root: [String: Any]) -> String? {
+        let gateway = root["gateway"] as? [String: Any]
+        let remote = gateway?["remote"] as? [String: Any]
+        return (remote?[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
     }
 
     static func resolveTokenValue(root: [String: Any]) -> TokenValue {
@@ -124,25 +123,11 @@ enum GatewayRemoteConfig {
     }
 
     static func resolvePasswordString(root: [String: Any]) -> String? {
-        guard let gateway = root["gateway"] as? [String: Any],
-              let remote = gateway["remote"] as? [String: Any],
-              let raw = remote["password"] as? String
-        else {
-            return nil
-        }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        self.remoteString("password", root: root)
     }
 
     static func resolveTLSFingerprint(root: [String: Any]) -> String? {
-        guard let gateway = root["gateway"] as? [String: Any],
-              let remote = gateway["remote"] as? [String: Any],
-              let raw = remote["tlsFingerprint"] as? String
-        else {
-            return nil
-        }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        self.remoteString("tlsFingerprint", root: root)
     }
 
     static func resolveGatewayUrl(root: [String: Any]) -> URL? {

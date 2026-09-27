@@ -6,6 +6,7 @@ import {
   createWebSocketStream,
   WebSocketServer as NpmWebSocketServer,
 } from "../../../packages/gateway-client/src/websocket.js";
+import { rawDataByteLength, rawDataToString } from "../../infra/ws.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -59,28 +60,18 @@ type TicketNodeRegistry = Pick<
   "getForPairingGeneration" | "isConnectionCurrentPairingState"
 >;
 
-function rawDataBuffer(data: RawData): Buffer {
-  if (Buffer.isBuffer(data)) {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data);
-  }
-  return Buffer.from(data);
-}
-
 function parseStreamMetadata(
   data: RawData,
   isBinary: boolean,
   kind: NodeStreamKind,
 ): NodeDesktopStreamMetadata | undefined {
-  const buffer = rawDataBuffer(data);
-  if (!isBinary || buffer.length === 0 || buffer.length > MAX_ATTACH_FRAME_BYTES) {
+  const length = rawDataByteLength(data);
+  if (!isBinary || length === 0 || length > MAX_ATTACH_FRAME_BYTES) {
     throw new Error(`invalid node ${kind} attach metadata`);
   }
   let value: unknown;
   try {
-    value = JSON.parse(buffer.toString("utf8"));
+    value = JSON.parse(rawDataToString(data));
   } catch {
     throw new Error(`invalid node ${kind} attach metadata`);
   }
@@ -90,23 +81,18 @@ function parseStreamMetadata(
     }
     return undefined;
   }
-  if (!isRecord(value) || (value.auth !== "vnc-password" && value.auth !== "ard-account")) {
-    throw new Error("invalid node desktop attach metadata");
-  }
-  if (!hasExactOwnKeys(value, ["auth"], ["vncPassword"])) {
-    throw new Error("invalid node desktop attach metadata");
-  }
-  if (value.vncPassword !== undefined && typeof value.vncPassword !== "string") {
-    throw new Error("invalid node desktop attach metadata");
-  }
   if (
-    value.auth === "ard-account" &&
-    value.vncPassword !== undefined &&
-    !isWorkerDesktopArdPassword(value.vncPassword)
+    !isRecord(value) ||
+    (value.auth !== "vnc-password" && value.auth !== "ard-account") ||
+    !hasExactOwnKeys(value, ["auth"], ["vncPassword"]) ||
+    (value.vncPassword !== undefined && typeof value.vncPassword !== "string") ||
+    (value.auth === "ard-account" &&
+      value.vncPassword !== undefined &&
+      !isWorkerDesktopArdPassword(value.vncPassword))
   ) {
     throw new Error("invalid node desktop attach metadata");
   }
-  const vncPassword = typeof value.vncPassword === "string" ? value.vncPassword : undefined;
+  const { vncPassword } = value;
   if (vncPassword) {
     registerSecretValueForRedaction(vncPassword);
   }

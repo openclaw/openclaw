@@ -1248,8 +1248,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
             acceptedRunId &&
             acceptedChildSessionKey
           ) {
-            // A normal final acknowledgement leaves completion with the child;
-            // the shared fixture's NO_REPLY intentionally yields requester custody.
+            // A normal final acknowledgement leaves completion with the child.
             parentAcknowledged = true;
             taskRunId = acceptedRunId;
             childSessionKey = acceptedChildSessionKey;
@@ -1317,6 +1316,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
             commands: { native: false, nativeSkills: false },
           },
         },
+        tools: { ...config.tools, codeMode: false, toolSearch: false },
       }),
     });
     let task: Record<string, unknown> | undefined;

@@ -43,27 +43,22 @@ function toSystemAuditFindings(params: {
   const tasks = listTaskRecords();
   const taskFindings = listTaskAuditFindings({ tasks });
   const flowFindings = listTaskFlowAuditFindings();
-  const result = buildTaskSystemAuditFindings({
+  return buildTaskSystemAuditFindings({
     taskFindings,
     flowFindings,
     severityFilter: params.severityFilter,
     codeFilter: params.codeFilter,
   });
-  return result;
 }
 
 function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
   const runtimeFilter = parseCliEnumFilter(opts.runtime, "--runtime", TASK_RUNTIMES);
   const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_STATUS_FILTERS);
-  const tasks = listTaskRecords((task) => {
-    if (runtimeFilter && task.runtime !== runtimeFilter) {
-      return false;
-    }
-    if (statusFilter && !matchesTaskStatusFilter(task, statusFilter)) {
-      return false;
-    }
-    return true;
-  });
+  const tasks = listTaskRecords(
+    (task) =>
+      (!runtimeFilter || task.runtime === runtimeFilter) &&
+      (!statusFilter || matchesTaskStatusFilter(task, statusFilter)),
+  );
   return {
     count: tasks.length,
     runtime: runtimeFilter ?? null,
@@ -77,10 +72,8 @@ function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
     opts.severity,
     "--severity",
     TASK_SYSTEM_AUDIT_SEVERITIES,
-  ) as TaskSystemAuditSeverity | undefined;
-  const codeFilter = parseCliEnumFilter(opts.code, "--code", TASK_SYSTEM_AUDIT_CODES) as
-    | TaskSystemAuditCode
-    | undefined;
+  );
+  const codeFilter = parseCliEnumFilter(opts.code, "--code", TASK_SYSTEM_AUDIT_CODES);
   const result = toSystemAuditFindings({
     severityFilter,
     codeFilter,

@@ -83,9 +83,6 @@ export class TelnyxProvider implements VoiceCallProvider {
     this.options = options;
   }
 
-  /**
-   * Make an authenticated request to the Telnyx API.
-   */
   private async apiRequest<T = unknown>(
     endpoint: string,
     body: Record<string, unknown>,
@@ -106,9 +103,6 @@ export class TelnyxProvider implements VoiceCallProvider {
     });
   }
 
-  /**
-   * Verify Telnyx webhook signature using Ed25519.
-   */
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
     const result = verifyTelnyxWebhook(ctx, this.publicKey, {
       skipVerification: this.options.skipVerification,
@@ -123,9 +117,6 @@ export class TelnyxProvider implements VoiceCallProvider {
     };
   }
 
-  /**
-   * Parse Telnyx webhook event into normalized format.
-   */
   parseWebhookEvent(
     ctx: WebhookContext,
     options?: WebhookParseOptions,
@@ -148,9 +139,6 @@ export class TelnyxProvider implements VoiceCallProvider {
     }
   }
 
-  /**
-   * Convert Telnyx event to normalized event format.
-   */
   private normalizeEvent(data: TelnyxEvent, dedupeKey?: string): NormalizedEvent | null {
     // Decode client_state from Base64 (we encode it in initiateCall)
     let callId = "";
@@ -288,9 +276,6 @@ export class TelnyxProvider implements VoiceCallProvider {
     };
   }
 
-  /**
-   * Hang up a call via Telnyx API.
-   */
   async hangupCall(input: HangupCallInput): Promise<void> {
     await this.apiRequest(
       `/calls/${input.providerCallId}/actions/hangup`,
@@ -309,9 +294,6 @@ export class TelnyxProvider implements VoiceCallProvider {
     await this.apiRequest(`/calls/${input.providerCallId}/actions/answer`, body);
   }
 
-  /**
-   * Play TTS audio via Telnyx speak action.
-   */
   async playTts(input: PlayTtsInput): Promise<void> {
     await this.apiRequest(`/calls/${input.providerCallId}/actions/speak`, {
       command_id: crypto.randomUUID(),
@@ -321,9 +303,6 @@ export class TelnyxProvider implements VoiceCallProvider {
     });
   }
 
-  /**
-   * Start transcription (STT) via Telnyx.
-   */
   async startListening(input: StartListeningInput): Promise<void> {
     await this.apiRequest(`/calls/${input.providerCallId}/actions/transcription_start`, {
       command_id: crypto.randomUUID(),
@@ -331,9 +310,6 @@ export class TelnyxProvider implements VoiceCallProvider {
     });
   }
 
-  /**
-   * Stop transcription via Telnyx.
-   */
   async stopListening(input: StopListeningInput): Promise<void> {
     await this.apiRequest(
       `/calls/${input.providerCallId}/actions/transcription_stop`,

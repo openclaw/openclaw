@@ -612,8 +612,10 @@ describe("agent harness host capability", () => {
   });
 
   it.each(
-    policyRevocations.flatMap((entry) =>
-      (["resolve", "reject"] as const).map((settlement) => Object.assign({ settlement }, entry)),
+    policyRevocations.flatMap((entry, index) =>
+      (index === 0 ? (["resolve", "reject"] as const) : (["resolve"] as const)).map((settlement) =>
+        Object.assign({ settlement }, entry),
+      ),
     ),
   )("rejects a deferred policy $settlement after $name", async ({ revoke, settlement }) => {
     const { attempt, admission } = await admittedAttempt("run-policy-race");

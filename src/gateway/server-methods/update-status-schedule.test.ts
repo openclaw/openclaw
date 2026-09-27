@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
+import { UpdateCampaignController } from "../../infra/update-campaign.js";
+import {
+  currentUpdateCheckLifecycle,
+  type UpdateCheckLifecycle,
+} from "../../infra/update-check-lifecycle.js";
 import { resetUpdateAvailableStateForTest } from "../../infra/update-startup.js";
 import {
   getUpdateSchedule,
   resetUpdateStatusState,
   setUpdateScheduleCache,
 } from "../../infra/update-status-state.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { updateStatusHandlers } from "./update-status.js";
 
 const history = vi.hoisted(() => vi.fn(async () => ({ activeRun: undefined, lastRun: undefined })));
@@ -24,14 +29,20 @@ vi.mock("../server-restart-sentinel.js", () => ({
   refreshLatestUpdateRestartSentinel: async () => null,
 }));
 
+let lifecycle: UpdateCheckLifecycle;
+let campaignOwner: UpdateCampaignController;
 beforeEach(() => {
   vi.useFakeTimers();
-  resetUpdateAvailableStateForTest();
+  resetUpdateAvailableStateForTest(createTestGatewayScheduler());
+  lifecycle = currentUpdateCheckLifecycle();
+  campaignOwner = new UpdateCampaignController(lifecycle.scheduler);
+  lifecycle.campaign = campaignOwner;
   history.mockClear();
   install.mockReset().mockRejectedValue(new Error("discovery unavailable"));
 });
-afterEach(() => {
-  gatewayUpdateCampaign.clear();
+afterEach(async () => {
+  await lifecycle.stop();
+  await lifecycle.scheduler.stop();
   resetUpdateStatusState();
   vi.unstubAllEnvs();
   vi.useRealTimers();
@@ -50,7 +61,7 @@ async function status(config: OpenClawConfig, params: { refreshCheckout?: boolea
 
 function announcePackageCampaign() {
   const target = { kind: "package" as const, version: "99.0.0" };
-  gatewayUpdateCampaign.announce({
+  campaignOwner.announce({
     target,
     inspect: { getQueueSize: () => 1 },
     apply: vi.fn(),
@@ -64,7 +75,7 @@ function announcePackageCampaign() {
         },
       }),
   });
-  return { target, campaign: gatewayUpdateCampaign.getState() };
+  return { target, campaign: campaignOwner.getState() };
 }
 
 it.each([false, true])(
@@ -82,17 +93,17 @@ it.each([false, true])(
 );
 
 it("preserves a live campaign while hydrating disabled policy", async () => {
-  gatewayUpdateCampaign.announce({
+  campaignOwner.announce({
     target: { kind: "package", version: "99.0.0" },
     inspect: { getQueueSize: () => 1 },
     onChange: () => {},
     apply: vi.fn(),
   });
-  const campaign = gatewayUpdateCampaign.getState();
+  const campaign = campaignOwner.getState();
   expect(campaign).toBeDefined();
   const result = await status({ update: { channel: "dev", auto: { enabled: false } } });
   expect(result.schedule).toMatchObject({ autoEnabled: false, campaign });
-  expect(gatewayUpdateCampaign.getState()).toBe(campaign);
+  expect(campaignOwner.getState()).toBe(campaign);
 });
 
 it("reads campaign publication after awaited run history", async () => {
@@ -101,7 +112,7 @@ it("reads campaign publication after awaited run history", async () => {
     return { activeRun: undefined, lastRun: undefined };
   });
   const result = await status({ update: { channel: "stable", auto: { enabled: false } } });
-  expect(result.schedule.campaign).toEqual(gatewayUpdateCampaign.getState());
+  expect(result.schedule.campaign).toEqual(campaignOwner.getState());
   expect(result.schedule.campaign).toBeDefined();
 });
 
@@ -183,7 +194,7 @@ it.each(["replace", "remove"])("uses current channel after history lookup (%s)",
 
 it("preserves the admitted campaign channel and target without publishing status reads", async () => {
   announcePackageCampaign();
-  expect(gatewayUpdateCampaign.adopt().status).toBe("adopted");
+  expect(campaignOwner.adopt().status).toBe("adopted");
   const schedule = getUpdateSchedule();
   const result = await status({ update: { channel: "beta", auto: { enabled: false } } });
   expect(result).toMatchObject({
@@ -198,7 +209,7 @@ it.each([false, true])(
   async (applying) => {
     const { target } = announcePackageCampaign();
     if (applying) {
-      expect(gatewayUpdateCampaign.adopt().status).toBe("adopted");
+      expect(campaignOwner.adopt().status).toBe("adopted");
     }
     install.mockResolvedValue({
       root: null,
@@ -212,7 +223,7 @@ it.each([false, true])(
     expect(result.schedule).toMatchObject({
       channel: "stable",
       target,
-      campaign: gatewayUpdateCampaign.getState(),
+      campaign: campaignOwner.getState(),
       autoEnabled: false,
     });
     expect(getUpdateSchedule()).toMatchObject({ channel: "stable", target });
@@ -222,7 +233,7 @@ it.each([false, true])(
 it("removes a settled campaign and its old channel target after history lookup", async () => {
   announcePackageCampaign();
   history.mockImplementationOnce(async () => {
-    gatewayUpdateCampaign.clear();
+    campaignOwner.clear();
     return { activeRun: undefined, lastRun: undefined };
   });
   const result = await status({ update: { channel: "dev", auto: { enabled: false } } });

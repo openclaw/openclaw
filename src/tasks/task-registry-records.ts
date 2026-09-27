@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { isIncognitoTask, projectTaskContentForPersistence } from "./task-content.js";
 import {
   ensureDeliveryStatus,
   ensureNotifyPolicy,
@@ -441,12 +442,22 @@ export function applyTaskRecordPatch(
   patch: Partial<TaskRecord>,
   now?: number,
 ): TaskRecord {
-  const updated = {
-    ...current,
-    ...patch,
-    ...(patch.executionOwner ? { executionOwner: { ...patch.executionOwner } } : {}),
-    ...(patch.detail !== undefined ? { detail: structuredClone(patch.detail) } : {}),
-  };
+  const updated = projectTaskContentForPersistence(
+    isIncognitoTask(current) || isIncognitoTask(patch),
+    {
+      ...current,
+      ...patch,
+      ...(patch.executionOwner ? { executionOwner: { ...patch.executionOwner } } : {}),
+      ...(patch.detail !== undefined ? { detail: structuredClone(patch.detail) } : {}),
+    },
+  );
+  // Transition inputs use null to clear summaries; materialized rows omit cleared content.
+  if (updated.progressSummary === null) {
+    delete updated.progressSummary;
+  }
+  if (updated.terminalSummary === null) {
+    delete updated.terminalSummary;
+  }
   if (Object.hasOwn(patch, "runId")) {
     updated.runId = normalizeOptionalString(patch.runId);
   }

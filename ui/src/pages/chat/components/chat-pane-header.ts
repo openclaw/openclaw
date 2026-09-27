@@ -113,12 +113,6 @@ export function resolveChatPaneParentSession(
   return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
 }
 
-/**
- * Header identity trail: which project, then which session inside it. Segments
- * and separators are rendered from one list so a further segment — the parent
- * session of a nested thread, yielding project / parent / child — slots in
- * without moving the project chip or the title.
- */
 function renderIdentityCrumbs(
   props: ChatPaneHeaderProps,
   copied: boolean,
@@ -467,76 +461,58 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                 : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
                   ${props.sessionRailAction}`
             }
-            ${
-              props.onOpenSplitView && !compactSessionActions
-                ? html`<openclaw-tooltip .content=${t("chat.splitView.open")}>
+            ${(
+              [
+                [
+                  props.onOpenSplitView && !compactSessionActions,
+                  "chat-open-split-view",
+                  "chat.splitView.open",
+                  icons.columns2,
+                  props.onOpenSplitView,
+                ],
+                [
+                  !props.narrow && props.onSplitDown,
+                  "chat-pane__split-down",
+                  "chat.splitView.splitDown",
+                  icons.panelBottomOpen,
+                  () => props.onSplitDown?.(props.paneId),
+                ],
+                [
+                  !props.narrow && props.onSplitRight,
+                  "chat-pane__split-right",
+                  "chat.splitView.splitRight",
+                  icons.panelRightOpen,
+                  () => props.onSplitRight?.(props.paneId),
+                ],
+                [
+                  props.onClosePane,
+                  "chat-pane__close-pane",
+                  "chat.splitView.closePane",
+                  icons.x,
+                  () => props.onClosePane?.(props.paneId),
+                ],
+                [
+                  props.mergedChrome && !compactSessionActions,
+                  "chat-pane__palette-open",
+                  "chat.openCommandPalette",
+                  icons.search,
+                  () => window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT)),
+                ],
+              ] as const
+            ).map(([visible, className, label, icon, onClick]) =>
+              visible
+                ? html`<openclaw-tooltip .content=${t(label)}>
                     <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
+                      class=${`btn btn--ghost btn--icon chat-icon-btn ${className}`}
                       type="button"
-                      aria-label=${t("chat.splitView.open")}
-                      @click=${props.onOpenSplitView}
+                      aria-label=${t(label)}
+                      @click=${onClick}
                     >
-                      ${icons.columns2}
+                      ${icon}
                     </button>
                   </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              !props.narrow && props.onSplitDown
-                ? html`<openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down"
-                      type="button"
-                      aria-label=${t("chat.splitView.splitDown")}
-                      @click=${() => props.onSplitDown?.(props.paneId)}
-                    >
-                      ${icons.panelBottomOpen}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              !props.narrow && props.onSplitRight
-                ? html`<openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right"
-                      type="button"
-                      aria-label=${t("chat.splitView.splitRight")}
-                      @click=${() => props.onSplitRight?.(props.paneId)}
-                    >
-                      ${icons.panelRightOpen}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              props.onClosePane
-                ? html`<openclaw-tooltip .content=${t("chat.splitView.closePane")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane"
-                      type="button"
-                      aria-label=${t("chat.splitView.closePane")}
-                      @click=${() => props.onClosePane?.(props.paneId)}
-                    >
-                      ${icons.x}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              props.mergedChrome && !compactSessionActions
-                ? html`<openclaw-tooltip .content=${t("chat.openCommandPalette")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open"
-                      type="button"
-                      aria-label=${t("chat.openCommandPalette")}
-                      @click=${() => window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT))}
-                    >
-                      ${icons.search}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
+                : nothing,
+            )}
             ${props.sessionMenuAction}
           </fieldset>
         </div>

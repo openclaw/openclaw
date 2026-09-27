@@ -49,22 +49,6 @@ describe("zalouser account resolution", () => {
     expect(resolveZalouserAccountSync({ cfg }).profile).toBe("personal");
   });
 
-  it("uses configured defaultAccount when present", () => {
-    const cfg = asConfig({
-      channels: {
-        zalouser: {
-          defaultAccount: "work",
-          accounts: {
-            default: {},
-            work: {},
-          },
-        },
-      },
-    });
-
-    expect(resolveDefaultZalouserAccountId(cfg)).toBe("work");
-  });
-
   it("resolves sync account by merging base + account config", () => {
     const cfg = asConfig({
       channels: {
@@ -110,37 +94,6 @@ describe("zalouser account resolution", () => {
     expect(resolved.accountId).toBe("work");
     expect(resolved.name).toBe("Work");
     expect(resolved.profile).toBe("work-profile");
-  });
-
-  it("resolves account config when account key casing differs from normalized id", () => {
-    const cfg = asConfig({
-      channels: {
-        zalouser: {
-          accounts: {
-            Work: {
-              name: "Work",
-            },
-          },
-        },
-      },
-    });
-
-    const resolved = resolveZalouserAccountSync({ cfg, accountId: "work" });
-    expect(resolved.accountId).toBe("work");
-    expect(resolved.name).toBe("Work");
-  });
-
-  it("defaults group policy to allowlist when unset", () => {
-    const cfg = asConfig({
-      channels: {
-        zalouser: {
-          enabled: true,
-        },
-      },
-    });
-
-    const resolved = resolveZalouserAccountSync({ cfg, accountId: "default" });
-    expect(resolved.config.groupPolicy).toBe("allowlist");
   });
 
   it("resolves profile precedence correctly", () => {

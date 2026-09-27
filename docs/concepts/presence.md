@@ -133,10 +133,35 @@ and observed activity separate from each entry's heartbeat freshness.
 Accepted interactions, including typing, update the exact activity timestamp on
 every live connection for that person. Activity-only presence events are coalesced
 to at most one every 30 seconds per identity. The first observed activity and
-activity after that window publish immediately; connection, disconnection,
-profile, and watched-session changes still publish immediately. The people card's
+activity after that window schedule a publication; connection, disconnection,
+profile, and watched-session changes share a 50 ms publication window anchored to
+the first pending change. Later changes do not postpone it. Hello snapshots and
+`system-presence` replies read the current state immediately. The people card's
 activity age can therefore lag the latest interaction by less than 30 seconds.
 Fresh snapshots and `system-presence` reads include the latest stored timestamp.
+
+## Online and recent activity
+
+A connected person is **Online**. Activity is a separate, recent-interaction hint:
+
+- **Active:** an accepted interaction was observed less than two minutes ago.
+- **Idle:** an interaction was observed, but it is at least two minutes old.
+- **Online** without an activity label: no interaction timestamp is available.
+  The people card says **Activity unavailable** rather than guessing active or idle.
+
+The sidebar ages active people into idle without waiting for another Gateway
+update. The card keeps continuous online duration separate from **Last interaction**.
+The newest observed interaction across a person's live, identity-qualified
+connections determines their activity. Heartbeats and the legacy native input
+recency field do not determine person activity.
+
+The Control UI reports its initial foreground visit and throttled keyboard,
+pointer, and scrolling interactions. Automatic reconnects, background tabs,
+incoming messages, and background requests do not count as fresh interaction.
+Clients that do not report interaction can still be online. This describes
+recent use of OpenClaw, not physical presence or attention: someone reading
+without interacting may become idle. The separate native
+[active computer signal](/nodes/presence) does not identify a person.
 
 ## TTL and bounded size
 

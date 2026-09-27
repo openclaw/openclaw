@@ -24,6 +24,7 @@ const sourceImportArgs = exitFinalizationUrl.pathname.endsWith(".ts")
   : [];
 
 const mocks = vi.hoisted(() => ({
+  servicePid: process.pid + 100_000,
   captureManagedPreflight:
     vi.fn<
       typeof import("./update-command-managed-context.js").captureOwnedManagedUpdatePreflightContext
@@ -38,6 +39,11 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../../infra/update-candidate-canary.js").validateUpdateCandidateCanary>(),
 }));
 
+vi.mock("../../daemon/service-process-membership.js", () => ({
+  // The simulated running service has no corresponding native host process.
+  inspectServiceProcessMembershipSync: (pid: number) =>
+    pid === mocks.servicePid ? "outside" : "unknown",
+}));
 vi.mock("../../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: mocks.validateCanary,
 }));
@@ -142,6 +148,7 @@ it("settles a failed candidate without inference repair and preserves its proces
     inspected: true,
     runtimeInspected: true,
     running: true,
+    servicePid: mocks.servicePid,
     serviceEnv: env,
   });
   const execution = await executeMutableUpdate({

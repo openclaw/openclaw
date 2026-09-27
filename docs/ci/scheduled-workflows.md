@@ -18,12 +18,23 @@ survivor all run against that revision. Node tests use the compact main inventor
 Full Release Validation and ordinary manual CI retain `validation_tier=full`
 by default. They additionally run release-only tooling/runtime/UI tests,
 minimum-Node compatibility, iOS screenshots, native Release builds, Android
-packaging, and all six Docker seed scenarios. Hourly iOS retains its full
-`ios-build (tests)` simulator phase and Swift lint; Android retains phone/Wear
-tests and lint. The Docker survivor uses the existing main smoke package,
+packaging, and all six Docker seed scenarios. Hourly iOS retains
+`ios-build (tests)`: Swift lint, Rust tests, voice cleanup, native Access, and
+the complete focused app/notification lifecycle inventory. Managed attachment
+UI/export proof, Watch operation simulator suites, and Watch delivery UI proof
+run only in full-tier manual/release validation, with every case and assertion
+retained there. Android retains phone/Wear tests and lint. The Docker survivor uses the existing main smoke package,
 including runtime, assets, public SDK declarations, and tarball integrity.
 The manual SDK API diff report stays manual-only: a scheduled tip has no change
 range to compare.
+
+Main-tier iOS builds target the selected simulator's native architecture and
+disable compiler indexing, as PR smoke already does. Voice and lifecycle tests
+disable Xcode's verbose diagnostic collection while retaining their logs and
+xcresult bundles. Full-tier manual/release validation keeps universal simulator
+builds and failure diagnostics. This removes duplicate architecture work and
+diagnostic stalls observed in 76–94-minute hourly jobs; it does not establish a
+new completion bound.
 
 Scheduled CI uses automatic-main [runner placement](/ci/runners), including
 hybrid placement on the first attempt when configured. Native runner labels,
@@ -41,6 +52,14 @@ Each scheduled run starts independently so an older iOS simulator phase cannot
 hold the next hourly core checks. Only scheduled `ios-build` jobs share a
 non-canceling slot: the active proof finishes while GitHub replaces a pending
 iOS job when another arrives. Arrival order need not match revision order.
+At the aggregate owner, `openclaw/ci-gate` accepts a selected `ios-build` result
+of `cancelled` only for scheduled `openclaw/openclaw` runs on `main`, and emits
+an “Hourly iOS proof coalesced” notice. A real iOS failure or unexpected skip
+still fails the gate, as does cancellation of another selected lane. Manual
+and PR iOS cancellations retain their existing failure policy. A passing gate
+with this notice delegates iOS proof to a later scheduled job; it does not
+validate iOS at the canceled revision. GitHub's workflow-level conclusion can
+still be `cancelled` even when the aggregate succeeds.
 Manual/release CI stays independent, and security-only pushes cannot cancel
 scheduled work. CI remains available during release validation;
 `OPENCLAW_RELEASE_PRIORITY_RUN` does not control admission.
@@ -136,8 +155,9 @@ be disabled after inactivity. Main-tier CI deliberately rechecks unchanged
 SHAs rather than introducing a separate last-success ledger. A failure can be
 retried at the next hourly opportunity, and manual dispatch remains available.
 If iOS proof takes longer than an hour, later hourly runs can finish their other
-checks while waiting for that slot. A superseded pending iOS job leaves its run
-non-green and cannot qualify Docs Agent. Those completed checks still consume
+checks while waiting for that slot. A superseded pending iOS job can leave its
+aggregate green with delegated iOS proof, but cannot qualify Docs Agent.
+Those completed checks still consume
 runner time; per-run worker limits do not bound concurrent hourly runs together.
 The slot does not cover manual/PR iOS jobs or runs admitted by an older workflow.
 This removes workflow admission blocking, not runner-capacity waits. No measured

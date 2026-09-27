@@ -265,17 +265,6 @@ async function withAcpSessionEnv(fn: () => Promise<void>) {
   });
 }
 
-async function withAcpSessionEnvInfo(
-  fn: (env: { home: string; storePath: string }) => Promise<void>,
-) {
-  await withTempHome(async (home) => {
-    const storePath = path.join(home, "sessions.json");
-    writeAcpSessionStore(storePath);
-    mockConfig(home, storePath);
-    await fn({ home, storePath });
-  });
-}
-
 function createRunTurnFromTextDeltas(chunks: string[]) {
   return vi.fn(async (paramsUnknown: unknown) => {
     const params = paramsUnknown as {
@@ -321,30 +310,6 @@ async function runAcpTurnWithAssistantEvents(chunks: string[]) {
   return { assistantEvents, logLines };
 }
 
-async function runAcpTurnWithTextDeltas(params: { message?: string; chunks: string[] }) {
-  const runTurn = createRunTurnFromTextDeltas(params.chunks);
-  mockAcpManager({
-    runTurn: (input: unknown) => runTurn(input),
-  });
-  await agentCommand(
-    {
-      message: params.message ?? "ping",
-      sessionKey: "agent:codex:acp:test",
-    },
-    runtime,
-  );
-  return { runTurn };
-}
-
-function expectPersistedAcpTranscript(params: { userContent: string; assistantText: string }) {
-  const calls = attemptExecutionMocks.persistAcpTurnTranscript.mock.calls;
-  const transcript = calls[calls.length - 1]?.[0] as
-    | { body?: string; finalText?: string }
-    | undefined;
-  expect(transcript?.body).toBe(params.userContent);
-  expect(transcript?.finalText).toBe(params.assistantText);
-}
-
 function firstRunTurnInput(runTurn: { mock: { calls: unknown[][] } }) {
   return runTurn.mock.calls[0]?.[0] as
     | { mode?: string; sessionKey?: string; text?: string }
@@ -377,17 +342,10 @@ async function expectAcpCommandRejects(
   code: string,
   messageIncludes?: string,
 ): Promise<void> {
-  try {
-    await agentCommand({ message: "ping", sessionKey }, runtime);
-  } catch (error) {
-    const acpError = error as { code?: string; message?: string };
-    expect(acpError.code).toBe(code);
-    if (messageIncludes) {
-      expect(acpError.message).toContain(messageIncludes);
-    }
-    return;
-  }
-  throw new Error(`Expected ACP command to reject with ${code}`);
+  await expect(agentCommand({ message: "ping", sessionKey }, runtime)).rejects.toMatchObject({
+    code,
+    ...(messageIncludes ? { message: expect.stringContaining(messageIncludes) } : {}),
+  });
 }
 
 describe("agentCommand ACP runtime routing", () => {
@@ -505,23 +463,20 @@ describe("agentCommand ACP runtime routing", () => {
   );
 
   it("routes ACP sessions and preserves exact transcript text", async () => {
-    await withAcpSessionEnvInfo(async () => {
-      const { runTurn } = await runAcpTurnWithTextDeltas({
-        message: "  ping\n",
-        chunks: ["  ACP_OK\n"],
+    await withAcpSessionEnv(async () => {
+      const runTurn = createRunTurnFromTextDeltas(["  ACP_OK\n"]);
+      mockAcpManager({ runTurn });
+      await agentCommand({ message: "  ping\n", sessionKey: "agent:codex:acp:test" }, runtime);
+      expect(firstRunTurnInput(runTurn)).toMatchObject({
+        sessionKey: "agent:codex:acp:test",
+        text: "  ping\n",
+        mode: "prompt",
       });
-      const runTurnInput = firstRunTurnInput(runTurn);
-      expect(runTurnInput?.sessionKey).toBe("agent:codex:acp:test");
-      expect(runTurnInput?.text).toBe("  ping\n");
-      expect(runTurnInput?.mode).toBe("prompt");
       expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
-      const hasAckLog = vi
-        .mocked(runtime.log)
-        .mock.calls.some(([first]) => typeof first === "string" && first.includes("ACP_OK"));
-      expect(hasAckLog).toBe(true);
-      expectPersistedAcpTranscript({
-        userContent: "  ping\n",
-        assistantText: "  ACP_OK\n",
+      expect(vi.mocked(runtime.log).mock.calls.flat().join("\n")).toContain("ACP_OK");
+      expect(attemptExecutionMocks.persistAcpTurnTranscript.mock.calls.at(-1)?.[0]).toMatchObject({
+        body: "  ping\n",
+        finalText: "  ACP_OK\n",
       });
     });
   });

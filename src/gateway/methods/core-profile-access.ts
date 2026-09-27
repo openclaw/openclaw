@@ -2,6 +2,8 @@ import { isSessionProfileDependentMethod } from "../session-method-policy.js";
 
 const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   "agent.wait",
+  // The first UI interaction may arrive before post-hello identity hydration.
+  "presence.activity",
   // Wait for post-hello identity enrichment so an identified caller does not
   // cache a shared-only catalog before their personal accounts are available.
   "models.list",

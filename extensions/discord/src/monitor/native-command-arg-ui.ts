@@ -103,20 +103,13 @@ async function handleDiscordCommandArgInteraction(params: {
   };
   const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
   await params.dispatchCommandInteraction({
-    readPolicy: ctx.readPolicy,
+    ...ctx,
     interaction,
     prompt,
     command: commandDefinition,
     commandArgs: commandArgsWithRaw,
-    cfg: ctx.cfg,
-    discordConfig: ctx.discordConfig,
-    accountId: ctx.accountId,
-    sessionPrefix: ctx.sessionPrefix,
     preferFollowUp: true,
-    threadBindings: ctx.threadBindings,
     responseEphemeral: resolveDiscordSlashCommandConfig(ctx.discordConfig?.slashCommand).ephemeral,
-    buildContext: ctx.buildContext,
-    dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
     pluginCommandDispatch: { kind: "non-plugin" },
   });
 }

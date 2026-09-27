@@ -27,7 +27,6 @@ import type {
 } from "./session-accessor.sqlite-archive-types.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { sqliteSessionStateDeleteSnapshotsEqual } from "./session-accessor.sqlite-delete-snapshot.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerCoordination } from "./session-accessor.sqlite-worker-coordination.js";
 import {
   runSqliteMutationWorkerRequest,
@@ -274,35 +273,14 @@ export async function readPendingSqliteTranscriptArchivesInWorker(
   },
   signal: AbortSignal,
 ): Promise<boolean> {
-  const scoped = runScopedSqliteArchiveOperation(
-    { operation: "pending", plans: [{ agentId: plan.agentId, databasePath: plan.databasePath }] },
-    createSqliteTranscriptArchiveWorker,
-    (run) =>
-      runExclusiveSqliteTranscriptArchiveWorker(
-        () =>
-          runExclusiveSqliteSessionWrite(
-            { agentId: plan.agentId, path: plan.databasePath, env: plan.env },
-            run,
-            "session.archive.publish-prepare",
-            undefined,
-            "foreground",
-            signal,
-          ),
-        signal,
-      ),
+  signal.throwIfAborted();
+  const { withSessionHistoryWorkerDatabase } =
+    await import("./session-transcript-worker-runtime.js");
+  signal.throwIfAborted();
+  return withSessionHistoryWorkerDatabase(
+    { agentId: plan.agentId, path: plan.databasePath, env: plan.env },
+    (reader) => reader.readPendingArchives({ env: plan.env }, signal),
   );
-  if (!scoped) {
-    throw new Error("SQLite archive pending reads require their captured database scope");
-  }
-  const result = await scoped;
-  if (
-    result.type !== "pending" ||
-    result.results.length !== 1 ||
-    typeof result.results[0] !== "boolean"
-  ) {
-    throw new Error("SQLite archive Worker omitted its pending-publication result");
-  }
-  return result.results[0];
 }
 
 export async function runSqliteTranscriptArchiveReadWorker(

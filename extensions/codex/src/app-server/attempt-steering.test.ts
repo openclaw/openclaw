@@ -120,7 +120,7 @@ describe("Codex app-server steering queue", () => {
     },
   );
 
-  it.each(["open", "closed", "reassigned"] as const)(
+  it.each(["open", "revoked"] as const)(
     "rechecks each source after later batch preparation at actual I/O: %s",
     async (transition) => {
       const harness = createClientHarness({
@@ -147,9 +147,7 @@ describe("Codex app-server steering queue", () => {
       const first = queue
         .queue("controlled", { debounceMs: 5, onQueueAccepted: acceptance }, () => {
           if (!sourceCurrent) {
-            throw new Error(
-              transition === "reassigned" ? "source claim replaced" : "source closed",
-            );
+            throw new Error("source claim replaced");
           }
         })
         .then(

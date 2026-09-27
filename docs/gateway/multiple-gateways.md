@@ -143,6 +143,7 @@ openclaw --profile rescue browser status
 ```
 
 - `gateway status --deep` catches stale launchd/systemd/schtasks services from older installs.
+- `doctor --deep` also reports when a recognizable service definition or native service manager could not be inspected. Restore inspection access and rerun Doctor; an incomplete scan does not prove that no other service exists. Inspection warnings never authorize service cleanup.
 - `gateway probe` warning text such as `multiple reachable gateway identities detected` is expected in two cases. You intentionally run more than one isolated gateway, or OpenClaw cannot prove that reachable probe targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway is one gateway with multiple transports, even when transport ports differ.
 
 ## Related

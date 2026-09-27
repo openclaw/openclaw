@@ -5,6 +5,9 @@ import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
+import { enqueueFollowupRun } from "./queue/enqueue.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import { createReplyOperation } from "./reply-run-registry.js";
 import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -74,6 +77,30 @@ function createAdmissionFixture() {
 afterEach(() => vi.clearAllMocks());
 
 describe("prepared reply transcript identity", () => {
+  it.each(["steer", "followup"] as const)(
+    "keeps %s admission independent of an older queued followup",
+    async (mode) => {
+      const { context, sessionKey, sessionId } = createAdmissionFixture();
+      const older = createQueueTestRun({ prompt: "Earlier followup", messageId: `older-${mode}` });
+      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      operation.setPhase("running");
+      enqueueFollowupRun(sessionKey, older, { mode: "followup" }, "message-id", undefined, false);
+      try {
+        const prepared = await prepareReplyRunAdmission({ ...context, effectiveQueueMode: mode });
+        expect(prepared).toMatchObject({
+          kind: "ready",
+          isActive: true,
+          shouldSteer: mode === "steer",
+          shouldFollowup: true,
+        });
+        expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([older]);
+      } finally {
+        operation.complete();
+        clearFollowupQueue(sessionKey);
+      }
+    },
+  );
+
   it.each([false, true])(
     "keeps caller-only model auth selection off the shared session (fast=%s)",
     async (fast) => {

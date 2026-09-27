@@ -8,6 +8,7 @@ import {
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
 import type { TurnRecap } from "../chat-progress.ts";
+import { rawMessageTimestamp } from "../chat-thread-items.ts";
 import {
   renderActivityGroup,
   renderMessageGroup,
@@ -55,7 +56,9 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
       frame.parts.find((part) => part.kind === "stream-run")?.replyToSender,
     messages: representative?.messages ?? [],
     visibleContent: representative?.visibleContent ?? "none",
-    timestamp: Math.min(...groups.map((group) => group.timestamp), ...streamStarts, Date.now()),
+    timestamp:
+      (actionOwner ? rawMessageTimestamp(actionOwner.message) : null) ??
+      Math.min(...groups.map((group) => group.timestamp), ...streamStarts, Date.now()),
     isStreaming: frame.outcome.kind === "active",
     runId: frame.runId,
   };

@@ -50,6 +50,8 @@ type SlackRoutingContext = {
 };
 
 function resolveSlackInitialAgentRoute(params: {
+  boundAgentId?: string;
+  bindingOwnerAvailable: boolean;
   ctx: SlackRoutingContextDeps;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
@@ -58,7 +60,11 @@ function resolveSlackInitialAgentRoute(params: {
   eventScope?: SlackEventScope;
 }) {
   const route = resolveAgentRoute({
-    cfg: normalizeSlackRouteBindingConfig(params.ctx.cfg),
+    cfg:
+      params.boundAgentId || !params.bindingOwnerAvailable
+        ? { session: params.ctx.cfg.session }
+        : normalizeSlackRouteBindingConfig(params.ctx.cfg),
+    defaultAgentId: params.boundAgentId,
     channel: "slack",
     accountId: params.account.accountId,
     teamId: params.eventScope?.teamId || params.ctx.teamId || undefined,
@@ -110,15 +116,6 @@ export function resolveSlackRoutingContext(params: {
     agentViewThreadTs,
     eventScope,
   } = params;
-  let route = resolveSlackInitialAgentRoute({
-    ctx,
-    account,
-    message,
-    isDirectMessage,
-    isRoom,
-    eventScope,
-  });
-
   const chatType = isDirectMessage ? "direct" : isGroupDm ? "group" : "channel";
   const replyToMode = channelConfig?.replyToMode ?? resolveSlackReplyToMode(account, chatType);
   const threadContext = resolveSlackThreadContext({ message, replyToMode, isDirectMessage });
@@ -169,7 +166,16 @@ export function resolveSlackRoutingContext(params: {
     routedThreadId ?? (isDirectMessage && isThreadReply ? threadTs : undefined);
   const bindingRoute = resolveSlackConversationBindingRoute({
     cfg: ctx.cfg,
-    route,
+    resolveRoute: (selection) =>
+      resolveSlackInitialAgentRoute({
+        ...selection,
+        ctx,
+        account,
+        message,
+        isDirectMessage,
+        isRoom,
+        eventScope,
+      }),
     accountId: account.accountId,
     baseConversationId,
     runtimeBindingThreadId,
@@ -178,7 +184,7 @@ export function resolveSlackRoutingContext(params: {
   const runtimeRoute = bindingRoute.runtimeRoute;
   const configuredBinding = bindingRoute.configuredRoute?.bindingResolution ?? null;
   const configuredBindingSessionKey = bindingRoute.configuredRoute?.boundSessionKey ?? "";
-  route = bindingRoute.route;
+  const route = bindingRoute.route;
   const threadKeys =
     runtimeRoute.boundSessionKey || configuredBindingSessionKey
       ? { sessionKey: route.sessionKey, parentSessionKey: undefined }

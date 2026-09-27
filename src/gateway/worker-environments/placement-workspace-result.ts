@@ -38,6 +38,22 @@ export type WorkerWorkspacePendingResult = {
   repositoryWorkspaceId?: string;
 };
 
+export function findPendingWorkerWorkspaceResult(
+  placements: {
+    listPendingWorkspaceResults(sessionId?: string): WorkerWorkspacePendingResult[];
+  },
+  claim: WorkerSessionTurnClaim,
+): WorkerWorkspacePendingResult | undefined {
+  return placements
+    .listPendingWorkspaceResults(claim.sessionId)
+    .find(
+      (pending) =>
+        pending.sessionId === claim.sessionId &&
+        pending.claimId === claim.claimId &&
+        pending.runId === claim.runId,
+    );
+}
+
 function matchesWorkspaceResultGeneration(
   placement: WorkerSessionPlacementRecord,
   generation: number,
@@ -132,6 +148,7 @@ export function readWorkerWorkspaceReconciliationFacts(
 ): {
   placements: ReadonlyMap<string, WorkerSessionPlacementRecord>;
   reconcilingSessionIds: ReadonlySet<string>;
+  pendingResultSessionIds: ReadonlySet<string>;
 } {
   const placements = new Map<string, WorkerSessionPlacementRecord>();
   const pendingResults: StateDatabase["worker_workspace_pending_results"][] = [];
@@ -179,7 +196,11 @@ export function readWorkerWorkspaceReconciliationFacts(
         : [];
     }),
   );
-  return { placements, reconcilingSessionIds };
+  return {
+    placements,
+    reconcilingSessionIds,
+    pendingResultSessionIds: new Set(pendingResults.map((row) => row.session_id)),
+  };
 }
 
 export function hasWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): boolean {
@@ -482,6 +503,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker workspace result changed for ${pending.sessionId}`);
         }
+        sessionChanges.emit({ all: true, scope: "worker-placements" }, db);
       });
     },
   };

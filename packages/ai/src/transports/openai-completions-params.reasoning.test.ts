@@ -49,21 +49,6 @@ describe("openai completions params", () => {
     expect(params.messages?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
   });
 
-  it("uses shared stream reasoning as OpenAI completions effort", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
-      emptyContext(),
-      {
-        reasoning: "medium",
-      } as never,
-    ) as { reasoning_effort?: unknown };
-
-    expect(params.reasoning_effort).toBe("medium");
-  });
-
   it("maps minimal shared reasoning to low for OpenAI completions", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({

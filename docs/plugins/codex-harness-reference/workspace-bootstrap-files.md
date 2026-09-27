@@ -43,12 +43,16 @@ For OpenClaw workspace parity, local tool notes live in the `## Tools` section
 of `AGENTS.md` and normally ride Codex's native project-doc discovery. The
 Codex harness forwards the other bootstrap files as developer instructions:
 
-- On the managed bundled stdio app-server, `SOUL.md`, `IDENTITY.md`, and
+- On managed direct stdio app-servers, including Desktop executables launched
+  by OpenClaw for Computer Use, `SOUL.md`, `IDENTITY.md`, and
   `USER.md` are added to **parent-only model request instructions**. The
   private relay leaves native base/catalog instructions and history intact,
   so newly delivered persona and user-profile context are not automatically
   inherited by native Codex subagents.
 - The compact loaded OpenClaw skills list uses the same parent-local layer.
+- The selected memory plugin's prompt builder receives the complete available
+  tool set, including deferred plugin tools. Its guidance uses the same
+  parent-local layer independently of `MEMORY.md` file routing.
 - Heartbeat turns receive generic initiative guidance through collaboration
   mode. Monitor cron scratch is appended to the heartbeat prompt instead of
   injected as workspace context.
@@ -81,7 +85,11 @@ parent-local instructions keep their native JSON bytes, including existing zstd
 compression on HTTP. Requests with parent-local instructions still receive the
 same bounded instruction injection.
 
-Custom commands, Desktop attachments, external Unix/WebSocket connections,
+Desktop executable selection and Computer Use permissions stay unchanged. The
+relay belongs to the direct stdio process OpenClaw starts, not to the Desktop
+application's other conversations.
+
+Custom commands, Desktop proxy attachments, external Unix/WebSocket connections,
 non-OpenAI native providers, custom upstream endpoints, unsupported native account
 modes, locked upstream configuration, and native `features.respect_system_proxy` profiles keep the legacy
 collaboration carrier for persona and memory guidance, which model-owned catalog

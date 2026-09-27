@@ -20,6 +20,39 @@ const {
   withConfigFileHarness,
 } = useConfigCliIntegrationHarness();
 
+function sourceMismatchConfig(
+  options: {
+    source?: "env" | "exec";
+    id?: string;
+    defaults?: boolean;
+    gateway?: boolean;
+  } = {},
+) {
+  return `${JSON.stringify(
+    {
+      ...(options.gateway ? { gateway: { port: 18789 } } : {}),
+      channels: {
+        discord: {
+          enabled: false,
+          token: {
+            source: options.source ?? "exec",
+            provider: "shared",
+            id: options.id ?? "discord/token",
+          },
+        },
+      },
+      secrets: {
+        ...(options.defaults ? { defaults: { env: "shared" } } : {}),
+        providers: {
+          shared: { source: "file", path: "/tmp/openclaw-unused-secrets.json", mode: "json" },
+        },
+      },
+    },
+    null,
+    2,
+  )}\n`;
+}
+
 function createExecDryRunBatch(params: { markerPath: string }) {
   const response = JSON.stringify({
     protocolVersion: 1,
@@ -335,24 +368,7 @@ describe("config cli secrets integration", () => {
         runConfigUnset({ path: "secrets.defaults.env", runtime }),
     },
   ])("rejects impossible provider/source refs during real config $name", async (testCase) => {
-    const raw = `${JSON.stringify(
-      {
-        channels: {
-          discord: {
-            enabled: false,
-            token: { source: "env", provider: "shared", id: "DISCORD_TEST_TOKEN" },
-          },
-        },
-        secrets: {
-          defaults: { env: "shared" },
-          providers: {
-            shared: { source: "file", path: "/tmp/openclaw-unused-secrets.json", mode: "json" },
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`;
+    const raw = sourceMismatchConfig({ source: "env", id: "DISCORD_TEST_TOKEN", defaults: true });
     await withConfigFileHarness(
       "openclaw-config-cli-source-mismatch-",
       raw,
@@ -370,24 +386,7 @@ describe("config cli secrets integration", () => {
   });
 
   it("rejects impossible provider/source refs during real config patch", async () => {
-    const raw = `${JSON.stringify(
-      {
-        channels: {
-          discord: {
-            enabled: false,
-            token: { source: "env", provider: "shared", id: "DISCORD_TEST_TOKEN" },
-          },
-        },
-        secrets: {
-          defaults: { env: "shared" },
-          providers: {
-            shared: { source: "file", path: "/tmp/openclaw-unused-secrets.json", mode: "json" },
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`;
+    const raw = sourceMismatchConfig({ source: "env", id: "DISCORD_TEST_TOKEN", defaults: true });
     await withConfigFileHarness(
       "openclaw-config-cli-patch-source-mismatch-",
       raw,
@@ -412,27 +411,7 @@ describe("config cli secrets integration", () => {
     const refId = "DISCORD_TEST_TOKEN";
     await withConfigFileHarness(
       "openclaw-config-cli-validate-source-mismatch-",
-      `${JSON.stringify(
-        {
-          channels: {
-            discord: {
-              enabled: false,
-              token: { source: "exec", provider: "shared", id: refId },
-            },
-          },
-          secrets: {
-            providers: {
-              shared: {
-                source: "file",
-                path: "/tmp/openclaw-unused-secrets.json",
-                mode: "json",
-              },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
+      sourceMismatchConfig({ id: refId }),
       async () => {
         const snapshot = await configRuntime.readConfigFileSnapshot({ observe: false });
         expect(snapshot.valid).toBe(true);
@@ -452,23 +431,7 @@ describe("config cli secrets integration", () => {
   });
 
   it("allows a config set that repairs an inactive provider/source mismatch", async () => {
-    const raw = `${JSON.stringify(
-      {
-        channels: {
-          discord: {
-            enabled: false,
-            token: { source: "exec", provider: "shared", id: "discord/token" },
-          },
-        },
-        secrets: {
-          providers: {
-            shared: { source: "file", path: "/tmp/openclaw-unused-secrets.json", mode: "json" },
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`;
+    const raw = sourceMismatchConfig();
     await withConfigFileHarness(
       "openclaw-config-cli-repair-source-mismatch-",
       raw,
@@ -511,24 +474,7 @@ describe("config cli secrets integration", () => {
         runConfigUnset({ path: "gateway.bind", runtime }),
     },
   ])("strictly validates an existing mismatch when $name is a no-op", async (testCase) => {
-    const raw = `${JSON.stringify(
-      {
-        gateway: { port: 18789 },
-        channels: {
-          discord: {
-            enabled: false,
-            token: { source: "exec", provider: "shared", id: "discord/token" },
-          },
-        },
-        secrets: {
-          providers: {
-            shared: { source: "file", path: "/tmp/openclaw-unused-secrets.json", mode: "json" },
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`;
+    const raw = sourceMismatchConfig({ gateway: true });
     await withConfigFileHarness(
       "openclaw-config-cli-noop-source-mismatch-",
       raw,

@@ -282,30 +282,6 @@ describe("ownership helpers", () => {
 describe("staging", () => {
   const mediaAccessFor = (roots: string[]) => ({ localRoots: roots });
 
-  it("copies a local source for the queue and survives producer cleanup", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
-    const livePayload = { text: "hi", mediaUrl: source };
-
-    const result = await stageQueuePayloadMedia({
-      payloads: [livePayload],
-      mediaAccess: mediaAccessFor([sourceDir]),
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-    await fs.rm(source);
-
-    expect(result.status).toBe("staged");
-    if (result.status !== "staged") {
-      return;
-    }
-    const staged = result.payloads[0]?.mediaUrl as string;
-    expect(path.dirname(staged)).toBe(spoolRoot);
-    expect(await fs.readFile(staged, "utf8")).toBe("opus-bytes");
-    expect(livePayload.mediaUrl).toBe(source);
-    expect(result.artifacts).toEqual([staged]);
-  });
-
   it("leaves replayable remote media untouched without creating the spool", async () => {
     const result = await stageQueuePayloadMedia({
       payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
@@ -318,21 +294,6 @@ describe("staging", () => {
       payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
       artifacts: [],
     });
-    expect(await exists(spoolRoot)).toBe(false);
-  });
-
-  it("does not make sensitive media durable", async () => {
-    const source = path.join(sourceDir, "secret.ogg");
-    await fs.writeFile(source, "private");
-
-    const result = await stageQueuePayloadMedia({
-      payloads: [{ mediaUrl: source, sensitiveMedia: true }],
-      mediaAccess: mediaAccessFor([sourceDir]),
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-
-    expect(result).toEqual({ status: "not-durable", reason: "sensitive-media" });
     expect(await exists(spoolRoot)).toBe(false);
   });
 

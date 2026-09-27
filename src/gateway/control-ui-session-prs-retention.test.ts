@@ -2,6 +2,7 @@ import { getEventListeners } from "node:events";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runGitWorkerOperation } from "../infra/git-worker.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import {
   createSessionPullRequestsFixture,
@@ -16,6 +17,12 @@ const loadControlUiSessionPullRequests = fixture.load;
 vi.mock("../infra/git-worker.js", () => ({ runGitWorkerOperation: vi.fn() }));
 
 let cacheEpochMs = Date.now();
+
+function localGitReads() {
+  return vi
+    .mocked(runGitWorkerOperation)
+    .mock.calls.filter(([operation]) => operation.type !== "checkout.revision");
+}
 
 beforeEach(() => {
   vi.mocked(runGitWorkerOperation).mockReset();
@@ -48,6 +55,7 @@ describe("watched session PR retention", () => {
       { rateLimited: boolean; pullRequests: unknown[]; repository: unknown }
     >();
     const subscriptions = createControlUiSessionPullRequestSubscriptions({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       prepareRead: fixture.prepareRead,
       broadcastToConnIds: (_event, payload) => {
         if (!isRecord(payload) || !isRecord(payload.sessions)) {
@@ -127,6 +135,9 @@ describe("watched session PR retention", () => {
     ]);
     const signals = new Set<AbortSignal>();
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+      if (operation.type === "checkout.revision") {
+        return "unchanged";
+      }
       if (operation.type === "checkout.context") {
         return {
           owner: "openclaw",
@@ -142,6 +153,7 @@ describe("watched session PR retention", () => {
       throw new Error("Unexpected local Git operation");
     });
     const subscriptions = createControlUiSessionPullRequestSubscriptions({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       prepareRead: fixture.prepareRead,
       broadcastToConnIds: vi.fn(),
       load: (params, cacheSignal) => {
@@ -165,18 +177,21 @@ describe("watched session PR retention", () => {
         Array.from({ length: 100 }, (_, index) => `watched-${index + 200}`),
       );
       expect(fetchImpl.mock.calls).toHaveLength(300);
-      expect(runGitWorkerOperation).toHaveBeenCalledTimes(600);
+      expect(localGitReads()).toHaveLength(600);
 
       vi.setSystemTime(Date.now() + 60_000);
       await subscriptions.pollNow();
 
       expect(fetchImpl.mock.calls).toHaveLength(300);
-      expect(runGitWorkerOperation).toHaveBeenCalledTimes(600);
+      expect(localGitReads()).toHaveLength(600);
 
       vi.setSystemTime(Date.now() + 15_001);
       await subscriptions.pollNow();
       expect(fetchImpl.mock.calls).toHaveLength(300);
-      expect(runGitWorkerOperation).toHaveBeenCalledTimes(1_200);
+      expect(localGitReads()).toHaveLength(600);
+      vi.setSystemTime(Date.now() + 225_000);
+      await subscriptions.pollNow();
+      expect(localGitReads()).toHaveLength(900);
       expect(signals.size).toBe(300);
       expect([...signals].every((signal) => getEventListeners(signal, "abort").length === 4)).toBe(
         true,
@@ -205,6 +220,9 @@ describe("watched session PR retention", () => {
       { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
     ]);
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+      if (operation.type === "checkout.revision") {
+        return branch;
+      }
       if (operation.type === "checkout.context") {
         return branch
           ? {

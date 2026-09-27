@@ -56,7 +56,7 @@ describe("concurrent worker workspace results", () => {
   )(
     "revalidates $change settlement after $phase transcript hydration",
     async ({ phase, change }) => {
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {
         throw new Error("expected active placement");
@@ -67,7 +67,7 @@ describe("concurrent worker workspace results", () => {
       );
       const before = source.getPersistedEntries();
       const beforeRows = readWorkerTurnTranscriptStorageRows();
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...sessionTarget,
         owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
         claimId: `hydrate-${phase}-${change}`,
@@ -191,7 +191,7 @@ describe("concurrent worker workspace results", () => {
       path.join(source, "skills", "synthetic", "SKILL.md"),
       "---\ndescription: Synthetic resource\n---\n# Resource\n",
     );
-    seedActivePlacement("remote-exec", remote);
+    await seedActivePlacement("remote-exec", remote);
     const placement = placements.get(SESSION_ID);
     if (placement?.state !== "active") {
       throw new Error("expected active placement");
@@ -202,7 +202,7 @@ describe("concurrent worker workspace results", () => {
         entries: loadWorkspaceSkills(source, { workspaceOnly: true }),
       }),
     };
-    const turnClaim = placements.claimTurn({
+    const turnClaim = await placements.claimTurn({
       ...sessionTarget,
       owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       claimId: "cleanup-failure",
@@ -265,7 +265,7 @@ describe("concurrent worker workspace results", () => {
     const leftovers = await fs.readdir(remote);
     expect(leftovers).toHaveLength(1);
     const nextTurn = turn("cleanup-recovery");
-    const nextClaim = placements.claimTurn({
+    const nextClaim = await placements.claimTurn({
       ...sessionTarget,
       owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       claimId: "cleanup-recovery",
@@ -368,7 +368,7 @@ describe("concurrent worker workspace results", () => {
           sessionId,
           ownerEpoch: 1,
         });
-        let placement = placements.startDispatch(identity);
+        let placement = await placements.startDispatch(identity);
         for (const transition of [
           { from: "requested", to: "provisioning", patch: { environmentId } },
           { from: "provisioning", to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
@@ -391,7 +391,7 @@ describe("concurrent worker workspace results", () => {
         if (placement.state !== "active") {
           throw new Error("expected active placement");
         }
-        const turnClaim = placements.claimTurn({
+        const turnClaim = await placements.claimTurn({
           ...identity,
           owner: { kind: "worker", environmentId, ownerEpoch: 1 },
           claimId: `claim-${index}`,

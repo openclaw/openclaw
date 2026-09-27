@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
 import { withSqliteIntegrityWorkerScope } from "../infra/sqlite-integrity-worker.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
@@ -121,14 +122,7 @@ async function runMaintenanceScope<T>(
               errors.push(error);
             }
           }
-          if (errors.length > 1) {
-            throw new AggregateError(errors, "Agent maintenance and nested work failed", {
-              cause: errors[0],
-            });
-          }
-          if (errors.length === 1) {
-            throw errors[0];
-          }
+          throwSqliteLifecycleErrors(errors, "Agent maintenance and nested work failed");
           if ("error" in outcome) {
             throw outcome.error;
           }
@@ -146,6 +140,7 @@ export function withAgentDatabaseMaintenanceLease<T>(
   options: Pick<OpenClawStateDatabaseOptions, "env"> & {
     schemaPolicy?: "existing";
     leaseMs?: number;
+    processBound?: boolean;
   },
   run: (maintenance: OpenClawStateLeaseContext) => Promise<T>,
 ): Promise<T> {
@@ -174,6 +169,7 @@ export function withAgentDatabaseMaintenanceLease<T>(
       waitMs: 5_000,
       prepareDatabase: true,
       heartbeat: "worker",
+      processBound: options.processBound,
       leaseLabel: "agent database maintenance lease",
       operationLabel: "agent.database.maintenance.lease",
     },

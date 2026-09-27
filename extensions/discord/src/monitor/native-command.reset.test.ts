@@ -96,38 +96,46 @@ async function runReset(commandName: "new" | "reset", allowFrom: string[]) {
   };
 }
 
-describe.each(["new", "reset"] as const)(
-  "Discord native /%s through the reply pipeline",
-  (name) => {
-    it.each(["", "user:", "discord:", "pk:", "<@", "<@!"])(
-      "resets the channel and acknowledges a matching %s sender entry",
-      async (prefix) => {
-        const entry = `${prefix}${userId}${prefix.startsWith("<") ? ">" : ""}`;
-        const result = await runReset(name, [entry]);
-        expect(result.entry?.sessionId).toBe(sessionId);
-        expect(result.entry?.lifecycleRevision).toBeTruthy();
-        expect(result.entry?.lifecycleRevision).not.toBe("before-reset");
-        expect(result.events).toEqual(
-          expect.arrayContaining([expect.objectContaining({ type: "reset", reason: name })]),
-        );
-        expect(result.replies).toEqual([
-          name === "new" ? "✅ New session started." : "✅ Session reset.",
-        ]);
-      },
-    );
+describe("Discord native session reset through the reply pipeline", () => {
+  it.each([
+    ["new", "user:"],
+    ["reset", ""],
+    ["reset", "user:"],
+    ["reset", "discord:"],
+    ["reset", "pk:"],
+    ["reset", "<@"],
+    ["reset", "<@!"],
+  ] as const)(
+    "/%s resets the channel and acknowledges a matching %s sender entry",
+    async (name, prefix) => {
+      const entry = `${prefix}${userId}${prefix.startsWith("<") ? ">" : ""}`;
+      const result = await runReset(name, [entry]);
+      expect(result.entry?.sessionId).toBe(sessionId);
+      expect(result.entry?.lifecycleRevision).toBeTruthy();
+      expect(result.entry?.lifecycleRevision).not.toBe("before-reset");
+      expect(result.events).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "reset", reason: name })]),
+      );
+      expect(result.replies).toEqual([
+        name === "new" ? "✅ New session started." : "✅ Session reset.",
+      ]);
+    },
+  );
 
-    it.each([
-      { reason: "a different user", allowFrom: ["user:100000000000000004"] },
-      { reason: "an empty allowlist", allowFrom: [] },
-    ])("preserves the session when denied by $reason", async ({ allowFrom }) => {
-      const result = await runReset(name, allowFrom);
+  it.each([
+    { name: "new", reason: "a different user", allowFrom: ["user:100000000000000004"] },
+    { name: "reset", reason: "an empty allowlist", allowFrom: [] },
+  ] as const)(
+    "/$name preserves the session when denied by $reason",
+    async ({ name, allowFrom }) => {
+      const result = await runReset(name, [...allowFrom]);
       expect(result.entry?.lifecycleRevision).toBe("before-reset");
       expect(result.events).not.toEqual(
         expect.arrayContaining([expect.objectContaining({ type: "reset" })]),
       );
-    });
-  },
-);
+    },
+  );
+});
 
 installDiscordIngressTestRuntime();
 

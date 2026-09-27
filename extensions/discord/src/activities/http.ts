@@ -170,22 +170,16 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       // Defer destruction so the rejections below reach the client before the close.
       destroyOnLimit: false,
     });
-    if (!bodyResult.ok && bodyResult.code === "REQUEST_BODY_TIMEOUT") {
+    if (
+      !bodyResult.ok &&
+      (bodyResult.code === "REQUEST_BODY_TIMEOUT" || bodyResult.code === "PAYLOAD_TOO_LARGE")
+    ) {
+      const timedOut = bodyResult.code === "REQUEST_BODY_TIMEOUT";
       await sendHttpRequestRejection(
         req,
         res,
-        408,
-        jsonBody({ error: "request body timeout" }),
-        JSON_CONTENT_TYPE,
-      );
-      return true;
-    }
-    if (!bodyResult.ok && bodyResult.code === "PAYLOAD_TOO_LARGE") {
-      await sendHttpRequestRejection(
-        req,
-        res,
-        413,
-        jsonBody({ error: "request body too large" }),
+        timedOut ? 408 : 413,
+        jsonBody({ error: timedOut ? "request body timeout" : "request body too large" }),
         JSON_CONTENT_TYPE,
       );
       return true;

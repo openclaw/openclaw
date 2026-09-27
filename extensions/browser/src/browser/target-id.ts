@@ -2,6 +2,7 @@
  * Target id resolution helpers for Browser tab aliases and user-facing ids.
  */
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
 import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
 
 const TAB_LABEL_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
@@ -168,4 +169,26 @@ export function resolveTargetIdFromTabs(
     return { ok: false, reason: "not_found" };
   }
   return { ok: false, reason: "ambiguous", matches };
+}
+
+export function resolveBrowserTabOrThrow(
+  input: string,
+  tabs: BrowserTab[],
+  exactTargetId = false,
+): BrowserTab {
+  let targetId = input;
+  if (!exactTargetId) {
+    const resolved = resolveTargetIdFromTabs(input, tabs);
+    if (!resolved.ok) {
+      throw resolved.reason === "ambiguous"
+        ? new BrowserTargetAmbiguousError()
+        : new BrowserTabNotFoundError({ input });
+    }
+    targetId = resolved.targetId;
+  }
+  const tab = tabs.find((candidate) => candidate.targetId === targetId);
+  if (!tab) {
+    throw new BrowserTabNotFoundError({ input });
+  }
+  return tab;
 }

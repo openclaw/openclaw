@@ -12,6 +12,7 @@ import {
   reclaimNativeSessionGeneration,
   resolveNativeSessionBinding,
   type NativeSessionBindingLeaseOptions,
+  type NativeSessionBindingStateStore,
   type NativeSessionGenerationAdoptionResult,
   type NativeSessionGenerationOperations,
   type NativeSessionGenerationReclaimPlan,
@@ -33,6 +34,7 @@ import {
 import {
   bindingStoreKey,
   matchesCodexNativeSubagentSubmissionBinding,
+  matchesPendingSupervisionBranch,
   ownsStoredSessionGeneration,
   preserveCodexNativeSubagentSubmissions,
   readCodexAppServerThreadBinding,
@@ -251,10 +253,8 @@ export function createStoredCodexAppServerBinding(
     : undefined;
 }
 
-type BindingStateStore = Pick<
-  PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-  "deleteIf" | "entries" | "lookup" | "lookupMany" | "registerIfAbsent" | "update"
->;
+export type CodexBindingStateStore = NativeSessionBindingStateStore<StoredCodexAppServerBinding> &
+  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "entries" | "lookupMany">;
 
 function bindingLeaseLostError(key: string, cause?: unknown): Error {
   return new Error(`Lost Codex binding lease: ${key}`, cause === undefined ? undefined : { cause });
@@ -362,7 +362,7 @@ export async function resolveCodexSessionBinding(params: {
 
 /** Creates the single binding facade owned by the Codex plugin runtime. */
 export function createCodexAppServerBindingStore(
-  state: BindingStateStore,
+  state: CodexBindingStateStore,
 ): CodexAppServerBindingStore {
   const lifecycle = createNativeSessionBindingLifecycle<StoredCodexAppServerBinding>(state, {
     readRecord: readStoredCodexAppServerBinding,
@@ -493,10 +493,7 @@ export function createCodexAppServerBindingStore(
           key === currentKey &&
           (currentIdentity.kind === "conversation" ||
             stored.sessionId === currentIdentity.sessionId.trim());
-        if (stored.state !== "active" || stored.binding.threadId !== threadId || isCurrentOwner) {
-          return false;
-        }
-        return true;
+        return stored.state === "active" && stored.binding.threadId === threadId && !isCurrentOwner;
       });
     },
 
@@ -808,29 +805,6 @@ function codexSessionGenerationOperations(
         assertCurrent,
       ),
   };
-}
-
-function matchesPendingSupervisionBranch(
-  binding: CodexAppServerThreadBinding | undefined,
-  expected: CodexAppServerPendingSupervisionBranch,
-): boolean {
-  const pending = binding?.pendingSupervisionBranch;
-  if (!pending || binding?.threadId !== expected.sourceThreadId) {
-    return false;
-  }
-  if (
-    pending.sourceThreadId !== expected.sourceThreadId ||
-    pending.connectionFingerprint !== expected.connectionFingerprint ||
-    pending.lastTurnId !== expected.lastTurnId
-  ) {
-    return false;
-  }
-  const currentCleanup = pending.cleanupThreadIds ?? [];
-  const expectedCleanup = expected.cleanupThreadIds ?? [];
-  return (
-    currentCleanup.length === expectedCleanup.length &&
-    currentCleanup.every((threadId, index) => threadId === expectedCleanup[index])
-  );
 }
 
 function isSameSupervisionOwner(

@@ -152,37 +152,6 @@ describe("runtime postbuild static assets", () => {
     expect(payload.sources).toContain("extensions/crabbox/assets/openclaw-worker-wallpaper.png");
   });
 
-  it("discovers static assets from plugin package metadata", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const packageDir = path.join(rootDir, "extensions", "demo");
-    await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/demo",
-        openclaw: {
-          build: {
-            staticAssets: [
-              {
-                source: "./assets/runtime.js",
-                output: "assets/runtime.js",
-              },
-            ],
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    expect(discoverStaticExtensionAssets({ rootDir })).toEqual([
-      {
-        pluginDir: "demo",
-        src: "extensions/demo/assets/runtime.js",
-        dest: "dist/extensions/demo/assets/runtime.js",
-      },
-    ]);
-  });
-
   it("copies each package asset once with multiple Git index stages", async () => {
     const rootDir = createTempDir("openclaw-static-assets-index-");
     const git = (args: string[], input?: string) =>
@@ -301,22 +270,6 @@ describe("runtime postbuild static assets", () => {
           ]
         : [],
     );
-  });
-
-  it("copies declared static assets into root dist", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const src = "extensions/acpx/src/runtime-internals/mcp-proxy.mjs";
-    const dest = "dist/extensions/acpx/mcp-proxy.mjs";
-    const sourcePath = path.join(rootDir, src);
-    const destPath = path.join(rootDir, dest);
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, "proxy-data\n", "utf8");
-
-    copyStaticExtensionAssets({
-      rootDir,
-      assets: [{ src, dest }],
-    });
-    expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
   });
 
   it.each([

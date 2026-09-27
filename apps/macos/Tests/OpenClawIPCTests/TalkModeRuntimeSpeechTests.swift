@@ -490,7 +490,7 @@ struct TalkModeRuntimeSpeechTests {
     @Test func `speech request uses dictation defaults`() {
         let request = SFSpeechAudioBufferRecognitionRequest()
 
-        TalkRecognitionCaptureLifecycle.configure(request)
+        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
 
         #expect(request.shouldReportPartialResults)
         #expect(request.taskHint == .dictation)

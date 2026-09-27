@@ -47,6 +47,41 @@ it("keeps source boundary proof when a narrow PR has no dist consumer", () => {
   }
 });
 
+it("keeps exclusive aggregates out of cold canonical metadata discovery", async () => {
+  vi.resetModules();
+  try {
+    const { nodeTestConfigRequiresCanonicalMetadata } =
+      await import("../../scripts/lib/ci-node-test-plan.mts");
+    const { isExclusiveCiTestConfig } = await import("../../scripts/lib/local-check-runtime.mts");
+    const readFile = vi.spyOn(fs, "readFileSync");
+    try {
+      for (const config of [
+        "vitest.config.ts",
+        "test/vitest/vitest.config.ts",
+        "test/vitest/vitest.full-agentic.config.ts",
+        "test/vitest/vitest.gateway.config.ts",
+      ]) {
+        expect(isExclusiveCiTestConfig(config)).toBe(true);
+        expect(nodeTestConfigRequiresCanonicalMetadata(config)).toBe(false);
+      }
+      expect(readFile).not.toHaveBeenCalled();
+    } finally {
+      readFile.mockRestore();
+    }
+    for (const config of [
+      "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.gateway-client.config.ts",
+      "test/vitest/vitest.tooling.config.ts",
+      "test/vitest/vitest.tui-pty.config.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
+    ]) {
+      expect(nodeTestConfigRequiresCanonicalMetadata(config)).toBe(true);
+    }
+  } finally {
+    vi.resetModules();
+  }
+});
+
 it("executes the source TUI assertion helper without admitting deferred PTY builds", () => {
   const helper = "src/tui/tui-pty-harness-assertion-test-support.test.ts";
   const changedPaths = [helper, ...tuiPtyTestFiles];

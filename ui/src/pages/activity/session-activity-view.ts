@@ -13,7 +13,8 @@ import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import {
-  isPresenceViewerIdle,
+  presenceViewerActivity,
+  presenceActivityLabel,
   presenceViewerLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
@@ -97,8 +98,9 @@ function renderPersonAvatar(person: PresenceViewer, showPresence = false) {
       showPresence && (person.entries?.length ?? 0) > 0
         ? html`<span
             class="activity-feed__presence-dot"
+            data-presence-activity=${presenceViewerActivity(person)}
             role="img"
-            aria-label=${t("activityFeed.online")}
+            aria-label=${presenceActivityLabel(presenceViewerActivity(person))}
           ></span>`
         : nothing
     }
@@ -431,12 +433,8 @@ function renderIdentityHeader(
   rows: readonly GatewaySessionRow[],
 ) {
   const online = (identity.entries?.length ?? 0) > 0;
-  const idle = online && isPresenceViewerIdle(identity);
-  const status = online
-    ? idle
-      ? t("activityFeed.idle")
-      : t("activityFeed.online")
-    : t("activityFeed.offline");
+  const activity = presenceViewerActivity(identity);
+  const status = online ? presenceActivityLabel(activity) : t("activityFeed.offline");
   const devices = identity.entries ?? [];
   const viewing = resolveViewingNow(identity, rows);
   return html`
@@ -452,7 +450,7 @@ function renderIdentityHeader(
           <h2>${presenceViewerLabel(identity)}</h2>
           ${identity.email ? html`<p>${identity.email}</p>` : nothing}
         </div>
-        ${renderSettingsStatus({ kind: online ? (idle ? "warn" : "ok") : "muted", label: status })}
+        ${renderSettingsStatus({ kind: online && activity !== "unknown" ? (activity === "idle" ? "warn" : "ok") : "muted", label: status })}
       </div>
       ${
         devices.length > 0

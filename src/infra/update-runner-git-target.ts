@@ -9,13 +9,14 @@ import {
   type OpenClawSchemaVersions,
 } from "../state/openclaw-schema-versions.js";
 import { hasErrnoCode } from "./errno.js";
-import { gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
+import { executeGitCommand, gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
 import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
+import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -402,7 +403,7 @@ export async function fetchGitUpdateTarget(params: {
   step: (name: string, argv: string[], cwd: string) => RunStepOptions;
   workStep: (name: string, argv: string[], cwd: string) => RunStepOptions;
   steps: UpdateStepResult[];
-}): Promise<{ ok: boolean; refreshedRemotes: string[] }> {
+}): Promise<{ ok: boolean; refreshedRemotes: string[]; releaseRemote?: string }> {
   const { root, channel, devTarget, name, step: targetStep, workStep, steps } = params;
   const refreshedRemotes: string[] = [];
   const result = (ok: boolean) => ({ ok, refreshedRemotes });
@@ -534,7 +535,127 @@ export async function fetchGitUpdateTarget(params: {
       root,
     ),
   );
-  return result(tags.exitCode === 0 && !isFailedUpdateStep(tags));
+  return {
+    ...result(tags.exitCode === 0 && !isFailedUpdateStep(tags)),
+    releaseRemote: tagRemote,
+  };
+}
+
+type PreferredGitChannelTarget = {
+  channel: "stable" | "beta";
+  tag: string;
+  sha: string;
+};
+
+/** Observe the preferred release without entering candidate admission or changing installed refs. */
+export async function readPreferredGitChannelTarget(params: {
+  root: string;
+  channel: PreferredGitChannelTarget["channel"];
+  sha: string;
+  timeoutMs: number;
+}): Promise<PreferredGitChannelTarget | undefined> {
+  const runGit: CommandRunner = async (argv, options) => {
+    const root = argv[2];
+    if (argv[0] !== "git" || argv[1] !== "-C" || !root) {
+      throw new Error("Expected a Git target inspection command");
+    }
+    const result = await executeGitCommand(root, argv.slice(3), {
+      ...options,
+      killProcessTree: true,
+      terminateOnOutputLimit: true,
+    });
+    if (
+      result.killed ||
+      result.signal ||
+      result.outputLimitExceeded ||
+      (result.termination && result.termination !== "exit")
+    ) {
+      throw new Error("Git target observation did not complete");
+    }
+    return result;
+  };
+  let cleanupFailed = false;
+  const target = await withGitTargetInspectionRoot(
+    {
+      ...params,
+      runCommand: runGit,
+      onWarning: () => {
+        cleanupFailed = true;
+      },
+    },
+    async (root, runCommand) => {
+      const step = (name: string, argv: string[], cwd: string): RunStepOptions => ({
+        name,
+        argv,
+        cwd,
+        runCommand,
+        timeoutMs: params.timeoutMs,
+        stepIndex: 0,
+        totalSteps: 0,
+      });
+      const fetched = await fetchGitUpdateTarget({
+        root,
+        channel: params.channel,
+        name: "git-status-target-fetch",
+        step,
+        workStep: step,
+        steps: [],
+      });
+      if (!fetched.ok || !fetched.releaseRemote) {
+        return undefined;
+      }
+      const tag = await resolveChannelTag(runCommand, root, params.timeoutMs, params.channel);
+      if (!tag) {
+        return undefined;
+      }
+      const ref = `refs/tags/${tag}`;
+      const resolved = await runCommand(
+        ["git", "-C", root, "rev-parse", "--verify", `${ref}^{commit}`],
+        {
+          timeoutMs: params.timeoutMs,
+        },
+      );
+      const sha = resolved.code === 0 ? resolved.stdout.trim() : "";
+      if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(sha)) {
+        return undefined;
+      }
+      // Fetch preserves operator-only tags. A selected cached tag is not a fresh remote fact.
+      const advertised = await runCommand(
+        ["git", "-C", root, "ls-remote", "--tags", "--", fetched.releaseRemote, ref, `${ref}^{}`],
+        { timeoutMs: params.timeoutMs },
+      );
+      if (advertised.code !== 0) {
+        return undefined;
+      }
+      const refs = new Map(
+        advertised.stdout
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const [oid, name] = line.split("\t");
+            return [name, oid];
+          }),
+      );
+      return (refs.get(`${ref}^{}`) ?? refs.get(ref)) === sha
+        ? { channel: params.channel, tag, sha }
+        : undefined;
+    },
+  );
+  if (!target || cleanupFailed) {
+    return undefined;
+  }
+  const [head, dirty] = await Promise.all([
+    runGit(["git", "-C", params.root, "rev-parse", "HEAD"], { timeoutMs: params.timeoutMs }).catch(
+      () => null,
+    ),
+    runGit(gitCleanCheckArgs(params.root), { timeoutMs: params.timeoutMs }).catch(() => null),
+  ]);
+  return head?.code === 0 &&
+    head.stdout.trim() === params.sha &&
+    dirty?.code === 0 &&
+    !dirty.stdout.trim()
+    ? target
+    : undefined;
 }
 
 export function selectChannelTag(

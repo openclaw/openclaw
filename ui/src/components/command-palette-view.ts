@@ -44,7 +44,6 @@ import {
 
 registerCommandPaletteEnglish();
 
-type PaletteItem = CommandPaletteItem;
 export type PaletteFilter = "all" | "sessions" | "messages";
 
 type CommandPaletteProps = {
@@ -61,8 +60,8 @@ type CommandPaletteProps = {
   agents: readonly GatewayAgentRow[];
   agentIdentity?: AgentIdentityCapability;
   defaultAgentId: string;
-  sessionItems: readonly PaletteItem[];
-  catalogItems: readonly PaletteItem[];
+  sessionItems: readonly CommandPaletteItem[];
+  catalogItems: readonly CommandPaletteItem[];
   primaryModelSearch: boolean;
   modelSearchError: string | null;
   sessionSearchPending: boolean;
@@ -93,8 +92,8 @@ type CommandPaletteProps = {
   draft: PaletteSessionDraft;
 };
 
-function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
-  const map = new Map<string, PaletteItem[]>();
+function groupItems(items: CommandPaletteItem[]): Array<[string, CommandPaletteItem[]]> {
+  const map = new Map<string, CommandPaletteItem[]>();
   for (const item of items) {
     const group = map.get(item.category) ?? [];
     group.push(item);
@@ -106,7 +105,7 @@ function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
 const paletteInputId = COMMAND_PALETTE_INPUT_ID;
 const paletteListboxId = "cmd-palette-listbox";
 
-function selectItem(item: PaletteItem, props: CommandPaletteProps) {
+function selectItem(item: CommandPaletteItem, props: CommandPaletteProps) {
   if (props.draft.submitting || props.searchDebouncing) {
     return;
   }
@@ -139,10 +138,6 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
   } else {
     props.onSlashCommand?.(item.action);
   }
-  props.onToggle();
-}
-
-function closePalette(props: CommandPaletteProps) {
   props.onToggle();
 }
 
@@ -194,7 +189,7 @@ function handleKeydown(event: KeyboardEvent, readProps: () => CommandPaletteProp
   if (event.key === "Escape") {
     event.preventDefault();
     event.stopPropagation();
-    closePalette(props);
+    props.onToggle();
     return;
   }
   if (props.draft.submitting) {
@@ -233,7 +228,7 @@ function getOptionId(index: number): string {
   return `cmd-palette-option-${index}`;
 }
 
-function matchesFilter(item: PaletteItem, filter: PaletteFilter) {
+function matchesFilter(item: CommandPaletteItem, filter: PaletteFilter) {
   return filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
 }
 
@@ -318,7 +313,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
           event.preventDefault();
           return;
         }
-        closePalette(props);
+        props.onToggle();
       }}
     >
       <div

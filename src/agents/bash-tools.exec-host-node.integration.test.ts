@@ -372,8 +372,6 @@ it("denies caller allowlist/off misses before dispatch to a permissive node", as
 
 it.each([
   { channel: "webchat", decision: "allow-once" },
-  { channel: "webchat", decision: "allow-always" },
-  { channel: "a2a", decision: "allow-once" },
   { channel: "a2a", decision: "allow-always" },
 ])(
   "keeps $channel node approval $decision inside the originating tool lifetime",

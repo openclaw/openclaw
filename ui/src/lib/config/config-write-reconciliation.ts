@@ -2,7 +2,6 @@ import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { cloneConfigObject } from "../config-form-utils.ts";
 import {
   adoptConfigWriteAck,
   applyConfigSnapshot,
@@ -244,7 +243,7 @@ export function createConfigWriteReconciliation({
       // never rebased the originals), so the reload below would replace
       // it with the committed bytes. Capture it for restoration.
       const captureDraft = () => ({
-        form: cloneConfigObject(state.configForm ?? {}),
+        form: structuredClone(state.configForm ?? {}),
         raw: state.configRaw,
         mode: state.configFormMode,
         originalRaw: state.configRawOriginal,

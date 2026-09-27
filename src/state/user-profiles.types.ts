@@ -1,4 +1,5 @@
 import type { SqlBool } from "kysely";
+import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { GatewayConfig } from "../config/types.gateway.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import type { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
@@ -7,6 +8,8 @@ import type { DB } from "./openclaw-state-db.generated.js";
 export const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
 
 export type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[number];
+
+export type UserProfile = Omit<UserProfileListItem, "emails" | "githubIdentity" | "hasAvatar">;
 
 export type UserProfileOwnerErrorCode = "merge" | "role" | "repair-required";
 

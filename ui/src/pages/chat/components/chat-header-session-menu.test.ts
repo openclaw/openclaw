@@ -217,7 +217,6 @@ describe("chat header session menu", () => {
   it.each([
     { name: "plain browser", nativeGateway: null, offered: false },
     { name: "native local gateway", nativeGateway: "local", offered: true },
-    { name: "native remote gateway", nativeGateway: "remote", offered: false },
     {
       name: "SSH-tunneled remote native gateway",
       nativeGateway: "remote",

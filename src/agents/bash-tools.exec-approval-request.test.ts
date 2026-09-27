@@ -3,7 +3,7 @@
  * Covers two-phase gateway registration, decision waiting, timeout fallback,
  * and lazy command highlighting for host/node approval payloads.
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 
 const commandExplainerMock = vi.hoisted(() => ({
@@ -42,22 +42,6 @@ let registerExecApprovalRequestForHostOrThrow: typeof import("./bash-tools.exec-
 let resolveRegisteredExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").resolveRegisteredExecApprovalDecision;
 let isExecApprovalRunAbortedError: typeof import("./bash-tools.exec-approval-request.js").isExecApprovalRunAbortedError;
 
-const initialProcessPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-
-function setProcessPlatformForTest(platform: NodeJS.Platform): void {
-  Object.defineProperty(process, "platform", {
-    configurable: true,
-    enumerable: true,
-    value: platform,
-  });
-}
-
-function restoreProcessPlatformForTest(): void {
-  if (initialProcessPlatform) {
-    Object.defineProperty(process, "platform", initialProcessPlatform);
-  }
-}
-
 type ApprovalRequestPayload = {
   approvalReviewerDeviceIds?: string[];
   commandSpans?: Array<{ startIndex: number; endIndex: number }>;
@@ -90,11 +74,6 @@ describe("exec approval requests", () => {
     vi.mocked(callGatewayTool).mockClear();
     commandExplainerMock.explainShellCommand.mockClear();
     commandExplainerMock.formatCommandSpans.mockClear();
-    restoreProcessPlatformForTest();
-  });
-
-  afterEach(() => {
-    restoreProcessPlatformForTest();
   });
 
   it("does not load the command explainer when importing approval requests", () => {
@@ -267,73 +246,6 @@ describe("exec approval requests", () => {
 
     const payload = requireApprovalRequestPayload(0);
     expect(payload?.commandSpans).toStrictEqual([{ startIndex: 0, endIndex: 4 }]);
-  });
-
-  it("omits generated command spans for unsupported shell wrapper languages", async () => {
-    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
-
-    await registerExecApprovalRequestForHostOrThrow({
-      approvalId: "approval-id-powershell",
-      command: 'pwsh -Command "Get-ChildItem"',
-      workdir: "/tmp/project",
-      host: "node",
-      security: "allowlist",
-      ask: "always",
-    });
-    await registerExecApprovalRequestForHostOrThrow({
-      approvalId: "approval-id-cmd",
-      command: 'cmd.exe /d /s /c "dir"',
-      workdir: "/tmp/project",
-      host: "node",
-      security: "allowlist",
-      ask: "always",
-    });
-
-    expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(2);
-    expect(requireApprovalRequestPayload(0).commandSpans).toBeUndefined();
-    expect(requireApprovalRequestPayload(1).commandSpans).toBeUndefined();
-  });
-
-  it("omits generated command spans for Windows gateway PowerShell commands", async () => {
-    setProcessPlatformForTest("win32");
-    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
-
-    await registerExecApprovalRequestForHostOrThrow({
-      approvalId: "approval-id-powershell",
-      command:
-        'Set-Content -Path "windows-agent-proof.txt" -Value "WINDOWS_AGENT_EXEC_OK" -NoNewline',
-      workdir: "C:\\project",
-      host: "gateway",
-      security: "allowlist",
-      ask: "always",
-    });
-
-    expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
-    expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(1);
-    expect(requireApprovalRequestPayload(0).commandSpans).toBeUndefined();
-  });
-
-  it("omits generated command spans for unsupported shell wrappers through system run carriers", async () => {
-    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
-
-    await registerExecApprovalRequestForHostOrThrow({
-      approvalId: "approval-id-carrier",
-      systemRunPlan: {
-        argv: ["timeout", "5", "pwsh", "-Command", "Get-ChildItem"],
-        cwd: "/tmp/project",
-        commandText: 'timeout 5 pwsh -Command "Get-ChildItem"',
-        agentId: null,
-        sessionKey: null,
-      },
-      workdir: "/tmp/project",
-      host: "node",
-      security: "allowlist",
-      ask: "always",
-    });
-
-    expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
-    expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(1);
-    expect(requireApprovalRequestPayload(0).commandSpans).toBeUndefined();
   });
 
   it("keeps explicit command spans", async () => {

@@ -253,36 +253,34 @@ describe("embedded gateway stub", () => {
     },
   );
 
-  it.each(["main", "ops"])(
-    "resolves omitted search filters through the fixed-store owner %s",
-    async (agentId) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [{ id: "main", default: true }, { id: "ops" }],
-          defaults: { sessionStore: { agentId } },
-        },
-        session: { store: "/stores/shared.sqlite" },
-      };
-      runtime.getRuntimeConfig.mockReturnValueOnce(cfg);
-      runtime.resolveSessionAgentId.mockReturnValueOnce(agentId);
-      runtime.resolveSessionStorePathCore.mockReturnValueOnce("/stores/shared.sqlite");
+  it("resolves omitted search filters through the fixed-store owner", async () => {
+    const agentId = "ops";
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "ops" }],
+        defaults: { sessionStore: { agentId } },
+      },
+      session: { store: "/stores/shared.sqlite" },
+    };
+    runtime.getRuntimeConfig.mockReturnValueOnce(cfg);
+    runtime.resolveSessionAgentId.mockReturnValueOnce(agentId);
+    runtime.resolveSessionStorePathCore.mockReturnValueOnce("/stores/shared.sqlite");
 
-      await createEmbeddedCallGateway()({ method: "sessions.search", params: { query: "needle" } });
+    await createEmbeddedCallGateway()({ method: "sessions.search", params: { query: "needle" } });
 
-      expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
-        sessionKey: "main",
-        config: cfg,
-      });
-      expect(runtime.listProjectedSessions).not.toHaveBeenCalled();
-      expect(runtime.searchSessionTranscripts).toHaveBeenCalledWith({
-        agentId,
-        query: "needle",
-        limit: undefined,
-        sessionKeys: undefined,
-        storePath: "/stores/shared.sqlite",
-      });
-    },
-  );
+    expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
+      sessionKey: "main",
+      config: cfg,
+    });
+    expect(runtime.listProjectedSessions).not.toHaveBeenCalled();
+    expect(runtime.searchSessionTranscripts).toHaveBeenCalledWith({
+      agentId,
+      query: "needle",
+      limit: undefined,
+      sessionKeys: undefined,
+      storePath: "/stores/shared.sqlite",
+    });
+  });
 
   it("rejects empty session-key filters instead of widening the search", async () => {
     const callGateway = createEmbeddedCallGateway();

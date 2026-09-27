@@ -636,7 +636,7 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
   }
 
   private resolveAutoJoinTarget(guildId: string): VoiceChannelResidency | undefined {
-    return this.autoJoinChannels.toReversed().find((entry) => entry.guildId === guildId.trim());
+    return this.autoJoinChannels.findLast((entry) => entry.guildId === guildId.trim());
   }
 
   private countHumanParticipants(target: { guildId: string; channelId: string }): number | null {

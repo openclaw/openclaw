@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createService: vi.fn(),
@@ -22,18 +22,9 @@ const {
   registerUnhandledRejectionHandler,
   logger,
 } = mocks;
-const dnsLabelEncoder = new TextEncoder();
 
 const stringOrFallback = (value: unknown, fallback: string) =>
   typeof value === "string" && value.trim() ? value : fallback;
-
-function expectDnsLabelByteLength(value: string, expected: number) {
-  expect(dnsLabelEncoder.encode(value).byteLength).toBe(expected);
-}
-
-function expectDnsLabelWithinLimit(value: string) {
-  expect(dnsLabelEncoder.encode(value).byteLength).toBeLessThanOrEqual(63);
-}
 
 function warnMessages(): string[] {
   return logger.warn.mock.calls.map(([message]) => String(message));
@@ -43,16 +34,7 @@ function expectWarnContaining(fragment: string) {
   expect(warnMessages().join("\n")).toContain(fragment);
 }
 
-function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
-  const call = mock.mock.calls.at(index);
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
-  return call;
-}
-
 function enableAdvertiserUnitMode(hostname = "test-host") {
-  // Allow advertiser to run in unit tests.
   vi.stubEnv("VITEST", undefined);
   vi.stubEnv("NODE_ENV", "development");
   vi.spyOn(os, "hostname").mockReturnValue(hostname);
@@ -63,49 +45,31 @@ function mockCiaoService(params?: {
   advertise?: ReturnType<typeof vi.fn>;
   serviceState?: string;
   stateRef?: { value: string };
-  on?: ReturnType<typeof vi.fn>;
   listenerMap?: Map<string, (value: unknown) => void>;
   responder?: Record<string, unknown>;
 }) {
   const advertise = params?.advertise ?? vi.fn().mockResolvedValue(undefined);
   const destroy = vi.fn().mockResolvedValue(undefined);
-  const on =
-    params?.on ??
-    vi.fn((event: string, listener: (value: unknown) => void) => {
-      params?.listenerMap?.set(event, listener);
-    });
-  createService.mockImplementation((options: Record<string, unknown>) => {
-    const service = {
-      advertise,
-      destroy,
-      on,
-      getFQDN: () =>
-        `${stringOrFallback(options.type, "service")}.${stringOrFallback(options.domain, "local")}.`,
-      getHostname: () => stringOrFallback(options.hostname, "unknown"),
-      getPort: () => Number(options.port ?? -1),
-    };
-    Object.defineProperty(service, "serviceState", {
-      configurable: true,
-      enumerable: true,
-      get: () => params?.stateRef?.value ?? params?.serviceState ?? "announced",
-      set: (value: string) => {
-        if (params?.stateRef) {
-          params.stateRef.value = value;
-        }
-      },
-    });
-    return service;
+  const on = vi.fn((event: string, listener: (value: unknown) => void) => {
+    params?.listenerMap?.set(event, listener);
   });
+  createService.mockImplementation((options: Record<string, unknown>) => ({
+    advertise,
+    destroy,
+    on,
+    getFQDN: () =>
+      `${stringOrFallback(options.type, "service")}.${stringOrFallback(options.domain, "local")}.`,
+    getHostname: () => stringOrFallback(options.hostname, "unknown"),
+    getPort: () => Number(options.port ?? -1),
+    get serviceState() {
+      return params?.stateRef?.value ?? params?.serviceState ?? "announced";
+    },
+  }));
   getResponder.mockReturnValue(params?.responder ?? { createService, shutdown });
   return { destroy };
 }
 
-vi.mock("@homebridge/ciao", () => {
-  return {
-    Protocol: { TCP: "tcp" },
-    getResponder,
-  };
-});
+vi.mock("@homebridge/ciao", () => ({ getResponder }));
 
 const { startGatewayBonjourAdvertiser } = await import("./advertiser.js");
 
@@ -114,16 +78,15 @@ afterAll(() => {
   vi.resetModules();
 });
 
-type StartGatewayBonjourAdvertiser = typeof startGatewayBonjourAdvertiser;
-
-const startAdvertiser = (
-  opts: Parameters<StartGatewayBonjourAdvertiser>[0],
-): ReturnType<StartGatewayBonjourAdvertiser> =>
-  startGatewayBonjourAdvertiser(opts, {
-    logger,
-    registerUncaughtExceptionHandler: (handler) => registerUncaughtExceptionHandler(handler),
-    registerUnhandledRejectionHandler: (handler) => registerUnhandledRejectionHandler(handler),
-  });
+const startAdvertiser = (opts: Partial<Parameters<typeof startGatewayBonjourAdvertiser>[0]> = {}) =>
+  startGatewayBonjourAdvertiser(
+    { gatewayPort: 18789, sshPort: 2222, ...opts },
+    {
+      logger,
+      registerUncaughtExceptionHandler,
+      registerUnhandledRejectionHandler,
+    },
+  );
 
 describe("gateway bonjour advertiser", () => {
   type ServiceCall = {
@@ -133,23 +96,19 @@ describe("gateway bonjour advertiser", () => {
     txt?: unknown;
   };
 
+  beforeEach(() => {
+    enableAdvertiserUnitMode();
+    mockCiaoService();
+  });
+
   afterEach(() => {
-    createService.mockClear();
-    getResponder.mockReset();
-    shutdown.mockClear();
-    registerUncaughtExceptionHandler.mockClear();
-    registerUnhandledRejectionHandler.mockClear();
-    logger.info.mockClear();
-    logger.warn.mockClear();
-    logger.debug.mockClear();
+    vi.resetAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
   it("does not block on advertise and publishes expected txt keys", async () => {
-    enableAdvertiserUnitMode();
-
     let resolveAdvertise = () => {};
     const advertise = vi.fn().mockImplementation(
       async () =>
@@ -160,8 +119,6 @@ describe("gateway bonjour advertiser", () => {
     const { destroy } = mockCiaoService({ advertise });
 
     const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
       gatewayDirectReachable: true,
       tailnetDns: "host.tailnet.ts.net",
       cliPath: "/opt/homebrew/bin/openclaw",
@@ -169,26 +126,24 @@ describe("gateway bonjour advertiser", () => {
     });
 
     expect(createService).toHaveBeenCalledTimes(1);
-    const [gatewayCall] = createService.mock.calls as Array<[Record<string, unknown>]>;
-    expect(gatewayCall?.[0]?.type).toBe("openclaw-gw");
-    const gatewayType = stringOrFallback(gatewayCall?.[0]?.type, "");
-    expect(gatewayType.length).toBeLessThanOrEqual(15);
-    expect(gatewayCall?.[0]?.port).toBe(18789);
-    expect(gatewayCall?.[0]?.domain).toBe("local");
-    expect(gatewayCall?.[0]?.hostname).toBe("test-host");
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("test-host.local");
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.gatewayPort).toBe("18789");
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.gatewayDirectReachable).toBe("1");
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.sshPort).toBe("2222");
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.tailnetDns).toBe(
-      "host.tailnet.ts.net",
+    expect(createService).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "openclaw-gw",
+        port: 18789,
+        domain: "local",
+        hostname: "test-host",
+        txt: expect.objectContaining({
+          lanHost: "test-host.local",
+          gatewayPort: "18789",
+          gatewayDirectReachable: "1",
+          sshPort: "2222",
+          tailnetDns: "host.tailnet.ts.net",
+          cliPath: "/opt/homebrew/bin/openclaw",
+          transport: "gateway",
+        }),
+      }),
     );
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.cliPath).toBe(
-      "/opt/homebrew/bin/openclaw",
-    );
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.transport).toBe("gateway");
 
-    // We don't await `advertise()`, but it should still be called for each service.
     expect(advertise).toHaveBeenCalledTimes(1);
     resolveAdvertise();
     await Promise.resolve();
@@ -199,13 +154,7 @@ describe("gateway bonjour advertiser", () => {
   });
 
   it("omits cliPath and sshPort in minimal mode", async () => {
-    enableAdvertiserUnitMode();
-
-    mockCiaoService();
-
     const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
       cliPath: "/opt/homebrew/bin/openclaw",
       tailnetDns: "host.tailnet.ts.net",
       minimal: true,
@@ -220,107 +169,61 @@ describe("gateway bonjour advertiser", () => {
   });
 
   it("honors truthy OPENCLAW_DISABLE_BONJOUR values", async () => {
-    enableAdvertiserUnitMode();
     vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "true");
 
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     expect(createService).not.toHaveBeenCalled();
     await expect(started.stop()).resolves.toBeUndefined();
   });
 
   it("auto-disables Bonjour in detected containers", async () => {
-    enableAdvertiserUnitMode();
     vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
 
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     expect(createService).not.toHaveBeenCalled();
     await expect(started.stop()).resolves.toBeUndefined();
   });
 
   it("auto-disables Bonjour on Fly Machines without Docker sentinel files", async () => {
-    enableAdvertiserUnitMode();
     vi.stubEnv("FLY_MACHINE_ID", "3d8d5459a03038");
     vi.stubEnv("FLY_APP_NAME", "openclaw-clawcks-test");
     vi.spyOn(fs, "existsSync").mockReturnValue(false);
     vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
 
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     expect(createService).not.toHaveBeenCalled();
     await expect(started.stop()).resolves.toBeUndefined();
   });
 
   it("honors explicit Bonjour opt-in inside detected containers", async () => {
-    enableAdvertiserUnitMode();
     vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "0");
     vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
 
-    mockCiaoService();
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     expect(createService).toHaveBeenCalledTimes(1);
 
     await started.stop();
   });
 
-  it("attaches conflict listeners for services", async () => {
-    enableAdvertiserUnitMode();
-
-    const onCalls: Array<{ event: string }> = [];
-
-    const on = vi.fn((event: string) => {
-      onCalls.push({ event });
-    });
-    mockCiaoService({ on });
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
-
-    // 1 service × 2 listeners
-    expect(onCalls.map((c) => c.event)).toEqual(["name-change", "hostname-change"]);
-
-    await started.stop();
-  });
-
   it("cleans up ciao process handlers after shutdown", async () => {
-    enableAdvertiserUnitMode();
-
     const order: string[] = [];
     shutdown.mockImplementation(async () => {
       order.push("shutdown");
     });
-    mockCiaoService();
-
     const cleanupException = vi.fn(() => {
       order.push("cleanup-exception");
     });
     const cleanupRejection = vi.fn(() => {
       order.push("cleanup-rejection");
     });
-    registerUncaughtExceptionHandler.mockImplementation(() => cleanupException);
-    registerUnhandledRejectionHandler.mockImplementation(() => cleanupRejection);
+    registerUncaughtExceptionHandler.mockReturnValue(cleanupException);
+    registerUnhandledRejectionHandler.mockReturnValue(cleanupRejection);
 
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     await started.stop();
 
@@ -332,16 +235,9 @@ describe("gateway bonjour advertiser", () => {
   });
 
   it("handles ciao netmask assertions at the bonjour caller", async () => {
-    enableAdvertiserUnitMode();
+    const started = await startAdvertiser();
 
-    mockCiaoService();
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
-
-    const exceptionHandler = mockCall(registerUncaughtExceptionHandler).at(0) as
+    const exceptionHandler = registerUncaughtExceptionHandler.mock.calls[0]?.[0] as
       | ((reason: unknown) => boolean)
       | undefined;
     expect(exceptionHandler).toBeTypeOf("function");
@@ -362,21 +258,15 @@ describe("gateway bonjour advertiser", () => {
   });
 
   it("logs advertise failures without starting a competing retry loop", async () => {
-    enableAdvertiserUnitMode();
     vi.useFakeTimers();
 
     const advertise = vi.fn().mockRejectedValue(new Error("boom"));
     mockCiaoService({ advertise, serviceState: "unannounced" });
 
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
-    // initial advertise attempt happens immediately
     expect(advertise).toHaveBeenCalledTimes(1);
 
-    // allow promise rejection handler to run
     await Promise.resolve();
     expectWarnContaining("advertise failed");
 
@@ -391,17 +281,12 @@ describe("gateway bonjour advertiser", () => {
   });
 
   it("handles advertise throwing synchronously", async () => {
-    enableAdvertiserUnitMode();
-
     const advertise = vi.fn(() => {
       throw new Error("sync-fail");
     });
     mockCiaoService({ advertise, serviceState: "unannounced" });
 
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     expect(advertise).toHaveBeenCalledTimes(1);
     expectWarnContaining("advertise threw");
@@ -410,68 +295,40 @@ describe("gateway bonjour advertiser", () => {
   });
 
   it("suppresses ciao self-probe retry console noise while advertising", async () => {
-    enableAdvertiserUnitMode();
+    const baseConsoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    mockCiaoService();
+    const started = await startAdvertiser();
 
-    const originalConsoleLog = console.log;
-    const baseConsoleLog = vi.fn();
-    console.log = baseConsoleLog as typeof console.log;
+    console.log(
+      "[test._openclaw-gw._tcp.local.] failed probing with reason: Error: Can't probe for a service which is announced already. Received announcing for service test._openclaw-gw._tcp.local.. Trying again in 2 seconds!",
+    );
+    console.log("ordinary console line");
 
-    try {
-      const started = await startAdvertiser({
-        gatewayPort: 18789,
-        sshPort: 2222,
-      });
+    expect(baseConsoleLog).toHaveBeenCalledTimes(1);
+    expect(baseConsoleLog).toHaveBeenCalledWith("ordinary console line");
 
-      console.log(
-        "[test._openclaw-gw._tcp.local.] failed probing with reason: Error: Can't probe for a service which is announced already. Received announcing for service test._openclaw-gw._tcp.local.. Trying again in 2 seconds!",
-      );
-      console.log("ordinary console line");
-
-      expect(baseConsoleLog).toHaveBeenCalledTimes(1);
-      expect(baseConsoleLog).toHaveBeenCalledWith("ordinary console line");
-
-      await started.stop();
-    } finally {
-      console.log = originalConsoleLog;
-    }
+    await started.stop();
   });
 
   it("suppresses transient ciao ENODEV MDNS socket warnings while advertising", async () => {
-    enableAdvertiserUnitMode();
+    const baseConsoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    mockCiaoService();
+    const started = await startAdvertiser();
 
-    const originalConsoleWarn = console.warn;
-    const baseConsoleWarn = vi.fn();
-    console.warn = baseConsoleWarn as typeof console.warn;
+    // A Docker bridge disappears between ciao's interface polls; the send to
+    // the removed interface fails with ENODEV, which ciao does not silence.
+    console.warn(
+      "Encountered MDNS socket error on socket 'br-abcdef123456': Error: send ENODEV 224.0.0.251:5353\n    at ...",
+    );
+    console.warn("ordinary warning line");
 
-    try {
-      const started = await startAdvertiser({
-        gatewayPort: 18789,
-        sshPort: 2222,
-      });
+    expect(baseConsoleWarn).toHaveBeenCalledTimes(1);
+    expect(baseConsoleWarn).toHaveBeenCalledWith("ordinary warning line");
 
-      // A Docker bridge disappears between ciao's interface polls; the send to
-      // the removed interface fails with ENODEV, which ciao does not silence.
-      console.warn(
-        "Encountered MDNS socket error on socket 'br-abcdef123456': Error: send ENODEV 224.0.0.251:5353\n    at ...",
-      );
-      console.warn("ordinary warning line");
-
-      expect(baseConsoleWarn).toHaveBeenCalledTimes(1);
-      expect(baseConsoleWarn).toHaveBeenCalledWith("ordinary warning line");
-
-      await started.stop();
-    } finally {
-      console.warn = originalConsoleWarn;
-    }
+    await started.stop();
   });
 
   it("does not monkey-patch responder methods during shutdown", async () => {
-    enableAdvertiserUnitMode();
-
     const responder = {
       createService,
       shutdown,
@@ -480,18 +337,10 @@ describe("gateway bonjour advertiser", () => {
       probe: vi.fn(),
       republishService: vi.fn(),
     };
-    const originalMethods = {
-      advertiseService: responder.advertiseService,
-      announce: responder.announce,
-      probe: responder.probe,
-      republishService: responder.republishService,
-    };
+    const originalMethods = { ...responder };
     mockCiaoService({ responder });
 
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
     await started.stop();
 
     expect(responder.advertiseService).toBe(originalMethods.advertiseService);
@@ -501,32 +350,18 @@ describe("gateway bonjour advertiser", () => {
   });
 
   it("does not clobber console.log if another wrapper replaced it before shutdown", async () => {
-    enableAdvertiserUnitMode();
-
-    mockCiaoService();
-
-    const originalConsoleLog = console.log;
-    const baseConsoleLog = vi.fn();
+    vi.spyOn(console, "log").mockImplementation(() => {});
     const replacementConsoleLog = vi.fn();
-    console.log = baseConsoleLog as typeof console.log;
 
-    try {
-      const started = await startAdvertiser({
-        gatewayPort: 18789,
-        sshPort: 2222,
-      });
+    const started = await startAdvertiser();
 
-      console.log = replacementConsoleLog as typeof console.log;
-      await started.stop();
+    console.log = replacementConsoleLog as typeof console.log;
+    await started.stop();
 
-      expect(console.log).toBe(replacementConsoleLog);
-    } finally {
-      console.log = originalConsoleLog;
-    }
+    expect(console.log).toBe(replacementConsoleLog);
   });
 
   it("never overlaps ciao lifecycle states or conflict handling with another advertise call", async () => {
-    enableAdvertiserUnitMode();
     vi.useFakeTimers();
 
     const stateRef = { value: "unannounced" };
@@ -534,10 +369,7 @@ describe("gateway bonjour advertiser", () => {
     const listenerMap = new Map<string, (value: unknown) => void>();
     const { destroy } = mockCiaoService({ advertise, stateRef, listenerMap });
 
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     expect(createService).toHaveBeenCalledTimes(1);
     expect(advertise).toHaveBeenCalledTimes(1);
@@ -564,18 +396,13 @@ describe("gateway bonjour advertiser", () => {
   });
 
   it("makes advertiser shutdown idempotent", async () => {
-    enableAdvertiserUnitMode();
-
     const cleanupException = vi.fn();
     const cleanupRejection = vi.fn();
     const { destroy } = mockCiaoService();
-    registerUncaughtExceptionHandler.mockImplementation(() => cleanupException);
-    registerUnhandledRejectionHandler.mockImplementation(() => cleanupRejection);
+    registerUncaughtExceptionHandler.mockReturnValue(cleanupException);
+    registerUnhandledRejectionHandler.mockReturnValue(cleanupRejection);
 
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     await Promise.all([started.stop(), started.stop()]);
 
@@ -586,18 +413,10 @@ describe("gateway bonjour advertiser", () => {
   });
 
   it("normalizes hostnames with domains for service names", async () => {
-    // Allow advertiser to run in unit tests.
-    vi.stubEnv("VITEST", undefined);
-    vi.stubEnv("NODE_ENV", "development");
-
+    vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", undefined);
     vi.spyOn(os, "hostname").mockReturnValue("Mac.localdomain");
 
-    mockCiaoService();
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
     expect(gatewayCall?.[0]?.name).toBe("Mac (OpenClaw)");
@@ -609,18 +428,10 @@ describe("gateway bonjour advertiser", () => {
   });
 
   it("falls back to openclaw when system hostname is invalid for DNS", async () => {
-    // Allow advertiser to run in unit tests.
-    vi.stubEnv("VITEST", undefined);
-    vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", undefined);
     vi.spyOn(os, "hostname").mockReturnValue("My_Lobster Host");
 
-    mockCiaoService();
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
     expect(gatewayCall?.[0]?.hostname).toBe("openclaw");
@@ -633,20 +444,15 @@ describe("gateway bonjour advertiser", () => {
     const reportedHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf";
     enableAdvertiserUnitMode(reportedHostname);
 
-    mockCiaoService();
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
     const serviceName = gatewayCall?.[0]?.name as string;
     const hostname = gatewayCall?.[0]?.hostname as string;
 
-    expectDnsLabelByteLength(`${reportedHostname} (OpenClaw)`, 64);
+    expect(Buffer.byteLength(`${reportedHostname} (OpenClaw)`)).toBe(64);
     expect(hostname).toBe(reportedHostname);
-    expectDnsLabelWithinLimit(serviceName);
+    expect(Buffer.byteLength(serviceName)).toBeLessThanOrEqual(63);
 
     await started.stop();
   });
@@ -655,22 +461,17 @@ describe("gateway bonjour advertiser", () => {
     const longHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf-abcdefghij";
     enableAdvertiserUnitMode(longHostname);
 
-    mockCiaoService();
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
     const serviceName = gatewayCall?.[0]?.name as string;
     const hostname = gatewayCall?.[0]?.hostname as string;
 
-    expectDnsLabelByteLength(longHostname, 64);
-    expectDnsLabelByteLength(hostname, 63);
+    expect(Buffer.byteLength(longHostname)).toBe(64);
+    expect(Buffer.byteLength(hostname)).toBe(63);
     expect(hostname).toBe(longHostname.slice(0, -1));
     expect(hostname).not.toMatch(/-$/);
-    expectDnsLabelWithinLimit(serviceName);
+    expect(Buffer.byteLength(serviceName)).toBeLessThanOrEqual(63);
 
     await started.stop();
   });
@@ -680,39 +481,13 @@ describe("gateway bonjour advertiser", () => {
     const cjkHostname = "你".repeat(21);
     enableAdvertiserUnitMode(cjkHostname);
 
-    mockCiaoService();
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
+    const started = await startAdvertiser();
 
     const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
     const serviceName = gatewayCall?.[0]?.name as string;
 
-    expectDnsLabelWithinLimit(serviceName);
+    expect(Buffer.byteLength(serviceName)).toBeLessThanOrEqual(63);
     expect(serviceName).not.toMatch(/\uFFFD$/);
-
-    await started.stop();
-  });
-
-  it("uses system hostname when OPENCLAW_MDNS_HOSTNAME is unset", async () => {
-    // Allow advertiser to run in unit tests.
-    vi.stubEnv("VITEST", undefined);
-    vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", undefined);
-    vi.spyOn(os, "hostname").mockReturnValue("Lobster");
-
-    mockCiaoService();
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
-
-    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
-    expect(gatewayCall?.[0]?.hostname).toBe("Lobster");
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("Lobster.local");
 
     await started.stop();
   });

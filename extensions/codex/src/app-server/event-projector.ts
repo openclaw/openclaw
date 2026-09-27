@@ -5,7 +5,6 @@ import {
   type AgentMessage,
   type AgentHarnessUserInputQuestion,
   type BeforeToolCallFailureDisposition,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
@@ -15,6 +14,7 @@ import {
 } from "./event-projector-items.js";
 import { CodexTurnProjection } from "./event-projector-result.js";
 import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.js";
+import type { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import {
   extractRawAssistantText,
   readCodexErrorNotificationMessage,
@@ -30,7 +30,6 @@ import type { CodexApprovalKind } from "./plugin-approval-roundtrip.js";
 import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import {
   isJsonObject,
-  type CodexDynamicToolCallOutputContentItem,
   type CodexServerNotification,
   type CodexThreadItem,
   type CodexTurn,
@@ -334,17 +333,11 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     }
   }
 
-  recordDynamicToolResult(params: {
-    callId: string;
-    tool: string;
-    asyncStarted?: boolean;
-    terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
-    success: boolean;
-    terminalType?: "blocked" | "completed" | "error";
-    sideEffectEvidence?: boolean;
-    contentItems: CodexDynamicToolCallOutputContentItem[];
-    details?: unknown;
-  }): void {
+  recordDynamicToolResult(
+    params: Parameters<CodexToolProgressProjection["recordDynamicToolResult"]>[0] & {
+      details?: unknown;
+    },
+  ): void {
     this.toolProgressProjection.recordDynamicToolResult(params);
     const source = this.options.resolveDynamicToolResultContentSource?.(params.tool);
     this.toolTranscriptProjection.recordDynamicToolResult(params, source);

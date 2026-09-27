@@ -22,7 +22,7 @@ export const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 export const WORKSPACE_LEGACY_STATE_MIGRATION_KIND = "legacy-workspace-setup-files";
 export const WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND = "workspace-content-relocation";
 const MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH = 255;
-export const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
 // Attested names are joined onto the workspace dir and read back, so keep the
 // accepted set closed rather than denying unsafe forms one at a time: a plain
 // ASCII markdown basename excludes separators, traversal, colons, NUL, and the
@@ -307,4 +307,106 @@ export function readWorkspaceStateSnapshotForDirectoryInDatabase(params: {
     const { identity } = resolveWorkspaceIdentityFromDatabase(params);
     return readWorkspaceStateSnapshotFromDatabase({ identity, database: params.database });
   });
+}
+
+export type WorkspaceAttestationInput = {
+  workspaceDir: string;
+  attestedAtMs: number;
+  generatedHashes: ReadonlyMap<string, string>;
+  nowMs?: number;
+};
+
+export function replaceWorkspaceAttestationInDatabase(
+  database: WorkspaceStateDatabaseHandle,
+  params: WorkspaceAttestationInput,
+): WorkspaceAttestation {
+  assertCanonicalIntegerTimestamp(params.attestedAtMs, "attestation");
+  if (params.nowMs !== undefined) {
+    assertCanonicalIntegerTimestamp(params.nowMs, "attestation update");
+  }
+  for (const [filename, sha256] of params.generatedHashes) {
+    if (!isSafeWorkspaceAttestationFilename(filename) || !SHA256_HEX_PATTERN.test(sha256)) {
+      throw new Error("workspace attestation hash is invalid");
+    }
+  }
+  const sortedHashes = [...params.generatedHashes.entries()].toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  // Capture the comparison clock only after BEGIN IMMEDIATE acquires the
+  // writer lock, so a newer committed row cannot look future-dated.
+  const updatedAtMs = params.nowMs ?? Date.now();
+  assertCanonicalIntegerTimestamp(updatedAtMs, "attestation update");
+  const resolution = resolveWorkspaceIdentityFromDatabase({
+    workspaceDir: params.workspaceDir,
+    database,
+  });
+  const identity = resolution.identity;
+  const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
+  if (
+    snapshot.attestation &&
+    snapshot.attestation.attestedAtMs > params.attestedAtMs &&
+    snapshot.attestation.attestedAtMs <= updatedAtMs
+  ) {
+    registerWorkspaceStateAliasIdentitiesInTransaction({
+      database,
+      identity,
+      aliases: resolution.aliases,
+      updatedAtMs,
+    });
+    return snapshot.attestation;
+  }
+  const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    kysely
+      .insertInto("workspace_setup_state")
+      .values({
+        workspace_key: identity.workspaceKey,
+        workspace_path: identity.workspacePath,
+        attested_at_ms: params.attestedAtMs,
+        attestation_updated_at_ms: updatedAtMs,
+      })
+      .onConflict((conflict) =>
+        conflict.column("workspace_key").doUpdateSet({
+          // Heals the NULL path on adopted legacy orphan attestation rows.
+          workspace_path: identity.workspacePath,
+          attested_at_ms: params.attestedAtMs,
+          attestation_updated_at_ms: updatedAtMs,
+        }),
+      ),
+  );
+  const committedHashes = snapshot.attestation?.generatedHashes;
+  if (
+    committedHashes?.size !== params.generatedHashes.size ||
+    sortedHashes.some(([filename, sha256]) => committedHashes.get(filename) !== sha256)
+  ) {
+    executeSqliteQuerySync(
+      database.db,
+      kysely
+        .deleteFrom("workspace_generated_bootstrap_hashes")
+        .where("workspace_key", "=", identity.workspaceKey),
+    );
+    if (sortedHashes.length > 0) {
+      executeSqliteQuerySync(
+        database.db,
+        kysely.insertInto("workspace_generated_bootstrap_hashes").values(
+          sortedHashes.map(([filename, sha256]) => ({
+            workspace_key: identity.workspaceKey,
+            filename,
+            sha256,
+          })),
+        ),
+      );
+    }
+  }
+  registerWorkspaceStateAliasIdentitiesInTransaction({
+    database,
+    identity,
+    aliases: resolution.aliases,
+    updatedAtMs,
+  });
+  return {
+    attestedAtMs: params.attestedAtMs,
+    generatedHashes: new Map(sortedHashes),
+  };
 }

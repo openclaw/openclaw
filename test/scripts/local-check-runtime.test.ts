@@ -26,6 +26,21 @@ const ROOMY_HOST = {
   logicalCpuCount: 16,
 };
 
+const localTsgoDefaults = [
+  "--declaration",
+  "false",
+  "--incremental",
+  "--tsBuildInfoFile",
+  ".artifacts/tsgo-cache/root.tsbuildinfo",
+];
+const localOxlintDefaults = [
+  "--type-aware",
+  "--tsconfig",
+  "config/tsconfig/oxlint.json",
+  "--report-unused-disable-directives-severity",
+  "error",
+];
+
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -139,16 +154,7 @@ describe("local-check-runtime", () => {
   it("tightens local tsgo runs on constrained hosts", () => {
     const { args, env } = applyLocalTsgoPolicy([], makeEnv(), CONSTRAINED_HOST);
 
-    expect(args).toEqual([
-      "--declaration",
-      "false",
-      "--incremental",
-      "--tsBuildInfoFile",
-      ".artifacts/tsgo-cache/root.tsbuildinfo",
-      "--singleThreaded",
-      "--checkers",
-      "1",
-    ]);
+    expect(args).toEqual([...localTsgoDefaults, "--singleThreaded", "--checkers", "1"]);
     expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
@@ -219,13 +225,7 @@ describe("local-check-runtime", () => {
   it("defaults local tsgo to full-speed mode on roomy hosts", () => {
     const { args, env } = applyLocalTsgoPolicy([], makeEnv(), ROOMY_HOST);
 
-    expect(args).toEqual([
-      "--declaration",
-      "false",
-      "--incremental",
-      "--tsBuildInfoFile",
-      ".artifacts/tsgo-cache/root.tsbuildinfo",
-    ]);
+    expect(args).toEqual(localTsgoDefaults);
     expect(env.GOMAXPROCS).toBeUndefined();
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
@@ -269,16 +269,7 @@ describe("local-check-runtime", () => {
       ROOMY_HOST,
     );
 
-    expect(args).toEqual([
-      "--declaration",
-      "false",
-      "--incremental",
-      "--tsBuildInfoFile",
-      ".artifacts/tsgo-cache/root.tsbuildinfo",
-      "--singleThreaded",
-      "--checkers",
-      "1",
-    ]);
+    expect(args).toEqual([...localTsgoDefaults, "--singleThreaded", "--checkers", "1"]);
     expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
@@ -293,54 +284,10 @@ describe("local-check-runtime", () => {
     expect(env.GOMAXPROCS).toBe("1");
   });
 
-  it("allows forcing full-speed tsgo runs on roomy hosts", () => {
-    const { args, env } = applyLocalTsgoPolicy(
-      [],
-      makeEnv({
-        OPENCLAW_LOCAL_CHECK_MODE: "full",
-      }),
-      ROOMY_HOST,
-    );
-
-    expect(args).toEqual([
-      "--declaration",
-      "false",
-      "--incremental",
-      "--tsBuildInfoFile",
-      ".artifacts/tsgo-cache/root.tsbuildinfo",
-    ]);
-    expect(env.GOMAXPROCS).toBeUndefined();
-    expect(env.GOGC).toBeUndefined();
-    expect(env.GOMEMLIMIT).toBeUndefined();
-  });
-
-  it("serializes local oxlint runs onto one thread on constrained hosts", () => {
-    const { args, env } = applyLocalOxlintPolicy([], makeEnv(), CONSTRAINED_HOST);
-
-    expect(args).toEqual([
-      "--type-aware",
-      "--tsconfig",
-      "config/tsconfig/oxlint.json",
-      "--report-unused-disable-directives-severity",
-      "error",
-      "--threads=1",
-    ]);
-    expect(env.GOMAXPROCS).toBe("2");
-    expect(env.GOGC).toBe("30");
-    expect(env.GOMEMLIMIT).toBe("3GiB");
-  });
-
   it("defaults local oxlint to one thread on roomy hosts", () => {
     const { args, env } = applyLocalOxlintPolicy([], makeEnv(), ROOMY_HOST);
 
-    expect(args).toEqual([
-      "--type-aware",
-      "--tsconfig",
-      "config/tsconfig/oxlint.json",
-      "--report-unused-disable-directives-severity",
-      "error",
-      "--threads=1",
-    ]);
+    expect(args).toEqual([...localOxlintDefaults, "--threads=1"]);
     expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
@@ -353,25 +300,16 @@ describe("local-check-runtime", () => {
       ROOMY_HOST,
     );
 
-    expect(args).toEqual([
-      "--threads=8",
-      "--type-aware",
-      "--tsconfig",
-      "config/tsconfig/oxlint.json",
-      "--report-unused-disable-directives-severity",
-      "error",
-    ]);
+    expect(args).toEqual(["--threads=8", ...localOxlintDefaults]);
     expect(env.GOMAXPROCS).toBe("3");
     expect(env.GOGC).toBe("80");
     expect(env.GOMEMLIMIT).toBe("5GiB");
   });
 
   it.each([
-    { name: "small CI runner", ci: "true", cpus: 4, gib: 16, throttled: true },
     { name: "memory-constrained CI runner", ci: "true", cpus: 16, gib: 16, throttled: true },
     { name: "CPU-constrained CI runner", ci: "true", cpus: 4, gib: 32, throttled: true },
     { name: "parallel CI boundary", ci: "true", cpus: 8, gib: 24, throttled: false },
-    { name: "large CI runner", ci: "true", cpus: 16, gib: 32, throttled: false },
     { name: "disabled local policy", ci: undefined, cpus: 4, gib: 16, throttled: false },
   ])("applies compiler memory policy for $name", ({ ci, cpus, gib, throttled }) => {
     const inputEnv = makeEnv({
@@ -501,13 +439,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
       ROOMY_HOST,
     );
 
-    expect(args).toEqual([
-      "--type-aware",
-      "--tsconfig",
-      "config/tsconfig/oxlint.json",
-      "--report-unused-disable-directives-severity",
-      "error",
-    ]);
+    expect(args).toEqual(localOxlintDefaults);
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
   });

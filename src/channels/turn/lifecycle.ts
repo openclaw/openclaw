@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken as ExecutionToken } from "../../audit/execution-identity-admission.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../../auto-reply/dispatch.js";
 import { getGroupThreadDispatchContext } from "../../auto-reply/group-thread-context.js";
@@ -181,7 +182,7 @@ function isExplicitlyNonVisibleChannelDelivery(result: unknown): boolean {
 }
 
 function markChannelDeliveryErrorVisible(error: unknown): unknown {
-  if (typeof error === "object" && error !== null && !Array.isArray(error)) {
+  if (isRecord(error)) {
     try {
       Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
       return error;

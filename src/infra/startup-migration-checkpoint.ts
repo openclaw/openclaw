@@ -84,10 +84,17 @@ function writeStartupMigrationCheckpointDatabase<T>(
 ): T {
   const databasePath = resolveOpenClawStateSqlitePath(env);
   return withStartupMigrationCheckpointDatabase(env, (db) =>
-    runSqliteImmediateTransactionSync(db, () => {
-      assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
-      return callback(db);
-    }),
+    runSqliteImmediateTransactionSync(
+      db,
+      () => {
+        assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
+        return callback(db);
+      },
+      {
+        databaseLabel: databasePath,
+        operationLabel: "state.startup-checkpoint.write",
+      },
+    ),
   );
 }
 
@@ -186,48 +193,55 @@ function acquireStartupMigrationLeaseFromDatabase(
   };
   const expiresAt = nowMs + STARTUP_MIGRATION_LEASE_TTL_MS;
 
-  runSqliteImmediateTransactionSync(connection, () => {
-    const db = connection;
-    assertOpenClawStateWriteAllowed({
-      database: db,
-      databasePath: resolveOpenClawStateSqlitePath(env),
-      env,
-    });
-    const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      stateDb
-        .deleteFrom("state_leases")
-        .where("scope", "=", STARTUP_MIGRATION_LEASE_SCOPE)
-        .where("lease_key", "=", STARTUP_MIGRATION_LEASE_KEY)
-        .where("expires_at", "<=", nowMs),
-    );
-    const existing = reclaimDeadOpenClawStateLeaseInTransaction(db, {
-      scope: STARTUP_MIGRATION_LEASE_SCOPE,
-      key: STARTUP_MIGRATION_LEASE_KEY,
-    });
-    const existingOwner = parseStateLeaseProcessOwner(existing?.payloadJson ?? null);
-    if (existing) {
-      const ownerHint = existingOwner ? ` (held by pid ${existingOwner.pid})` : "";
-      throw new StartupMigrationLeaseConflictError(
-        `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after ${new Date(existing.expiresAt ?? expiresAt).toISOString()}.${ownerHint}`,
-        existingOwner?.host === hostname(),
+  runSqliteImmediateTransactionSync(
+    connection,
+    () => {
+      const db = connection;
+      assertOpenClawStateWriteAllowed({
+        database: db,
+        databasePath: resolveOpenClawStateSqlitePath(env),
+        env,
+      });
+      const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
+      executeSqliteQuerySync(
+        db,
+        stateDb
+          .deleteFrom("state_leases")
+          .where("scope", "=", STARTUP_MIGRATION_LEASE_SCOPE)
+          .where("lease_key", "=", STARTUP_MIGRATION_LEASE_KEY)
+          .where("expires_at", "<=", nowMs),
       );
-    }
-    executeSqliteQuerySync(
-      db,
-      stateDb.insertInto("state_leases").values({
+      const existing = reclaimDeadOpenClawStateLeaseInTransaction(db, {
         scope: STARTUP_MIGRATION_LEASE_SCOPE,
-        lease_key: STARTUP_MIGRATION_LEASE_KEY,
-        owner,
-        expires_at: expiresAt,
-        heartbeat_at: nowMs,
-        payload_json: JSON.stringify({ version: VERSION, owner: leaseOwner }),
-        created_at: nowMs,
-        updated_at: nowMs,
-      }),
-    );
-  });
+        key: STARTUP_MIGRATION_LEASE_KEY,
+      });
+      const existingOwner = parseStateLeaseProcessOwner(existing?.payloadJson ?? null);
+      if (existing) {
+        const ownerHint = existingOwner ? ` (held by pid ${existingOwner.pid})` : "";
+        throw new StartupMigrationLeaseConflictError(
+          `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after ${new Date(existing.expiresAt ?? expiresAt).toISOString()}.${ownerHint}`,
+          existingOwner?.host === hostname(),
+        );
+      }
+      executeSqliteQuerySync(
+        db,
+        stateDb.insertInto("state_leases").values({
+          scope: STARTUP_MIGRATION_LEASE_SCOPE,
+          lease_key: STARTUP_MIGRATION_LEASE_KEY,
+          owner,
+          expires_at: expiresAt,
+          heartbeat_at: nowMs,
+          payload_json: JSON.stringify({ version: VERSION, owner: leaseOwner }),
+          created_at: nowMs,
+          updated_at: nowMs,
+        }),
+      );
+    },
+    {
+      databaseLabel: resolveOpenClawStateSqlitePath(env),
+      operationLabel: "state.startup-migration.lease.acquire",
+    },
+  );
 
   return {
     owner,

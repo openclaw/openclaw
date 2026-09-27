@@ -1,6 +1,5 @@
 import MarkdownIt, { type MarkdownIt as MarkdownItParser, type Token } from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
-import markdownItTaskLists from "markdown-it-task-lists";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
 import { isGitHubHost } from "./github-link-eligibility.ts";
@@ -25,8 +24,9 @@ import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
 import { installMarkdownHumanMentions } from "./markdown-human-mentions.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
-import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
+import { installMarkdownSessionLinks } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
+import { replaceMarkdownTextMatches } from "./markdown-text-replacements.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
@@ -154,8 +154,6 @@ export function createMarkdownParser(): MarkdownItParser {
   markdownParser.use(markdownItCjkFriendly);
   const defaultCodeInlineRenderer = markdownParser.renderer.rules.code_inline!;
 
-  // Enable GFM strikethrough (~~text~~) to match original marked.js behavior.
-  // markdown-it uses <s> tags; we added "s" to the sanitizer allowlist.
   markdownParser.enable("strikethrough");
   installAssistantTranscriptRoleMarkdown(markdownParser, escapeMarkdownHtml);
   installMarkdownDetails(markdownParser);
@@ -164,13 +162,6 @@ export function createMarkdownParser(): MarkdownItParser {
   // Disable fuzzy link detection to prevent bare filenames like "README.md"
   // from being auto-linked as "http://README.md". URLs with explicit protocol
   // (https://...) and emails are still linkified.
-  //
-  // Alternative considered: extensions/matrix/src/matrix/format.ts uses fuzzyLink
-  // with a file-extension blocklist to filter false positives at render time.
-  // We chose the www-only approach instead because:
-  // 1. Matches original marked.js GFM behavior exactly (bare domains were never linked)
-  // 2. No blocklist to maintain — new TLDs like .ai, .io, .dev would need constant updates
-  // 3. Predictable behavior — users can always use explicit https:// for any URL
   markdownParser.linkify.set({ fuzzyLink: false });
 
   // Re-enable www. prefix detection per GFM spec: bare URLs without protocol
@@ -192,10 +183,6 @@ export function createMarkdownParser(): MarkdownItParser {
       }
       let length = match[0].length;
 
-      // Strip trailing punctuation per GFM extended autolink spec.
-      // GFM says: ?, !, ., ,, :, *, _, ~ are not part of the autolink if trailing.
-
-      // Balance checking config: closeChar -> openChar mapping.
       // Strip trailing close chars only when unbalanced (more closes than opens).
       // For self-matching pairs like "", open === close (strip if odd count).
       const balancePairs: Record<string, string> = {
@@ -214,7 +201,6 @@ export function createMarkdownParser(): MarkdownItParser {
         for (let index = 0; index < length; index++) {
           const character = tail.charAt(index);
           if (open === close) {
-            // Self-matching pair (e.g., "") — toggle between 0 and 1
             if (character === open) {
               balance[close] = balance[close] === 0 ? 1 : 0;
             }
@@ -228,7 +214,6 @@ export function createMarkdownParser(): MarkdownItParser {
 
       while (length > 0) {
         const character = tail.charAt(length - 1);
-        // GFM trailing punctuation: ?, !, ., ,, :, *, _, ~ stripped unconditionally.
         if (/[?!.,:*_~]/.test(character)) {
           length--;
           continue;
@@ -245,10 +230,8 @@ export function createMarkdownParser(): MarkdownItParser {
             length = index;
             continue;
           }
-          // Not an entity reference, stop stripping
           break;
         }
-        // Handle balanced pairs — only strip close char if unbalanced.
         const open = balancePairs[character];
         if (open !== undefined) {
           if (open === character) {
@@ -335,7 +318,6 @@ export function createMarkdownParser(): MarkdownItParser {
         if (cjkIndex <= 0 || cjkIndex === displayText.length) {
           continue;
         }
-        // Split: URL part and CJK tail from display text
         const trimmedDisplay = displayText.slice(0, cjkIndex);
         const cjkTail = displayText.slice(cjkIndex);
         // Rebuild href by preserving the scheme prefix that linkify added but
@@ -345,7 +327,6 @@ export function createMarkdownParser(): MarkdownItParser {
         const hrefPrefix = prefixLength > 0 ? href.slice(0, prefixLength) : "";
         token.attrSet("href", hrefPrefix + trimmedDisplay);
         textToken.content = trimmedDisplay;
-        // Find link_close and insert CJK text after it
         for (let closeIndex = index + 1; closeIndex < children.length; closeIndex++) {
           if (children[closeIndex]?.type === "link_close") {
             const tailToken = new state.Token("text", "", 0);
@@ -446,62 +427,50 @@ export function createMarkdownParser(): MarkdownItParser {
           continue;
         }
 
-        const replacements: typeof children = [];
-        let cursor = 0;
         MARKDOWN_FILE_LINK_SCAN_RE.lastIndex = 0;
-        for (const match of token.content.matchAll(MARKDOWN_FILE_LINK_SCAN_RE)) {
-          const matchIndex = match.index;
-          const matched = match[0];
-          const matchEnd = matchIndex + matched.length;
-          if (!hasMarkdownLinkBoundaries(token.content, matchIndex, matchEnd)) {
-            continue;
-          }
-          const target = parseMarkdownFileLinkTarget(matched);
-          if (!target) {
-            continue;
-          }
-          if (matchIndex > cursor) {
-            const leading = new state.Token("text", "", 0);
-            leading.content = token.content.slice(cursor, matchIndex);
-            replacements.push(leading);
-          }
-          const open = new state.Token("link_open", "a", 1);
-          open.markup = "file-link";
-          open.attrSet("class", "markdown-file-link");
-          open.attrSet("role", "button");
-          open.attrSet("tabindex", "0");
-          open.attrSet("data-file-path", target.path);
-          open.attrSet("data-file-kind", fileKindForPath(target.path));
-          if (target.line !== null) {
-            open.attrSet("data-file-line", String(target.line));
-          }
-          const label = new state.Token("text", "", 0);
-          label.content = matched;
-          const close = new state.Token("link_close", "a", -1);
-          close.markup = "file-link";
-          replacements.push(open, label, close);
-          decorations.push({
-            path: target.path,
-            reference: matched,
-            applyLabel: (text) => {
-              label.content = text;
-              if (text !== matched) {
-                open.attrSet("title", matched);
-              }
-            },
-          });
-          cursor = matchEnd;
-        }
-        if (replacements.length === 0) {
-          continue;
-        }
-        if (cursor < token.content.length) {
-          const trailing = new state.Token("text", "", 0);
-          trailing.content = token.content.slice(cursor);
-          replacements.push(trailing);
-        }
-        children.splice(index, 1, ...replacements);
-        index += replacements.length - 1;
+        index = replaceMarkdownTextMatches(
+          state,
+          children,
+          index,
+          MARKDOWN_FILE_LINK_SCAN_RE,
+          (match) => {
+            const matchIndex = match.index;
+            const matched = match[0];
+            const matchEnd = matchIndex + matched.length;
+            if (!hasMarkdownLinkBoundaries(token.content, matchIndex, matchEnd)) {
+              return null;
+            }
+            const target = parseMarkdownFileLinkTarget(matched);
+            if (!target) {
+              return null;
+            }
+            const open = new state.Token("link_open", "a", 1);
+            open.markup = "file-link";
+            open.attrSet("class", "markdown-file-link");
+            open.attrSet("role", "button");
+            open.attrSet("tabindex", "0");
+            open.attrSet("data-file-path", target.path);
+            open.attrSet("data-file-kind", fileKindForPath(target.path));
+            if (target.line !== null) {
+              open.attrSet("data-file-line", String(target.line));
+            }
+            const label = new state.Token("text", "", 0);
+            label.content = matched;
+            const close = new state.Token("link_close", "a", -1);
+            close.markup = "file-link";
+            decorations.push({
+              path: target.path,
+              reference: matched,
+              applyLabel: (text) => {
+                label.content = text;
+                if (text !== matched) {
+                  open.attrSet("title", matched);
+                }
+              },
+            });
+            return [open, label, close];
+          },
+        );
       }
     }
     // A path carries far more characters than identity: the basename is what a
@@ -516,7 +485,7 @@ export function createMarkdownParser(): MarkdownItParser {
     }
   });
 
-  installMarkdownSessionLinks(markdownParser, SESSION_LINK_SCAN_RE);
+  installMarkdownSessionLinks(markdownParser);
 
   // Classify web anchors for presentation; runs after linkify so bare URLs are
   // already anchors. The GitHub mark skips links whose only content is an image
@@ -625,32 +594,44 @@ export function createMarkdownParser(): MarkdownItParser {
 
   installMarkdownGitHubRefs(markdownParser);
 
-  // Enable GFM task list checkboxes (- [x] / - [ ]).
-  // enabled: false keeps checkboxes read-only (disabled="") — task lists in
-  // chat messages are display-only, not interactive forms.
-  // label: false avoids wrapping item text in <label>, which would break
-  // accessibility when the item contains links (MDN warns against anchors inside labels).
-  markdownParser.use(markdownItTaskLists, { enabled: false, label: false });
-
-  // The plugin inserts its checkbox as the first inline child. Trust only that
-  // generated token so later user-authored HTML remains escaped.
-  markdownParser.core.ruler.after("github-task-lists", "task-list-allowlist", (state) => {
-    for (const [index, listItem] of state.tokens.entries()) {
-      if (listItem.type !== "list_item_open" || listItem.attrGet("class") !== "task-list-item") {
+  markdownParser.core.ruler.after("inline", "task-lists", (state) => {
+    for (const [index, inline] of state.tokens.entries()) {
+      const listItem = state.tokens[index - 2];
+      const children = inline.children;
+      const firstChild = children?.[0];
+      if (
+        inline.type !== "inline" ||
+        state.tokens[index - 1]?.type !== "paragraph_open" ||
+        listItem?.type !== "list_item_open" ||
+        !/^\[[ xX]\] /.test(inline.content) ||
+        !children ||
+        !firstChild
+      ) {
         continue;
       }
-      const checkbox = state.tokens[index + 2]?.children?.[0];
-      if (checkbox?.type === "html_inline") {
-        checkbox.meta = { taskListPlugin: true };
+      // Task lists are display-only; labels would also wrap any links in the item.
+      const checkbox = new state.Token("html_inline", "", 0);
+      const checked = inline.content[1] !== " " ? ' checked=""' : "";
+      checkbox.content = `<input class="task-list-item-checkbox"${checked} disabled="" type="checkbox">`;
+      // Trust only the generated checkbox, including for transcript-role projection.
+      checkbox.meta = { taskListPlugin: true };
+      firstChild.content = firstChild.content.slice(3);
+      children.unshift(checkbox);
+      inline.content = inline.content.slice(3);
+      listItem.attrSet("class", "task-list-item");
+      for (let parent = index - 3; parent >= 0; parent--) {
+        const token = state.tokens[parent];
+        if (token?.level === listItem.level - 1) {
+          token.attrSet("class", "contains-task-list");
+          break;
+        }
       }
     }
   });
 
   // Override html_block and html_inline to escape raw HTML (#13937). Progress-card
   // rendering strips non-progress HTML instead of exposing escaped tag text.
-  // Exception: html_inline tokens marked by a trusted plugin (meta.taskListPlugin)
-  // are allowed through — they are generated by our own plugin pipeline, not user input,
-  // and DOMPurify provides the final safety net regardless.
+  // Only generated task-list checkboxes bypass escaping; DOMPurify still sanitizes them.
   // Renderer rules degrade to empty output on impossible token misses instead of
   // throwing mid-render; markdown input is untrusted and the chat view must not crash.
   markdownParser.renderer.rules.html_block = (tokens, index, _options, env) =>
@@ -730,7 +711,6 @@ export function createMarkdownParser(): MarkdownItParser {
       ? `<div class="markdown-mermaid">${code}</div>`
       : code;
   };
-  // Override indented code blocks (code_block) with the same treatment as fence
   markdownParser.renderer.rules.code_block = (tokens, index, _options, env) => {
     const content = tokens[index]?.content;
     if (content === undefined) {

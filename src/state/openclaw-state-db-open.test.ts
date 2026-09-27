@@ -336,7 +336,7 @@ describe("unpublished state database acquisition", () => {
           pathname: path.join(path.dirname(params.pathname), "healthy.sqlite"),
           ensureSchema,
         });
-        openClawStateDatabaseCache.publishOpenClawStateDatabase(healthy);
+        openClawStateDatabaseCache.publishOpenClawStateDatabase(healthy, params.env);
         expect(() => openClawStateDatabaseCache.closeOpenClawStateDatabase()).toThrow(
           maintenanceFails ? AggregateError : nativeFailure,
         );

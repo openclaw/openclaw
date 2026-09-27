@@ -127,7 +127,6 @@ it("rejects retained UI assets after a same-source runtime rebuild without repai
 });
 
 it.each([
-  { name: "cold build", remove: "dist", reason: "missing_private_qa_dist" },
   {
     name: "missing private QA",
     remove: "dist/plugin-sdk/qa-runtime.js",

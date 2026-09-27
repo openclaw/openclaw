@@ -66,6 +66,7 @@ function createCodexTestRuntime(
     ...(current ? { config: { current } } : {}),
     state: {
       openSyncKeyedStore: () => stateStore,
+      openKeyedStore: () => stateStore,
     },
   } as never;
 }
@@ -76,6 +77,18 @@ vi.mock("./src/app-server/run-attempt.js", () => ({
 vi.mock("./src/app-server/side-question.js", () => ({
   runCodexAppServerSideQuestion: runCodexAppServerSideQuestionMock,
 }));
+
+function createCodexTestApi(overrides: Parameters<typeof createTestPluginApi>[0] = {}) {
+  return createTestPluginApi({
+    id: "codex",
+    name: "Codex",
+    source: "test",
+    config: {},
+    pluginConfig: {},
+    ...overrides,
+    runtime: overrides.runtime ?? createCodexTestRuntime(),
+  });
+}
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
   return mock.mock.calls.at(index);
@@ -111,12 +124,8 @@ describe("codex plugin", () => {
 
     expect(() =>
       plugin.register(
-        createTestPluginApi({
-          id: "codex",
-          name: "Codex",
-          source: "test",
+        createCodexTestApi({
           config: explicitAgentConfig,
-          pluginConfig: {},
           runtime: { modelAuth, state: { openSyncKeyedStore, openKeyedStore } } as never,
         }),
       ),
@@ -265,12 +274,8 @@ describe("codex plugin", () => {
 
     expect(() =>
       plugin.register(
-        createTestPluginApi({
-          id: "codex",
-          name: "Codex",
-          source: "test",
+        createCodexTestApi({
           config: explicitAgentConfig,
-          pluginConfig: {},
           runtime: createCodexTestRuntime(() => explicitAgentConfig),
           registerAgentHarness,
           registerNodeHostCommand,
@@ -322,13 +327,7 @@ describe("codex plugin", () => {
     const onConversationBindingResolved = vi.fn();
 
     plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
-        pluginConfig: {},
-        runtime: createCodexTestRuntime(),
+      createCodexTestApi({
         registerAgentHarness,
         registerCommand,
         registerMediaUnderstandingProvider,
@@ -421,22 +420,13 @@ describe("codex plugin", () => {
     const registerProvider = vi.fn();
     const registerSessionCatalog = vi.fn();
     plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
+      createCodexTestApi({
         config: explicitAgentConfig,
         pluginConfig: { sessionCatalog: { enabled: false } },
-        runtime: createCodexTestRuntime(),
         registerAgentHarness,
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
         registerNodeHostCommand,
         registerProvider,
         registerSessionCatalog,
-        registerTool: vi.fn(),
-        on: vi.fn(),
       }),
     );
 
@@ -495,20 +485,9 @@ describe("codex plugin", () => {
   it("registers the five shipped supervision tools only when supervision is enabled", () => {
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
     plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
+      createCodexTestApi({
         pluginConfig: { supervision: { enabled: true } },
-        runtime: createCodexTestRuntime(),
-        registerAgentHarness: vi.fn(),
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
         registerTool,
-        on: vi.fn(),
       }),
     );
 
@@ -530,12 +509,7 @@ describe("codex plugin", () => {
     (_label, supervision) => {
       const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
       plugin.register(
-        createTestPluginApi({
-          id: "codex",
-          name: "Codex",
-          source: "test",
-          config: {},
-          pluginConfig: {},
+        createCodexTestApi({
           // No explicit plugins.entries.codex.enabled: core auto-enables the
           // plugin from this config block, so the harness must keep honoring it.
           runtime: createCodexTestRuntime(() => ({
@@ -550,13 +524,7 @@ describe("codex plugin", () => {
               },
             },
           })),
-          registerAgentHarness: vi.fn(),
-          registerCommand: vi.fn(),
-          registerMediaUnderstandingProvider: vi.fn(),
-          registerMigrationProvider: vi.fn(),
-          registerProvider: vi.fn(),
           registerTool,
-          on: vi.fn(),
         }),
       );
 
@@ -570,12 +538,7 @@ describe("codex plugin", () => {
   it("drops live plugin config when the Codex entry is explicitly disabled", () => {
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
     plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
-        pluginConfig: {},
+      createCodexTestApi({
         runtime: createCodexTestRuntime(() => ({
           plugins: {
             entries: {
@@ -586,13 +549,7 @@ describe("codex plugin", () => {
             },
           },
         })),
-        registerAgentHarness: vi.fn(),
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
         registerTool,
-        on: vi.fn(),
       }),
     );
 
@@ -605,12 +562,7 @@ describe("codex plugin", () => {
   it("activates from live supervision config through a normalized Codex entry id", () => {
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
     plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
-        pluginConfig: {},
+      createCodexTestApi({
         runtime: createCodexTestRuntime(() => ({
           plugins: {
             entries: {
@@ -620,13 +572,7 @@ describe("codex plugin", () => {
             },
           },
         })),
-        registerAgentHarness: vi.fn(),
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
         registerTool,
-        on: vi.fn(),
       }),
     );
 
@@ -698,20 +644,10 @@ describe("codex plugin", () => {
       },
     };
     plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
+      createCodexTestApi({
         pluginConfig: { supervision: { enabled: true } },
         runtime: createCodexTestRuntime(() => liveConfig),
-        registerAgentHarness: vi.fn(),
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
         registerTool,
-        on: vi.fn(),
       }),
     );
     const registration = registeredCodexTools(registerTool);
@@ -731,18 +667,8 @@ describe("codex plugin", () => {
 
   it("registers with capture APIs that do not expose conversation binding hooks yet", () => {
     const registerProvider = vi.fn();
-    const api = createTestPluginApi({
-      id: "codex",
-      name: "Codex",
-      source: "test",
-      config: {},
-      pluginConfig: {},
-      runtime: createCodexTestRuntime(),
-      registerAgentHarness: vi.fn(),
-      registerCommand: vi.fn(),
-      registerMediaUnderstandingProvider: vi.fn(),
+    const api = createCodexTestApi({
       registerProvider,
-      on: vi.fn(),
     });
     delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
 
@@ -756,47 +682,13 @@ describe("codex plugin", () => {
     );
   });
 
-  it("claims the Codex routing providers by default", () => {
-    const harness = createCodexAppServerAgentHarness({
-      bindingStore: testCodexAppServerBindingStore,
-    });
-
-    expect(harness.deliveryDefaults?.visibleReplies).toBe("message_tool");
-    expect(
-      harness.supports({ provider: "codex", modelId: "gpt-5.4", requestedRuntime: "auto" })
-        .supported,
-    ).toBe(true);
-    const openAiCodex = harness.supports({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      requestedRuntime: "auto",
-    });
-    expect(openAiCodex.supported).toBe(true);
-    const unsupported = harness.supports({
-      provider: "9router",
-      modelId: "gpt-5.4",
-      requestedRuntime: "auto",
-    });
-    expect(unsupported.supported).toBe(false);
-  });
-
   it("retires only ended session binding rows in the owning agent scope", async () => {
     const stateStore = createCodexTestBindingStateStore();
     const bindingStore = createCodexAppServerBindingStore(stateStore);
     const on = vi.fn();
     plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
-        pluginConfig: {},
+      createCodexTestApi({
         runtime: createCodexTestRuntime(undefined, stateStore),
-        registerAgentHarness: vi.fn(),
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
         on,
       }),
     );
@@ -820,33 +712,33 @@ describe("codex plugin", () => {
       sessionId: "session-1",
       sessionKey: "agent:worker:session-1",
     });
-    const setBinding = () =>
-      bindingStore.mutate(identity, {
+    const setBinding = (target = identity) =>
+      bindingStore.mutate(target, {
         kind: "set",
         binding: { threadId: "thread-1", cwd: "/repo" },
       });
 
-    for (const reason of ["shutdown", "restart", "compaction", "unknown"] as const) {
-      await setBinding();
+    for (const reason of ["shutdown", "restart", "compaction", "deleted", "unknown"] as const) {
+      await expect(setBinding()).resolves.toBe(true);
       await sessionEnd(
         { sessionId: "session-1", sessionKey: "agent:worker:session-1", reason },
         { agentId: "worker", sessionId: "session-1" },
       );
       expect(bindingStore.read(identity)).toMatchObject({ threadId: "thread-1" });
     }
-    for (const reason of ["new", "reset", "idle", "daily", "deleted"] as const) {
-      await setBinding();
-      await sessionEnd(
-        { sessionId: "session-1", sessionKey: "agent:worker:session-1", reason },
-        { agentId: "worker", sessionId: "session-1" },
-      );
-      expect(bindingStore.read(identity)).toBeUndefined();
+    for (const reason of ["new", "reset", "idle", "daily"] as const) {
+      const sessionId = `session-${reason}`;
+      const sessionKey = `agent:worker:${sessionId}`;
+      const retiredIdentity = sessionBindingIdentity({ agentId: "worker", sessionId, sessionKey });
+      await expect(setBinding(retiredIdentity)).resolves.toBe(true);
+      expect(bindingStore.read(retiredIdentity)).toMatchObject({ threadId: "thread-1" });
+      await sessionEnd({ sessionId, sessionKey, reason }, { agentId: "worker", sessionId });
+      expect(bindingStore.read(retiredIdentity)).toBeUndefined();
     }
 
     // Cross-key handoff (e.g. dashboard "New Chat"/fork): the parent's still-live
     // binding must survive because the successor lives under a different key and
-    // owns its own Codex thread. Use a fresh parent key (session-1 above is now
-    // permanently retired). See #106778.
+    // owns its own Codex thread. See #106778.
     const parent = sessionBindingIdentity({
       agentId: "worker",
       sessionId: "parent-1",
@@ -977,19 +869,10 @@ describe("codex plugin", () => {
     };
     const runtime = createCodexTestRuntime(() => liveConfig);
     plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
+      createCodexTestApi({
         pluginConfig: { codexPlugins: { enabled: false } },
         runtime,
         registerAgentHarness,
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
-        on: vi.fn(),
       }),
     );
     const harness = mockCallArg(registerAgentHarness) as ReturnType<

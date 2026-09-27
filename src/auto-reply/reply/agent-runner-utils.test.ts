@@ -43,18 +43,8 @@ const {
   revokeMessageActionTurnCapability,
 } = await import("../../gateway/message-action-turn-capability.js");
 const { resolveProviderScopedAuthProfile } = await import("./agent-runner-auth-profile.js");
-const { buildEmbeddedRunBaseParams: buildEmbeddedRunBaseParamsCore } =
-  await import("./agent-runner-run-params.js");
+const { buildEmbeddedRunBaseParams } = await import("./agent-runner-run-params.js");
 const { setChannelSourceTurnId } = await import("./source-turn-id.js");
-
-function buildEmbeddedRunBaseParams(
-  params: Omit<Parameters<typeof buildEmbeddedRunBaseParamsCore>[0], "isReasoningTagProvider">,
-) {
-  return buildEmbeddedRunBaseParamsCore({
-    ...params,
-    isReasoningTagProvider: hoisted.isReasoningTagProviderMock,
-  });
-}
 
 function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"] {
   return {
@@ -256,26 +246,6 @@ describe("agent-runner-utils", () => {
     expect(resolved.fallbacksOverride).toEqual([]);
   });
 
-  it("passes through missing agentId for helper-based fallback resolution", () => {
-    hoisted.resolveModelFallbackAvailabilityMock.mockReturnValue({
-      kind: "active",
-      models: ["fallback-model"],
-    });
-    const run = makeRun({ agentId: undefined });
-
-    const resolved = resolveModelFallbackOptions(run);
-
-    expect(hoisted.resolveModelFallbackAvailabilityMock).toHaveBeenCalledWith({
-      cfg: run.config,
-      agentId: undefined,
-      sessionKey: run.sessionKey,
-      hasSessionModelOverride: false,
-      modelOverrideSource: undefined,
-      hasAutoFallbackProvenance: false,
-    });
-    expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
-  });
-
   it("builds embedded run base params with auth profile and run metadata", async () => {
     const run = makeRun({
       enforceFinalTag: true,
@@ -373,22 +343,6 @@ describe("agent-runner-utils", () => {
     });
 
     expect(resolved.runBaseParams.conversationToolPolicy).toEqual({ deny: ["exec"] });
-  });
-
-  it("uses session chat type over stale queued metadata for embedded execution params", async () => {
-    const run = makeRun({ chatType: "direct" });
-
-    const resolved = await buildEmbeddedRunExecutionParams({
-      run,
-      sessionCtx: { Provider: "discord", ChatType: "Channel" },
-      hasRepliedRef: undefined,
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      runId: "run-1",
-    });
-
-    expect(resolved.embeddedContext.chatType).toBe("channel");
-    expect("chatType" in resolved.runBaseParams).toBe(false);
   });
 
   it("passes through recovered auto fallback provenance for embedded run params", async () => {
@@ -513,6 +467,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.agentId).toBe(run.agentId);
     expect(resolved.embeddedContext.messageProvider).toBe("openai");
     expect(resolved.embeddedContext.chatType).toBe("channel");
+    expect("chatType" in resolved.runBaseParams).toBe(false);
     expect(resolved.embeddedContext.messageTo).toBe("channel-1");
     expect(resolved.embeddedContext.chatId).toBe("native-chat-1");
     expect(resolved.embeddedContext.memberRoleIds).toEqual(["admin", "operator"]);

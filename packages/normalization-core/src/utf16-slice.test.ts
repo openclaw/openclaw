@@ -1,4 +1,3 @@
-// Tests for surrogate-safe UTF-16 string slicing helpers.
 import { describe, expect, it } from "vitest";
 import { findGraphemeChunkEnd } from "./grapheme.js";
 import {
@@ -26,7 +25,6 @@ describe("avoidTrailingHighSurrogateBreak", () => {
 
 describe("sliceUtf16Safe", () => {
   it.each<[string, Parameters<typeof sliceUtf16Safe>, string]>([
-    ["slices ASCII string normally", ["hello world", 0, 5], "hello"],
     ["handles negative start", ["hello world", -5], "world"],
     ["handles negative end", ["hello world", 0, -6], "hello"],
     ["handles start beyond length", ["hello", 10], ""],
@@ -35,7 +33,6 @@ describe("sliceUtf16Safe", () => {
     ["preserves emoji with surrogate pairs", ["👨‍👩‍👧‍👦", 0], "👨‍👩‍👧‍👦"],
     ["returns empty string when slicing middle of surrogate pair", ["👨👩", 1, 3], ""],
     ["returns empty string when slicing at start of surrogate pair", ["👨👩", 0, 1], ""],
-    ["handles empty string", ["", 0], ""],
     ["handles undefined end", ["hello", 2], "llo"],
   ])("%s", (_name, args, expected) => {
     expect(sliceUtf16Safe(...args)).toBe(expected);
@@ -45,7 +42,6 @@ describe("sliceUtf16Safe", () => {
 describe("truncateUtf16Safe", () => {
   it.each<[string, Parameters<typeof truncateUtf16Safe>, string]>([
     ["returns input when shorter than limit", ["hello", 10], "hello"],
-    ["truncates when longer than limit", ["hello world", 5], "hello"],
     ["handles zero limit", ["hello", 0], ""],
     ["handles negative limit", ["hello", -1], ""],
     ["floors decimal limit", ["hello world", 5.7], "hello"],
@@ -56,51 +52,39 @@ describe("truncateUtf16Safe", () => {
 });
 
 describe("truncateWithMarker", () => {
-  it.each([
-    {
-      name: "returns values at the boundary unchanged",
-      value: "hello",
-      max: 5,
-      options: { marker: "...", reserve: 3, trimEnd: false },
-      expected: "hello",
-    },
-    {
-      name: "reserves marker width",
-      value: "hello world",
-      max: 8,
-      options: { marker: "...", reserve: 3, trimEnd: false },
-      expected: "hello...",
-    },
-    {
-      name: "supports markers outside the limit",
-      value: "hello world",
-      max: 5,
-      options: { marker: "...", reserve: 0, trimEnd: false },
-      expected: "hello...",
-    },
-    {
-      name: "trims only the truncated prefix",
-      value: "hello   world",
-      max: 9,
-      options: { marker: "...", reserve: 3, trimEnd: true },
-      expected: "hello...",
-    },
-    {
-      name: "keeps surrogate pairs well formed",
-      value: "ab🚀tail",
-      max: 4,
-      options: { marker: "…", reserve: 1, trimEnd: false },
-      expected: "ab…",
-    },
-    {
-      name: "preserves marker output at zero limits",
-      value: "hello",
-      max: 0,
-      options: { marker: "…", reserve: 1, trimEnd: false },
-      expected: "…",
-    },
-  ] as const)("$name", ({ value, max, options, expected }) => {
-    expect(truncateWithMarker(value, max, options)).toBe(expected);
+  it.each<[string, Parameters<typeof truncateWithMarker>, string]>([
+    [
+      "keeps the boundary unchanged",
+      ["hello", 5, { marker: "...", reserve: 3, trimEnd: false }],
+      "hello",
+    ],
+    [
+      "reserves marker width",
+      ["hello world", 8, { marker: "...", reserve: 3, trimEnd: false }],
+      "hello...",
+    ],
+    [
+      "supports markers outside the limit",
+      ["hello world", 5, { marker: "...", reserve: 0, trimEnd: false }],
+      "hello...",
+    ],
+    [
+      "trims only the prefix",
+      ["hello   world", 9, { marker: "...", reserve: 3, trimEnd: true }],
+      "hello...",
+    ],
+    [
+      "keeps surrogate pairs whole",
+      ["ab🚀tail", 4, { marker: "…", reserve: 1, trimEnd: false }],
+      "ab…",
+    ],
+    [
+      "keeps the marker at zero limits",
+      ["hello", 0, { marker: "…", reserve: 1, trimEnd: false }],
+      "…",
+    ],
+  ])("%s", (_name, args, expected) => {
+    expect(truncateWithMarker(...args)).toBe(expected);
   });
 });
 

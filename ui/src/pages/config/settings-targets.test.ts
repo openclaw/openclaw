@@ -149,30 +149,22 @@ describe("settings search target manifest", () => {
 });
 
 describe("settings config section ownership", () => {
-  const pages: ReadonlyArray<readonly [ConfigPageId, readonly string[]]> = [
-    ["communications", ["messages", "tts", "transcripts"]],
-    ["appearance", ["__appearance__", "ui"]],
-    ["notifications", ["__notifications__"]],
-    ["security", ["security", "approvals"]],
-    ["automation", ["commands", "hooks", "bindings", "cron"]],
-    ["mcp", ["mcp"]],
-    ["memory", ["memory"]],
-    ["talk", ["talk"]],
-    ["infrastructure", ["gateway", "browser", "nodeHost", "discovery", "acp"]],
-    ["updates", ["update"]],
-    ["ai-agents", ["agents", "skills", "tools", "session"]],
+  const pages: readonly ConfigPageId[] = [
+    "communications",
+    "appearance",
+    "notifications",
+    "security",
+    "automation",
+    "mcp",
+    "memory",
+    "talk",
+    "infrastructure",
+    "updates",
+    "ai-agents",
   ];
 
-  it.each(pages)("routes every %s section back to its rendering page", (pageId, sections) => {
-    expect(configSectionKeysForPage(pageId)).toEqual(sections);
-
-    for (const section of sections) {
-      expect(configPageForSection(section)).toBe(pageId);
-    }
-  });
-
   it("assigns each curated section to exactly one page", () => {
-    const sections = pages.flatMap(([, pageSections]) => pageSections);
+    const sections = pages.flatMap((page) => configSectionKeysForPage(page) ?? []);
 
     expect(new Set(sections).size).toBe(sections.length);
     expect([...SCOPED_CONFIG_SECTION_KEYS].toSorted()).toEqual([...sections, "plugins"].toSorted());

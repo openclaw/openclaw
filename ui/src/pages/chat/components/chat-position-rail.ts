@@ -224,7 +224,11 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.disconnectVisibility();
       this.transcriptElement = root;
       this.stopTranscriptScroll = subscribeTranscriptScroll(root, (observation) => {
-        if (observation.type === "input") {
+        if (observation.type === "offset") {
+          // The reading position can cross a landmark without changing the
+          // rendered rows; follow it here instead of re-rendering the pane.
+          this.scheduleLayout();
+        } else if (observation.type === "input") {
           if (this.followingResize) {
             this.followActive = true;
             this.scheduleLayout();
@@ -381,11 +385,14 @@ class ChatPositionRailDirective extends AsyncDirective {
 
   private syncVisibleMarks() {
     this.syncReaderViewport();
-    const visible = new Set(
-      Array.from(this.observedMessages.values())
-        .filter((message) => message.visible)
-        .map((message) => message.id),
-    );
+    const visible = new Set<string>();
+    const visibleMessageIds = new Set<string>();
+    for (const message of this.observedMessages.values()) {
+      if (message.visible) {
+        visible.add(message.id);
+        visibleMessageIds.add(message.messageId);
+      }
+    }
     for (const id of this.visibleIds) {
       if (!visible.has(id)) {
         this.markerElements.get(id)?.removeAttribute("data-visible");
@@ -403,11 +410,6 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.followActive = true;
       this.scheduleLayout();
     }
-    const visibleMessageIds = new Set(
-      Array.from(this.observedMessages.values())
-        .filter((message) => message.visible)
-        .map((message) => message.messageId),
-    );
     const visibleOrder = this.positionMessageIds.filter((id) => visibleMessageIds.has(id));
     // A continuation, folded tool row, or virtualized jump still belongs to a transcript position.
     const activeMessageId = this.session?.activeMessageId(

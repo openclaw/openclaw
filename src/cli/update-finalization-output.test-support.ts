@@ -180,6 +180,7 @@ export const createUpdateConfigSnapshot = async () => {
     sourceUrl("./update-cli/update-command-config.ts"),
     `
 import { readConfigFileSnapshot } from ${JSON.stringify(sourceUrl("../config/config.ts"))};
+export const capturePreUpdateSourceConfig = ({sourceConfig, parsed}) => ({ sourceConfig, authoredConfig: parsed });
 export const readPostCorePreUpdateSourceConfig = async () => {
   ${scenario === "phase-hang" ? "await new Promise(resolve => setTimeout(resolve, 1_200));" : ""}
   return undefined;

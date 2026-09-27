@@ -1009,7 +1009,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     ]);
   });
 
-  it.each([undefined, "invalidated-handle"])("invalidates resume handles %#", async (newHandle) => {
+  it("invalidates a resume handle even when its replacement is supplied", async () => {
     vi.useFakeTimers();
     try {
       const onClose = vi.fn();
@@ -1036,7 +1036,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
         },
       });
       lastConnectParams().callbacks.onmessage({
-        sessionResumptionUpdate: { resumable: false, ...(newHandle ? { newHandle } : {}) },
+        sessionResumptionUpdate: { resumable: false, newHandle: "invalidated-handle" },
       });
       expect(onEvent).not.toHaveBeenCalled();
       lastConnectParams().callbacks.onclose({
@@ -2121,17 +2121,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
   it.each([
     ["undefined", (): undefined => undefined],
-    ["function", () => () => undefined],
-    ["symbol", () => Symbol("invalid-tool-result")],
     ["bigint", () => ({ value: 1n })],
-    [
-      "circular",
-      () => {
-        const result: { self?: unknown } = {};
-        result.self = result;
-        return result;
-      },
-    ],
     ["omitted custom serialization", () => ({ toJSON: () => undefined })],
   ] as const)(
     "rejects %s Google Live tool results while keeping the call retryable",

@@ -74,8 +74,8 @@ function fixture(capturedEvents?: Array<Record<string, unknown>>) {
             afterRequestEventId: 0,
             sessionId: "qa-slack",
             store: {
-              getSessionEvents: () => capturedEvents.toReversed(),
-              readBlob: () => null,
+              getSessionEvents: async () => capturedEvents.toReversed(),
+              readBlob: async () => null,
             },
           })
         : writes,

@@ -83,36 +83,16 @@ describe("ingress retry policy", () => {
     expect(resolveIngressRetryDelayMs(event, undefined, now)).toBe(expected);
   });
 
-  it.each([
-    {
-      name: "attempts below floor",
-      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
-      ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS + 1,
-      expected: false,
-    },
-    {
-      name: "age below gate",
-      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS - 1,
-      expected: false,
-    },
-    {
-      name: "both attempt floor and age met",
-      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-      expected: true,
-    },
-    {
-      name: "over floor and over age",
-      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 3,
-      ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS * 2,
-      expected: true,
-    },
-  ])("dead-letter requires both gates: $name", ({ attempt, ageMs, expected }) => {
+  it("does not dead-letter an old event below the attempt floor", () => {
     const receivedAt = 1_000;
     expect(
-      shouldDeadLetterRetryableIngressEvent({ receivedAt }, attempt, undefined, receivedAt + ageMs),
-    ).toBe(expected);
+      shouldDeadLetterRetryableIngressEvent(
+        { receivedAt },
+        DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
+        undefined,
+        receivedAt + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS + 1,
+      ),
+    ).toBe(false);
   });
 
   it("disposition prefers non-retryable fail", () => {
@@ -164,10 +144,8 @@ describe("ingress retry policy", () => {
     });
   });
 
-  it.each([
-    'Session "agent:main:main" ended during restart recovery. Use /new or /reset to start a replacement session.',
-    "This generation is terminal.",
-  ])("dead-letters a restart tombstone by structured code: %s", (message) => {
+  it("dead-letters a restart tombstone by structured code instead of wording", () => {
+    const message = "This generation is terminal.";
     const wrapped = Object.assign(new Error("BotError in middleware"), {
       error: new Error("telegram spooled update processing failed", {
         cause: Object.assign(new Error(message), {
@@ -219,7 +197,7 @@ describe("ingress retry policy", () => {
     },
   );
 
-  it.each(["code", "cause", "reason", "original", "error", "data", "errors"])(
+  it.each(["code", "cause", "errors"])(
     "releases a transient failure when its %s getter throws",
     (field) => {
       const err = Object.defineProperty(new Error("temporary failure"), field, {

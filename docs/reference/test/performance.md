@@ -285,6 +285,15 @@ Output includes first process output, `/healthz`, `/readyz`, HTTP listen log tim
 
 Use JSON output or `--output` when comparing changes. Use `--cpu-prof-dir` only after trace output points at import, compile, or CPU-bound work that phase timings alone cannot explain.
 
+After readiness, the Gateway uses idle turns to prepare common Control UI handler
+modules and configured local agent skill discovery. Each item yields to admitted
+foreground work, and shutdown joins preparation that has already started. This
+work does not execute chat requests, create connection state, or fetch live provider
+catalogs. Context-window cache preparation shares this sequence and starts no
+earlier than five seconds after scheduling. Compare immediate first requests with
+requests after an idle interval; readiness alone does not guarantee every optional
+cache is warm.
+
 </Accordion>
 
 <Accordion title="Workspace computation (scripts/bench-workspace-computation.ts)">

@@ -289,21 +289,8 @@ function resolveLiveModelCatalogNextPage(
     if (nextUrl && currentParsed && nextUrl.origin === currentParsed.origin) {
       return { status: "next", url: nextUrl.toString() };
     }
-    // The provider advertised a next URL but it is malformed or cross-origin.
-    // Attempt cursor-based pagination as a fallback before giving up.
-    const cursor = readLiveModelCatalogCursor(body);
-    if (cursor) {
-      const cursorUrl = tryParseUrl(currentUrl);
-      if (cursorUrl) {
-        cursorUrl.searchParams.set(cursor.name, cursor.value);
-        return { status: "next", url: cursorUrl.toString() };
-      }
-    }
-    // No usable fallback: the provider explicitly advertised a next page we
-    // cannot follow. Return incomplete so the caller surfaces a controlled
-    // error instead of silently returning a truncated catalog.
-    return { status: "incomplete" };
   }
+  // Malformed or cross-origin next URLs may still have a usable same-origin cursor.
   const cursor = readLiveModelCatalogCursor(body);
   if (cursor) {
     const nextUrl = tryParseUrl(currentUrl);
@@ -312,7 +299,7 @@ function resolveLiveModelCatalogNextPage(
       return { status: "next", url: nextUrl.toString() };
     }
   }
-  return bodyAdvertisesMoreLiveModelCatalogPages(body)
+  return rawNextUrl || bodyAdvertisesMoreLiveModelCatalogPages(body)
     ? { status: "incomplete" }
     : { status: "complete" };
 }

@@ -20,7 +20,6 @@ import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import { handleAcpDispatchTailAfterReset } from "./dispatch-from-config.acp-tail.js";
 import { createDispatchBlockReplyHandler } from "./dispatch-from-config.block-reply.js";
 import { flushDispatchDeferredFinalText } from "./dispatch-from-config.deferred-final.js";
-import type { InternalReplyResolverOptions } from "./dispatch-from-config.events.js";
 import {
   hasAskUserPayload,
   prepareReplyPayloadForSideEffects as preparePayload,
@@ -130,19 +129,17 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
                 sessionPromptSourceReplyDeliveryMode: state.sessionStableSourceReplyDeliveryMode,
                 ...state.sourceReplyDeliveryRuntimeOptions,
-                ...({
-                  mediaNormalizationOwner: state.isInternalWebchatTurn ? "gateway" : undefined,
-                  onPendingContinuation: (settlement) => {
-                    pendingContinuation = true;
-                    pendingContinuationSettlement ??= settlement;
-                  },
-                  onSessionMetadataChanges: notifySessionMetadataChanges,
-                  onSessionPrepared: state.notePreparedSession,
-                  onRunVerbosityResolved: (settings) => {
-                    state.noteRunVerbosity(settings);
-                    params.replyOptions?.onRunVerbosityResolved?.(settings);
-                  },
-                } satisfies InternalReplyResolverOptions),
+                mediaNormalizationOwner: state.isInternalWebchatTurn ? "gateway" : undefined,
+                onPendingContinuation: (settlement) => {
+                  pendingContinuation = true;
+                  pendingContinuationSettlement ??= settlement;
+                },
+                onSessionMetadataChanges: notifySessionMetadataChanges,
+                onSessionPrepared: state.notePreparedSession,
+                onRunVerbosityResolved: (settings) => {
+                  state.noteRunVerbosity(settings);
+                  params.replyOptions?.onRunVerbosityResolved?.(settings);
+                },
                 onObservedReplyDelivery: state.markObservedReplyDelivery,
                 typingPolicy: typing.typingPolicy,
                 suppressTyping: typing.suppressTyping,

@@ -150,6 +150,10 @@ spend and lockups while preserving normal tool access.
   appearing on every repeated call. The raw outcome is recorded before the note
   is added, so warning text does not count as progress.
 - Blocking follows once a pattern persists past the warning threshold.
+- Repeating `wait` with identical arguments and outcomes ten times blocks the
+  next wait. Changed outcomes reset the streak. This uses the same recovery
+  response and terminal handling described below; it does not cancel a tool
+  call that is still executing.
 - In the embedded agent loop, the first critical loop blocks the whole tool
   batch before any tool in that batch runs. The model then gets one more
   response with its normal tools.

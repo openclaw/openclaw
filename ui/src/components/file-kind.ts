@@ -92,22 +92,18 @@ const FILE_KIND_BY_EXTENSION: Record<string, FileKind> = {
 // Windows paths reach chat verbatim, so both separators split segments.
 const PATH_SEPARATOR_RE = /[\\/]/;
 
-function fileBaseName(path: string): string {
-  const segments = path.split(PATH_SEPARATOR_RE);
-  return segments[segments.length - 1] ?? path;
-}
-
 export function fileKindForPath(path: string): FileKind {
-  const name = fileBaseName(path).toLowerCase();
-  const named = FILE_KIND_BY_NAME[name];
-  if (named) {
-    return named;
+  const name = (path.split(PATH_SEPARATOR_RE).at(-1) ?? path).toLowerCase();
+  if (Object.hasOwn(FILE_KIND_BY_NAME, name)) {
+    return FILE_KIND_BY_NAME[name]!;
   }
   // Index 0 means a dotfile (".gitignore"), which has a leading dot rather than
   // an extension; it falls through to the generic document kind.
   const dot = name.lastIndexOf(".");
   const extension = dot > 0 ? name.slice(dot + 1) : "";
-  return FILE_KIND_BY_EXTENSION[extension] ?? "file";
+  return Object.hasOwn(FILE_KIND_BY_EXTENSION, extension)
+    ? FILE_KIND_BY_EXTENSION[extension]!
+    : "file";
 }
 
 type SuffixTrieNode = {
@@ -161,8 +157,7 @@ export function shortestFileLabels(paths: readonly string[]): Map<string, string
     insertReversedSegments(suffixTrie, segments);
   }
   const labels = new Map<string, string>();
-  for (const path of unique) {
-    const segments = segmentsByPath.get(path) ?? [];
+  for (const [path, segments] of segmentsByPath) {
     const depth = shortestUniqueSuffixDepth(suffixTrie, segments);
     // Render the suffix with the separator the path itself used so a Windows
     // path never reads as a POSIX one.

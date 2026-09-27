@@ -4,7 +4,11 @@ import {
 } from "../../../sessions/session-lifecycle-events.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import {
+  captureOpenClawStateWorkerContext,
+  prepareOpenClawStateReadSource,
+} from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import {
   projectSubagentRunForMaintenance,
@@ -148,8 +152,11 @@ type SubagentRegistryPersistListener = (sessionKeys?: readonly (string | undefin
 
 const SUBAGENT_REGISTRY_PERSIST_LISTENERS = new Set<SubagentRegistryPersistListener>();
 
-function emitSubagentRegistryPersisted(keys?: Array<string | undefined>): void {
-  publishSubagentRunChanges(keys);
+function emitSubagentRegistryPersisted(
+  keys?: Array<string | undefined>,
+  runIds?: readonly string[],
+): void {
+  publishSubagentRunChanges(keys, runIds);
   for (const listener of SUBAGENT_REGISTRY_PERSIST_LISTENERS) {
     try {
       listener(keys);
@@ -206,7 +213,7 @@ export function publishSubagentRunsAfterAtomicStore(
   const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds);
   const events = updateCommittedSwarmNotifications(runs, changedRunIds);
   deferredObserverEvents.push(() => {
-    emitSubagentRegistryPersisted(keys);
+    emitSubagentRegistryPersisted(keys, changedRunIds);
     events.forEach(emitSessionLifecycleEvent);
   });
 }
@@ -224,6 +231,70 @@ export function getSubagentSessionListReadSnapshotIdentity(): object | undefined
     }
     return undefined;
   }
+}
+
+export type SubagentSessionListReadView = {
+  snapshotIdentity(this: void): object | undefined;
+  runs(this: void, runIds?: ReadonlySet<string>): Map<string, SubagentRunReadRecord>;
+  prepare(this: void): Promise<void>;
+};
+
+/** A long-lived projection retains its source; registry publications still own the facts. */
+export function createSubagentSessionListReadView(options: {
+  env: NodeJS.ProcessEnv;
+  path?: string;
+}): SubagentSessionListReadView {
+  const path = options.path ?? resolveOpenClawStateSqlitePath(options.env);
+  const source = prepareOpenClawStateReadSource({ path, env: options.env });
+  const cache = persistedSubagentSessionListRunsReadCache;
+  const readPersisted = shouldReadPersistedSubagentRuns();
+  const matches = () => true;
+  const prepare = (context: OpenClawStateWorkerContext) =>
+    prepareSubagentRunsCache(cache, readCompactSubagentRuns, context);
+  return {
+    snapshotIdentity() {
+      if (!readPersisted) {
+        return subagentRuns;
+      }
+      try {
+        return getPersistedSubagentRunsSnapshot(cache, source.current()) ?? undefined;
+      } catch (error) {
+        if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
+          throw error;
+        }
+        return undefined;
+      }
+    },
+    runs(runIds) {
+      if (runIds) {
+        const persisted = readPersisted
+          ? getPersistedSubagentRunsSnapshot(cache, source.current())
+          : undefined;
+        const selected = new Map<string, SubagentRunReadRecord>();
+        for (const runId of runIds) {
+          const live = subagentRuns.get(runId);
+          const entry = live ? cache.project(live) : persisted?.get(runId);
+          if (entry) {
+            selected.set(runId, entry);
+          }
+        }
+        return selected;
+      }
+      return getSubagentRunsSnapshot(subagentRuns, cache, {
+        context: readPersisted ? source.current() : undefined,
+        matches,
+      });
+    },
+    async prepare() {
+      if (!readPersisted) {
+        return;
+      }
+      if (getActiveOpenClawStateDatabaseReadSnapshot({ path, env: options.env })) {
+        throw new Error("Resident subagent preparation cannot adopt a private database snapshot");
+      }
+      await source.withCurrent(prepare);
+    },
+  };
 }
 
 export async function prepareSubagentSessionListReadCache(): Promise<void> {
@@ -291,7 +362,7 @@ function persistSubagentRuns(
   // In-process readers must observe the authoritative memory snapshot before the wake.
   const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds, { committed });
   const events = committed ? updateCommittedSwarmNotifications(runs, changedRunIds) : [];
-  emitSubagentRegistryPersisted(keys);
+  emitSubagentRegistryPersisted(keys, changedRunIds);
   events.forEach(emitSessionLifecycleEvent);
 }
 
@@ -323,7 +394,7 @@ export function persistSubagentRunsToDiskAsyncOrThrow(
       databasePath: options.context.admission.databasePath,
     });
     const events = updateCommittedSwarmNotifications(snapshot, runIds);
-    emitSubagentRegistryPersisted(keys);
+    emitSubagentRegistryPersisted(keys, runIds);
     events.forEach(emitSessionLifecycleEvent);
   });
 }
@@ -431,6 +502,7 @@ export async function prepareSubagentRunsSnapshotForRunIds(
     inMemoryRuns,
     fullCache: persistedSubagentRunsReadCache,
     compactCache: persistedSubagentSessionListRunsReadCache,
+    requestedRunIds: requested,
     select: (snapshot) => ({
       runIds: [...snapshot.values()].filter(matches).map((entry) => entry.runId),
       sessionKeys: [],

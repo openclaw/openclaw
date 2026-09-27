@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -493,14 +493,23 @@ export function loadLatestAssistantText(
 ): LatestTranscriptAssistantText | undefined {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return readLatestAssistantTextFromDatabase(database, resolved, options);
+}
+
+/** Read through an already admitted connection without reopening its physical store. */
+export function readLatestAssistantTextFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  scope: Pick<ResolvedTranscriptReadScope, "agentId" | "sessionId" | "sessionKey">,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
+): LatestTranscriptAssistantText | undefined {
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
-      assertSessionTranscriptHot(database.db, resolved.sessionId);
+      assertSessionTranscriptHot(database.db, scope.sessionId);
       const db = getSessionKysely(database.db);
       const beforeEventSeq = resolveSqliteSessionTranscriptReadFence({
         database,
-        ...resolved,
+        ...scope,
       })?.beforeRawSeq;
       const rows = iterateSqliteQuerySync(
         database.db,
@@ -510,7 +519,7 @@ export function loadLatestAssistantText(
             join.onRef("ti.session_id", "=", "te.session_id").onRef("ti.seq", "=", "te.seq"),
           )
           .select(transcriptEventJsonSql(database.db, "te").as("event_json"))
-          .where("te.session_id", "=", resolved.sessionId)
+          .where("te.session_id", "=", scope.sessionId)
           .where("ti.event_type", "=", "message")
           .$if(beforeEventSeq !== undefined, (query) => query.where("ti.seq", "<", beforeEventSeq!))
           .orderBy("ti.seq", "desc"),
@@ -661,20 +670,11 @@ function findTranscriptEventInRows(
 export function readTranscriptEventMessage(
   event: TranscriptEvent,
 ): Record<string, unknown> | undefined {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return undefined;
-  }
-  const message = (event as { message?: unknown }).message;
-  return message && typeof message === "object" && !Array.isArray(message)
-    ? (message as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(asOptionalRecord(event)?.message);
 }
 
 export function readTranscriptEventId(event: TranscriptEvent): string | undefined {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return undefined;
-  }
-  const id = (event as { id?: unknown }).id;
+  const id = asOptionalRecord(event)?.id;
   return typeof id === "string" && id.trim() ? id : undefined;
 }
 

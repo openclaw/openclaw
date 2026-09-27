@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -341,10 +342,12 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       const executeRequest = async () => {
         diagnostics?.bindTrace();
         let entry: GatewayRequestEntry | undefined;
-        // Most UI/SDK RPCs outlive a reconnect. Companion asks are the exception:
-        // without their requester there is no safe recipient for a late answer.
+        // Ordinary mutations survive reconnects; an explicit reload wait instead
+        // belongs to its requester so disconnect can release its admission fence.
         const cancelOnDisconnect =
           req.method === "sessions.companion.ask" ||
+          (req.method === "plugins.reload" &&
+            asOptionalRecord(req.params)?.waitForDrain === true) ||
           (req.method === "node.invoke" &&
             client.connect.client.id === GATEWAY_CLIENT_IDS.CLI &&
             client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI);
@@ -392,7 +395,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           // deadline. Operator requests share bounded starts without serializing completion.
           if (client.connect.role === "operator") {
             diagnostics?.startQueue();
-            const start = scheduleGatewayRequestStart(frameBytes);
+            const start = scheduleGatewayRequestStart(frameBytes, req, connId);
             if (!start) {
               respondWithAuthority(
                 false,
