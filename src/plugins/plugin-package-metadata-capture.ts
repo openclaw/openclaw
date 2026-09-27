@@ -131,6 +131,8 @@ export function createPluginNativeDependencyScopes(
 export function capturePluginDependencies(params: {
   root: string;
   manifestFile?: string;
+  /** Nested manifests nobody selected (benchmarks, examples) keep their declarations optional. */
+  incidental?: boolean;
   references: ReadonlyMap<string, ReadonlySet<string>>;
   resolve: ReturnType<typeof createPluginDependencyResolver>;
   capture: (name: string, dependency: PluginDependencyResolution) => void;
@@ -158,6 +160,7 @@ export function capturePluginDependencies(params: {
     if (!dependency) {
       if (
         !params.manifestFile ||
+        params.incidental ||
         name in (manifest.optionalDependencies ?? {}) ||
         name in (manifest.peerDependencies ?? {})
       ) {
