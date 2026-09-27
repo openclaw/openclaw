@@ -10,6 +10,7 @@ import {
 import {
   buildAgentSessionKey,
   deriveLastRoutePolicy,
+  parseAgentSessionKey,
   resolveAgentRoute,
   resolveThreadSessionKeys,
   buildAgentMainSessionKey,
@@ -75,16 +76,43 @@ function prepareTelegramConversationRoute(params: ResolveTelegramConversationRou
     resolvedThreadId,
     chatId: params.chatId,
   });
-  let route = resolveAgentRoute({
-    cfg: params.cfg,
+  const routeInput = {
     channel: "telegram",
     accountId: params.accountId,
     peer: {
-      kind: params.isGroup ? "group" : "direct",
+      kind: params.isGroup ? ("group" as const) : ("direct" as const),
       id: peerId,
     },
     parentPeer,
+  };
+  const conversation = {
+    channel: "telegram",
+    accountId: params.accountId,
+    conversationId,
+  };
+  // Read the binding owner before ordinary agent selection, which rejects an ambiguous
+  // multi-agent roster even when this conversation's binding already names its agent.
+  // Session-only config keeps scope derivation from consulting the roster at all.
+  const resolveScopeRoute = (agentId?: string) =>
+    resolveAgentRoute({
+      ...routeInput,
+      cfg: { session: params.cfg.session },
+      defaultAgentId: agentId,
+    });
+  const binding = resolveRuntimeConversationBindingRoute({
+    route: resolveScopeRoute(),
+    conversation,
+    touchBinding: false,
   });
+  const metadataAgentId = binding.bindingRecord?.metadata?.agentId;
+  const hasBoundAgent = Boolean(
+    binding.boundSessionKey &&
+    (parseAgentSessionKey(binding.boundSessionKey) ||
+      (typeof metadataAgentId === "string" && metadataAgentId.trim())),
+  );
+  let route = hasBoundAgent
+    ? resolveScopeRoute(binding.boundAgentId)
+    : resolveAgentRoute({ ...routeInput, cfg: params.cfg });
 
   const rawTopicAgentId = params.topicAgentId?.trim();
   if (rawTopicAgentId) {
@@ -149,11 +177,7 @@ function prepareTelegramConversationRoute(params: ResolveTelegramConversationRou
   return {
     route,
     bindingMode,
-    conversation: {
-      channel: "telegram",
-      accountId: params.accountId,
-      conversationId,
-    },
+    conversation,
   };
 }
 

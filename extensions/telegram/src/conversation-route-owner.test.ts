@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectTelegramConversationRouteOwner } from "./conversation-route-owner.js";
 import {
   inspectTelegramConversationRoute,
+  resolveTelegramConversationRoute,
   touchTelegramConversationRoute,
 } from "./conversation-route.js";
 
@@ -333,5 +334,93 @@ describe("inspectTelegramConversationRouteOwner", () => {
         conversation: { kind: "group", peerId: "-100123" },
       }),
     ).toEqual({ kind: "unavailable" });
+  });
+
+  describe("a runtime binding when ordinary agent selection is ambiguous", () => {
+    // Two agents and no route binding: ordinary routing cannot choose an agent on its own.
+    // The conversation's runtime binding already names one, so it must be read first.
+    const ambiguousCfg: OpenClawConfig = {
+      agents: { list: [{ id: "main" }, { id: "codex" }] },
+      bindings: [],
+      channels: { telegram: { accounts: { default: {} } } },
+    };
+    const direct = {
+      cfg: ambiguousCfg,
+      accountId: "default",
+      chatId: 1234,
+      senderId: 1234,
+      isGroup: false,
+      threadSpec: { scope: "none" as const },
+    };
+
+    const bindTo = (targetSessionKey: string, metadata?: Record<string, unknown>) => {
+      const touchAsync = vi.fn(async () => {});
+      registerSessionBindingAdapter({
+        channel: "telegram",
+        accountId: "default",
+        listBySession: () => [],
+        resolveByConversation: (conversation) => ({
+          bindingId: "binding-dm",
+          targetSessionKey,
+          targetKind: "session",
+          conversation,
+          status: "active",
+          boundAt: 1,
+          ...(metadata ? { metadata } : {}),
+        }),
+        touchAsync,
+      });
+      return touchAsync;
+    };
+
+    it("routes inbound messages to the bound agent", async () => {
+      const touchAsync = bindTo("agent:codex:acp:session-1");
+
+      const result = await resolveTelegramConversationRoute(direct);
+
+      expect(result.route.agentId).toBe("codex");
+      expect(result.route.sessionKey).toBe("agent:codex:acp:session-1");
+      expect(result.bindingMode).toEqual({
+        kind: "runtime-bound",
+        sessionKey: "agent:codex:acp:session-1",
+      });
+      expect(touchAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it("inspects the bound agent without touching liveness", () => {
+      const touch = vi.fn();
+      registerSessionBindingAdapter({
+        ...adapter,
+        resolveByConversation: (conversation) => ({
+          bindingId: "binding-dm",
+          targetSessionKey: "agent:codex:acp:session-1",
+          targetKind: "session",
+          conversation,
+          status: "active",
+          boundAt: 1,
+        }),
+        touch,
+      });
+
+      expect(inspectTelegramConversationRoute(direct).route.agentId).toBe("codex");
+      expect(touch).not.toHaveBeenCalled();
+    });
+
+    it("uses explicit bound-agent metadata for a sentinel session", async () => {
+      bindTo("global", { agentId: "codex" });
+
+      const result = await resolveTelegramConversationRoute(direct);
+
+      expect(result.route.agentId).toBe("codex");
+      expect(result.route.sessionKey).toBe("global");
+    });
+
+    it("still requires agent selection when the binding names no agent", async () => {
+      bindTo("global");
+
+      await expect(resolveTelegramConversationRoute(direct)).rejects.toMatchObject({
+        code: "AGENT_SELECTION_REQUIRED",
+      });
+    });
   });
 });
