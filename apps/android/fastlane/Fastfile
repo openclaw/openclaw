@@ -52,10 +52,6 @@ def android_release_signing_materialized_properties_path
   File.join(android_root, "build", "release-signing", "gradle.properties")
 end
 
-def shell_join(args)
-  args.shelljoin
-end
-
 def play_package_name
   raw = ENV["GOOGLE_PLAY_PACKAGE_NAME"].to_s.strip
   raw.empty? ? DEFAULT_PLAY_PACKAGE_NAME : raw
@@ -216,7 +212,7 @@ def sync_android_versioning!(for_upload: true)
   if for_upload || env_present?(ENV["OPENCLAW_ANDROID_RELEASE_PLAN"])
     %w(phone wear).each { |audience| render_android_release_notes!(version, audience) }
   else
-    sh(shell_join(["node", "--import", "tsx", File.join(repo_root, "scripts", "android-sync-versioning.ts"), "--check", "--root", repo_root]))
+    sh(["node", "--import", "tsx", File.join(repo_root, "scripts", "android-sync-versioning.ts"), "--check", "--root", repo_root].shelljoin)
   end
 end
 
@@ -393,11 +389,11 @@ def play_release_artifact_paths(version)
 end
 
 def build_release_artifacts!
-  sh(shell_join(["bun", File.join(android_root, "scripts", "build-release-artifacts.ts")]))
+  sh(["bun", File.join(android_root, "scripts", "build-release-artifacts.ts")].shelljoin)
 end
 
 def capture_android_screenshots!
-  sh(shell_join(["bash", File.join(repo_root, "scripts", "android-screenshots.sh")]))
+  sh(["bash", File.join(repo_root, "scripts", "android-screenshots.sh")].shelljoin)
 end
 
 def mobile_release_ref_script
@@ -422,7 +418,7 @@ def mobile_release_ref_command(command)
     "--root",
     repo_root,
   ]
-  sh(shell_join(args))
+  sh(args.shelljoin)
 end
 
 def read_android_release_signing_properties!(path)
@@ -452,7 +448,7 @@ def export_android_release_signing_properties!(path)
 end
 
 def sync_android_release_signing!
-  sh(shell_join(["node", android_release_signing_script, "--mode", "sync-pull"]))
+  sh(["node", android_release_signing_script, "--mode", "sync-pull"].shelljoin)
   export_android_release_signing_properties!(android_release_signing_materialized_properties_path)
 end
 
@@ -468,13 +464,13 @@ def validate_android_release_signing!
   build_commit = release_git_sha
   build_timestamp = Time.now.utc.strftime("%Y-%m-%dT%H:%M:%SZ")
   Dir.chdir(android_root) do
-    sh(shell_join([
+    sh([
       "./gradlew",
       ":app:validateSigningPlayRelease",
       ":wear:validateSigningRelease",
       "-PopenclawBuildCommit=#{build_commit}",
       "-PopenclawBuildTimestamp=#{build_timestamp}"
-    ]))
+    ].shelljoin)
   end
 end
 
@@ -575,7 +571,7 @@ platform :android do
 
   desc "Print the Android release signing plan"
   lane :signing_plan do
-    sh(shell_join(["node", android_release_signing_script, "--mode", "plan"]))
+    sh(["node", android_release_signing_script, "--mode", "plan"].shelljoin)
   end
 
   desc "Pull encrypted Android release signing assets and validate Gradle release signing"
@@ -593,7 +589,7 @@ platform :android do
 
   desc "Create or refresh encrypted Android release signing assets in the shared signing repo"
   lane :signing_sync_push do
-    sh(shell_join(["node", android_release_signing_script, "--mode", "sync-push"]))
+    sh(["node", android_release_signing_script, "--mode", "sync-push"].shelljoin)
     UI.success("Pushed Android release signing assets.")
   end
 

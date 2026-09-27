@@ -14,7 +14,6 @@ import { WARM_IMAGE_MAX_ENTRIES } from "./crabbox-worker-warm-image-records.js";
 import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
-  isCrabboxWarmImageCaptureUncertain,
   projectCrabboxWarmImage,
   type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
@@ -166,7 +165,7 @@ export function registerCrabboxWorkerProviderDoctorChecks(
             target: image.profileKey,
           } as const;
           if (image.capture) {
-            const uncertain = isCrabboxWarmImageCaptureUncertain(image.capture);
+            const uncertain = image.capture.phase === "uncertain";
             findings.push({
               ...details,
               severity: uncertain || image.capture.stale ? "warning" : "info",

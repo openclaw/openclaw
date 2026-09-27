@@ -1,4 +1,3 @@
-// Reject ambiguous provider media before it becomes a user-visible artifact.
 import {
   createDebugProxyCaptureReaderAsync,
   finalizeDebugProxyCaptureAsync,

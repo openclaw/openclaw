@@ -58,7 +58,7 @@ describe("tools product copy", () => {
     expect(buildCommandsMessage(cfg)).toContain("/tools - List available runtime tools.");
     expect(buildCommandsMessage(cfg)).toContain("More: /tools for available capabilities");
     expect(buildHelpMessage(cfg)).toContain("/tools for available capabilities");
-    expect(buildHelpMessage(cfg)).toContain("/tasks");
+    expect(buildHelpMessage(cfg)).not.toContain("/tasks");
   });
 
   it("formats built-in and plugin tools for end users", () => {

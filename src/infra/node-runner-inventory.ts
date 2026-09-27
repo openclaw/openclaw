@@ -1,5 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { parseWorkerSlotSummary } from "../shared/node-list-parse.js";
+
+export { NODE_WORKER_CAPACITY_MAX } from "../shared/node-list-parse.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
 export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
@@ -15,7 +18,6 @@ export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
 export const NODE_WORKER_PORTAL_STREAM_VERSION = 1;
 export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
-export const NODE_WORKER_CAPACITY_MAX = 1_024;
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
   code: "update-required",
@@ -56,28 +58,6 @@ export type NodeRunnerInventoryDeclaration =
       workerHost: NodeWorkerHostDeclaration;
     };
 
-function parseCapacitySnapshot(value: unknown): NodeWorkerCapacitySnapshot | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const keys = Object.keys(value);
-  const total = value.total;
-  const available = value.available;
-  return keys.length === 2 &&
-    keys.includes("total") &&
-    keys.includes("available") &&
-    typeof total === "number" &&
-    typeof available === "number" &&
-    Number.isSafeInteger(total) &&
-    Number.isSafeInteger(available) &&
-    total >= 1 &&
-    total <= NODE_WORKER_CAPACITY_MAX &&
-    available >= 0 &&
-    available <= total
-    ? { total, available }
-    : null;
-}
-
 function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration | null {
   if (!isRecord(value) || typeof value.enabled !== "boolean") {
     return null;
@@ -86,7 +66,7 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
   if (!value.enabled) {
     return keys.length === 1 && keys[0] === "enabled" ? { enabled: false } : null;
   }
-  const capacity = parseCapacitySnapshot(value.capacity);
+  const capacity = parseWorkerSlotSummary(value.capacity);
   if (
     !capacity ||
     keys.length < 2 ||

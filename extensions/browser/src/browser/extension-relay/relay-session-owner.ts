@@ -94,7 +94,7 @@ export class RelaySessionOwner {
       fetch: new RelayFetch((method, params) => this.send(physical, method, params, "fetch")),
     };
     physical.parent?.children.add(physical);
-    this.physical.set(scope.childSessionId ?? scope.rootSessionId, physical);
+    this.physical.set(physical.id, physical);
     return physical;
   }
 
@@ -411,9 +411,8 @@ export class RelaySessionOwner {
         for (const parent of scope.parent?.subscribers ?? []) {
           parent.detachedChildren.delete(scope);
         }
-        const id = scope.childSessionId ?? scope.rootSessionId;
-        if (this.physical.get(id) === scope) {
-          this.physical.delete(id);
+        if (this.physical.get(scope.id) === scope) {
+          this.physical.delete(scope.id);
         }
       }
     };
@@ -511,12 +510,12 @@ export class RelaySessionOwner {
     if (method === "Target.attachedToTarget") {
       const attached = asOptionalRecord(params);
       const childId = attached?.sessionId;
-      const nativeTargetId = asOptionalRecord(attached?.targetInfo)?.targetId;
+      const targetInfo = asOptionalRecord(attached?.targetInfo);
+      const nativeTargetId = targetInfo?.targetId;
       if (typeof childId !== "string" || typeof nativeTargetId !== "string") {
         this.report(new Error("Native child attachment is missing its session or target identity"));
         return;
       }
-      const targetInfo = asOptionalRecord(attached?.targetInfo);
       if (!targetInfo || typeof targetInfo.type !== "string" || !nativeTargetId) {
         this.report(new Error("Native child attachment is missing its target type"));
         return;

@@ -568,12 +568,8 @@ export function buildCliRunResult(params: {
     meta: {
       durationMs: Date.now() - context.started,
       ...(output.finalPromptText ? { finalPromptText: output.finalPromptText } : {}),
-      ...(finalAssistantVisibleText || rawText
-        ? {
-            ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
-            ...(rawText ? { finalAssistantRawText: rawText } : {}),
-          }
-        : {}),
+      ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
+      ...(rawText ? { finalAssistantRawText: rawText } : {}),
       systemPromptReport: context.systemPromptReport,
       ...(terminalInterruption
         ? {

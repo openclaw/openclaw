@@ -6,3 +6,25 @@ export function resolveAcpSessionControlOwner(
 ): string | undefined {
   return entry?.spawnedBy?.trim() || entry?.parentSessionKey?.trim();
 }
+
+/** A cleanup target constraint; live task and actor authority remain separate. */
+export type AcpSessionControlBinding = Readonly<{
+  sessionId: string;
+  lifecycleRevision?: string;
+  sessionStartedAt?: number;
+  ownerKey: string;
+}>;
+
+export function matchesAcpSessionControlBinding(
+  entry: SessionEntry | undefined,
+  expected: AcpSessionControlBinding,
+): boolean {
+  return Boolean(
+    entry &&
+    entry.sessionId === expected.sessionId &&
+    entry.lifecycleRevision === expected.lifecycleRevision &&
+    (expected.lifecycleRevision !== undefined ||
+      entry.sessionStartedAt === expected.sessionStartedAt) &&
+    resolveAcpSessionControlOwner(entry) === expected.ownerKey,
+  );
+}

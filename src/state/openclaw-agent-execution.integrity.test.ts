@@ -61,7 +61,7 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
     const prepare = DatabaseSync.prototype.prepare;
     DatabaseSync.prototype.prepare = function(sql) {
       const statement = prepare.call(this, sql);
-      const match = /^PRAGMA (integrity_check|foreign_key_check);?$/i.exec(sql.trim());
+      const match = /^PRAGMA (integrity_check|foreign_key_check)(?:[(]'sqlite_schema'[)])?;?$/i.exec(sql.trim());
       if (this.location() === workerData.testIntegrityPath && match) {
         for (const method of ["all", "get", "iterate", "run"]) {
           const execute = statement[method].bind(statement);

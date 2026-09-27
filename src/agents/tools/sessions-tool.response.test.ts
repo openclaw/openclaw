@@ -27,6 +27,22 @@ function createTool() {
 }
 
 describe("sessions tool responses", () => {
+  it("clears its model override when patch requests the default model", async () => {
+    const callGateway = vi.fn().mockResolvedValue({});
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway,
+    });
+
+    await tool.execute("reset-model", { action: "patch", model: "default" });
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: { key: "agent:main:main", model: null },
+    });
+  });
+
   it("routes group actions to existing gateway methods", async () => {
     gatewayMocks.callGateway.mockImplementation(async (request) => request);
     const tool = createTool();

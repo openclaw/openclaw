@@ -613,22 +613,14 @@ type AgentHarnessModelCatalogCapability = {
   ): { accountType: string; authMode?: string } | undefined;
 };
 
-type AgentHarnessTaskHistoryCapability = {
-  /** Reads native task history without creating an OpenClaw child session. */
-  taskHistory?: {
-    taskKinds: readonly string[];
-    read(params: {
-      task: Readonly<import("../../tasks/task-registry.types.js").TaskRecord>;
-      cfg: OpenClawConfig;
-      cursor?: string;
-      limit: number;
-      /** Revalidate the task, requester access, and registered owner after awaited work. */
-      assertCurrent: () => void;
-    }): Promise<
-      import("../../../packages/gateway-protocol/src/schema/tasks.js").TasksHistoryResult
-    >;
-  };
-};
+type AgentHarnessSharedCapabilities = AgentHarnessCompactionCapability &
+  AgentHarnessRuntimeArtifactCapability &
+  AgentHarnessAuthBindingCapability &
+  AgentHarnessProviderUsageCapability &
+  AgentHarnessModelCatalogCapability &
+  AgentHarnessMcpCatalogCapability &
+  AgentHarnessSessionForkCapability &
+  AgentHarnessSessionLifecycleCapability;
 
 /**
  * @deprecated Implement AgentHarnessV2. This registration contract remains
@@ -637,29 +629,13 @@ type AgentHarnessTaskHistoryCapability = {
 export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
-  AgentHarnessCompactionCapability &
-  AgentHarnessRuntimeArtifactCapability &
-  AgentHarnessAuthBindingCapability &
-  AgentHarnessProviderUsageCapability &
-  AgentHarnessModelCatalogCapability &
-  AgentHarnessMcpCatalogCapability &
-  AgentHarnessSessionForkCapability &
-  AgentHarnessTaskHistoryCapability &
-  AgentHarnessSessionLifecycleCapability;
+  AgentHarnessSharedCapabilities;
 
 /** Current harness contract for hosts that always supply versioned capabilities. */
 export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParamsV2> &
   AgentHarnessSideQuestionCapability<AgentHarnessSideQuestionParamsV2> &
   AgentHarnessClassificationCapability<AgentHarnessAttemptParamsV2> &
-  AgentHarnessCompactionCapability &
-  AgentHarnessRuntimeArtifactCapability &
-  AgentHarnessAuthBindingCapability &
-  AgentHarnessProviderUsageCapability &
-  AgentHarnessModelCatalogCapability &
-  AgentHarnessMcpCatalogCapability &
-  AgentHarnessSessionForkCapability &
-  AgentHarnessTaskHistoryCapability &
-  AgentHarnessSessionLifecycleCapability;
+  AgentHarnessSharedCapabilities;
 
 export type RegisteredAgentHarness = {
   harness: AgentHarness;

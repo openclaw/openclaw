@@ -76,7 +76,7 @@ export async function createManagedOutgoingImageBlocks(params: ManagedOutgoingIm
 export async function createManagedOutgoingImageBlocksWithoutHostSql(
   params: ManagedOutgoingImageTestParams,
 ) {
-  const queries = observeHostDataSql({ ...process.env, OPENCLAW_STATE_DIR: params.stateDir });
+  const queries = observeHostDataSql();
   try {
     const blocks = await createManagedOutgoingImageBlocks(params);
     expect(queries.queries).toEqual([]);

@@ -4,6 +4,7 @@ import {
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
+  getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
   resolvePreparedRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -13,6 +14,7 @@ import {
   normalizeOptionalAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
 } from "../../agents/agent-runtime-id.js";
+import { bindActiveOperatorTurnAuthority } from "../../agents/cron-creator-authority-context.js";
 import {
   buildUsageAgentMetaFields,
   resolveFinalAssistantRawText,
@@ -28,6 +30,7 @@ import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-authority.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -93,6 +96,14 @@ export async function prepareWorkerAgentRuntimeIdentity(
     assertAdmittedActive();
   };
   assertAdmittedActive();
+  const operatorAuthority = readAdmittedRunOperatorAuthority(admittedRunContext);
+  const assertPresenceSourceCurrent = capturePresenceToolAuthority({
+    runId: params.turn.runId,
+    ownerAuthority: bindActiveOperatorTurnAuthority(params.turn.runId),
+    operatorAuthority,
+    delegatedAuthority: getAdmittedRunDelegatedAuthority(admittedRunContext),
+    assertCurrent: assertActive,
+  });
   // Stop closes the operational run before its placement claim finishes draining.
   // Worker tools must retain both owners even when audit collection is disabled.
   const { capability, takeFinishingOutcome } = await bindWorkerTurnOwner(
@@ -103,7 +114,8 @@ export async function prepareWorkerAgentRuntimeIdentity(
     params.sessionTarget,
     assertActive,
     params.turn.prepareAssistantTranscriptMessage,
-    readAdmittedRunOperatorAuthority(admittedRunContext),
+    operatorAuthority,
+    assertPresenceSourceCurrent,
   );
   capability.receiptAuthority();
   // Worker-local process keys isolate ephemeral state only. The signed caller

@@ -15,9 +15,9 @@ import {
   trackActiveCronTaskRunSettlement,
 } from "./active-run-cancellation.js";
 import {
-  settleTimedOutCronRun,
   createCronAgentWatchdog,
   CRON_AGENT_SETUP_WATCHDOG_MS,
+  settleTimedOutCronRun,
 } from "./agent-watchdog.js";
 import { abortErrorMessage, isSetupTimeoutErrorText } from "./execution-errors.js";
 import {
@@ -25,20 +25,19 @@ import {
   trackServiceCronRunReceiptSettlement,
 } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
-import { tryUpdateCronTaskRunSession } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
-  type ExecuteJobCoreOptions,
   type CronJobRunResult,
+  type ExecuteJobCoreOptions,
   type IsolatedAgentSetupTimeoutSignal,
   runsDetachedFromMainSession,
 } from "./timer-execution-timeout.js";
 import { executeJobCore } from "./timer-execution.js";
 import {
+  type CronRunProgress,
   resolveInterruptedRunProgress,
   withPrimaryWebhookInterruption,
   withPrimaryWebhookTrace,
-  type CronRunProgress,
 } from "./timer-job-runner.interruption.js";
 import { resolveDeliveryState } from "./timer-trigger.js";
 
@@ -272,7 +271,6 @@ async function executeJobCoreWithTimeoutUnfinalized(
       } else {
         accumulateExecution(info);
       }
-      tryUpdateCronTaskRunSession(state, opts?.runId, info?.sessionKey);
     };
     const trackExecution = !watchdog || deferTimeoutUntilExecutionStart;
     const resolveHeartbeatTimeoutMs = state.deps.resolveHeartbeatTimeoutMs;

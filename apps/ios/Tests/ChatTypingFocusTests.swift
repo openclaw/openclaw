@@ -1,4 +1,5 @@
 import Observation
+import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 import UIKit
@@ -18,8 +19,8 @@ private final class ChatTypingRenderCompletion {
     private var continuation: CheckedContinuation<Void, Never>?
 
     func complete(_ phase: Int) {
-        self.completedPhase = max(self.completedPhase, phase)
-        guard let awaitedPhase, self.completedPhase >= awaitedPhase else { return }
+        self.completedPhase = phase
+        guard let awaitedPhase, self.completedPhase == awaitedPhase else { return }
         self.awaitedPhase = nil
         let continuation = self.continuation
         self.continuation = nil
@@ -27,7 +28,7 @@ private final class ChatTypingRenderCompletion {
     }
 
     func wait(for phase: Int) async {
-        if self.completedPhase >= phase { return }
+        if self.completedPhase == phase { return }
         await withCheckedContinuation { continuation in
             self.awaitedPhase = phase
             self.continuation = continuation
@@ -68,12 +69,136 @@ private struct ChatTypingRenderedOwner: View {
     }
 }
 
+@MainActor
+@Observable
+private final class ChatTypingReadinessState {
+    var composerEnabled = false
+    var ancestorDisabled = false
+
+    var renderedState: Int {
+        (self.composerEnabled ? 1 : 0) + (self.ancestorDisabled ? 2 : 0)
+    }
+}
+
+private struct ChatTypingRenderedComposer: View {
+    let viewModel: OpenClawChatViewModel
+    let readiness: ChatTypingReadinessState
+    let completion: ChatTypingRenderCompletion
+
+    var body: some View {
+        NavigationStack {
+            OpenClawChatView(
+                viewModel: self.viewModel,
+                composerChrome: .clean,
+                isComposerEnabled: self.readiness.composerEnabled)
+                .disabled(self.readiness.ancestorDisabled)
+                .overlay(alignment: .topLeading) {
+                    ChatTypingRenderBoundary(
+                        phase: self.readiness.renderedState,
+                        completion: self.completion)
+                        .frame(width: 1, height: 1)
+                        .allowsHitTesting(false)
+                }
+        }
+    }
+}
+
 /// XCTest keeps awaited key-window checks outside Swift Testing's concurrent suites.
 @MainActor
 final class ChatTypingFocusTests: XCTestCase {
     func testInitialAgentHydrationPreservesFocusedTypingWithinAccount() async throws {
         for changesAccount in [true, false] {
             try await Self.checkTyping(changesAccount: changesAccount)
+        }
+    }
+
+    func testComposerDisabledReadinessAndRecovery() async throws {
+        try await Self.checkComposerReadiness(disabledByAncestor: false)
+    }
+
+    func testAncestorDisabledComposerReadinessAndRecovery() async throws {
+        try await Self.checkComposerReadiness(disabledByAncestor: true)
+    }
+
+    private static func checkComposerReadiness(disabledByAncestor: Bool) async throws {
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive },
+            "The readiness test requires an active app scene.")
+        let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+        let appModel = NodeAppModel()
+        appModel.enterScreenshotFixtureMode()
+        let owner = appModel.chatPresentation
+        owner.sync(appModel: appModel)
+        let model = try XCTUnwrap(owner.viewModel)
+        defer { model.detachTransport() }
+        model.input = ""
+
+        let readiness = ChatTypingReadinessState()
+        readiness.composerEnabled = disabledByAncestor
+        readiness.ancestorDisabled = disabledByAncestor
+        let completion = ChatTypingRenderCompletion()
+        let controller = UIHostingController(rootView: ChatTypingRenderedComposer(
+            viewModel: model,
+            readiness: readiness,
+            completion: completion))
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.screen.bounds
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer {
+            window.endEditing(true)
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKeyAndVisible()
+        }
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        await completion.wait(for: readiness.renderedState)
+        await Self.completeDeferredInteractionUpdate()
+        let editor = try XCTUnwrap(Self.composer(in: controller.view))
+        XCTAssertTrue(window.isKeyWindow)
+        XCTAssertTrue(editor.window === window)
+        XCTAssertFalse(editor.isEditable)
+        XCTAssertFalse(editor.isSelectable)
+        XCTAssertTrue(editor.accessibilityTraits.contains(.notEnabled))
+        XCTAssertFalse(editor.isFirstResponder)
+
+        for suffix in ["draft", " resumed"] {
+            if disabledByAncestor {
+                readiness.ancestorDisabled = false
+            } else {
+                readiness.composerEnabled = true
+            }
+            await completion.wait(for: readiness.renderedState)
+            await Self.completeDeferredInteractionUpdate()
+            XCTAssertTrue(Self.composer(in: controller.view) === editor)
+            XCTAssertTrue(editor.isEditable)
+            XCTAssertTrue(editor.isSelectable)
+            XCTAssertFalse(editor.accessibilityTraits.contains(.notEnabled))
+            guard editor.becomeFirstResponder(), editor.isFirstResponder else {
+                XCTFail("The enabled composer must acquire native keyboard focus.")
+                return
+            }
+            let expectedDraft = model.input + suffix
+            editor.insertText(suffix)
+            XCTAssertEqual(model.input, expectedDraft)
+            XCTAssertEqual(editor.text, expectedDraft)
+
+            if disabledByAncestor {
+                readiness.ancestorDisabled = true
+            } else {
+                readiness.composerEnabled = false
+            }
+            await completion.wait(for: readiness.renderedState)
+            await Self.completeDeferredInteractionUpdate()
+            XCTAssertTrue(Self.composer(in: controller.view) === editor)
+            XCTAssertFalse(editor.isEditable)
+            XCTAssertFalse(editor.isSelectable)
+            XCTAssertTrue(editor.accessibilityTraits.contains(.notEnabled))
+            XCTAssertFalse(editor.isFirstResponder)
+            XCTAssertEqual(model.input, expectedDraft)
+            XCTAssertEqual(editor.text, expectedDraft)
         }
     }
 

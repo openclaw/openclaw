@@ -41,7 +41,7 @@ import {
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
-import { isNativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
+import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import {
   floatingSidebarAttentionVisible,
@@ -262,8 +262,10 @@ export function renderApplicationShell(host: ShellViewHost) {
       onPreloadRoute: callbacks.preloadRoute,
     });
   }
+  const embedNavigation =
+    nativeEmbed && !(nativeEmbedHost()?.surface === "conversation" && activeRoute === "chat");
   const navigationContent =
-    settingsTakeover || nativeEmbed
+    settingsTakeover || embedNavigation
       ? renderLazySettingsSidebar(host, {
           presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
           basePath: context.basePath,
@@ -499,7 +501,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           onRefresh: host.refreshControlUi,
           onNavigate: host.navigate,
         })}
-        ${nativeEmbed ? navigationContent : nothing}
+        ${embedNavigation ? navigationContent : nothing}
         <openclaw-router-outlet
           ?inert=${pageActionsBlocked || reloadRequired}
           aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}

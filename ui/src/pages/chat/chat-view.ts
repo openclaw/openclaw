@@ -17,6 +17,7 @@ import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -86,6 +87,8 @@ export type ChatProps = Omit<
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
   | "onFocusComposer"
+  | "commentAttachments"
+  | "commentsDisabled"
   | "onAddToChat"
   | "onOpenSession"
   | "onSend"
@@ -156,6 +159,13 @@ export type ChatProps = Omit<
     githubPublication?: import("../../lib/sessions/github-publication-controller.ts").GitHubPublicationView;
   };
 
+// renderChat runs on every pane render and the chat-item cache keys the queue by
+// identity; reuse the appended copy until the outbox publishes a new array.
+const placementQueues = new WeakMap<
+  readonly ChatQueueItem[],
+  { initialTurn: ChatQueueItem; queue: ChatQueueItem[] }
+>();
+
 export function renderChat(props: ChatProps) {
   // The request session hosts the card; only sourceSessionKey names the requester.
   const approvalSourceSessionKey = props.inlineApproval?.sourceSessionKey;
@@ -191,9 +201,16 @@ export function renderChat(props: ChatProps) {
   const attachmentDropHandlers = createChatAttachmentDropHandlers({ ...props, canCompose });
   const placementStartup =
     props.placementStartup?.phase === "failed" ? null : props.placementStartup;
-  const queue = props.placementStartup?.initialTurn
-    ? [...props.queue, props.placementStartup.initialTurn]
-    : props.queue;
+  const initialTurn = props.placementStartup?.initialTurn;
+  let queue = props.queue;
+  if (initialTurn) {
+    let cached = placementQueues.get(props.queue);
+    if (cached?.initialTurn !== initialTurn) {
+      cached = { initialTurn, queue: [...props.queue, initialTurn] };
+      placementQueues.set(props.queue, cached);
+    }
+    queue = cached.queue;
+  }
   // Placement is visible work, but does not own an abortable model run yet.
   const runWorking = Boolean(placementStartup) || isChatRunWorking(props);
   const thread = renderPluginSurface(
@@ -235,7 +252,8 @@ export function renderChat(props: ChatProps) {
         onDiscardQueuedMessage: props.onQueueRemove,
         onCompanionPrefill:
           props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
-        commentAttachments: props.suggestionComposer ? undefined : props,
+        commentAttachments: props.suggestionComposer ? undefined : props.attachments,
+        commentsDisabled: !canCompose || Boolean(props.readSignal?.aborted),
         onAddToChat:
           props.canSend && !props.suggestionComposer
             ? (selection, anchorRect) => {

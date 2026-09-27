@@ -34,6 +34,7 @@ import {
 import "./session-activity-git.ts";
 import "./session-activity-media.ts";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
+import { renderSessionActivityPulse } from "./session-activity-pulse.ts";
 import { renderSessionActivitySummary } from "./session-activity-summary.ts";
 import {
   ACTIVITY_TIME_FILTERS,
@@ -231,6 +232,7 @@ function renderPeopleControl(
                 </div>`
             : nothing
         }
+        ${props.result?.peopleIncomplete ? html`<p class="activity-feed__footer" role="status">${t("activityFeed.partialHistory")}</p>` : nothing}
       </div>
     </wa-popover>
   </div>`;
@@ -300,7 +302,9 @@ function renderSessionLink(
   const scope = row.channel ? t("activityFeed.channelLabel", { value: row.channel }) : null;
   const showAgent = row.kind !== "global" || Boolean(row.agentId);
   const source = row.createdVia === "cron" ? t("activityFeed.automation") : null;
-  return staticHtml`<div class="activity-feed__session-row">
+  return staticHtml`<div
+    class="activity-feed__session-row${target ? " activity-feed__session-row--link" : ""}"
+  >
     <${tag}
       class="activity-feed__session"
       data-activity-session=${row.key}
@@ -500,6 +504,7 @@ function renderIdentityHeader(
 function renderActivityLoading() {
   return html`<section class="activity-feed__loading" aria-busy="true">
     <span class="sr-only" role="status">${t("common.loading")}</span>
+    <div class="skeleton activity-pulse activity-pulse--loading" aria-hidden="true"></div>
     <div class="activity-feed__sessions" aria-hidden="true">
       ${Array.from(
         { length: 4 },
@@ -590,8 +595,10 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
       <div class="activity-feed__main">
         ${props.loading && !props.result ? renderActivityLoading() : nothing}
         ${
-          props.result?.peopleIncomplete
-            ? html`<p role="status">${t("activityFeed.partialHistory")}</p>`
+          props.result?.activityPulse
+            ? renderSessionActivityPulse(props.result.activityPulse, Date.now(), {
+                peopleIncomplete: props.result.peopleIncomplete,
+              })
             : nothing
         }
         ${
@@ -607,15 +614,6 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         ${
           props.result && (!props.filters.personId || identity)
             ? html`
-                <div class="activity-feed__summary">
-                  <h2>${t("activityFeed.sessions")}</h2>
-                  <span
-                    >${t("activityFeed.showing", {
-                      shown: String(projection.sessions.length),
-                      total: String(projection.matchedCount),
-                    })}</span
-                  >
-                </div>
                 ${
                   projection.days.length > 0
                     ? projection.days.map(
@@ -630,6 +628,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
                         ${t("activityFeed.noSessions")}
                       </section>`
                 }
+                ${projection.matchedCount > projection.sessions.length ? html`<p class="activity-feed__footer">${t("activityFeed.showing", { shown: String(projection.sessions.length), total: String(projection.matchedCount) })}</p>` : nothing}
               `
             : nothing
         }

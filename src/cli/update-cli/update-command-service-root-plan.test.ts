@@ -43,6 +43,7 @@ async function fixture({ systemd = false } = {}) {
   const nodeRunner = path.join(root, "bin", "node");
   const command = {
     programArguments: [nodeRunner, path.join(serviceRoot, "dist", "index.js"), "gateway"],
+    sourcePath: path.join(root, "gateway.cmd"),
   };
   service.readCommand.mockResolvedValue(
     systemd ? { ...command, managedDefinition: command, managedOverrides: {} } : command,

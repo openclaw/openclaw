@@ -54,11 +54,13 @@ describe("Doctor runtime child diagnostics", () => {
   it("preserves the combined UTF-8 output limit without charging diagnostic readiness", async () => {
     const runtimeRoot = createRuntime('process.stdout.write("éé"); process.stderr.write("xxxx");');
     const env = { PATH: process.env.PATH };
-    const result = await tempDirs.track(runBuiltRuntime(runtimeRoot, env, [], 5_000, 8));
-    expect(result).toEqual({ code: 0, signal: null, stdout: "éé", stderr: "xxxx" });
-    await expect(tempDirs.track(runBuiltRuntime(runtimeRoot, env, [], 5_000, 7))).rejects.toThrow(
-      "CLI process exceeded maxBuffer (7 bytes)",
+    const result = await tempDirs.track(
+      runBuiltRuntime(runtimeRoot, env, [], 5_000, { maxBuffer: 8 }),
     );
+    expect(result).toEqual({ code: 0, signal: null, stdout: "éé", stderr: "xxxx" });
+    await expect(
+      tempDirs.track(runBuiltRuntime(runtimeRoot, env, [], 5_000, { maxBuffer: 7 })),
+    ).rejects.toThrow("CLI process exceeded maxBuffer (7 bytes)");
   });
 
   it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(

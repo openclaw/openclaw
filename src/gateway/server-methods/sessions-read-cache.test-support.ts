@@ -121,6 +121,7 @@ export function requestContext(config: OpenClawConfig): GatewayRequestContext {
     chatAbortControllers: new Map(),
     getRuntimeConfig: () => config,
     getSessionEventSubscriberConnIds: () => new Set(),
+    forgetConnectionAncestors: vi.fn(),
     loadGatewayModelCatalog: async () => [],
     logGateway: { debug: vi.fn() },
   } as unknown as GatewayRequestContext;

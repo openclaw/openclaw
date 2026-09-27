@@ -536,7 +536,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
-    lastRunError: entry?.lastRunError,
+    lastRunError: undefined,
     providerReview: projectSessionProviderReview(entry, key),
     lastRunId: entry?.lastRunId,
     hasAutomation: input.hasAutomation,

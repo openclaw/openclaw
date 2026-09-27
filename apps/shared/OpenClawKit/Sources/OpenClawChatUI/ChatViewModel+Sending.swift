@@ -167,26 +167,17 @@ extension OpenClawChatViewModel {
         guard let commandName = slashCommandName(from: text), !commandName.isEmpty else {
             return false
         }
-        if self.commands(commands, containInvocationName: commandName) {
+        if commands.contains(where: { self.command($0, matchesInvocationName: commandName) }) {
             return true
         }
         guard commandName == "skill" else { return false }
         let parts = text.trimmingCharacters(in: .whitespacesAndNewlines)
             .split(whereSeparator: { $0.isWhitespace })
-        guard parts.count >= 2 else {
-            return self.commands(commands, containInvocationName: commandName)
-        }
+        guard parts.count >= 2 else { return false }
         let skillName = String(parts[1]).lowercased()
         return commands.contains { command in
             command.source == .skill && self.command(command, matchesInvocationName: skillName)
         }
-    }
-
-    private static func commands(
-        _ commands: [OpenClawChatCommandChoice],
-        containInvocationName name: String) -> Bool
-    {
-        commands.contains { self.command($0, matchesInvocationName: name) }
     }
 
     private static func command(
@@ -286,28 +277,18 @@ extension OpenClawChatViewModel {
     }
 
     private func handleLocalSlashCommandIfNeeded(_ command: String, draftInput: String) async -> Bool {
+        guard Self.isLiveOnlyLocalSlashCommand(command) else { return false }
+        if input == draftInput {
+            input = ""
+        }
         if command == "/new" {
-            if input == draftInput {
-                input = ""
-            }
             await performStartNewSession(worktree: false)
-            return true
-        }
-        if Self.resetTriggers.contains(command) {
-            if input == draftInput {
-                input = ""
-            }
+        } else if Self.resetTriggers.contains(command) {
             await performReset()
-            return true
-        }
-        if Self.compactTriggers.contains(command) {
-            if input == draftInput {
-                input = ""
-            }
+        } else {
             await performCompact()
-            return true
         }
-        return false
+        return true
     }
 
     private static func isLiveOnlyLocalSlashCommand(_ command: String) -> Bool {
@@ -605,29 +586,19 @@ extension OpenClawChatViewModel {
             OpenClawChatMessageContent(
                 type: "text",
                 text: messageText,
-                thinking: nil,
-                thinkingSignature: nil,
                 mimeType: nil,
                 fileName: nil,
-                content: nil,
-                id: nil,
-                name: nil,
-                arguments: nil),
+                content: nil),
         ]
         for (attachment, payload) in zip(attachments, encodedAttachments) {
             content.append(
                 OpenClawChatMessageContent(
                     type: payload.type,
                     text: nil,
-                    thinking: nil,
-                    thinkingSignature: nil,
                     mimeType: payload.mimeType,
                     fileName: payload.fileName,
                     durationSeconds: attachment.durationSeconds,
-                    content: AnyCodable(payload.content),
-                    id: nil,
-                    name: nil,
-                    arguments: nil))
+                    content: AnyCodable(payload.content)))
         }
         return content
     }
@@ -802,12 +773,10 @@ extension OpenClawChatViewModel {
     }
 
     private func restoreDraftAfterLiveSendFailure(_ attempt: LiveSendAttempt) {
-        if attempt.encodedAttachments.isEmpty, input.isEmpty {
+        if input.isEmpty {
             input = attempt.draft.input
-        } else if !attempt.encodedAttachments.isEmpty {
-            if input.isEmpty {
-                input = attempt.draft.input
-            }
+        }
+        if !attempt.encodedAttachments.isEmpty {
             let currentAttachmentIDs = Set(attachments.map(\.id))
             let removedDraftAttachments = attempt.draft.attachments.filter {
                 !currentAttachmentIDs.contains($0.id)

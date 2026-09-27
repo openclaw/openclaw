@@ -20,6 +20,7 @@ import {
 import {
   assertCodexThreadForkResponse,
   assertCodexThreadStartResponse,
+  assertExactSupervisionModelSelection,
   readSupervisionResponseThreadId,
 } from "./protocol-validators.js";
 import type { CodexDynamicToolSpec, CodexThread, CodexThreadForkParams } from "./protocol.js";
@@ -501,18 +502,6 @@ function requireNativeSupervisionModelProvider(params: {
     );
   }
   return responseProvider;
-}
-
-function assertExactSupervisionModelSelection(
-  value: { model?: string | null; modelProvider?: string | null },
-  expected: { model: string; modelProvider: string; operation: string },
-): void {
-  if (value.model !== expected.model || value.modelProvider !== expected.modelProvider) {
-    throw new Error(
-      `Codex supervision ${expected.operation} changed native model selection: ` +
-        `${value.modelProvider ?? "unknown"}/${value.model ?? "unknown"}`,
-    );
-  }
 }
 
 function matchesPendingSupervisionState(

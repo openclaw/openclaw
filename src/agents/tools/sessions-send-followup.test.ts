@@ -3,16 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayClient } from "../../gateway/server-methods/types.js";
 import type { PreparedSessionMutationFacts } from "../../gateway/session-sharing-policy.js";
 import { rolePolicyConfig, sharingPolicyClient } from "../../gateway/session-sharing.test-utils.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import {
-  clearActivePluginRegistry,
-  getActivePluginRegistry,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import type { DetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime-contract.js";
-import { getRegisteredDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime-state.js";
-import { setDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.test-support.js";
 import { readFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type {
   FollowupRequest,
@@ -41,7 +32,6 @@ vi.mock("../../gateway/session-sharing-preparation.js", () => ({
 }));
 vi.mock("../../plugins/runtime/gateway-request-scope.js", () => ({
   getPluginRuntimeGatewayRequestScope: () => ({ client: mocks.client() }),
-  getPluginRegistryForContext: () => getActivePluginRegistry(),
 }));
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileRoleAuthority: mocks.profile,
@@ -60,7 +50,6 @@ const input = {
 const facts = new Map<string, PreparedSessionMutationFacts>();
 const active: FollowupRequest[] = [];
 beforeEach(() => {
-  setActivePluginRegistry(createEmptyPluginRegistry());
   mocks.config.mockReturnValue({ ...rolePolicyConfig(), agents: { entries: { main: {} } } });
   mocks.client.mockReturnValue(sharingPolicyClient({ user: "requester" }));
   mocks.profile.mockResolvedValue({
@@ -109,11 +98,10 @@ beforeEach(() => {
     release: () => {},
   }));
 });
-afterEach(async () => {
+afterEach(() => {
   for (const request of active.splice(0)) {
     request.custody.release();
   }
-  await clearActivePluginRegistry();
   vi.clearAllMocks();
 });
 async function prepare() {
@@ -146,8 +134,7 @@ describe("followup retained session authorization", () => {
       markAccepted: unexpected,
       finishExecution: unexpected,
       ownsExecution: unexpected,
-      activate: unexpected,
-      cancel: unexpected,
+      assertExecutionCurrent: unexpected,
       promoteYield: unexpected,
       successor: unexpected,
       prepareSuccessor: unexpected,
@@ -230,24 +217,6 @@ describe("followup retained session authorization", () => {
     expect(close).not.toHaveBeenCalled();
   });
 
-  it("keeps a registered task runtime on its existing path before capturing core custody", async () => {
-    const runtime: DetachedTaskLifecycleRuntime = {
-      createQueuedTaskRun: vi.fn(() => null),
-      createRunningTaskRun: vi.fn(() => null),
-      startTaskRunByRunId: vi.fn(() => []),
-      recordTaskRunProgressByRunId: vi.fn(() => []),
-      completeTaskRunByRunId: vi.fn(() => []),
-      failTaskRunByRunId: vi.fn(() => []),
-      setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
-      cancelDetachedTaskRunById: vi.fn(async () => ({ found: false, cancelled: false })),
-    };
-    setDetachedTaskLifecycleRuntime(runtime, "registered-owner");
-    expect(getRegisteredDetachedTaskLifecycleRuntime()).toBe(runtime);
-    await expect(prepareSessionsSendFollowup(input)).resolves.toBeUndefined();
-    expect(runtime.createRunningTaskRun).not.toHaveBeenCalled();
-    expect(mocks.capture).not.toHaveBeenCalled();
-    expect(mocks.prepare).not.toHaveBeenCalled();
-  });
   it.each(["canonical", "stored alias"])(
     "latches original-operator access revocation on the %s key",
     async (kind) => {

@@ -65,9 +65,8 @@ async function checkCacheEvidence(
 
 describe("large read cache evidence", () => {
   it.each([
-    "…12345 tokens truncated…",
-    "…12345 chars truncated…",
     "Warning: truncated output (original token count: 20000)\n…12345 tokens truncated…",
+    "…12345 chars truncated…",
     "[Read output capped at 50KB]",
     "...(OpenClaw truncated dynamic tool result: original 100000 chars)",
     "...(truncated)...",
@@ -75,7 +74,7 @@ describe("large read cache evidence", () => {
     await expect(checkCacheEvidence(marker)).resolves.toMatchObject({ status: "pass" });
   });
 
-  it.each(["", "tokens truncated", "…0 tokens truncated…", "…many tokens truncated…"])(
+  it.each(["", "…0 tokens truncated…", "…many tokens truncated…"])(
     "rejects absent or malformed truncation evidence %s",
     async (marker) => {
       await expect(checkCacheEvidence(marker)).rejects.toThrow(

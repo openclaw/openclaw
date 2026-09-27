@@ -23,6 +23,7 @@ import "../../../components/tooltip.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type {
+  ChatAttachment,
   ChatGuardianNotice,
   ChatQueueItem,
   ChatSelectionSource,
@@ -40,8 +41,6 @@ import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
-import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
 import { isConfirmedActionPopoverFocused } from "./chat-message-confirmation.ts";
@@ -189,13 +188,13 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
-  commentAttachments?: ChatAttachmentControlsProps;
+  commentAttachments?: readonly ChatAttachment[];
+  commentsDisabled?: boolean;
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
   onCompanionPrefill?: (question: string) => void;
   onOpenSession?: (sessionKey: string) => void;
   modelSetupRequired?: boolean;
   onModelSetup?: () => void;
-  backgroundTasks?: BackgroundTasksProps;
 };
 
 type TranscriptInteractionProps = Pick<

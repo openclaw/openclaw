@@ -10,6 +10,7 @@ import {
   SLACK_DEFAULT_RETRY_OPTIONS,
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
+import { readLruMapEntry } from "./monitor/lru-map-cache.js";
 
 const SLACK_WRITE_CLIENT_CACHE_MAX = 32;
 const SLACK_STARTUP_AUTH_TIMEOUT_MS = 10_000;
@@ -132,10 +133,8 @@ export function getSlackWriteClient(
 ): WebClient {
   const resolvedOptions = resolveSlackWriteClientOptions(options);
   const tokenKey = slackWriteClientCacheKey(token, resolvedOptions);
-  const cached = slackWriteClientCache.get(tokenKey);
+  const cached = readLruMapEntry(slackWriteClientCache, tokenKey);
   if (cached) {
-    slackWriteClientCache.delete(tokenKey);
-    slackWriteClientCache.set(tokenKey, cached);
     return cached;
   }
   const client = new WebClient(token, resolvedOptions);

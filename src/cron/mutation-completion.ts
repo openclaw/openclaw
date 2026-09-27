@@ -83,7 +83,7 @@ export function captureCronMutationCommit(method: string): (() => undefined) | u
   };
 }
 
-/** Record the SQL commit before fallible coordinator cleanup, preserving existing hooks. */
+/** Record the SQL commit before fallible reporting, preserving existing hooks. */
 export function withCronMutationCommitHook(
   method: string,
   hooks?: CronStoreTransactionHooks,
@@ -94,9 +94,9 @@ export function withCronMutationCommitHook(
   }
   return {
     ...hooks,
-    afterWrite: (db) => {
+    afterWrite: (db, receiptSchema) => {
       deferSqlitePostCommitPublication(db, committed);
-      return hooks?.afterWrite?.(db);
+      return hooks?.afterWrite?.(db, receiptSchema);
     },
   };
 }

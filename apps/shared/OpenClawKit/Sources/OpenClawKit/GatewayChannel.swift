@@ -7,12 +7,6 @@ import Synchronization
 /// Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
-extension String {
-    fileprivate var nilIfEmpty: String? {
-        self.isEmpty ? nil : self
-    }
-}
-
 public actor GatewayChannelActor {
     nonisolated static func resolveRequestTimeoutMs(_ timeoutMs: Double?, defaultMs: Double) -> Double? {
         timeoutMs == 0 ? nil : (timeoutMs ?? defaultMs)
@@ -572,7 +566,7 @@ public actor GatewayChannelActor {
             try self.requireCurrentConnection(connectionGeneration)
             let shouldRetryWithDeviceToken = self.shouldRetryWithStoredDeviceToken(
                 error: error,
-                explicitGatewayToken: self.token?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                explicitGatewayToken: self.token?.trimmedNonEmpty,
                 storedToken: selectedAuth.storedToken,
                 attemptedDeviceTokenRetry: selectedAuth.authDeviceToken != nil)
             if shouldRetryWithDeviceToken {
@@ -644,10 +638,9 @@ extension GatewayChannelActor {
         deviceId: String?,
         requestedScopes: [String]) -> SelectedConnectAuth
     {
-        let explicitToken = self.token?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        let explicitBootstrapToken =
-            self.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        let explicitPassword = self.password?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let explicitToken = self.token?.trimmedNonEmpty
+        let explicitBootstrapToken = self.bootstrapToken?.trimmedNonEmpty
+        let explicitPassword = self.password?.trimmedNonEmpty
         let storedEntry =
             (includeDeviceIdentity && allowStoredDeviceAuth && deviceId != nil)
             ? DeviceAuthStore.loadToken(
@@ -904,45 +897,26 @@ extension GatewayChannelActor {
         let deviceAuthGatewayID = options.deviceAuthGatewayID
         let deviceIdentityProfile = options.deviceIdentityProfile
         if res.ok == false {
-            let error = res.error
-            let msg = error?.message ?? "gateway connect failed"
-            let details = gatewayErrorDetails(error)
-            let detailCode = details["code"]?.value as? String
-            let canRetryWithDeviceToken = details["canRetryWithDeviceToken"]?.value as? Bool ?? false
-            let recommendedNextStep = details["recommendedNextStep"]?.value as? String
-            let requestId = details["requestId"]?.value as? String
-            let reason = details["reason"]?.value as? String
-            let owner = details["owner"]?.value as? String
-            let title = details["title"]?.value as? String
-            let userMessage = details["userMessage"]?.value as? String
-            let actionLabel = details["actionLabel"]?.value as? String
-            let actionCommand = details["actionCommand"]?.value as? String
-            let docsURLString = details["docsUrl"]?.value as? String
-            let retryableOverride = details["retryable"]?.value as? Bool
-            let pauseReconnectOverride = details["pauseReconnect"]?.value as? Bool
-            let clientMinProtocol = gatewayIntValue(details["clientMinProtocol"]?.value)
-            let clientMaxProtocol = gatewayIntValue(details["clientMaxProtocol"]?.value)
-            let expectedProtocol = gatewayIntValue(details["expectedProtocol"]?.value)
-            let minimumProbeProtocol = gatewayIntValue(details["minimumProbeProtocol"]?.value)
+            let details = gatewayErrorDetails(res.error)
             throw GatewayConnectAuthError(
-                message: msg,
-                detailCodeRaw: detailCode,
-                canRetryWithDeviceToken: canRetryWithDeviceToken,
-                recommendedNextStepRaw: recommendedNextStep,
-                requestId: requestId,
-                detailsReason: reason,
-                ownerRaw: owner,
-                titleOverride: title,
-                userMessageOverride: userMessage,
-                actionLabel: actionLabel,
-                actionCommand: actionCommand,
-                docsURLString: docsURLString,
-                retryableOverride: retryableOverride,
-                pauseReconnectOverride: pauseReconnectOverride,
-                clientMinProtocol: clientMinProtocol,
-                clientMaxProtocol: clientMaxProtocol,
-                expectedProtocol: expectedProtocol,
-                minimumProbeProtocol: minimumProbeProtocol)
+                message: res.error?.message ?? "gateway connect failed",
+                detailCodeRaw: details["code"]?.value as? String,
+                canRetryWithDeviceToken: details["canRetryWithDeviceToken"]?.value as? Bool ?? false,
+                recommendedNextStepRaw: details["recommendedNextStep"]?.value as? String,
+                requestId: details["requestId"]?.value as? String,
+                detailsReason: details["reason"]?.value as? String,
+                ownerRaw: details["owner"]?.value as? String,
+                titleOverride: details["title"]?.value as? String,
+                userMessageOverride: details["userMessage"]?.value as? String,
+                actionLabel: details["actionLabel"]?.value as? String,
+                actionCommand: details["actionCommand"]?.value as? String,
+                docsURLString: details["docsUrl"]?.value as? String,
+                retryableOverride: details["retryable"]?.value as? Bool,
+                pauseReconnectOverride: details["pauseReconnect"]?.value as? Bool,
+                clientMinProtocol: gatewayIntValue(details["clientMinProtocol"]?.value),
+                clientMaxProtocol: gatewayIntValue(details["clientMaxProtocol"]?.value),
+                expectedProtocol: gatewayIntValue(details["expectedProtocol"]?.value),
+                minimumProbeProtocol: gatewayIntValue(details["minimumProbeProtocol"]?.value))
         }
         guard let payload = res.payload else {
             throw NSError(
