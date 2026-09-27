@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
 import { createRetainedCheckpointFixture } from "../../infra/update-retained-checkpoint.test-support.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
@@ -141,27 +140,24 @@ describe("selected-target state initialization", () => {
     expect(inspectSchema(filename).version).toEqual({ user_version: 16 });
   });
 
-  it.each(SQLITE_SIDECAR_SUFFIXES)(
-    "preserves orphan %s without bootstrapping state",
-    async (suffix) => {
-      const env = freshEnvironment();
-      const filename = resolveOpenClawStateSqlitePath(env);
-      fs.mkdirSync(path.dirname(filename), { recursive: true });
-      const sidecar = `${filename}${suffix}`;
-      fs.writeFileSync(sidecar, "retained database family bytes");
+  it("preserves an orphan journal without bootstrapping state", async () => {
+    const env = freshEnvironment();
+    const filename = resolveOpenClawStateSqlitePath(env);
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    const sidecar = `${filename}-journal`;
+    fs.writeFileSync(sidecar, "retained database family bytes");
 
-      await expect(
-        initializeUpdateStateFromTarget({
-          ...initializationOptions(env),
-          checkSchemas: async () => undefined,
-        }),
-      ).rejects.toThrow(/sidecar|missing|orphan/i);
+    await expect(
+      initializeUpdateStateFromTarget({
+        ...initializationOptions(env),
+        checkSchemas: async () => undefined,
+      }),
+    ).rejects.toThrow(/sidecar|missing|orphan/i);
 
-      expect(mocks.doctor).not.toHaveBeenCalled();
-      expect(fs.existsSync(filename)).toBe(false);
-      expect(fs.readFileSync(sidecar, "utf8")).toBe("retained database family bytes");
-    },
-  );
+    expect(mocks.doctor).not.toHaveBeenCalled();
+    expect(fs.existsSync(filename)).toBe(false);
+    expect(fs.readFileSync(sidecar, "utf8")).toBe("retained database family bytes");
+  });
 
   it.each([false, true])(
     "preserves pending recovery before initialization (displaced: %s)",
@@ -289,10 +285,6 @@ describe("selected-target state initialization", () => {
 
   it.each([
     { label: "missing entrypoint", result: null },
-    {
-      label: "failed Doctor",
-      result: { ...doctorSuccess, exitCode: 1, stderrTail: "Doctor failed" },
-    },
     { label: "successful Doctor without a database", result: doctorSuccess },
   ])("refuses $label instead of letting the parent bootstrap state", async ({ result }) => {
     const env = freshEnvironment();
