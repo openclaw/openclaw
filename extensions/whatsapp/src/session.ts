@@ -219,8 +219,9 @@ async function createWaSocketInternal(
   };
   const { version } = await fetchLatestBaileysVersion();
   const waWebSocketUrl = resolveWaWebSocketUrl(opts.waWebSocketUrl) ?? resolveEnvWaWebSocketUrl();
+  // An absent media agent permits direct uploads, so proxy setup errors must propagate.
+  const fetchAgent = createNodeProxyAgent({ mode: "env", protocol: "https" });
   const agent = resolveEnvProxyAgent(sessionLogger, WHATSAPP_WEBSOCKET_PROXY_TARGET);
-  const fetchAgent = resolveEnvProxyAgent(sessionLogger);
   const socketTiming = {
     keepAliveIntervalMs:
       opts.keepAliveIntervalMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs,
@@ -403,7 +404,7 @@ export async function createWaDirectorySocket(
 
 function resolveEnvProxyAgent(
   logger: ReturnType<typeof getChildLogger>,
-  targetUrl?: string,
+  targetUrl: string,
 ): Agent | undefined {
   try {
     const agent = createNodeProxyAgent({

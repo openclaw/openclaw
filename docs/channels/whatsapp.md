@@ -140,6 +140,7 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 - WhatsApp Channels/Newsletters can be explicit outbound targets via their native `@newsletter` JID, using channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, lowercase variants). Prefer host-level proxy config over per-channel settings.
 - Media uploads use the same proxy environment, with `NO_PROXY` evaluated for each actual upload host independently of the WebSocket destination.
+- Media proxy URLs must use HTTP or HTTPS. If proxy initialization fails, correct the proxy settings before restarting the WhatsApp connection.
 
 ## Call the current requester with MeowCaller (experimental)
 
