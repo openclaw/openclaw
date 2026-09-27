@@ -49,6 +49,16 @@ final class IOSChatViewModelOwner {
         }
         // Recording, staging, and delivery retain their captured route until the owner releases it.
         guard self.viewModel?.isAttachmentOwnerPinned != true else { return }
+        // Resolving the default agent replaces its transport without changing the draft's owner.
+        let draft: String? = if let viewModel, !viewModel.isQuestionAuthorityRetired,
+                                self.ownerID == ownerID, self.controlUIInputs == controlUIInputs,
+                                self.transportAgentID.isEmpty, !agentID.isEmpty,
+                                viewModel.sessionKey == appModel.chatSessionKey
+        {
+            viewModel.input
+        } else {
+            nil
+        }
         self.viewModel?.detachTransport()
         self.ownerID = ownerID
         self.transportAgentID = agentID
@@ -86,6 +96,7 @@ final class IOSChatViewModelOwner {
             },
             diagnosticsLog: { message in GatewayDiagnostics.log(message) })
         self.viewModel = viewModel
+        if let draft { viewModel.input = draft }
         viewModel.load()
     }
 

@@ -205,10 +205,14 @@ describe("native Talk action ownership through public plugin registration", () =
       });
       const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
         if ((update.target?.sessionId ?? update.sessionId) === SESSION_ID) {
-          publications.push(publish(update));
+          const publication = publish(update);
+          void publication.catch(() => {});
+          publications.push(publication);
         }
       });
       let modelRun: Promise<void> | undefined;
+      let activeVoiceSessionId: string | undefined;
+      const failures = new Set<unknown>();
       upstream.runEmbeddedAgent.mockImplementationOnce(
         async (params) =>
           await withRegisteredNativeEmbeddedRun(params, async () => {
@@ -246,6 +250,7 @@ describe("native Talk action ownership through public plugin registration", () =
       );
       try {
         const { socket, result } = await connectNativeSession(fixture);
+        activeVoiceSessionId = requireString(result, "voiceSessionId");
         socket.serverEvent(nativeTranscript(spoken));
         await flushNativeTranscript(result);
         socket.serverEvent(nativeDelegation("custody-request", delegated));
@@ -336,19 +341,52 @@ describe("native Talk action ownership through public plugin registration", () =
             resolveOpenClawAgentSqlitePath({ agentId: AGENT_ID }),
           ),
         ).toBe(true);
-        await connectNativeSession(fixture);
+        const reconnected = await connectNativeSession(fixture);
+        activeVoiceSessionId = requireString(reconnected.result, "voiceSessionId");
         const session = await nativeCallSession();
         expect.soft(session.instructions).not.toContain(delegated);
         expect(nativeBackgroundItems(session)).toEqual(retained);
         expect(session.delegation?.ack_filler).toBe(false);
         expect(rawTranscriptRows()).toEqual(rawCompleted);
+      } catch (error) {
+        failures.add(error);
       } finally {
         providerStream.push({ type: "done", reason: "stop", message: answer });
         providerStream.end();
-        await modelRun;
-        await Promise.all(publications);
+        try {
+          await modelRun;
+        } catch (error) {
+          failures.add(error);
+        }
+        try {
+          if (activeVoiceSessionId) {
+            await closeTalkClientGatewayControlSession({
+              voiceSessionId: activeVoiceSessionId,
+              sessionKey: SESSION_KEY,
+              connId: CONNECTION_ID,
+            });
+          }
+        } catch (error) {
+          failures.add(error);
+        }
+        // Seal publication admission after producers settle; a rejected reader
+        // must not skip sibling readers or leave a listener across fixture teardown.
         unsubscribe();
-        rowProjection.dispose();
+        try {
+          for (const outcome of await Promise.allSettled(publications)) {
+            if (outcome.status === "rejected") {
+              failures.add(outcome.reason);
+            }
+          }
+        } finally {
+          rowProjection.dispose();
+        }
+      }
+      if (failures.size === 1) {
+        throw failures.values().next().value;
+      }
+      if (failures.size > 1) {
+        throw new AggregateError(failures, "Native Talk fixture failed");
       }
     });
   });

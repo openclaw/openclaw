@@ -11,6 +11,7 @@ import type {
   CliThinkingProgress,
   CliToolUseStartDelta,
 } from "../cli-output-contracts.js";
+import { isClaudeForegroundAgentToolName } from "../cli-output-records.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
 import {
   extractToolErrorMessage,
@@ -429,6 +430,10 @@ export function createCliEventHandlers(params: {
     emitCliThinkingProgress,
     hasObservedCliActivity: () => observedCliActivity,
     activeParsedToolCount: () => activeParsedTools.size,
+    isActiveForegroundAgentTool: (toolCallId: string) => {
+      const tool = activeParsedTools.get(toolCallId);
+      return tool !== undefined && isClaudeForegroundAgentToolName(tool.toolName);
+    },
     getToolSummary,
   };
 }

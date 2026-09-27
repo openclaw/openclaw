@@ -245,10 +245,10 @@ describe("buildCodexAppServerUsageSnapshot", () => {
         expect(status).toContain("does not establish eligibility or per-request billing");
         const command = formatCodexStatus({
           models: { ok: true, value: { models: [] } },
-          account: { ok: true, value: {} },
+          account: { ok: true, value: { requiresOpenaiAuth: false } },
           limits: { ok: true, value },
-          mcps: { ok: true, value: [] },
-          skills: { ok: true, value: [] },
+          mcps: { ok: true, value: { data: [] } },
+          skills: { ok: true, value: { data: [] } },
         });
         expect(command).toContain(". Luna Reserve is a separate");
       } else {

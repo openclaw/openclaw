@@ -21,6 +21,13 @@ import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
+import { markDiagnosticToolStartedForTest } from "./diagnostic-run-activity.test-support.js";
+import { resetDiagnosticSessionStateForTest } from "./diagnostic-session-state.js";
+import {
+  logSessionStateChange,
+  startDiagnosticHeartbeat,
+  stopDiagnosticHeartbeat,
+} from "./diagnostic.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -260,4 +267,63 @@ describe("owned backend silence allowances", () => {
       replacement?.close();
     },
   );
+
+  it("does not abort an Agent call while attributed subagent progress stays inside the floor", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-09-24T00:00:00Z"));
+    const recoverStuckSession = vi.fn();
+    startDiagnosticHeartbeat(
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+      },
+    );
+    const ref = {
+      sessionId: "agent-progress",
+      sessionKey: "agent:main:agent-progress",
+      runId: "agent-run",
+    };
+    logSessionStateChange({ ...ref, state: "processing" });
+    const owner = createDiagnosticEmbeddedRunOwner(ref);
+    markDiagnosticEmbeddedRunStarted({ ...ref, owner });
+    markDiagnosticToolStartedForTest({
+      ...ref,
+      toolName: "Agent",
+      toolCallId: "toolu_parent",
+    });
+    const backend = beginDiagnosticBackendActivity({
+      owner,
+      noOutputTimeoutMs: 180_000,
+      assertCurrent: () => {},
+    });
+    try {
+      vi.advanceTimersByTime(14 * 60_000);
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+      expect(backend.observeAttributedAgentProgress("toolu_bash")).toBe(false);
+      expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+        activeToolName: "Agent",
+        activeToolCallId: "toolu_parent",
+        lastProgressReason: "tool:Agent:started",
+        lastProgressAgeMs: 14 * 60_000,
+      });
+
+      expect(backend.observeAttributedAgentProgress("toolu_parent")).toBe(true);
+      expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+        lastProgressReason: "tool:Agent:subagent_progress",
+        lastProgressAgeMs: 0,
+        activeToolAgeMs: 14 * 60_000,
+      });
+
+      vi.advanceTimersByTime(14 * 60_000);
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(60_000);
+      expect(recoverStuckSession).toHaveBeenCalled();
+    } finally {
+      backend.close();
+      closeDiagnosticEmbeddedRunOwner(owner);
+      stopDiagnosticHeartbeat();
+      resetDiagnosticSessionStateForTest();
+    }
+  });
 });
