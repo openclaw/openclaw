@@ -47,7 +47,10 @@ Set `plugins.entries.agentsapi.config.environment` to `openai_hosted` or
     "entries": {
       "agentsapi": {
         "enabled": true,
-        "config": { "environment": "self_hosted" }
+        "config": {
+          "environment": "self_hosted",
+          "capabilityDirectories": ["/workspace/skills", "/opt/agent/skills"]
+        }
       }
     }
   }
@@ -76,7 +79,18 @@ file transfers. Gateway function availability follows the configured OpenClaw
 tool policy. Native Agents API apps and connectors are not configured by this
 plugin, and the Gateway image-generation tool is not exposed.
 
-Changing the environment or a self-hosted workspace requires resetting the
+For self-hosted sessions, `capabilityDirectories` registers existing skill
+directories with the native harness. Supply absolute paths inside the executor;
+OpenClaw does not copy files or resolve these paths against the Gateway's filesystem.
+Include any supporting scripts and dependencies in the executor as well.
+The native harness discovers skills in these directories and reads their contents
+through the executor. OpenClaw's per-skill eligibility filters do not apply to this
+explicit native discovery list; choose only directories you intend to expose.
+Gateway tool policies continue to apply to Gateway functions.
+Omitting the list or supplying an empty list leaves existing session bindings valid.
+The list is unused for hosted sessions.
+
+Changing the environment, self-hosted workspace, or capability directories requires resetting the
 OpenClaw session. Existing hosted bindings remain valid with the setting omitted
 or explicitly `openai_hosted`. No saved session is reset or migrated automatically.
 

@@ -16,6 +16,12 @@
         "enum": ["openai_hosted", "self_hosted"],
         "default": "openai_hosted",
         "description": "Execution environment for new sessions. Self-hosted uses the prepared OpenClaw workspace and requires an externally connected executor. Reset existing sessions after changing this setting."
+      },
+      "capabilityDirectories": {
+        "type": "array",
+        "maxItems": 32,
+        "items": { "type": "string", "pattern": "^/" },
+        "description": "Existing absolute directories inside a self-hosted executor for native skill discovery. Gateway skill eligibility filters do not apply to these directories. Reset existing sessions after changing this list."
       }
     }
   }

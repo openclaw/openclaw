@@ -4,6 +4,7 @@ import { z } from "zod";
 
 export const agentsApiConfigSchema = z.strictObject({
   environment: z.enum(["openai_hosted", "self_hosted"]).default("openai_hosted"),
+  capabilityDirectories: z.array(z.string().startsWith("/")).max(32).optional(),
 });
 
 export type AgentsApiEnvironment =
@@ -16,6 +17,12 @@ export function resolveAgentsApiEnvironment(
 ): AgentsApiEnvironment {
   const parsed = agentsApiConfigSchema.parse(pluginConfig ?? {});
   return parsed.environment === "self_hosted"
-    ? { type: "self_hosted", workspace_directory: path.resolve(workspaceDir) }
+    ? {
+        type: "self_hosted",
+        workspace_directory: path.resolve(workspaceDir),
+        ...(parsed.capabilityDirectories?.length
+          ? { capability_directories: parsed.capabilityDirectories }
+          : {}),
+      }
     : { type: "openai_hosted" };
 }
