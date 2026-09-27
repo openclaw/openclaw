@@ -61,7 +61,7 @@ function groupByDeclaredIdentity(
 ): Map<string, PluginToolRegistration[]> {
   const groups = new Map<string, PluginToolRegistration[]>();
   for (const entry of tools) {
-    const names = [...new Set(entry.names)].sort();
+    const names = [...new Set(entry.names)].toSorted();
     if (entry.pluginId !== pluginId || names.length === 0) {
       continue;
     }
