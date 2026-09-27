@@ -63,6 +63,7 @@ import {
 } from "./in-process-gateway.js";
 import { startVisibleCloudSession } from "./sessions-spawn-cloud.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
+import { resolveVisibleSpawnThinkingLevel } from "./sessions-spawn-visible-thinking.js";
 import { SessionsSpawnPlacementSchema } from "./sessions-spawn-visible.schema.js";
 
 export type SessionsSpawnToolOptions = {
@@ -147,7 +148,7 @@ export async function maybeSpawnVisibleSession(params: {
     if (providedVisibleOnlyParams.length > 0) {
       throw new ToolInputError(
         `Parameters require visible=true: ${providedVisibleOnlyParams.join(", ")}. ` +
-          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, thinking, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
+          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
       );
     }
     return undefined;
@@ -162,11 +163,6 @@ export async function maybeSpawnVisibleSession(params: {
       "runtime",
       params.runtime === "subagent" ? undefined : params.runtime,
       'supports runtime="subagent" only',
-    ],
-    [
-      "thinking",
-      readToolStringParam(params.raw, "thinking"),
-      "thinking overrides are not wired to the sessions.create path",
     ],
     [
       "thread",
@@ -372,6 +368,7 @@ export async function maybeSpawnVisibleSession(params: {
           hasFallbackOrigin: initialSessionPatch.modelOverrideFallbackOriginModel !== undefined,
         }
       : undefined;
+  const resolvedThinkingLevel = resolveVisibleSpawnThinkingLevel(resolvedModel, params.raw);
   assertActive();
   const reservation = reserveChildAdmissionSlot({
     controllerSessionKey: requesterKey,
@@ -443,6 +440,7 @@ export async function maybeSpawnVisibleSession(params: {
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
+        ...(resolvedThinkingLevel ? { thinkingLevel: resolvedThinkingLevel } : {}),
         ...(placement ? { titleSource } : { task: taskMessage }),
         timeoutMs:
           runTimeoutSeconds === 0
