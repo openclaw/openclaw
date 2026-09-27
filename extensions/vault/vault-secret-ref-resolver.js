@@ -286,7 +286,7 @@ async function resolveVaultClientToken(baseUrl) {
       return resolveVaultTokenFile();
     case "jwt":
       return await resolveVaultTokenFromJwt(baseUrl, "jwt");
-    case "kubernetes":
+    default:
       return await resolveVaultTokenFromJwt(baseUrl, "kubernetes");
   }
 }
