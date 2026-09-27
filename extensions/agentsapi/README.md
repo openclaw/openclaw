@@ -58,9 +58,17 @@ Omitting the setting keeps `openai_hosted`. Self-hosted session creation sends
 the absolute host-prepared OpenClaw workspace as `workspace_directory`. That
 directory must already exist at the same path inside the executor. See the
 [official self-hosted guide](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted).
-The operator must connect an executor to each native session separately; this
-plugin does not launch, provision, or authenticate an executor. Session connection
-events remain visible while it connects. Hosted environments support input
+Before enabling `self_hosted`, configure an operator-owned controller using the
+[official webhook-managed lifecycle](https://developers.openai.com/api/docs/guides/agents-api/environments/lifecycle#start-compute-from-webhooks).
+It receives `agent.session.action_required` with an `environment_connection`
+action, retrieves that session through the authenticated Agents API, and connects
+the executor using `session.environment.id` and the unchanged
+`session.environment.remote_url`. Route only this Gateway's sessions to the
+controller and match its workspace path. The controller owns startup,
+reconnection, and cleanup; this plugin does not launch, provision, or authenticate
+an executor. Without a connected executor, input waits until the API's connection
+deadline and can fail. Session connection events remain visible while it connects.
+Hosted environments support input
 attachments and output file transfers. Self-hosted environments do not support
 file transfers. Gateway function availability follows the configured OpenClaw
 tool policy. Native Agents API apps and connectors are not configured by this

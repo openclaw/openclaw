@@ -36,9 +36,14 @@ the values `openai_hosted` and `self_hosted`. Omitted configuration uses
 
 For `self_hosted`, OpenClaw sends its prepared absolute workspace path as the
 Agents API `workspace_directory`. The executor must already have that directory
-at the same path. Connect the executor separately for each native session using
-the [official self-hosted setup](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted).
-OpenClaw does not launch or provision executors through this setting.
+at the same path. Before selecting this mode, configure an operator-owned
+[webhook controller](https://developers.openai.com/api/docs/guides/agents-api/environments/lifecycle#start-compute-from-webhooks)
+for the Gateway's sessions. The controller retrieves each session's environment
+ID and remote URL through the authenticated Agents API and connects its executor,
+following the [official self-hosted setup](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted).
+It owns startup, reconnection, and cleanup. OpenClaw does not launch or provision
+executors through this setting; input can fail if no executor connects before
+the API's deadline.
 
 Reset the OpenClaw session after changing its environment or a self-hosted
 workspace. Existing hosted sessions continue with omitted or explicit
