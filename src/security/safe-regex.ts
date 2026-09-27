@@ -316,7 +316,17 @@ export function testRegexWithBoundedInput(
   if (testRegexFromStart(regex, head)) {
     return true;
   }
-  return testRegexFromStart(regex, input.slice(-maxWindow));
+  const tailStart = input.length - maxWindow;
+  // Slide middle windows with 50% overlap so any match up to half a window
+  // long is fully contained in at least one tested window. Head and tail
+  // stay as fast paths for anchored (^ / $) patterns.
+  const stride = Math.max(1, Math.floor(maxWindow / 2));
+  for (let start = stride; start < tailStart; start += stride) {
+    if (testRegexFromStart(regex, input.slice(start, start + maxWindow))) {
+      return true;
+    }
+  }
+  return testRegexFromStart(regex, input.slice(tailStart));
 }
 
 function hasNestedRepetition(source: string): boolean {
