@@ -56,7 +56,8 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
     if (popup && this.anchor) {
       configureAnchoredPopup(popup, this.anchor, "bottom");
     } else {
-      this.focusInitialControl();
+      // Sheet rows are child components that render after this update.
+      requestAnimationFrame(this.focusInitialControl);
     }
   }
 
