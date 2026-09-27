@@ -820,14 +820,18 @@ describe("sidebar routed-lineage freshness", () => {
             ).toBe(false);
             return;
           }
-          const visible = sidebar.sessionData.sessionsResult?.sessions.find(
+          const listedRow = sidebar.sessionData.sessionsResult?.sessions.find(
             (row) => row.key === key,
           );
-          const expected = presentation("Latest filtered child");
-          expect(visible?.status).toBe("done");
-          expect(visible?.label).toBe(expected.label);
-          expect(visible?.derivedTitle).toBe(expected.derivedTitle);
-          expect(visible?.lastMessagePreview).toBe(expected.lastMessagePreview);
+          expect({
+            label: listedRow?.label,
+            derivedTitle: listedRow?.derivedTitle,
+            lastMessagePreview: listedRow?.lastMessagePreview,
+            status: listedRow?.status,
+          }).toStrictEqual({
+            ...presentation("Latest filtered child"),
+            status: "done",
+          });
           if (pendingSelection === "root") {
             expect(sidebar.findSidebarSessionByKey(key)?.status).toBe("done");
           } else {

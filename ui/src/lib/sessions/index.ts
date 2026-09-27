@@ -4,7 +4,6 @@ import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootst
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome } from "./create.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
 import { subscribeAgentSelection, type SessionAgentSelection } from "./session-agent-selection.ts";
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
@@ -239,7 +238,7 @@ export function createSessionCapability(
     decorate: decorateRows,
     reconcileList: (result, revision, agentId) => {
       const admitted = deletions.reconcileList(
-        projectSessionResultRows(result, result?.sessions.map(sanitizeSessionRow) ?? []),
+        result ? { ...result, sessions: result.sessions.map(sanitizeSessionRow) } : result,
         revision,
         agentId,
       );
