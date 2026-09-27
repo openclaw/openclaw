@@ -30,7 +30,6 @@ import type {
   GatewayClient,
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
-  RespondFn,
 } from "../../server-methods/types.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
 import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
