@@ -1,5 +1,8 @@
 import type { PlacementRecoveryDeps } from "./placement-dispatch-pending-results.js";
-import type { WithPreparedWorkerWorkspaceRecovery } from "./placement-reclaim-contract.js";
+import type {
+  WithPreparedWorkerWorkspaceRecovery,
+  WorkerPlacementReclaimBarriers,
+} from "./placement-reclaim-contract.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import type {
   WorkerWorkspaceConflictReport,
@@ -9,6 +12,12 @@ import type {
 export type WorkerWorkspaceRecoveryFailureReport = WorkerSessionPlacementIdentity & {
   error: string;
 };
+
+export const runReclaimPreparation: WorkerPlacementReclaimBarriers["runReclaimPreparation"] =
+  async ({ run, authorize, pendingOperations }) => {
+    await pendingOperations?.settled;
+    return await run(authorize);
+  };
 
 export function createWorkerWorkspaceRecoveryFixture(options: {
   resolveWorkspace: PlacementRecoveryDeps["resolveWorkspace"];

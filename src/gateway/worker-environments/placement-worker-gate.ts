@@ -13,8 +13,8 @@ import {
 import {
   findPendingWorkerWorkspaceResult,
   isCurrentWorkerWorkspacePendingResultOwner,
-  type WorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
 type WorkerPlacementBinding = Readonly<{
   sessionId: string;
@@ -23,6 +23,7 @@ type WorkerPlacementBinding = Readonly<{
 }>;
 
 export type WorkerSessionPlacementGate = {
+  fenceWorkerTurnForRecovery: (claim: WorkerSessionTurnClaim) => void;
   /** Refresh runtime bytes without changing the retained workspace's owner epoch. */
   prepareWorkerRuntimeRefresh(binding: WorkerPlacementBinding): Promise<{
     generation: number;
@@ -101,7 +102,14 @@ export function createWorkerSessionPlacementGate(
     return claim && store.validateTurnClaim(claim) ? claim : undefined;
   };
 
+  const fenceWorkerTurnForRecovery = (claim: WorkerSessionTurnClaim) => {
+    if (claim.owner.kind === "worker") {
+      recoveryOnlyClaims.add(serializeWorkerSessionTurnClaim(claim));
+    }
+  };
+
   return {
+    fenceWorkerTurnForRecovery,
     async prepareWorkerRuntimeRefresh(binding) {
       const prepared = await store.prepareRuntimeRefresh(binding.sessionId);
       try {
@@ -135,7 +143,7 @@ export function createWorkerSessionPlacementGate(
         }
         prepared.assertCurrent();
         if (reclaimResult && claim) {
-          recoveryOnlyClaims.add(serializeWorkerSessionTurnClaim(claim));
+          fenceWorkerTurnForRecovery(claim);
         }
         return {
           generation: placement.generation,

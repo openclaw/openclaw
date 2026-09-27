@@ -14,6 +14,7 @@ import { fromRow, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { publishPlacementWorkspaceResultState } from "./placement-turn-authority.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
 type WorkspaceResultDatabase = Pick<
   StateDatabase,
@@ -21,20 +22,6 @@ type WorkspaceResultDatabase = Pick<
 >;
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
-
-export type WorkerWorkspacePendingResult = {
-  sessionId: string;
-  environmentId: string;
-  ownerEpoch: number;
-  placementGeneration: number;
-  claimId: string;
-  runId: string;
-  gatewayInstanceId: string;
-  recoveryRequestedAtMs: number | null;
-  workspaceAcceptedAtMs: number | null;
-  stagedResultRef: string | null;
-  repositoryWorkspaceId?: string;
-};
 
 function pendingResultFromRow(
   row: StateDatabase["worker_workspace_pending_results"],

@@ -7,7 +7,7 @@ import type {
   WorkerEnvironmentBootstrapReceipt,
   WorkerEnvironmentRecord,
 } from "./environment-record.js";
-import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import type { WorkerEnvironmentState } from "./state.js";
 
 export type WorkerEnvironmentTransitionPatch = {

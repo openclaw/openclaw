@@ -851,6 +851,7 @@ describe("worker placement dispatch reclaim", () => {
       expect(restarted.log.indexOf("workspace:verify-local")).toBeLessThan(
         restarted.log.indexOf("teardown:destroy"),
       );
+      console.info("[stop-restart-proof]", interruption, restarted.log.join(","));
     },
   );
 

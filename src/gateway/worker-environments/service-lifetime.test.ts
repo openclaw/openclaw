@@ -472,6 +472,7 @@ describe("worker environment service", () => {
     const liveEvents = support.createLiveEvents();
     const unsubscribeTurnClaimClosed = vi.fn();
     const placementStore = {
+      fenceWorkerTurnForRecovery: vi.fn(),
       prepareWorkerRuntimeRefresh: vi.fn(async () => {
         throw new Error("Runtime refresh is outside this timer fixture");
       }),

@@ -287,14 +287,17 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
           continue;
         }
         const claimId = `reclaim-${randomUUID()}`;
-        const claim = placements.claimReclaimWorkspaceResult({
-          sessionId: placement.sessionId,
-          sessionKey: placement.sessionKey,
-          agentId: placement.agentId,
-          claimId,
-          runId: claimId,
-          owner: placementTurnOwner(placement),
-        });
+        const claim = placements.claimReclaimWorkspaceResult(
+          {
+            sessionId: placement.sessionId,
+            sessionKey: placement.sessionKey,
+            agentId: placement.agentId,
+            claimId,
+            runId: claimId,
+            owner: placementTurnOwner(placement),
+          },
+          (recoveryClaim) => environments.fenceWorkerTurnForRecovery(recoveryClaim),
+        );
         placements.handoffWorkspaceResultRecovery(claim);
       }
       // Drain the bounded environment pass before recovering placement authority or results.

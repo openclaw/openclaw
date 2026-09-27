@@ -25,12 +25,13 @@ import {
   seedAttachedPlacementEnvironment,
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
+  type WorkerTurnTunnelHandle,
   type WorkerWorkspaceReconcileRequest,
 } from "./tunnel-contract.js";
-import type { WorkerTunnelHandle } from "./tunnel.js";
 import {
   projectWorkspaceResultConflict,
   type WorkspaceResultConflictLookup,
@@ -41,19 +42,11 @@ import {
 } from "./workspace-operation-coordinator.js";
 import {
   createWorkerWorkspaceRecoveryFixture,
+  runReclaimPreparation,
   type WorkerWorkspaceRecoveryFailureReport,
 } from "./workspace-recovery.test-support.js";
 
 type DispatchOptions = Parameters<typeof createWorkerPlacementDispatchService>[0];
-
-const runReclaimPreparation: DispatchOptions["runReclaimPreparation"] = async ({
-  run,
-  authorize,
-  pendingOperations,
-}) => {
-  await pendingOperations?.settled;
-  return await run(authorize);
-};
 
 export function createHarness(
   database: OpenClawStateDatabase,
@@ -148,7 +141,7 @@ export function createHarness(
     recordWorkspaceResultConflict: (claim, conflict) =>
       placementStore.recordWorkspaceResultConflict(claim, conflict),
     claimTurn: (params) => placementStore.claimTurn(params),
-    claimReclaimWorkspaceResult: (params) => placementStore.claimReclaimWorkspaceResult(params),
+    claimReclaimWorkspaceResult: (...args) => placementStore.claimReclaimWorkspaceResult(...args),
     closeWorkerTurnToolState: (claim) => placementStore.closeWorkerTurnToolState(claim),
     beginPlacementMove: (params) => {
       const begun = placementStore.beginPlacementMove(params);
@@ -250,7 +243,7 @@ export function createHarness(
     });
     return seedActivePlacement(placementStore, { environmentId, ownerEpoch, executionMode });
   };
-  const tunnelHandle = (ownerEpoch: number): WorkerTunnelHandle => ({
+  const tunnelHandle = (ownerEpoch: number): WorkerTurnTunnelHandle => ({
     environmentId: ready.environmentId,
     ownerEpoch,
     measureLaunchTurn: vi.fn(),
@@ -386,6 +379,8 @@ export function createHarness(
       WorkerEnvironmentService,
       "recordError" | "requestDestroy" | "requiresNodeEnrollment" | "readMachineShape"
     > = {
+    fenceWorkerTurnForRecovery:
+      createWorkerSessionPlacementGate(placementStore).fenceWorkerTurnForRecovery,
     requiresNodeEnrollment: vi.fn(() => options.requiresNodeEnrollment === true),
     readMachineShape: () => undefined,
     recordError: vi.fn((record) => record),
@@ -598,6 +593,7 @@ export function createHarness(
   });
   return {
     log,
+    tunnelHandle,
     reconciledManifestRef,
     placements: {
       current: () => placementStore.get(REQUEST.sessionId),
