@@ -6,6 +6,7 @@ import {
   groupCandidates,
 } from "../../scripts/ci-codex-test-selection.mts";
 import { classifyChangedNodeTestCandidates } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { summarizeTestSelections } from "../../scripts/lib/ci-codex-test-selection-summary.mts";
 
 const candidates = [
   "src/direct.test.ts",
@@ -156,5 +157,97 @@ describe("shadow Codex test selection", () => {
       { path: "src/related/b.test.ts", classification: "codex-pruned", miss: true },
       { path: "test/outside.test.ts", classification: "outside-candidates", miss: false },
     ]);
+  });
+
+  it("aggregates statuses, distributions, timing coverage, and per-run misses without double counting reporters", () => {
+    const selection = (
+      status: string,
+      candidateCount: number,
+      pruned: number,
+      durationMs: number,
+      estimate?: number,
+    ) => ({
+      schemaVersion: 1 as const,
+      status,
+      counts: { candidates: candidateCount, pruned },
+      codex: { durationMs },
+      ...(estimate === undefined ? {} : { estimatedPrunedSeconds: estimate }),
+    });
+    const result = summarizeTestSelections([
+      {
+        runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
+        selection: selection("shadow", 10, 8, 100, 4),
+        report: {
+          schemaVersion: 1,
+          errors: [],
+          unknown: [{ job: "cancelled", reason: "cancelled" }],
+          failures: [
+            { path: "src/floor.test.ts", classification: "floor" },
+            { path: "src/kept.test.ts", classification: "codex-kept" },
+            { path: "src/missed.test.ts", classification: "codex-pruned" },
+            { path: "src/missed.test.ts", classification: "codex-pruned" },
+            { path: "src/outside.test.ts", classification: "outside-candidates" },
+          ],
+        },
+      },
+      {
+        runUrl: "https://github.com/openclaw/openclaw/actions/runs/2",
+        selection: selection("ready", 20, 5, 500, 6),
+        report: {
+          schemaVersion: 1,
+          errors: ["log-unavailable"],
+          unknown: [{ job: "logs", reason: "log-unavailable" }],
+          failures: [{ path: "src/missed.test.ts", classification: "codex-pruned" }],
+        },
+      },
+      { runUrl: "run-3", selection: selection("fallback:low-confidence", 10, 0, 300) },
+      { runUrl: "run-4", selection: selection("skipped:no-prunable-candidates", 5, 0, 0) },
+      { runUrl: "run-5", selection: selection("skipped:broad-fallback", 0, 0, 0) },
+      { runUrl: "run-6" },
+    ]);
+    expect(result).toEqual({
+      runsConsidered: 6,
+      runsWithSelection: 5,
+      runsWithoutSelection: 1,
+      statusCounts: {
+        ready: 2,
+        "fallback:low-confidence": 1,
+        "skipped:no-prunable-candidates": 1,
+        "skipped:broad-fallback": 1,
+      },
+      pruneRatio: { samples: 4, median: 0.125, p90: 0.8 },
+      codexDurationMs: { samples: 3, median: 300, p90: 500 },
+      estimatedPrunedSeconds: 10,
+      runsWithTimingEstimates: 2,
+      reports: 2,
+      missingReports: 3,
+      reportsWithErrors: 1,
+      unknownJobs: 2,
+      unknownJobsByReason: { cancelled: 1, "log-unavailable": 1 },
+      failingFiles: { floor: 1, kept: 1, MISS: 2, outside: 1 },
+      misses: [
+        {
+          runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
+          path: "src/missed.test.ts",
+        },
+        {
+          runUrl: "https://github.com/openclaw/openclaw/actions/runs/2",
+          path: "src/missed.test.ts",
+        },
+      ],
+    });
+  });
+
+  it("does not invent distribution or timing estimates when no selection is available", () => {
+    expect(summarizeTestSelections([{ runUrl: "missing" }])).toMatchObject({
+      runsWithSelection: 0,
+      runsWithoutSelection: 1,
+      statusCounts: {},
+      pruneRatio: { samples: 0, median: null, p90: null },
+      codexDurationMs: { samples: 0, median: null, p90: null },
+      estimatedPrunedSeconds: null,
+      runsWithTimingEstimates: 0,
+      misses: [],
+    });
   });
 });

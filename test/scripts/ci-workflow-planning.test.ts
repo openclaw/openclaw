@@ -2414,10 +2414,7 @@ describe("ci workflow guards", () => {
       const rows: string[] = [];
       const hostedLabels = new Set(["ubuntu-24.04", "windows-2025", "macos-15", "xcode-27"]);
       for (const [name, job] of Object.entries(readCiWorkflow().jobs)) {
-        if (
-          !includeShadow &&
-          ["codex-test-selection", "codex-test-selection-report"].includes(name)
-        ) {
+        if (!includeShadow && name === "codex-test-selection") {
           continue;
         }
         const definition = job as {
@@ -2622,19 +2619,18 @@ describe("ci workflow guards", () => {
       }
       expect(enabled.outputs.hybrid_hosted_base_rows).toBe("40");
       expect(enabled.outputs.hybrid_hosted_offload).toBe("true");
-      expect(enabled.outputs.codex_selection_hosted_rows).toBe("2");
+      expect(enabled.outputs.codex_selection_hosted_rows).toBe("1");
       expect(disabled.outputs.codex_selection_hosted_rows).toBe("0");
       const actual = emittedHostedRows(
         enabled.outputs,
         {
           eventName: "pull_request",
-          additionalNeeds: { "codex-test-selection": { outputs: {}, result: "success" } },
         },
         false,
         true,
       );
       expect(Number(enabled.outputs.hybrid_hosted_total_with_shadow_rows)).toBe(actual.length);
-      expect(actual.filter((name) => name.startsWith("codex-test-selection"))).toHaveLength(2);
+      expect(actual.filter((name) => name === "codex-test-selection")).toHaveLength(1);
       const context = JSON.parse(enabled.outputs.codex_selection_context_json!);
       expect(context.changedPaths).toEqual(options.changedPaths);
       expect(context.options).not.toHaveProperty("onFallback");
@@ -9768,12 +9764,7 @@ describe("ci workflow guards", () => {
       Object.keys(workflow.jobs)
         .filter(
           (job) =>
-            ![
-              "ci-gate",
-              "seal_release_child_evidence",
-              "codex-test-selection",
-              "codex-test-selection-report",
-            ].includes(job),
+            !["ci-gate", "seal_release_child_evidence", "codex-test-selection"].includes(job),
         )
         .toSorted(),
     );

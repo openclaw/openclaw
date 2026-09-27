@@ -641,10 +641,18 @@ async function main() {
       head: { type: "string" },
       "output-dir": { type: "string", default: "artifacts/codex-test-selection" },
       model: { type: "string" },
+      limit: { type: "string", default: "200" },
+      repo: { type: "string", default: "openclaw/openclaw" },
+      "cache-dir": { type: "string", default: path.join(tmpdir(), "openclaw-codex-selection") },
     },
   });
   const command = positionals[0],
     dir = path.resolve(values["output-dir"]);
+  if (command === "summarize") {
+    const { runSelectionSummary } = await import("./lib/ci-codex-test-selection-summary.mts");
+    await runSelectionSummary(values.repo, Number(values.limit), path.resolve(values["cache-dir"]));
+    return;
+  }
   if (command === "report") {
     try {
       mkdirSync(dir, { recursive: true });
@@ -670,7 +678,7 @@ async function main() {
   }
   if (command !== "prepare" && command !== "backtest") {
     throw new Error(
-      "usage: prepare|finalize|report|backtest [--base ref --head ref --output-dir path --model model]",
+      "usage: prepare|finalize|report|backtest|summarize [--base ref --head ref --output-dir path --model model --limit count --repo owner/name --cache-dir path]",
     );
   }
   if (!values.base || !values.head) {

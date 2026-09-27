@@ -378,7 +378,6 @@ describe("PR failure monitor", () => {
         job(4, null, "pr-fail-fast"),
         job(5, null, "openclaw/ci-gate"),
         job(6, "failure", "codex-test-selection"),
-        job(7, "timed_out", "codex-test-selection-report"),
       ],
     });
     expect(await f.monitor(3)).toBe("completed");

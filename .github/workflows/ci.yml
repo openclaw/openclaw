@@ -2553,13 +2553,13 @@ jobs:
           const hybridHostedMainChecks = hybridHostedChecks && eventName === "push" &&
             eventRef === "refs/heads/main" &&
             hybridHostedRowsWithChecks + hybridHostedMainCheckRows <= HYBRID_HOSTED_ROW_LIMIT;
-          // Shadow jobs have a separate two-row allowance; they cannot displace
+          // The shadow job has a separate one-row allowance; it cannot displace
           // existing checks or enter the required-job cancellation inventory.
           const codexSelectionHostedRows = workflowEventName === "pull_request" &&
             process.env.GITHUB_RUN_ATTEMPT === "1" &&
             process.env.OPENCLAW_CI_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY &&
             process.env.OPENCLAW_CI_CODEX_SELECTION !== "off" &&
-            manifest.run_checks_node_core_nondist ? 2 : 0;
+            manifest.run_checks_node_core_nondist ? 1 : 0;
           Object.assign(manifest, {
             hybrid_hosted_offload: hybridHostedOffload,
             hybrid_hosted_checks: hybridHostedChecks,
@@ -4610,13 +4610,18 @@ jobs:
 
   codex-test-selection:
     permissions:
+      actions: read
       contents: read
-    needs: [preflight]
+    needs: [preflight, checks-node-core-test-nondist-shard, pr-fail-fast]
     if: >-
-      needs.preflight.result == 'success' && github.event_name == 'pull_request' &&
+      always() && needs.preflight.result == 'success' && github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.run_attempt == 1 && needs.preflight.outputs.run_checks_node_core_nondist == 'true' &&
-      vars.OPENCLAW_CI_CODEX_SELECTION != 'off'
+      vars.OPENCLAW_CI_CODEX_SELECTION != 'off' &&
+      ((!cancelled() && (needs.checks-node-core-test-nondist-shard.result == 'success' ||
+        needs.checks-node-core-test-nondist-shard.result == 'failure')) ||
+        (needs.pr-fail-fast.outputs.failure_run_attempt == format('{0}', github.run_attempt) &&
+          needs.pr-fail-fast.outputs.failure_job_id != ''))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -4624,8 +4629,19 @@ jobs:
       OPENCLAW_CI_SELECTION_CONTEXT: ${{ needs.preflight.outputs.codex_selection_context_json }}
       OPENCLAW_CI_SELECTION_MATRIX: ${{ needs.preflight.outputs.checks_node_core_nondist_matrix }}
     steps:
-      - *linux_node_checkout_step
+      - name: Checkout
+        id: checkout
+        if: always()
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: *owned_checkout_run
       - name: Setup Node environment
+        id: setup
+        if: always() && steps.checkout.outcome == 'success'
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
@@ -4633,6 +4649,7 @@ jobs:
 
       - name: Prepare shadow test selection
         id: prepare
+        if: always() && steps.setup.outcome == 'success'
         continue-on-error: true
         env:
           BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
@@ -4641,7 +4658,7 @@ jobs:
 
       - name: Run Codex shadow test selection
         id: codex
-        if: steps.prepare.outputs.eligible == 'true'
+        if: always() && steps.prepare.outcome == 'success' && steps.prepare.outputs.eligible == 'true'
         continue-on-error: true
         timeout-minutes: 8
         uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
@@ -4662,51 +4679,18 @@ jobs:
           OPENCLAW_CI_PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
         run: node scripts/ci-codex-test-selection.mjs finalize --output-dir artifacts/codex-test-selection
 
-      - name: Upload shadow test selection
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: codex-test-selection-${{ github.run_attempt }}
-          path: artifacts/codex-test-selection/
-          if-no-files-found: error
-          retention-days: 14
-
-  codex-test-selection-report:
-    permissions:
-      actions: read
-      contents: read
-    needs: [preflight, codex-test-selection, checks-node-core-test-nondist-shard]
-    if: always() && needs.codex-test-selection.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - *linux_node_checkout_step
-      - name: Setup Node environment
-        uses: ./.ci-harness/.github/actions/setup-node-env
-        with:
-          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
-          install-bun: "false"
-
-      - name: Download shadow test selection
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: codex-test-selection-${{ github.run_attempt }}
-          path: artifacts/codex-test-selection
-
       - name: Report shadow test selection
         if: always()
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/ci-codex-test-selection.mjs report --output-dir artifacts/codex-test-selection
 
-      - name: Upload shadow test selection report
+      - name: Upload shadow test selection
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: codex-test-selection-report-${{ github.run_attempt }}
-          path: |
-            artifacts/codex-test-selection/report.json
-            artifacts/codex-test-selection/report-summary.md
+          name: codex-test-selection-${{ github.run_attempt }}
+          path: artifacts/codex-test-selection/
           if-no-files-found: error
           retention-days: 14
 

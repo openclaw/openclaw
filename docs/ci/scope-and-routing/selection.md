@@ -92,10 +92,13 @@ independently of changed paths, subject to the target's Docker seed capability.
 ## Codex test selection shadow
 
 Trusted same-repository pull requests on their first attempt also record a
-Codex proposal for the existing nondist Node test plan. The full deterministic
-plan still runs. Neither the selector nor its report gates merging or triggers
-PR fail-fast. Set `OPENCLAW_CI_CODEX_SELECTION=off` to disable both jobs; an unset
-variable enables shadow collection.
+Codex proposal for the existing nondist Node test plan. One hosted job waits for
+the Node shards and PR failure monitor, then prepares the proposal, runs Codex,
+finalizes selection, and reports failures. It survives cancellation only when
+the monitor recorded a failure cause for the current attempt; superseded or
+manually canceled runs skip it. The full deterministic plan still runs, and
+shadow collection neither gates merging nor triggers PR fail-fast. Set
+`OPENCLAW_CI_CODEX_SELECTION=off` to disable the job; an unset variable enables it.
 
 The deterministic floor includes changed tests, direct importers, tests in the
 changed source's directory, and every non-import owner: policy watches,
@@ -116,16 +119,17 @@ keep every candidate. Unknown keep entries are counted and ignored; directory
 prefixes expand only when they appeared in the prompt. Selection artifacts
 contain `selection.json`, the prepared inventory with each floor file's first
 matching reason (changed test, direct import, same directory, non-import file,
-or non-import row), prompt, output, and a short summary. Report artifacts contain `report.json`, failing test classifications,
-and a summary. Both are retained for 14 days. Per-file timing estimates appear
+or non-import row), prompt, output, and a short summary. The same
+`codex-test-selection-<attempt>` artifact contains `report.json`, failing test
+classifications, and the report summary, with 14-day retention. Per-file timing estimates appear
 only when the existing timing source covers every pruned file; these are test
 seconds, not expected workflow wall-time savings.
 
 The report reads only the current run attempt's Node job logs. A failing file
 proposed for pruning is a **MISS**. Cancelled, skipped, missing, or unreadable
-jobs remain unknown. Existing workflow cancellation can interrupt the selector;
-the report runs only after the selector succeeds, so some failed attempts have
-no comparison. These observations inform a later decision about enforcement.
+jobs remain unknown. Codex sees only the diff and candidate inventory; result
+logs are fetched afterward by the report step, whose read-only Actions token is
+not passed to Codex. These observations inform a later decision about enforcement.
 
 For offline evaluation, `node scripts/ci-codex-test-selection.mjs prepare --base
 <base> --head <head>` produces the prompt and an all-candidate selection without
@@ -135,6 +139,23 @@ read-only sandbox and finalizes the proposal; `--model` selects a local model.
 checkout and the current planner's policy over that checkout; they require
 compatible installed dependencies. CI instead replays preflight's exact planner
 options and uses its emitted matrix as the candidate source.
+
+`node scripts/ci-codex-test-selection.mjs summarize --limit 200` summarizes the
+latest 200 `pull_request` CI runs by default. `--repo owner/name` selects another
+repository, and `--cache-dir <path>` chooses a reusable scratch cache. It uses
+bare `gh` with at most four calls in flight and caches each archive by artifact
+ID. If multiple selection attempts exist, each run contributes its latest
+available selection and matching report once.
+
+The JSON summary includes ready/skipped/fallback status counts, median and p90
+prune ratios, available estimated pruned seconds, Codex duration distributions,
+failure classifications, and every MISS with its run URL and file. `ready`
+counts completed shadow proposals. Prune ratios include skipped and fallback
+selections with nonzero candidate counts; durations include positive recorded
+durations. Medians average the middle pair and p90 uses nearest rank. Missing
+timing estimates remain unknown, and missing/expired artifacts, missing reports,
+partial reports, and unknown jobs grouped by reason (including canceled shards
+and unavailable logs) are reported separately.
 
 ## Process proof tier
 

@@ -219,6 +219,9 @@ export function evaluateWorkflowExpression(
       "checks-baseline-ratchets": {
         result: context.jobResults?.["checks-baseline-ratchets"] ?? "success",
       },
+      "checks-node-core-test-nondist-shard": {
+        result: context.jobResults?.["checks-node-core-test-nondist-shard"] ?? "success",
+      },
       preflight: {
         result: context.preflightResult ?? context.jobResults?.preflight ?? "success",
         outputs: {
