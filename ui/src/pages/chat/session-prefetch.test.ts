@@ -519,6 +519,118 @@ describe("recent session prefetch", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["intent", "list revision"])(
+    "brings a cooldown-deferred cycle forward for a new %s",
+    async (trigger) => {
+      const warm = "agent:main:warm";
+      const intended = "agent:main:intended";
+      const request = historyRequest();
+      const state = prefetchState(request, [row(warm, NOW - 1)]);
+      updatePrefetch(state);
+      await advancePrefetch(300);
+      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm]);
+      await advancePrefetch(4_700);
+
+      const changed = { ...state, listRevision: 2, rows: [row(warm, Date.now())] };
+      updatePrefetch(changed);
+      await advancePrefetch(1_000);
+      expect(request).toHaveBeenCalledOnce();
+
+      updatePrefetch({
+        ...changed,
+        listRevision: trigger === "intent" ? 2 : 3,
+        rows: [...changed.rows, row(intended, NOW - 2)],
+      });
+      if (trigger === "intent") {
+        const target = document.createElement("a");
+        target.dataset.sessionKey = intended;
+        fixture.shell.append(target);
+        target.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      }
+      const delay = trigger === "intent" ? 75 : 250;
+      await advancePrefetch(delay - 1);
+      expect(request).toHaveBeenCalledOnce();
+      await advancePrefetch(2);
+      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm, intended]);
+
+      // Pulling the cycle forward must not bypass the first key's cooldown.
+      await advancePrefetch(20_000);
+      expect(request).toHaveBeenCalledTimes(2);
+      await advancePrefetch(5_000);
+      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm, intended, warm]);
+    },
+  );
+
+  it("keeps the original 250 ms automatic deadline across later list revisions, then waits for idle", async () => {
+    const idle = vi.fn<(callback: IdleRequestCallback) => number>().mockReturnValue(1);
+    vi.stubGlobal("requestIdleCallback", idle);
+    const request = historyRequest();
+    const state = prefetchState(request, [row("agent:main:recent", NOW - 1)]);
+    updatePrefetch(state);
+    await advancePrefetch(100);
+    updatePrefetch({ ...state, listRevision: 2 });
+    await advancePrefetch(149);
+    expect(idle).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    await advancePrefetch(1);
+    expect(idle).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalled();
+    idle.mock.calls[0]?.[0]({ didTimeout: false, timeRemaining: () => 50 });
+    await settlePromises();
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
+  });
+
+  it("runs the latest pointer intent without waiting for a pending idle callback", async () => {
+    vi.stubGlobal("requestIdleCallback", vi.fn().mockReturnValue(1));
+    const request = historyRequest();
+    updatePrefetch(
+      prefetchState(request, [row("agent:main:swept", NOW), row("agent:main:intended", NOW - 1)], {
+        hiddenConversationSessionKeys: ["agent:main:foreground"],
+      }),
+    );
+    await advancePrefetch(300);
+    const target = document.createElement("a");
+    fixture.shell.append(target);
+    target.dataset.sessionKey = "agent:main:swept";
+    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    await advancePrefetch(30);
+    target.dataset.sessionKey = "agent:main:intended";
+    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    await advancePrefetch(44);
+    expect(request).not.toHaveBeenCalled();
+    await advancePrefetch(1);
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:intended"]);
+  });
+
+  it("coalesces intent behind the running request without losing its short non-idle schedule", async () => {
+    const first = "agent:main:first";
+    const intended = "agent:main:intended";
+    const response = createDeferred<ReturnType<typeof historyResult>>();
+    const request = vi.fn(async (_method: string, params: unknown) =>
+      (params as { sessionKey: string }).sessionKey === first
+        ? response.promise
+        : historyResult(intended),
+    );
+    const rows = [row(first, NOW - 1)];
+    const state = prefetchState(request, rows);
+    updatePrefetch(state);
+    await advancePrefetch(300);
+    vi.stubGlobal("requestIdleCallback", vi.fn().mockReturnValue(1));
+    updatePrefetch({ ...state, listRevision: 2, rows: [...rows, row(intended, NOW - 2)] });
+    const target = document.createElement("a");
+    fixture.shell.append(target);
+    target.dataset.sessionKey = intended;
+    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    await advancePrefetch(100);
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([first]);
+    response.resolve(historyResult(first));
+    await settlePromises();
+    await advancePrefetch(74);
+    expect(request).toHaveBeenCalledOnce();
+    await advancePrefetch(1);
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([first, intended]);
+  });
+
   it("rewarms complete stored history after an interleaved append miss", async () => {
     const sessionKey = "agent:main:delta";
     const priorMessages = Array.from({ length: 5 }, (_, index) => ({
