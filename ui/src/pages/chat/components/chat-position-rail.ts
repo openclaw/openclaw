@@ -70,7 +70,10 @@ class ChatPositionRailDirective extends AsyncDirective {
   private resizeScrollTarget: { offset: number; atEnd: boolean } | undefined;
   private followingResize = false;
   private readonly stopScrollInput = {
-    handleEvent: (event: Event) => event.stopPropagation(),
+    handleEvent: (event: Event) => {
+      this.followActive = false;
+      event.stopPropagation();
+    },
     passive: true,
   };
 
@@ -459,7 +462,8 @@ class ChatPositionRailDirective extends AsyncDirective {
     this.syncVisibleMarks();
     this.syncTabStop();
     if (initialize || this.followActive) {
-      this.followActive = false;
+      // Navigation must reach the final viewport, even if its slot resized before this frame.
+      this.followActive = this.session?.layout.viewportResizePending ?? false;
       const focused = this.markerElements.get(this.interaction.focusedId ?? "");
       const current =
         (initialize || focused?.matches(":focus-visible")

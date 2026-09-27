@@ -1,5 +1,5 @@
 ---
-summary: "Performance, QA Lab, CodeQL, maintenance jobs, and ClawSweeper forwarding"
+summary: "Performance, QA Lab, CodeQL, Security Review, maintenance jobs, and ClawSweeper forwarding"
 title: "Scheduled and maintenance workflows"
 read_when:
   - You are changing ClawSweeper dispatch or GitHub activity forwarding
@@ -320,6 +320,52 @@ improvement ratio and at least five of its seven pairs individually meet that
 ratio. Otherwise it reports per-lane evidence without a broad improvement
 claim. Artifacts use only the trusted workflow run ID and attempt in their name;
 the exact baseline and candidate commits remain recorded inside the artifact.
+
+## Security Review reconciler
+
+Every ten minutes, Security Review reconciles CI completions
+from five minutes before the previous successful scheduled pass started until
+five minutes ago (sixty-minute fallback, twelve-hour cap). Passes tile without gaps;
+late or dropped cron ticks only widen the next window, up to the cap. Run listing
+covers creation times from three hours before the window through the current time.
+GitHub caps each filtered query at 1,000 results, so the resolver bisects ranges
+whose reported total exceeds that limit. Each smaller range is paged until a short
+page, and its distinct run count must cover the total reported on its first page.
+Ten full pages or fewer distinct runs than reported fail the pass before any
+status publication or matrix output, retaining the anchor for a complete retry.
+Inclusive range endpoints are separated by one second, and run IDs are deduplicated
+across pages and slices. A range shorter than ten minutes that still exceeds
+1,000 runs fails before status publication or matrix output, so the covered window
+does not advance. The next pass rescans from the last successful pass.
+Scheduled resolver passes share one
+concurrency group without canceling an active pass; GitHub keeps one
+pending pass, which still starts from the last successful window.
+Each pass selects at most 100 PR heads, oldest CI completion first, with run ID
+breaking ties, and stops reading statuses when the cap is reached. If candidates
+remain, the `reconcile-backlog` job fails the workflow after the selected reviews
+finish. This keeps the same anchor: reviewed heads have fresh statuses, allowing
+the next scheduled pass to select the remainder from the same window.
+
+After a reconciler outage longer than twelve hours, older lost completions need
+a new push or a Security Review rerun.
+
+A CI rerun keeps its original creation time. A rerun of a run created more than
+three hours before the window relies on its own completion delivery; if that is
+lost, a new push or a Security Review rerun recovers it.
+
+Wholly skipped CI runs are ignored. The resolver reads status history in reverse
+chronological order and uses only the newest `openclaw/ci-gate` status from
+`github-actions[bot]` with creator type `Bot`. Other publishers are ignored.
+Normal review runs only when that Actions-owned status is missing, older than
+CI completion, or pending. Only a
+non-pending status created at or after CI completion is settled and stops
+reselection. Every pending status remains eligible, including a review wait
+published after a pre-completion CI read. Tiled windows bound the harmless extra
+review when a head legitimately waits on newer in-progress CI.
+It never checks out PR code and uses one hosted
+`ubuntu-24.04` resolver job per pass, run-list reads plus paginated
+status-history reads per newly completed head, and no Blacksmith registrations.
+See [Security review checks](/ci/pipeline#security-review-checks).
 
 ## QA Lab
 

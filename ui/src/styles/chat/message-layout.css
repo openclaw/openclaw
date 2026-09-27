@@ -5,6 +5,7 @@
 }
 
 .chat-position-rail {
+  contain: layout;
   /* Centered previews need clearance at both ends of a capped rail. */
   --chat-position-rail-clearance: 60px;
   --chat-position-rail-height: min(
