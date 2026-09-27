@@ -17,6 +17,7 @@ import { prepareTaskRegistryRead } from "../../tasks/task-registry-read.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import {
   authorizeIncognitoSessionTarget,
   createSessionListEntryFilter,
@@ -35,6 +36,11 @@ type ResolvedArtifactSession = {
   sessionKey: string;
   agentId?: string;
 };
+
+type ArtifactSessionProjection = Pick<
+  SessionRowProjection,
+  "ensureMaterialized" | "findBySessionId" | "sharingRevision"
+>;
 
 function resolveArtifactSessionAgentId(
   sessionKey: string | undefined,
@@ -96,6 +102,7 @@ function resolveQuerySession(
   query: ArtifactQuery,
   cfg: OpenClawConfig | undefined,
   task: TaskRecord | undefined,
+  projection?: ArtifactSessionProjection,
 ): ResolvedArtifactSession | undefined {
   if (query.sessionKey) {
     const sessionKey = resolveScopedArtifactSessionKey(query.sessionKey, query.agentId, cfg);
@@ -106,10 +113,10 @@ function resolveQuerySession(
   if (query.runId) {
     // A live run context can resolve its own agent-scoped key. Do not force an
     // unrelated default-agent selection before consulting that authoritative row.
-    const sessionKey = resolveSessionKeyForRun(
-      query.runId,
-      query.agentId ? { agentId: query.agentId } : {},
-    );
+    const sessionKey = resolveSessionKeyForRun(query.runId, {
+      ...(query.agentId ? { agentId: query.agentId } : {}),
+      ...(projection ? { projection } : {}),
+    });
     const agentId =
       query.agentId ??
       resolveArtifactSessionAgentId(sessionKey, cfg) ??
@@ -151,7 +158,9 @@ function resolveQuerySession(
   }
   const agentId = query.agentId ?? taskAgentId ?? resolveSessionAgentId({ config: cfg });
   const runId = normalizeOptionalString(task?.runId);
-  const sessionKey = runId ? resolveSessionKeyForRun(runId, { agentId }) : undefined;
+  const sessionKey = runId
+    ? resolveSessionKeyForRun(runId, { agentId, ...(projection ? { projection } : {}) })
+    : undefined;
   const scopedSessionKey = resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
   return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
 }
@@ -177,6 +186,7 @@ export function artifactResponseIsCurrent(found: ArtifactLookup, respond: Respon
 
 export async function prepareArtifactSessionResolution(
   input: ArtifactQuery,
+  projection?: ArtifactSessionProjection,
 ): Promise<
   (
     cfg: OpenClawConfig | undefined,
@@ -184,6 +194,13 @@ export async function prepareArtifactSessionResolution(
   ) => ResolvedArtifactSession | undefined
 > {
   const query = { ...input };
+  if (
+    !query.sessionKey &&
+    (query.runId || query.taskId) &&
+    projection?.sharingRevision === undefined
+  ) {
+    await projection?.ensureMaterialized();
+  }
   const taskId = !query.sessionKey && !query.runId ? query.taskId : undefined;
   const read = taskId ? await prepareTaskRegistryRead() : undefined;
   if (taskId && !read) {
@@ -203,7 +220,7 @@ export async function prepareArtifactSessionResolution(
       }
       scopedQuery = { ...query, agentId: owner.agentId };
     }
-    const resolved = resolveQuerySession(scopedQuery, cfg, task);
+    const resolved = resolveQuerySession(scopedQuery, cfg, task, projection);
     if (!resolved) {
       return undefined;
     }

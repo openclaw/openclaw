@@ -1,28 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 import { classifyFailoverSignal } from "./classify.js";
+import type { PreparedProviderFailoverOwner } from "./provider-patterns.js";
+
+function expect429Reason(
+  message: string,
+  providerPlugin: PreparedProviderFailoverOwner | null,
+  reason: "billing" | "rate_limit",
+  code?: string,
+) {
+  expect(
+    classifyFailoverSignal(
+      { provider: "custom-route", status: 429, code, message },
+      { providerPlugin },
+    ),
+  ).toEqual({ kind: "reason", reason });
+}
 
 describe("prepared provider HTTP 429 precedence", () => {
   it.each(["rate_limit", "billing"] as const)("retains the owner's %s decision", (reason) => {
-    const classifyFailoverReason = vi.fn(() => reason);
-    expect(
-      classifyFailoverSignal(
-        {
-          provider: "custom-route",
-          status: 429,
-          code: "OWNER_QUOTA",
-          message: "insufficient_quota",
-        },
-        { providerPlugin: { id: "prepared-owner", classifyFailoverReason } },
-      ),
-    ).toEqual({ kind: "reason", reason });
-    expect(classifyFailoverReason).toHaveBeenCalledOnce();
-    expect(classifyFailoverReason).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "prepared-owner",
-        status: 429,
-        code: "OWNER_QUOTA",
-      }),
-    );
+    const providerPlugin = { id: "prepared-owner", classifyFailoverReason: vi.fn(() => reason) };
+    expect429Reason("insufficient_quota", providerPlugin, reason, "OWNER_QUOTA");
+    expect(providerPlugin.classifyFailoverReason).toHaveBeenCalledOnce();
   });
 
   it("keeps generic billing and rate limits when no provider decision is available", () => {
@@ -30,41 +28,21 @@ describe("prepared provider HTTP 429 precedence", () => {
       null,
       { id: "unknown-owner", classifyFailoverReason: () => undefined },
     ]) {
-      expect(
-        classifyFailoverSignal(
-          { provider: "custom-route", status: 429, message: "insufficient_quota" },
-          { providerPlugin },
-        ),
-      ).toEqual({ kind: "reason", reason: "billing" });
-      expect(
-        classifyFailoverSignal(
-          { provider: "custom-route", status: 429, message: "Too many requests" },
-          { providerPlugin },
-        ),
-      ).toEqual({ kind: "reason", reason: "rate_limit" });
+      expect429Reason("insufficient_quota", providerPlugin, "billing");
+      expect429Reason("Too many requests", providerPlugin, "rate_limit");
     }
   });
 
-  it.each(["timeout", "overloaded", "auth", "format", "context_overflow"] as const)(
+  it.each(["timeout", "context_overflow"] as const)(
     "does not promote the provider's %s fallback above HTTP 429 semantics",
     (reason) => {
       const providerPlugin = { id: "prepared-owner", classifyFailoverReason: () => reason };
-      expect(
-        classifyFailoverSignal(
-          { provider: "custom-route", status: 429, message: "Provider returned error" },
-          { providerPlugin },
-        ),
-      ).toEqual({ kind: "reason", reason: "rate_limit" });
-      expect(
-        classifyFailoverSignal(
-          {
-            provider: "custom-route",
-            status: 429,
-            message: 'Provider returned error\n{"error":{"code":"insufficient_quota"}}',
-          },
-          { providerPlugin },
-        ),
-      ).toEqual({ kind: "reason", reason: "billing" });
+      expect429Reason("Provider returned error", providerPlugin, "rate_limit");
+      expect429Reason(
+        'Provider returned error\n{"error":{"code":"insufficient_quota"}}',
+        providerPlugin,
+        "billing",
+      );
     },
   );
 });

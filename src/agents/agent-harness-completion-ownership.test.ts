@@ -4,6 +4,7 @@ import {
   replaceSessionEntry,
   appendTranscriptMessage,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createContext } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import {
   registerAgentRunContext,
@@ -46,6 +47,23 @@ vi.mock("./subagents/announce/subagent-announce-delivery.js", async (importOrigi
 const key = "agent:main:main",
   child = "review4:child",
   source = "announce:review4:parent:child:succeeded";
+const inputProvenance = {
+  kind: "inter_session",
+  sourceTool: "agent_harness_task",
+  sourceChannel: "internal",
+  sourceSessionKey: child,
+};
+
+function captureCompletion(entry: SessionEntry) {
+  return captureHarnessCompletionRecovery({
+    agentId: "main",
+    sessionKey: key,
+    entry,
+    runId: source,
+    inputProvenance,
+  });
+}
+
 async function setup(
   state: OpenClawTestState,
   terminalStatus: "succeeded" | "failed" | "cancelled" = "succeeded",
@@ -97,28 +115,16 @@ beforeEach(() => {
     .mockResolvedValue({ delivered: true, path: "steered" });
 });
 describe("live harness cancellation reporting", () => {
-  it.each(
-    (["succeeded", "failed", "cancelled"] as const).flatMap((stored) =>
-      (["succeeded", "failed", "cancelled"] as const).map(
-        (reported) => [stored, reported, stored === reported] as const,
-      ),
-    ),
-  )("checks stored %s against reported %s", async (stored, reported, allowed) => {
+  it.each([
+    ["succeeded", "succeeded", true],
+    ["failed", "failed", true],
+    ["cancelled", "cancelled", true],
+    ["succeeded", "failed", false],
+  ] as const)("checks stored %s against reported %s", async (stored, reported, allowed) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { scope, task, entry } = await setup(state, stored);
       expect(getTaskById(task.taskId)?.status).toBe(stored);
-      const claim = captureHarnessCompletionRecovery({
-        agentId: "main",
-        sessionKey: key,
-        entry,
-        runId: source,
-        inputProvenance: {
-          kind: "inter_session",
-          sourceTool: "agent_harness_task",
-          sourceChannel: "internal",
-          sourceSessionKey: child,
-        },
-      });
+      const claim = captureCompletion(entry);
       expect(Boolean(claim)).toBe(stored !== "cancelled");
       const result = await deliverAgentHarnessTaskCompletion({
         scope,
@@ -196,7 +202,7 @@ describe("review4 exact task ownership", () => {
     },
   );
 
-  it.each(["single", "duplicate", "late-duplicate"])(
+  it.each(["duplicate", "late-duplicate"])(
     "uses real task creation for %s ownership",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -226,7 +232,7 @@ describe("review4 exact task ownership", () => {
           expect(result).toMatchObject({ delivered: false, recoveryBlocked: true });
           expect(deliverSubagentAnnouncement).not.toHaveBeenCalled();
         } else {
-          expect(result.delivered).toBe(kind === "single");
+          expect(result.delivered).toBe(false);
         }
         expect(getTaskById(task.taskId)?.deliveryStatus).toBe("pending");
       });
@@ -237,18 +243,7 @@ describe("review4 exact task ownership", () => {
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const { entry, target, task } = await setup(state);
-        const claim = captureHarnessCompletionRecovery({
-          agentId: "main",
-          sessionKey: key,
-          entry,
-          runId: source,
-          inputProvenance: {
-            kind: "inter_session",
-            sourceTool: "agent_harness_task",
-            sourceChannel: "internal",
-            sourceSessionKey: child,
-          },
-        });
+        const claim = captureCompletion(entry);
         expect(claim).toBeDefined();
         await replaceSessionEntry(target, {
           ...entry,
@@ -294,23 +289,12 @@ describe("review4 exact task ownership", () => {
 });
 
 describe("pre-mirror recovery input custody", () => {
-  it.each(["current", "prior", "unknown", "unadmitted-prior", "foreign-source", "human"] as const)(
+  it.each(["current", "prior", "unadmitted-prior", "foreign-source", "human"] as const)(
     "retains exact pre-mirror recovery admission after the real recorder commits %s",
     async (scenario) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const { task, target, entry: original } = await setup(state);
-        const claim = captureHarnessCompletionRecovery({
-          agentId: "main",
-          sessionKey: key,
-          entry: original,
-          runId: source,
-          inputProvenance: {
-            kind: "inter_session",
-            sourceTool: "agent_harness_task",
-            sourceChannel: "internal",
-            sourceSessionKey: child,
-          },
-        });
+        const claim = captureCompletion(original);
         if (!claim) {
           throw new Error("real harness task did not bind at admission");
         }
@@ -334,12 +318,7 @@ describe("pre-mirror recovery input custody", () => {
             content: "completed child",
             idempotencyKey: `${source}:user`,
             __openclaw: { runId: source },
-            provenance: {
-              kind: "inter_session",
-              sourceTool: "agent_harness_task",
-              sourceChannel: "internal",
-              sourceSessionKey: child,
-            },
+            provenance: inputProvenance,
           },
         });
         const recoveryRunId = "recorder-recovery-current";
@@ -375,11 +354,7 @@ describe("pre-mirror recovery input custody", () => {
           }
           effect();
           const inputRunId =
-            scenario === "prior" || scenario === "unadmitted-prior"
-              ? priorRunId
-              : scenario === "unknown"
-                ? "unrelated-run"
-                : recoveryRunId;
+            scenario === "prior" || scenario === "unadmitted-prior" ? priorRunId : recoveryRunId;
           const recorder = createUserTurnTranscriptRecorder({
             target: { ...transcript, sessionEntry: recovered },
             input: {

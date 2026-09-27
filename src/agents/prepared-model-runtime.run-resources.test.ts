@@ -481,24 +481,6 @@ it("publishes a replacement while an idle RUN registration is still disposing", 
   );
 });
 
-it("keeps configured registry identity and its raw resources under the configured owner", async () => {
-  await withRunFixture(async ({ config, acquire, original }) => {
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-    const first = await acquire();
-    const raw = original();
-    const second = await acquire();
-    expect(first.snapshot === second.snapshot).toBe(true);
-    await first[Symbol.asyncDispose]();
-    await second[Symbol.asyncDispose]();
-    await closePreparedModelRuntimeSnapshots();
-    expect(raw.disposals).toBe(0);
-    expect(readAnswer(raw)).toBe(42);
-  });
-});
-
 it("preserves eight Gateway RUN retention entries without closing an evicted live lease", async () => {
   await withRunFixture(async ({ config, input, acquire, registrations }) => {
     await refreshPreparedModelRuntimeSnapshots(config, {

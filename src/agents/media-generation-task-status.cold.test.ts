@@ -22,6 +22,12 @@ import {
   createImageGenerateStatusActionResult,
 } from "./tools/image-generate-tool.actions.js";
 
+const contextRequest = {
+  capabilityToolNames: new Set(["image_generate"]),
+  sessionKey: "global",
+  agentId: "ops",
+};
+
 let state: OpenClawTestState;
 beforeEach(async () => {
   state = await createOpenClawTestState({
@@ -71,13 +77,7 @@ describe("cold media generation task status", () => {
   it("resolves legacy requester identity from cold config without parent SQLite through close", async () => {
     const mainSql = observeMainThreadSql();
     expect(getRuntimeConfigSnapshot()).toBeNull();
-    expect(
-      await buildMediaTaskRuntimeContext({
-        capabilityToolNames: new Set(["image_generate"]),
-        sessionKey: "global",
-        agentId: "ops",
-      }),
-    ).toBe(
+    expect(await buildMediaTaskRuntimeContext(contextRequest)).toBe(
       '## Media Generation Tasks\n- tool=image_generate; task=legacy-media; status=running; provider_json="synthetic"',
     );
     await withPluginCache(createPluginCache(), async () => {
@@ -109,13 +109,9 @@ describe("cold media generation task status", () => {
       return tasks;
     });
 
-    await expect(
-      buildMediaTaskRuntimeContext({
-        capabilityToolNames: new Set(["image_generate"]),
-        sessionKey: "global",
-        agentId: "ops",
-      }),
-    ).rejects.toThrow("Runtime config source changed");
+    await expect(buildMediaTaskRuntimeContext(contextRequest)).rejects.toThrow(
+      "Runtime config source changed",
+    );
     expect(reads).toBe(readToChange);
   });
 
@@ -136,13 +132,9 @@ describe("cold media generation task status", () => {
       return tasks;
     });
 
-    expect(
-      await buildMediaTaskRuntimeContext({
-        capabilityToolNames: new Set(["image_generate"]),
-        sessionKey: "global",
-        agentId: "ops",
-      }),
-    ).toContain("task=legacy-media; status=running");
+    expect(await buildMediaTaskRuntimeContext(contextRequest)).toContain(
+      "task=legacy-media; status=running",
+    );
     expect(reads).toBe(2);
   });
 });

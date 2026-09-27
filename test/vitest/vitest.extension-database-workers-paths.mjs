@@ -131,6 +131,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/native-subagent-monitor.followup.test.ts",
   "extensions/codex/src/app-server/native-subagent-monitor.followup-recovery.test.ts",
   "extensions/codex/src/app-server/native-subagent-monitor.history-owner.test.ts",
+  "extensions/codex/src/app-server/native-subagent-monitor.receipt-ownership.test.ts",
   "extensions/codex/src/app-server/native-subagent-monitor.rotated-parent.test.ts",
   "extensions/codex/src/app-server/native-subagent-monitor.submission-recovery.test.ts",
   "extensions/codex/src/app-server/native-subagent-monitor.test.ts",

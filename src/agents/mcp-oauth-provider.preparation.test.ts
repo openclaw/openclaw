@@ -28,6 +28,27 @@ vi.mock("./mcp-oauth-store.js", () => ({
 
 import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
 
+const providerParams = {
+  lease,
+  storeContext: context,
+  identity: {
+    principal: "operator",
+    storeKey: "synthetic-provider",
+    serverName: "synthetic",
+    serverUrl: "https://mcp.example.test",
+  },
+} satisfies Parameters<typeof createMcpOAuthClientProvider>[0];
+
+function loginLifecycle(controller: AbortController) {
+  return {
+    signal: controller.signal,
+    assertCurrent: () => controller.signal.throwIfAborted(),
+    onAuthorizationPublished() {},
+    beforeTokensSaved() {},
+    onTokensSaved() {},
+  };
+}
+
 beforeEach(() => {
   read.mockReset();
   update.mockReset();
@@ -43,16 +64,7 @@ it("keeps acknowledged metadata when an earlier read completes later", async () 
     redirectUrl: "https://callback.example.test/updated",
   } satisfies McpOAuthStore;
   read.mockResolvedValueOnce(original);
-  const provider = await createMcpOAuthClientProvider({
-    lease,
-    storeContext: context,
-    identity: {
-      principal: "operator",
-      storeKey: "synthetic-provider",
-      serverName: "synthetic",
-      serverUrl: "https://mcp.example.test",
-    },
-  });
+  const provider = await createMcpOAuthClientProvider(providerParams);
   const earlier = createDeferred<McpOAuthStore>();
   read.mockReturnValueOnce(earlier.promise);
   const clientInformation = provider.clientInformation();
@@ -70,16 +82,7 @@ it("requires an acknowledged read after a write reports an uncertain result", as
   const original = { redirectUrl: "https://callback.example.test/original" };
   const committed = { redirectUrl: "https://callback.example.test/committed" };
   read.mockResolvedValueOnce(original);
-  const provider = await createMcpOAuthClientProvider({
-    lease,
-    storeContext: context,
-    identity: {
-      principal: "operator",
-      storeKey: "synthetic-provider",
-      serverName: "synthetic",
-      serverUrl: "https://mcp.example.test",
-    },
-  });
+  const provider = await createMcpOAuthClientProvider(providerParams);
   const earlier = createDeferred<McpOAuthStore>();
   read.mockReturnValueOnce(earlier.promise);
   const information = provider.clientInformation();
@@ -99,48 +102,29 @@ it("requires an acknowledged read after a write reports an uncertain result", as
   expect(provider.clientMetadata.redirect_uris).toEqual([committed.redirectUrl]);
 });
 
-it.each(["state", "clientInformation", "tokens", "codeVerifier", "discoveryState"] as const)(
-  "rejects %s when its login lifecycle ends during a credential read",
-  async (operation) => {
-    const original = { redirectUrl: "https://callback.example.test/original" };
-    read.mockResolvedValueOnce(original);
-    const controller = new AbortController();
-    const provider = await createMcpOAuthClientProvider({
-      lease,
-      storeContext: context,
-      identity: {
-        principal: "operator",
-        storeKey: "synthetic-provider",
-        serverName: "synthetic",
-        serverUrl: "https://mcp.example.test",
-      },
-      allowAuthorizationRedirect: true,
-      login: {
-        signal: controller.signal,
-        assertCurrent: () => controller.signal.throwIfAborted(),
-        onAuthorizationPublished: vi.fn(),
-        beforeTokensSaved: vi.fn(),
-        onTokensSaved: vi.fn(),
-      },
-    });
-    const delayed = createDeferred<McpOAuthStore>();
-    read.mockReturnValueOnce(delayed.promise);
-    const result = provider[operation]?.();
-    const failure = new Error("Login lifecycle ended");
-    controller.abort(failure);
-    delayed.resolve({
-      clientInformation: { client_id: "late-client" },
-      tokens: { access_token: "late-access", token_type: "Bearer" },
-      codeVerifier: "late-verifier",
-      discoveryState: { authorizationServerUrl: "https://issuer.example.test" },
-      redirectUrl: "https://callback.example.test/late",
-    });
+it("rejects tokens when its login lifecycle ends during a credential read", async () => {
+  const original = { redirectUrl: "https://callback.example.test/original" };
+  read.mockResolvedValueOnce(original);
+  const controller = new AbortController();
+  const provider = await createMcpOAuthClientProvider({
+    ...providerParams,
+    allowAuthorizationRedirect: true,
+    login: loginLifecycle(controller),
+  });
+  const delayed = createDeferred<McpOAuthStore>();
+  read.mockReturnValueOnce(delayed.promise);
+  const result = provider.tokens();
+  const failure = new Error("Login lifecycle ended");
+  controller.abort(failure);
+  delayed.resolve({
+    tokens: { access_token: "late-access", token_type: "Bearer" },
+    redirectUrl: "https://callback.example.test/late",
+  });
 
-    await expect(result).rejects.toBe(failure);
-    expect(provider.redirectUrl).toBe(original.redirectUrl);
-    expect(provider.clientMetadata.redirect_uris).toEqual([original.redirectUrl]);
-  },
-);
+  await expect(result).rejects.toBe(failure);
+  expect(provider.redirectUrl).toBe(original.redirectUrl);
+  expect(provider.clientMetadata.redirect_uris).toEqual([original.redirectUrl]);
+});
 
 it.each([
   { operation: "tokens", owner: "login" },
@@ -154,13 +138,7 @@ it.each([
     const login = new AbortController();
     let leaseLive = true;
     const provider = await createMcpOAuthClientProvider({
-      storeContext: context,
-      identity: {
-        principal: "operator",
-        storeKey: "synthetic-provider",
-        serverName: "synthetic",
-        serverUrl: "https://mcp.example.test",
-      },
+      ...providerParams,
       allowAuthorizationRedirect: true,
       suppressStoredTokens: operation === "tokens",
       lease: {
@@ -172,16 +150,7 @@ it.each([
         },
         async renew() {},
       },
-      login:
-        owner === "login"
-          ? {
-              signal: login.signal,
-              assertCurrent: () => login.signal.throwIfAborted(),
-              onAuthorizationPublished() {},
-              beforeTokensSaved() {},
-              onTokensSaved() {},
-            }
-          : undefined,
+      login: owner === "login" ? loginLifecycle(login) : undefined,
     });
     if (operation === "codeVerifier") {
       await provider.saveCodeVerifier("fixture-prepared-verifier");

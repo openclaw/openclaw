@@ -325,8 +325,10 @@ Before runtime plugin loading, startup attempts receipt-aware cleanup under
 exclusive maintenance ownership. It can reclaim a retired, unlocked instance
 immediately, including unpublished native payloads retained until the previous
 process exited. Published native payloads still referenced by the installed index
-remain available. Busy maintenance or cleanup failures produce a warning and
-startup continues; observational reads leave captures untouched.
+remain available. If another process holds state ownership, this opportunistic
+cleanup silently skips without asking the operator to stop a healthy Gateway.
+Other maintenance or cleanup failures produce a warning and startup continues;
+observational reads leave captures untouched.
 
 Hourly cleanup also inspects this owned subtree. An instance becomes eligible
 after one hour. Age alone never authorizes removal: for token-bearing instances, cleanup must

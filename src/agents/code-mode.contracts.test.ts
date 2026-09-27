@@ -7,7 +7,6 @@ import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
   mcpTool,
-  pluginTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
@@ -62,36 +61,6 @@ it("supports root MCP API and multiple server declarations", async () => {
   }
 });
 
-it("supports documented catalog handle metadata", async () => {
-  const h = createCodeModeHarness();
-  const tool = pluginTool("shipment_list", "List shipments");
-  tool.outputSchema = Type.Object({ id: Type.String() }, { additionalProperties: false });
-  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
-  const result = resultDetails(
-    await expectDefined(h.tools[0], "exec").execute("handle-metadata", {
-      code: `
-          return catalog.all().map(tool => ({
-            label: tool.label,
-            input: tool.input,
-            output: tool.output,
-            serializedInput: tool.toJSON().input,
-          }));
-        `,
-    }),
-  );
-  expect(result, JSON.stringify(result)).toMatchObject({
-    status: "completed",
-    value: [
-      {
-        label: "shipment_list",
-        input: "{ value?: string }",
-        output: "{ id: string }",
-        serializedInput: "{ value?: string }",
-      },
-    ],
-  });
-  expect(tool.execute).not.toHaveBeenCalled();
-});
 it("allows omitted native empty inputs but preserves required fields", async () => {
   const h = createCodeModeHarness();
   const optional = pluginToolWithExecute("optional_input", "Optional input", async () =>

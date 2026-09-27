@@ -51,16 +51,144 @@ export class CodexNativeSubagentAdmissionCustody {
     AgentHarnessTaskRuntime,
     { state: ParentState; runtime: AgentHarnessTaskRuntime }
   >();
+  private readonly childPreparations = new Map<
+    string,
+    Set<{ state: ParentState; promise: Promise<unknown>; revokedThreads: Set<string> }>
+  >();
+  private readonly preparedReads = new WeakMap<
+    ParentState,
+    { runtime: AgentHarnessTaskRuntime; read: () => AgentHarnessTaskRecord[] }
+  >();
 
   constructor(
     private readonly dependencies: {
       parentState: (id: string) => ParentState | undefined;
+      isParentCurrent: (state: ParentState) => boolean;
       knownChild: (id: string) => KnownChild | undefined;
       childState: (runId: string) => ChildState | undefined;
       runtime: NativeSubagentMonitorRuntime;
       onTaskWritesSettled?: (state: ParentState) => void;
     },
   ) {}
+
+  pendingChildPreparation(threadId: string): Promise<boolean> | undefined {
+    const pending = [...(this.childPreparations.get(threadId) ?? [])].filter(
+      (entry) => !entry.revokedThreads.has(threadId),
+    );
+    return pending.length
+      ? Promise.allSettled(pending.map((entry) => entry.promise)).then(() =>
+          pending.every((entry) => !entry.revokedThreads.has(threadId)),
+        )
+      : undefined;
+  }
+
+  revokeChildPreparations(threadId: string): void {
+    for (const entry of this.childPreparations.get(threadId) ?? []) {
+      entry.revokedThreads.add(threadId);
+    }
+    this.retainOnly((evidence) => evidence.childThreadId !== threadId);
+  }
+
+  hasPendingPreparations(state: ParentState): boolean {
+    return [...this.childPreparations.values()].some((pending) =>
+      [...pending].some((entry) => entry.state === state),
+    );
+  }
+
+  prepareTaskRecords<T>(
+    state: ParentState,
+    consume: (records: readonly AgentHarnessTaskRecord[]) => T,
+    childThreadId?: string | readonly string[],
+    allowResident = false,
+  ): Promise<T | undefined> {
+    const runtime = state.taskRuntime;
+    const revokedThreads = new Set<string>();
+    const threadIds = typeof childThreadId === "string" ? [childThreadId] : (childThreadId ?? []);
+    const isRevoked = () => threadIds.length > 0 && threadIds.every((id) => revokedThreads.has(id));
+    const predecessors = threadIds.flatMap((threadId) =>
+      [...(this.childPreparations.get(threadId) ?? [])].map((entry) => entry.promise),
+    );
+    if (
+      allowResident &&
+      predecessors.length === 0 &&
+      !state.mirror?.hasPendingWrites &&
+      this.dependencies.isParentCurrent(state)
+    ) {
+      state.mirror?.assertSupported();
+      const prepared = this.preparedReads.get(state);
+      let records: AgentHarnessTaskRecord[] | undefined = runtime ? undefined : [];
+      if (prepared && prepared.runtime === runtime) {
+        try {
+          records = prepared.read();
+        } catch {
+          // A refused resident capability must be prepared again before any effects.
+          this.preparedReads.delete(state);
+        }
+      }
+      if (records) {
+        return Promise.resolve(consume(records));
+      }
+    }
+    const prepare = async () => {
+      await Promise.allSettled(predecessors);
+      if (isRevoked() || !this.dependencies.isParentCurrent(state)) {
+        return undefined;
+      }
+      const knownChildren = threadIds.map((threadId) => {
+        const known = this.dependencies.knownChild(threadId);
+        return { threadId, known, runId: known?.assignment.runId };
+      });
+      state.mirror?.assertSupported();
+      const read = runtime ? await runtime.prepareTaskRecordsRead!() : () => [];
+      if (
+        isRevoked() ||
+        !this.dependencies.isParentCurrent(state) ||
+        state.taskRuntime !== runtime ||
+        knownChildren.some(
+          ({ threadId, known, runId }) =>
+            !revokedThreads.has(threadId) &&
+            (this.dependencies.knownChild(threadId) !== known || known?.assignment.runId !== runId),
+        )
+      ) {
+        return undefined;
+      }
+      // Consume fresh lineage in this synchronous phase. Completion and native RPCs
+      // run outside the mirror queue because they can await its persistence prefix.
+      const records = read();
+      if (runtime) {
+        this.preparedReads.set(state, { runtime, read });
+      }
+      return consume(records);
+    };
+    let result: T | undefined;
+    const pending = state.mirror
+      ? state.mirror
+          .enqueuePersistence(async () => {
+            result = await prepare();
+          })
+          .then(() => result)
+      : prepare();
+    if (threadIds.length) {
+      const entry = { state, promise: pending, revokedThreads };
+      for (const threadId of threadIds) {
+        const preparations = this.childPreparations.get(threadId) ?? new Set();
+        preparations.add(entry);
+        this.childPreparations.set(threadId, preparations);
+      }
+      const settled = () => {
+        for (const threadId of threadIds) {
+          const preparations = this.childPreparations.get(threadId);
+          preparations?.delete(entry);
+          if (!preparations?.size) {
+            this.childPreparations.delete(threadId);
+          }
+        }
+        this.dependencies.onTaskWritesSettled?.(state);
+      };
+      void pending.then(settled, settled);
+    }
+    return pending;
+  }
 
   async prepareParentTaskRuntime(
     state: ParentState,
@@ -136,8 +264,7 @@ export class CodexNativeSubagentAdmissionCustody {
     if (this.dependencies.parentState(state.parentThreadId) !== state) {
       throw new Error("Codex native subagent parent registration is no longer current");
     }
-    // Keep the guarded resident accessor so later committed rows remain visible.
-    state.readTaskRecords = readTaskRecords;
+    this.preparedReads.set(state, { runtime: taskRuntime, read: readTaskRecords });
   }
 
   private followAssignmentTransitionAsync<T extends { expectedTask?: AgentHarnessTaskAssignment }>(
@@ -185,7 +312,11 @@ export class CodexNativeSubagentAdmissionCustody {
     return this.pending;
   }
 
-  buffer(turnIdInput: string | undefined, evidence: NativeChildAdmissionEvidence): void {
+  buffer(
+    turnIdInput: string | undefined,
+    evidence: NativeChildAdmissionEvidence,
+    completionCustody?: AgentHarnessCompletionCustody,
+  ): void {
     const turnId = turnIdInput?.trim();
     const requiresUnboundOwner =
       evidence.kind !== "interaction" || (!evidence.owner && !evidence.modelOwner);
@@ -238,8 +369,8 @@ export class CodexNativeSubagentAdmissionCustody {
     try {
       if (evidence.kind === "interaction") {
         evidence.completionCustody ??= (
-          evidence.owner ?? evidence.modelOwner
-        )?.completionCustody?.retain();
+          completionCustody ?? (evidence.owner ?? evidence.modelOwner)?.completionCustody
+        )?.retain();
       }
       if (evidence.kind === "interaction" && !evidence.modelSourceConsumed) {
         const owner = evidence.modelOwner ?? evidence.owner;
@@ -274,7 +405,7 @@ export class CodexNativeSubagentAdmissionCustody {
   replace(turnId: string, remaining: NativeChildAdmissionEvidence[]): void {
     const previous = this.pending.get(turnId) ?? [];
     for (const evidence of previous) {
-      if (evidence.kind === "interaction" && !remaining.includes(evidence)) {
+      if (!remaining.includes(evidence)) {
         releaseCompletionCustody(evidence);
       }
     }
@@ -286,6 +417,9 @@ export class CodexNativeSubagentAdmissionCustody {
     for (const evidence of previous) {
       if (evidence.kind === "interaction" && !remaining.includes(evidence)) {
         consumeNativeChildModelAdmission(evidence);
+      } else if (evidence.kind === "spawn" && !remaining.includes(evidence)) {
+        evidence.modelSource?.release();
+        evidence.modelSource = undefined;
       }
     }
   }
@@ -301,15 +435,18 @@ export class CodexNativeSubagentAdmissionCustody {
     hasRecovery: (state: ParentState, threadId: string) => boolean,
   ): void {
     this.retainOnly((evidence) => {
+      const state = this.dependencies.parentState(evidence.parentThreadId);
+      if (evidence.kind === "spawn" && evidence.preparing && state && !isRetired(state)) {
+        return true;
+      }
       const known = this.dependencies.knownChild(evidence.childThreadId);
+      if (evidence.kind === "interaction" && evidence.modelSource && state && !isRetired(state)) {
+        return true;
+      }
       if (known && known.parent.parentThreadId !== evidence.parentThreadId) {
         return false;
       }
-      const state = this.dependencies.parentState(evidence.parentThreadId);
       if (evidence.kind === "interaction" && (evidence.owner || evidence.modelSource)) {
-        if (evidence.modelSource && state && !isRetired(state)) {
-          return true;
-        }
         if (state && evidence.owner && [...state.owners.values()].includes(evidence.owner)) {
           return true;
         }
