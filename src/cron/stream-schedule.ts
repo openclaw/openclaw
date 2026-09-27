@@ -129,3 +129,15 @@ export function appendCronPayloadText(payload: CronPayload, text: string): CronP
   }
   return payload;
 }
+
+export function normalizeStreamScheduleBounds(schedule: CronSchedule): CronSchedule {
+  if (schedule.kind !== "stream") {
+    return schedule;
+  }
+  const resolved = resolveCronStreamBatching(schedule);
+  return {
+    ...schedule,
+    ...(schedule.batchMs !== undefined ? { batchMs: resolved.batchMs } : {}),
+    ...(schedule.maxBatchBytes !== undefined ? { maxBatchBytes: resolved.maxBatchBytes } : {}),
+  };
+}

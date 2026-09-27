@@ -17,6 +17,7 @@ import {
 } from "../../infra/delivery-queue-sqlite.js";
 import * as deliveryRecovery from "../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { retryAsync } from "../../infra/retry.js";
@@ -192,6 +193,16 @@ export function logCronDeliveryErrorDeferred(message: string): void {
   void deliveryLoggerRuntimeLoader.load().then(({ logError }) => {
     logError(message);
   });
+}
+
+export function createBestEffortCronPayloadErrorHandler(jobId: string, enabled: boolean) {
+  return enabled
+    ? (err: unknown, _payload: unknown) => {
+        logCronDeliveryErrorDeferred(
+          `[cron:${jobId}] delivery payload failed (bestEffort): ${formatErrorMessage(err)}`,
+        );
+      }
+    : undefined;
 }
 
 export function resolveStaleCronDeliveryError(params: {

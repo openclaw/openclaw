@@ -3,7 +3,6 @@ import crypto from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
-import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { parseCronPacingBounds } from "../pacing.js";
@@ -12,12 +11,15 @@ import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
 import { CRON_STUCK_RUN_MS } from "../store/run-receipt-store.js";
-import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
-import type { CronJob, CronSchedule } from "../types.js";
-import { autoDisableCronJob } from "./auto-disable.js";
+import { createCronStreamSourceIdentity } from "../stream-schedule.js";
+import type { CronJob } from "../types.js";
 import { normalizePayloadToSystemText } from "./normalize.js";
+import { recordScheduleComputeError } from "./schedule-errors.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
+
+export { normalizeStreamScheduleBounds } from "../stream-schedule.js";
+export { recordScheduleComputeError } from "./schedule-errors.js";
 
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
@@ -40,18 +42,6 @@ function ownsCronRunMarker(
   return (
     reservation?.markerAtMs === markerAtMs && (!requireForce || reservation.preserveWhenDisabled)
   );
-}
-
-export function normalizeStreamScheduleBounds(schedule: CronSchedule): CronSchedule {
-  if (schedule.kind !== "stream") {
-    return schedule;
-  }
-  const resolved = resolveCronStreamBatching(schedule);
-  return {
-    ...schedule,
-    ...(schedule.batchMs !== undefined ? { batchMs: resolved.batchMs } : {}),
-    ...(schedule.maxBatchBytes !== undefined ? { maxBatchBytes: resolved.maxBatchBytes } : {}),
-  };
 }
 
 /** Default retry delays applied after consecutive cron execution errors. */
@@ -374,46 +364,6 @@ export function computeJobPreviousRunAtOrBeforeMs(job: CronJob, nowMs: number): 
 }
 
 /** Maximum consecutive schedule errors before auto-disabling a job. */
-const MAX_SCHEDULE_ERRORS = 3;
-
-/** Records a schedule-computation failure and auto-disables after repeated errors. */
-export function recordScheduleComputeError(params: {
-  state: CronServiceState;
-  job: CronJob;
-  err: unknown;
-  deferredNotifications?: DeferredCronNotifications;
-}): boolean {
-  const { state, job, err } = params;
-  const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
-  const errText = formatErrorMessageWithCode(err);
-
-  job.state.scheduleErrorCount = errorCount;
-  job.state.nextRunAtMs = undefined;
-  job.state.lastError = `schedule error: ${errText}`;
-
-  if (errorCount >= MAX_SCHEDULE_ERRORS) {
-    autoDisableCronJob({
-      state,
-      job,
-      reason: "schedule-errors",
-      atMs: state.deps.nowMs(),
-      consecutiveErrors: errorCount,
-      deferredNotifications: params.deferredNotifications,
-    });
-    state.deps.log.error(
-      { jobId: job.id, name: job.name, errorCount, err: errText },
-      "cron: auto-disabled job after repeated schedule errors",
-    );
-  } else {
-    state.deps.log.warn(
-      { jobId: job.id, name: job.name, errorCount, err: errText },
-      "cron: failed to compute next run for job (skipping)",
-    );
-  }
-
-  return true;
-}
-
 function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; nowMs: number }): {
   changed: boolean;
   skip: boolean;

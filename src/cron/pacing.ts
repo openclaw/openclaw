@@ -50,3 +50,16 @@ export function resolvePacedNextRunAtMs(params: {
     ),
   );
 }
+
+/** An earlier Flow wake may advance a paced check; a distant one cannot postpone it. */
+export function resolvePacedNextRunWithObligationAtMs(params: {
+  nowMs: number;
+  delayMs: number;
+  pacing: CronPacing;
+  scheduledAtMs?: number;
+}): number | undefined {
+  const ceiling = resolvePacedNextRunAtMs(params);
+  return params.scheduledAtMs === undefined
+    ? ceiling
+    : Math.min(params.scheduledAtMs, ceiling ?? Number.POSITIVE_INFINITY);
+}

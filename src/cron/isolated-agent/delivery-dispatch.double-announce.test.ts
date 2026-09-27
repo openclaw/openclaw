@@ -211,7 +211,12 @@ import {
   dispatchCronDelivery,
   queueCronMessageToolDeliveryAwareness,
 } from "./delivery-dispatch.js";
-import { makeBaseParams, makeResolvedDelivery } from "./delivery-dispatch.test-helpers.js";
+import {
+  expectFields,
+  expectResultFields,
+  makeBaseParams,
+  makeResolvedDelivery,
+} from "./delivery-dispatch.test-helpers.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 import {
   readDescendantSubagentFallbackReply,
@@ -236,18 +241,8 @@ function outboundDeliveryCall(callIndex = 0) {
   return requireRecord(call[0], `outbound delivery call ${callIndex}`);
 }
 
-function expectFields(actual: Record<string, unknown>, expected: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key], key).toEqual(value);
-  }
-}
-
 function expectDeliveryCall(callIndex: number, expected: Record<string, unknown>) {
   expectFields(outboundDeliveryCall(callIndex), expected);
-}
-
-function expectResultFields(result: unknown, expected: Record<string, unknown>) {
-  expectFields(requireRecord(result, "cron delivery result"), expected);
 }
 
 function mockResolvedOutboundRoute(

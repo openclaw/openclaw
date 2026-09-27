@@ -1,7 +1,7 @@
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
-import { resolvePacedNextRunAtMs } from "../pacing.js";
+import { resolvePacedNextRunWithObligationAtMs } from "../pacing.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
@@ -490,19 +490,14 @@ export function applyJobResult(
     ) {
       // Pacing bounds are the explicit per-job cadence contract. Do not apply
       // normal schedule floors here; that would change the promised clamp.
-      const pacedCeilingAtMs = resolvePacedNextRunAtMs({
+      // The Flow receipt remains durable for exact timer repair even when its
+      // due time is later than the ordinary check.
+      const pacedNextRunAtMs = resolvePacedNextRunWithObligationAtMs({
         nowMs: result.endedAt,
         delayMs: result.nextCheck.delayMs,
         pacing: job.pacing,
+        scheduledAtMs: result.nextCheck.scheduledAtMs,
       });
-      // A managed Flow may need an exact wake earlier than the ordinary paced
-      // check, but a distant obligation must not suspend that check. The Flow
-      // receipt remains durable and timer repair can pull a later check forward
-      // to its exact due time.
-      const pacedNextRunAtMs =
-        result.nextCheck.scheduledAtMs === undefined
-          ? pacedCeilingAtMs
-          : Math.min(result.nextCheck.scheduledAtMs, pacedCeilingAtMs ?? Number.POSITIVE_INFINITY);
       // The operator trigger floor is a safety policy and outranks a job-local
       // pacing bound. Non-trigger jobs retain the exact pacing clamp contract.
       const nextRunAtMs = assignNextRunAtMs({
