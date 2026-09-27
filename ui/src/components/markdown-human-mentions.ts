@@ -108,11 +108,7 @@ export function installMarkdownHumanMentions(parser: MarkdownIt): void {
     const restore = (value: string) => restoreMarkdownHumanMentions(value, mentions);
     const restoreToken = (token: Token) => {
       token.content = restore(token.content);
-      token.attrs =
-        token.attrs?.map(([name, value]) => [
-          name,
-          typeof value === "string" ? restore(value) : value,
-        ]) ?? null;
+      token.attrs = token.attrs?.map(([name, value]) => [name, restore(value)]) ?? null;
       token.children?.forEach(restoreToken);
     };
     for (const block of state.tokens) {
@@ -162,13 +158,7 @@ export function installMarkdownHumanMentions(parser: MarkdownIt): void {
     const token = tokens[index];
     const profileId = token?.attrGet("profile-id");
     return token && typeof profileId === "string" && profileId
-      ? '<openclaw-person-reference profile-id="' +
-          escapeMarkdownHtml(profileId) +
-          '" label="' +
-          escapeMarkdownHtml(token.content) +
-          '">' +
-          escapeMarkdownHtml(token.content) +
-          "</openclaw-person-reference>"
+      ? `<openclaw-person-reference profile-id="${escapeMarkdownHtml(profileId)}" label="${escapeMarkdownHtml(token.content)}">${escapeMarkdownHtml(token.content)}</openclaw-person-reference>`
       : "";
   };
 }

@@ -1,16 +1,14 @@
-import type { NativeBrowserTab } from "../../app/native-browser-bridge.ts";
-import { resizeBrowserViewport, type BrowserRequestClient } from "./browser-client.ts";
-import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
-import type { BrowserPanelView } from "./browser-panel-surface.ts";
+import { resizeBrowserViewport } from "./browser-client.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
 
-interface BrowserPanelViewportHost {
-  readonly host: { browserPanelIsOpen(): boolean };
-  readonly native: { readonly activeTab: NativeBrowserTab | undefined };
-  readonly activeTargetId: string | null;
-  readonly view: BrowserPanelView | null;
-  readonly operations: Pick<BrowserPanelOperationOwnership, "captureClient">;
-  runAction(action: (client: BrowserRequestClient) => Promise<void>): Promise<boolean>;
-}
+type BrowserPanelViewportHost = Pick<
+  BrowserPanelController,
+  "activeTargetId" | "view" | "runAction"
+> & {
+  readonly host: Pick<BrowserPanelController["host"], "browserPanelIsOpen">;
+  readonly native: Pick<BrowserPanelController["native"], "activeTab">;
+  readonly operations: Pick<BrowserPanelController["operations"], "captureClient">;
+};
 
 type ViewportResize = {
   targetId: string;

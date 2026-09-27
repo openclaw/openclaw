@@ -20,11 +20,6 @@ const CHART_TOP_PAD = 4;
 // Gradient defs need document-unique ids because tiles render into the light DOM.
 let gradientCounter = 0;
 
-function nextGradientId(): string {
-  gradientCounter += 1;
-  return `sparkline-tile-gradient-${gradientCounter}`;
-}
-
 /** Stat tile with an embedded area sparkline and pointer scrubbing. */
 class SparklineTile extends OpenClawLightDomElement {
   @property() label = "";
@@ -40,7 +35,7 @@ class SparklineTile extends OpenClawLightDomElement {
 
   @litState() private hoverIndex: number | null = null;
 
-  private readonly gradientId = nextGradientId();
+  private readonly gradientId = `sparkline-tile-gradient-${++gradientCounter}`;
 
   private get yRange(): { min: number; span: number } {
     let max = this.floorMax;

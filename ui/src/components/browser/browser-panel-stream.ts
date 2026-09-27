@@ -1,11 +1,12 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import type { BrowserPanelTab, BrowserRequestClient } from "./browser-client.ts";
+import type { BrowserRequestClient } from "./browser-client.ts";
 import { isBrowserScreencastUnsupportedError, requestBrowserScreencast } from "./browser-client.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import type {
   BrowserPanelControllerHost,
   BrowserPanelOperationOwnership,
 } from "./browser-panel-operation-ownership.ts";
-import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
+import { loadBrowserPanelImage } from "./browser-panel-surface.ts";
 import {
   BrowserScreencastClient,
   type BrowserScreencastFrame,
@@ -16,27 +17,23 @@ import { browserRouteKey } from "./browser-target.ts";
 const RETRY_DELAY_MS = 10_000;
 const RESIZE_RESTART_DEBOUNCE_MS = 500;
 
-type StreamState = {
-  activeTargetId: string | null;
-  view: BrowserPanelView | null;
-  tabs: BrowserPanelTab[];
-  urlDraft: string;
-  loading: boolean;
-};
-
-interface BrowserPanelStreamHost extends StreamState {
-  readonly host: BrowserPanelControllerHost;
-  readonly mode: "interact" | "annotate" | "inspect";
+interface BrowserPanelStreamHost extends Pick<
+  BrowserPanelController,
+  | "activeTargetId"
+  | "tabs"
+  | "host"
+  | "mode"
+  | "urlDraftEditing"
+  | "observedViewportSize"
+  | "setState"
+  | "clearUnavailableView"
+  | "refreshView"
+  | "refreshAll"
+> {
   readonly operations: Pick<
     BrowserPanelOperationOwnership,
     "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
   >;
-  readonly urlDraftEditing: boolean;
-  readonly observedViewportSize: { width: number; height: number } | null;
-  setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
-  clearUnavailableView(): boolean;
-  refreshView(targetId: string): Promise<void>;
-  refreshAll(): Promise<void>;
 }
 
 type Recovery = Pick<Attempt, "targetId" | "epoch" | "client">;

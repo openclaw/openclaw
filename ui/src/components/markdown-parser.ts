@@ -1,6 +1,5 @@
 import MarkdownIt, { type MarkdownIt as MarkdownItParser, type Token } from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
-import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
 import { isGitHubHost } from "./github-link-eligibility.ts";
 import {
@@ -8,10 +7,7 @@ import {
   parseGitHubItemPath,
   parseGitHubLinkTarget,
 } from "./github-link-target.ts";
-import {
-  installAssistantTranscriptRoleImageRenderer,
-  installAssistantTranscriptRoleMarkdown,
-} from "./markdown-assistant-transcript.ts";
+import { installAssistantTranscriptRoleMarkdown } from "./markdown-assistant-transcript.ts";
 import { markdownCodeBlockCopyText, renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { installMarkdownDetails } from "./markdown-details.ts";
 import {
@@ -29,30 +25,21 @@ import { installMarkdownTables } from "./markdown-tables.ts";
 import { replaceMarkdownTextMatches } from "./markdown-text-replacements.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
-const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const DISALLOWED_LINK_SCHEME_RE = /^(?!(?:https?|mailto):)[a-z][a-z0-9+.-]*:/i;
-// CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
-// CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
-// Hangul Syllables, and CJK Compatibility Ideographs.
+// Raw CJK suffixes delimit autolinks; percent-encoded URL content stays intact.
 const CJK_RE = new RegExp(
   "[\\u2E80-\\u2FFF\\u3000-\\u303F\\u3040-\\u309F\\u30A0-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uAC00-\\uD7AF\\uF900-\\uFAFF\\uFF01-\\uFF60]",
 );
 
-// Anchors carrying this class get a decorative GitHub icon painted by CSS
-// (styles/chat/text.css). The icon is never emitted as markup so it stays out
-// of the accessibility tree and out of copied text.
+// CSS paints the decorative mark outside the accessibility tree and copied text.
 const GITHUB_LINK_CLASS = "markdown-github-link";
-// Marks anchors whose visible text is the URL itself, which CSS may break at
-// any character. Authored labels keep normal word wrapping.
+// Only generated URL labels may wrap at any character.
 const BARE_URL_CLASS = "markdown-bare-url";
-// Anchors minted from a code span that held only a GitHub URL; they carry a
-// generated label exactly like linkify output.
+// Code-span URLs use the same generated labels as autolinks.
 const CODE_SPAN_LINK_MARKUP = "code-span-url";
 const CODE_SPAN_URL_BREAK_RE = /[\s\p{Cc}]/u;
 
-// Inline-code file links are rendered by the code_inline rule, which runs after
-// every core rule. The core rule therefore parks the resolved target here so the
-// renderer never re-parses a path the core rule already classified.
+// Core rules classify file links before the code_inline renderer consumes them.
 type MarkdownFileLinkMeta = {
   path: string;
   line: number | null;
@@ -60,8 +47,7 @@ type MarkdownFileLinkMeta = {
   title: string | null;
 };
 
-// Shortening a label needs every file link in the message, so the core rule
-// collects targets first and applies labels in a second pass.
+// Label shortening needs every file target before applying any label.
 type MarkdownFileLinkDecoration = {
   path: string;
   reference: string;
@@ -90,8 +76,7 @@ function renderRawMarkdownHtml(
   return escapeMarkdownHtml(content) + (block ? "\n" : "");
 }
 
-/** Visible text of the link opened at `openIndex`, used to tell an authored
- *  label apart from one that merely repeats the reference. */
+/** Authored labels differ from labels that merely repeat the reference. */
 function linkLabelText(children: readonly Token[], openIndex: number): string {
   let label = "";
   for (let cursor = openIndex + 1; cursor < children.length; cursor++) {
@@ -106,21 +91,10 @@ function linkLabelText(children: readonly Token[], openIndex: number): string {
   return label.trim();
 }
 
-function normalizeMarkdownImageLabel(text?: string | null): string {
-  const trimmed = text?.trim();
-  return trimmed ? trimmed : "image";
-}
-
 function parseWebLinkHref(href: string): URL | null {
-  let url: URL;
-  try {
-    url = new URL(href);
-  } catch {
-    // Relative and malformed hrefs are not web destinations at this stage; the
-    // docs shortlink rewrite in markdown.ts runs later and only targets docs.
-    return null;
-  }
-  return url.protocol === "https:" || url.protocol === "http:" ? url : null;
+  // Docs-relative rewriting runs later in markdown.ts.
+  const url = URL.parse(href);
+  return url?.protocol === "https:" || url?.protocol === "http:" ? url : null;
 }
 
 function formatGitHubLinkLabel(url: URL): string {
@@ -155,26 +129,18 @@ export function createMarkdownParser(): MarkdownItParser {
   const defaultCodeInlineRenderer = markdownParser.renderer.rules.code_inline!;
 
   markdownParser.enable("strikethrough");
-  installAssistantTranscriptRoleMarkdown(markdownParser, escapeMarkdownHtml);
+  installAssistantTranscriptRoleMarkdown(markdownParser);
   installMarkdownDetails(markdownParser);
   installMarkdownTables(markdownParser);
 
-  // Disable fuzzy link detection to prevent bare filenames like "README.md"
-  // from being auto-linked as "http://README.md". URLs with explicit protocol
-  // (https://...) and emails are still linkified.
+  // Bare filenames such as README.md are not web destinations.
   markdownParser.linkify.set({ fuzzyLink: false });
 
-  // Re-enable www. prefix detection per GFM spec: bare URLs without protocol
-  // must start with "www." to be auto-linked. This avoids false positives on
-  // filenames while preserving expected behavior for "www.example.com".
-  // GFM spec: valid domain = alphanumeric/underscore/hyphen segments separated
-  // by periods, at least one period, no underscores in last two segments.
+  // Keep GFM's www. autolinks without fuzzy filename detection.
   markdownParser.linkify.add("www", {
     validate(text, pos) {
       const tail = text.slice(pos);
-      // Match: . followed by domain and optional path, matching marked.js behavior.
-      // Stops at whitespace, < (HTML tag boundary), or CJK characters (RFC 3986:
-      // raw CJK is not valid in URLs; percent-encoded CJK like %E4%BD%A0 is fine).
+      // Preserve the previous autolink grammar, including its CJK boundary.
       const match = tail.match(
         /^\.(?:[a-zA-Z0-9-]+\.?)+[^\s<\u2E80-\u2FFF\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60]*/,
       );
@@ -193,8 +159,7 @@ export function createMarkdownParser(): MarkdownItParser {
         "'": "'",
       };
 
-      // Pre-count balanced pairs to avoid O(n²) rescans.
-      // balance[closeChar] = count(open) - count(close), negative means unbalanced
+      // Pre-count delimiters to avoid quadratic suffix scans.
       const balance: Record<string, number> = {};
       for (const [close, open] of Object.entries(balancePairs)) {
         balance[close] = 0;
@@ -220,7 +185,6 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         // GFM entity reference rule: strip trailing &entity; sequences.
         if (character === ";") {
-          // Backward scan to find & (O(n) total, avoids string allocation)
           let index = length - 2;
           while (index >= 0 && /[a-zA-Z0-9]/.test(tail.charAt(index))) {
             index--;
@@ -269,7 +233,7 @@ export function createMarkdownParser(): MarkdownItParser {
       for (const token of children) {
         if (
           token.type === "link_open" &&
-          DISALLOWED_LINK_SCHEME_RE.test(String(token.attrGet("href") ?? ""))
+          DISALLOWED_LINK_SCHEME_RE.test(token.attrGet("href") ?? "")
         ) {
           token.hidden = true;
           hideClose = true;
@@ -281,10 +245,7 @@ export function createMarkdownParser(): MarkdownItParser {
     }
   });
 
-  // Trim trailing CJK characters from auto-linked URLs (RFC 3986: raw CJK is
-  // not valid in URLs). markdown-it's built-in linkify for https:// URLs may
-  // swallow adjacent CJK text into the URL. This core rule runs after linkify
-  // and splits the CJK suffix back into a plain text token.
+  // Linkify can swallow adjacent CJK prose; return only its suffix to plain text.
   markdownParser.core.ruler.after("linkify", "linkify-cjk-trim", (state) => {
     for (const blockToken of state.tokens) {
       if (blockToken.type !== "inline" || !blockToken.children) {
@@ -296,9 +257,7 @@ export function createMarkdownParser(): MarkdownItParser {
         if (!token || token.type !== "link_open") {
           continue;
         }
-        // Only trim linkify-generated autolinks, not explicit markdown links
-        // like [OpenClaw中文](https://docs.openclaw.ai) where CJK in display
-        // text is intentional and href must not be rewritten.
+        // Authored labels and destinations keep their intentional CJK content.
         if (token.markup !== "linkify") {
           continue;
         }
@@ -308,9 +267,7 @@ export function createMarkdownParser(): MarkdownItParser {
           continue;
         }
         const displayText = textToken.content;
-        // Scan backward to find trailing CJK suffix only.
-        // Middle CJK must be preserved (e.g. https://example.com/你/test stays intact);
-        // only strip a contiguous CJK tail adjacent to non-URL text.
+        // Interior CJK stays in the URL (https://example.com/你/test).
         let cjkIndex = displayText.length;
         while (cjkIndex > 0 && CJK_RE.test(displayText.charAt(cjkIndex - 1))) {
           cjkIndex--;
@@ -322,7 +279,7 @@ export function createMarkdownParser(): MarkdownItParser {
         const cjkTail = displayText.slice(cjkIndex);
         // Rebuild href by preserving the scheme prefix that linkify added but
         // display text omits (e.g. "mailto:" for emails, "http://" for www links).
-        const href = String(token.attrGet("href") ?? "");
+        const href = token.attrGet("href") ?? "";
         const prefixLength = href.indexOf(displayText);
         const hrefPrefix = prefixLength > 0 ? href.slice(0, prefixLength) : "";
         token.attrSet("href", hrefPrefix + trimmedDisplay);
@@ -357,7 +314,7 @@ export function createMarkdownParser(): MarkdownItParser {
           continue;
         }
         if (token.type === "link_open") {
-          const href = String(token.attrGet("href") ?? "");
+          const href = token.attrGet("href") ?? "";
           if (href && !token.attrGet("data-session-href")) {
             let decodedHref = href;
             try {
@@ -381,10 +338,7 @@ export function createMarkdownParser(): MarkdownItParser {
                 if (target.line !== null) {
                   token.attrSet("data-file-line", String(target.line));
                 }
-                // The author wrote this label, so it is never rewritten; the
-                // tooltip is the only place the reference behind it survives —
-                // and it is skipped when the label already is that reference,
-                // matching the shortened links below.
+                // Keep authored labels; expose their reference only when different.
                 const reference = decodedHref.trim();
                 if (linkLabelText(children, index) !== reference) {
                   token.attrSet("title", reference);
@@ -473,26 +427,18 @@ export function createMarkdownParser(): MarkdownItParser {
         );
       }
     }
-    // A path carries far more characters than identity: the basename is what a
-    // reader scans for, and the glyph already says "workspace file". Paths that
-    // share a basename keep just enough trailing segments to stay distinct.
+    // Colliding basenames retain enough trailing path segments to stay distinct.
     const labels = shortestFileLabels(decorations.map((decoration) => decoration.path));
     for (const decoration of decorations) {
       const label = labels.get(decoration.path) ?? decoration.path;
-      // Line suffixes (":42") are part of the reference, not the path, and stay
-      // on the visible label because they are what makes the link specific.
+      // Line suffixes stay on the shortened label.
       decoration.applyLabel(label + decoration.reference.slice(decoration.path.length));
     }
   });
 
   installMarkdownSessionLinks(markdownParser);
 
-  // Classify web anchors for presentation; runs after linkify so bare URLs are
-  // already anchors. The GitHub mark skips links whose only content is an image
-  // (badges/shields), where a mark beside a mark reads as noise. markdown-it
-  // does not linkify inside code spans or fences; a code span holding nothing
-  // but a GitHub URL is promoted here to the same anchor a bare URL gets, since
-  // models routinely quote links that way and the reference is what matters.
+  // Give bare and code-span GitHub URLs the same label; image-only links get no mark.
   markdownParser.core.ruler.after("linkify", "web-link-classes", (state) => {
     for (const blockToken of state.tokens) {
       if (blockToken.type !== "inline" || !blockToken.children) {
@@ -507,11 +453,8 @@ export function createMarkdownParser(): MarkdownItParser {
           continue;
         }
         if (open?.type === "code_inline" && linkDepth === 0) {
-          // The URL parser strips or percent-encodes whitespace and control
-          // characters instead of failing, so a span with prose beside the URL
-          // would fold that prose into the href. CommonMark has already stripped
-          // symmetric padding; anything left is content, and only a span that is
-          // entirely one URL is promoted.
+          // URL parsing absorbs whitespace/control characters, so reject mixed prose first.
+          // CommonMark already removed symmetric code-span padding.
           const content = open.content;
           const codeUrl = CODE_SPAN_URL_BREAK_RE.test(content) ? null : parseWebLinkHref(content);
           if (!codeUrl || !isGitHubHost(codeUrl.hostname)) {
@@ -528,7 +471,7 @@ export function createMarkdownParser(): MarkdownItParser {
           continue;
         }
         linkDepth += 1;
-        const href = String(open.attrGet("href") ?? "");
+        const href = open.attrGet("href") ?? "";
         const url = href ? parseWebLinkHref(href) : null;
         if (!url) {
           continue;
@@ -632,8 +575,6 @@ export function createMarkdownParser(): MarkdownItParser {
   // Override html_block and html_inline to escape raw HTML (#13937). Progress-card
   // rendering strips non-progress HTML instead of exposing escaped tag text.
   // Only generated task-list checkboxes bypass escaping; DOMPurify still sanitizes them.
-  // Renderer rules degrade to empty output on impossible token misses instead of
-  // throwing mid-render; markdown input is untrusted and the chat view must not crash.
   markdownParser.renderer.rules.html_block = (tokens, index, _options, env) =>
     renderRawMarkdownHtml(tokens, index, env?.progressBars === true, true);
   markdownParser.renderer.rules.html_inline = (tokens, index, _options, env) => {
@@ -661,40 +602,12 @@ export function createMarkdownParser(): MarkdownItParser {
     return rendered;
   };
 
-  // Remote images can stay click-to-open without truncating a document preview.
-  installAssistantTranscriptRoleImageRenderer(markdownParser, {
-    escapeHtml: escapeMarkdownHtml,
-    isInlineDataImage: (src) => INLINE_DATA_IMAGE_RE.test(src),
-    normalizeLabel: normalizeMarkdownImageLabel,
-    assistantLabel: () => t("sessionsView.assistant"),
-    openImageLabel: (alt, hasAlt) =>
-      t("chat.imageLightbox.open", {
-        title: hasAlt ? alt : t("chat.imageLightbox.untitled"),
-      }),
-    renderExternalImageFallback: (src, renderedLabel, linkedImage) => {
-      if (!parseWebLinkHref(src)) {
-        return renderedLabel;
-      }
-      const label = `<span>${escapeMarkdownHtml(t("chat.externalImage.notLoaded"))}: ${renderedLabel}</span>`;
-      const action = linkedImage
-        ? ""
-        : ` <a href="${escapeMarkdownHtml(src)}">${escapeMarkdownHtml(t("chat.externalImage.open"))}</a>`;
-      return `<span class="markdown-external-image">${label}${action}</span>`;
-    },
-    interactiveImages: (env) =>
-      (env as Partial<MarkdownRenderEnv> | undefined)?.interactiveImages === true,
-    allowRemoteImages: (env) =>
-      (env as Partial<MarkdownRenderEnv> | undefined)?.remoteImages === true,
-  });
-
   // Fenced and indented blocks share one interaction and overflow surface.
   markdownParser.renderer.rules.fence = (tokens, index, _options, env) => {
     const token = tokens[index];
     if (!token) {
       return "";
     }
-    // token.info contains the full fence info string (e.g., "json title=foo");
-    // extract only the first whitespace-separated token as the language.
     const language = token.info.trim().split(/\s+/)[0] || "";
     // An unfinished fence consumes the remaining input; only container closers can
     // follow it. Invalid fence-looking prose must not de-highlight an earlier block.

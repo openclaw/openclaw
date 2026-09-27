@@ -1,10 +1,6 @@
 import { t } from "../../i18n/index.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
-import type {
-  BrowserRequestClient,
-  BrowserInspectedNode,
-  BrowserPanelTab,
-} from "./browser-client.ts";
+import type { BrowserInspectedNode, BrowserRequestClient } from "./browser-client.ts";
 import {
   clickBrowserCoords,
   inspectBrowserElementAt,
@@ -13,6 +9,7 @@ import {
   pressBrowserKey,
   scrollBrowserBy,
 } from "./browser-client.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import {
@@ -22,25 +19,25 @@ import {
   browserPanelShouldForwardKey,
   dispatchCompositedBrowserAnnotation,
   paintBrowserPanelOverlay,
-  type BrowserPanelView,
 } from "./browser-panel-surface.ts";
 
 const INSPECT_THROTTLE_MS = 120;
 
-type BrowserPanelInputState = {
-  mode: "interact" | "annotate" | "inspect";
-  strokes: AnnotationStroke[];
-  view: BrowserPanelView | null;
-  tabs: BrowserPanelTab[];
-  activeTargetId: string | null;
-  inspected: BrowserInspectedNode | null;
-  inspectPointer: { x: number; y: number } | null;
-  evaluateUnavailable: boolean;
-  errorText: string | null;
-  noticeText: string | null;
-};
-
-interface BrowserPanelInputHost extends BrowserPanelInputState {
+interface BrowserPanelInputHost extends Pick<
+  BrowserPanelController,
+  | "mode"
+  | "strokes"
+  | "view"
+  | "tabs"
+  | "activeTargetId"
+  | "inspected"
+  | "evaluateUnavailable"
+  | "errorText"
+  | "setState"
+  | "runAction"
+  | "reportError"
+  | "exitCaptureModes"
+> {
   readonly host: {
     readonly renderRoot: HTMLElement | DocumentFragment;
     readonly updateComplete: Promise<boolean>;
@@ -53,16 +50,6 @@ interface BrowserPanelInputHost extends BrowserPanelInputState {
     BrowserPanelPendingInput,
     "clearInput" | "queueInspection" | "queueWheel"
   >;
-  setState<Key extends keyof BrowserPanelInputState>(
-    key: Key,
-    value: BrowserPanelInputState[Key],
-  ): void;
-  runAction(
-    action: (client: BrowserRequestClient) => Promise<void>,
-    refreshView?: boolean,
-  ): Promise<boolean>;
-  reportError(error: unknown): void;
-  exitCaptureModes(): void;
 }
 
 type BrowserPanelDrawingGesture = {

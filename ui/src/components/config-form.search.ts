@@ -1,5 +1,7 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { indexFirstByKey } from "../../../src/shared/dedupe-by-key.ts";
 import type { ConfigUiHints } from "../api/types.ts";
 import {
   localizedHintForPath,
@@ -27,44 +29,24 @@ export function hasConfigSearchCriteria(criteria: ConfigSearchCriteria | undefin
 }
 
 export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
-  const tags: string[] = [];
-  const seen = new Set<string>();
+  const tags = new Set<string>();
   const stripped = query.replace(/(?:^|\s)tag:([^\s]+)/gi, (_, token: string) => {
     const normalized = normalizeLowercaseStringOrEmpty(token);
-    if (normalized && !seen.has(normalized)) {
-      seen.add(normalized);
-      tags.push(normalized);
+    if (normalized) {
+      tags.add(normalized);
     }
     return "";
   });
   return {
     text: normalizeLowercaseStringOrEmpty(stripped),
-    tags,
+    tags: [...tags],
   };
 }
 
 function normalizeTags(raw: unknown): string[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const tags: string[] = [];
-  for (const value of raw) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const tag = value.trim();
-    if (!tag) {
-      continue;
-    }
-    const key = normalizeLowercaseStringOrEmpty(tag);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    tags.push(tag);
-  }
-  return tags;
+  return [
+    ...indexFirstByKey(normalizeTrimmedStringList(raw), normalizeLowercaseStringOrEmpty).values(),
+  ];
 }
 
 export function resolveConfigFieldMeta(
@@ -153,48 +135,25 @@ export function matchesNodeSearch(params: {
   if (matchesNodeSelf({ schema, path, hints, criteria, textMatcher })) {
     return true;
   }
+  const matchesChild = (schema: JsonSchema, value: unknown, segment: string | number) =>
+    matchesNodeSearch({ ...params, schema, value, path: [...path, segment] });
 
   const type = schemaType(schema);
   if (type === "object") {
     const fallback = value ?? schema.default;
     const obj = asNonArrayRecord(fallback);
     const properties = schema.properties ?? {};
-    for (const [propertyKey, node] of Object.entries(properties)) {
-      if (
-        matchesNodeSearch({
-          ...params,
-          schema: node,
-          value: obj[propertyKey],
-          path: [...path, propertyKey],
-        })
-      ) {
-        return true;
-      }
+    if (Object.entries(properties).some(([key, node]) => matchesChild(node, obj[key], key))) {
+      return true;
     }
     const additional = schema.additionalProperties;
     if (additional && typeof additional === "object") {
       const reserved = new Set(Object.keys(properties));
       const dynamicEntries = Object.entries(obj).filter(([entryKey]) => !reserved.has(entryKey));
       if (dynamicEntries.length === 0) {
-        return matchesNodeSearch({
-          ...params,
-          schema: additional,
-          value: undefined,
-          path: [...path, "*"],
-        });
+        return matchesChild(additional, undefined, "*");
       }
-      for (const [entryKey, entryValue] of dynamicEntries) {
-        if (
-          matchesNodeSearch({
-            ...params,
-            schema: additional,
-            value: entryValue,
-            path: [...path, entryKey],
-          })
-        ) {
-          return true;
-        }
-      }
+      return dynamicEntries.some(([key, entryValue]) => matchesChild(additional, entryValue, key));
     }
     return false;
   }
@@ -206,15 +165,7 @@ export function matchesNodeSearch(params: {
   const searchLength = Math.max(values.length, arrayItemSchemaIndexes(schema).length);
   for (let index = 0; index < searchLength; index += 1) {
     const itemSchema = arrayItemSchema(schema, index);
-    if (
-      itemSchema &&
-      matchesNodeSearch({
-        ...params,
-        schema: itemSchema,
-        value: values[index],
-        path: [...path, index],
-      })
-    ) {
+    if (itemSchema && matchesChild(itemSchema, values[index], index)) {
       return true;
     }
   }

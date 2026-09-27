@@ -19,10 +19,6 @@ const RICH_CONTENT_CLOSE_DELAY = 100;
 
 let nextTooltipId = 0;
 
-function createTooltipId() {
-  return `openclaw-tooltip-${++nextTooltipId}`;
-}
-
 class TooltipProvider extends OpenClawLitElement {
   @property({ type: Number }) delay = HOVER_DELAY;
   @property({ type: Number }) skipDelay = SKIP_DELAY;
@@ -169,7 +165,7 @@ class Tooltip extends OpenClawLitElement {
   #descriptionElement: HTMLSpanElement | null = null;
   #richContentObserver: MutationObserver | null = null;
   #tooltipProvider: TooltipProvider | null = null;
-  readonly #tooltipId = createTooltipId();
+  readonly #tooltipId = `openclaw-tooltip-${++nextTooltipId}`;
   readonly #descriptionId = `${this.#tooltipId}-description`;
 
   static override styles = css`
