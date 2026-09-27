@@ -642,9 +642,16 @@ export function createStartedThreadHarness(
   }, options);
 }
 
-export function createResumeHarness(threadId = "thread-existing") {
+export function createResumeHarness(
+  threadId = "thread-existing",
+  requestImpl: Parameters<typeof createAppServerHarness>[0] = async () => undefined,
+) {
   return createAppServerHarness(
-    async (method, params) => {
+    async (method, params, requestOptions) => {
+      const override = await requestImpl(method, params, requestOptions);
+      if (override !== undefined) {
+        return override;
+      }
       if (method === "configRequirements/read") {
         return { requirements: null };
       }

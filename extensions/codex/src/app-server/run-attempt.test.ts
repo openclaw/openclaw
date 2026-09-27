@@ -8867,7 +8867,13 @@ describe("runCodexAppServerAttempt", () => {
         const run = runCodexAppServerAttempt(params, {
           pluginConfig: { appServer: { enableUltrafast: true, serviceTier: baseline } },
         });
-        await run.waitForTurnAccepted();
+        await vi.waitFor(
+          () =>
+            expect(
+              harness.requests.filter((request) => request.method === "turn/start"),
+            ).toHaveLength(turn + 1),
+          fastWait,
+        );
         await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
         await run;
       }
