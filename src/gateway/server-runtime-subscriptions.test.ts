@@ -353,7 +353,10 @@ describe("startGatewayEventSubscriptions", () => {
     expect(agentEventHandlerMocks.persistLifecycle).toHaveBeenCalledWith(
       expect.objectContaining({ assertCommitAllowed: expect.any(Function) }),
     );
-    expect(agentEventHandlerMocks.resolveSessionKey).toHaveBeenCalledWith(runId, undefined);
+    expect(agentEventHandlerMocks.resolveSessionKey).toHaveBeenCalledWith(runId, {
+      agentId: undefined,
+      projection: undefined,
+    });
     expect(warn).toHaveBeenCalledWith(
       "Agent event dispatch failed",
       expect.objectContaining({ runId, stream: "lifecycle" }),

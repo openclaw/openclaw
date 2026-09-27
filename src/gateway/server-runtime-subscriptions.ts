@@ -314,7 +314,11 @@ export function startGatewayEventSubscriptions(params: {
             nodeSendToSession: params.nodeSendToSession,
             agentRunSeq: params.agentRunSeq,
             chatRunState: params.chatRunState,
-            resolveSessionKeyForRun,
+            resolveSessionKeyForRun: (runId, options) =>
+              resolveSessionKeyForRun(runId, {
+                ...options,
+                projection: params.getSessionRowProjection?.(),
+              }),
             clearAgentRunContext,
             toolEventRecipients: params.toolEventRecipients,
             sessionEventSubscribers: params.sessionEventSubscribers,
@@ -536,10 +540,10 @@ export function startGatewayEventSubscriptions(params: {
           // Context cleanup can precede a terminal event. Resolve its persisted
           // run mapping before the lazy chat handler consumes the same event.
           terminalPreparation = getSessionKeyModule().then(async ({ resolveSessionKeyForRun }) => {
-            const sessionKey = resolveSessionKeyForRun(
-              evt.runId,
-              sessionAgentId ? { agentId: sessionAgentId } : undefined,
-            );
+            const sessionKey = resolveSessionKeyForRun(evt.runId, {
+              agentId: sessionAgentId,
+              projection: params.getSessionRowProjection?.(),
+            });
             if (sessionKey) {
               await prepareTerminalPersistence(sessionKey);
             }
