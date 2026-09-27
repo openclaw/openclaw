@@ -34,6 +34,17 @@ const catalog = {
       toolDetails: "Tool details",
       reloadFailed: "Failed to reload the latest file.",
       reloadBlocked: "Save or discard your file edits before reloading.",
+      draftRecovery: {
+        review: "Review file drafts",
+        description:
+          "Copy or download unsaved edits before discarding them. This only changes drafts in this tab, not files on disk. After resolving all drafts, try Refresh again.",
+        copy: "Copy {name}",
+        download: "Download {name}",
+        discard: "Discard {name}",
+        keep: "Keep drafts",
+        changed: "These edits changed. Close this dialog and review the drafts again.",
+        copyFailed: "Could not copy the edits. Select the text or download the draft instead.",
+      },
       overwriteLoadFailed: "Failed to load the latest file before overwriting.",
       fullContentLoadFailed: "Failed to load full content: {error}",
     },

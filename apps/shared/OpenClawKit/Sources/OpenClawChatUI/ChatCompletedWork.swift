@@ -173,7 +173,7 @@ extension OpenClawChatMessage {
         self.hasWorkMedia || (self.role.lowercased() == "assistant" && ChatMessageVisibleText.hasVisibleText(in: self))
     }
 
-    private var workPhase: String? {
+    var workPhase: String? {
         if self.streamSegmentID != nil { return "commentary" }
         struct Signature: Decodable {
             let v: Int?

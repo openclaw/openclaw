@@ -141,6 +141,9 @@ Native dependency policy:
       the remaining value must use plain decimal digits without leading zeros,
       so values such as `1e5` or `007` are rejected. Unset the variable to
       disable the watchdog.
+      Canceling a compiler shard batch joins each compiler, including forced
+      termination when needed, before releasing checkout artifact ownership so
+      the next build or check can proceed.
 
   </Accordion>
 

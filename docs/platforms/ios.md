@@ -115,6 +115,14 @@ Long-press a session in the sidebar or Sessions screen to open its session actio
 
 A colored session has a narrow leading stripe in session lists and a small dot beside its title in Chat. Unset colors show neither marker. The Gateway stores color names, not hex values; the app adjusts their hues for light and dark appearances.
 
+## Message times and models
+
+Completed message groups show relative time for the past week and a compact
+local date for older messages, alongside usage when available. VoiceOver reads
+the exact date, time, and time zone. Assistant replies show their recorded
+originating model when known; selecting another model does not change older
+replies. Streaming text, commentary, and tool activity do not gain these footers.
+
 ## Sources in chat
 
 Completed answers show up to eight compact **Sources** cards for cited pages

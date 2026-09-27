@@ -11,6 +11,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import { createAgentsApiBindings } from "./agentsapi-bindings.js";
 import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
+import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 
 const AGENTS_API_NATIVE_TOOL_REQUIREMENTS = [
   "exec",
@@ -201,18 +202,7 @@ function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
       { scope: "harness" },
     );
   }
-  const target = params.sessionTarget;
-  if (
-    !target?.agentId ||
-    !target.sessionId ||
-    !target.sessionKey ||
-    !target.storePath ||
-    target.sessionId !== params.sessionId ||
-    target.agentId !== params.agentId ||
-    target.sessionKey !== params.sessionKey
-  ) {
-    throw new Error("Agents API requires a matching host-prepared session target");
-  }
+  const target = requireAgentsApiSessionTarget(params);
   if (!params.resolvedApiKey) {
     throw new Error("Agents API MVP requires an OpenAI API key");
   }
@@ -224,11 +214,5 @@ function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
   if (params.contextEngine && params.contextEngine.info.id !== "legacy") {
     throw new Error("Agents API MVP currently supports only the default legacy context engine");
   }
-  return {
-    ...target,
-    agentId: target.agentId,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-  };
+  return target;
 }

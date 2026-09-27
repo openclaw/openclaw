@@ -11,11 +11,7 @@ import type {
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  deriveLastRoutePolicy,
-  normalizeAccountId,
-  resolveThreadSessionKeys,
-} from "openclaw/plugin-sdk/routing";
+import { deriveLastRoutePolicy, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   expandTelegramAllowFromWithAccessGroups,
@@ -39,12 +35,11 @@ import {
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramMessageThreadSpec,
   resolveTelegramThreadSpec,
-  shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import {
-  resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
+  resolveTelegramTargetSession,
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { resolveTelegramForumTopicMetadata } from "./forum-topic-metadata.js";
@@ -299,7 +294,7 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  const sendTyping = async () => {
+  const sendChatAction = async (action: "typing" | "record_voice") => {
     if (threadSpec.scope === "direct-messages") {
       return;
     }
@@ -308,26 +303,16 @@ export const buildTelegramMessageContext = async ({
       fn: () =>
         sendChatActionHandler.sendChatAction(
           chatId,
-          "typing",
+          action,
           buildTypingThreadParams(replyThreadId),
         ),
     });
   };
+  const sendTyping = () => sendChatAction("typing");
 
   const sendRecordVoice = async () => {
-    if (threadSpec.scope === "direct-messages") {
-      return;
-    }
     try {
-      await withTelegramApiErrorLogging({
-        operation: "sendChatAction",
-        fn: () =>
-          sendChatActionHandler.sendChatAction(
-            chatId,
-            "record_voice",
-            buildTypingThreadParams(replyThreadId),
-          ),
-      });
+      await sendChatAction("record_voice");
     } catch (err) {
       logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
     }
@@ -379,24 +364,17 @@ export const buildTelegramMessageContext = async ({
     return false;
   };
 
-  const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+  const sessionKey = resolveTelegramTargetSession({
     cfg,
     route,
     chatId,
     isGroup,
     senderId,
-  });
-  const useDmThreadSession = shouldUseTelegramDmThreadSession({
     dmThreadId,
     botHasTopicsEnabled:
       (threadSpec.scope === "dm" && msg.is_topic_message === true) ||
       resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
   });
-  const threadKeys =
-    useDmThreadSession && dmThreadId != null
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
-      : null;
-  const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   route = {
     ...route,
     sessionKey,

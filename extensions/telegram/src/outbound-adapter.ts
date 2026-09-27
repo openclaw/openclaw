@@ -287,10 +287,9 @@ export async function sendTelegramPayloadMessages(params: {
   const projectionCursor = promptContextSource
     ? createTelegramPromptContextProjectionCursor(promptContextSource)
     : undefined;
-  const projectionOptions = (finalPart: boolean) =>
-    projectionCursor
-      ? { promptContextProjectionPlan: { cursor: projectionCursor, finalPart } }
-      : {};
+  const projectionOptions = projectionCursor
+    ? { promptContextProjectionPlan: { cursor: projectionCursor, finalPart: true } }
+    : {};
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
@@ -319,7 +318,7 @@ export async function sendTelegramPayloadMessages(params: {
     }
     return await params.sendLocation(params.to, payload.location, {
       ...params.baseOpts,
-      ...projectionOptions(true),
+      ...projectionOptions,
       buttons,
       quoteText,
     });
@@ -352,7 +351,7 @@ export async function sendTelegramPayloadMessages(params: {
 
   return await params.send(params.to, text, {
     ...payloadOpts,
-    ...projectionOptions(true),
+    ...projectionOptions,
     ...(mediaUrls.length === 1
       ? { mediaUrl: mediaUrls[0] }
       : mediaUrls.length > 1
@@ -517,11 +516,7 @@ export function createTelegramOutboundAdapter(
           ...params,
           resolveSend,
         });
-        return toTelegramOutboundResult(
-          await send(outboundTo, params.text, {
-            ...baseOpts,
-          }),
-        );
+        return toTelegramOutboundResult(await send(outboundTo, params.text, baseOpts));
       },
       sendMedia: async (params) => {
         const { outboundTo, send, baseOpts } = await resolveTelegramOutboundSendContext({

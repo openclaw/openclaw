@@ -112,15 +112,18 @@ it.each(
           expect.objectContaining(nextPredecessorMessage),
         ]);
       } else if (transcript === "live run" || transcript === "live stream") {
+        const text = transcript === "live stream" ? "Predecessor is still working." : "";
         emitGatewayEvent("chat", {
           sessionKey: previous.key,
           agentId: "main",
           runId: "predecessor-live-run",
           seq: 1,
           state: "delta",
-          deltaText: transcript === "live stream" ? "Predecessor is still working." : "",
+          deltaText: text,
+          message: { role: "assistant", content: [{ type: "text", text }] },
         });
         expect(pane.state.chatRunId).toBe("predecessor-live-run");
+        expect(pane.state.chatStream).toBe(text);
         expect(getChatSessionProjection(pane.state).entries).toEqual([]);
       } else if (transcript === "optimistic-only") {
         reduceChatSessionProjection(pane.state, {

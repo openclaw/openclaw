@@ -185,6 +185,7 @@ function createAgentDatabaseExecution(
   const aliases = new Map<string, () => void>();
   const assertAgentAdmitted = captureAgentDatabaseAdmission(agentId, { env: context.environment });
   let retired = false;
+  let revoked = false;
   let borrowers = 0;
   let creationReference: object | undefined;
   let generation: AgentDatabaseNativeGeneration | undefined;
@@ -560,6 +561,14 @@ function createAgentDatabaseExecution(
         finishRetirement();
       })().catch((error: unknown) => {
         closing = undefined;
+        if (!revoked) {
+          // A rejected native close has not retired anything yet: the owner still holds
+          // its generation and lease, and `executions` still points at it. Leaving it
+          // retired would refuse every later borrower with "admission is closed" until
+          // the process drains. Re-admit the owner instead; its retained cleanupFailure
+          // makes the next request retry the native close before any new work.
+          retired = false;
+        }
         throw error;
       });
       return closing;
@@ -583,6 +592,7 @@ function createAgentDatabaseExecution(
       agentId,
       path: alias,
       revoke() {
+        revoked = true;
         retired = true;
         clearIdleTimer();
       },

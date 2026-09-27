@@ -417,6 +417,7 @@ export function toToolDefinitions(
               const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
                 toolCallId,
                 toolName: name,
+                toolKind: hookMetadata?.toolKind,
                 params: executeParams,
                 ctx: hookContext,
               });

@@ -5,7 +5,6 @@ import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -125,7 +124,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         path: opts.webhookPath,
         legacyWebhook: opts.legacyWebhook ?? account.config.legacyWebhook,
         secret: opts.webhookSecret ?? account.config.webhookSecret,
-        runtime: opts.runtime as RuntimeEnv,
+        runtime: opts.runtime,
         buildContext: pluginChannelRuntime?.inbound.buildContext,
         // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
         dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,

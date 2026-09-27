@@ -1,3 +1,4 @@
+import { PluginHostObject } from "../plugins/plugin-instance-owned-values.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { copyAgentToolAvailability } from "./agent-tool-availability.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -13,25 +14,54 @@ export type AgentToolActionDescriptor = Readonly<{
   operation: "filesystem" | "memory" | "openclaw" | "process";
 }>;
 
-const actionDescriptors = new WeakMap<AnyAgentTool, AgentToolActionDescriptor>();
+// Rebuilt tools retain prepared classification without adding weak-table edges.
+class ToolActionMetadata extends PluginHostObject {
+  #descriptor: AgentToolActionDescriptor;
+
+  constructor(tool: AnyAgentTool, descriptor: AgentToolActionDescriptor) {
+    super(tool);
+    this.#descriptor = descriptor;
+  }
+
+  static get(tool: AnyAgentTool): AgentToolActionDescriptor | undefined {
+    return #descriptor in tool ? tool.#descriptor : undefined;
+  }
+
+  static set(tool: AnyAgentTool, descriptor: AgentToolActionDescriptor): void {
+    if (#descriptor in tool) {
+      tool.#descriptor = descriptor;
+    } else {
+      void new ToolActionMetadata(tool, descriptor);
+    }
+  }
+}
+
+const memoryAction: AgentToolActionDescriptor = Object.freeze({
+  family: "data",
+  operation: "memory",
+});
+const openclawAction: AgentToolActionDescriptor = Object.freeze({
+  family: "tool",
+  operation: "openclaw",
+});
 
 export function bindAgentToolActionDescriptor(
   tool: AnyAgentTool,
   descriptor: AgentToolActionDescriptor,
 ): void {
-  actionDescriptors.set(tool, descriptor);
+  ToolActionMetadata.set(tool, descriptor);
 }
 
 export function getAgentToolActionDescriptor(
   tool: AnyAgentTool,
 ): AgentToolActionDescriptor | undefined {
-  return actionDescriptors.get(tool);
+  return ToolActionMetadata.get(tool);
 }
 
 function copyAgentToolActionDescriptor(source: AnyAgentTool, target: AnyAgentTool): void {
-  const descriptor = actionDescriptors.get(source);
+  const descriptor = getAgentToolActionDescriptor(source);
   if (descriptor) {
-    actionDescriptors.set(target, descriptor);
+    bindAgentToolActionDescriptor(target, descriptor);
   }
 }
 
@@ -50,15 +80,12 @@ export function copyBeforeToolCallWrapperMetadata(
 
 /** Bind the broad family at final assembly from private, process-stable owner metadata. */
 export function bindAssembledAgentToolActionDescriptor(tool: AnyAgentTool): void {
-  if (actionDescriptors.has(tool)) {
+  if (getAgentToolActionDescriptor(tool)) {
     return;
   }
   const kind = getPluginToolMeta(tool)?.kind;
   const memory = kind === "memory" || (Array.isArray(kind) && kind.includes("memory"));
-  actionDescriptors.set(
-    tool,
-    memory ? { family: "data", operation: "memory" } : { family: "tool", operation: "openclaw" },
-  );
+  bindAgentToolActionDescriptor(tool, memory ? memoryAction : openclawAction);
 }
 
 /**

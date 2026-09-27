@@ -102,12 +102,13 @@ export class CodexNativeSubagentCompletionDelivery {
     childState.deliveringCompletion = true;
     let deferredToForeground = false;
     try {
-      const read = state.taskRuntime?.prepareTaskRunRead
-        ? await state.taskRuntime.prepareTaskRunRead(childState.runId)
-        : () =>
-            state.taskRuntime
-              ?.listTaskRecords()
-              .filter((task) => task.runId === childState.runId) ?? [];
+      await state.mirror?.settlePendingWrites();
+      if (!this.isCurrent(state, childState)) {
+        return;
+      }
+      const read = state.taskRuntime
+        ? await state.taskRuntime.prepareTaskRunRead!(childState.runId)
+        : () => [];
       if (!this.isCurrent(state, childState)) {
         return;
       }
@@ -134,9 +135,7 @@ export class CodexNativeSubagentCompletionDelivery {
           deliveryStatus: "failed" as const,
           error: exhaustedError,
         };
-        const updated = state.taskRuntime?.setDetachedTaskDeliveryStatusByRunIdAsync
-          ? await state.taskRuntime.setDetachedTaskDeliveryStatusByRunIdAsync(params)
-          : state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId(params);
+        const updated = await state.taskRuntime?.setDetachedTaskDeliveryStatusByRunIdAsync!(params);
         if (!this.isCurrent(state, childState)) {
           return;
         }
@@ -230,11 +229,7 @@ export class CodexNativeSubagentCompletionDelivery {
         deliveryStatus: "pending" as const,
         error,
       };
-      if (state.taskRuntime?.setDetachedTaskDeliveryStatusByRunIdAsync) {
-        await state.taskRuntime.setDetachedTaskDeliveryStatusByRunIdAsync(params);
-      } else {
-        state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId(params);
-      }
+      await state.taskRuntime?.setDetachedTaskDeliveryStatusByRunIdAsync!(params);
       this.scheduleRetry(childState, error);
     } catch (error) {
       if (
@@ -435,9 +430,7 @@ export class CodexNativeSubagentCompletionDelivery {
             }
           : {}),
       };
-      const updated = state.taskRuntime?.finalizeTaskRunByRunIdAsync
-        ? await state.taskRuntime.finalizeTaskRunByRunIdAsync(params)
-        : state.taskRuntime?.finalizeTaskRunByRunId(params);
+      const updated = await state.taskRuntime?.finalizeTaskRunByRunIdAsync!(params);
       if (!this.isCurrent(state, child)) {
         return false;
       }
@@ -473,9 +466,7 @@ export class CodexNativeSubagentCompletionDelivery {
           ? ("delivered" as const)
           : ("pending" as const),
       };
-      const updated = state.taskRuntime?.setDetachedTaskDeliveryStatusByRunIdAsync
-        ? await state.taskRuntime.setDetachedTaskDeliveryStatusByRunIdAsync(params)
-        : state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId(params);
+      const updated = await state.taskRuntime?.setDetachedTaskDeliveryStatusByRunIdAsync!(params);
       if (!this.isCurrent(state, child)) {
         return false;
       }

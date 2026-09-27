@@ -90,21 +90,21 @@ export function projectMemoryWikiOverviewItem(
   const updatedAt = normalizeOptionalString(page.updatedAt);
   const sourceType = normalizeOptionalString(page.sourceType);
   const snippet = extractSnippet(body);
-  return Object.assign(
-    { pagePath: page.relativePath, title: page.title, kind: page.kind },
-    page.id ? { id: page.id } : {},
-    updatedAt ? { updatedAt } : {},
-    sourceType ? { sourceType } : {},
-    {
-      claimCount: page.claims.length,
-      questionCount: page.questions.length,
-      contradictionCount: page.contradictions.length,
-      claims: page.claims.map((claim) => claim.text).slice(0, 3),
-      questions: page.questions.slice(0, 3),
-      contradictions: page.contradictions.slice(0, 3),
-    },
-    snippet ? { snippet } : {},
-  );
+  return {
+    pagePath: page.relativePath,
+    title: page.title,
+    kind: page.kind,
+    ...(page.id ? { id: page.id } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+    ...(sourceType ? { sourceType } : {}),
+    claimCount: page.claims.length,
+    questionCount: page.questions.length,
+    contradictionCount: page.contradictions.length,
+    claims: page.claims.map((claim) => claim.text).slice(0, 3),
+    questions: page.questions.slice(0, 3),
+    contradictions: page.contradictions.slice(0, 3),
+    ...(snippet ? { snippet } : {}),
+  };
 }
 
 export function buildMemoryWikiOverview(

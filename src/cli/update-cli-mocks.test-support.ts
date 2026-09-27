@@ -389,8 +389,6 @@ vi.mock("../process/exec.js", async (importOriginal) => {
   const { createUpdateCommandTransportFixture, createUpdateUtf8CommandTransportFixture } =
     await import("./update-cli/update-command-transport.test-support.js");
   const actual = await importOriginal<typeof import("../process/exec.js")>();
-  // A process start time stays fixed while post-core work awaits I/O.
-  const parentStartedAt = new Date(Date.now() - 1000).toString();
   return {
     isPlainCommandExitFailure: actual.isPlainCommandExitFailure,
     // The real snapshot worker has separate WAL/source-inode boundary coverage.
@@ -428,7 +426,7 @@ vi.mock("../process/exec.js", async (importOriginal) => {
         actual.runUtf8CommandWithTimeout,
       ),
     ),
-    runExec: vi.fn(async () => ({ stdout: parentStartedAt, stderr: "" })),
+    runExec: vi.fn(async () => ({ stdout: "", stderr: "" })),
   };
 });
 

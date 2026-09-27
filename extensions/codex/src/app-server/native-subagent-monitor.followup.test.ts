@@ -185,7 +185,7 @@ describe("CodexNativeSubagentMonitor", () => {
       expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
         expect.objectContaining({ childSessionId: "child-thread", result: "second result" }),
       );
-      monitor.dispose();
+      await monitor.dispose();
     },
   );
 
@@ -197,9 +197,9 @@ describe("CodexNativeSubagentMonitor", () => {
     const oldClaim = vi.fn(() => oldRelease);
     const newClaim = vi.fn(() => newRelease);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    onTestFinished(() => {
-      monitor.retireParent("parent-thread");
-      monitor.dispose();
+    onTestFinished(async () => {
+      await monitor.retireParent("parent-thread");
+      await monitor.dispose();
     });
     const register = (claimDirectChild: typeof oldClaim) =>
       monitor.registerParent({
@@ -243,9 +243,9 @@ describe("CodexNativeSubagentMonitor", () => {
     const runtime = createRuntime();
     runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({ delivered: false, path: "none" });
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    onTestFinished(() => {
-      monitor.retireParent("parent-thread");
-      monitor.dispose();
+    onTestFinished(async () => {
+      await monitor.retireParent("parent-thread");
+      await monitor.dispose();
     });
     const parent = await registerParent(monitor);
     parent.bindTurn("parent-turn");
@@ -842,14 +842,14 @@ describe("CodexNativeSubagentMonitor", () => {
             expect(claimDirectChild).not.toHaveBeenCalled();
             owner.bindTurn("parent-turn");
           }
-          expect(records.size).toBe(previousEnd === "interrupted" ? 1 : 2);
+          await vi.waitFor(() => expect(records.size).toBe(previousEnd === "interrupted" ? 1 : 2));
           expect(claimDirectChild).toHaveBeenCalledOnce();
         }
         if (parent === "released") {
           unregisterPromise = owner.unregister();
         }
         if (parent === "retired" || parent === "replaced") {
-          monitor.retireParent("parent-thread");
+          await monitor.retireParent("parent-thread");
         }
         if (parent === "replaced") {
           replacement = await monitor.registerParent({

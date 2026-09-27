@@ -308,13 +308,22 @@ receipt only from that transition's returned record. Carry the successor through
 later mutations, events, and delivery; never adopt it from a fresh task lookup.
 
 On hosts that provide them, await the scoped runtime's optional
-`createRunningTaskRunAsync(...)`, `finalizeTaskRunByRunIdAsync(...)`, and
-`setDetachedTaskDeliveryStatusByRunIdAsync(...)` methods for task creation and
-background completion. Core persistence waits run through its existing
+`createRunningTaskRunAsync(...)`, `tryCreateRunningTaskRunAsync(...)`,
+`recordTaskRunProgressByRunIdAsync(...)`, `finalizeTaskRunByRunIdAsync(...)`, and
+`setDetachedTaskDeliveryStatusByRunIdAsync(...)` methods for task creation,
+progress, and background completion. The `tryCreate` method returns `null` when
+the registered runtime refuses creation; the throwing method reports persistence
+failure instead. Core persistence waits run through its existing
 worker and retain the same `expectedTask` and `completionCustody` fences. Custom
 runtimes keep their registered exact-assignment adapter; asynchronous callers never
 fall through to core when an adapter is present.
 
+For scoped recovery candidates, await `prepareTaskRecordsRead()` and use its returned
+accessor. It selects current resident rows from the existing core projection by
+requester, runtime, task kind, and run-ID prefix, including later published commits.
+An invalidated owner or projection rejects the read instead of reporting absence.
+Refresh preparation before each recovery attempt and retain
+the selected assignment receipt for later mutations.
 For admission checks, await `prepareTaskRunRead(runId)` before delivery. Its returned
 accessor reads current resident records without synchronous database I/O. It rejects
 if the runtime, store, or relevant task identity is no longer prepared. Prepare again

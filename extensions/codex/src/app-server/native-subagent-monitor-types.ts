@@ -6,6 +6,7 @@ import type {
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
   AgentHarnessTaskRuntime,
+  AgentHarnessTaskRecord,
   AgentHarnessTaskRuntimeScope,
   AgentHarnessTaskAssignment,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
@@ -155,6 +156,8 @@ export type ParentState = {
   historyOwner?: CodexNativeSubagentHistoryOwner;
   agentId?: string;
   taskRuntime?: AgentHarnessTaskRuntime;
+  /** Observed lineage only; writes and delivery require fresh exact-assignment reads. */
+  readTaskRecords?: () => AgentHarnessTaskRecord[];
   mirror?: CodexNativeSubagentTaskMirror;
   submissionStore?: CodexNativeSubagentSubmissionStore;
 };

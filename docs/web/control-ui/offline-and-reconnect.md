@@ -48,7 +48,14 @@ do not clear site data while drafts or queued messages still need recovery.
 
 Unsaved file edits block automatic and in-app reloads, even after you close their
 previews or switch conversations. Reopen each edited file and save or discard its
-changes, then retry the reload. File edits stay in memory in the current page;
+changes, then retry the reload. If a server update makes the editor unavailable,
+choose **Review file drafts** in the reload notification. You can copy or download
+each retained draft without connecting to the Gateway, explicitly discard resolved
+drafts, then try **Refresh** again. **Keep drafts** leaves them protected in this tab.
+Each draft shows the session title, session key, and pane position captured when
+the file was opened, so matching filenames remain distinguishable. Newer edits
+remain protected if they change while you review an older draft.
+File edits stay in memory in the current page;
 an explicit browser reload or closing the browser tab discards them.
 
 ## Connection loss and reconnect

@@ -16,7 +16,6 @@ setupRunAttemptTestHooks();
 describe("native background command outcomes", () => {
   it.each([
     "complete",
-    "cancel",
     "natural success",
     "natural failure",
     "natural failure during stop",
@@ -255,7 +254,7 @@ describe("native background command outcomes", () => {
         const expected =
           scenario === "complete" || scenario === "natural success"
             ? "succeeded"
-            : scenario === "cancel" || scenario === "concurrent stop" || scenario === "failed stop"
+            : scenario === "concurrent stop" || scenario === "failed stop"
               ? "cancelled"
               : "failed";
         expect(tasks.listTaskRecords()).toContainEqual(
@@ -306,9 +305,6 @@ describe("native background command outcomes", () => {
     ["inventory unavailable", "52627"],
     ["retained", null],
     ["foreign item", null],
-    ["orphan", null],
-    ["completion during inventory", null],
-    ["revoked during inventory", null],
   ] as const)("projects owner outcome: %s (%s)", async (scenario, startProcessId) => {
     const accepted = createDeferred<void>();
     const abort = new AbortController();

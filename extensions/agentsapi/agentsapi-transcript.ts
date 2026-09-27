@@ -16,6 +16,7 @@ import {
   agentsApiNativeToolOutcome,
   agentsApiNativeToolOutput,
 } from "./agentsapi-native-items.js";
+import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 
 /** Canonical native facts use the same durable identities during live and historical repair. */
 export async function recordAgentsApiNativeToolTranscript(
@@ -159,24 +160,8 @@ export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMes
   assertCurrent: () => void,
 ): Promise<TMessage> {
   assertCurrent();
-  const { agentId, sessionId, sessionKey, storePath } = params.sessionTarget ?? {};
-  if (
-    !agentId ||
-    !sessionId ||
-    !sessionKey ||
-    !storePath ||
-    sessionId !== params.sessionId ||
-    agentId !== params.agentId ||
-    sessionKey !== params.sessionKey
-  ) {
-    throw new Error("Agents API requires a matching host-prepared session target");
-  }
   const append = await appendSessionTranscriptMessageByIdentityStrict({
-    ...params.sessionTarget,
-    agentId,
-    sessionId,
-    sessionKey,
-    storePath,
+    ...requireAgentsApiSessionTarget(params),
     config: params.config,
     message,
     prepareMessageAfterIdempotencyCheck: (prepared) => {

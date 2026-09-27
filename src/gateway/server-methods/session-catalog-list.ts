@@ -27,6 +27,7 @@ import {
 } from "./session-catalog-list-lifetime.js";
 import {
   getSessionCatalogListOperations,
+  listSessionCatalogWithinBudget,
   resolvePublishedSessionCatalogs,
   sessionCatalogListKey,
   type CatalogListEnumeration,
@@ -174,7 +175,7 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
             filterSessionCatalogHost(
               requestEntries.projectHostSessions(
                 host,
-                result.instances,
+                result.instancesByCatalog.get(catalog.id)!,
                 providerAudiences.get(catalog.id),
               ),
               visibility,
@@ -213,7 +214,10 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
             {
               progressId,
               agentId: resolvedAgent.agentId,
-              catalog: projectResult({ catalogs: [catalog], instances }).catalogs[0],
+              catalog: projectResult({
+                catalogs: [catalog],
+                instancesByCatalog: new Map([[catalog.id, instances]]),
+              }).catalogs[0],
             },
             new Set([progressConnId]),
             { dropIfSlow: true },
@@ -248,7 +252,11 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     allowProcessHomeFallback: allowHomeFallback,
     visibilityKey: resolveSessionCatalogVisibility(client, config).cacheKey,
   });
-  const operations = getSessionCatalogListOperations(config, catalogRegistrations);
+  const operations = getSessionCatalogListOperations(
+    config,
+    catalogRegistrations,
+    context.requestEntryLifetime?.signal,
+  );
   const pending = operations.pending.get(listKey);
   if (pending) {
     // progressId is connection-owned and excluded from the work key.
@@ -313,7 +321,7 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     } finally {
       finishPlanning?.();
     }
-    const instances: SessionCatalogInstances = new Map();
+    const instancesByCatalog = new Map<string, SessionCatalogInstances>();
     // Partial lists can publish a newer host while another provider or projection still waits.
     const publishedHosts: CatalogListEnumeration["publishedHosts"] = allowPartialResults
       ? new Map()
@@ -327,46 +335,77 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
           const shareRoute = catalogRegistrations.shareRoutes.get(provider);
           const resolution = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
           const createTarget = resolution.ok ? resolution.target : undefined;
-          const onHost = (host: SessionCatalog["hosts"][number]) => {
-            if (publishedHosts) {
-              const hosts = publishedHosts.get(provider.id) ?? new Map();
-              hosts.set(host.hostId, host);
-              publishedHosts.set(provider.id, hosts);
-            }
-            requestEntries?.captureHostInstances(host, instances);
-            const catalog = catalogResult(provider, shareRoute, [host], undefined, createTarget);
-            // The final response also reconciles these snapshots if a slow client drops a frame.
-            progress.publish(catalog, instances);
-          };
-          try {
-            const hosts = await progress.runProvider(onHost, (lifetime) => {
-              const providerParams = {
-                agentId: resolvedAgent.agentId,
-                allowPartialResults,
-                allowProcessHomeFallback: allowHomeFallback,
-                search,
-                limitPerHost: request.limitPerHost,
-                hostIds: request.hostIds,
-                ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
-                sessionEntries: requestEntries?.sessionEntries,
-                listNodes,
-                ...lifetime,
+          const page = await listSessionCatalogWithinBudget(
+            operations,
+            JSON.stringify([listKey, provider.id]),
+            progress,
+            subscribe,
+            catalogResult(provider, shareRoute, [], undefined, createTarget),
+            async () => {
+              const providerInstances: SessionCatalogInstances = new Map();
+              const onHost = (host: SessionCatalog["hosts"][number]) => {
+                if (publishedHosts) {
+                  const hosts = publishedHosts.get(provider.id) ?? new Map();
+                  hosts.set(host.hostId, host);
+                  publishedHosts.set(provider.id, hosts);
+                }
+                requestEntries?.captureHostInstances(host, providerInstances);
+                const catalog = catalogResult(
+                  provider,
+                  shareRoute,
+                  [host],
+                  undefined,
+                  createTarget,
+                );
+                // The final response also reconciles these snapshots if a slow client drops a frame.
+                progress.publish(catalog, providerInstances);
               };
-              return listSessionCatalogProvider(provider, providerParams, progress.assertCurrent);
-            });
-            for (const host of hosts) {
-              requestEntries?.captureHostInstances(host, instances);
-            }
-            return catalogResult(provider, shareRoute, hosts, undefined, createTarget);
-          } catch (error) {
-            return catalogResult(provider, shareRoute, [], catalogError(error), createTarget);
-          }
+              try {
+                const hosts = await progress.runProvider(onHost, (lifetime) => {
+                  const providerParams = {
+                    agentId: resolvedAgent.agentId,
+                    allowPartialResults,
+                    allowProcessHomeFallback: allowHomeFallback,
+                    search,
+                    limitPerHost: request.limitPerHost,
+                    hostIds: request.hostIds,
+                    ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
+                    sessionEntries: requestEntries?.sessionEntries,
+                    listNodes,
+                    ...lifetime,
+                  };
+                  return listSessionCatalogProvider(
+                    provider,
+                    providerParams,
+                    progress.assertCurrent,
+                  );
+                });
+                for (const host of hosts) {
+                  requestEntries?.captureHostInstances(host, providerInstances);
+                }
+                return {
+                  catalogs: [catalogResult(provider, shareRoute, hosts, undefined, createTarget)],
+                  instancesByCatalog: new Map([[provider.id, providerInstances]]),
+                  publishedHosts,
+                };
+              } catch (error) {
+                return {
+                  catalogs: [
+                    catalogResult(provider, shareRoute, [], catalogError(error), createTarget),
+                  ],
+                  instancesByCatalog: new Map([[provider.id, providerInstances]]),
+                };
+              }
+            },
+          );
+          instancesByCatalog.set(provider.id, page.instancesByCatalog.get(provider.id)!);
+          return resolvePublishedSessionCatalogs(page)[0]!;
         }),
       );
     } finally {
       finishProvider?.();
     }
-    return { catalogs: catalogList, instances, publishedHosts };
+    return { catalogs: catalogList, instancesByCatalog, publishedHosts };
   })();
   const entry = { progress, result: operation };
   // Coalesce only concurrent requests; each subsequent list sees current provider rows.
