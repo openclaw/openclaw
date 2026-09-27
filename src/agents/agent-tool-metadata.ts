@@ -48,18 +48,8 @@ const openclawAction: AgentToolActionDescriptor = Object.freeze({
   operation: "openclaw",
 });
 
-export function bindAgentToolActionDescriptor(
-  tool: AnyAgentTool,
-  descriptor: AgentToolActionDescriptor,
-): void {
-  ToolActionMetadata.set(tool, descriptor);
-}
-
-export function getAgentToolActionDescriptor(
-  tool: AnyAgentTool,
-): AgentToolActionDescriptor | undefined {
-  return ToolActionMetadata.get(tool);
-}
+export const bindAgentToolActionDescriptor = ToolActionMetadata.set;
+export const getAgentToolActionDescriptor = ToolActionMetadata.get;
 
 function copyAgentToolActionDescriptor(source: AnyAgentTool, target: AnyAgentTool): void {
   const descriptor = getAgentToolActionDescriptor(source);
