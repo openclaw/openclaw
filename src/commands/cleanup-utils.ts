@@ -625,7 +625,7 @@ export async function removeAgentSessions(
     await import("../config/sessions/session-accessor.sqlite-reset.js");
   const { resolveAllAgentSessionStoreTargetsSync } = await import("../config/sessions/targets.js");
   const lock = opts?.dryRun ? undefined : await acquireStateCleanupOwnership(cleanup);
-  try {
+  const resetStores = async () => {
     const failures: string[] = [];
     for (const target of resolveAllAgentSessionStoreTargetsSync(cleanup.cfg)) {
       try {
@@ -652,6 +652,9 @@ export async function removeAgentSessions(
     if (failures.length > 0) {
       throw new Error(failures.join("\n"));
     }
+  };
+  try {
+    await (lock ? lock.run(resetStores) : resetStores());
   } finally {
     await lock?.release();
   }
