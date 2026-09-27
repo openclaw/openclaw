@@ -27,6 +27,11 @@ struct ChatSessionSidebar: View {
     @State private var inspectedSession: OpenClawChatSessionEntry?
     @State private var isPresentingNewSessionOptions = false
     @AppStorage("openclaw.chat.collapsedSessionGroups") private var collapsedSessionGroups = ""
+    @AppStorage("openclaw.chat.sidebar.sort") private var sessionSort = ChatSessionSidebarModel.Sort.created
+    @AppStorage("openclaw.chat.sidebar.showMessagePreview") private var showMessagePreview = false
+    @AppStorage("openclaw.chat.sidebar.showAutomationSessions") private var showAutomationSessions = false
+    @AppStorage("openclaw.chat.sidebar.showSystemSessions") private var showSystemSessions = false
+    @State private var observedOrder = ChatSessionSidebarModel.ObservedOrder()
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -41,9 +46,15 @@ struct ChatSessionSidebar: View {
             mainSessionKey: self.viewModel.selectedAgentMainSessionKey,
             activeAgentID: self.viewModel.selectedAgentID,
             groups: self.groups,
+            excludesMainSession: self.viewModel.selectedAgent != nil,
             query: self.query,
             sessionRoutingContract: self.viewModel.agentCatalog?.sessionRoutingContract ??
-                self.viewModel.sessionRoutingContract)
+                self.viewModel.sessionRoutingContract,
+            viewOptions: .init(
+                sort: self.sessionSort,
+                showAutomation: self.showAutomationSessions,
+                showSystem: self.showSystemSessions),
+            observedOrder: self.observedOrder)
         let previewRequest = ChatSessionSidebarPreviews.Request(
             viewModel: self.viewModel,
             sessions: sections.flatMap(\.nodes).flatMap(\.previewSessions))
@@ -119,6 +130,9 @@ struct ChatSessionSidebar: View {
             placement: .sidebar,
             prompt: String(localized: "Search threads"))
         .safeAreaInset(edge: .bottom, spacing: 0) { self.connectionFooter }
+        .onChange(of: self.viewModel.sessions.map(\.key), initial: true) { _, keys in
+            self.observedOrder.observe(keys)
+        }
         .task(id: previewRequest) {
             let model = self.viewModel
             let cache = model.transcriptCache
@@ -287,13 +301,34 @@ struct ChatSessionSidebar: View {
                 .font(OpenClawChatTypography.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            Menu {
+                Picker("Sort", selection: self.$sessionSort) {
+                    Text("Created").tag(ChatSessionSidebarModel.Sort.created)
+                    Text("Last updated").tag(ChatSessionSidebarModel.Sort.updated)
+                }
+                .pickerStyle(.inline)
+                Divider()
+                Toggle("Show message preview", isOn: self.$showMessagePreview)
+                Toggle("Show automation sessions", isOn: self.$showAutomationSessions)
+                Toggle("Show system sessions", isOn: self.$showSystemSessions)
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(String(localized: "View options"))
+            .accessibilityLabel(String(localized: "View options"))
+            .accessibilityIdentifier("chat-sidebar-view-options")
         }
         .padding(.top, 14)
         .padding(.bottom, 2)
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
         .selectionDisabled()
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
     private func agentRow(_ agent: OpenClawChatAgentChoice, now: Date) -> some View {
@@ -419,6 +454,7 @@ struct ChatSessionSidebar: View {
             session: session,
             isConnected: self.viewModel.healthOK,
             preview: self.rowPreview(for: session, previewRequest: previewRequest),
+            showPreview: self.showMessagePreview,
             now: now)
         return HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
@@ -632,6 +668,7 @@ struct ChatSessionRowPresentation {
         session: OpenClawChatSessionEntry,
         isConnected: Bool,
         preview: @autoclosure () -> String?,
+        showPreview: Bool = true,
         now: Date)
     {
         self.timestamp = ChatSessionSidebarModel.activityTimestamp(for: session).map {
@@ -641,12 +678,18 @@ struct ChatSessionRowPresentation {
         let activity = ChatSessionSidebarModel.activity(for: session, now: now.timeIntervalSince1970 * 1000)
         if let activity, activity.kind == .attention {
             self.subtitle = activity.text
-        } else if isConnected, let activity, [.running, .queued].contains(activity.kind) {
+        } else if isConnected, let activity, [.running, .queued].contains(activity.kind),
+                  showPreview || activity.kind == .queued
+        {
             self.subtitle = activity.text
         } else if let activity, activity.kind == .failed,
                   session.unread == true || (session.lastReadAt ?? 0) < (session.endedAt ?? session.updatedAt ?? 0)
         {
             self.subtitle = activity.text
+        } else if !showPreview {
+            // Like session-row-subtitle.ts, hide ambient text after attention;
+            // native queued status and unread failures also retain their existing slot.
+            self.subtitle = nil
         } else if let preview = preview() {
             self.subtitle = preview
         } else {
