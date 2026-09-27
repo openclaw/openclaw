@@ -33,7 +33,6 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.currentSystemLanguageTag
 import ai.openclaw.app.gateway.GatewayEndpoint
-import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gatewayExecApprovalTextForDisplay
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
@@ -158,6 +157,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -180,6 +180,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
@@ -1674,6 +1675,8 @@ private fun GatewaySettingsScreen(
   var showSetupCodeHelp by remember { mutableStateOf(false) }
   var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
   var pendingForgetStableId by remember { mutableStateOf<String?>(null) }
+  var pendingRenameStableId by rememberSaveable { mutableStateOf<String?>(null) }
+  val renameScope = rememberCoroutineScope()
   val transport =
     remember(hostInput, tlsInput) {
       gatewayManualTransportPresentation(
@@ -1716,9 +1719,57 @@ private fun GatewaySettingsScreen(
     )
   }
 
+  pairedGateways.firstOrNull { it.stableId == pendingRenameStableId }?.let { entry ->
+    var name by rememberSaveable(entry.stableId) { mutableStateOf(entry.localName.orEmpty()) }
+    var saving by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+    FoldAwarePrompt(
+      onDismissRequest = { if (!saving) pendingRenameStableId = null },
+      title = nativeString("Rename gateway"),
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(entry.address, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          ClawTextField(
+            value = name,
+            onValueChange = {
+              name = it
+              failed = false
+            },
+            placeholder = entry.name,
+            label = nativeString("Display name"),
+            maxLines = 1,
+            enabled = !saving,
+          )
+          Text(
+            nativeString("Only on this phone. Leave empty to use the default name."),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+          if (failed) {
+            Text(nativeString("Could not save the name. Try again."), color = ClawTheme.colors.danger)
+          }
+        }
+      },
+      actions = {
+        TextButton(enabled = !saving, onClick = { pendingRenameStableId = null }) { Text(nativeString("Cancel")) }
+        TextButton(
+          enabled = !saving,
+          onClick = {
+            saving = true
+            renameScope.launch {
+              if (viewModel.renameGateway(entry.stableId, name)) pendingRenameStableId = null else failed = true
+              saving = false
+            }
+          },
+        ) { Text(nativeString("Save")) }
+      },
+      containerColor = ClawTheme.colors.surface,
+    )
+  }
+
   pendingForgetStableId?.let { stableId ->
     val entry = pairedGateways.firstOrNull { it.stableId == stableId }
-    val gatewayName = entry?.name ?: nativeString("this gateway")
+    val gatewayName = entry?.displayName ?: nativeString("this gateway")
     FoldAwarePrompt(
       onDismissRequest = { pendingForgetStableId = null },
       title = nativeString("Forget gateway?"),
@@ -1791,7 +1842,7 @@ private fun GatewaySettingsScreen(
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric(nativeString("Gateway"), serverName?.takeIf { it.isNotBlank() } ?: nativeString("Home Gateway")),
+          SettingsMetric(nativeString("Gateway"), pairedGateways.firstOrNull { it.stableId == activeGatewayStableId }?.localName ?: serverName?.takeIf { it.isNotBlank() } ?: nativeString("Home Gateway")),
           SettingsMetric(nativeString("Connection"), if (gatewayConnectionDisplay.isConnected) nativeString("Connected") else nativeString("Offline")),
           SettingsMetric(nativeString("Status"), gatewayStatusLabel(gatewayConnectionDisplay)),
         ),
@@ -1850,12 +1901,9 @@ private fun GatewaySettingsScreen(
           pairedGateways.forEachIndexed { index, entry ->
             if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
             ClawListItem(
-              title = entry.name,
-              subtitle =
-                when (entry.kind) {
-                  GatewayRegistryEntryKind.MANUAL -> "${entry.host}:${entry.port}"
-                  GatewayRegistryEntryKind.DISCOVERED -> entry.stableId
-                },
+              title = entry.displayName,
+              subtitle = entry.address,
+              maxLines = 2,
               leading = {
                 if (entry.stableId == activeGatewayStableId) {
                   ClawIconBadge(Icons.Default.Check)
@@ -1864,18 +1912,13 @@ private fun GatewaySettingsScreen(
                 }
               },
               trailing = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                  Switch(
-                    checked = entry.stableId == activeGatewayStableId || entry.stableId in connectedGatewayStableIds,
-                    onCheckedChange = { enabled ->
-                      viewModel.setGatewayConnectionEnabled(entry.stableId, enabled)
-                    },
-                    enabled = entry.stableId != activeGatewayStableId,
-                  )
-                  TextButton(onClick = { pendingForgetStableId = entry.stableId }) {
-                    Text(nativeString("Forget"))
-                  }
-                }
+                Switch(
+                  checked = entry.stableId == activeGatewayStableId || entry.stableId in connectedGatewayStableIds,
+                  onCheckedChange = { enabled ->
+                    viewModel.setGatewayConnectionEnabled(entry.stableId, enabled)
+                  },
+                  enabled = entry.stableId != activeGatewayStableId,
+                )
               },
               onClick =
                 if (entry.stableId == activeGatewayStableId) {
@@ -1884,6 +1927,10 @@ private fun GatewaySettingsScreen(
                   { viewModel.switchToGateway(entry.stableId) }
                 },
             )
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+              TextButton(onClick = { pendingRenameStableId = entry.stableId }) { Text(nativeString("Rename")) }
+              TextButton(onClick = { pendingForgetStableId = entry.stableId }) { Text(nativeString("Forget")) }
+            }
           }
         }
       }
@@ -1915,8 +1962,9 @@ private fun GatewaySettingsScreen(
             discoveredGateways.forEachIndexed { index, endpoint ->
               if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
               ClawListItem(
-                title = endpoint.name,
+                title = pairedGateways.firstOrNull { it.stableId == endpoint.stableId }?.displayName ?: endpoint.name,
                 subtitle = gatewayDiscoveredRowSubtitle(endpoint),
+                maxLines = 2,
                 leading = { ClawIconBadge(Icons.Default.Cloud) },
                 trailing = {
                   TextButton(onClick = { viewModel.connect(endpoint) }) {
@@ -3311,17 +3359,7 @@ private fun notificationPackageSelectionSummary(
     }
   }
 
-private fun notificationAppBadge(label: String): String {
-  val initials =
-    label
-      .split(' ', '-', '_', '.')
-      .asSequence()
-      .filter { it.isNotBlank() }
-      .take(2)
-      .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
-      .joinToString("")
-  return initials.ifBlank { "A" }
-}
+private fun notificationAppBadge(label: String): String = badgeInitials(label.replace('.', ' '), fallback = "A")
 
 internal fun formatCronWake(
   timeMs: Long?,

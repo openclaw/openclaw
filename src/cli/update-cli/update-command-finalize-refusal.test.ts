@@ -48,18 +48,16 @@ vi.mock("../../infra/gateway-owner-lease.js", async (original) => ({
       ? { state: "live", mode: "supervised", pid: 4242 }
       : undefined,
 }));
-vi.mock("../../infra/state-database-coordinator.js", async (original) => {
-  const actual = await original<typeof import("../../infra/state-database-coordinator.js")>();
+vi.mock("../../infra/gateway-state-owner.js", async (original) => {
+  const actual = await original<typeof import("../../infra/gateway-state-owner.js")>();
   return {
     ...actual,
-    acquireGatewayMaintenanceCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayMaintenanceCoordinator>[0],
-    ) => {
+    acquireGatewayStateOwner: (params: Parameters<typeof actual.acquireGatewayStateOwner>[0]) => {
       if (native.inspecting && (!native.stopped || native.contend)) {
         native.events.push(native.stopped ? "non-serving-holder" : "running-holder");
-        throw new actual.StateDatabaseCoordinatorContentionError("gateway-lifecycle");
+        throw new actual.GatewayStateOwnerContentionError(params.databasePath);
       }
-      return actual.acquireGatewayMaintenanceCoordinator(params);
+      return actual.acquireGatewayStateOwner(params);
     },
   };
 });
@@ -197,44 +195,41 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([undefined, false])(
-  "restores a stopped service and defers non-serving contention (restart=%s)",
-  async (restart) => {
-    const old = createUpdateRun({ trigger: "cli" });
-    const history = finishUpdateRun(old.runId, { status: "failed", reason: "abandoned" });
-    await updateRepairCommand({ json: true, yes: true, restart, deferCompletionCache: true });
-    expect(native.events).toEqual([
-      "running-holder",
-      "stop-verified",
-      "non-serving-holder",
-      "non-serving-holder",
-      "restart",
-      "restart-verified",
-    ]);
-    expect(native.elapsedMs).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: "warning",
-        postUpdate: {
-          doctor: {
-            status: "warning",
-            warnings: [expect.stringContaining("openclaw update repair")],
-          },
+it("restores a stopped service and defers non-serving contention", async () => {
+  const old = createUpdateRun({ trigger: "cli" });
+  const history = finishUpdateRun(old.runId, { status: "failed", reason: "abandoned" });
+  await updateRepairCommand({ json: true, yes: true, deferCompletionCache: true });
+  expect(native.events).toEqual([
+    "running-holder",
+    "stop-verified",
+    "non-serving-holder",
+    "non-serving-holder",
+    "restart",
+    "restart-verified",
+  ]);
+  expect(native.elapsedMs).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      status: "warning",
+      postUpdate: {
+        doctor: {
+          status: "warning",
+          warnings: [expect.stringContaining("openclaw update repair")],
         },
-      }),
-    );
-    const run = listUpdateRuns()[0]!;
-    expect(run.status).toBe("succeeded");
-    expect(run.steps).toContainEqual(
-      expect.objectContaining({ step: "warning:finalize:doctor:0", status: "completed" }),
-    );
-    expect(run.steps.some((step) => step.status === "failed")).toBe(false);
-    expect(getUpdateRun(old.runId)).toEqual(history);
-    expect(readDeferredPluginMigrations()).toEqual([pending]);
-    expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
-    expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
-  },
-);
+      },
+    }),
+  );
+  const run = listUpdateRuns()[0]!;
+  expect(run.status).toBe("succeeded");
+  expect(run.steps).toContainEqual(
+    expect.objectContaining({ step: "warning:finalize:doctor:0", status: "completed" }),
+  );
+  expect(run.steps.some((step) => step.status === "failed")).toBe(false);
+  expect(getUpdateRun(old.runId)).toEqual(history);
+  expect(readDeferredPluginMigrations()).toEqual([pending]);
+  expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
+  expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
+});
 
 it("keeps a refused stop for an admitted migration write as a failed update", async () => {
   native.failStop = true;

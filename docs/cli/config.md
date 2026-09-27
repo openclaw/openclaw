@@ -246,6 +246,10 @@ openclaw config set gateway.port 19001 --strict-json --expect-current-absent
 the effective authored config after includes and environment substitution, before runtime defaults
 are applied.
 
+If the expectation does not match, no settings are saved. Read the current config and
+review the expected value before retrying; repeating the same mismatched expectation
+will not succeed.
+
 The two expectation flags are mutually exclusive. They apply only to a single `config set`
 operation, require a direct non-redirected config path, and cannot be combined with batch mode or
 `--dry-run`. If input or roster resolution would write a different path than the caller requested,
@@ -446,6 +450,8 @@ openclaw config patch --file ./discord.patch.json5 --replace-path 'channels.disc
 
 `--dry-run` simulates a change without writing `openclaw.json`. Available on `config set`, `config patch`, and `config unset`. Which checks run depends on the input mode. Value mode (`config set <path> <value>` without `--strict-json`) skips the full schema pass and the ordinary SecretRef resolvability scan. Policy, provider, and model-reference checks can still run. When no checks apply, value mode reports `Dry run successful` even for a value the real write rejects. Use `--strict-json` (or `config patch --file --dry-run`) when you need schema validation.
 
+For `config patch` and `config unset`, `--json` requires `--dry-run`. Using `--json` without `--dry-run` returns the standard [CLI JSON failure envelope](/cli#json-failures) on stdout, keeps diagnostics on stderr, and exits with status 1.
+
 ```bash
 openclaw config set channels.discord.token \
   --ref-provider default \
@@ -478,7 +484,7 @@ openclaw config set channels.discord.token \
     - `checks.resolvabilityComplete`: whether resolvability checks ran to completion (false when exec refs are skipped)
     - `refsChecked`: number of refs actually resolved during dry-run
     - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
-    - `errors`: structured failures when `ok=false`; each carries a `kind` of `missing-path`, `schema`, `resolvability`, `model`, or `conflict` (`conflict` means the config file changed while the command was writing, so nothing was changed — re-run to pick up the new file)
+    - `errors`: structured failures when `ok=false`; each carries a `kind` of `missing-path`, `schema`, `resolvability`, `model`, or `conflict` (`conflict` means the write was declined because its config snapshot, target, or conditional expectation no longer matched; follow the message before retrying)
 
   </Accordion>
 </AccordionGroup>

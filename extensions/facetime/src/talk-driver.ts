@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
+import { resolveRealtimeVoiceAgentContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import {
   createRealtimeVoiceBridgeSession,
   createTalkSessionController,
@@ -410,21 +410,15 @@ export async function startFaceTimeTalkDriver(params: {
         fullConfig: params.fullConfig,
         agentId: consultAgentId,
       });
-      const bootstrapContextResolution = resolveRealtimeBootstrapContextInstructions({
+      const agentContextResolution = resolveRealtimeVoiceAgentContextInstructions({
         config: params.fullConfig,
         agentId: consultAgentId,
         sessionKey: requesterSessionKey,
-        warn: (message) =>
-          params.logger.warn?.(`[facetime] realtime bootstrap context: ${message}`),
-      }).catch((error: unknown) => {
-        params.logger.warn?.(
-          `[facetime] realtime bootstrap context unavailable: ${formatErrorMessage(error)}`,
-        );
-        return undefined;
+        warn: (message) => params.logger.warn?.(`[facetime] realtime agent context: ${message}`),
       });
       const [resolved, bootstrapContext] = await Promise.all([
         providerResolution,
-        bootstrapContextResolution,
+        agentContextResolution,
       ]);
       if (params.signal?.aborted || stopped || mediaSuspended) {
         throw new Error("FaceTime talk startup aborted");

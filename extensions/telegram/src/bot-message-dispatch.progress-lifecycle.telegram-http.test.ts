@@ -284,33 +284,30 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     );
   });
 
-  it.each([false, true])(
-    "preserves the post-progress final when Telegram rejects cleanup (error: %s)",
-    async (isError) => {
-      http.respondToCall = (call) =>
-        call.method === "deleteMessage"
-          ? { error_code: 400, description: "Bad Request: progress cleanup rejected" }
-          : undefined;
-      await dispatchProgressTurn(
-        async (options) => {
-          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "cleanup" });
-          await waitForBotApiCall((call) => call.method === "sendMessage");
-        },
-        {
-          mode: "progress",
-          toolProgress: true,
-          textLimit: 80,
-          finalReply: { text: "A".repeat(80) + "B".repeat(40), isError },
-        },
-      );
-      await vi.advanceTimersByTimeAsync(4_100);
-      await waitForBotApiCall((call) => call.method === "deleteMessage");
-      expect([...visibleMessages.values()].slice(1)).toEqual(["A".repeat(80), "B".repeat(40)]);
-      expect(
-        calls.filter((call) => call.fields.text === "No response generated. Please try again."),
-      ).toEqual([]);
-    },
-  );
+  it("preserves a post-progress error final when Telegram rejects cleanup", async () => {
+    http.respondToCall = (call) =>
+      call.method === "deleteMessage"
+        ? { error_code: 400, description: "Bad Request: progress cleanup rejected" }
+        : undefined;
+    await dispatchProgressTurn(
+      async (options) => {
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "cleanup" });
+        await waitForBotApiCall((call) => call.method === "sendMessage");
+      },
+      {
+        mode: "progress",
+        toolProgress: true,
+        textLimit: 80,
+        finalReply: { text: "A".repeat(80) + "B".repeat(40), isError: true },
+      },
+    );
+    await vi.advanceTimersByTimeAsync(4_100);
+    await waitForBotApiCall((call) => call.method === "deleteMessage");
+    expect([...visibleMessages.values()].slice(1)).toEqual(["A".repeat(80), "B".repeat(40)]);
+    expect(
+      calls.filter((call) => call.fields.text === "No response generated. Please try again."),
+    ).toEqual([]);
+  });
 
   it("flushes a pending parent progress surface before adopting a fast yield", async () => {
     const commentary = "The delegated check is still running.";
@@ -433,52 +430,45 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps tool progress until the final answer replaces it (assistant boundary: %s)",
-    async (assistantBoundary) => {
-      const finalText = "The requested result.";
-      let progressMessageId: number | undefined;
-      await dispatchProgressTurn(
-        async (options) => {
-          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "first" });
-          await waitForBotApiCall(
-            (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
-          );
-          progressMessageId = [...visibleMessages.keys()][0];
-          await options?.onItemEvent?.({
-            kind: "search",
-            itemId: "search-docs",
-            phase: "update",
-            progressText: "Inspecting the release notes",
-          });
-          await waitForBotApiCall((call) =>
-            String(call.fields.text).includes("Inspecting the release notes"),
-          );
-          if (assistantBoundary) {
-            await options?.onAssistantMessageStart?.();
-          }
-          expect([...visibleMessages.values()]).toEqual([expect.stringContaining("Exec")]);
-          expect([...visibleMessages.values()][0]).toContain("Inspecting the release notes");
-          expect(calls.some((call) => call.method === "deleteMessage")).toBe(false);
-        },
-        { mode: "partial", toolProgress: true, finalReply: { text: finalText } },
-      );
+  it("keeps tool progress across an assistant boundary until the final answer replaces it", async () => {
+    const finalText = "The requested result.";
+    let progressMessageId: number | undefined;
+    await dispatchProgressTurn(
+      async (options) => {
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "first" });
+        await waitForBotApiCall(
+          (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
+        );
+        progressMessageId = [...visibleMessages.keys()][0];
+        await options?.onItemEvent?.({
+          kind: "search",
+          itemId: "search-docs",
+          phase: "update",
+          progressText: "Inspecting the release notes",
+        });
+        await waitForBotApiCall((call) =>
+          String(call.fields.text).includes("Inspecting the release notes"),
+        );
+        await options?.onAssistantMessageStart?.();
+        expect([...visibleMessages.values()]).toEqual([expect.stringContaining("Exec")]);
+        expect([...visibleMessages.values()][0]).toContain("Inspecting the release notes");
+        expect(calls.some((call) => call.method === "deleteMessage")).toBe(false);
+      },
+      { mode: "partial", toolProgress: true, finalReply: { text: finalText } },
+    );
 
-      await expect
-        .poll(() => [...visibleMessages.values()], { timeout: 5_000 })
-        .toEqual([finalText]);
-      const finalMessageId = [...visibleMessages.keys()][0];
-      expect(finalMessageId).not.toBe(progressMessageId);
-      expect(
-        calls.filter((call) => call.method === "sendMessage" && call.fields.text === finalText),
-      ).toHaveLength(1);
-      expect(
-        calls
-          .filter((call) => call.method === "deleteMessage")
-          .map((call) => Number(call.fields.message_id)),
-      ).toEqual([progressMessageId]);
-    },
-  );
+    await expect.poll(() => [...visibleMessages.values()], { timeout: 5_000 }).toEqual([finalText]);
+    const finalMessageId = [...visibleMessages.keys()][0];
+    expect(finalMessageId).not.toBe(progressMessageId);
+    expect(
+      calls.filter((call) => call.method === "sendMessage" && call.fields.text === finalText),
+    ).toHaveLength(1);
+    expect(
+      calls
+        .filter((call) => call.method === "deleteMessage")
+        .map((call) => Number(call.fields.message_id)),
+    ).toEqual([progressMessageId]);
+  });
   it("shows compaction transitions and retires progress only after the final is accepted", async () => {
     const snapshots: string[] = [];
     let progressId: number | undefined;

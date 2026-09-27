@@ -163,6 +163,11 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         return await self.connection.supportsServerMethod(method, ifCurrentServerLease: lease)
     }
 
+    func attachmentLimits() async -> GatewayAttachmentLimits? {
+        guard await self.currentOutboxGatewayMatchesConnection() else { return nil }
+        return await self.connection.currentAttachmentLimits()
+    }
+
     func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard? {
         let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
         let request = OpenClawChatGatewayRequests.progressCardGet(
@@ -414,11 +419,6 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             }
             return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
         }
-    }
-
-    func listAgents() async throws -> OpenClawChatAgentsListResponse? {
-        let data = try await connection.request(OpenClawChatGatewayRequests.agentsList())
-        return try OpenClawChatGatewayPayloadCodec.decodeAgentsList(data)
     }
 
     func listSessionGroups() async throws -> OpenClawChatSessionGroupsResponse? {

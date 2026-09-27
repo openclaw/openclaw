@@ -126,6 +126,15 @@ without recreating `sessions.json` or replaying session metadata. Hash-matching
 sources continue through import; changed or unverifiable sources remain protected
 and are listed by path. Preserve those files for inspection.
 
+A session directory does not need a legacy `sessions.json` to recover its history.
+Doctor derives session ownership from verified transcript headers and SQLite. For
+a configured agent with a pending plugin migration, it records a source index in
+the existing import receipt without creating a new JSON index. For unconfigured
+agents, it imports valid conversations and moves the original history into the
+protected migration archive, recording each move. Trajectory-only directories are
+preserved there too, without creating an empty agent database. Pending migrations
+for other agents do not block this archival.
+
 A restored copy with the recorded SHA-256 and size remains valid even when its
 inode or modification time differs. `--session-sqlite recover` records its current
 identity in the existing receipt, including when no failed migration manifest exists.
@@ -139,7 +148,10 @@ migration archive with their validation error and recovery path in the report.
 For changed indexes, Doctor compares session keys and IDs with canonical SQLite and
 names differing metadata fields in per-session warnings. This comparison does not
 authorize replaying old values or accepting changed bytes as the original import.
-Snapshot-path repair leaves these historical inputs unchanged.
+Snapshot, model-route, and integrity repairs leave these historical inputs unchanged,
+including after the plugin obligation completes while its source receipt remains.
+Canonical SQLite repairs continue. A new index appearing after an indexless import
+is preserved as conflicting input; it cannot inherit the earlier receipt's authority.
 
 A retained plugin source conflict does not prevent Gateway readiness after the
 core import completed. Doctor owns the repair and the Gateway keeps serving SQLite.

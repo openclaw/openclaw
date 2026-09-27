@@ -5,7 +5,6 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -41,6 +40,7 @@ import {
   buildTelegramNativeCommandOwnerContext,
   resolveTelegramCommandIngressAuthorization,
 } from "./ingress.js";
+import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 
 const loadTelegramNativeCommandDeliveryRuntime = createLazyRuntimeModule(
   () => import("./bot/delivery.js"),
@@ -424,12 +424,13 @@ export async function prepareTelegramCommandDispatch(
     runtimeCfg,
     route.agentId,
   );
-  const tableMode = resolveMarkdownTableMode({
+  const richMessagesParams = {
     cfg: runtimeCfg,
-    channel: "telegram",
     accountId: route.accountId,
-    supportsBlockTables: true,
-  });
+    accountConfig: runtimeTelegramCfg,
+  };
+  const richMessages = resolveTelegramRichMessages(richMessagesParams);
+  const tableMode = resolveTelegramTableMode(richMessagesParams);
   const chunkMode = nativeCommandRuntime.resolveChunkMode(runtimeCfg, "telegram", route.accountId);
   const buildDeliveryBaseOptions: TelegramCommandDispatch["buildDeliveryBaseOptions"] = (keys) => ({
     cfg: runtimeCfg,
@@ -451,7 +452,7 @@ export async function prepareTelegramCommandDispatch(
     tableMode,
     chunkMode,
     linkPreview: runtimeTelegramCfg.linkPreview,
-    richMessages: runtimeTelegramCfg.richMessages,
+    richMessages,
   });
   return {
     ...params,

@@ -16,6 +16,7 @@ import {
   finishCronRunReceipt,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
 import { cronNotificationJob, type CronNotificationIntent } from "./notification-intents.js";
@@ -765,6 +766,7 @@ describe("cron service store seam coverage", () => {
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
       claimCronRunReceiptInDatabase({
         database: db,
+        receiptSchema: prepareCronRunReceiptWriteSchema(db),
         prepared,
         resolveAgentId: (current) => current.agentId!,
       }),

@@ -176,7 +176,6 @@ export function lobsterPetName(look: LobsterPetLook, seed: number): string {
   return signatureName !== look.palette.id ? signatureName : lobsterRandomName(seed);
 }
 
-// A stranger wears a different palette than the resident pet.
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {

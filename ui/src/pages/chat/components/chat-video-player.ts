@@ -122,6 +122,11 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       return;
     }
     this.media?.pause();
+    // Touch activation need not focus a button. Give the modal a stable return
+    // target even when expansion came from the non-focusable card surface.
+    this.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.focus({
+      preventScroll: true,
+    });
     this.onExpand?.(source);
   };
 

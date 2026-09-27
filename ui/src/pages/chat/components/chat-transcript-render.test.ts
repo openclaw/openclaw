@@ -660,6 +660,96 @@ describe("chat transcript rendering", () => {
     secondTranscript.hostDisconnected();
   });
 
+  it("keeps the completed answer timestamp and actions when full run history is restored", async () => {
+    vi.useFakeTimers();
+    const runId = "answer-timestamp";
+    const sessionKey = "agent:main:dashboard:answer-timestamp";
+    const startedAt = Date.parse("2026-09-27T08:46:05.653Z");
+    const answeredAt = Date.parse("2026-09-27T09:20:57.883Z");
+    const text = "Confirmed: Engineers — café 雪 🦞";
+    const user = {
+      role: "user",
+      content: "Confirm the audience.",
+      timestamp: startedAt - 1_000,
+      __openclaw: { id: "timestamp-prompt", idempotencyKey: `${runId}:user` },
+    };
+    const answer = {
+      role: "assistant",
+      content: text,
+      timestamp: answeredAt,
+      stopReason: "stop",
+      __openclaw: { id: "timestamp-answer", runId, runTerminal: true },
+    };
+    const work = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "audience", name: "ask_user", arguments: {} }],
+        timestamp: startedAt,
+        stopReason: "toolUse",
+        __openclaw: { id: "timestamp-call", runId },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "audience",
+        toolName: "ask_user",
+        content: "Engineers — café 雪 🦞",
+        timestamp: answeredAt - 1_000,
+        __openclaw: { id: "timestamp-result", runId },
+      },
+    ];
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const onSetReply = vi.fn();
+    try {
+      for (const [index, messages] of [
+        [user, answer],
+        [user, ...work, answer],
+      ].entries()) {
+        const props = {
+          ...threadProps(`pane-answer-timestamp-${index}`, sessionKey, messages),
+          showToolCalls: true,
+          onSetReply,
+          selectedSession: {
+            key: sessionKey,
+            kind: "direct" as const,
+            updatedAt: answeredAt,
+            status: "done" as const,
+            lastRunId: runId,
+            runtimeMs: 35 * 60_000 + 17_000,
+          },
+        };
+        const transcript = createTestTranscript();
+        const container = document.body.appendChild(document.createElement("div"));
+        try {
+          render(renderChatThread(props, transcript), container);
+          transcript.hostConnected();
+          transcript.hostUpdated();
+          await vi.advanceTimersByTimeAsync(0);
+          const group = requireElement(container, ".chat-group.assistant");
+          expect(group.querySelectorAll(".chat-group-footer")).toHaveLength(1);
+          expect(group.querySelector("time")?.getAttribute("datetime")).toBe(
+            "2026-09-27T09:20:57.883Z",
+          );
+          requireElement(group, ".chat-copy-btn").click();
+          expect(writeText).toHaveBeenLastCalledWith(text);
+          requireElement(group, ".chat-reply-btn").click();
+          expect(onSetReply).toHaveBeenLastCalledWith(
+            expect.objectContaining({ sourceMessageId: "timestamp-answer", text }),
+          );
+          if (index === 1) {
+            expect(requireElement(group, ".chat-work-group").textContent).toContain("35m 17s");
+          }
+          await vi.advanceTimersByTimeAsync(1_500);
+        } finally {
+          transcript.hostDisconnected();
+          container.remove();
+        }
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["indexed", "keyed"] as const)(
     "keeps a settled %s stream replyable while search separates its following tool row",
     async (kind) => {

@@ -167,8 +167,6 @@ function createSharedStateWorkerOwner() {
                       throw new Error("Shared-state worker resumed before idle inspection");
                     }
                   },
-                  undefined,
-                  true,
                 ),
               )) === "healthy" && isSqliteWorkerStoreAvailable(store);
             entry.context.admission.assertCurrent();
@@ -453,6 +451,28 @@ function createSharedStateWorkerOwner() {
       }
       if (!entry) {
         const openingGuard = captureOpenClawStateWorkerOpeningGuard(context, assertCurrent);
+        const open = async () => {
+          try {
+            return await openSharedStateSqliteWorkerStore<StoreOperations>(
+              {
+                ...source,
+                databasePath: admission.databasePath,
+                existingOnly,
+              },
+              context,
+              openingGuard.assertCurrent,
+              {
+                maintenanceScope: context.maintenanceScope,
+                preparation,
+                retainCleanup: (cleanup) => {
+                  admitted.cleanup = cleanup;
+                },
+              },
+            );
+          } finally {
+            openingGuard.releaseContext();
+          }
+        };
         const admitted: Entry = {
           source,
           context,
@@ -460,28 +480,9 @@ function createSharedStateWorkerOwner() {
           existingOnly,
           activeOperations: 0,
           operationGeneration: 0,
-          opening: runInDetachedAsyncContext(async () => {
-            try {
-              return await openSharedStateSqliteWorkerStore<StoreOperations>(
-                {
-                  ...source,
-                  databasePath: admission.databasePath,
-                  existingOnly,
-                },
-                context,
-                openingGuard.assertCurrent,
-                {
-                  maintenanceScope: context.maintenanceScope,
-                  preparation,
-                  retainCleanup: (cleanup) => {
-                    admitted.cleanup = cleanup;
-                  },
-                },
-              );
-            } finally {
-              openingGuard.releaseContext();
-            }
-          }),
+          // Maintenance may already be draining an accepted callback; its native
+          // opening must retain that callback's live admission through settlement.
+          opening: context.maintenanceScope ? open() : runInDetachedAsyncContext(open),
         };
         entry = admitted;
         admitted.opening = admitted.opening.then((store) => {

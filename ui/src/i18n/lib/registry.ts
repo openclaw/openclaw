@@ -1,12 +1,10 @@
-// Control UI i18n module implements registry behavior.
-import type { Locale, TranslationMap } from "./types.ts";
+import type { TranslationMap } from "./types.ts";
 
-type LazyLocale = Exclude<Locale, "en">;
 type LocaleModule = Record<string, TranslationMap>;
 
-export const DEFAULT_LOCALE: Locale = "en";
+export const DEFAULT_LOCALE = "en";
 
-const LAZY_LOCALE_REGISTRY: Record<LazyLocale, () => Promise<LocaleModule>> = {
+const LAZY_LOCALE_REGISTRY = {
   "zh-CN": () => import("../locales/zh-CN.ts"),
   "zh-TW": () => import("../locales/zh-TW.ts"),
   "pt-BR": () => import("../locales/pt-BR.ts"),
@@ -27,7 +25,9 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, () => Promise<LocaleModule>> = {
   nl: () => import("../locales/nl.ts"),
   fa: () => import("../locales/fa.ts"),
   ru: () => import("../locales/ru.ts"),
-};
+} satisfies Record<string, () => Promise<LocaleModule>>;
+type LazyLocale = keyof typeof LAZY_LOCALE_REGISTRY;
+export type Locale = typeof DEFAULT_LOCALE | LazyLocale;
 // SAFETY: The record contract guarantees every own key is a LazyLocale.
 const LAZY_LOCALES = Object.keys(LAZY_LOCALE_REGISTRY) as LazyLocale[];
 
@@ -65,6 +65,6 @@ export async function loadLazyLocaleTranslation(locale: Locale): Promise<Transla
   if (!isLazyLocale(locale)) {
     return null;
   }
-  const module = await LAZY_LOCALE_REGISTRY[locale]();
+  const module: LocaleModule = await LAZY_LOCALE_REGISTRY[locale]();
   return module[locale.replaceAll("-", "_")] ?? null;
 }

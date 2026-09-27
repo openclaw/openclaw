@@ -2,6 +2,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import type { SessionTranscriptReadScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   ArtifactSessionResolutionError,
@@ -15,8 +16,9 @@ export async function prepareArtifactSessionRead(
   query: ArtifactQuery,
   getRuntimeConfig: () => OpenClawConfig | undefined,
   client: GatewayClient | null,
+  projection?: SessionRowProjection,
 ) {
-  const resolveSession = await prepareArtifactSessionResolution(query);
+  const resolveSession = await prepareArtifactSessionResolution(query, projection);
   const resolved = resolveSession(getRuntimeConfig(), client);
   if (!resolved) {
     return undefined;

@@ -298,6 +298,13 @@ describe("update candidate canary", () => {
       databasePath = path.join(root, "runtime-budget.sqlite");
       await fs.writeFile(databasePath, "");
       await fs.truncate(databasePath, sqliteBytes);
+      // The sparse database models validation cost, not this host's free disk space.
+      const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+        targetPath,
+        checkedPath: targetPath,
+        availableBytes: 16 * 1024 ** 3,
+        totalBytes: 32 * 1024 ** 3,
+      }));
       const now = Date.now.bind(Date);
       let doctorElapsed = 0;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + doctorElapsed);
@@ -327,6 +334,7 @@ describe("update candidate canary", () => {
         }
       } finally {
         clock.mockRestore();
+        capacity.mockRestore();
       }
     },
   );
@@ -809,13 +817,17 @@ describe("update candidate canary", () => {
         ),
       );
       const result = await validateUpdateCandidateCanary(canaryStateOptions(250));
-      expect(result.status).toBe(failure === "readiness" ? "ok" : "error");
+      expect(result.status).toBe("error");
       expect(result.phase).toBe(failure);
       if (failure === "plugins") {
         expect(renderSteps(result.steps)).toContain("incompatible plugin");
       }
       if (failure === "readiness") {
-        readiness.expectCanaryReadinessWarning(result.steps.at(-1), "readyz", 503);
+        expect(result.steps.at(-1)).toMatchObject({
+          exitCode: 1,
+          failureFacts: [{ check: "readyz", message: expect.stringContaining("stalled") }],
+        });
+        expect(result.steps.at(-1)?.advisory).toBeUndefined();
       }
       expect(result.steps.some((step) => step.exitCode !== 0)).toBe(true);
       expect(result.logTail.length).toBeLessThanOrEqual(40);

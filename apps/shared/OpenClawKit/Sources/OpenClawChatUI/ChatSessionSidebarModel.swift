@@ -39,8 +39,8 @@ public enum ChatSessionSidebarModel {
     {
         let declared = self.activeAgentStatus(session.agentStatus, now: now)
         let observer = self.visibleObserverDigest(for: session)
-        let status = self.normalized(session.status)?.lowercased()
-        if let declared, self.normalized(declared.attention) != nil {
+        let status = ChatPayloadDecoding.trimmedNonEmptyString(session.status)?.lowercased()
+        if let declared, ChatPayloadDecoding.trimmedNonEmptyString(declared.attention) != nil {
             return Activity(kind: .attention, text: declared.note)
         }
         if let observer, ["waiting-on-user", "stuck"].contains(observer.health.lowercased()) {
@@ -73,7 +73,8 @@ public enum ChatSessionSidebarModel {
     {
         var seen = Set<String>()
         let owned = sessions.filter { entry in
-            let owner = self.normalized(entry.agentId) ?? OpenClawChatSessionKey.agentID(from: entry.key)
+            let owner = ChatPayloadDecoding.trimmedNonEmptyString(entry.agentId) ?? OpenClawChatSessionKey
+                .agentID(from: entry.key)
             return owner?.lowercased() == agentID.lowercased() && !entry.isArchived &&
                 !self.isHiddenInternalSession(entry.key) &&
                 self.isSessionInActiveAgentScope(key: entry.key, agentID: entry.agentId, activeAgentID: agentID) &&
@@ -210,8 +211,8 @@ public enum ChatSessionSidebarModel {
 
     static func tree(from sessions: [OpenClawChatSessionEntry]) -> [Node] {
         let hierarchyPresent = sessions.contains { session in
-            self.normalized(session.spawnedBy) != nil ||
-                self.normalized(session.parentSessionKey) != nil ||
+            ChatPayloadDecoding.trimmedNonEmptyString(session.spawnedBy) != nil ||
+                ChatPayloadDecoding.trimmedNonEmptyString(session.parentSessionKey) != nil ||
                 session.childSessions != nil
         }
         guard hierarchyPresent else {
@@ -299,9 +300,9 @@ public enum ChatSessionSidebarModel {
     }
 
     public static func displayName(for session: OpenClawChatSessionEntry) -> String {
-        self.normalized(session.label) ??
-            self.normalized(session.displayName) ??
-            self.normalized(session.autoLabel) ??
+        ChatPayloadDecoding.trimmedNonEmptyString(session.label) ??
+            ChatPayloadDecoding.trimmedNonEmptyString(session.displayName) ??
+            ChatPayloadDecoding.trimmedNonEmptyString(session.autoLabel) ??
             self.displayName(forKey: session.key)
     }
 
@@ -328,7 +329,7 @@ public enum ChatSessionSidebarModel {
         let declaredAttention = agentStatus?.attention == nil ? nil : agentStatus?.note
         let failedAttention = self.unreadFailureReason(for: session)
         let statusNote = agentStatus?.note
-        let queued = self.normalized(session.status)?.lowercased() == "queued"
+        let queued = ChatPayloadDecoding.trimmedNonEmptyString(session.status)?.lowercased() == "queued"
             ? String(localized: "Waiting for a concurrency slot")
             : nil
         let observer = self.visibleObserverDigest(for: session)?.headline
@@ -346,12 +347,11 @@ public enum ChatSessionSidebarModel {
         let scopedSessions = self.clearingForeignGlobalObserverDigest(
             in: sessions,
             activeAgentId: activeAgentId)
-        if digest.sessionkey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global" {
-            let digestAgentId = self.normalized(digest.agentid)?.lowercased()
-            guard digestAgentId != nil,
-                  digestAgentId == self.normalized(activeAgentId)?.lowercased()
-            else { return scopedSessions }
-        }
+        guard self.sessionMatchesActiveAgent(
+            sessionKey: digest.sessionkey,
+            agentId: digest.agentid,
+            activeAgentId: activeAgentId)
+        else { return scopedSessions }
         guard let index = scopedSessions.firstIndex(where: { $0.key == digest.sessionkey }) else {
             return scopedSessions
         }
@@ -359,7 +359,7 @@ public enum ChatSessionSidebarModel {
         let candidate = OpenClawChatSessionObserverDigest(digest)
         let activeRunIds = self.normalizedActiveRunIds(session.activeRunIds)
         guard self.isRunning(session),
-              let runId = normalized(candidate.runId),
+              let runId = ChatPayloadDecoding.trimmedNonEmptyString(candidate.runId),
               activeRunIds.contains(runId)
         else { return scopedSessions }
 
@@ -401,9 +401,9 @@ public enum ChatSessionSidebarModel {
         agentId: String?,
         activeAgentId: String?) -> Bool
     {
-        guard self.normalized(sessionKey)?.lowercased() == "global" else { return true }
-        guard let owner = self.normalized(agentId)?.lowercased() else { return false }
-        return owner == self.normalized(activeAgentId)?.lowercased()
+        guard ChatPayloadDecoding.trimmedNonEmptyString(sessionKey)?.lowercased() == "global" else { return true }
+        guard let owner = ChatPayloadDecoding.trimmedNonEmptyString(agentId)?.lowercased() else { return false }
+        return owner == ChatPayloadDecoding.trimmedNonEmptyString(activeAgentId)?.lowercased()
     }
 
     private static func reconcilingGlobalObserverDigestOwner(
@@ -413,11 +413,11 @@ public enum ChatSessionSidebarModel {
     {
         // Missing ownership is transient disconnect state, not an agent switch.
         // Preserve the last verified offline projection until routing identity returns.
-        guard let selectedAgentId = self.normalized(activeAgentId)?.lowercased(),
+        guard let selectedAgentId = ChatPayloadDecoding.trimmedNonEmptyString(activeAgentId)?.lowercased(),
               let index = sessions.firstIndex(where: { $0.key == "global" }),
               let digest = sessions[index].observerDigest
         else { return sessions }
-        let digestAgentId = self.normalized(digest.agentId)?.lowercased()
+        let digestAgentId = ChatPayloadDecoding.trimmedNonEmptyString(digest.agentId)?.lowercased()
         guard digestAgentId != selectedAgentId else { return sessions }
         var updated = sessions
         updated[index].observerDigest = if digestAgentId == nil, adoptOwnerless {
@@ -440,17 +440,17 @@ public enum ChatSessionSidebarModel {
     {
         let digest = change.observerDigest
         let present = change.observerDigestPresent
-        guard self.normalized(change.sessionKey)?.lowercased() == "global" else {
+        guard ChatPayloadDecoding.trimmedNonEmptyString(change.sessionKey)?.lowercased() == "global" else {
             return (digest, present)
         }
         guard self.sessionMatchesActiveAgent(
             sessionKey: change.sessionKey,
             agentId: change.agentId,
             activeAgentId: activeAgentId),
-            let owner = self.normalized(change.agentId)?.lowercased()
+            let owner = ChatPayloadDecoding.trimmedNonEmptyString(change.agentId)?.lowercased()
         else { return nil }
         guard let digest else { return (nil, present) }
-        let digestOwner = self.normalized(digest.agentId)?.lowercased()
+        let digestOwner = ChatPayloadDecoding.trimmedNonEmptyString(digest.agentId)?.lowercased()
         if digestOwner == nil {
             return (
                 OpenClawChatSessionObserverDigest(
@@ -477,8 +477,6 @@ public enum ChatSessionSidebarModel {
         guard let index = sessions.firstIndex(where: { $0.key == key }) else { return nil }
         guard let projection = self.observerProjection(for: change, activeAgentId: activeAgentId)
         else { return sessions }
-        let projectedDigest = projection.digest
-        let observerDigestPresent = projection.present
 
         var session = sessions[index]
         if let updatedAt = change.updatedAt {
@@ -514,24 +512,19 @@ public enum ChatSessionSidebarModel {
 
         let activeRunIds = self.normalizedActiveRunIds(session.activeRunIds)
         if self.isRunning(session),
-           self.normalized(session.observerDigest?.runId).map(activeRunIds.contains) != true
+           ChatPayloadDecoding.trimmedNonEmptyString(session.observerDigest?.runId).map(activeRunIds.contains) != true
         {
             session.observerDigest = nil
         }
-        if observerDigestPresent {
-            if let projected = projectedDigest {
+        if projection.present {
+            if let projected = projection.digest {
                 let matchesActiveRun = !self.isRunning(session) ||
-                    self.normalized(projected.runId).map(activeRunIds.contains) == true
-                if matchesActiveRun {
-                    if let previous = session.observerDigest,
-                       previous.runId == projected.runId
-                    {
-                        if self.isNewer(projected, than: previous) {
-                            session.observerDigest = projected
-                        }
-                    } else {
-                        session.observerDigest = projected
-                    }
+                    ChatPayloadDecoding.trimmedNonEmptyString(projected.runId).map(activeRunIds.contains) == true
+                let supersedesPrevious = session.observerDigest.map {
+                    $0.runId != projected.runId || self.isNewer(projected, than: $0)
+                } ?? true
+                if matchesActiveRun, supersedesPrevious {
+                    session.observerDigest = projected
                 }
             } else {
                 session.observerDigest = nil
@@ -549,7 +542,7 @@ public enum ChatSessionSidebarModel {
         guard let digest = session.observerDigest else { return nil }
         if self.isRunning(session) {
             let activeRunIds = self.normalizedActiveRunIds(session.activeRunIds)
-            guard let runId = normalized(digest.runId),
+            guard let runId = ChatPayloadDecoding.trimmedNonEmptyString(digest.runId),
                   activeRunIds.contains(runId)
             else { return nil }
             return digest
@@ -577,7 +570,7 @@ public enum ChatSessionSidebarModel {
         guard status == "failed" || status == "timeout" else { return nil }
         let failureAt = session.endedAt ?? session.updatedAt ?? 0
         guard (session.lastReadAt ?? 0) < failureAt else { return nil }
-        return self.normalized(session.lastRunError)
+        return ChatPayloadDecoding.trimmedNonEmptyString(session.lastRunError)
     }
 
     private static func isRunning(_ session: OpenClawChatSessionEntry) -> Bool {
@@ -593,13 +586,8 @@ public enum ChatSessionSidebarModel {
             (candidate.revision == previous.revision && candidate.updatedAt > previous.updatedAt)
     }
 
-    private static func normalized(_ value: String?) -> String? {
-        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized?.isEmpty == false ? normalized : nil
-    }
-
     private static func normalizedActiveRunIds(_ runIds: [String]?) -> Set<String> {
-        Set((runIds ?? []).compactMap(self.normalized))
+        Set((runIds ?? []).compactMap(ChatPayloadDecoding.trimmedNonEmptyString))
     }
 
     public static func canDeleteSession(key: String, mainSessionKey: String) -> Bool {
@@ -612,12 +600,9 @@ public enum ChatSessionSidebarModel {
         _ session: OpenClawChatSessionEntry,
         mainSessionKey: String) -> Bool
     {
-        let status = session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return self.normalized(session.sessionId) != nil &&
+        ChatPayloadDecoding.trimmedNonEmptyString(session.sessionId) != nil &&
             self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey) &&
-            session.hasActiveRun != true &&
-            session.hasActiveSubagentRun != true &&
-            status != "running"
+            !self.isRunning(session) && session.hasActiveSubagentRun != true
     }
 
     public static func isSessionInActiveAgentScope(

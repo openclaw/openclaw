@@ -14,9 +14,6 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import { normalizeOutboundLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildOutboundSessionContext,
-  resolveChannelProgressDraftMaxLineChars,
-  resolveChannelProgressDraftMaxLines,
-  resolveChannelStreamingPreviewToolProgress,
   sendDurableMessageBatch,
   type DurableMessageBatchSendResult,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -33,7 +30,6 @@ import {
   createTelegramActionGate,
   resolveDefaultTelegramAccountId,
   resolveTelegramPollActionGateState,
-  resolveTelegramAccount,
 } from "./accounts.js";
 import {
   readTelegramChatId,
@@ -42,7 +38,6 @@ import {
   readTelegramSendMediaUrls,
   readTelegramThreadId,
 } from "./action-params.js";
-import { resolveTelegramStreamMode } from "./bot/helpers.js";
 import {
   appendTelegramDroppedControlFallback,
   buildTelegramControlDegradation,
@@ -64,7 +59,7 @@ import {
 } from "./message-topic-binding.js";
 import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
-import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
+import { renderTelegramAccountProgressDraftPreview } from "./progress-draft-preview.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
   createForumTopicTelegram,
@@ -737,17 +732,9 @@ export async function handleTelegramAction(
     let caption = readStringParam(params, "caption", { allowEmpty: true });
     let progressPreview: TelegramDraftPreview | undefined;
     if (options?.progressSnapshot) {
-      const telegramCfg = resolveTelegramAccount({ cfg, accountId }).config;
-      const streamMode = resolveTelegramStreamMode(telegramCfg);
-      progressPreview = renderTelegramProgressDraftPreview(options.progressSnapshot, {
-        richMessages: telegramCfg.richMessages === true,
-        toolProgress: resolveChannelStreamingPreviewToolProgress(
-          telegramCfg,
-          streamMode !== "progress",
-          streamMode,
-        ),
-        maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
-        maxLineChars: resolveChannelProgressDraftMaxLineChars(telegramCfg),
+      progressPreview = renderTelegramAccountProgressDraftPreview(options.progressSnapshot, {
+        cfg,
+        accountId,
       });
       content = progressPreview.text;
     }

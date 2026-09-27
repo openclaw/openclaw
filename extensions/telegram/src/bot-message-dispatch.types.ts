@@ -98,6 +98,8 @@ export type TelegramDispatchTurnConfig = Omit<
   replyQuotePosition?: number;
   replyQuoteText?: string;
   resolvedReasoningLevel: TelegramReasoningLevel;
+  /** Resolved once per turn by the rich-messages owner; never re-read from telegramCfg. */
+  richMessages: boolean;
   statusReactionController: TelegramMessageContext["statusReactionController"];
   tableMode: Parameters<
     NonNullable<import("./bot-deps.js").TelegramBotDeps["deliverReplies"]>

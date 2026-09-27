@@ -328,8 +328,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
           statusChannel: "telegram",
           resolvedHarness: "openclaw",
           pluginHealthLineOverride: "Plugins: test",
-          taskLineOverride: "",
-          skipDefaultTaskLookup: true,
           modelAuthOverride: "api-key",
           activeModelAuthOverride: "api-key",
           includeTranscriptUsage: false,

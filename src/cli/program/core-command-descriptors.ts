@@ -133,11 +133,6 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
     description: "List stored conversation sessions",
     hasSubcommands: true,
   },
-  {
-    name: "tasks",
-    description: "Inspect durable background tasks and TaskFlow state",
-    hasSubcommands: true,
-  },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>;
 
 /** Return core root-command descriptors in help/registration order. */

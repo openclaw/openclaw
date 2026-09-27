@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
+import { retainMutationAuthority } from "./mutation-authority.js";
 import {
   collectPackageDistInventory,
   readPackageDistInventoryIfPresent,
@@ -493,18 +494,7 @@ export async function swapStagedPackageInstall(
             const messages: string[] = [];
             // The filesystem fallback can recheck an assertion after catching it.
             // A later successful read cannot turn that authority failure into cleanup.
-            let assertionFailure: { cause: unknown } | undefined;
-            const assertRetirementCurrent = () => {
-              if (assertionFailure) {
-                throw assertionFailure.cause;
-              }
-              try {
-                assertCurrent();
-              } catch (cause) {
-                assertionFailure = { cause };
-                throw cause;
-              }
-            };
+            const assertRetirementCurrent = retainMutationAuthority(assertCurrent);
             const linkRetention =
               rootLink && packageBackedUp ? await rootLink.retire(assertRetirementCurrent) : null;
             assertRetirementCurrent();

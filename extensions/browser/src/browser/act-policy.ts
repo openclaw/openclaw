@@ -71,20 +71,18 @@ export function normalizeActBoundedNonNegativeMs(
 
 /** Clamp interaction actions to the supported browser-control timeout window. */
 export function resolveActInteractionTimeoutMs(timeoutMs?: number): number {
-  const normalized =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? Math.floor(timeoutMs)
-      : ACT_DEFAULT_INTERACTION_TIMEOUT_MS;
-  return Math.max(ACT_MIN_TIMEOUT_MS, Math.min(ACT_MAX_INTERACTION_TIMEOUT_MS, normalized));
+  return Math.min(
+    ACT_MAX_INTERACTION_TIMEOUT_MS,
+    resolveTimerTimeoutMs(timeoutMs, ACT_DEFAULT_INTERACTION_TIMEOUT_MS, ACT_MIN_TIMEOUT_MS),
+  );
 }
 
 /** Clamp wait actions to their wider supported browser-control timeout window. */
 export function resolveActWaitTimeoutMs(timeoutMs?: number): number {
-  const normalized =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? Math.floor(timeoutMs)
-      : ACT_DEFAULT_WAIT_TIMEOUT_MS;
-  return Math.max(ACT_MIN_TIMEOUT_MS, Math.min(ACT_MAX_WAIT_TIMEOUT_MS, normalized));
+  return Math.min(
+    ACT_MAX_WAIT_TIMEOUT_MS,
+    resolveTimerTimeoutMs(timeoutMs, ACT_DEFAULT_WAIT_TIMEOUT_MS, ACT_MIN_TIMEOUT_MS),
+  );
 }
 
 function parseTimerInteger(value: unknown): number | undefined {
@@ -169,7 +167,6 @@ function resolveLeafExecutionBudgetMs(
       );
     }
     case "evaluate":
-      return addNavigationGraceMs(resolveActWaitTimeoutMs(parseTimerInteger(request.timeoutMs)));
     case "scrollIntoView":
       return addNavigationGraceMs(resolveActWaitTimeoutMs(parseTimerInteger(request.timeoutMs)));
     case "hover":

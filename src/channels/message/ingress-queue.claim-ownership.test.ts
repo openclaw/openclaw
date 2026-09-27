@@ -2,8 +2,8 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import * as workerReplies from "../../infra/sqlite-worker-broker-reply.js";
 import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
-import * as workerLifecycle from "../../infra/sqlite-worker-lifecycle-preparation.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createTestIngressQueue, withTempState } from "./ingress-drain.test-helpers.js";
 import { createChannelIngressQueue } from "./ingress-queue.js";
@@ -158,30 +158,16 @@ describe("channel ingress claim ownership", () => {
         }
         return originalPost.call(this, request, transferList);
       });
-      const prepareLifecycle = workerLifecycle.createSqliteWorkerLifecyclePreparation;
-      const lifecycle = vi
-        .spyOn(workerLifecycle, "createSqliteWorkerLifecyclePreparation")
-        .mockImplementation((params) =>
-          prepareLifecycle({
-            ...params,
-            receiveResult(reply, pumping) {
-              if (
-                reply &&
-                typeof reply === "object" &&
-                "id" in reply &&
-                reply.id === claimRequest &&
-                "ok" in reply &&
-                reply.ok === false &&
-                stopClaimWorker &&
-                !stopped
-              ) {
-                stopped = stopClaimWorker();
-                return;
-              }
-              params.receiveResult(reply, pumping);
-            },
-          }),
-        );
+      const receiveReply = workerReplies.receiveSqliteWorkerReply;
+      const replies = vi
+        .spyOn(workerReplies, "receiveSqliteWorkerReply")
+        .mockImplementation((slot, reply, owner) => {
+          if (reply.id === claimRequest && !reply.ok && stopClaimWorker && !stopped) {
+            stopped = stopClaimWorker();
+            return;
+          }
+          receiveReply(slot, reply, owner);
+        });
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       const admission = vi
         .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
@@ -212,7 +198,7 @@ describe("channel ingress claim ownership", () => {
       } finally {
         admission.mockRestore();
         post.mockRestore();
-        lifecycle.mockRestore();
+        replies.mockRestore();
         await stopped;
       }
     });

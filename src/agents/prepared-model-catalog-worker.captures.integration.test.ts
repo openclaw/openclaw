@@ -130,10 +130,6 @@ describe("Gateway catalog worker captures", () => {
       const retained = inventory();
       const footprint = () => readCatalogCaptureFootprint(captureRoot);
       const initialFootprint = footprint();
-      console.info(
-        "Catalog capture footprint",
-        JSON.stringify({ phase: "loaded", ...initialFootprint }),
-      );
       expect(initialFootprint.captures).toHaveLength(2);
       for (const token of ["B", "C"]) {
         fs.writeFileSync(fixture.externalAuthPath, token);
@@ -147,16 +143,8 @@ describe("Gateway catalog worker captures", () => {
         expect(inventory()).toEqual(retained);
       }
       expect(footprint()).toEqual(initialFootprint);
-      console.info(
-        "Catalog capture footprint",
-        JSON.stringify({ phase: "refreshed", ...footprint() }),
-      );
       await closePreparedModelRuntimeSnapshots();
       expect(fs.existsSync(captureRoot)).toBe(false);
-      console.info(
-        "Catalog capture footprint",
-        JSON.stringify({ phase: "retired", captures: 0, bytes: 0, allocatedBytes: 0 }),
-      );
     } finally {
       workerChannel.unsubscribe(recordWorker);
     }

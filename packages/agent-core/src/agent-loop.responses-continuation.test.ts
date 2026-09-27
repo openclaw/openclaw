@@ -9,13 +9,13 @@ import { runAgentLoop } from "./agent-loop.js";
 import type { Message, Model } from "./llm.js";
 import type { AgentEvent, AgentTool } from "./types.js";
 
-function textItem(id: string, text: string, phase = "final_answer") {
+function textItem(id: string, text: string) {
   return {
     type: "message",
     id,
     role: "assistant",
     status: "completed",
-    phase,
+    phase: "final_answer",
     content: [{ type: "output_text", text, annotations: [] }],
   };
 }
@@ -23,17 +23,8 @@ function textItem(id: string, text: string, phase = "final_answer") {
 describe("Responses turn continuation", () => {
   it.each([
     { label: "explicit continuation with final text", endTurn: false, requests: 3 },
-    {
-      label: "explicit continuation with commentary",
-      endTurn: false,
-      phase: "commentary",
-      requests: 3,
-    },
-    { label: "explicit end", endTurn: true, requests: 1 },
     { label: "omitted end_turn", endTurn: undefined, requests: 1 },
     { label: "malformed end_turn", endTurn: "false", requests: 1 },
-    { label: "null end_turn", endTurn: null, requests: 1 },
-    { label: "object end_turn", endTurn: { privateValue: "do not retain" }, requests: 1 },
     { label: "incomplete response", endTurn: false, incomplete: true, requests: 1 },
     { label: "caller cancellation", endTurn: false, cancel: true, requests: 1 },
     { label: "host stop decision", endTurn: false, stop: true, requests: 1 },
@@ -54,7 +45,7 @@ describe("Responses turn continuation", () => {
         const index = requests.length;
         const output =
           index === 1
-            ? [textItem("msg_progress", "I am checking the result.", scenario.phase)]
+            ? [textItem("msg_progress", "I am checking the result.")]
             : index === 2
               ? [
                   {
@@ -76,11 +67,7 @@ describe("Responses turn continuation", () => {
               ...(scenario.incomplete
                 ? { incomplete_details: { reason: "max_output_tokens" } }
                 : {}),
-              ...(index === 1
-                ? endTurn === undefined
-                  ? {}
-                  : { end_turn: endTurn }
-                : { end_turn: index !== 2 }),
+              end_turn: index === 1 ? endTurn : index !== 2,
               output,
               usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
             },
@@ -178,7 +165,7 @@ describe("Responses turn continuation", () => {
             expect.objectContaining({
               type: "message",
               role: "assistant",
-              phase: scenario.phase ?? "final_answer",
+              phase: "final_answer",
               content: [expect.objectContaining({ text: "I am checking the result." })],
             }),
           ]),

@@ -65,12 +65,6 @@ interface EventBridgeOptions {
     stream: "item" | "plan";
     data: Record<string, unknown>;
   }) => void | Promise<void>;
-  onNativeSubagentEvent?: (
-    event: Extract<
-      SessionEvent,
-      { type: "subagent.started" | "subagent.completed" | "subagent.failed" }
-    >,
-  ) => void | Promise<void>;
   onCompactionComplete?: (payload: {
     messagesRemoved?: number;
     success: boolean;
@@ -473,10 +467,6 @@ export function attachEventBridge(
     });
   });
 
-  for (const eventType of ["subagent.started", "subagent.completed", "subagent.failed"] as const) {
-    registerListener(session, unsubscribeFns, eventType, forwardNativeSubagentEvent);
-  }
-
   registerListener(session, unsubscribeFns, "session.compaction_start", (event) => {
     if (!isRootSessionEvent(event)) {
       return;
@@ -803,20 +793,6 @@ export function attachEventBridge(
       return;
     }
     const invoke = () => callback(event);
-    agentEventChain = agentEventChain.then(invoke, invoke).catch(() => undefined);
-  }
-
-  function forwardNativeSubagentEvent(
-    event: Extract<
-      SessionEvent,
-      { type: "subagent.started" | "subagent.completed" | "subagent.failed" }
-    >,
-  ): void {
-    if (detached) {
-      return;
-    }
-    const invoke = () => options.onNativeSubagentEvent?.(event);
-    // Teardown joins this queue and retries unresolved mirror outcomes before releasing the session.
     agentEventChain = agentEventChain.then(invoke, invoke).catch(() => undefined);
   }
 

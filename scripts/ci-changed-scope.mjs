@@ -1,6 +1,7 @@
 // Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import {
@@ -83,8 +84,7 @@ const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.ym
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
 const APPLE_SWIFT_CONFIG_RE = /^config\/(?:swiftformat|swiftlint\.yml)$/;
 const SWIFT_LINT_OWNER_RE = /^scripts\/(?:run-swiftlint|lib\/check-limits)\.mts$/;
-const APPLE_SHARED_CONTRACT_FIXTURE_RE =
-  /^test\/fixtures\/(?:device-identity-coordinator|talk-config)-contract\.json$/;
+const APPLE_SHARED_CONTRACT_FIXTURE_RE = /^test\/fixtures\/talk-config-contract\.json$/;
 const MACOS_NATIVE_RE =
   /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
 const GIT_OWNER_SCOPE_RE =
@@ -797,6 +797,10 @@ export function writeGitHubOutput(
     "utf8",
   );
   const changedPathsJson = JSON.stringify(changedPaths);
+  // Same-job consumers read the complete manifest without Actions output or env limits.
+  const changedPathsFile = resolve(`${outputPath}.changed-paths.json`);
+  writeFileSync(changedPathsFile, changedPathsJson, "utf8");
+  appendFileSync(outputPath, `changed_paths_file=${changedPathsFile}\n`, "utf8");
   appendFileSync(
     outputPath,
     `changed_paths_json=${Buffer.byteLength(changedPathsJson, "utf8") <= CHANGED_PATHS_OUTPUT_MAX_BYTES ? changedPathsJson : "null"}\n`,

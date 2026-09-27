@@ -7,13 +7,12 @@ import { html, nothing } from "lit";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
-  SessionRunStatus,
   SessionsListResult,
 } from "../../api/types.ts";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { renderCapacityMeter } from "../../components/capacity-meter.ts";
-import "../../styles/sessions.css";
 import { icons } from "../../components/icons.ts";
+import "../../styles/sessions.css";
 import {
   renderSettingsPage,
   renderSettingsSegmented,
@@ -54,6 +53,7 @@ import {
 import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-reason.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import { renderCategoryCell } from "./category-cell.ts";
+import { renderSessionStatusBadge } from "./session-status.ts";
 import {
   renderSessionsAdvancedFilters,
   type SessionsAdvancedFiltersProps,
@@ -155,44 +155,6 @@ function buildSessionLevelOptions(
           ? t("sessionsView.offExplicit")
           : t(`sessionsView.${value}`),
   }));
-}
-
-const SESSION_RUN_STATUS_LABELS = {
-  queued: "sessionsView.statusQueued",
-  running: "sessionsView.statusRunning",
-  done: "sessionsView.statusDone",
-  failed: "sessionsView.statusFailed",
-  killed: "sessionsView.statusKilled",
-  timeout: "sessionsView.statusTimeout",
-} as const satisfies Record<SessionRunStatus, string>;
-
-function renderSessionStatusBadge(row: GatewaySessionRow) {
-  const active = isSessionRunActive(row);
-  const idle = row.hasActiveRun === false && (!row.status || row.status === "running");
-  const label =
-    row.status === "queued"
-      ? t("sessionsView.statusQueued")
-      : active
-        ? t("sessionsView.statusLive")
-        : idle
-          ? t("sessionsView.statusIdle")
-          : row.status
-            ? t(SESSION_RUN_STATUS_LABELS[row.status] ?? "sessionsView.statusUnknown")
-            : t("sessionsView.statusUnknown");
-  const kind =
-    row.status === "queued"
-      ? "warn"
-      : active || row.status === "done"
-        ? "ok"
-        : idle || !row.status
-          ? "muted"
-          : "danger";
-  const title = `${t("sessionsView.status")}: ${label}`;
-  return html`
-    <openclaw-tooltip .content=${title}>
-      ${renderSettingsStatus({ kind, label })}
-    </openclaw-tooltip>
-  `;
 }
 
 const SESSION_KIND_ICONS = {

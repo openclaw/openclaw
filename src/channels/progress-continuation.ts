@@ -1,7 +1,7 @@
 import type { ChannelProgressDraftCompositorSnapshot } from "./progress-draft-compositor.types.js";
 
 /** Positive platform evidence plus data-only presentation state, never a transport callback. */
-export type ProgressContinuationReceipt = {
+type ProgressContinuationReceipt = {
   channel: string;
   accountId?: string;
   to: string;

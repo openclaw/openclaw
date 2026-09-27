@@ -71,7 +71,6 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     // host lifecycle owner before dispatch so sibling maintenance cannot overtake them.
     const result = await runOpenClawStateWorkerOperation(context, operation, {
       assertCurrent: assertAdmission,
-      requireStateLifecycle: true,
       createAdmission,
     });
     if (isObservation?.(result)) {
