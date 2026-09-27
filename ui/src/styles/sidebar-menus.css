@@ -383,18 +383,6 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .shell--mobile-nav
-    :is(
-      .sidebar-issues-panel,
-      .sidebar-issues-panel__backdrop,
-      .sidebar-session-filter-panel,
-      .sidebar-session-filter-panel__backdrop
-    ) {
-    animation: none;
-  }
-}
-
 .shell--mobile-nav .sidebar-session-sort-menu .sidebar-session-filter-panel {
   position: fixed;
   z-index: 121;
@@ -412,6 +400,13 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
 
 .shell--mobile-nav .sidebar-session-filter-panel__grabber {
   margin-inline: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell--mobile-nav .sidebar-session-sort-menu .sidebar-session-filter-panel,
+  .shell--mobile-nav .sidebar-session-filter-panel__backdrop {
+    animation: none;
+  }
 }
 
 /* Long choice lists fade at an edge they scroll past. */

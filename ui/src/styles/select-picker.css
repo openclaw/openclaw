@@ -382,7 +382,8 @@ openclaw-select-picker {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .picker-select--sheet .picker-select__menu {
+  .picker-select--sheet .picker-select__menu,
+  .picker-select--sheet:dir(rtl) .picker-select__menu {
     animation: none;
   }
 }

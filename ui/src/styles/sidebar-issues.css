@@ -33,6 +33,13 @@
   animation: sidebar-sheet-in 240ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .shell--mobile-nav .sidebar-issues-panel,
+  .shell--mobile-nav .sidebar-issues-panel__backdrop {
+    animation: none;
+  }
+}
+
 .sidebar-issues-panel__header {
   display: flex;
   flex: none;
