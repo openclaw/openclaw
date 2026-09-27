@@ -8,6 +8,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         case finished
         case failed
         case blocked
+        case skipped
         case unavailable
 
         var title: LocalizedStringResource {
@@ -16,6 +17,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
             case .finished: "Finished"
             case .failed: "Failed"
             case .blocked: "Blocked"
+            case .skipped: "Skipped"
             case .unavailable: "No result"
             }
         }
@@ -42,6 +44,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         case "completed": return .finished
         case "failed": return .failed
         case "blocked": return .blocked
+        case "skipped": return .skipped
         default: return .unavailable
         }
     }
