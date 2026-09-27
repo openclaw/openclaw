@@ -153,9 +153,9 @@ class SecurePrefsTest {
 
     assertEquals(defaultSidebarPageOrder, prefs.sidebarPageOrder.value)
 
-    prefs.setSidebarPageOrder(listOf("threads", "home", "threads", "unknown"))
+    prefs.setSidebarPageOrder(listOf("settings", "threads", "home", "threads", "unknown"))
 
-    val legacyOrder = listOf("threads", "home", "skills", "work", "settings")
+    val legacyOrder = listOf("threads", "home", "skills", "work")
     val storedOrder = prefs.sidebarPageOrder.value
     assertEquals(legacyOrder, storedOrder.take(legacyOrder.size))
     assertTrue("New workspace pages follow the saved order", "skill-workshop" in storedOrder.drop(legacyOrder.size))
@@ -179,7 +179,7 @@ class SecurePrefsTest {
 
     assertEquals(defaultSidebarVisiblePages, prefs.sidebarVisiblePages.value)
 
-    prefs.setSidebarVisiblePages(listOf("threads", "skill-workshop", "home", "threads", "unknown"))
+    prefs.setSidebarVisiblePages(listOf("settings", "threads", "skill-workshop", "home", "threads", "unknown"))
 
     val expected = listOf("threads", "skill-workshop", "home")
     assertEquals(expected, prefs.sidebarVisiblePages.value)

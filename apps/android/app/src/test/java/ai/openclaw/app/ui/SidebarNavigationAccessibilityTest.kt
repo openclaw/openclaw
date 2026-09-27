@@ -81,7 +81,7 @@ class SidebarNavigationAccessibilityTest {
   private var editing = false
   private lateinit var inputModeManager: InputModeManager
   private lateinit var backDispatcher: OnBackPressedDispatcher
-  private val personalizedOrder = listOf("settings", "work", "home", "skills", "threads")
+  private val personalizedOrder = listOf("agents", "work", "home", "skills", "threads")
 
   @Before
   fun setUp() {
@@ -119,10 +119,10 @@ class SidebarNavigationAccessibilityTest {
   @Test
   fun visibleRowsSkipHiddenSlotsPersistMovesAndRetainNavigation() {
     prefs.setSidebarPageOrder(personalizedOrder)
-    prefs.setSidebarVisiblePages(listOf("settings", "home", "threads"))
+    prefs.setSidebarVisiblePages(listOf("agents", "home", "threads"))
     showSidebar()
     capture("normal-sidebar")
-    assertActions("Settings", "Move down")
+    assertActions("Agents", "Move down")
     assertActions("Home", "Move up", "Move down")
     assertActions("Threads", "Move up")
     composeRule.onNodeWithText("Overview").assertDoesNotExist()
@@ -133,12 +133,12 @@ class SidebarNavigationAccessibilityTest {
     home.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
     val homeId = home.fetchSemanticsNode().id
     invokeMove("Home", "Move up")
-    assertPersisted(listOf("home", "work", "settings", "skills", "threads"), listOf("settings", "home", "threads"))
+    assertPersisted(listOf("home", "work", "agents", "skills", "threads"), listOf("agents", "home", "threads"))
     assertActions("Home", "Move down")
     assertEquals(homeId, home.fetchSemanticsNode().id)
     home.assertIsSelected().assert(SemanticsMatcher.expectValue(SemanticsProperties.Focused, true))
     invokeMove("Home", "Move down")
-    assertPersisted(personalizedOrder, listOf("settings", "home", "threads"))
+    assertPersisted(personalizedOrder, listOf("agents", "home", "threads"))
     home.performClick()
     composeRule.runOnIdle { assertEquals(listOf(SidebarDestination.Home), selections) }
     capture("normal-sidebar-restored")
@@ -151,22 +151,24 @@ class SidebarNavigationAccessibilityTest {
     showSidebar()
     assertActions("Home")
     composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
+    composeRule.onNodeWithText("Settings").assertDoesNotExist()
     composeRule.onNodeWithText("Edit pinned items").performScrollTo().performClick()
+    composeRule.onNodeWithText("Settings").assertDoesNotExist()
     editing = true
     capture("editor", popup = true)
-    assertActions("Settings", "Move down")
+    assertActions("Agents", "Move down")
     assertActions("Overview", "Move up", "Move down")
     assertActions("Threads", "Move up", "Move down")
     invokeMove("Overview", "Move up")
-    assertPersisted(listOf("work", "settings", "home", "skills", "threads"), listOf("home"))
+    assertPersisted(listOf("work", "agents", "home", "skills", "threads"), listOf("home"))
     assertActions("Overview", "Move down")
     row("Overview").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Not pinned"))
     row("Overview").performClick()
-    assertPersisted(listOf("work", "settings", "home", "skills", "threads"), listOf("work", "home"))
+    assertPersisted(listOf("work", "agents", "home", "skills", "threads"), listOf("work", "home"))
     row("Overview").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Pinned"))
     row("Overview").performClick()
     row("Home").performClick()
-    assertPersisted(listOf("work", "settings", "home", "skills", "threads"), listOf("home"))
+    assertPersisted(listOf("work", "agents", "home", "skills", "threads"), listOf("home"))
     composeRule.runOnIdle { assertTrue(selections.isEmpty()) }
   }
 
@@ -182,7 +184,7 @@ class SidebarNavigationAccessibilityTest {
       model.setSidebarVisiblePages(listOf("home"))
       assertFalse("Hidden source has no visible move", moveUp.action())
     }
-    assertPersisted(listOf("work", "settings", "home", "skills", "threads"), listOf("home"))
+    assertPersisted(listOf("work", "agents", "home", "skills", "threads"), listOf("home"))
     assertActions("Home")
   }
 
@@ -215,10 +217,10 @@ class SidebarNavigationAccessibilityTest {
     sidebarRow("Threads").assertIsSelected()
     composeRule.runOnIdle {
       model.setSidebarPageOrder(personalizedOrder)
-      model.setSidebarVisiblePages(listOf("settings", "work", "home"))
+      model.setSidebarVisiblePages(listOf("agents", "work", "home"))
     }
-    assertPersisted(personalizedOrder, listOf("settings", "work", "home"))
-    sidebarRow("Settings").assertIsDisplayed()
+    assertPersisted(personalizedOrder, listOf("agents", "work", "home"))
+    sidebarRow("Agents").assertIsDisplayed()
     composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
     composeRule.onNodeWithText("Edit pinned items").performScrollTo().performClick()
     composeRule.onNodeWithText("Reset pinned items").performScrollTo().performClick()
@@ -231,7 +233,7 @@ class SidebarNavigationAccessibilityTest {
       assertTrue(popup.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE)))
     }
     assertDefaultRows()
-    assertPersisted(listOf("home", "threads", "skills", "work", "settings"), listOf("home", "threads", "skills", "work"))
+    assertPersisted(listOf("home", "threads", "skills", "work"), listOf("home", "threads", "skills", "work"))
     capture("reset-sidebar")
   }
 
