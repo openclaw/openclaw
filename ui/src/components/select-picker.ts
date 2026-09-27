@@ -134,7 +134,7 @@ export class SelectPicker<
     }
   }
 
-  private openMenu(last = false) {
+  private openMenu(last = false, focus = true) {
     if (this.params.disabled || this.mode !== "closed") {
       return undefined;
     }
@@ -151,7 +151,7 @@ export class SelectPicker<
     this.ownerDocument.addEventListener("pointerdown", this.handleOutsidePointer, true);
     this.params.onOpen?.();
     void this.updateComplete.then(() => {
-      if (this.mode !== "closed") {
+      if (focus && this.mode !== "closed") {
         this.querySelector<HTMLElement>("[data-picker-focus]")?.focus({ preventScroll: true });
       }
     });
@@ -229,7 +229,9 @@ export class SelectPicker<
       () => {
         if (enter) {
           this.keyboard = false;
-          this.hoverOpened = this.openMenu() !== undefined;
+          // Hover previews the choices without taking focus, so a later
+          // close never hands a script-moved focus ring to the trigger.
+          this.hoverOpened = this.openMenu(false, false) !== undefined;
         } else {
           this.closeMenu(this.contains(this.ownerDocument.activeElement));
         }
