@@ -75,7 +75,7 @@ const slackApproval = createChannelApprovalAuth({
 });
 
 export const getSlackApprovalApprovers = slackApproval.resolveApprovers;
-export const isSlackApprovalAuthorizedSender = slackApproval.isAuthorizedSender;
+const isSlackApprovalAuthorizedSender = slackApproval.isAuthorizedSender;
 
 export function hasConfiguredSlackPluginApprovalApprovers(params: SlackApprovalContext): boolean {
   const policy = params.cfg.approvals?.plugin?.slack;

@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   getSlackApprovalApprovers,
   getSlackApprovalApproversForTeam,
-  isSlackApprovalAuthorizedSender,
   isSlackPluginApprovalAuthorizedSender,
 } from "./approval-auth.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
@@ -21,7 +20,7 @@ function pluginRequest(
   };
 }
 
-describe("isSlackApprovalAuthorizedSender", () => {
+describe("legacy Slack plugin approval sender authorization", () => {
   it("authorizes general Slack approvers from allowFrom and defaultTo", () => {
     const cfg = {
       channels: {
@@ -34,10 +33,10 @@ describe("isSlackApprovalAuthorizedSender", () => {
     };
 
     for (const senderId of ["U123OWNER", "u123owner", "U345DEFAULT", "u345default"]) {
-      expect(isSlackApprovalAuthorizedSender({ cfg, senderId })).toBe(true);
+      expect(isSlackPluginApprovalAuthorizedSender({ cfg, senderId })).toBe(true);
     }
     for (const senderId of ["U999EXEC", "U999ATTACKER"]) {
-      expect(isSlackApprovalAuthorizedSender({ cfg, senderId })).toBe(false);
+      expect(isSlackPluginApprovalAuthorizedSender({ cfg, senderId })).toBe(false);
     }
   });
 
@@ -52,7 +51,7 @@ describe("isSlackApprovalAuthorizedSender", () => {
     };
 
     for (const senderId of ["U123OWNER", "U345DEFAULT"]) {
-      expect(isSlackApprovalAuthorizedSender({ cfg, senderId })).toBe(true);
+      expect(isSlackPluginApprovalAuthorizedSender({ cfg, senderId })).toBe(true);
     }
   });
 
@@ -68,13 +67,13 @@ describe("isSlackApprovalAuthorizedSender", () => {
 
     expect(getSlackApprovalApprovers({ cfg: qualifiedCfg })).toEqual([qualifiedApprover]);
     expect(
-      isSlackApprovalAuthorizedSender({
+      isSlackPluginApprovalAuthorizedSender({
         cfg: qualifiedCfg,
         senderId: qualifiedApprover,
       }),
     ).toBe(true);
     for (const senderId of ["team:T22222222:user:U123OWNER", "U123OWNER"]) {
-      expect(isSlackApprovalAuthorizedSender({ cfg: qualifiedCfg, senderId })).toBe(false);
+      expect(isSlackPluginApprovalAuthorizedSender({ cfg: qualifiedCfg, senderId })).toBe(false);
     }
 
     const unqualifiedCfg = {
@@ -89,7 +88,7 @@ describe("isSlackApprovalAuthorizedSender", () => {
       "team:T11111111:user:U123OWNER",
       "team:T22222222:user:U123OWNER",
     ]) {
-      expect(isSlackApprovalAuthorizedSender({ cfg: unqualifiedCfg, senderId })).toBe(true);
+      expect(isSlackPluginApprovalAuthorizedSender({ cfg: unqualifiedCfg, senderId })).toBe(true);
     }
   });
 
@@ -103,12 +102,12 @@ describe("isSlackApprovalAuthorizedSender", () => {
     };
 
     expect(
-      isSlackApprovalAuthorizedSender({
+      isSlackPluginApprovalAuthorizedSender({
         cfg,
         senderId: "U123OWNER",
       }),
     ).toBe(true);
-    expect(isSlackApprovalAuthorizedSender({ cfg })).toBe(false);
+    expect(isSlackPluginApprovalAuthorizedSender({ cfg })).toBe(false);
   });
 });
 
