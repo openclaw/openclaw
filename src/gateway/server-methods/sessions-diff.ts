@@ -11,10 +11,12 @@ import {
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { loadCheckoutDiff } from "../../sessions/session-diff.js";
+import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
+import { retainSessionScopedRead } from "./session-scoped-read.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -91,7 +93,8 @@ export async function loadSessionDiff(
 }
 
 export const sessionsDiffHandlers: GatewayRequestHandlers = {
-  "sessions.diff": async ({ params, respond, context }) => {
+  "sessions.diff": async (options) => {
+    const { params, respond, context } = options;
     if (!assertValidParams(params, validateSessionsDiffParams, "sessions.diff", respond)) {
       return;
     }
@@ -116,15 +119,30 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    respond(
-      true,
-      await loadSessionDiff(
+    // The sharing boundary applies to caller classes that have one: configured operator
+    // roles, or a narrow session grant. A Gateway without roles keeps the access it has
+    // today, matching the exact-key read contract in sessions-read-by-key.ts. The diff
+    // describes the checkout, baseline and session identity captured above, so a concurrent
+    // label or activity update must not fail the read; visibility, caller authority and
+    // session identity still have to hold when the response is built.
+    const boundaryCfg = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
+    const read = hasOperatorBoundary(options.client, boundaryCfg)
+      ? retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
+          allowMetadataChanges: true,
+        })
+      : undefined;
+    try {
+      const result = await loadSessionDiff(
         {
           ...params,
           ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
         },
         context,
-      ),
-    );
+      );
+      read?.assertCurrent();
+      respond(true, result);
+    } finally {
+      read?.release();
+    }
   },
 };
