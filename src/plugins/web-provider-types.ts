@@ -72,7 +72,7 @@ export type WebSearchProviderSetupContext = {
   secretInputMode?: SecretInputMode;
 };
 
-export type WebFetchCredentialResolutionSource = WebSearchCredentialResolutionSource;
+export type WebFetchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
 
 type WebFetchRuntimeMetadataContext = {
   config?: OpenClawConfig;
