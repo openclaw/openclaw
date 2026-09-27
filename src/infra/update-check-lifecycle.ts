@@ -5,6 +5,7 @@ import type { UpdateCampaignController } from "./update-campaign.js";
 import type { resolveStartupInstallStatus } from "./update-install-status.js";
 
 export type UpdateCheckLifecycle = {
+  scheduler: GatewayScheduler;
   signal: AbortSignal;
   campaign?: Pick<UpdateCampaignController, "clear">;
   isCurrent: () => boolean;
@@ -67,6 +68,7 @@ export function createGatewayUpdateLifecycle(scheduler: GatewayScheduler): Updat
     arm(0);
   };
   const lifecycle: UpdateCheckLifecycle = {
+    scheduler,
     signal,
     isCurrent: () => updateCheckLifecycle === lifecycle,
     refreshes: new WeakMap(),

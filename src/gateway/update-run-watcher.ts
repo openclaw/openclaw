@@ -1,5 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import type { GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { gatewayUpdateCampaign } from "../infra/update-campaign.js";
+import type { UpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
 import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
 import {
   findActiveUpdateRun,
@@ -22,12 +24,14 @@ export function wakeUpdateRunWatcher(): void {
 
 /** The update-check lifecycle joins notices and their transport tails before Gateway teardown. */
 export function startUpdateRunWatcher(params: {
+  lifecycle: UpdateCheckLifecycle;
   broadcast: GatewayBroadcastFn;
   log: { warn: (message: string) => void };
 }): { stop: () => Promise<void> } {
   const work = new AsyncWorkScope();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let publicationTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduler = params.lifecycle.scheduler;
+  let timer: GatewayScheduledJob | undefined;
+  let publicationTimer: GatewayScheduledJob | undefined;
   let watched: { runId: string; revision?: number; phase?: UpdateRunPhase } | undefined;
   let notices = Promise.resolve();
   const reconciled: UpdateRunRecord[] = [];
@@ -35,10 +39,8 @@ export function startUpdateRunWatcher(params: {
   let pollAgain = false;
 
   const schedulePublication = () => {
-    if (publicationTimer) {
-      clearTimeout(publicationTimer);
-      publicationTimer = undefined;
-    }
+    publicationTimer?.cancel();
+    publicationTimer = undefined;
     if (work.isClosing) {
       return;
     }
@@ -46,11 +48,11 @@ export function startUpdateRunWatcher(params: {
       const blocker = reconcileOpenClawStateSchemaPublication();
       if (blocker?.publishAfterMs != null) {
         // Deadline belongs to the ledger row, so process restarts never restart the grace.
-        publicationTimer = setTimeout(
-          schedulePublication,
-          Math.min(2_147_483_647, Math.max(0, blocker.publishAfterMs - Date.now())),
-        );
-        publicationTimer.unref?.();
+        publicationTimer = scheduler.schedule({
+          id: "update.schema-publication",
+          atMs: blocker.publishAfterMs,
+          run: schedulePublication,
+        });
       }
     } catch (error) {
       params.log.warn(`state schema publication deferred: ${formatErrorMessage(error)}`);
@@ -61,9 +63,7 @@ export function startUpdateRunWatcher(params: {
     if (work.isClosing) {
       return;
     }
-    if (timer) {
-      clearTimeout(timer);
-    }
+    timer?.cancel();
     timer = undefined;
     try {
       reconciled.push(
@@ -124,8 +124,11 @@ export function startUpdateRunWatcher(params: {
       // Named freshness-poll exception: the detached orchestrator writes the
       // shared ledger. Observe one active run until terminal or teardown so a
       // late repair still clears the clients' update-in-progress state.
-      timer = setTimeout(poll, UPDATE_RUN_POLL_MS);
-      timer.unref?.();
+      timer = scheduler.schedule({
+        id: "update.run-poll",
+        delayMs: UPDATE_RUN_POLL_MS,
+        run: poll,
+      });
     } catch (error) {
       watched = undefined;
       params.log.warn(`update run watcher stopped: ${formatErrorMessage(error)}`);
@@ -180,14 +183,10 @@ export function startUpdateRunWatcher(params: {
   wake();
   return {
     stop: () => {
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
-      if (publicationTimer) {
-        clearTimeout(publicationTimer);
-        publicationTimer = undefined;
-      }
+      timer?.cancel();
+      timer = undefined;
+      publicationTimer?.cancel();
+      publicationTimer = undefined;
       if (wakeCurrentWatcher === wake) {
         wakeCurrentWatcher = undefined;
       }

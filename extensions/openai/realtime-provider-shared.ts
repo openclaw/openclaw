@@ -50,7 +50,7 @@ export function captureOpenAIRealtimeWsClose(
   captureWsEventAsync: OpenAIRealtimeHost["captureWsEventAsync"],
 ): void {
   // Finalization retains capture failures; observe the Promise returned by the host view.
-  void captureWsEventAsync({
+  void captureWsEventAsync?.({
     url: params.url,
     direction: "local",
     kind: "ws-close",

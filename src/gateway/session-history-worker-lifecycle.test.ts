@@ -17,6 +17,12 @@ import {
 } from "../config/sessions/session-cold-storage.test-support.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import {
+  historyClearTimeout,
+  historyLane,
+  maintenanceLane,
+  rotateDatabaseWorkers,
+} from "../config/sessions/session-transcript-worker-resources.js";
+import {
   prepareSessionEntryPresenceRead,
   withSessionHistoryWorkerDatabase,
 } from "../config/sessions/session-transcript-worker-runtime.js";
@@ -35,7 +41,10 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
-import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
+import {
+  captureOpenClawStateDatabaseReadAdmission,
+  closeOpenClawStateDatabaseAsync,
+} from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
@@ -91,9 +100,15 @@ vi.mock("../config/sessions/session-cold-storage-read.js", async (importOriginal
 
 afterAll(() => observed.timers.mockRestore());
 
-afterEach(() => {
+afterEach(async () => {
   observed.dispatch = undefined;
   observed.restoration = undefined;
+  await Promise.all(
+    [historyLane, maintenanceLane].map(async (lane) => {
+      historyClearTimeout(lane.idleTimer);
+      await rotateDatabaseWorkers(lane);
+    }),
+  );
   for (const worker of observed.workers.splice(0)) {
     expect(worker.threadId).toBe(-1);
   }
@@ -158,6 +173,30 @@ it("retains the prepared metadata target when caller scope and environment chang
     expect(await prepareSessionEntryPresenceRead(target).read()).toBe(false);
     expect(fs.existsSync(target.storePath)).toBe(false);
   });
+});
+
+it("keeps fresh fixture roots isolated while reusing idle reader execution", async () => {
+  let previousWorker: Worker | undefined;
+  for (const sessionId of ["first-fixture", "second-fixture"]) {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const fixture = await seed(state, "main", sessionId);
+      expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+        `${sessionId}-message`,
+      ]);
+      const worker = observed.workers.at(-1)!;
+      if (previousWorker) {
+        if (process.versions.bun) {
+          expect(previousWorker.threadId).toBe(-1);
+          expect(worker).not.toBe(previousWorker);
+        } else {
+          expect(worker).toBe(previousWorker);
+        }
+      }
+      previousWorker = worker;
+    });
+  }
+  await closeOpenClawStateDatabaseAsync();
+  expect(previousWorker?.threadId).toBe(-1);
 });
 
 it("joins native worker exit when metadata-read custody is revoked during dispatch", async () => {
@@ -228,7 +267,7 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
 }
 
 it.each(["message-by-id", "message-count"] as const)(
-  "settles cancelled %s reads before reuse and joins their worker on close",
+  "settles cancelled %s reads before reuse and closes their database handles",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const fixture = await seed(state, "main", "cancel-message-read");
@@ -259,16 +298,21 @@ it.each(["message-by-id", "message-count"] as const)(
       await expect(pending).rejects.toBe(cancelled);
       expect(dispatched).toBe(true);
       const worker = observed.workers.at(-1)!;
+      const threadId = worker.threadId;
       expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
         "cancel-message-read-message",
       ]);
       expect(observed.workers.at(-1)).toBe(worker);
       await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
-      expect(worker.threadId).toBe(-1);
+      expect(worker.threadId).toBe(process.versions.bun ? -1 : threadId);
       expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
         "cancel-message-read-message",
       ]);
-      expect(observed.workers.at(-1)).not.toBe(worker);
+      if (process.versions.bun) {
+        expect(observed.workers.at(-1)).not.toBe(worker);
+      } else {
+        expect(observed.workers.at(-1)).toBe(worker);
+      }
     });
   },
 );
@@ -369,14 +413,15 @@ it.each(["new-agent", "new-path", "schema", "physical-replacement"] as const)(
   },
 );
 
-it("closes A through native exit while active and queued B pages survive, then reopens replaced A", async () => {
+it("closes idle A while active and queued B pages survive, then reads replaced A", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const a = await seed(state, "main", "close-a");
     const b = await seed(state, "other", "active-b");
     const c = await seed(state, "other", "queued-b");
-    await a.read();
+    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual(["close-a-message"]);
     await b.read();
     const oldWorker = observed.workers.at(-1)!;
+    const threadId = oldWorker.threadId;
     let closing: Promise<boolean> | undefined;
     observed.dispatch = (message) => {
       const input = asOptionalRecord(asOptionalRecord(message)?.input);
@@ -393,13 +438,28 @@ it("closes A through native exit while active and queued B pages survive, then r
       ["active-b-message"],
       ["queued-b-message"],
     ]);
-    expect(oldWorker.threadId).toBe(-1);
+    expect(oldWorker.threadId).toBe(process.versions.bun ? -1 : threadId);
     // This also exercises Windows replacement while the unrelated agent remains usable.
     fs.copyFileSync(a.path, `${a.path}.replacement`);
     fs.renameSync(a.path, `${a.path}.previous`);
     fs.renameSync(`${a.path}.replacement`, a.path);
-    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual(["close-a-message"]);
+    await replaceTranscriptEvents(a.target, [
+      { type: "session", version: 3, id: "close-a" },
+      {
+        type: "message",
+        id: "replacement-a-message",
+        parentId: null,
+        message: { role: "user", content: "replacement content" },
+      },
+    ]);
+    await waitForSessionTranscriptProjection(a.target);
+    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
+      "replacement-a-message",
+    ]);
     expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["active-b-message"]);
+    if (!process.versions.bun) {
+      expect(observed.workers.at(-1)).toBe(oldWorker);
+    }
   });
 });
 
@@ -426,11 +486,20 @@ it("evicts the least recently used of 64 retained targets without charging missi
       expect(fs.existsSync(target.storePath)).toBe(false);
     }
     await targets[64]!.read();
-    // Only the confirmed eviction releases custody without retiring this worker.
-    await closeOpenClawAgentDatabaseByPathAsync(targets[1]!.path, "retained-1");
-    expect(worker.threadId).toBe(threadId);
-    await closeOpenClawAgentDatabaseByPathAsync(targets[0]!.path, "retained-0");
-    expect(worker.threadId).toBe(-1);
+    const closeResources = vi.spyOn(historyLane.pool, "closeResources");
+    try {
+      // The evicted target has no retained native custody; the hot target still does.
+      await closeOpenClawAgentDatabaseByPathAsync(targets[1]!.path, "retained-1");
+      expect(worker.threadId).toBe(threadId);
+      expect(closeResources).not.toHaveBeenCalled();
+      await closeOpenClawAgentDatabaseByPathAsync(targets[0]!.path, "retained-0");
+      expect(worker.threadId).toBe(process.versions.bun ? -1 : threadId);
+      if (!process.versions.bun) {
+        expect(closeResources).toHaveBeenCalledWith(JSON.stringify([{ path: targets[0]!.path }]));
+      }
+    } finally {
+      closeResources.mockRestore();
+    }
     expect((await targets[64]!.read()).messages.map(readChatHistoryMessageId)).toEqual([
       "history-64-message",
     ]);

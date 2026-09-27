@@ -119,7 +119,7 @@ export async function resolveSubagentSpawnRequest(
   // Capture the requester window before launch; a reset must not move child
   // progress receipts or private results to a replacement session at the same key.
   let completionRequesterSessionId: string | undefined;
-  const captureRequesterSession = async () => {
+  const captureRequester = async () => {
     try {
       const target = await resolveGatewaySessionStoreTargetInWorker({
         cfg,
@@ -129,25 +129,25 @@ export async function resolveSubagentSpawnRequest(
       });
       ctx.assertActive?.();
       completionRequesterSessionId = target.store[target.canonicalKey]?.sessionId;
-      return undefined;
     } catch (error) {
       return rejectSubagentSpawnRequest(
         "error",
         `sessions_spawn could not read the requester session: ${summarizeSpawnError(error)}`,
       );
     }
+    if (params.completionTarget === "parent" && !completionRequesterSessionId) {
+      return rejectSubagentSpawnRequest(
+        "error",
+        "Private completion requires an existing requester session. Retry from an active session.",
+      );
+    }
+    return undefined;
   };
   if (!params.collect) {
-    const rejection = await captureRequesterSession();
+    const rejection = await captureRequester();
     if (rejection) {
       return rejection;
     }
-  }
-  if (params.completionTarget === "parent" && !completionRequesterSessionId) {
-    return rejectSubagentSpawnRequest(
-      "error",
-      "Private completion requires an existing requester session. Retry from an active session.",
-    );
   }
 
   const requesterAgentId = resolveSessionAgentId({
@@ -276,48 +276,55 @@ export async function resolveSubagentSpawnRequest(
         .digest("hex")
         .slice(0, 32)}`
     : crypto.randomUUID();
-  let swarmReservation: ReturnType<typeof holdQueuedSwarmRun>;
+  let reservationPending = false;
   let soleImplicitMember = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
     const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId);
     soleImplicitMember = !explicitSwarmGroupId && !swarmLaunchReplayKey && groupRuns.length === 0;
-    // Swarm reservation can reconcile existing lane state even when it rejects a duplicate.
-    ctx.onSpawnEffectsStart?.();
-    if (
-      !reserveSwarmRun({
-        groupId: swarmSchedulerGroupKey,
-        runId: childIdem,
-        maxConcurrent: swarmConfig.maxConcurrent,
-        activeRunIds: groupRuns
-          .filter(
-            (entry) =>
-              entry.execution.status === "running" || entry.execution.status === "interrupted",
-          )
-          .map((entry) => entry.schedulerSlotId ?? entry.runId),
-      })
-    ) {
-      return rejectSubagentSpawnRequest(
-        "error",
-        "sessions_spawn could not reserve swarm FIFO order.",
-      );
-    }
-    swarmReservation = holdQueuedSwarmRun(childIdem);
-    if (!swarmReservation) {
-      return rejectSubagentSpawnRequest("error", "Collector FIFO reservation is no longer current");
-    }
-    // Reserve invocation order before worker reads can finish out of order.
-    // Transfer this exact hold to the spawn owner only after requester capture succeeds.
-    let transferred = false;
     try {
-      const rejection = await captureRequesterSession();
+      if (
+        !reserveSwarmRun({
+          groupId: swarmSchedulerGroupKey,
+          runId: childIdem,
+          maxConcurrent: swarmConfig.maxConcurrent,
+          activeRunIds: groupRuns
+            .filter(
+              (entry) =>
+                entry.execution.status === "running" || entry.execution.status === "interrupted",
+            )
+            .map((entry) => entry.schedulerSlotId ?? entry.runId),
+        })
+      ) {
+        return rejectSubagentSpawnRequest(
+          "error",
+          "sessions_spawn could not reserve swarm FIFO order.",
+        );
+      }
+      reservationPending = true;
+    } finally {
+      if (!reservationPending) {
+        // Rejected reservations can still reconcile existing lane state.
+        ctx.onSpawnEffectsStart?.();
+      }
+    }
+  }
+  // Keep submission order while requester reads finish on independent workers.
+  // Hand this exact hold to the spawn owner; failed reads must unblock the lane.
+  const reservation = reservationPending ? holdQueuedSwarmRun(childIdem) : undefined;
+  if (params.collect) {
+    let captured = false;
+    try {
+      // Notify after capturing the requester, but include failed reservation work
+      // in the tool's effect receipt before the attempt settles.
+      const rejection = await captureRequester().finally(() => ctx.onSpawnEffectsStart?.());
       if (rejection) {
         return rejection;
       }
-      transferred = true;
+      captured = true;
     } finally {
-      if (!transferred) {
-        swarmReservation.withdraw();
-        await swarmReservation.release();
+      if (!captured) {
+        reservation?.withdraw();
+        await reservation?.release();
       }
     }
   }
@@ -347,7 +354,8 @@ export async function resolveSubagentSpawnRequest(
         schedulerGroupKey: swarmSchedulerGroupKey,
         launchReplayKey: swarmLaunchReplayKey,
         soleImplicitMember,
-        reservation: swarmReservation,
+        reservationPending,
+        reservation,
       },
       admission: {
         resolve: resolveAdmission,

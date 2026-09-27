@@ -116,7 +116,11 @@ function manifestPath(input: string, family: Family, targetSha = TARGET_SHA) {
   return path.join(familyDirectory(input, family, targetSha), "manifest.json");
 }
 
-function collectAll(root: string, targetSha = TARGET_SHA) {
+function collectAll(
+  root: string,
+  targetSha = TARGET_SHA,
+  runAttempts: Partial<Record<Family, number>> = {},
+) {
   const output = path.join(root, "collected");
   for (const family of ["iphone", "ipad-13", "watch"] as const) {
     const source = writeFamilySource(root, family);
@@ -125,7 +129,7 @@ function collectAll(root: string, targetSha = TARGET_SHA) {
       screenshotDirectory: source.screenshots,
       xcresultDirectory: source.xcresults,
       outputDirectory: path.join(output, containerName(family, targetSha)),
-      provenance: provenance(targetSha),
+      provenance: { ...provenance(targetSha), runAttempt: runAttempts[family] ?? 2 },
       readXcresultSummary: (resultPath) => {
         const result = fs.readFileSync(path.join(resultPath, "summary.txt"), "utf8");
         return result === "pass"
@@ -279,6 +283,35 @@ describe("iOS screenshot evidence", () => {
     mutate(input);
 
     expect(() => reduceAll(input, path.join(root, "reduced"))).toThrow(/topology mismatch/u);
+  });
+
+  it.each([
+    { label: "iPad-only rerun", runAttempts: { iphone: 1, "ipad-13": 2, watch: 2 } },
+    { label: "reducer-only rerun", runAttempts: { iphone: 1, "ipad-13": 1, watch: 1 } },
+  ])("accepts shard evidence retained from an earlier attempt: $label", ({ runAttempts }) => {
+    const root = tempDirs.make("ios-screenshot-partial-rerun-");
+    const input = collectAll(root, TARGET_SHA, runAttempts);
+
+    const manifest = reduceAll(input, path.join(root, "reduced"));
+
+    expect(manifest.runAttempt).toBe(2);
+    expect(
+      Object.fromEntries(
+        (manifest.families as Array<Record<string, any>>).map((family) => [
+          family.family,
+          family.runAttempt,
+        ]),
+      ),
+    ).toEqual(runAttempts);
+  });
+
+  it("rejects one shard job's families from different attempts", () => {
+    const root = tempDirs.make("ios-screenshot-mixed-attempt-");
+    const input = collectAll(root, TARGET_SHA, { watch: 1 });
+
+    expect(() => reduceAll(input, path.join(root, "reduced"))).toThrow(
+      `${containerName("watch")} mixes evidence from different workflow run attempts`,
+    );
   });
 
   it("rejects cross-SHA shard evidence", () => {

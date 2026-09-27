@@ -1,6 +1,3 @@
-/**
- * Orchestrates one agent attempt across embedded and CLI runtimes.
- */
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import {

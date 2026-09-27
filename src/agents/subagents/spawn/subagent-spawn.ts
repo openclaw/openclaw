@@ -106,6 +106,7 @@ export async function spawnSubagentDirect(
       schedulerGroupKey: swarmSchedulerGroupKey,
       launchReplayKey: swarmLaunchReplayKey,
       soleImplicitMember,
+      reservationPending,
       reservation: swarmReservation,
     },
     admission: {
@@ -120,7 +121,7 @@ export async function spawnSubagentDirect(
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;
   let childRunId: string = childIdem;
-  let swarmReservationPending = swarmReservation !== undefined;
+  let swarmReservationPending = reservationPending;
   let canCleanupCreatedSession: (() => boolean) | undefined;
   let canRetireReservation: (() => boolean) | undefined;
   let releaseOperatorAuthority: (() => void) | undefined;
@@ -128,7 +129,7 @@ export async function spawnSubagentDirect(
   let contextEnginePreparation: PreparedContextEngineSubagentSpawn | undefined;
   try {
     assertActive?.();
-    if (swarmReservation && !swarmReservation.isCurrent()) {
+    if (reservationPending && !swarmReservation?.isCurrent()) {
       return { status: "error", error: "Collector FIFO reservation is no longer current" };
     }
     if (operatorAuthority && !gatewayContextResolver) {

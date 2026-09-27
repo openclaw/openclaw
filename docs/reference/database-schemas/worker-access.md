@@ -37,9 +37,12 @@ Plugin requirement batches prepare their final installed index through the exist
 metadata worker after installation and compensation settle. Preparation seals
 collection, reads an uncached row from the captured database, and retains the
 original lifecycle lease until the read settles. It rechecks lease ownership and
-batch closure before publishing runtime targets. Synchronous lease primitives and
-repeated source-cleanup reads remain unchanged migration work; this one-shot
-preparation does not replace their fresh authority checks.
+batch closure before publishing runtime targets. After runtime handoff, source
+cleanup reacquires the plugin lease and prepares a fresh index through that worker.
+The index stays scoped to the cleanup lease, which excludes its canonical writers
+until deletion settles. Config policy, source identity, and durable lease checks
+remain fresh at each existing effect guard; the captured index is not a retained
+permission to delete. Stored formats and update behavior are unchanged.
 
 Registry refresh, Doctor repair, and legacy index import hold that same plugin
 lease before reading or deriving replacement rows. Startup acquires plugin

@@ -21,7 +21,7 @@ export const nextcloudTalkGatewayAdapter: NonNullable<
       );
     }
 
-    ctx.log?.info(`[${account.accountId}] starting Nextcloud Talk webhook server`);
+    ctx.log?.info(`[${account.accountId}] starting Nextcloud Talk Gateway webhook route`);
 
     const statusSink = createAccountStatusSink({
       accountId: ctx.accountId,

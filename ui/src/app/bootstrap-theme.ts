@@ -86,6 +86,18 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   syncControlUiSystemChrome();
 }
 
+function livePreferencesKey(settings: UiPreferences): string {
+  // Persisted navigation bindings are boot/resume state. Live selection is
+  // published by the Gateway and agent-selection owners, not theme subscribers.
+  const {
+    sessionKey: _sessionKey,
+    lastActiveSessionKey: _lastActiveSessionKey,
+    selectedAgentId: _selectedAgentId,
+    ...preferences
+  } = settings;
+  return JSON.stringify(preferences);
+}
+
 export function createApplicationTheme(
   initialSettings: UiSettings,
   gateway: ApplicationGateway,
@@ -203,10 +215,11 @@ export function createApplicationTheme(
 
   const refresh = () => {
     const next = loadUiPreferences(gateway.connection.gatewayUrl);
-    if (JSON.stringify(next) === JSON.stringify(settings)) {
+    const changed = livePreferencesKey(next) !== livePreferencesKey(settings);
+    settings = next;
+    if (!changed) {
       return;
     }
-    settings = next;
     void loadCatalog();
     publish();
     syncSystemThemeListener();

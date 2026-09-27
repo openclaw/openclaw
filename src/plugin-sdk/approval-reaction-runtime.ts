@@ -77,7 +77,7 @@ export type ApprovalReactionDecisionResolution = {
 /** Stored target metadata needed to convert a reaction into an approval decision. */
 export type ApprovalReactionTargetRecord<TRoute = unknown> = {
   approvalId: string;
-  /** Explicit ownership; omission is supported only by the deprecated resolver. */
+  /** Optional for legacy record shapes; typed resolution requires explicit ownership. */
   approvalKind?: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   route?: TRoute;
@@ -99,7 +99,9 @@ export function readApprovalReactionTargetRecord(
   if (
     !isRecord(target) ||
     typeof target.approvalId !== "string" ||
-    (target.approvalKind !== "exec" && target.approvalKind !== "plugin")
+    (target.approvalKind !== "exec" &&
+      target.approvalKind !== "plugin" &&
+      target.approvalKind !== "system-agent")
   ) {
     return null;
   }
@@ -285,10 +287,13 @@ export function resolveApprovalReactionDecision(params: {
   return null;
 }
 
-function resolveApprovalReactionTargetInternal<TRoute>(params: {
-  target: ApprovalReactionTargetRecord<TRoute> | null | undefined;
+/** Resolve an explicitly typed target without deriving ownership from its id. */
+export function resolveTypedApprovalReactionTarget<TRoute = unknown>(params: {
+  target:
+    | (ApprovalReactionTargetRecord<TRoute> & { approvalKind: ChannelApprovalKind })
+    | null
+    | undefined;
   reactionKey: string;
-  allowLegacyKindInference: boolean;
 }): ApprovalReactionTargetResolution<TRoute> | null {
   const target = params.target;
   if (!target) {
@@ -301,45 +306,21 @@ function resolveApprovalReactionTargetInternal<TRoute>(params: {
   if (!decision) {
     return null;
   }
-  // Typed targets already carry canonical protocol identity. Preserve it byte-for-byte;
-  // only the shipped ownerless path retains its historical trimming behavior.
-  const approvalId = params.allowLegacyKindInference ? target.approvalId.trim() : target.approvalId;
+  const approvalId = target.approvalId;
   const approvalKind = target.approvalKind;
   if (!approvalId) {
     return null;
   }
-  const resolvedKind =
-    approvalKind === "exec" || approvalKind === "plugin"
-      ? approvalKind
-      : params.allowLegacyKindInference
-        ? approvalId.startsWith("plugin:")
-          ? "plugin"
-          : "exec"
-        : null;
-  if (!resolvedKind) {
+  if (approvalKind !== "exec" && approvalKind !== "plugin" && approvalKind !== "system-agent") {
     return null;
   }
   return {
     approvalId,
-    approvalKind: resolvedKind,
+    approvalKind,
     decision: decision.decision,
     normalizedEmoji: decision.normalizedEmoji,
     ...(target.route === undefined ? {} : { route: target.route }),
   };
-}
-
-/** Resolve an explicitly typed target without deriving ownership from its id. */
-export function resolveTypedApprovalReactionTarget<TRoute = unknown>(params: {
-  target:
-    | (ApprovalReactionTargetRecord<TRoute> & { approvalKind: ChannelApprovalKind })
-    | null
-    | undefined;
-  reactionKey: string;
-}): ApprovalReactionTargetResolution<TRoute> | null {
-  return resolveApprovalReactionTargetInternal({
-    ...params,
-    allowLegacyKindInference: false,
-  });
 }
 
 function formatSeverity(value: "info" | "warning" | "critical"): string {

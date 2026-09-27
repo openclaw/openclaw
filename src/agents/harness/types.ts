@@ -449,6 +449,8 @@ type AgentHarnessRunCapability<
   /**
    * Runs one fresh prompt-only completion with a literal zero-tool model surface.
    * The harness must fail closed when it cannot enforce that native boundary.
+   * Agents API is the documented exception: its restricted sessions may retain
+   * service-owned helpers. Callers requiring zero tools must use another runtime.
    */
   runIsolatedCompletionV2?(
     params: AgentHarnessIsolatedCompletionParamsV2,

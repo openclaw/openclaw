@@ -49,6 +49,10 @@ function isInlineImageSource(source: string | undefined): source is string {
   return source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
 }
 
+function imageTitle(image: ImageBlock): string {
+  return image.alt?.trim() || image.fileName?.trim() || t("chat.imageLightbox.untitled");
+}
+
 class MessageImageResourceDirective extends AsyncDirective {
   private image: ImageBlock | undefined;
   private options: ImageRenderOptions | undefined;
@@ -289,7 +293,7 @@ class MessageImageResourceDirective extends AsyncDirective {
     previewUrl: string | undefined,
     opts: ImageRenderOptions | undefined,
   ) {
-    const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
+    const title = imageTitle(img);
     return this.renderImageFrame(
       img,
       html`
@@ -440,7 +444,7 @@ function openMessageImage(
   previewUrl: string,
   opts: ImageRenderOptions | undefined,
 ) {
-  const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
+  const title = imageTitle(img);
   const requestVersion = opts?.onRequestOpenImage?.();
   const images = opts?.galleryImages;
   const index = images?.indexOf(img) ?? -1;
@@ -551,7 +555,7 @@ async function loadGalleryImage(
   }
   return {
     src: safeSrc,
-    title: image.alt?.trim() || t("chat.imageLightbox.untitled"),
+    title: imageTitle(image),
     width: image.width,
     height: image.height,
     release,

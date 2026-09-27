@@ -208,32 +208,27 @@ export function useQueuedCollectorFixture() {
     return respond.mock.calls[0]![1] as SessionsListResult;
   }
 
-  function spawnCollector(label: string, completionOwnerKey?: string, assertActive?: () => void) {
-    return spawnSubagentDirect(
-      {
-        task: "Wait for cancellation",
-        label,
-        collect: true,
-        context: "isolated",
-        lightContext: true,
-      },
-      {
-        agentSessionKey: parentKey,
-        completionOwnerKey,
-        requesterRunId: "parent-turn",
-        requesterTurnRunId: "parent-turn",
-        assertActive,
-      },
-    );
-  }
-
   async function spawnCollectors(
     labels = ["Collector A", "Collector B"],
     completionOwnerKey?: string,
   ) {
     const results: Awaited<ReturnType<typeof spawnSubagentDirect>>[] = [];
     for (const label of labels) {
-      const result = await spawnCollector(label, completionOwnerKey);
+      const result = await spawnSubagentDirect(
+        {
+          task: "Wait for cancellation",
+          label,
+          collect: true,
+          context: "isolated",
+          lightContext: true,
+        },
+        {
+          agentSessionKey: parentKey,
+          completionOwnerKey,
+          requesterRunId: "parent-turn",
+          requesterTurnRunId: "parent-turn",
+        },
+      );
       expect(result.status).toBe("accepted");
       results.push(result);
       // Establish occupied capacity before creating the collector expected to queue.
@@ -241,7 +236,6 @@ export function useQueuedCollectorFixture() {
         await waitForLaunch(expectDefined(result.runId, "first collector run"));
       }
     }
-    expect(results.map((result) => result.status)).toEqual(labels.map(() => "accepted"));
     expect(launchedRunIds).toEqual([results[0]?.runId]);
     return results;
   }
@@ -297,7 +291,6 @@ export function useQueuedCollectorFixture() {
     requestContext,
     operatorClient,
     listChildren,
-    spawnCollector,
     spawnCollectors,
     createQueuedReservation,
   };

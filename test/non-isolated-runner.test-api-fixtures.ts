@@ -43,7 +43,6 @@ it("receives task events in the ${generation} file", async () => {
         ? `
 // Check during collection before imports can overwrite the previous generation.
 const remainingKeys = [
-  "openclaw.beforeToolCallBlockedErrorTestApi",
   "openclaw.staleAuthOrderTestApi",
   "openclaw.bashProcessRegistryTestApi",
   "openclaw.diagnosticRunActivityTestApi",
@@ -62,8 +61,6 @@ expect(redactPriorValues(priorError, () => "***")).toBe(priorError);
 import { createRequire } from "node:module";
 import { afterAll, describe, expect, it } from "vitest";
 ${observeCleanup}
-const { createBeforeToolCallBlockedError } = await import(${sourcePath("agents/agent-tools.before-tool-call.test-support.ts")});
-const { isBeforeToolCallBlockedError } = await import(${sourcePath("agents/agent-tools.before-tool-call.wrapper.ts")});
 const { repairStaleConfiguredAuthOrders } = await import(${sourcePath("commands/doctor/shared/stale-auth-order.test-support.ts")});
 const registry = await import(${sourcePath("agents/bash-process-registry.ts")});
 const { resetProcessRegistryForTests } = await import(${sourcePath("agents/bash-process-registry.test-support.ts")});
@@ -82,13 +79,9 @@ const { markDiagnosticToolStartedForTest } = await import(${sourcePath("logging/
 const { resolveGlobalSingleton } = await import(${sourcePath("shared/global-singleton.ts")});
 const { registerSecretValueForRedaction, redactRegisteredSecretValues } = await import(${sourcePath("logging/secret-redaction-registry.ts")});
 describe("${generation} test API consumers", () => {
-  async function verifyConsumers(message: string): Promise<void> {
+  async function verifyConsumers(): Promise<void> {
     registerSecretValueForRedaction("identity");
     expect(redactRegisteredSecretValues("session identity is locked", () => "***")).toBe("session *** is locked");
-    const blocked = createBeforeToolCallBlockedError(message);
-    expect(blocked.message).toBe(message);
-    expect(isBeforeToolCallBlockedError(blocked)).toBe(true);
-    expect(isBeforeToolCallBlockedError(new Error(message))).toBe(false);
     registry.addSession(createProcessSessionFixture({ id: "captured", backgrounded: true }));
     replacement.addSession(createProcessSessionFixture({ id: "replacement", backgrounded: true }));
     try {
@@ -110,17 +103,17 @@ describe("${generation} test API consumers", () => {
       changes: [],
     });
   }
-  it.each(["first test", "second test"])("keeps test API consumers usable in %s", async (phase) => {
-    await verifyConsumers(phase);
+  it.each(["first test", "second test"])("keeps test API consumers usable in %s", async () => {
+    await verifyConsumers();
   });
   afterAll(async () => {
-    await verifyConsumers("afterAll");
+    await verifyConsumers();
     console.info("test API lifecycle: ${generation} afterAll passed");
   });
   const cleanupKey = Symbol("fixture resource teardown");
   resolveGlobalSingleton(cleanupKey, () => ({}), async () => {
     try {
-      await verifyConsumers("resource teardown");
+      await verifyConsumers();
       const key = Symbol.for("openclaw.diagnosticRunActivityTestApi");
       const priorApi = Reflect.get(globalThis, key);
       resetDiagnosticRunActivityForTest();

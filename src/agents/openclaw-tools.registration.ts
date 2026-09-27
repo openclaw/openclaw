@@ -101,7 +101,7 @@ type PrimarySessionToolRegistrationParams = {
   pluginToolDenylist?: string[];
 };
 
-function shouldIncludePrimarySessionToolForOpenClawTools(
+export function shouldIncludePrimarySessionToolForOpenClawTools(
   toolName: "ask_user" | "secrets",
   params: PrimarySessionToolRegistrationParams,
 ): boolean {
@@ -114,18 +114,4 @@ function shouldIncludePrimarySessionToolForOpenClawTools(
     ...(params.pluginToolDenylist ?? []),
   ]);
   return isPrimaryBootstrapRun(sessionKey) && isToolAllowedByPolicyName(toolName, { deny });
-}
-
-/** Includes ask_user only on a primary session and when normal deny policy permits it. */
-export function shouldIncludeAskUserToolForOpenClawTools(
-  params: PrimarySessionToolRegistrationParams,
-): boolean {
-  return shouldIncludePrimarySessionToolForOpenClawTools("ask_user", params);
-}
-
-/** Keeps credential management on primary sessions allowed by the normal tool policy. */
-export function shouldIncludeSecretsToolForOpenClawTools(
-  params: PrimarySessionToolRegistrationParams,
-): boolean {
-  return shouldIncludePrimarySessionToolForOpenClawTools("secrets", params);
 }

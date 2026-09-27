@@ -8,13 +8,17 @@ import {
   maintenanceLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
-import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import {
+  retainSessionHistoryWorkerDatabase,
+  withSessionHistoryWorkerDatabase,
+} from "./session-transcript-worker-runtime.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
 const observed = vi.hoisted(() => ({
   run: vi.fn<(input: unknown, options: WorkerTaskOptions<unknown>) => Promise<unknown>>(),
   rotate: vi.fn<() => Promise<void>>(),
+  closeResources: vi.fn<(key?: string) => Promise<void>>(),
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
 }));
@@ -35,7 +39,7 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
     run: (prepare: () => unknown, options: WorkerTaskOptions<unknown>) =>
       observed.run(prepare(), options),
     rotate: observed.rotate,
-    closeResources: async () => {},
+    closeResources: observed.closeResources,
   }),
 }));
 vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
@@ -75,10 +79,12 @@ function input() {
 beforeEach(() => {
   observed.run.mockReset();
   observed.rotate.mockReset().mockResolvedValue(undefined);
+  observed.closeResources.mockReset().mockResolvedValue(undefined);
   observed.unregister.mockReset();
 });
 afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
+  observed.closeResources.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
 });
 
@@ -127,42 +133,75 @@ it.runIf(!process.versions.bun)(
     const retained = observed.resources.find((resource) => resource.agentId === "main");
     assert(retained);
     await retained.close();
-    expect(observed.rotate).toHaveBeenCalledTimes(1);
+    expect(observed.rotate).not.toHaveBeenCalled();
+    expect(observed.closeResources).toHaveBeenCalledTimes(2);
     expect(observed.unregister).toHaveBeenCalledTimes(2);
   },
 );
 
-it("revokes both reader lanes and joins both retirements through one database owner", async () => {
+it.each([false, true])(
+  "revokes both reader lanes and joins their cleanup (pending=%s)",
+  async (pending) => {
+    const request = input();
+    observed.run.mockResolvedValue({ ok: true, value: false });
+    const owners: SessionHistoryWorkerDatabase[] = [];
+    for (const lane of [historyLane, maintenanceLane]) {
+      await withSessionHistoryWorkerDatabase(
+        request.database,
+        async (owner) => {
+          await owner.readEntryPresence(request.scope);
+          owners.push(owner);
+        },
+        lane,
+      );
+    }
+    expect(observed.resources).toHaveLength(1);
+    const resource = observed.resources[0]!;
+    const retained = pending ? retainSessionHistoryWorkerDatabase(request.database) : undefined;
+    const foreground = createDeferredCore();
+    const maintenance = createDeferredCore();
+    const cleanup = pending || process.versions.bun ? observed.rotate : observed.closeResources;
+    cleanup.mockReturnValueOnce(foreground.promise).mockReturnValueOnce(maintenance.promise);
+    resource.revoke();
+    retained?.release();
+    for (const owner of owners) {
+      expect(owner.assertCurrent).toThrow("revoked");
+    }
+    const closing = resource.close();
+    expect(cleanup).toHaveBeenCalledTimes(2);
+    foreground.resolve();
+    await foreground.promise;
+    expect(observed.unregister).not.toHaveBeenCalled();
+    maintenance.resolve();
+    await closing;
+    expect(observed.unregister).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("retains reads dispatched after a cleanup request", async () => {
   const request = input();
   observed.run.mockResolvedValue({ ok: true, value: false });
-  const owners: SessionHistoryWorkerDatabase[] = [];
-  for (const lane of [historyLane, maintenanceLane]) {
-    await withSessionHistoryWorkerDatabase(
-      request.database,
-      async (owner) => {
-        await owner.readEntryPresence(request.scope);
-        owners.push(owner);
-      },
-      lane,
+  const read = () =>
+    withSessionHistoryWorkerDatabase(request.database, (owner) =>
+      owner.readEntryPresence(request.scope),
     );
-  }
-  expect(observed.resources).toHaveLength(1);
-  const resource = observed.resources[0]!;
-  const foreground = createDeferredCore();
-  const maintenance = createDeferredCore();
-  observed.rotate.mockReturnValueOnce(foreground.promise).mockReturnValueOnce(maintenance.promise);
-  resource.revoke();
-  for (const owner of owners) {
-    expect(owner.assertCurrent).toThrow("revoked");
-  }
+  await read();
+  const resource = observed.resources.find((entry) => entry.agentId === "main");
+  assert(resource);
+  const receipt = createDeferredCore();
+  const cleanup = process.versions.bun ? observed.rotate : observed.closeResources;
+  cleanup.mockReturnValueOnce(receipt.promise);
   const closing = resource.close();
-  expect(observed.rotate).toHaveBeenCalledTimes(2);
-  foreground.resolve();
-  await foreground.promise;
-  expect(observed.unregister).not.toHaveBeenCalled();
-  maintenance.resolve();
+  await read();
+  receipt.resolve();
   await closing;
-  expect(observed.unregister).toHaveBeenCalledTimes(1);
+  expect(observed.unregister).not.toHaveBeenCalled();
+  if (!process.versions.bun) {
+    expect(observed.rotate).not.toHaveBeenCalled();
+  }
+  await resource.close();
+  expect(observed.unregister).toHaveBeenCalledOnce();
+  expect(cleanup).toHaveBeenCalledTimes(2);
 });
 
 it.runIf(!process.versions.bun)(
