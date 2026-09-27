@@ -11,11 +11,17 @@ import {
   createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
+import {
+  attachGatewayLocalUserIngress,
+  getGatewayLocalUserIngress,
+  prepareGatewayLocalUserIngress,
+} from "../../gateway/local-user-ingress.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
+import { consumeChannelRunAdmission } from "./channel-run-admission.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
+import { createQueueTestRun, installQueueRuntimeErrorSilencer } from "./queue.test-helpers.js";
 import {
   createOverflowSummaryRetrySource,
   resolveFollowupDeliveryContextKey,
@@ -455,5 +461,116 @@ describe("followup prompt metadata carrier", () => {
     expect(retry.explicitSkillSelections).toEqual(source.explicitSkillSelections);
     expect(retry.channelAdmissionEvidence).toBe(source.channelAdmissionEvidence);
     expectCombinedCarrierFacts(retry);
+  });
+});
+
+describe("queued Gateway attach evidence", () => {
+  installQueueRuntimeErrorSilencer();
+
+  const prepareIngress = (profileId: string) =>
+    prepareGatewayLocalUserIngress({
+      authMethod: "token",
+      authenticatedUserExpected: true,
+      profile: { profileId },
+      isLocalClient: false,
+    });
+
+  it.each(["matching", "mixed", "missing"] as const)(
+    "collects %s attach snapshots without changing sender authority",
+    async (kind) => {
+      const key = `gateway-attach-collect-${kind}`;
+      queueKeys.add(key);
+      const done = createDeferred<FollowupRun>();
+      for (const index of [0, 1]) {
+        const run = createQueueTestRun({ prompt: `queued ${index}` });
+        run.gatewayLocalUserIngress =
+          kind === "missing" && index === 1
+            ? undefined
+            : prepareIngress(kind === "mixed" && index === 1 ? "person-2" : "person-1");
+        run.run = { ...run.run, senderId: "transport", senderIsOwner: true };
+        enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
+      }
+      scheduleFollowupDrain(key, async (run) => {
+        done.resolve(run);
+      });
+      const collected = await done.promise;
+      expect(collected.prompt).toContain("queued 0");
+      expect(collected.prompt).toContain("queued 1");
+      const admission = consumeChannelRunAdmission(
+        collected.channelAdmissionEvidence,
+        collected.gatewayLocalUserIngress,
+      );
+      expect(admission.facts).toEqual(
+        kind === "matching"
+          ? {
+              ingress: {
+                kind: "gateway-client",
+                boundary: "gateway.ws.authenticated-connect",
+                state: "present",
+                rawSourceRef: "person-1",
+              },
+              invoker: { state: "present", kind: "person", rawPrincipalRef: "person-1" },
+              assurance: [
+                {
+                  kind: "durable-profile",
+                  rawEvidenceRef: "person-1",
+                  strength: "boundary-verified",
+                },
+              ],
+            }
+          : {
+              ingress: {
+                kind: "gateway-client",
+                boundary: "gateway.ws.authenticated-connect",
+                state: "unknown",
+              },
+              invoker: { state: "unknown" },
+            },
+      );
+      expect(collected.run).toMatchObject({ senderId: "transport", senderIsOwner: true });
+    },
+  );
+
+  it("retains the original attach snapshot when overflow delivery retries after profile replacement", async () => {
+    const key = "gateway-attach-overflow-retry";
+    queueKeys.add(key);
+    const client = {};
+    attachGatewayLocalUserIngress(client, prepareIngress("original-person"));
+    const source = createQueueTestRun({ prompt: "overflow source" });
+    source.gatewayLocalUserIngress = getGatewayLocalUserIngress(client);
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    enqueueFollowupRun(key, source, settings);
+    enqueueFollowupRun(key, createQueueTestRun({ prompt: "surviving source" }), settings);
+    const done = createDeferred();
+    const admissions: ReturnType<typeof consumeChannelRunAdmission>[] = [];
+    let attempts = 0;
+    scheduleFollowupDrain(key, async (run) => {
+      if (!run.prompt.includes("overflow source")) {
+        done.resolve();
+        return;
+      }
+      attempts += 1;
+      if (attempts === 1) {
+        attachGatewayLocalUserIngress(client, prepareIngress("replacement-person"));
+        throw new Error("Synthetic pre-admission delivery failure");
+      }
+      admissions.push(
+        consumeChannelRunAdmission(run.channelAdmissionEvidence, run.gatewayLocalUserIngress),
+      );
+    });
+    await done.promise;
+
+    expect(attempts).toBe(2);
+    expect(admissions).toHaveLength(1);
+    expect(admissions[0]?.facts).toMatchObject({
+      ingress: { kind: "gateway-client", state: "present", rawSourceRef: "original-person" },
+      invoker: { state: "present", kind: "person", rawPrincipalRef: "original-person" },
+      assurance: [{ kind: "durable-profile", rawEvidenceRef: "original-person" }],
+    });
   });
 });

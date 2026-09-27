@@ -12,13 +12,29 @@ import {
   type ChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  readGatewayLocalUserIngressFacts,
+  type GatewayLocalUserIngress,
+} from "../../gateway/local-user-ingress.js";
 
-/** Adapt one opaque channel carrier to the canonical admitted-run facts and decision FIFO. */
-export function consumeChannelRunAdmission(evidence: ChannelAdmissionEvidence | undefined): {
+/** Adapt reply ingress to admission; authenticated Gateway attach has no plugin-channel decision. */
+export function consumeChannelRunAdmission(
+  evidence: ChannelAdmissionEvidence | undefined,
+  gatewayLocalUserIngress?: GatewayLocalUserIngress,
+): {
   ingressState: ExecutionIdentityAdmissionFacts["ingress"]["state"];
-  facts: Pick<ExecutionIdentityAdmissionFacts, "invoker" | "assurance">;
+  facts: Pick<ExecutionIdentityAdmissionFacts, "invoker" | "assurance"> &
+    Partial<Pick<ExecutionIdentityAdmissionFacts, "ingress">>;
   onAdmitted: (context: AdmittedRunContext) => void;
 } {
+  const gatewayFacts = readGatewayLocalUserIngressFacts(gatewayLocalUserIngress);
+  if (gatewayFacts) {
+    return Object.freeze({
+      ingressState: gatewayFacts.ingress.state,
+      facts: gatewayFacts,
+      onAdmitted: () => undefined,
+    });
+  }
   const admission = consumeChannelAdmissionEvidence(evidence);
   return Object.freeze({
     ingressState: admission.ingressState,
@@ -62,6 +78,7 @@ export function prepareChannelRunAdmission(params: {
   ingressKind: ExecutionIdentityAdmissionFacts["ingress"]["kind"];
   boundary: string;
   evidence?: ChannelAdmissionEvidence;
+  gatewayLocalUserIngress?: GatewayLocalUserIngress;
   assertSourceCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   onAdmitted?: (context: AdmittedRunContext) => void;
@@ -92,7 +109,10 @@ export function prepareChannelRunAdmission(params: {
         return Promise.reject(new Error("prepared execution context is already closed"));
       }
       if (!prepared) {
-        const channelAdmission = consumeChannelRunAdmission(params.evidence);
+        const channelAdmission = consumeChannelRunAdmission(
+          params.evidence,
+          params.gatewayLocalUserIngress,
+        );
         prepared = prepareAgentRunAdmission({
           cfg: params.cfg,
           assertSourceCurrent: params.assertSourceCurrent,
