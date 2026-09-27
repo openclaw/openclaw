@@ -698,7 +698,14 @@ export function formatToolSearchControlError(
   return protectNetworkToolExecutionError(error, "Tool Search call failed.", signal);
 }
 
-/** Project a target result into the value Code Mode guests receive. */
+function unwrapToolResultValue(result: AgentToolResult<unknown>): unknown {
+  return isRecord(result) && "details" in result ? result.details : result;
+}
+
+/**
+ * Project a target result into the value Code Mode guests receive. Output
+ * contracts validate the raw details; only the guest value gains error text.
+ */
 function projectToolResultValue(result: AgentToolResult<unknown>): unknown {
   if (!isRecord(result) || !("details" in result)) {
     return result;
