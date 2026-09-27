@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { runInNewContext } from "node:vm";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCrabboxNodeRuntimeSetup } from "./crabbox-worker-node-enrollment.js";
 import {
   createNodeBootstrapFixture,
@@ -16,7 +16,31 @@ const require = createRequire(import.meta.url);
 const archive = Buffer.from("verified worker archive");
 const runtimeArchive = Buffer.from("verified runtime archive");
 
-type DownloadOutcome = string | number | { durationMs: number };
+type DownloadOutcome = string | number | { durationMs: number; failure?: string };
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  vi.setSystemTime(0);
+});
+afterEach(() => vi.useRealTimers());
+
+function waitForDownload(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      const reason = signal?.reason;
+      reject(reason instanceof Error ? reason : new Error("download aborted", { cause: reason }));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) {
+      abort();
+    }
+  });
+}
 
 async function download(
   outcomes: DownloadOutcome[] | ((elapsedMs: number) => DownloadOutcome),
@@ -45,26 +69,40 @@ async function download(
   const removed: Array<{ file: string; bytes: number }> = [];
   const delays: number[] = [];
   const output: string[] = [];
+  const installations: number[] = [];
   let elapsedMs = 0;
-  let installations = 0;
-  const deadlines: Array<{ atMs: number; controller: AbortController }> = [];
-  const advanceTime = (ms: number) => {
-    const untilMs = elapsedMs + ms;
-    for (const { atMs, controller } of deadlines.toSorted((a, b) => a.atMs - b.atMs)) {
-      if (!controller.signal.aborted && atMs <= untilMs) {
-        controller.abort(new Error("synthetic deadline exceeded"));
-      }
-    }
-    elapsedMs = untilMs;
-  };
+  const aborted: string[] = [];
+  const completedAt: number[] = [];
+  const grants = new Map<string, AbortSignal>(
+    [nodeBootstrap, workerBundle].map((artifact) => {
+      const controller = new AbortController();
+      setTimeout(() => {
+        controller.abort(Object.assign(new Error("capability expired"), { code: "ECONNRESET" }));
+      }, 10 * 60_000);
+      return [`Bearer ${artifact.token}`, controller.signal] as const;
+    }),
+  );
   const transport = {
     request: (url: URL, options: { headers: { authorization: string }; signal: AbortSignal }) => {
       const content = url.href === nodeBootstrap.url ? runtimeArchive : archive;
       const outcome =
         typeof outcomes === "function"
-          ? outcomes(elapsedMs)
+          ? outcomes(Date.now())
           : outcomes[Math.min(requests.length, outcomes.length - 1)];
       requests.push(options.headers.authorization);
+      const grant = grants.get(options.headers.authorization)!;
+      const signal = AbortSignal.any([options.signal, grant]);
+      const unavailable = grant.aborted;
+      let finished = false;
+      signal.addEventListener(
+        "abort",
+        () => {
+          if (!finished) {
+            aborted.push(options.headers.authorization);
+          }
+        },
+        { once: true },
+      );
       const request = Object.assign(new EventEmitter(), {
         destroy: (error: Error) => request.emit("error", error),
         end: () => {
@@ -72,13 +110,16 @@ async function download(
             Readable.from(
               (async function* () {
                 if (typeof outcome === "object") {
-                  advanceTime(outcome.durationMs);
-                  options.signal.throwIfAborted();
+                  await waitForDownload(outcome.durationMs, signal);
+                  if (outcome.failure) {
+                    throw new Error(outcome.failure);
+                  }
                 }
                 if (outcome === "busy") {
                   yield Buffer.from('{"error":"transfer_in_progress"}');
                   return;
                 }
+                signal.throwIfAborted();
                 yield content.subarray(0, 4);
                 if (outcome === "short") {
                   return;
@@ -89,14 +130,23 @@ async function download(
                 ) {
                   throw Object.assign(new Error("transport interrupted"), { code: outcome });
                 }
+                signal.throwIfAborted();
                 yield outcome === "digest" ? Buffer.alloc(content.length - 4) : content.subarray(4);
                 if (outcome === "size") {
                   yield Buffer.from("excess");
                 }
+                finished = true;
+                completedAt.push(Date.now());
               })(),
             ),
             {
-              statusCode: outcome === "busy" ? 503 : typeof outcome === "number" ? outcome : 200,
+              statusCode: unavailable
+                ? 404
+                : outcome === "busy"
+                  ? 503
+                  : typeof outcome === "number"
+                    ? outcome
+                    : 200,
               headers: {},
             },
           );
@@ -176,15 +226,16 @@ async function download(
     umask: () => {},
     exitCode: 0,
   };
-  await runInNewContext(setup.command.split("\n").slice(2, -1).join("\n"), {
+  const execution = runInNewContext(setup.command.split("\n").slice(2, -1).join("\n"), {
     Buffer,
     URL,
     Math: Object.assign(Object.create(Math), { random: () => 0.5 }),
+    AbortController,
     AbortSignal: {
       any: (signals: AbortSignal[]) => AbortSignal.any(signals),
       timeout: (ms: number) => {
         const controller = new AbortController();
-        deadlines.push({ atMs: elapsedMs + ms, controller });
+        setTimeout(() => controller.abort(new Error("request deadline exceeded")), ms);
         return controller.signal;
       },
     },
@@ -205,9 +256,9 @@ async function download(
       }
       if (name === "node:timers/promises") {
         return {
-          setTimeout: async (ms: number) => {
+          setTimeout: async (ms: number, _value: unknown, options?: { signal: AbortSignal }) => {
             delays.push(ms);
-            advanceTime(ms);
+            await waitForDownload(ms, options?.signal);
           },
         };
       }
@@ -215,7 +266,7 @@ async function download(
         return {
           spawnSync: () => ({ status: 0, stdout: "OpenClaw 2026.8.1" }),
           spawn: () => {
-            installations++;
+            installations.push(Date.now());
             const child = new EventEmitter();
             queueMicrotask(() => child.emit("close", 0));
             return child;
@@ -225,6 +276,12 @@ async function download(
       return require(name);
     },
   });
+  const completion = Promise.resolve(execution).finally(() => {
+    elapsedMs = Date.now();
+    vi.clearAllTimers();
+  });
+  await vi.runAllTimersAsync();
+  await completion;
   return {
     code: processFixture.exitCode,
     requests,
@@ -232,6 +289,8 @@ async function download(
     removed,
     delays,
     elapsedMs,
+    completedAt,
+    aborted,
     installations,
     output: output.join("\n"),
     published: [...files.values()],
@@ -239,18 +298,51 @@ async function download(
 }
 
 describe("bootstrap artifact download retries", () => {
-  it("completes sequential nine-minute runtime and eight-minute worker downloads", async () => {
-    const result = await download([{ durationMs: 9 * 60_000 }, { durationMs: 8 * 60_000 }], true);
-    expect(result.code, result.output).toBe(0);
-    expect(result.elapsedMs).toBe(17 * 60_000);
-    expect(result.requests).toEqual([
-      "Bearer synthetic-bootstrap-token",
-      "Bearer synthetic-worker-archive-token",
-    ]);
-    expect(result.installations).toBe(1);
-    expect(result.published).toEqual([archive]);
-    expect(result.output).toContain("CRABBOX_PHASE:openclaw-bootstrap-complete");
-  });
+  it.each([
+    [9, 8],
+    [8, 9],
+  ])(
+    "completes %i/%i-minute downloads before both grants expire",
+    async (runtimeMinutes, workerMinutes) => {
+      const result = await download(
+        [{ durationMs: runtimeMinutes * 60_000 }, { durationMs: workerMinutes * 60_000 }],
+        true,
+      );
+      expect(result.code, result.output).toBe(0);
+      expect(result.elapsedMs).toBe(9 * 60_000);
+      expect(result.completedAt).toEqual([8 * 60_000, 9 * 60_000]);
+      expect(result.aborted).toEqual([]);
+      expect(result.requests).toEqual([
+        "Bearer synthetic-bootstrap-token",
+        "Bearer synthetic-worker-archive-token",
+      ]);
+      expect(result.installations).toEqual([9 * 60_000]);
+      expect(result.published).toEqual([archive]);
+      expect(result.output).toContain("CRABBOX_PHASE:openclaw-bootstrap-complete");
+    },
+  );
+
+  it.each(["runtime", "worker", "runtime during peer backoff"] as const)(
+    "aborts the peer download and preserves the first terminal %s failure and phase",
+    async (failed) => {
+      const failure = { durationMs: 1_000, failure: "synthetic archive failure" };
+      const slow = failed === "runtime during peer backoff" ? "busy" : { durationMs: 8 * 60_000 };
+      const result = await download(failed === "worker" ? [slow, failure] : [failure, slow], true);
+      expect(result.code).toBe(1);
+      expect(result.elapsedMs).toBe(1_000);
+      expect(result.requests.length).toBeGreaterThanOrEqual(2);
+      expect(result.aborted).toContain(
+        failed === "worker"
+          ? "Bearer synthetic-bootstrap-token"
+          : "Bearer synthetic-worker-archive-token",
+      );
+      expect(result.output).toContain(
+        `Cloud worker ${failed === "worker" ? "archive" : "node bootstrap"} download body failed: synthetic archive failure (download attempt 1/3)`,
+      );
+      expect(result.installations).toEqual([]);
+      expect(result.published).toEqual([]);
+    },
+  );
 
   it("waits for delayed serve settlement without spending content-transfer attempts", async () => {
     let transfers = 0;
