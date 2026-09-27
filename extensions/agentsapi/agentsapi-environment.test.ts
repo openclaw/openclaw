@@ -37,6 +37,9 @@ vi.mock("openclaw/plugin-sdk/agent-harness-attempt-runtime", () => ({
     emitLifecycleTerminal: vi.fn(),
   }),
   emitAgentHarnessAttemptEvent: vi.fn(),
+  resolveAgentHarnessHistoryLimits: vi.fn(),
+  resolveAgentWorkspaceMemoryRouting: () => ({ memoryToolNames: [], memoryToolRouted: false }),
+  shouldIncludeAgentHarnessRuntimeContext: () => true,
   selectSupportedReasoningEffort: vi.fn(),
   AgentHarnessProjectionSettlement: class {
     constructor(readonly params: AgentHarnessAttemptParamsV2) {}
@@ -46,6 +49,13 @@ vi.mock("openclaw/plugin-sdk/agent-harness-attempt-runtime", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   agentHarnessAttemptTerminal: { normalize: () => ({ kind: "ok" }) },
+  resolveAgentHarnessBeforePromptBuildResult: async ({
+    prompt,
+    developerInstructions,
+  }: {
+    prompt: string;
+    developerInstructions: string;
+  }) => ({ prompt, developerInstructions }),
   prepareAgentWorkspaceContext: async () => ({
     instructionSnapshot: { instructions: "" },
     personaInstructions: "",
