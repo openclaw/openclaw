@@ -740,9 +740,9 @@ class SessionsPage extends OpenClawLightDomElement {
         }
       }
       await this.refreshSessionList(scope);
-      if (result.errors.length > 0) {
-        return result.errors.map(({ error }) => formatBatchSessionRemovalError(error)).join("; ");
-      }
+      return result.errors.length > 0
+        ? result.errors.map(({ error }) => formatBatchSessionRemovalError(error)).join("; ")
+        : undefined;
     });
   }
 

@@ -44,8 +44,6 @@ import {
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 
-type StoreListener = () => void;
-
 /** One process-local conversation owner shared by the full page and dock surface. */
 export class CustodianSessionStore {
   messages: CustodianMessage[] = [];
@@ -94,9 +92,9 @@ export class CustodianSessionStore {
   private gatewayCleanup: (() => void) | null = null;
   private agentCleanup: (() => void) | null = null;
   private eventCleanup: (() => void) | null = null;
-  private readonly listeners = new Set<StoreListener>();
+  private readonly listeners = new Set<() => void>();
 
-  subscribe(listener: StoreListener): () => void {
+  subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }

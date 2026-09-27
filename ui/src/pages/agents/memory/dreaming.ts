@@ -109,6 +109,15 @@ export type WikiOverview = {
   truncated: boolean;
 };
 
+export type WikiPagePreview = {
+  title: string;
+  path: string;
+  content: string;
+  totalLines?: number;
+  truncated?: boolean;
+  updatedAt?: string;
+};
+
 type DreamingResourceKey = "dreamingStatus" | "dreamDiary" | "wikiImportInsights" | "wikiOverview";
 type DreamingResourceRequest = { agentId: string };
 

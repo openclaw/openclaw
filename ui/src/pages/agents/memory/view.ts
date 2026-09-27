@@ -12,7 +12,12 @@ import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import "../../../styles/dreams.css";
-import type { DreamingEntry, WikiImportInsights, WikiOverview } from "./dreaming.ts";
+import type {
+  DreamingEntry,
+  WikiImportInsights,
+  WikiOverview,
+  WikiPagePreview,
+} from "./dreaming.ts";
 
 registerSettingsEnglish();
 registerDreamingEnglish();
@@ -81,15 +86,6 @@ type DreamingPhaseInfo = {
   enabled: boolean;
   cron: string;
   nextRunAtMs?: number;
-};
-
-export type WikiPagePreview = {
-  title: string;
-  path: string;
-  content: string;
-  totalLines?: number;
-  truncated?: boolean;
-  updatedAt?: string;
 };
 
 type DreamingProps = {

@@ -2,7 +2,7 @@
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import type { RouteLocation } from "@openclaw/uirouter";
-import type { PropertyValues } from "lit";
+import { render as renderTemplate, type PropertyValues } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -31,7 +31,6 @@ type TestActivityPage = HTMLElement & {
   context: ApplicationContext;
   entries: ActivityEntry[];
   expandedIds: Set<string>;
-  clearEntries: () => void;
   routeLocation?: RouteLocation;
   routeData?: ActivityRouteData;
   willUpdate: (changed: PropertyValues) => void;
@@ -611,7 +610,11 @@ describe("ActivityPage gateway lifecycle", () => {
       "other output",
     ]);
 
-    page.clearEntries();
+    const container = document.createElement("div");
+    renderTemplate(page.render(), container);
+    const clear = container.querySelector<HTMLButtonElement>(".activity-page button.danger");
+    expect(clear?.textContent?.trim()).toBe("Clear");
+    clear?.click();
     source.setSessionKey("main");
     expect(page.entries).toEqual([]);
     current().opts.onEvent?.(toolEvent("after-clear", "agent:other:work"));

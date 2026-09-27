@@ -120,10 +120,11 @@ export function openChatRewindConfirmation(btn: HTMLElement, action: () => void)
     action();
     return;
   }
-  const owner = btn.closest<HTMLElement>(".chat-confirm-wrap");
-  if (!owner) {
+  const wrap = btn.closest<HTMLElement>(".chat-confirm-wrap");
+  if (!wrap) {
     return;
   }
+  const owner = wrap;
   const existing = confirmedActions.get(owner);
   if (existing) {
     existing.dismiss({ restoreFocus: true });

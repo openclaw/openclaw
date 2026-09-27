@@ -40,6 +40,13 @@ type MemoryOverviewProps = {
 };
 
 type DreamingStatus = NonNullable<DoctorMemoryStatusPayload["dreaming"]>;
+type DreamingPhase = {
+  enabled: boolean;
+  cron: string;
+  managedCronPresent: boolean;
+  nextRunAtMs?: number;
+  lastRunAtMs?: number;
+};
 
 function hasEmbeddingError(payload: DoctorMemoryStatusPayload): boolean {
   return !payload.embedding.ok && payload.embedding.checked !== false;
@@ -126,7 +133,7 @@ function renderHero(props: MemoryOverviewProps) {
 }
 
 function phaseScheduleDescription(
-  phase: DreamingStatus["phases"]["light"],
+  phase: DreamingPhase,
   timezone: string | undefined,
   scheduled: boolean,
 ) {

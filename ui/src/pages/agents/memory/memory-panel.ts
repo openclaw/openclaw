@@ -37,6 +37,7 @@ import {
   resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
+  type WikiPagePreview,
 } from "./dreaming.ts";
 import { renderDreamingToggleConfirmation } from "./toggle-confirmation.ts";
 import {
@@ -44,7 +45,6 @@ import {
   renderDreaming,
   resetWikiPreview,
   type DreamingViewState,
-  type WikiPagePreview,
 } from "./view.ts";
 
 registerDreamingEnglish();
