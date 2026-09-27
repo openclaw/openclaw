@@ -34,7 +34,7 @@ describe("normalizeGatewayEvent terminal tool item status", () => {
     [{ phase: "end", status: "failed" }, "tool.call.failed"],
     [{ phase: "end", status: "blocked" }, "tool.call.failed"],
     [{ phase: "end", status: "completed" }, "tool.call.completed"],
-    [{ phase: "end", status: "skipped" }, "tool.call.completed"],
+    [{ phase: "end", status: "skipped" }, "tool.call.failed"],
     [{ phase: "end" }, "tool.call.completed"],
   ])("classifies %j as %s", (data, expectedType) => {
     const event = normalizeGatewayEvent(agentItemEvent(data));
