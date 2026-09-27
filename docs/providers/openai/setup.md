@@ -469,8 +469,15 @@ workspace** in the sign-in prompt.
 ### Current limitations
 
 - Developer function tools and web search are supported. OpenAI-hosted plugins,
-  connected apps, hosted MCP tools, tool search, and file-backed inputs are not
-  supported yet.
+  connected apps, hosted MCP tools, tool search, and hosted image generation are
+  not supported yet.
+- Text, images, and files can be inputs when the selected Responses model accepts
+  them. This does not grant access to the Files upload API, audio or video input,
+  or the transcription API.
+- SIWC credentials do not authorize image generation, audio transcription,
+  speech synthesis, video generation, or memory embeddings. Configure a separate
+  compatible credential for those tools. Onboarding continues with the agent's
+  emoji when no image-generation provider is available; an avatar is optional.
 - Responses requests use HTTP streaming. WebSocket inference and SIWC quota
   reporting in OpenClaw are not available.
 - With the Codex runtime, SIWC requires a managed local process and an isolated

@@ -57,6 +57,17 @@ export function resolveModelAuthPolicy(
     };
   }
   if (ctx.mode === "oauth" && ctx.authFlow === TOKEN_SHARING_AUTH_FLOW) {
+    // The SIWC grant covers Responses inference, not the separate media APIs
+    // or Codex-hosted tools. Filter before refresh/selection so a mixed store
+    // can still use its independently authorized media credential.
+    if (ctx.capability) {
+      return {
+        authRequirement: "api-key",
+        compatible: false,
+        incompatibilityReason:
+          "does not support this operation with Sign in with ChatGPT. Configure a credential that supports it",
+      };
+    }
     return {
       authRequirement: "api-key",
       compatible:
@@ -69,16 +80,19 @@ export function resolveModelAuthPolicy(
   const subscription = ctx.mode === "oauth" || ctx.mode === "token";
   const apiKey = ctx.mode === "api-key" || ctx.mode === "api_key";
   const codex = api === "openai-chatgpt-responses";
+  const requiresApiKey = ctx.capability === "embedding" || ctx.capability === "video-generation";
   return {
     authRequirement: subscription
       ? "subscription"
       : apiKey || ctx.mode === "aws-sdk"
         ? "api-key"
         : null,
-    compatible: api === undefined || (codex ? subscription : apiKey),
-    incompatibilityReason: codex
-      ? "requires a ChatGPT subscription (OAuth or token) profile"
-      : "requires an OpenAI API key profile",
+    compatible:
+      (!requiresApiKey || apiKey) && (api === undefined || (codex ? subscription : apiKey)),
+    incompatibilityReason:
+      codex && !requiresApiKey
+        ? "requires a ChatGPT subscription (OAuth or token) profile"
+        : "requires an OpenAI API key profile",
   };
 }
 
