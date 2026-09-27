@@ -134,6 +134,7 @@ export function createDirectChatContext(
     broadcast: vi.fn(),
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
+    forgetConnectionAncestors: vi.fn<GatewayRequestContext["forgetConnectionAncestors"]>(),
     nodeSendToSession: vi.fn(),
     registerToolEventRecipient: vi.fn(),
     getRuntimeConfig,

@@ -2,7 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
-import { setActiveNodeContext } from "../../infra/active-node-context.js";
+import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import * as globalHooks from "../../plugins/hook-runner-global.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
@@ -76,7 +76,7 @@ describe("CLI durable session context", () => {
         await cleanup();
       }
     } finally {
-      setActiveNodeContext(null);
+      setActiveNodeContexts([]);
       vi.restoreAllMocks();
       resetCliRunnerPrepareTestDeps();
       cliBackendsTesting.resetDepsForTest();
@@ -115,7 +115,7 @@ describe("CLI durable session context", () => {
         resolvePluginSetupCliBackend: () => undefined,
         resolveRuntimeCliBackends: () => [runtimeBackend],
       });
-      setActiveNodeContext({ nodeId: "mac-one" });
+      setActiveNodeContexts([{ nodeId: "mac-one" }]);
       const hookRunner = {
         hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
         runBeforePromptBuild: vi.fn(async () => ({
@@ -149,7 +149,7 @@ describe("CLI durable session context", () => {
       const context = await prepareTurn();
 
       const activeNodeText =
-        "Current active computer (latest physical input, not message origin): active_node=mac-one";
+        "Current active computer (latest reported app/system input, not message origin): active_node=mac-one active_node_identity=unknown";
       const logicalPrompt = `Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail\n\n${activeNodeText}`;
       expect(context.params.prompt).toBe(
         pluginExecution ? "Sender: ⟦openclaw:ctx⟧\nsender_id=U123 latest ask" : logicalPrompt,
@@ -175,13 +175,13 @@ describe("CLI durable session context", () => {
         transport === "first-only" ? "--system-prompt" : undefined,
       );
 
-      setActiveNodeContext({ nodeId: "mac-two" });
+      setActiveNodeContexts([{ nodeId: "mac-two" }]);
       const next = await prepareTurn();
       const nextPrompt = next.promptForHooks ?? next.params.prompt;
       expect(nextPrompt).toContain("active_node=mac-two");
       expect(nextPrompt).not.toContain("active_node=mac-one");
 
-      setActiveNodeContext({ nodeId: "mac-two" }, { isCurrent: () => false });
+      setActiveNodeContexts([{ nodeId: "mac-two", isCurrent: () => false }]);
       const revoked = await prepareTurn();
       const revokedPrompt = revoked.promptForHooks ?? revoked.params.prompt;
       expect(revokedPrompt).toContain("active_node=unknown");
@@ -228,7 +228,7 @@ describe("CLI durable session context", () => {
     cleanups.push(() => context.preparedBackend.cleanup?.());
 
     expect(context.params.prompt).toBe(
-      "hook context\n\ncurrent ask\n\nCurrent active computer (latest physical input, not message origin): active_node=unknown",
+      "hook context\n\ncurrent ask\n\nCurrent active computer (latest reported app/system input, not message origin): active_node=unknown active_node_identity=unknown",
     );
     expect(context.openClawHistoryPrompt).toContain("Compaction summary: compacted earlier ask");
     expect(context.openClawHistoryPrompt).toContain("hook context");

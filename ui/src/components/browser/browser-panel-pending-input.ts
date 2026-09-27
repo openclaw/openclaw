@@ -1,40 +1,32 @@
 /** Owns cancellable refreshes and input that must not outlive its browser document. */
 export class BrowserPanelPendingInput {
-  private refreshTimer: number | null = null;
-  private wheelTimer: number | null = null;
-  private inspectTimer: number | null = null;
+  private refreshTimer: number | undefined;
+  private wheelTimer: number | undefined;
+  private inspectTimer: number | undefined;
   private wheelDeltaX = 0;
   private wheelDeltaY = 0;
   private lastInspectAt = 0;
 
   clear(): void {
-    if (this.refreshTimer !== null) {
-      clearTimeout(this.refreshTimer);
-      this.refreshTimer = null;
-    }
+    clearTimeout(this.refreshTimer);
+    this.refreshTimer = undefined;
     this.clearInput();
   }
 
   clearInput(): void {
-    if (this.wheelTimer !== null) {
-      clearTimeout(this.wheelTimer);
-      this.wheelTimer = null;
-    }
-    if (this.inspectTimer !== null) {
-      clearTimeout(this.inspectTimer);
-      this.inspectTimer = null;
-    }
+    clearTimeout(this.wheelTimer);
+    clearTimeout(this.inspectTimer);
+    this.wheelTimer = undefined;
+    this.inspectTimer = undefined;
     this.wheelDeltaX = 0;
     this.wheelDeltaY = 0;
     this.lastInspectAt = 0;
   }
 
   scheduleRefresh(delayMs: number, refresh: () => void): void {
-    if (this.refreshTimer !== null) {
-      clearTimeout(this.refreshTimer);
-    }
+    clearTimeout(this.refreshTimer);
     this.refreshTimer = window.setTimeout(() => {
-      this.refreshTimer = null;
+      this.refreshTimer = undefined;
       refresh();
     }, delayMs);
   }
@@ -47,11 +39,11 @@ export class BrowserPanelPendingInput {
   ): void {
     this.wheelDeltaX += deltaX;
     this.wheelDeltaY += deltaY;
-    if (this.wheelTimer !== null) {
+    if (this.wheelTimer !== undefined) {
       return;
     }
     this.wheelTimer = window.setTimeout(() => {
-      this.wheelTimer = null;
+      this.wheelTimer = undefined;
       const pendingDeltaX = this.wheelDeltaX;
       const pendingDeltaY = this.wheelDeltaY;
       this.wheelDeltaX = 0;
@@ -74,11 +66,9 @@ export class BrowserPanelPendingInput {
       run();
       return;
     }
-    if (this.inspectTimer !== null) {
-      clearTimeout(this.inspectTimer);
-    }
+    clearTimeout(this.inspectTimer);
     this.inspectTimer = window.setTimeout(() => {
-      this.inspectTimer = null;
+      this.inspectTimer = undefined;
       run();
     }, delayMs);
   }

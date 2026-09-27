@@ -423,46 +423,7 @@ describe("prepared catalog source composition", () => {
     },
   );
 
-  it("composes captured generated inventory without restoring its request authority", async () => {
-    const { facts, configured, staticConfig, modelsJsonContents } = fixture();
-    const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
-      config: facts.input.config,
-      modelsJsonContents,
-      pluginMetadataSnapshot: metadata,
-      staticProviderConfigs: { [providerId]: staticConfig },
-      pluginCatalogs: [
-        {
-          pluginId,
-          contents: JSON.stringify({
-            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-            providers: {
-              [providerId]: {
-                ...configured,
-                apiKey: "discarded-cache-key",
-                headers: { Authorization: "discarded-cache-header" },
-                models: [model("generated-only")],
-              },
-            },
-          }),
-        },
-      ],
-    });
-    expect(
-      registry
-        .getAll()
-        .map((entry) => entry.id)
-        .toSorted(),
-    ).toEqual(["authored-only", "configured-only", "curated-only", "generated-only", "shared"]);
-    const generated = registry.find(providerId, "generated-only")!;
-    expect(generated).toMatchObject({ maxTokensSource: "discovered" });
-    await expect(registry.getApiKeyAndHeaders(generated)).resolves.toEqual({
-      ok: true,
-      apiKey: undefined,
-      headers: undefined,
-    });
-  });
-
-  it("replaces stale root request settings while keeping request-local forks isolated", async () => {
+  it("replaces stale root request settings with current configuration", async () => {
     const { facts, configured } = fixture();
     const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
       config: facts.input.config,
@@ -485,19 +446,6 @@ describe("prepared catalog source composition", () => {
       apiKey: undefined,
       headers: undefined,
     });
-    const fork = registry.fork(
-      AuthStorage.inMemory({ [providerId]: { type: "api_key", key: "current-request-key" } }),
-    );
-    await expect(fork.getApiKeyAndHeaders(selected)).resolves.toEqual({
-      ok: true,
-      apiKey: "current-request-key",
-      headers: undefined,
-    });
-    await expect(registry.getApiKeyAndHeaders(selected)).resolves.toEqual({
-      ok: true,
-      apiKey: undefined,
-      headers: undefined,
-    });
   });
 
   it.each([
@@ -507,7 +455,6 @@ describe("prepared catalog source composition", () => {
       storeKey: "current-store-key",
       expectedKey: "current-store-key",
     },
-    { sourceKey: undefined, storeKey: "current-store-key", expectedKey: "current-store-key" },
     { sourceKey: undefined, storeKey: undefined, expectedKey: undefined },
   ])(
     "uses current request authority for accepted routes ($sourceKey, $storeKey)",

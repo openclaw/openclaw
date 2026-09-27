@@ -14,7 +14,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import {
   createSubagentTaskBackingDetail,
   resolveManagedTaskBackingDetail,
@@ -392,11 +392,7 @@ describe("task registry read preparation", () => {
         emitTool(task.runId!, "warmup");
         await prepareTaskRegistryRead();
         const context = captureOpenClawStateWorkerContext();
-        const holder = holdStateDatabaseCoordinator(
-          context.admission.databasePath,
-          context.coordinatorRuntime,
-          300,
-        );
+        const holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 300);
         let pending: Promise<unknown> | undefined;
         try {
           await holder.ready;
@@ -566,11 +562,7 @@ describe("task registry read preparation", () => {
         await prepareTaskRegistryRead();
         expect((await request()).mock.calls[0]?.[0]).toBe(true);
         const stateContext = captureOpenClawStateWorkerContext();
-        const holder = holdStateDatabaseCoordinator(
-          stateContext.admission.databasePath,
-          stateContext.coordinatorRuntime,
-          300,
-        );
+        const holder = holdStateDatabaseWriteTransaction(stateContext.admission.databasePath, 300);
         let read: ReturnType<typeof request> | undefined;
         try {
           await holder.ready;

@@ -1,12 +1,5 @@
-/**
- * Agent harness prompt and compaction hook helpers.
- *
- * Harness runtimes use this to run plugin hooks around prompt construction and
- * compaction while keeping hook failures non-fatal.
- */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { PluginHookBeforePromptBuildResult } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CurrentInboundPromptContext } from "../embedded-agent-runner/run/params.js";
@@ -125,10 +118,10 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
             return undefined;
           })
       : undefined;
-  const systemPrompt = resolvePromptBuildSystemPrompt({
-    developerInstructions,
-    promptBuildResult,
-  });
+  const systemPrompt =
+    typeof promptBuildResult?.systemPrompt === "string"
+      ? promptBuildResult.systemPrompt
+      : developerInstructions;
   const promptPrefix = joinPresentTextSegments([
     heartbeatResult?.prependContext,
     promptBuildResult?.prependContext,
@@ -171,16 +164,6 @@ function resolveDeveloperInstructions(
   return typeof instructions === "string"
     ? instructions
     : (instructions.build({ toolsAllow }) ?? "");
-}
-
-function resolvePromptBuildSystemPrompt(params: {
-  developerInstructions: string;
-  promptBuildResult?: PluginHookBeforePromptBuildResult;
-}): string {
-  if (typeof params.promptBuildResult?.systemPrompt === "string") {
-    return params.promptBuildResult.systemPrompt;
-  }
-  return params.developerInstructions;
 }
 
 /** Runs best-effort before-compaction hooks for a harness session. */

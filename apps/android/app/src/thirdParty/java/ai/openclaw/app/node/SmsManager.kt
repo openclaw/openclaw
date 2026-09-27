@@ -11,7 +11,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -26,36 +25,6 @@ class SmsManager(
   private val json = JsonConfig
 
   @Volatile private var permissionRequester: PermissionRequester? = null
-
-  data class SendResult(
-    val ok: Boolean,
-    val to: String,
-    val message: String?,
-    val error: String? = null,
-    val payloadJson: String,
-  )
-
-  @Serializable
-  data class SmsMessage(
-    val id: Long,
-    val threadId: Long,
-    val address: String?,
-    val person: String?,
-    val date: Long,
-    val dateSent: Long,
-    val read: Boolean,
-    val type: Int,
-    val body: String?,
-    val status: Int,
-    val transportType: String? = null,
-  )
-
-  data class SearchResult(
-    val ok: Boolean,
-    val messages: List<SmsMessage>,
-    val error: String? = null,
-    val payloadJson: String,
-  )
 
   internal data class QueryMetadata(
     val mmsRequested: Boolean,
@@ -551,7 +520,7 @@ class SmsManager(
     permissionRequester = requester
   }
 
-  suspend fun send(paramsJson: String?): SendResult {
+  suspend fun send(paramsJson: String?): SmsSendResult {
     if (!hasTelephonyFeature()) {
       return errorResult(
         error = "SMS_UNAVAILABLE: telephony not available",
@@ -614,7 +583,7 @@ class SmsManager(
     }
   }
 
-  suspend fun search(paramsJson: String?): SearchResult =
+  suspend fun search(paramsJson: String?): SmsSearchResult =
     withContext(Dispatchers.IO) {
       if (!hasTelephonyFeature()) {
         return@withContext queryError("SMS_UNAVAILABLE: telephony not available")
@@ -702,8 +671,8 @@ class SmsManager(
   private fun okResult(
     to: String,
     message: String,
-  ): SendResult =
-    SendResult(
+  ): SmsSendResult =
+    SmsSendResult(
       ok = true,
       to = to,
       message = message,
@@ -715,8 +684,8 @@ class SmsManager(
     error: String,
     to: String = "",
     message: String? = null,
-  ): SendResult =
-    SendResult(
+  ): SmsSendResult =
+    SmsSendResult(
       ok = false,
       to = to,
       message = message,
@@ -727,16 +696,16 @@ class SmsManager(
   private fun queryOk(
     messages: List<SmsMessage>,
     queryMetadata: QueryMetadata? = null,
-  ): SearchResult =
-    SearchResult(
+  ): SmsSearchResult =
+    SmsSearchResult(
       ok = true,
       messages = messages,
       error = null,
       payloadJson = buildQueryPayloadJson(json, ok = true, messages = messages, queryMetadata = queryMetadata),
     )
 
-  private fun queryError(error: String): SearchResult =
-    SearchResult(
+  private fun queryError(error: String): SmsSearchResult =
+    SmsSearchResult(
       ok = false,
       messages = emptyList(),
       error = error,

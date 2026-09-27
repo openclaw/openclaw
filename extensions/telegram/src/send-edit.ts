@@ -1,5 +1,4 @@
 import type { Message } from "grammy/types";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -20,6 +19,7 @@ import {
   buildTelegramRichMarkdownPlan,
   type TelegramInputRichMessage,
 } from "./rich-message.js";
+import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { withTelegramPlainFallback } from "./rich-plain-fallback.js";
 import { sendLogger, withTelegramApiContext, type TelegramApiContext } from "./send-context.js";
 import type { TelegramApiCallOpts, TelegramSendOpts } from "./send-message-types.js";
@@ -110,13 +110,14 @@ export async function editMessageTelegram(
       const textMode = opts.textMode ?? "markdown";
       const linkPreviewEnabled = opts.linkPreview ?? account.config.linkPreview ?? true;
       // Caller-authored HTML edits keep legacy parse_mode HTML semantics too.
-      const useRichMessages = account.config.richMessages === true && textMode !== "html";
-      const tableMode = resolveMarkdownTableMode({
+      const richMessagesParams = {
         cfg,
-        channel: "telegram",
         accountId: account.accountId,
-        supportsBlockTables: useRichMessages,
-      });
+        accountConfig: account.config,
+        htmlTextMode: textMode === "html",
+      };
+      const useRichMessages = resolveTelegramRichMessages(richMessagesParams);
+      const tableMode = resolveTelegramTableMode(richMessagesParams);
       const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
       const plainText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : text;
 

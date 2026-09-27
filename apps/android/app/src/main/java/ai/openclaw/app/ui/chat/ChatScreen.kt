@@ -625,9 +625,9 @@ internal fun ChatScreen(
   DisposableEffect(viewModel) {
     onDispose(viewModel::stopChatMessageSpeech)
   }
-  val modelSections =
+  val modelChoices =
     remember(modelCatalog, modelFavorites, modelRecents) {
-      chatModelPickerSections(
+      chatModelPickerChoices(
         catalog = modelCatalog,
         favorites = modelFavorites,
         recents = modelRecents,
@@ -1365,7 +1365,7 @@ internal fun ChatScreen(
           }
         } else {
           ChatModelPickerContent(
-            sections = modelSections,
+            models = modelChoices,
             favorites = modelFavorites.toSet(),
             selectedModelLabel = selectedModelLabel,
             selectedModelRef = selectedModelRef,
@@ -2070,7 +2070,7 @@ private fun EmptyChatHint(
           } else {
             nativeString("Chat not ready")
           },
-        style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
+        style = ClawTheme.type.title.copy(lineHeight = 23.sp),
         color = ClawTheme.colors.text,
       )
       Text(
@@ -3087,7 +3087,7 @@ private fun ProgressCardPill(
           )
           Text(
             text = expandedActivityLabel,
-            style = ClawTheme.type.caption.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium),
+            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Medium),
             color = ClawTheme.colors.textMuted,
             maxLines = 1,
           )
@@ -3206,10 +3206,10 @@ private fun PlanStepMarker(status: ChatPlanStepStatus) {
 private fun chatDraftStyle(): TextStyle = ClawTheme.type.body.copy(fontSize = 16.sp, lineHeight = 22.sp)
 
 @Composable
-private fun chatProjectStyle(): TextStyle = ClawTheme.type.caption.copy(fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.Normal)
+private fun chatProjectStyle(): TextStyle = ClawTheme.type.caption.copy(fontSize = ClawTheme.type.captionSmall.fontSize, lineHeight = 13.sp, fontWeight = FontWeight.Normal)
 
 @Composable
-private fun chatTitleStyle(): TextStyle = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
+private fun chatTitleStyle(): TextStyle = ClawTheme.type.title.copy(fontSize = ClawTheme.type.section.fontSize, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
 
 @Composable
 private fun minimumChatLineHeight(style: TextStyle): Int {
@@ -3928,7 +3928,7 @@ internal fun branchMetadataText(branch: SessionBranch): String {
 
 @Composable
 private fun ChatModelPickerContent(
-  sections: ChatModelPickerSections,
+  models: List<GatewayModelSummary>,
   favorites: Set<String>,
   selectedModelLabel: String,
   selectedModelRef: String?,
@@ -3941,7 +3941,6 @@ private fun ChatModelPickerContent(
 ) {
   var query by remember { mutableStateOf("") }
   var expandedProviders by remember { mutableStateOf(emptySet<String>()) }
-  val models = sections.pinned + sections.recent + sections.remaining
   val defaultModel = models.firstOrNull { it.providerQualifiedRef() == defaultModelRef }
 
   fun matches(model: GatewayModelSummary): Boolean = query.isBlank() || listOf(model.name, model.id, providerDisplayName(model.provider)).any { it.contains(query.trim(), ignoreCase = true) }
@@ -4200,12 +4199,12 @@ private fun ChatOfflineNotice(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(
         text = nativeString("Gateway offline"),
-        style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+        style = ClawTheme.type.caption,
         color = ClawTheme.colors.warning,
       )
       Text(
         text = status,
-        style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+        style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
@@ -4686,7 +4685,7 @@ private fun ChatComposerModelPicker(
       Row(modifier = Modifier.padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
           text = label,
-          style = ClawTheme.type.caption.copy(fontSize = 14.sp),
+          style = ClawTheme.type.caption.copy(fontSize = ClawTheme.type.body.fontSize),
           // Android supports middle ellipsis only on one line; keep both ends of the model name visible.
           maxLines = 1,
           overflow = TextOverflow.MiddleEllipsis,

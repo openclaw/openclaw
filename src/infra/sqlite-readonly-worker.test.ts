@@ -17,7 +17,6 @@ import {
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
-import { acquireStateDatabaseHandleExclusion } from "./state-database-coordinator.js";
 
 const logs = vi.hoisted(() => ({ debug: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -216,24 +215,6 @@ describe("scoped SQLite read-only children", () => {
           expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBe(0);
         },
       );
-    });
-    expect(spawn).toHaveBeenCalledTimes(2);
-  });
-
-  it("releases admission between requests and reacquires it against the current exclusion", async () => {
-    const source = createDatabase(0);
-    await withSqliteReadOnlyWorkerScope(async () => {
-      await readSnapshotVersion(source);
-      const exclusion = acquireStateDatabaseHandleExclusion({
-        databasePath: source,
-        busyTimeoutMs: 0,
-      });
-      try {
-        await expect(readSnapshotVersion(source)).rejects.toThrow("state-handles");
-      } finally {
-        exclusion.release();
-      }
-      expect(await readSnapshotVersion(source)).toBe(0);
     });
     expect(spawn).toHaveBeenCalledTimes(2);
   });

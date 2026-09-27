@@ -208,27 +208,36 @@ describe("task execution ownership on successor restore", () => {
     },
   );
 
-  it("rechecks execution ownership after settlement admission", async () => {
+  it("rechecks each execution owner after the preceding task commits", async () => {
     const liveOwner = ownerFor(process.pid);
     const { task, store } = await restoreFixture(liveOwner);
-    store.upsertTaskWithDeliveryState({
-      task: {
-        ...task,
-        executionOwner: { ...liveOwner, startIdentity: liveOwner.startIdentity + 1 },
-      },
-    });
+    const successor = { ...task, taskId: "task-second-owner", runId: "harness:second-owner" };
+    for (const record of [task, successor]) {
+      store.upsertTaskWithDeliveryState({
+        task: {
+          ...record,
+          executionOwner: { ...liveOwner, startIdentity: liveOwner.startIdentity + 1 },
+        },
+      });
+    }
+    let admitted = 0;
     configureTaskRegistryRuntime({
       store: {
         ...store,
         withMutation: (operation) => {
-          store.upsertTaskWithDeliveryState({ task });
+          admitted += 1;
+          if (admitted === 2) {
+            expect(store.loadSnapshot().tasks.get(task.taskId)?.status).toBe("cancelled");
+            store.upsertTaskWithDeliveryState({ task: successor });
+          }
           return operation();
         },
       },
     });
     await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
-    expect(getTaskById(task.taskId)?.executionOwner).toEqual(liveOwner);
-    expect(store.loadSnapshot().tasks.get(task.taskId)?.status).toBe("running");
+    expect(getTaskById(task.taskId)?.status).toBe("cancelled");
+    expect(getTaskById(successor.taskId)?.executionOwner).toEqual(liveOwner);
+    expect(store.loadSnapshot().tasks.get(successor.taskId)?.status).toBe("running");
     expect((await waitForGatewayActiveWork(0)).drained).toBe(false);
   });
 

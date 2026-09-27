@@ -5,19 +5,16 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import {
   normalizeLegacyDeviceIdentity,
   type NormalizedLegacyDeviceIdentity,
 } from "./device-identity-legacy.js";
 import {
   readStoredDeviceIdentityReadOnly,
-  resolveDeviceIdentityStore,
   validateStoredDeviceIdentity,
   type DeviceIdentity,
 } from "./device-identity-store.js";
 import { deriveEd25519PrivateKeyRaw, deriveEd25519PublicKeyRaw } from "./ed25519-signature.js";
-import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -513,28 +510,13 @@ export async function migrateLegacyDeviceIdentity(params: {
   if (params.doctorOnlyStateMigrations !== true) {
     return { changes: [], warnings: [] };
   }
-  let identityCoordinator: ReturnType<typeof acquireDeviceIdentityCoordinator> | undefined;
   return await withLegacyMigrationStateLock({
     stateDir: params.stateDir,
     env: params.env,
     label: "legacy device identity",
     releaseLabel: "Device identity",
     errorLabel: "Failed reading legacy device identity state",
-    beforeRelease: () => identityCoordinator?.release(),
     run: async (env) => {
-      try {
-        identityCoordinator = acquireDeviceIdentityCoordinator({
-          databasePath: resolveDeviceIdentityStore({ env, identityKey: IDENTITY_KEY }).databasePath,
-          stateDir: params.stateDir,
-        });
-      } catch (error) {
-        return {
-          changes: [],
-          warnings: [
-            `Failed migrating legacy device identity: identity state is busy (${formatErrorMessage(error)}).`,
-          ],
-        };
-      }
       if (hasLegacyDeviceIdentityPath(params.detected)) {
         const stateRoot = await root(params.stateDir, {
           hardlinks: "reject",

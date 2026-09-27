@@ -856,9 +856,10 @@ describe("Git candidate activation", () => {
         "throw new Error('broken launcher');\n",
       );
       const target = await advanceRemote();
-      let validated = false;
+      const onStepComplete = vi.fn();
       const result = await update({
         devTarget: { mode: "detached", ref: target },
+        progress: { onStepComplete },
         validateCandidate: async (candidateRoot) => {
           const launcher = path.join(candidateRoot, "openclaw.mjs");
           await fs.writeFile(launcher, "export {};\n");
@@ -872,10 +873,13 @@ describe("Git candidate activation", () => {
             timeoutMs: 5000,
           });
           expect(probe.code).toBe(0);
-          validated = true;
         },
       });
-      expect(validated).toBe(true);
+      expect(
+        onStepComplete.mock.calls
+          .filter(([step]) => step.name === "preflight-update-clean-check")
+          .map(([step]) => step.exitCode),
+      ).toEqual([repairState === "committed" ? 0 : 1]);
       expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
       expect(stopped).toBe(false);
       expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);

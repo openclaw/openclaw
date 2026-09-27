@@ -8,7 +8,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { reserveSqliteWorkerInputPreparation } from "../infra/sqlite-worker-store.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
@@ -221,7 +220,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     };
   }
 
-  it.for(["overloaded", "unavailable", "coordinator"] as const)(
+  it.for(["overloaded", "unavailable"] as const)(
     "expires the original waiter after %s admission recovers without a client read",
     async (code, testContext) => {
       const {
@@ -267,13 +266,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       clock.mockReturnValue(record.expiresAtMs + (retry?.delayMs ?? 0));
       const retryFailure = createDeferredCore<unknown>();
       onError.mockImplementationOnce((error) => retryFailure.resolve(error));
-      if (code === "coordinator") {
-        const otherCoordinator = path.join(path.dirname(databaseOptions.path), "other-coordinator");
-        fs.mkdirSync(otherCoordinator);
-        await withStateDatabaseCoordinatorRuntimeDirectory(otherCoordinator, () => invoke(retry));
-      } else {
-        await invoke(retry);
-      }
+      await invoke(retry);
       await expect(Promise.race([decision, retryFailure.promise])).resolves.toBeNull();
       await observation;
       expect(handoff).toHaveBeenCalledExactlyOnceWith(null);

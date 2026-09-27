@@ -52,7 +52,7 @@ it("refuses an external active agent lease before serving-Gateway coordinator co
   expect(JSON.stringify(facts)).not.toContain("private");
   expect(boundary.readLeases).toHaveBeenCalledOnce();
   expect(boundary.gatewayAcquire).not.toHaveBeenCalled();
-  expect(boundary.stateAcquire).not.toHaveBeenCalled();
+  expect(boundary.ownerAssert).not.toHaveBeenCalled();
   expect(boundary.lease).not.toHaveBeenCalled();
   expect(boundary.stop).not.toHaveBeenCalled();
   expect(boundary.restart).not.toHaveBeenCalled();
@@ -71,13 +71,13 @@ it("does not use an empty external lease observation to bypass coordinator conte
   expect(collectUpdateDoctorFailureFacts(refusal)).toEqual([]);
   expect(boundary.readLeases).toHaveBeenCalledOnce();
   expect(boundary.gatewayAcquire).toHaveBeenCalledOnce();
-  expect(boundary.stateAcquire).not.toHaveBeenCalled();
+  expect(boundary.ownerAssert).not.toHaveBeenCalled();
   expect(boundary.lease).not.toHaveBeenCalled();
   expect(boundary.stop).not.toHaveBeenCalled();
   expect(boundary.close).not.toHaveBeenCalled();
 });
 
-it("rechecks external leases under both coordinators after an empty observation", async () => {
+it("rechecks external leases under the process owner after an empty observation", async () => {
   boundary.external.mockReturnValue(true);
   boundary.lease.mockImplementation(() => {
     throw new OpenClawAgentDatabaseLeaseActiveError(privateCause);
@@ -88,16 +88,19 @@ it("rechecks external leases under both coordinators after an empty observation"
   ]);
   expect(boundary.readLeases).toHaveBeenCalledOnce();
   expect(boundary.gatewayAcquire).toHaveBeenCalledOnce();
-  expect(boundary.stateAcquire).toHaveBeenCalledOnce();
+  expect(boundary.ownerAssert).toHaveBeenCalledOnce();
   expect(boundary.readLeases.mock.invocationCallOrder[0]!).toBeLessThan(
     boundary.gatewayAcquire.mock.invocationCallOrder[0]!,
   );
-  expect(boundary.stateAcquire.mock.invocationCallOrder[0]!).toBeLessThan(
+  expect(boundary.ownerAssert.mock.invocationCallOrder[0]!).toBeLessThan(
     boundary.lease.mock.invocationCallOrder[0]!,
   );
-  expect(boundary.release).toHaveBeenCalledTimes(2);
+  expect(boundary.release).toHaveBeenCalledOnce();
   expect(boundary.stop).not.toHaveBeenCalled();
-  expect(boundary.close).not.toHaveBeenCalled();
+  expect(boundary.close).toHaveBeenCalledOnce();
+  expect(boundary.close.mock.invocationCallOrder[0]!).toBeLessThan(
+    boundary.release.mock.invocationCallOrder[0]!,
+  );
 });
 
 it("fails closed on an unknown external lease observation without exposing private details", async () => {
@@ -124,11 +127,14 @@ it("fails closed on an unknown external lease observation without exposing priva
     }),
   ).toBe("DoctorMaintenanceRefusalError: Doctor could not enter maintenance.");
   expect(boundary.gatewayAcquire).toHaveBeenCalledOnce();
-  expect(boundary.stateAcquire).toHaveBeenCalledOnce();
+  expect(boundary.ownerAssert).toHaveBeenCalledOnce();
   expect(boundary.lease).toHaveBeenCalledOnce();
-  expect(boundary.release).toHaveBeenCalledTimes(2);
+  expect(boundary.release).toHaveBeenCalledOnce();
   expect(boundary.stop).not.toHaveBeenCalled();
-  expect(boundary.close).not.toHaveBeenCalled();
+  expect(boundary.close).toHaveBeenCalledOnce();
+  expect(boundary.close.mock.invocationCallOrder[0]!).toBeLessThan(
+    boundary.release.mock.invocationCallOrder[0]!,
+  );
 });
 
 it("grants external maintenance only after the unchanged held-owner checks", async () => {
@@ -137,15 +143,15 @@ it("grants external maintenance only after the unchanged held-owner checks", asy
   expect(maintenance).toBeDefined();
   expect(boundary.readLeases).toHaveBeenCalledOnce();
   expect(boundary.gatewayAcquire).toHaveBeenCalledOnce();
-  expect(boundary.stateAcquire).toHaveBeenCalledOnce();
+  expect(boundary.ownerAssert).toHaveBeenCalledOnce();
   expect(boundary.lease).toHaveBeenCalledOnce();
-  expect(boundary.stateAcquire.mock.invocationCallOrder[0]!).toBeLessThan(
+  expect(boundary.ownerAssert.mock.invocationCallOrder[0]!).toBeLessThan(
     boundary.lease.mock.invocationCallOrder[0]!,
   );
   expect(boundary.stop).not.toHaveBeenCalled();
   await maintenance!.release();
   expect(boundary.close).toHaveBeenCalledOnce();
-  expect(boundary.release).toHaveBeenCalledTimes(2);
+  expect(boundary.release).toHaveBeenCalledOnce();
 });
 
 it("preserves held-owner unreadable-state guidance after an external diagnostic read fails", async () => {
@@ -170,10 +176,13 @@ it("preserves held-owner unreadable-state guidance after an external diagnostic 
   expect(refusal).toBeInstanceOf(DoctorUnreadableStateDatabaseError);
   expect(String(refusal)).toContain("restore this file from a verified backup");
   expect(boundary.gatewayAcquire).toHaveBeenCalledOnce();
-  expect(boundary.stateAcquire).toHaveBeenCalledOnce();
+  expect(boundary.ownerAssert).toHaveBeenCalledOnce();
   expect(boundary.lease).toHaveBeenCalledOnce();
-  expect(boundary.release).toHaveBeenCalledTimes(2);
-  expect(boundary.close).not.toHaveBeenCalled();
+  expect(boundary.release).toHaveBeenCalledOnce();
+  expect(boundary.close).toHaveBeenCalledOnce();
+  expect(boundary.close.mock.invocationCallOrder[0]!).toBeLessThan(
+    boundary.release.mock.invocationCallOrder[0]!,
+  );
   expect(boundary.stop).not.toHaveBeenCalled();
 });
 
@@ -186,12 +195,15 @@ it("carries an actual typed lease refusal through Doctor IPC, finalization and p
   expect(refusal).toBeInstanceOf(UpdateDoctorError);
   expect(refusal).toMatchObject({ cause, message: leaseGuidance });
   expect(boundary.readLeases).not.toHaveBeenCalled();
-  expect(boundary.close).not.toHaveBeenCalled();
-  expect(boundary.release).toHaveBeenCalledTimes(2);
+  expect(boundary.close).toHaveBeenCalledOnce();
+  expect(boundary.release).toHaveBeenCalledOnce();
+  expect(boundary.close.mock.invocationCallOrder[0]!).toBeLessThan(
+    boundary.release.mock.invocationCallOrder[0]!,
+  );
   expect(boundary.resume).toHaveBeenCalledOnce();
   expect(boundary.complete).toHaveBeenCalledOnce();
   expect(boundary.restart).toHaveBeenCalledOnce();
-  expect(boundary.release.mock.invocationCallOrder[1]).toBeLessThan(
+  expect(boundary.release.mock.invocationCallOrder[0]).toBeLessThan(
     boundary.resume.mock.invocationCallOrder[0]!,
   );
   expect(boundary.complete.mock.invocationCallOrder[0]).toBeLessThan(
@@ -268,7 +280,7 @@ it("retains the typed refusal and restoration failure in the aggregate", async (
   expect(collectUpdateDoctorFailureFacts(refusal)).toEqual([
     { check: "doctor", code: leaseCode, message: leaseGuidance },
   ]);
-  expect(boundary.release).toHaveBeenCalledTimes(2);
+  expect(boundary.release).toHaveBeenCalledOnce();
   expect(boundary.complete).toHaveBeenCalledOnce();
   expect(boundary.restart).not.toHaveBeenCalled();
 });

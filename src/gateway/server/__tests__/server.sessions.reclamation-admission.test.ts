@@ -51,7 +51,9 @@ vi.mock("node:worker_threads", async (importOriginal) => {
             const prepare = DatabaseSync.prototype.prepare;
             DatabaseSync.prototype.prepare = function (sql) {
               const statement = prepare.call(this, sql);
-              if (sql !== 'PRAGMA integrity_check;' && sql !== 'PRAGMA foreign_key_check;') {
+              const integrityCheck = sql.startsWith('PRAGMA integrity_check') || sql.startsWith('PRAGMA quick_check');
+              const foreignKeyCheck = sql.startsWith('PRAGMA foreign_key_check');
+              if (!integrityCheck && !foreignKeyCheck) {
                 return statement;
               }
               const target = prepare.call(this, 'PRAGMA database_list').all().some(
@@ -59,7 +61,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
               );
               if (!target) return statement;
               const database = this;
-              if (sql === 'PRAGMA integrity_check;') {
+              if (integrityCheck) {
                 const all = statement.all.bind(statement);
                 statement.all = (...args) => {
                   Atomics.add(gate, 0, 1);
@@ -72,7 +74,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
                   Atomics.add(gate, 2, 1);
                   return result;
                 };
-              } else if (sql === 'PRAGMA foreign_key_check;') {
+              } else if (foreignKeyCheck) {
                 const iterate = statement.iterate.bind(statement);
                 statement.iterate = function* (...args) {
                   yield* iterate(...args);

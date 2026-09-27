@@ -29,6 +29,10 @@ type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 
+type ToolImageSanitizationOptions = ImageSanitizationLimits & {
+  verifyDecodability?: boolean;
+};
+
 // Anthropic Messages API rejects oversized images; sanitize here so replayed
 // tool outputs do not break later turns or silent channel replies.
 const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
@@ -157,6 +161,17 @@ function inferImageFileName(params: {
   return undefined;
 }
 
+async function verifyImageDecodability(buffer: Buffer): Promise<void> {
+  try {
+    // Rastermill probes only headers; discard a tiny encode to verify full decodability.
+    await resizeToJpeg({ buffer, maxSide: 1, quality: 1, withoutEnlargement: true });
+  } catch (err) {
+    if (!isImageProcessorUnavailableError(err)) {
+      throw err;
+    }
+  }
+}
+
 async function resizeImageBase64IfNeeded(params: {
   base64: string;
   mimeType: string;
@@ -164,6 +179,7 @@ async function resizeImageBase64IfNeeded(params: {
   maxBytes: number;
   label?: string;
   fileName?: string;
+  verifyDecodability?: boolean;
 }): Promise<{
   base64: string;
   mimeType: string;
@@ -180,6 +196,9 @@ async function resizeImageBase64IfNeeded(params: {
   const overDimensions =
     hasDimensions && (width > params.maxDimensionPx || height > params.maxDimensionPx);
   if (imageWithinLimits(buf, meta, params.maxDimensionPx, params.maxBytes)) {
+    if (params.verifyDecodability) {
+      await verifyImageDecodability(buf);
+    }
     return {
       base64: params.base64,
       mimeType: params.mimeType,
@@ -293,7 +312,7 @@ async function resizeImageBase64IfNeeded(params: {
 export async function sanitizeContentBlocksImages(
   blocks: ToolContentBlock[],
   label: string,
-  opts: ImageSanitizationLimits = {},
+  opts: ToolImageSanitizationOptions = {},
 ): Promise<ToolContentBlock[]> {
   const maxDimensionPx = resolveIntegerOption(opts.maxDimensionPx, MAX_IMAGE_DIMENSION_PX, {
     min: 1,
@@ -354,6 +373,7 @@ export async function sanitizeContentBlocksImages(
         maxBytes,
         label,
         fileName,
+        verifyDecodability: opts.verifyDecodability,
       });
       out.push({
         ...block,

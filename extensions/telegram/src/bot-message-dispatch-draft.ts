@@ -43,10 +43,10 @@ function resolveDraftPartialText(
 }
 
 function renderStreamText(
-  turn: Pick<Turn, "tableMode" | "telegramCfg">,
+  turn: Pick<Turn, "richMessages" | "tableMode" | "telegramCfg">,
   text: string,
 ): TelegramDraftPreview {
-  return turn.telegramCfg.richMessages === true
+  return turn.richMessages
     ? {
         text,
         richMessage: buildTelegramRichMarkdown(text, {
@@ -92,9 +92,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
         )
       : Math.min(
           params.textLimit,
-          params.telegramCfg.richMessages === true
-            ? TELEGRAM_RICH_TEXT_LIMIT
-            : TELEGRAM_TEXT_CHUNK_LIMIT,
+          params.richMessages ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT,
         );
   const renderDraftText = (text: string): TelegramDraftPreview => renderStreamText(params, text);
 
@@ -111,7 +109,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
             params.draftReplyToMessageId != null
               ? params.replyQuoteByMessageId[String(params.draftReplyToMessageId)]
               : undefined,
-          richMessages: params.telegramCfg.richMessages,
+          richMessages: params.richMessages,
           linkPreview: params.telegramCfg.linkPreview,
           minInitialChars: DRAFT_MIN_INITIAL_CHARS,
           renderText: renderDraftText,

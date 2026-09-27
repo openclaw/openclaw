@@ -983,15 +983,6 @@ function runConcurrentSchemaProbe(params: {
     const roundCount = 1;
     const databasePaths = [];
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-    const coordinatorContracts =
-      mode === "fresh"
-        ? await Promise.all([
-            import(${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.boundaryPath).href)}),
-            import(${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.cryptoDigest).href)}),
-            import(${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.sqliteCoordinator).href)}),
-            import(${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabaseContract).href)}),
-          ])
-        : undefined;
 
     function waitForChild(child) {
       let stdout = "";
@@ -1045,65 +1036,6 @@ function runConcurrentSchemaProbe(params: {
         ]);
       } finally {
         clearTimeout(timeout);
-      }
-    }
-
-    function openFreshInitializationCoordinator(databasePath) {
-      if (!coordinatorContracts) {
-        throw new Error("fresh initialization coordinator contracts are unavailable");
-      }
-      const [
-        { resolvePathViaExistingAncestorSync },
-        { sha256HexPrefixCore },
-        { ensurePrivateSqliteCoordinatorDirectory },
-        { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
-      ] = coordinatorContracts;
-      const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
-      const canonicalRuntimeDirectory = resolvePathViaExistingAncestorSync("/tmp");
-      const suffix = typeof process.getuid === "function"
-        ? \`openclaw-state-locks-\${process.getuid()}\`
-        : "openclaw-state-locks";
-      const coordinatorPath = path.join(
-        canonicalRuntimeDirectory,
-        suffix,
-        \`state-lifecycle.\${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite\`,
-      );
-      ensurePrivateSqliteCoordinatorDirectory(
-        path.dirname(coordinatorPath),
-        "state ownership coordinator test",
-      );
-      const coordinator = new DatabaseSync(coordinatorPath);
-      try {
-        coordinator.exec(
-          \`PRAGMA busy_timeout = \${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; BEGIN EXCLUSIVE;\`,
-        );
-      } catch (error) {
-        coordinator.close();
-        throw error;
-      }
-      return coordinator;
-    }
-
-    function releaseCoordinator(coordinator) {
-      if (!coordinator) {
-        return;
-      }
-      const errors = [];
-      try {
-        coordinator.exec("ROLLBACK");
-      } catch (error) {
-        errors.push(error);
-      }
-      try {
-        coordinator.close();
-      } catch (error) {
-        errors.push(error);
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "coordinator rollback and close failed");
       }
     }
 
@@ -1195,43 +1127,14 @@ function runConcurrentSchemaProbe(params: {
         );
       });
       const outcomes = workers.map(waitForChild);
-      let coordinator;
       let roundError;
       try {
         await waitForMarkers(workers, readyPaths, "ready markers", round);
-        if (mode === "fresh") {
-          coordinator = openFreshInitializationCoordinator(databasePath);
-        }
         fs.writeFileSync(startPath, "start");
-
-        if (mode === "fresh") {
-          await waitForMarkers(workers, enteringPaths, "entering markers", round);
-          // Both children have reached the synchronous open behind the exact production
-          // coordinator; target absence while it is held proves contention, not scheduling.
-          await sleep(250);
-          assert.equal(
-            fs.existsSync(databasePath),
-            false,
-            \`round \${round} database was created while the ownership coordinator was held\`,
-          );
-          for (const [index, worker] of workers.entries()) {
-            assert.equal(worker.exitCode, null, \`round \${round} worker \${index} exited early\`);
-            assert.equal(worker.signalCode, null, \`round \${round} worker \${index} signaled early\`);
-          }
-        }
+        await waitForMarkers(workers, enteringPaths, "entering markers", round);
       } catch (error) {
         roundError = error;
       } finally {
-        try {
-          releaseCoordinator(coordinator);
-        } catch (error) {
-          roundError = roundError
-            ? new AggregateError(
-                [roundError, error],
-                \`round \${round} probe and coordinator release failed\`,
-              )
-            : error;
-        }
         if (roundError) {
           for (const worker of workers) {
             if (worker.exitCode === null && worker.signalCode === null) {
@@ -1245,8 +1148,7 @@ function runConcurrentSchemaProbe(params: {
         if (!roundError) {
           const openedPaths = readyPaths.map((readyPath) => readyPath + ".opened");
           await waitForMarkers(workers, openedPaths, "successful open markers", round);
-          // Opens contend together; explicit WAL-capable retirement intentionally fails
-          // on contention, so each worker stays live until granted its own close phase.
+          // Keep both real connections live through successful admission, then join each close.
           for (const [index, worker] of workers.entries()) {
             assert.equal(worker.exitCode, null, \`round \${round} worker \${index} exited before retirement\`);
             assert.equal(worker.signalCode, null, \`round \${round} worker \${index} signaled before retirement\`);

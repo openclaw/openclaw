@@ -279,48 +279,51 @@ export async function initializeAndRunUpdate(
                 preflight: true,
                 serviceRoot: target.managedServiceRoot,
               });
-              const assertCurrent = () => {
-                fence.assertCurrent();
-                assertUpdatePackageActivationAdmission(target.root, packageAdmission);
-              };
               const { stagePackageInstallUpdate } = await import("./update-command-package.js");
-              assertCurrent();
+              fence.assertCurrent();
+              assertUpdatePackageActivationAdmission(target.root, packageAdmission);
               const legacyFence = acquireLegacyUpdateInitializationFence({
                 env,
                 targetVersion,
                 targetSchemas: schemas,
               });
               let initializationStage: InitializedUpdate["stagedPackage"];
+              const assertCurrent = () => {
+                fence.assertCurrent();
+                assertUpdatePackageActivationAdmission(target.root, packageAdmission);
+                legacyFence?.assertCurrent();
+              };
               await withUpdateInitializationCleanup(
                 async () => {
-                  await withUpdateInitializationCleanup(
-                    async () => {
-                      const presentation = createUpdateProgress(!opts.json);
-                      try {
-                        await checkSchemas();
-                        assertCurrent();
-                        if (!target.packageAlreadyCurrent && !initialization.stagedPackage) {
-                          initializationStage = await stagePackageInstallUpdate(
-                            stageParams(presentation),
-                          );
-                          initialization.stagedPackage = initializationStage;
-                        }
-                        assertCurrent();
-                        await initializeUpdateStateFromTarget({
-                          root: initialization.stagedPackage?.root ?? target.root,
-                          env,
-                          timeoutMs,
-                          workTimeoutMs: prepared.timeoutMs ?? null,
-                          nodeRunner: target.packageUpdateNodeRunner,
-                          invocationCwd,
-                          progress: presentation.progress,
-                          assertCurrent,
-                          checkSchemas: async (phase) => void (await checkSchemas(phase)),
-                        });
-                      } finally {
-                        presentation.dispose();
+                  const initialize = async () => {
+                    const presentation = createUpdateProgress(!opts.json);
+                    try {
+                      await checkSchemas();
+                      assertCurrent();
+                      if (!target.packageAlreadyCurrent && !initialization.stagedPackage) {
+                        initializationStage = await stagePackageInstallUpdate(
+                          stageParams(presentation),
+                        );
+                        initialization.stagedPackage = initializationStage;
                       }
-                    },
+                      assertCurrent();
+                      await initializeUpdateStateFromTarget({
+                        root: initialization.stagedPackage?.root ?? target.root,
+                        env,
+                        timeoutMs,
+                        workTimeoutMs: prepared.timeoutMs ?? null,
+                        nodeRunner: target.packageUpdateNodeRunner,
+                        invocationCwd,
+                        progress: presentation.progress,
+                        assertCurrent,
+                        checkSchemas: async (phase) => void (await checkSchemas(phase)),
+                      });
+                    } finally {
+                      presentation.dispose();
+                    }
+                  };
+                  await withUpdateInitializationCleanup(
+                    () => (legacyFence ? legacyFence.run(initialize) : initialize()),
                     () => legacyFence?.release(),
                   );
                   await runInitialized(initialization);

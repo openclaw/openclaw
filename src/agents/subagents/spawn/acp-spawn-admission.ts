@@ -16,14 +16,10 @@ export function countUntrackedActiveAcpRunsForOwner(
   }
   const tasks = listTasksForOwnerKey(normalizedOwnerKey);
   const trackedChildSessionKeys = new Set(
-    tasks
-      .filter(
-        (task) =>
-          task.runtime === "subagent" &&
-          isActiveTaskStatus(task.status) &&
-          normalizeOptionalString(task.childSessionKey),
-      )
-      .map((task) => normalizeOptionalString(task.childSessionKey) as string),
+    tasks.flatMap((task) => {
+      const key = normalizeOptionalString(task.childSessionKey);
+      return task.runtime === "subagent" && isActiveTaskStatus(task.status) && key ? [key] : [];
+    }),
   );
   const activeAcpChildSessionKeys = new Set(
     tasks.flatMap((task) => {

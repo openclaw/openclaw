@@ -16,7 +16,7 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import { prepareTaskRegistryRead } from "../../../tasks/task-registry-read.js";
 import { createTaskFixture } from "../../../tasks/task-registry.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator } from "../../../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -127,11 +127,7 @@ describe("settleEmbeddedAttemptStream liveness", () => {
         await prepareTaskRegistryRead();
         const context = captureOpenClawStateWorkerContext();
         expect(context.admission.databasePath.startsWith(state.stateDir)).toBe(true);
-        const holder = holdStateDatabaseCoordinator(
-          context.admission.databasePath,
-          context.coordinatorRuntime,
-          300,
-        );
+        const holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 300);
         const controller = new AbortController();
         const input = createSettleFixture({
           runAbortSignal: controller.signal,
@@ -161,7 +157,7 @@ describe("settleEmbeddedAttemptStream liveness", () => {
           expect(result.sessionIdUsed).toBe("sess-settle-1");
           expect(
             Atomics.load(holder.released, 0),
-            "full cancellation settlement must finish before coordinator release",
+            "full cancellation settlement must finish before write transaction release",
           ).toBe(0);
           holder.release();
           const read = await prepareTaskRegistryRead();

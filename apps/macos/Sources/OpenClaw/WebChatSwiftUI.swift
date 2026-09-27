@@ -416,11 +416,6 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         }
     }
 
-    func listAgents() async throws -> OpenClawChatAgentsListResponse? {
-        let data = try await connection.request(OpenClawChatGatewayRequests.agentsList())
-        return try OpenClawChatGatewayPayloadCodec.decodeAgentsList(data)
-    }
-
     func listSessionGroups() async throws -> OpenClawChatSessionGroupsResponse? {
         let data = try await connection.request(OpenClawChatGatewayRequests.sessionGroupsList())
         return try JSONDecoder().decode(OpenClawChatSessionGroupsResponse.self, from: data)

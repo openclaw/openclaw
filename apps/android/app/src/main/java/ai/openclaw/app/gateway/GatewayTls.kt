@@ -245,12 +245,7 @@ internal fun buildGatewayTlsConfig(
 
   fun recordAcceptedFingerprint(chain: Array<X509Certificate>) {
     val certificate = chain.firstOrNull() ?: return
-    effectiveFingerprint.set(
-      certificate.encoded
-        .toByteString()
-        .sha256()
-        .hex(),
-    )
+    effectiveFingerprint.set(certificate.sha256Fingerprint())
   }
 
   @SuppressLint("CustomX509TrustManager")
@@ -292,12 +287,7 @@ internal fun buildGatewayTlsConfig(
         authType: String,
       ) {
         if (chain.isEmpty()) throw CertificateException("empty certificate chain")
-        val fingerprint =
-          chain[0]
-            .encoded
-            .toByteString()
-            .sha256()
-            .hex()
+        val fingerprint = chain[0].sha256Fingerprint()
         if (expectedInput != null) {
           if (expected == null) {
             throw CertificateException("invalid gateway TLS fingerprint")
@@ -445,13 +435,7 @@ internal suspend fun probeGatewayTlsFingerprint(
           authType: String,
         ) {
           if (chain.isEmpty()) throw CertificateException("empty certificate chain")
-          fingerprintRef.set(
-            chain[0]
-              .encoded
-              .toByteString()
-              .sha256()
-              .hex(),
-          )
+          fingerprintRef.set(chain[0].sha256Fingerprint())
           // Abort validation after capture; the probe is not deciding trust.
           throw CertificateException("gateway TLS probe captured fingerprint")
         }
@@ -504,13 +488,7 @@ internal suspend fun probeGatewayTlsFingerprint(
       val cert =
         socket.session.peerCertificates.firstOrNull() as? X509Certificate
           ?: return@withContext GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE)
-      GatewayTlsProbeResult(
-        fingerprintSha256 =
-          cert.encoded
-            .toByteString()
-            .sha256()
-            .hex(),
-      )
+      GatewayTlsProbeResult(fingerprintSha256 = cert.sha256Fingerprint())
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
@@ -583,10 +561,7 @@ private fun probeGatewayTlsSystemTrust(
     checkActive()
     socket.startHandshake()
     val certificate = socket.session.peerCertificates.firstOrNull() as? X509Certificate ?: return null
-    certificate.encoded
-      .toByteString()
-      .sha256()
-      .hex()
+    certificate.sha256Fingerprint()
   } catch (err: CancellationException) {
     throw err
   } catch (_: Exception) {
@@ -595,6 +570,8 @@ private fun probeGatewayTlsSystemTrust(
     runCatching { socket.close() }
   }
 }
+
+private fun X509Certificate.sha256Fingerprint(): String = encoded.toByteString().sha256().hex()
 
 private fun defaultTrustManager(): X509TrustManager {
   val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())

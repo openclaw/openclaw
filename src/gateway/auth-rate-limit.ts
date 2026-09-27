@@ -1,22 +1,3 @@
-/**
- * In-memory sliding-window rate limiter for gateway authentication attempts.
- *
- * Tracks failed auth attempts by {scope, clientIp}. A scope lets callers keep
- * independent counters for different credential classes (for example, shared
- * gateway token/password vs device-token auth) while still sharing one
- * limiter instance.
- *
- * Design decisions:
- * - Pure in-memory Map – no external dependencies; suitable for a single
- *   gateway process. The Map is periodically pruned and capped to avoid
- *   unbounded growth.
- * - Loopback addresses (127.0.0.1 / ::1) are exempt from denial by default so
- *   local CLI sessions are never locked out. Failed auth still incurs a
- *   bounded, escalating delay.
- * - The module is side-effect-free: callers create an instance via
- *   {@link createGatewayAuthRateLimiter} and pass it where needed.
- */
-
 import {
   resolveIntegerOption,
   resolveTimerTimeoutMs,
@@ -25,10 +6,6 @@ import type { GatewayAuthRateLimitConfig } from "../config/types.gateway.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface RateLimitConfig extends GatewayAuthRateLimitConfig {
   /** Background prune interval in milliseconds; set <= 0 to disable auto-prune.  @default 60_000 */
@@ -120,10 +97,6 @@ export function isAuthRateLimitClientExempt(
   return authRateLimiterExemptionChecks.get(limiter)?.(ip) ?? false;
 }
 
-// ---------------------------------------------------------------------------
-// Defaults
-// ---------------------------------------------------------------------------
-
 const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_WINDOW_MS = 60_000; // 1 minute
 const DEFAULT_LOCKOUT_MS = 300_000; // 5 minutes
@@ -133,10 +106,6 @@ const LOOPBACK_FAILURE_DELAY_BASE_MS = 250;
 const LOOPBACK_FAILURE_DELAY_MAX_MS = 5_000;
 const LOOPBACK_FAILURE_HISTORY_LIMIT =
   Math.ceil(Math.log2(LOOPBACK_FAILURE_DELAY_MAX_MS / LOOPBACK_FAILURE_DELAY_BASE_MS)) + 1;
-
-// ---------------------------------------------------------------------------
-// Implementation
-// ---------------------------------------------------------------------------
 
 /**
  * Canonicalize client IPs used for auth throttling so all call sites

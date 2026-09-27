@@ -1,6 +1,10 @@
 import { existsSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  acquireStateDatabaseSchemaLease,
+  assertStateDatabaseAccessAllowed,
+} from "../infra/gateway-state-owner.js";
+import {
   createSqliteAuditRecordKernel,
   prepareSqliteAuditRecord,
 } from "../infra/sqlite-audit-record.kernel.js";
@@ -10,6 +14,7 @@ import {
   withSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
 import { readTaskRegistrySnapshot } from "../tasks/task-registry.store.kernel.js";
@@ -239,40 +244,48 @@ it.each(["kv", "task"] as const)(
     ).toEqual({ ok: true, value: undefined });
     expect(existsSync(databasePath)).toBe(false);
     const stages: string[] = [];
-    const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-      stages.push(request.stage);
-      context.admission.assertCurrent();
-      grant();
-    });
-    const nativePost = admission.port.postMessage.bind(admission.port);
-    // Both native backends share this thread; service the real grant before its synchronous wait.
-    const dispatch = vi
-      .spyOn(admission.port, "postMessage")
-      .mockImplementation((message, transferList) => {
-        nativePost(message, transferList);
-        admission.service();
+    withStateDatabaseSchemaMaintenance({ databasePath }, () => {
+      const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+        stages.push(request.stage);
+        context.admission.assertCurrent();
+        grant();
       });
-    try {
-      expect(
-        runWithSqliteWorkerStateContext(context, () =>
-          withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-            kv.execute({
-              type: "pluginState.register",
-              input: {
-                ...key,
-                valueJson: JSON.stringify({ value: 42 }),
-                maxEntries: 4,
-                overflowPolicy: "reject-new",
-              },
-            }),
+      admission.bindDatabaseAuthority({
+        databasePath,
+        assertRequest: context.admission.assertCurrent,
+        assertAccess: () => assertStateDatabaseAccessAllowed(databasePath),
+        acquireSchema: () => acquireStateDatabaseSchemaLease(databasePath),
+      });
+      const nativePost = admission.port.postMessage.bind(admission.port);
+      // Both native backends share this thread; service the real grant before its synchronous wait.
+      const dispatch = vi
+        .spyOn(admission.port, "postMessage")
+        .mockImplementation((message, transferList) => {
+          nativePost(message, transferList);
+          admission.service();
+        });
+      try {
+        expect(
+          runWithSqliteWorkerStateContext(context, () =>
+            withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+              kv.execute({
+                type: "pluginState.register",
+                input: {
+                  ...key,
+                  valueJson: JSON.stringify({ value: 42 }),
+                  maxEntries: 4,
+                  overflowPolicy: "reject-new",
+                },
+              }),
+            ),
           ),
-        ),
-      ).toEqual({ ok: true, value: undefined });
-      expect(stages).toEqual(["transaction", "commit"]);
-    } finally {
-      dispatch.mockRestore();
-      admission.finish();
-    }
+        ).toEqual({ ok: true, value: undefined });
+        expect(stages).toEqual(["transaction", "commit"]);
+      } finally {
+        dispatch.mockRestore();
+        admission.finish();
+      }
+    });
     const task = runWithSqliteWorkerStateContext(context, () =>
       createSqliteWorkerBackend(undefined, { databasePath }),
     );

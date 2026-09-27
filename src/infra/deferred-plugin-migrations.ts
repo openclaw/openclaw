@@ -1,23 +1,33 @@
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
+import {
+  closeTrackedStateDatabase,
+  openTrackedStateDatabase,
+} from "../state/openclaw-state-db-handle.js";
+import { assertStateReadSchema } from "../state/openclaw-state-db-read-connection.js";
 import {
   isArtifactPreservingStateRead,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
-  withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
+import { runManagedStateTransaction } from "../state/openclaw-state-db-transaction.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { isTruthyEnvValue } from "./env.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { runWithSqliteCleanup, throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { invalidateSuccessfulMigrationCheckpointsInTransaction } from "./startup-migration-checkpoint.js";
+import { withStateDatabaseSchemaMaintenance } from "./state-database-maintenance.js";
 import { recordLegacyMigrationRun } from "./state-migrations.receipts.js";
 
 const RUN_PREFIX = "deferred-plugin-migration:";
@@ -205,31 +215,70 @@ export function withDeferredPluginMigrationsCurrent<T>(
 ): T {
   const databasePath = resolveOpenClawStateSqlitePath(params.env);
   const existing = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath);
-  return withSharedStateWriteCoordinator({ databasePath, existing: existing?.db }, () => {
-    // Exclude obligation writers without bootstrapping or migrating unrelated state.
-    if (params.expectedPending.length === 0 && !existing?.db.isTransaction) {
-      const pending = withExistingOpenClawStateDatabaseCurrentReadOnly(
-        ({ db }) => readPendingMigrationRecords(db),
-        params,
+  if (params.expectedPending.length === 0 && !existing) {
+    if (!existsSync(databasePath)) {
+      return withStateDatabaseSchemaMaintenance({ databasePath }, () =>
+        existsSync(databasePath) ? withDeferredPluginMigrationsCurrent(params, publish) : publish(),
       );
-      if (!pending?.length) {
-        return publish();
-      }
     }
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const pending = pendingMigrationRecords(readPendingMigrationRows(db));
-        if (!isDeepStrictEqual(pending, params.expectedPending) && params.onConflict) {
-          // Commit preservation facts against these rows; callers refuse publication after return.
-          return params.onConflict(pending);
-        }
-        assertPendingGeneration(pending, params.expectedPending);
-        return publish();
+    // Historical empty state needs exclusion, but publication never owns its schema upgrade.
+    const db = openTrackedStateDatabase(databasePath, { existingOnly: true });
+    let publication: { value: T } | undefined;
+    runWithSqliteCleanup(
+      {
+        release() {
+          const errors: unknown[] = [];
+          try {
+            clearNodeSqliteKyselyCacheForDatabase(db);
+          } catch (error) {
+            errors.push(error);
+          }
+          try {
+            closeTrackedStateDatabase(db);
+          } catch (error) {
+            errors.push(error);
+          }
+          throwSqliteLifecycleErrors(errors, "Plugin migration publication cleanup failed.");
+        },
       },
-      { env: params.env },
-      { operationLabel: "state.plugin-migration-input-publication" },
+      "Plugin migration input publication",
+      () => {
+        setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+        runManagedStateTransaction(
+          db,
+          (): T | undefined => {
+            assertStateReadSchema(db, databasePath);
+            if (readPendingMigrationRecords(db).length > 0) {
+              return undefined;
+            }
+            const value = publish();
+            publication = { value };
+            return value;
+          },
+          {
+            databaseLabel: databasePath,
+            operationLabel: "state.plugin-migration-input-publication",
+          },
+        );
+      },
     );
-  });
+    if (publication) {
+      return publication.value;
+    }
+  }
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const pending = pendingMigrationRecords(readPendingMigrationRows(db));
+      if (!isDeepStrictEqual(pending, params.expectedPending) && params.onConflict) {
+        // Commit preservation facts against these rows; callers refuse publication after return.
+        return params.onConflict(pending);
+      }
+      assertPendingGeneration(pending, params.expectedPending);
+      return publish();
+    },
+    { env: params.env },
+    { operationLabel: "state.plugin-migration-input-publication" },
+  );
 }
 
 export function formatDeferredPluginMigration(

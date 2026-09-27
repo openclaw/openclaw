@@ -120,7 +120,6 @@ export async function listCurrentConversationBindingRecordsBySessionAsync(
       }),
     {
       assertCurrent,
-      requireStateLifecycle: true,
       createAdmission: createSqliteWorkerWriteAdmission(() => {
         context.admission.assertCurrent();
         assertCurrent?.();
@@ -468,7 +467,7 @@ export async function readCurrentConversationBindingSelectionAsync(
   const result = await runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "conversationBindings.readSelection", input: conversations }),
-    { assertCurrent, existingOnly: true, requireStateLifecycle: true },
+    { assertCurrent, existingOnly: true },
   );
   context.admission.assertCurrent();
   assertCurrent?.();

@@ -47,8 +47,10 @@ describe("presence.activity registered request", () => {
   it("records server time across live tabs and coalesces publication without requiring chat", async () => {
     const { started, clock, tabs, request, publish, clients } = setup();
     expect(await request()).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(tabs.map((tab) => tab.connectionLastActivityAt)).toEqual([started, undefined]);
     clock.mockReturnValue(started + 1_000);
     await request(tabs[1]);
+    expect(tabs.map((tab) => tab.connectionLastActivityAt)).toEqual([started, started + 1_000]);
     expect(publish).toHaveBeenCalledOnce();
     for (const tab of tabs) {
       expect(tab.personPresence).toEqual({

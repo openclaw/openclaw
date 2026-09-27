@@ -37,7 +37,7 @@ const unavailableMessage =
 it.each([false, true])(
   "retains missing incognito identity across first birth and rollback (warm: %s)",
   async (warm) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
       const sessionKey = "agent:main:dashboard:incognito-negative";
       const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
@@ -45,7 +45,7 @@ it.each([false, true])(
       if (warm) {
         openOpenClawAgentDatabase(options);
       }
-      const sql = observeHostDataSql(state.env);
+      const sql = observeHostDataSql();
       const read = await prepareSessionMutationFacts({
         cfg,
         sessionKey,
@@ -53,7 +53,7 @@ it.each([false, true])(
         allowMissing: true,
       }).finally(sql.restore);
       const assertWithoutSql = (action: () => void) => {
-        const observation = observeHostDataSql(state.env);
+        const observation = observeHostDataSql();
         try {
           action();
           for (const call of observation.calls) {
@@ -333,7 +333,7 @@ it.each(["durable", "incognito"] as const)(
         }
       });
       try {
-        const preparationSql = observeHostDataSql(state.env);
+        const preparationSql = observeHostDataSql();
         try {
           prepared = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
           for (const call of preparationSql.calls) {
@@ -344,7 +344,7 @@ it.each(["durable", "incognito"] as const)(
         }
         const read = prepared;
         const assertWithoutSql = (allowed: boolean) => {
-          const sql = observeHostDataSql(state.env);
+          const sql = observeHostDataSql();
           try {
             expect(authorize(read) === null).toBe(allowed);
             for (const call of sql.calls) {

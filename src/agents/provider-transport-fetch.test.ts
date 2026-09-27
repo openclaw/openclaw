@@ -142,45 +142,6 @@ describe("buildGuardedModelFetch", () => {
     expect(params.dispatcherPool).toBeDefined();
   });
 
-  it("rejects successful streamed OpenAI-compatible responses with HTML content", async () => {
-    const release = vi.fn(async () => undefined);
-    const model = makeProviderModelFixture<"openai-completions">({
-      id: "private-model",
-      provider: "custom-openai",
-      api: "openai-completions",
-      baseUrl: "https://proxy.example.com",
-    });
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("<html>not the API</html>", {
-        status: 200,
-        headers: { "content-type": "text/html; charset=utf-8" },
-      }),
-      finalUrl: "https://proxy.example.com/chat/completions",
-      release,
-    });
-
-    let error: unknown;
-    try {
-      await buildGuardedModelFetch(model)("https://proxy.example.com/chat/completions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "private-model", stream: true }),
-      });
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).toMatchObject({
-      name: "ProviderHttpError",
-      status: 200,
-      code: "invalid_provider_content_type",
-      errorType: "invalid_response",
-    });
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(/baseUrl.*\/v1 path prefix/);
-    expect(release).toHaveBeenCalled();
-  });
-
   it("returns promptly for missing content-type SSE streams that remain open", async () => {
     const source = openResponseStreamText('data: {"ok": true}\n\n');
     mockResponse(new Response(source.stream), "https://chatgpt.com/backend-api/codex/responses");

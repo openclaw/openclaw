@@ -5,7 +5,7 @@
 import type { KeyId } from "@earendil-works/pi-tui";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ImageContent, Model } from "../../../llm/types.js";
-import { interactiveAgentTheme as theme, type Theme } from "../../modes/interactive/theme/theme.js";
+import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
@@ -210,21 +210,13 @@ const noOpUIContext: ExtensionUIContext = {
   },
   getAllThemes: () => [],
   getTheme: () => undefined,
-  setTheme: (nextTheme: string | Theme) => {
-    void nextTheme;
-    return { success: false, error: "UI not available" };
-  },
+  setTheme: () => ({ success: false, error: "UI not available" }),
   getToolsExpanded: () => false,
   setToolsExpanded: () => {},
 };
 
 export class ExtensionRunner {
-  private extensions: Extension[];
-  private runtime: ExtensionRuntime;
   private uiContext: ExtensionUIContext;
-  private cwd: string;
-  private sessionManager: SessionManager;
-  private modelRegistry: ModelRegistry;
   private errorListeners: Set<ExtensionErrorListener> = new Set();
   private getModel: () => Model | undefined = () => undefined;
   private isIdleFn: () => boolean = () => true;
@@ -252,18 +244,13 @@ export class ExtensionRunner {
   private staleMessage: string | undefined;
 
   constructor(
-    extensions: Extension[],
-    runtime: ExtensionRuntime,
-    cwd: string,
-    sessionManager: SessionManager,
-    modelRegistry: ModelRegistry,
+    private extensions: Extension[],
+    private runtime: ExtensionRuntime,
+    private cwd: string,
+    private sessionManager: SessionManager,
+    private modelRegistry: ModelRegistry,
   ) {
-    this.extensions = extensions;
-    this.runtime = runtime;
     this.uiContext = noOpUIContext;
-    this.cwd = cwd;
-    this.sessionManager = sessionManager;
-    this.modelRegistry = modelRegistry;
   }
 
   bindCore(
@@ -474,11 +461,12 @@ export class ExtensionRunner {
     }
   }
 
-  private assertActive(): void {
+  private requireActive(): this {
     if (this.staleMessage) {
       throw new Error(this.staleMessage);
     }
     this.runtime.assertActive();
+    return this;
   }
 
   onError(listener: ExtensionErrorListener): () => void {
@@ -493,13 +481,7 @@ export class ExtensionRunner {
   }
 
   hasHandlers(eventType: string): boolean {
-    for (const ext of this.extensions) {
-      const handlers = ext.handlers.get(eventType);
-      if (handlers && handlers.length > 0) {
-        return true;
-      }
-    }
-    return false;
+    return this.extensions.some((ext) => (ext.handlers.get(eventType)?.length ?? 0) > 0);
   }
 
   getMessageRenderer(customType: string): MessageRenderer | undefined {
@@ -572,10 +554,7 @@ export class ExtensionRunner {
    * Context values are resolved at call time, so changes via bindCore/bindUI are reflected.
    */
   createContext(): ExtensionContext {
-    const requireActiveRunner = () => {
-      this.assertActive();
-      return this;
-    };
+    const requireActiveRunner = () => this.requireActive();
     // Model selection snapshots its getter; all other context values stay live.
     const getModel = this.getModel;
     return {
@@ -614,30 +593,14 @@ export class ExtensionRunner {
   createCommandContext(): ExtensionCommandContext {
     // Add commands to the fresh context without reading its guarded getters.
     return Object.assign(this.createContext(), {
-      waitForIdle: () => {
-        this.assertActive();
-        return this.waitForIdleFn();
-      },
-      newSession: (options) => {
-        this.assertActive();
-        return this.newSessionHandler(options);
-      },
-      fork: (entryId, options) => {
-        this.assertActive();
-        return this.forkHandler(entryId, options);
-      },
-      navigateTree: (targetId, options) => {
-        this.assertActive();
-        return this.navigateTreeHandler(targetId, options);
-      },
-      switchSession: (sessionPath, options) => {
-        this.assertActive();
-        return this.switchSessionHandler(sessionPath, options);
-      },
-      reload: () => {
-        this.assertActive();
-        return this.reloadHandler();
-      },
+      waitForIdle: () => this.requireActive().waitForIdleFn(),
+      newSession: (options) => this.requireActive().newSessionHandler(options),
+      fork: (entryId, options) => this.requireActive().forkHandler(entryId, options),
+      navigateTree: (targetId, options) =>
+        this.requireActive().navigateTreeHandler(targetId, options),
+      switchSession: (sessionPath, options) =>
+        this.requireActive().switchSessionHandler(sessionPath, options),
+      reload: () => this.requireActive().reloadHandler(),
     } satisfies ExtensionCommandContextActions);
   }
 
@@ -833,7 +796,7 @@ export class ExtensionRunner {
     let currentSystemPrompt = systemPrompt;
     const ctx = this.createContext();
     ctx.getSystemPrompt = () => {
-      this.assertActive();
+      this.requireActive();
       return currentSystemPrompt;
     };
     const messages: NonNullable<BeforeAgentStartEventResult["message"]>[] = [];

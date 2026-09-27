@@ -349,27 +349,19 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       // Acceptance is not a lifecycle start; preserve a raced start or leave its clock unset.
       const lifecycleStartedAt =
         entry.execution.status === "running" ? entry.execution.startedAt : undefined;
+      entry.execution = {
+        ...entry.execution,
+        status: "running",
+        acceptedAt,
+        lifecycleGeneration: acceptedLifecycleGeneration,
+        restartRecovery: undefined,
+        suppressSessionEffects: undefined,
+      };
       if (typeof lifecycleStartedAt === "number") {
         entry.sessionStartedAt ??= lifecycleStartedAt;
-        entry.execution = {
-          ...entry.execution,
-          status: "running",
-          acceptedAt,
-          lifecycleGeneration: acceptedLifecycleGeneration,
-          restartRecovery: undefined,
-          suppressSessionEffects: undefined,
-          startedAt: lifecycleStartedAt,
-        };
+        entry.execution.startedAt = lifecycleStartedAt;
       } else {
         delete entry.sessionStartedAt;
-        entry.execution = {
-          ...entry.execution,
-          status: "running",
-          acceptedAt,
-          lifecycleGeneration: acceptedLifecycleGeneration,
-          restartRecovery: undefined,
-          suppressSessionEffects: undefined,
-        };
         delete entry.execution.startedAt;
       }
     }

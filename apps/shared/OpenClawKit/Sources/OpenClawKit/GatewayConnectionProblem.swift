@@ -95,20 +95,20 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         self.owner = owner
         self.title = title
         self.message = message
-        self.actionLabel = Self.trimmedOrNil(actionLabel)
+        self.actionLabel = actionLabel?.trimmedNonEmpty
         self.titlePresentation = titlePresentation ?? .localized(title)
         self.messagePresentation = messagePresentation ?? .localized(message)
         self.actionLabelPresentation = actionLabelPresentation
             ?? self.actionLabel.map(PresentationText.localized)
-        self.actionCommand = Self.trimmedOrNil(actionCommand)
+        self.actionCommand = actionCommand?.trimmedNonEmpty
         self.docsURL = docsURL
-        self.requestId = Self.trimmedOrNil(requestId)
+        self.requestId = requestId?.trimmedNonEmpty
         self.retryable = retryable
         self.pauseReconnect = pauseReconnect
-        self.technicalDetails = Self.trimmedOrNil(technicalDetails)
-        self.tlsStoreKey = Self.trimmedOrNil(tlsStoreKey)
-        self.tlsExpectedFingerprint = Self.trimmedOrNil(tlsExpectedFingerprint)
-        self.tlsObservedFingerprint = Self.trimmedOrNil(tlsObservedFingerprint)
+        self.technicalDetails = technicalDetails?.trimmedNonEmpty
+        self.tlsStoreKey = tlsStoreKey?.trimmedNonEmpty
+        self.tlsExpectedFingerprint = tlsExpectedFingerprint?.trimmedNonEmpty
+        self.tlsObservedFingerprint = tlsObservedFingerprint?.trimmedNonEmpty
         self.tlsSystemTrustOk = tlsSystemTrustOk
     }
 
@@ -160,11 +160,6 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
             && self.tlsSystemTrustOk
             && self.tlsStoreKey != nil
             && self.tlsObservedFingerprint != nil
-    }
-
-    private static func trimmedOrNil(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -549,7 +544,7 @@ extension GatewayConnectionProblemMapper {
                 message: responseError.message,
                 detailCodeRaw: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
                 canRetryWithDeviceToken: false,
-                requestId: self.nonEmpty(responseError.details["requestId"]?.value as? String),
+                requestId: responseError.details["requestId"]?.stringValue?.trimmedNonEmpty,
                 detailsReason: responseError.detailsReason)
             return self.map(authError)
         }
@@ -836,16 +831,16 @@ extension GatewayConnectionProblemMapper {
     }
 
     private static func approvalCommand(requestId: String?) -> String {
-        self.nonEmpty(requestId).map { "openclaw devices approve \($0)" }
+        requestId?.trimmedNonEmpty.map { "openclaw devices approve \($0)" }
             ?? "openclaw devices list"
     }
 
     private static func technicalDetails(for authError: GatewayConnectAuthError) -> String? {
         var parts: [String?] = [
-            self.nonEmpty(authError.detailCodeRaw),
-            self.nonEmpty(authError.detailsReason).map { "reason=\($0)" },
-            self.nonEmpty(authError.requestId).map { "requestId=\($0)" },
-            self.nonEmpty(authError.recommendedNextStepRaw).map { "next=\($0)" },
+            authError.detailCodeRaw?.trimmedNonEmpty,
+            authError.detailsReason?.trimmedNonEmpty.map { "reason=\($0)" },
+            authError.requestId?.trimmedNonEmpty.map { "requestId=\($0)" },
+            authError.recommendedNextStepRaw?.trimmedNonEmpty.map { "next=\($0)" },
             self.protocolRange(min: authError.clientMinProtocol, max: authError.clientMaxProtocol)
                 .map { "clientProtocol=\($0)" },
             authError.expectedProtocol.map { "gatewayProtocol=\($0)" },
@@ -872,8 +867,8 @@ extension GatewayConnectionProblemMapper {
     }
 
     private static func docsURL(_ preferred: String?, fallback: String?) -> URL? {
-        self.nonEmpty(preferred).flatMap { URL(string: $0) }
-            ?? self.nonEmpty(fallback).flatMap { URL(string: $0) }
+        preferred?.trimmedNonEmpty.flatMap { URL(string: $0) }
+            ?? fallback?.trimmedNonEmpty.flatMap { URL(string: $0) }
     }
 
     private static func owner(from raw: String) -> GatewayConnectionProblem.Owner? {
@@ -883,10 +878,5 @@ extension GatewayConnectionProblemMapper {
         case let normalized:
             GatewayConnectionProblem.Owner(rawValue: normalized)
         }
-    }
-
-    private static func nonEmpty(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
     }
 }

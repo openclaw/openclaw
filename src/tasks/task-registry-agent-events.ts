@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { getAgentRunContext, getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   deferSqlitePostCommitPublication,
   stageSqliteTransactionState,

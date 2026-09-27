@@ -12,10 +12,11 @@ import type {
   WithPreparedWorkerWorkspaceRecovery,
   PreparedWorkerWorkspaceRecovery,
 } from "./placement-reclaim-contract.js";
-import { placementTurnOwner } from "./placement-record.js";
+import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import { completeRecoveredWorkspaceTeardown } from "./placement-teardown.js";
 import {
+  findPendingWorkerWorkspaceResult,
   isCurrentWorkerWorkspacePendingResultOwner,
   type WorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
@@ -51,21 +52,14 @@ export type PlacementRecoveryDeps = {
   environments: WorkerDispatchEnvironmentService;
   failure: PlacementFailureActions;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
-  resolveWorkspace: (params: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<WorkerSessionWorkspace>;
+  resolveWorkspace: (params: WorkerSessionPlacementIdentity) => Promise<WorkerSessionWorkspace>;
   withPreparedRecovery: WithPreparedWorkerWorkspaceRecovery;
   recoverPlacementMoves?: (environmentId?: string) => Promise<Set<string>>;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
-  prepareGatewayMove?: (params: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-    assertCurrent: () => void;
-  }) => Promise<void>;
+  prepareGatewayMove?: (
+    params: WorkerSessionPlacementIdentity & { assertCurrent: () => void },
+  ) => Promise<void>;
 };
 
 const log = createSubsystemLogger("gateway/worker-placement");
@@ -587,14 +581,10 @@ export async function recoverPendingWorkspaceResults(
                 await prepareAcceptedPublication(deps, turnClaim);
                 assertPreservedEnvironment();
                 placements.acceptWorkspaceResult(turnClaim);
-                const recordedStagedResultRef = placements
-                  .listPendingWorkspaceResults(turnClaim.sessionId)
-                  .find(
-                    (result) =>
-                      result.sessionId === turnClaim.sessionId &&
-                      result.claimId === turnClaim.claimId &&
-                      result.runId === turnClaim.runId,
-                  )?.stagedResultRef;
+                const recordedStagedResultRef = findPendingWorkerWorkspaceResult(
+                  placements,
+                  turnClaim,
+                )?.stagedResultRef;
                 const conflictPaths = applied?.conflictPaths ?? [];
                 if (conflictPaths.length > 0 && !recordedStagedResultRef) {
                   throw new Error(
