@@ -4347,7 +4347,7 @@ private fun ChatInputPill(
               .fillMaxWidth()
               .heightIn(min = ClawTheme.spacing.touchTarget, max = with(LocalDensity.current) { sixLines.toDp() } + 12.dp)
               .padding(vertical = 6.dp),
-            contentAlignment = Alignment.CenterStart,
+            contentAlignment = Alignment.TopStart,
           ) {
             BasicTextField(
               value = textFieldValue,
