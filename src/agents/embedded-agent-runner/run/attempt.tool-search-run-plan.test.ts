@@ -10,9 +10,9 @@ describe("buildToolSearchRunPlan", () => {
     // Visible compacted tools can be narrower than replay-safe names needed for
     // existing transcript tool calls.
     const plan = buildToolSearchRunPlan({
-      visibleTools: [{ name: "tool_search_code" }] as never,
+      visibleTools: [{ name: "tool_call" }] as never,
       uncompactedTools: [
-        { name: "tool_search_code" },
+        { name: "tool_call" },
         { name: "exec" },
         { name: "fake_plugin_tool" },
       ] as never,
@@ -31,22 +31,22 @@ describe("buildToolSearchRunPlan", () => {
       explicitAllowlistSources: [{ entries: ["missing_tool"] }],
     });
 
-    expect([...plan.visibleAllowedToolNames]).toEqual(["tool_search_code"]);
+    expect([...plan.visibleAllowedToolNames]).toEqual(["tool_call"]);
     expect([...plan.replayAllowedToolNames]).toEqual([
-      "tool_search_code",
+      "tool_call",
       "exec",
       "fake_plugin_tool",
       "client_pick_file",
     ]);
     expect(plan.liveAllowedToolNames).toBe(plan.visibleAllowedToolNames);
-    expect([...plan.capabilityToolNames]).toEqual(["tool_search_code"]);
+    expect([...plan.capabilityToolNames]).toEqual(["tool_call"]);
     expect(plan.hasCallableTools).toBe(true);
   });
 
   it("counts explicitly allowlisted client tools before they are cataloged later", () => {
     const plan = buildToolSearchRunPlan({
-      visibleTools: [{ name: "tool_search_code" }] as never,
-      uncompactedTools: [{ name: "tool_search_code" }] as never,
+      visibleTools: [{ name: "tool_call" }] as never,
+      uncompactedTools: [{ name: "tool_call" }] as never,
       clientTools: [
         {
           type: "function",
@@ -136,8 +136,8 @@ describe("buildToolSearchRunPlan", () => {
 
   it("does not let unrelated client tools mask a bad explicit allowlist", () => {
     const plan = buildToolSearchRunPlan({
-      visibleTools: [{ name: "tool_search_code" }] as never,
-      uncompactedTools: [{ name: "tool_search_code" }] as never,
+      visibleTools: [{ name: "tool_call" }] as never,
+      uncompactedTools: [{ name: "tool_call" }] as never,
       clientTools: [
         {
           type: "function",
@@ -158,12 +158,12 @@ describe("buildToolSearchRunPlan", () => {
 
   it("keeps explicitly requested Tool Search controls callable", () => {
     const plan = buildToolSearchRunPlan({
-      visibleTools: [{ name: "tool_search_code" }] as never,
-      uncompactedTools: [{ name: "tool_search_code" }] as never,
+      visibleTools: [{ name: "tool_call" }] as never,
+      uncompactedTools: [{ name: "tool_call" }] as never,
       clientToolsCataloged: true,
       catalogToolCount: 0,
       controlsEnabled: true,
-      explicitAllowlistSources: [{ entries: ["tool_search_code"] }],
+      explicitAllowlistSources: [{ entries: ["tool_call"] }],
     });
 
     expect(plan.hasCallableTools).toBe(true);
@@ -176,7 +176,7 @@ describe("buildToolSearchRunPlan", () => {
         { name: "tool_describe" },
         { name: "tool_call" },
       ] as never,
-      uncompactedTools: [{ name: "tool_search_code" }, { name: "fake_plugin_tool" }] as never,
+      uncompactedTools: [{ name: "fake_plugin_tool" }] as never,
       clientTools: [
         {
           type: "function",

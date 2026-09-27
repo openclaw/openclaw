@@ -7,7 +7,7 @@ import {
   addClientToolsToToolSearchCatalog,
   applyToolSearchCatalog,
   createToolSearchCatalogRef,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+  TOOL_CALL_RAW_TOOL_NAME,
 } from "../tool-search.js";
 import type { ClientToolDefinition } from "./run/params.js";
 import {
@@ -37,7 +37,7 @@ describe("tool name allowlists", () => {
     // tools like exec stay visible), but conflict checks still need the
     // original core names to reject duplicate client tools.
     const uncompactedTools = [
-      createStubTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME),
+      createStubTool(TOOL_CALL_RAW_TOOL_NAME),
       createStubTool("exec"),
       createStubTool("message"),
     ];
@@ -49,11 +49,8 @@ describe("tool name allowlists", () => {
     });
     const names = collectCoreBuiltinToolNames(uncompactedTools);
 
-    expect([...names]).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "message"]);
-    expect(compacted.tools.map((tool) => tool.name)).toEqual([
-      TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-      "exec",
-    ]);
+    expect([...names]).toEqual([TOOL_CALL_RAW_TOOL_NAME, "exec", "message"]);
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([TOOL_CALL_RAW_TOOL_NAME, "exec"]);
     expect(
       findClientToolNameConflicts({
         tools: [
@@ -105,7 +102,7 @@ describe("tool name allowlists", () => {
     const config = { tools: { toolSearch: true } } as never;
     const catalogRef = createToolSearchCatalogRef();
     const compacted = applyToolSearchCatalog({
-      tools: [createStubTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME)],
+      tools: [createStubTool(TOOL_CALL_RAW_TOOL_NAME)],
       config,
       sessionId: "session-client-allowed-names",
       catalogRef,
@@ -135,7 +132,7 @@ describe("tool name allowlists", () => {
 
     expect(compacted.catalogRegistered).toBe(true);
     expect(clientToolSearch.tools).toEqual([]);
-    expect(allowlist).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
+    expect(allowlist).toEqual([TOOL_CALL_RAW_TOOL_NAME]);
   });
 
   it("keeps hidden catalog tools valid for replay guards after Tool Search compaction", () => {
@@ -143,7 +140,7 @@ describe("tool name allowlists", () => {
     // allowlist can be narrower after catalog compaction.
     const config = { tools: { toolSearch: true } } as never;
     const uncompactedTools = [
-      createStubTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME),
+      createStubTool(TOOL_CALL_RAW_TOOL_NAME),
       createStubTool("exec"),
       createStubTool("fake_plugin_tool"),
     ];
@@ -176,12 +173,12 @@ describe("tool name allowlists", () => {
       }),
     );
 
-    expect(visibleAllowlist).toEqual(["exec", TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
+    expect(visibleAllowlist).toEqual(["exec", TOOL_CALL_RAW_TOOL_NAME]);
     expect(replayAllowlist).toEqual([
       "client_pick_file",
       "exec",
       "fake_plugin_tool",
-      TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
     ]);
   });
 });

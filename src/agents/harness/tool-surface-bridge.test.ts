@@ -12,7 +12,6 @@ import {
   createToolSearchTools,
   buildToolSchemaDirectoryPrompt,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../tool-search.js";
 import { createAgentsWaitTool } from "../tools/agents-wait-tool.js";
@@ -41,7 +40,7 @@ function createRuntime(config: OpenClawConfig) {
 }
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
-  it.each(["tools", "code", "directory"] as const)(
+  it.each(["tools", "directory"] as const)(
     "returns the canonical %s directory only after applying prompt policy",
     (mode) => {
       const runtime = createAgentHarnessToolSurfaceRuntime({
@@ -440,22 +439,22 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   it("atomically filters and restores direct tools plus the hidden catalog", () => {
     const runtime = createRuntime({ tools: { toolSearch: true } });
     const compacted = runtime.compactTools(
-      tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "read", "hidden_alpha", "hidden_beta"]),
+      tools([TOOL_CALL_RAW_TOOL_NAME, "read", "hidden_alpha", "hidden_beta"]),
     );
 
     try {
       const alpha = compacted.promptToolPolicy.apply({ toolsAllow: ["hidden_alpha"] });
-      expect(alpha.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
-      expect(alpha.callableToolNames).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "hidden_alpha"]);
+      expect(alpha.tools.map((tool) => tool.name)).toEqual([TOOL_CALL_RAW_TOOL_NAME]);
+      expect(alpha.callableToolNames).toEqual([TOOL_CALL_RAW_TOOL_NAME, "hidden_alpha"]);
 
       const beta = compacted.promptToolPolicy.apply({ toolsAllow: ["hidden_beta"] });
-      expect(beta.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
-      expect(beta.callableToolNames).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "hidden_beta"]);
+      expect(beta.tools.map((tool) => tool.name)).toEqual([TOOL_CALL_RAW_TOOL_NAME]);
+      expect(beta.callableToolNames).toEqual([TOOL_CALL_RAW_TOOL_NAME, "hidden_beta"]);
 
       const restored = compacted.promptToolPolicy.apply();
       expect(restored.tools).toEqual(compacted.tools);
       expect(restored.callableToolNames).toEqual([
-        TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+        TOOL_CALL_RAW_TOOL_NAME,
         "read",
         "hidden_alpha",
         "hidden_beta",
@@ -472,13 +471,13 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       parameters: { type: "array", items: { type: "number" } },
     };
     const compacted = runtime.compactTools([
-      ...tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "valid_hidden"]),
+      ...tools([TOOL_CALL_RAW_TOOL_NAME, "valid_hidden"]),
       invalid,
     ]);
 
     try {
       expect(compacted.promptToolPolicy.apply().callableToolNames).toEqual([
-        TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+        TOOL_CALL_RAW_TOOL_NAME,
         "valid_hidden",
       ]);
     } finally {
@@ -581,19 +580,19 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     }
   });
 
-  it("preserves explicit code-mode compaction for lean runs", () => {
+  it("preserves explicit structured Tool Search compaction for lean runs", () => {
     const config: OpenClawConfig = {
       agents: { defaults: { experimental: { localModelLean: true } } },
-      tools: { toolSearch: { mode: "code" } },
+      tools: { toolSearch: { mode: "tools" } },
     };
     const runtime = createRuntime(config);
     try {
       // Compaction still applies to non-core tools; core coding tools stay visible.
       expect(
         runtime
-          .compactTools(tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "read"]))
+          .compactTools(tools([TOOL_CALL_RAW_TOOL_NAME, "exec", "read"]))
           .tools.map((tool) => tool.name),
-      ).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "read"]);
+      ).toEqual([TOOL_CALL_RAW_TOOL_NAME, "exec", "read"]);
     } finally {
       runtime.cleanup();
     }
