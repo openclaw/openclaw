@@ -194,6 +194,7 @@ describe("provider account re-login through the real persistence adapter", () =>
             cfg: config,
             provider: providerId,
             modelId: "proof-model",
+            agentId: "main",
             agentDir: state.agentDir(),
             sessionEntry,
             sessionStore,
