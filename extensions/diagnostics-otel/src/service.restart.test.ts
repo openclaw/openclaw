@@ -29,6 +29,8 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import {
   resetDiagnosticEventsForTest,
+  createDiagnosticTraceContext,
+  emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticTraceContext,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -373,6 +375,74 @@ test("leaves OTEL_LOG_LEVEL and the process diagnostic logger under host ownersh
     expect(registeredOtelGlobals()?.diag).toBe(hostDiagOwner);
     diag.warn("host diagnostic logger remains active");
     expect(messages).toContain("host diagnostic logger remains active");
+  } finally {
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 30_000);
+
+test("exports Incognito model/tool metrics without content to an isolated OTLP receiver", async () => {
+  releaseOtelGlobals();
+  const receiver = startLocalOtlpReceiver(["PRIVATE_SENTINEL"]);
+  const port = await receiver.listen();
+  const { service, ctx } = await startOtelService({
+    endpoint: `http://127.0.0.1:${port}`,
+    traces: true,
+    metrics: true,
+    captureContent: true,
+  });
+  try {
+    for (const [id, sessionKey, sentinel] of [
+      ["private", "agent:main:dashboard:incognito-otlp", "PRIVATE_SENTINEL"],
+      ["normal", "agent:main:main", "NORMAL_SENTINEL"],
+    ] as const) {
+      const eventTrace = createDiagnosticTraceContext();
+      const base = {
+        trace: eventTrace,
+        sessionKey,
+        runId: id,
+        callId: `${id}-model`,
+        provider: "openai",
+        model: "gpt-5",
+      };
+      const modelContent = {
+        inputMessages: [{ role: "user", content: sentinel }],
+        outputMessages: [{ role: "assistant", content: sentinel }],
+      };
+      emitTrustedDiagnosticEventWithPrivateData(
+        { ...base, type: "model.call.started" },
+        { modelContent },
+      );
+      emitTrustedDiagnosticEventWithPrivateData(
+        { ...base, type: "model.call.error", durationMs: 42, errorCategory: "error" },
+        { modelContent, errorMessage: sentinel },
+      );
+      const toolBase = {
+        trace: eventTrace,
+        sessionKey,
+        runId: id,
+        toolCallId: `${id}-tool`,
+        toolName: "read",
+        toolSource: "core" as const,
+      };
+      emitTrustedDiagnosticEventWithPrivateData({ ...toolBase, type: "tool.execution.started" });
+      emitTrustedDiagnosticEventWithPrivateData(
+        { ...toolBase, type: "tool.execution.completed", durationMs: 12 },
+        {
+          toolContent: {
+            toolInput: { path: sentinel },
+            toolOutput: { content: [{ type: "text", text: sentinel }] },
+          },
+        },
+      );
+    }
+    await waitForDiagnosticEventsDrained();
+    await service.stop?.(ctx);
+    const content = JSON.stringify(receiver.capturedBodyText);
+    expect(content).toContain("NORMAL_SENTINEL");
+    expect(content).not.toContain("PRIVATE_SENTINEL");
+    expect(receiver.capturedSpans).toHaveLength(4);
+    expect(receiver.capturedMetrics.length).toBeGreaterThan(0);
   } finally {
     await service.stop?.(ctx);
     await receiver.close();

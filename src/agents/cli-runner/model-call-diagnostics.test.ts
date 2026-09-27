@@ -1,6 +1,6 @@
 // Verifies Claude CLI model diagnostics stay listener-gated and memory-bounded.
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -54,6 +54,33 @@ function createOutputDiagnostics(captureOutputMessages: (messages: unknown) => v
 }
 
 describe("Claude CLI model-call diagnostics", () => {
+  it("does not read Incognito assistant content while preserving lifecycle diagnostics", async () => {
+    const listener = vi.fn();
+    onTrustedInternalDiagnosticEvent(listener);
+    const context = createContext();
+    context.params.sessionKey = "agent:main:dashboard:incognito-cli";
+    const readContent = vi.fn(() => [{ type: "text", text: "PRIVATE_OUTPUT" }]);
+    const diagnostics = expectDefined(
+      createClaudeCliModelCallDiagnostics({ context, prompt: "PRIVATE_INPUT", transport: "stdio" }),
+      "diagnostics",
+    );
+    diagnostics.emitStarted();
+    diagnostics.observeAssistantMessage({
+      get content() {
+        return readContent();
+      },
+    });
+    diagnostics.emitError(new Error("PRIVATE_ERROR"));
+    await waitForDiagnosticEventsDrained();
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener.mock.calls[1]?.[0]).toMatchObject({
+      type: "model.call.error",
+      errorCategory: "Error",
+    });
+    expect(JSON.stringify(listener.mock.calls)).not.toContain("PRIVATE_");
+    expect(readContent).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     resetDiagnosticEventsForTest();
   });

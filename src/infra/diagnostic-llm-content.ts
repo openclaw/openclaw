@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 
 /** Per-field policy for diagnostic traces that may include model-visible content. */
 export type DiagnosticModelContentCapturePolicy = {
@@ -46,8 +47,9 @@ export function cloneDiagnosticContentValue(value: unknown): unknown {
 /** Resolves model-content diagnostic capture from config, defaulting to no content capture. */
 export function resolveDiagnosticModelContentCapturePolicy(
   config: unknown,
+  sessionKey?: string,
 ): DiagnosticModelContentCapturePolicy {
-  if (!isRecord(config)) {
+  if (isIncognitoSessionKey(sessionKey) || !isRecord(config)) {
     return NO_MODEL_CONTENT_CAPTURE;
   }
   const diagnostics = config.diagnostics;

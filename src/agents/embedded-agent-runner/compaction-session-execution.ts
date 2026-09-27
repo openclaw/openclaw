@@ -347,7 +347,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           requestTimeoutMs: compactionTimeoutMs,
           contextTokenBudget,
           trace: compactionModelCallTrace,
-          contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
+          contentCapture: resolveDiagnosticModelContentCapturePolicy(
+            params.config,
+            params.sessionKey,
+          ),
           nextCallId: nextDiagnosticModelCallId,
           ownerGeneration: diagnosticOwner.generation,
           // Multi-stage compaction intentionally serializes provider calls. Each new

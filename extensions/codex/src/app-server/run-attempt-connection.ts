@@ -69,7 +69,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const codexModelCallTrace = freezeDiagnosticTraceContext(
     createDiagnosticTraceContextFromActiveScope(),
   );
-  const codexModelContentCapture = resolveDiagnosticModelContentCapturePolicy(params.config);
+  const codexModelContentCapture = resolveDiagnosticModelContentCapturePolicy(
+    params.config,
+    params.sessionKey,
+  );
   const codexModelCallId = `${params.runId}:codex-model:1`;
   const fastModeAutoStartedAtMs =
     typeof params.fastModeStartedAtMs === "number" && Number.isFinite(params.fastModeStartedAtMs)
