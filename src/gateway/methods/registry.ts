@@ -51,6 +51,11 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
     name,
     scope: normalizedScope,
     profileAccess,
+    ...(input.startup === "unavailable-until-sidecars"
+      ? { startup: "unavailable-until-sidecars" }
+      : {}),
+    ...(input.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
+    ...(input.advertise === false ? { advertise: false } : {}),
   };
 }
 

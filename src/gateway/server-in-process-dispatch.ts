@@ -177,7 +177,7 @@ export async function dispatchGatewayRequestInProcessRaw(
   let firstResponse: GatewayMethodDispatchResponse | undefined;
   let finalResponse: GatewayMethodDispatchResponse | undefined;
   const first = createDeferredCore<GatewayMethodDispatchResponse>();
-  let final: Deferred<GatewayMethodDispatchResponse> | undefined;
+  let final: Deferred<GatewayMethodDispatchResponse> | null = null;
   let postFirstResponseError: Error | undefined;
   const deadlineMs = resolveDispatchDeadlineMs(options.timeoutMs);
   const req = {

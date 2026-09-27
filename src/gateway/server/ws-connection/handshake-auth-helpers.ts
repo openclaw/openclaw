@@ -348,7 +348,7 @@ export function resolveUnauthorizedHandshakeContext(params: {
   }
   let recommendedNextStep: ReturnType<
     typeof resolveUnauthorizedHandshakeContext
-  >["recommendedNextStep"] = "review_auth_configuration";
+  >["recommendedNextStep"];
   switch (params.failedAuth.reason) {
     case "token_missing":
     case "token_missing_config":
@@ -365,6 +365,9 @@ export function resolveUnauthorizedHandshakeContext(params: {
       break;
     case "rate_limited":
       recommendedNextStep = "wait_then_retry";
+      break;
+    default:
+      recommendedNextStep = "review_auth_configuration";
       break;
   }
   return { authProvided, canRetryWithDeviceToken, recommendedNextStep };

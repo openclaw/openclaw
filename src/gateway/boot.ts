@@ -112,7 +112,7 @@ export async function runBootOnce(params: {
     return { status: "failed", reason: message };
   }
 
-  if (result.status === "missing" || result.status === "empty") {
+  if (result.status !== "ok") {
     return { status: "skipped", reason: result.status };
   }
 

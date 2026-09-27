@@ -30,15 +30,13 @@ export type GatewayModelThinkingFacts = {
 
 export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
 
-export type SessionIdentityProjection = ReturnType<typeof createSessionIdentityProjection>;
-
 export type GatewaySessionModelSource = {
   entry: SessionEntry | undefined;
   readSourceEntry: (key: string) => SessionEntry | undefined;
 };
 
 export type SessionListRowContext = {
-  identityProjection?: SessionIdentityProjection;
+  identityProjection?: ReturnType<typeof createSessionIdentityProjection>;
   workerPlacementEnvironment?: NodeJS.ProcessEnv;
   projectedAgentRuns?: ProjectedAgentRunIndex;
   projectedSubagentActivity?: ReadonlySet<string>;

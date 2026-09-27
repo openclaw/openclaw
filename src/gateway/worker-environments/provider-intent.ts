@@ -423,7 +423,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         return false;
       }
       const current = resolveProfile(record.profileId, createOptions);
-      return (
+      return Boolean(
         current.provider === provider &&
         isDeepStrictEqual(current.profileSnapshot, profileSnapshot) &&
         isDeepStrictEqual(
@@ -434,12 +434,12 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           ),
           target,
         ) &&
-        !!provider.requiresNodeEnrollment &&
-        !!provider.supportsProjectPreparation?.(
+        provider.requiresNodeEnrollment &&
+        provider.supportsProjectPreparation?.(
           profile,
           createOptions.machineClass,
           createOptions.os,
-        )
+        ),
       );
     };
     if (!isProfileCurrent()) {
