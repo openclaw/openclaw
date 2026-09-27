@@ -9,8 +9,8 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
@@ -810,7 +810,7 @@ it.each([false, true])(
 it.each(["in_progress", "completed"] as const)(
   "identifies a progress ledger failure at preflight worktree (%s)",
   (status) => {
-    const cause = new StateDatabaseCoordinatorContentionError("state-lifecycle");
+    const cause = new GatewayStateOwnerContentionError("/synthetic/openclaw.sqlite");
     const record = vi.spyOn(updateRunLedger, "recordUpdateRunStep").mockImplementation(() => {
       throw cause;
     });

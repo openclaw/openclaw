@@ -66,6 +66,14 @@ export function createSubagentPersistenceMock(
     persistSubagentRunsToDisk: publishAfter(methods.persistSubagentRunsToDisk),
     persistSubagentRunsToDiskOrThrow: publishAfter(methods.persistSubagentRunsToDiskOrThrow),
     restoreSubagentRunsFromDisk: publishAfter(methods.restoreSubagentRunsFromDisk),
+    persistSubagentRunsToDiskAsyncOrThrow: (async (runs, ids, options) => {
+      const snapshot = structuredClone(runs);
+      await Promise.resolve();
+      options.assertCurrent?.();
+      methods.persistSubagentRunsToDiskOrThrow(snapshot, ids);
+      options.onCommitted?.();
+      notifyListeners(listeners, undefined);
+    }) satisfies typeof RegistryPersistence.persistSubagentRunsToDiskAsyncOrThrow,
   };
 }
 

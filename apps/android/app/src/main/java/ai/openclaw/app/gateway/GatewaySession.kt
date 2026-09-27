@@ -590,7 +590,9 @@ class GatewaySession(
       val target = desired ?: return
       if (resumeAuthPaused) {
         target.reconnectPausedForAuthFailure = false
-      } else if (target.reconnectPausedForAuthFailure || currentConnection?.isReady() == true) {
+      } else if (target.reconnectPausedForAuthFailure || currentConnection?.hasOpenTransport() == true) {
+        // Another network becoming available does not invalidate an open WebSocket.
+        // Its handshake may already have consumed a one-time setup code.
         return
       }
       connectionToClose = currentConnection
@@ -1403,6 +1405,8 @@ class GatewaySession(
     }
 
     fun isReady(): Boolean = state.get() == ConnectionState.READY
+
+    fun hasOpenTransport(): Boolean = state.get() != ConnectionState.CLOSED && connectHandshakeJob != null
 
     fun markReady(methods: Set<String>?): Boolean {
       if (!state.compareAndSet(ConnectionState.CONNECTING, ConnectionState.READY)) return false

@@ -98,7 +98,7 @@ describe("plugin runtime state proxy", () => {
       const api = registry.createApi(record, { config: {} });
 
       expect(api.runtime.state.resolveStateDir()).toBe(state.stateDir);
-      const observation = observeHostDataSql(state.env);
+      const observation = observeHostDataSql();
       const sql = observation.calls;
       try {
         const store = api.runtime.state.openKeyedStore<{ plugin: string }>({

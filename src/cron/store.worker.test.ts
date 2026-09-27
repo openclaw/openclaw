@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
+import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";

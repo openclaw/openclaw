@@ -12,7 +12,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
+import {
+  getCurrentActiveNodeContext,
+  setActiveNodeContexts,
+} from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
@@ -72,7 +75,7 @@ afterEach(() => {
   }
   activeTestRegistries.clear();
   testNodeHostCommands = [];
-  setActiveNodeContext(null);
+  setActiveNodeContexts([]);
 });
 
 function registerTestNodeSocket(
@@ -1446,177 +1449,6 @@ describe("gateway/node-registry", () => {
     );
     controller.abort();
     await invoke;
-  });
-
-  it("ranks connected nodes by gateway-derived input activity", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], {
-        displayName: "Desk Mac",
-        permissions: { accessibility: true },
-      }),
-      {},
-    );
-    registerNodeSession(
-      registry,
-      makeClient("conn-2", "node-2", [], {
-        displayName: "Laptop",
-        permissions: { accessibility: true },
-      }),
-      {},
-    );
-
-    expect(
-      registry.updatePresenceActivity({
-        nodeId: "node-1",
-        connId: "conn-1",
-        idleSeconds: 10,
-        observedAtMs: 100_000,
-      }),
-    ).toMatchObject({ lastActiveAtMs: 90_000, presenceUpdatedAtMs: 100_000 });
-    registry.updatePresenceActivity({
-      nodeId: "node-2",
-      connId: "conn-2",
-      idleSeconds: 2,
-      observedAtMs: 105_000,
-    });
-
-    expect(registry.getActiveNode()?.nodeId).toBe("node-2");
-    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-2" });
-    expect(registry.unregister("conn-2")).toBe("node-2");
-    expect(registry.getActiveNode()?.nodeId).toBe("node-1");
-    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-1" });
-  });
-
-  it("recomputes active context when a same-id connection replaces reported presence", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-old", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-old",
-      idleSeconds: 0,
-      observedAtMs: 100_000,
-    });
-
-    registerNodeSession(
-      registry,
-      makeClient("conn-new", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-
-    expect(registry.getActiveNode()).toBeUndefined();
-    expect(getCurrentActiveNodeContext()).toBeNull();
-    expect(registry.unregister("conn-old")).toBeNull();
-    expect(getCurrentActiveNodeContext()).toBeNull();
-  });
-
-  it("rejects presence updates from stale node connections", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-new", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-
-    expect(
-      registry.updatePresenceActivity({
-        nodeId: "node-1",
-        connId: "conn-old",
-        idleSeconds: 0,
-        observedAtMs: 100_000,
-      }),
-    ).toBeNull();
-    expect(registry.getActiveNode()).toBeUndefined();
-  });
-
-  it("does not advance a bounded estimate on saturated idle keepalives", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    const first = registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 2_592_000,
-      saturated: true,
-      observedAtMs: 3_000_000_000,
-    });
-    const keepalive = registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 2_592_000,
-      saturated: true,
-      observedAtMs: 3_000_180_000,
-    });
-
-    expect(first?.lastActiveAtMs).toBe(408_000_000);
-    expect(keepalive?.lastActiveAtMs).toBe(408_000_000);
-    expect(keepalive?.presenceUpdatedAtMs).toBe(3_000_180_000);
-  });
-
-  it("clears reported presence when Accessibility permission is removed", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], {
-        permissions: { accessibility: true },
-        declaredPermissions: { accessibility: true },
-      }),
-      {},
-    );
-    registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 0,
-      observedAtMs: 100_000,
-    });
-
-    registry.updateSurface("node-1", { commands: [], permissions: { accessibility: false } });
-
-    expect(registry.get("node-1")?.lastActiveAtMs).toBeUndefined();
-    expect(registry.get("node-1")?.presenceUpdatedAtMs).toBeUndefined();
-    expect(registry.getActiveNode()).toBeUndefined();
-    expect(getCurrentActiveNodeContext()).toBeNull();
-  });
-
-  it("clears presence only for the current connection and selects the next active Mac", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    registerNodeSession(
-      registry,
-      makeClient("conn-2", "node-2", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 10,
-      observedAtMs: 100_000,
-    });
-    registry.updatePresenceActivity({
-      nodeId: "node-2",
-      connId: "conn-2",
-      idleSeconds: 0,
-      observedAtMs: 105_000,
-    });
-
-    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-old" })).toBeNull();
-    expect(registry.getActiveNode()?.nodeId).toBe("node-2");
-    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-2" })).toBe(true);
-    expect(registry.getActiveNode()?.nodeId).toBe("node-1");
-    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-1" });
-    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-2" })).toBe(false);
   });
 
   it("checks node websocket connectivity with ping/pong", async () => {

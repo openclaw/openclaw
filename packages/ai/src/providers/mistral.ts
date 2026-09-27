@@ -20,8 +20,8 @@ import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
   assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
+  finalizeTransportStream,
   notifyProviderHttpResponse,
-  transportAbortError,
 } from "../transports/transport-stream-shared.js";
 import type {
   AssistantMessage,
@@ -182,16 +182,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       stream.push({ type: "start", partial: output });
       await consumeChatStream(model, output, stream, mistralStream, options?.signal);
 
-      if (options?.signal?.aborted) {
-        throw transportAbortError(options.signal);
-      }
-
-      if (output.stopReason === "aborted" || output.stopReason === "error") {
-        throw new Error(output.errorMessage ?? "An unknown error occurred");
-      }
-
-      stream.push({ type: "done", reason: output.stopReason, message: output });
-      stream.end();
+      finalizeTransportStream({ stream, output, signal: options?.signal });
     } catch (error) {
       const terminal = assignTransportErrorDetails(output, error, options?.signal);
       // Failed or canceled generations must never retain partially repaired tool calls.

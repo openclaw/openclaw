@@ -1,6 +1,6 @@
 // Completed cron work must become durable before unrelated batch work drains.
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -10,11 +10,12 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { listTaskRecords } from "../../tasks/task-registry.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { isCronJobActive, markCronJobActive } from "../active-jobs.js";
-import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
+import {
+  readCronRunHistoryPageForTests,
+  readCronRunRecordsForTests,
+} from "../run-history.test-support.js";
 import { createCronExecutionId } from "../run-id.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -32,10 +33,6 @@ import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({
   prefix: "cron-service-batch-finalization-",
-});
-
-afterEach(() => {
-  resetTaskRegistryForTests();
 });
 
 type BatchTrigger = "scheduled" | "startup";
@@ -70,7 +67,7 @@ function startBatch(
 }
 
 function findCronTask(jobId: string) {
-  return listTaskRecords().find((task) => task.runtime === "cron" && task.sourceId === jobId);
+  return readCronRunRecordsForTests().find((task) => task.jobId === jobId);
 }
 
 function authorOutcome(
@@ -207,7 +204,7 @@ describe("cron batch outcome finalization", () => {
           runId: expect.stringMatching(new RegExp(`^${createCronExecutionId(job.id, startedAt)}:`)),
           startedAt,
           status: "succeeded",
-          terminalSummary: "finished before terminal store failure",
+          summary: "finished before terminal store failure",
         });
         expect(events.filter((event) => event.action === "finished")).toEqual([]);
 
@@ -221,11 +218,9 @@ describe("cron batch outcome finalization", () => {
         await start(recoveryState);
 
         expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
-        expect(
-          listTaskRecords().filter(
-            (record) => record.runtime === "cron" && record.sourceId === job.id,
-          ),
-        ).toEqual([expect.objectContaining({ runId: task?.runId, status: "succeeded" })]);
+        expect(readCronRunRecordsForTests().filter((record) => record.jobId === job.id)).toEqual([
+          expect.objectContaining({ runId: task?.runId, status: "succeeded" }),
+        ]);
         expect(
           readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(store.storePath),
@@ -889,7 +884,7 @@ describe("cron batch outcome finalization", () => {
         });
 
         expect(findCronTask(first.id)?.status).toBe("succeeded");
-        expect(findCronTask(second.id)?.status).toBe("running");
+        expect(findCronTask(second.id)).toBeUndefined();
         expect(isCronJobActive(first.id)).toBe(false);
         expect(isCronJobActive(second.id)).toBe(true);
         expect(events).toContainEqual(
@@ -963,7 +958,7 @@ describe("cron batch outcome finalization", () => {
           expect(findCronTask(job.id)?.status).toBe("succeeded");
           expect(isCronJobActive(job.id)).toBe(false);
         }
-        expect(findCronTask(lastJob.id)?.status).toBe("running");
+        expect(findCronTask(lastJob.id)).toBeUndefined();
         expect(isCronJobActive(lastJob.id)).toBe(true);
       } finally {
         releaseFinalRun.resolve({ status: "ok", summary: "finished final job" });

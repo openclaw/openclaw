@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "CLI reference for `openclaw update` (updates, repair, and recovery cleanup)"
 read_when:
   - You want to update a source checkout safely

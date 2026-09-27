@@ -118,7 +118,6 @@ const RETIRED_EXTENSION_TEST_HELPER_BRIDGE_FILES = [
   "test/helpers/plugins/provider-wizard-contract-suites.ts",
   "test/helpers/plugins/public-artifacts.ts",
   "test/helpers/plugins/public-surface-loader.ts",
-  "test/helpers/plugins/runtime-taskflow.ts",
   "test/helpers/plugins/runtime-env.ts",
   "test/helpers/plugins/send-config.ts",
   "test/helpers/plugins/setup-wizard.ts",

@@ -187,6 +187,7 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   replyToMode?: ReplyToMode;
   threadId?: string | number | null;
   silent?: boolean;
+  /** Live cancellation signal; check before each physical send and after awaited preparation. */
   signal?: AbortSignal;
   gatewayClientScopes?: readonly string[];
   /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
@@ -214,6 +215,7 @@ export type ChannelMessageSendMediaContext<TConfig = OpenClawConfig> =
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     audioAsVoice?: boolean;
     gifPlayback?: boolean;
+    /** Send image, GIF, or video as document to avoid channel compression. */
     forceDocument?: boolean;
   };
 

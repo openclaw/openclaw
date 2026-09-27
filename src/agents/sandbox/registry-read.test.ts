@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -70,49 +69,35 @@ async function seed() {
   await updateBrowserRegistry(browser);
 }
 
-it.each([
-  { mode: "cached", otherRows: 0 },
-  { mode: "fresh", otherRows: 0 },
-  { mode: "cached", otherRows: 512 },
-  { mode: "fresh", otherRows: 512 },
-] as const)(
-  "reads all four sandbox projections off the parent thread with a $mode source and $otherRows unrelated rows",
-  async ({ mode, otherRows }) => {
+it.each(["cached", "fresh"])(
+  "reads all four sandbox projections off the parent thread with a %s source and unrelated data",
+  async (mode) => {
     expect(isMainThread).toBe(true);
-    const { databasePath } = fixture();
+    fixture();
     await seed();
-    if (otherRows) {
-      // A shared state database can be much larger than its sandbox registry.
-      runOpenClawStateWriteTransaction(({ db }) => {
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<DB>(db)
-            .insertInto("plugin_state_entries")
-            .values(
-              Array.from({ length: otherRows }, (_, index) => ({
-                plugin_id: "fixture",
-                namespace: "unrelated",
-                entry_key: String(index),
-                value_json: JSON.stringify({ text: "x".repeat(16 * 1024) }),
-                created_at: 1,
-                expires_at: null,
-              })),
-            ),
-        );
-      });
-    }
-    const sourceBytes = ["", "-wal"].reduce(
-      (total, suffix) =>
-        total +
-        (fs.existsSync(databasePath + suffix) ? fs.statSync(databasePath + suffix).size : 0),
-      0,
-    );
+    // A shared state database can be much larger than its sandbox registry.
+    runOpenClawStateWriteTransaction(({ db }) => {
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<DB>(db)
+          .insertInto("plugin_state_entries")
+          .values(
+            Array.from({ length: 512 }, (_, index) => ({
+              plugin_id: "fixture",
+              namespace: "unrelated",
+              entry_key: String(index),
+              value_json: JSON.stringify({ text: "x".repeat(16 * 1024) }),
+              created_at: 1,
+              expires_at: null,
+            })),
+          ),
+      );
+    });
     if (mode === "fresh") {
       await closeOpenClawStateDatabaseAsync();
     }
     requireNodeSqlite();
     const calls = observeMainThreadSql();
-    const startedAt = performance.now();
     expect(await readRegistry()).toEqual({
       entries: [{ ...container, runtimeLabel: container.containerName, configLabelKind: "Image" }],
     });
@@ -121,15 +106,7 @@ it.each([
       await readRegisteredSandboxRuntimeIds({ backendId: "fixture", scopeKey: "agent:main" }),
     ).toEqual([container.containerName]);
     expect(await readBrowserRegistry()).toEqual({ entries: [browser] });
-    const mainThreadSqlCalls = calls.count();
-    console.info("sandbox registry read", {
-      mode,
-      otherRows,
-      sourceBytes,
-      mainThreadSqlCalls,
-      elapsedMs: Math.round(performance.now() - startedAt),
-    });
-    expect(mainThreadSqlCalls).toBe(0);
+    expect(calls.count()).toBe(0);
   },
 );
 
@@ -165,9 +142,7 @@ it("lists persisted sandbox runtime state through the actual CLI without parent 
       ],
       browsers: [],
     });
-    const mainThreadSqlCalls = calls.count();
-    console.info("sandbox CLI listing", { mainThreadSqlCalls });
-    expect(mainThreadSqlCalls).toBe(0);
+    expect(calls.count()).toBe(0);
   } finally {
     restore();
   }

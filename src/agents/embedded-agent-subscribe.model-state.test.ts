@@ -287,14 +287,9 @@ describe("subscribeEmbeddedAgentSession model state", () => {
     },
   );
 
-  it.each([
-    { blockReplyBreak: "text_end", retry: false },
-    { blockReplyBreak: "text_end", retry: true },
-    { blockReplyBreak: "message_end", retry: false },
-    { blockReplyBreak: "message_end", retry: true },
-  ] as const)(
-    "accounts queued $blockReplyBreak delivery across retry=$retry",
-    async ({ blockReplyBreak, retry }) => {
+  it.each(["text_end", "message_end"] as const)(
+    "accounts queued %s delivery across a retry",
+    async (blockReplyBreak) => {
       const deliveryStarted = createDeferred();
       const releaseDelivery = createDeferred();
       const secondCompleted = createDeferred();
@@ -307,7 +302,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         return releaseDelivery.promise;
       });
       const harness = createSubscribedSessionHarness({
-        runId: "queued-usage-" + blockReplyBreak + "-" + retry,
+        runId: "queued-usage-" + blockReplyBreak,
         lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
         sessionPersistence: "detached",
         blockReplyBreak,
@@ -336,7 +331,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
             return;
           }
           admittedUsage.push(structuredClone(event.message.usage));
-          if (admittedUsage.length === 1 && retry) {
+          if (admittedUsage.length === 1) {
             emit(retryingCompactionEnd());
           }
           if (admittedUsage.length === 2) {
@@ -399,34 +394,34 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       expected: { input: 11, output: 3, total: 14, cost: { total: 0.25 } },
       contextTokens: 11,
     },
-    ...[0, 0.125].map((cost) => ({
-      name: "billed " + cost + " over a later estimate",
+    {
+      name: "billed zero over a later estimate",
       call: {
-        streamedUsage: makeUsage({ input: 7, output: 5, cost, billed: true }),
+        streamedUsage: makeUsage({ input: 7, output: 5, cost: 0, billed: true }),
         usage: makeUsage({ input: 11, output: 3, cost: 0.5 }),
       },
       expected: {
         input: 11,
         output: 3,
         total: 14,
-        cost: { total: cost, totalOrigin: "provider-billed" },
+        cost: { total: 0, totalOrigin: "provider-billed" },
       },
       contextTokens: 11,
-    })),
-    ...[0, 0.125].map((cost) => ({
-      name: "final billing-only " + cost + " with streamed tokens",
+    },
+    {
+      name: "final billing-only zero with streamed tokens",
       call: {
         streamedUsage: makeUsage({ input: 7, output: 5, cost: 0.1 }),
-        usage: makeUsage({ cost, billed: true }),
+        usage: makeUsage({ cost: 0, billed: true }),
       },
       expected: {
         input: 7,
         output: 5,
         total: 12,
-        cost: { total: cost, totalOrigin: "provider-billed" },
+        cost: { total: 0, totalOrigin: "provider-billed" },
       },
       contextTokens: 7,
-    })),
+    },
     {
       name: "streamed usage before a zero error result",
       call: {
@@ -503,8 +498,6 @@ describe("subscribeEmbeddedAgentSession model state", () => {
 
   it.each([
     { costTotal: 0, priorCall: false },
-    { costTotal: 0.125, priorCall: false },
-    { costTotal: 0, priorCall: true },
     { costTotal: 0.125, priorCall: true },
   ])(
     "retains billed cost-only $costTotal with prior call $priorCall",

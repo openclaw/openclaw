@@ -34,6 +34,7 @@ export function makeContextParams(
   return {
     runtime: {
       getSessionRowProjection: () => undefined,
+      forgetConnectionAncestors: vi.fn(),
       connectionWork: { track: trackAsyncWork },
       deps: {} as never,
       runtimeState: {

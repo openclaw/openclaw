@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { SqliteIntegrityOperation } from "../infra/sqlite-integrity.js";
@@ -17,13 +16,16 @@ import {
 } from "./openclaw-agent-db.js";
 
 const boundary = vi.hoisted(() => {
-  const controls: { ready: Promise<void>; acquired: Promise<{ release: () => void }> } = {
+  const controls: { ready: Promise<void>; onIntegrity?: (signal?: AbortSignal) => void } = {
     ready: Promise.resolve(),
-    acquired: Promise.resolve({ release: vi.fn() }),
   };
   return {
     controls,
-    prepare: vi.fn(async (_params: { deadlineMs: number }) => await controls.acquired),
+    integrity: vi.fn(async (_path: string, _timeout: number, signal?: AbortSignal) => {
+      controls.onIntegrity?.(signal);
+      await controls.ready;
+      signal?.throwIfAborted();
+    }),
     cache: {
       pending: new Map<string, PendingAgentDatabaseOpen>(),
       activePending: new Set<PendingAgentDatabaseOpen>(),
@@ -41,16 +43,6 @@ const boundary = vi.hoisted(() => {
     open: vi.fn((_options: OpenClawAgentDatabaseOptions) => {}),
   };
 });
-
-vi.mock("../infra/state-database-coordinator-acquisition.js", () => ({
-  acquireStateDatabaseCoordinatorWithWait: boundary.prepare,
-}));
-vi.mock("./openclaw-state-worker-context.js", () => ({
-  captureOpenClawStateWorkerContext: () => ({
-    admission: { databasePath: "/synthetic/state.sqlite", assertCurrent() {} },
-    coordinatorRuntime: { directory: "/synthetic/locks", keepAlive: false },
-  }),
-}));
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class {
@@ -91,7 +83,7 @@ vi.mock("./openclaw-agent-db-schema-helpers.js", () => ({
   readExistingAgentSchemaMeta: vi.fn(),
 }));
 vi.mock("../infra/sqlite-integrity-worker.js", () => ({
-  assertSqliteIntegrityInWorker: vi.fn(async () => await boundary.controls.ready),
+  assertSqliteIntegrityInWorker: boundary.integrity,
 }));
 vi.mock("../infra/sqlite-integrity.js", () => ({
   runSqliteIntegrityCheckSync: vi.fn(),
@@ -132,7 +124,7 @@ afterEach(() => {
   expect(boundary.cache.activePending.size).toBe(0);
   boundary.cache.databases.clear();
   boundary.controls.ready = Promise.resolve();
-  boundary.controls.acquired = Promise.resolve({ release: vi.fn() });
+  boundary.controls.onIntegrity = undefined;
   vi.clearAllMocks();
 });
 
@@ -186,75 +178,42 @@ it.each([
   });
 });
 
-it("bounds coalesced acquisition waiters by their own deadlines without cancelling the shared opener", async () => {
-  vi.useFakeTimers();
-  const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-  const acquired = createDeferredCore<{ release: () => void }>();
-  boundary.controls.acquired = acquired.promise;
+it("cancels one coalesced waiter without aborting the shared integrity check", async () => {
+  const ready = createDeferredCore();
+  const started = createDeferredCore<AbortSignal>();
+  boundary.controls.ready = ready.promise;
+  boundary.controls.onIntegrity = (signal) => {
+    if (!signal) {
+      throw new Error("Shared integrity check requires its owner's signal");
+    }
+    started.resolve(signal);
+  };
   const first = vi.fn((database: OpenClawAgentDatabase) => database.path);
   const second = vi.fn((database: OpenClawAgentDatabase) => database.path);
   const options = { agentId: "main", path: "/synthetic/coalesced.sqlite" };
-  const expired = Promise.allSettled([
-    withOpenClawAgentDatabaseAsync(options, first, undefined, {
-      deadlineMs: performance.now() + 25,
-    }),
+  const canceled = new AbortController();
+  const stopped = Promise.allSettled([
+    withOpenClawAgentDatabaseAsync(options, first, undefined, canceled.signal),
   ]);
-  const remaining = withOpenClawAgentDatabaseAsync(options, second, undefined, {
-    deadlineMs: performance.now() + 100,
-  });
+  const remaining = withOpenClawAgentDatabaseAsync(options, second);
   try {
-    await vi.advanceTimersByTimeAsync(25);
-    expect(await expired).toMatchObject([
-      { status: "rejected", reason: { family: "state-lifecycle" } },
+    const physicalSignal = await started.promise;
+    const reason = new Error("Stop only the first waiter");
+    canceled.abort(reason);
+    expect(await stopped).toMatchObject([
+      { status: "rejected", reason: { name: "AbortError", cause: reason } },
     ]);
+    expect(physicalSignal.aborted).toBe(false);
     expect(first).not.toHaveBeenCalled();
-    acquired.resolve({ release: vi.fn() });
+    expect(second).not.toHaveBeenCalled();
+    expect(boundary.open).not.toHaveBeenCalled();
+    ready.resolve();
     await expect(remaining).resolves.toBe(options.path);
     expect(second).toHaveBeenCalledOnce();
-    expect(boundary.prepare).toHaveBeenCalledOnce();
+    expect(boundary.integrity).toHaveBeenCalledOnce();
+    expect(boundary.open).toHaveBeenCalledOnce();
   } finally {
-    acquired.resolve({ release: vi.fn() });
-    await remaining.catch(() => {});
-    clock.mockRestore();
-    vi.useRealTimers();
-  }
-});
-
-it("keeps a later coalesced request's remaining acquisition budget after the first expires", async () => {
-  vi.useFakeTimers();
-  const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-  const acquired = createDeferredCore<{ release: () => void }>();
-  boundary.controls.acquired = acquired.promise;
-  const options = { agentId: "main", path: "/synthetic/late-coalesced.sqlite" };
-  const first = vi.fn();
-  const second = vi.fn();
-  const initialDeadline = performance.now() + 5000;
-  const initial = Promise.allSettled([
-    withOpenClawAgentDatabaseAsync(options, first, undefined, { deadlineMs: initialDeadline }),
-  ]);
-  let later: Promise<unknown> | undefined;
-  try {
-    await vi.advanceTimersByTimeAsync(4500);
-    const laterDeadline = performance.now() + 5000;
-    later = withOpenClawAgentDatabaseAsync(options, second, undefined, {
-      deadlineMs: laterDeadline,
-    });
-    expect(boundary.prepare.mock.calls[0]?.[0].deadlineMs).toBe(laterDeadline);
-    await vi.advanceTimersByTimeAsync(500);
-    expect(await initial).toMatchObject([
-      { status: "rejected", reason: { family: "state-lifecycle" } },
-    ]);
-    expect(first).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1000);
-    acquired.resolve({ release: vi.fn() });
-    await later;
-    expect(second).toHaveBeenCalledOnce();
-    expect(boundary.prepare).toHaveBeenCalledOnce();
-  } finally {
-    acquired.resolve({ release: vi.fn() });
-    await initial;
-    await later?.catch(() => {});
-    clock.mockRestore();
-    vi.useRealTimers();
+    ready.resolve();
+    await Promise.allSettled([stopped, remaining]);
   }
 });

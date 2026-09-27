@@ -1,32 +1,27 @@
-import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
-  captureAgentHarnessCompletionCustody,
-  createAgentHarnessTaskEventSink,
   AgentHarnessCompletionCustody,
-  createAgentHarnessTaskRuntime,
-  deliverAgentHarnessTaskCompletion,
-  AgentHarnessTaskRuntime,
-  AgentHarnessTaskRecord,
-  AgentHarnessTaskRuntimeScope,
-  AgentHarnessTaskAssignment,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
+  AgentHarnessCompletionScope,
+  captureAgentHarnessCompletionCustody,
+  createAgentHarnessCompletionEventSink,
+  deliverAgentHarnessCompletion,
+} from "openclaw/plugin-sdk/agent-harness-completion";
+import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
+import type { NativeSubagentAssignment } from "./native-subagent-assignment.js";
 import type { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
+import type { CodexNativeSubagentAssignmentStore } from "./native-subagent-pending-assignments.js";
 import type {
   CodexNativeSubagentSubmission,
   CodexNativeSubagentSubmissionStore,
 } from "./native-subagent-submission.js";
-import type { NativeSubagentAssignment } from "./native-subagent-task-ids.js";
-import type { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 
 export type NativeSubagentMonitorRuntime = {
+  deliverAgentHarnessCompletion: typeof deliverAgentHarnessCompletion;
   captureAgentHarnessCompletionCustody: typeof captureAgentHarnessCompletionCustody;
-  createAgentHarnessTaskEventSink: typeof createAgentHarnessTaskEventSink;
-  createAgentHarnessTaskRuntime: typeof createAgentHarnessTaskRuntime;
-  deliverAgentHarnessTaskCompletion: typeof deliverAgentHarnessTaskCompletion;
+  createAgentHarnessCompletionEventSink: typeof createAgentHarnessCompletionEventSink;
 };
 
 export type NativeSubagentMonitorClient = Pick<
@@ -107,6 +102,7 @@ export type ParentOwner = {
 };
 
 export type ParentRegistrationHandle = {
+  ready: Promise<void>;
   bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
   unregister: () => Promise<void>;
 };
@@ -152,14 +148,11 @@ export type ParentState = {
   turnIds: Set<string>;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
   requesterSessionKey?: string;
-  taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
+  completionScope?: AgentHarnessCompletionScope;
   historyOwner?: CodexNativeSubagentHistoryOwner;
   agentId?: string;
-  taskRuntime?: AgentHarnessTaskRuntime;
-  /** Observed lineage only; writes and delivery require fresh exact-assignment reads. */
-  readTaskRecords?: () => AgentHarnessTaskRecord[];
-  mirror?: CodexNativeSubagentTaskMirror;
   submissionStore?: CodexNativeSubagentSubmissionStore;
+  assignmentStore?: CodexNativeSubagentAssignmentStore;
 };
 
 export type NativeExecutionWait = {
@@ -177,14 +170,15 @@ export type NativeTurnObservation = {
 };
 
 export type ChildState = NativeSubagentAssignment & {
-  expectedTask?: AgentHarnessTaskAssignment;
   completionCustody?: AgentHarnessCompletionCustody;
-  emitTaskEvent?: ReturnType<typeof createAgentHarnessTaskEventSink>;
+  emitEvent?: ReturnType<typeof createAgentHarnessCompletionEventSink>;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
   parentThreadId: string;
   nativeParentThreadId: string;
   readonly agentId?: string;
+  readonly historyOwner?: CodexNativeSubagentHistoryOwner;
   nativeTurnState?: NativeTurnState;
+  recoverInitialAssignment?: true;
   activityWait?: { itemId: string; wait: NativeExecutionWait };
   activityObserved?: true;
   recoveryAttempt: number;
@@ -193,9 +187,6 @@ export type ChildState = NativeSubagentAssignment & {
   terminal: boolean;
   fallbackCompletion?: RecoveredCompletion;
   pendingCompletion?: RecoveredCompletion;
-  completionTaskPhase?: "finalize" | "delivery";
-  // Cold reconstruction requires its saved requester, not a later live registration.
-  requiresHistoryOwner?: true;
   subscriptionClosed?: true;
   nativeCompletionDelivered: boolean;
   completionDeliveryAttempt: number;
@@ -235,7 +226,6 @@ export type RecoveredCompletion = CodexNativeSubagentCompletion & {
 export type ThreadRecovery = {
   parentThreadId?: string;
   agentPath?: string;
-  assignmentUnresolved?: true;
   assignmentTurnId?: string;
   nativeTurnId?: string;
   nativeTurnState?: NativeTurnState;
@@ -251,20 +241,6 @@ export type ThreadStatusRevision = {
   readers: number;
   terminal?: true;
   parentThreadId?: string;
-};
-
-export type TaskRecoveryCandidate = NativeSubagentAssignment & {
-  expectedTask: AgentHarnessTaskAssignment;
-  completionCustody?: AgentHarnessCompletionCustody;
-  terminal: boolean;
-  observedTurns: NativeTurnObservation[];
-  deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
-  parentState: ParentState;
-  recoveryAttempt: number;
-  requesterSessionKey: string;
-  taskRuntimeScope: AgentHarnessTaskRuntimeScope;
-  agentId?: string;
-  taskRuntime: AgentHarnessTaskRuntime;
 };
 
 export type MonitorOptions = {

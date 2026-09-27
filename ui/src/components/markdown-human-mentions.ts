@@ -162,13 +162,7 @@ export function installMarkdownHumanMentions(parser: MarkdownIt): void {
     const token = tokens[index];
     const profileId = token?.attrGet("profile-id");
     return token && typeof profileId === "string" && profileId
-      ? '<openclaw-person-reference profile-id="' +
-          escapeMarkdownHtml(profileId) +
-          '" label="' +
-          escapeMarkdownHtml(token.content) +
-          '">' +
-          escapeMarkdownHtml(token.content) +
-          "</openclaw-person-reference>"
+      ? `<openclaw-person-reference profile-id="${escapeMarkdownHtml(profileId)}" label="${escapeMarkdownHtml(token.content)}">${escapeMarkdownHtml(token.content)}</openclaw-person-reference>`
       : "";
   };
 }

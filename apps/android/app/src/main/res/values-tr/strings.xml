@@ -1557,6 +1557,7 @@
     <string name="native_d68f3aaa52604f24" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yeni bir sohbet başlatmadan önce mevcut yanıtın tamamlanmasını bekleyin."</string>
     <string name="native_d696a35bdd1883da" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Profil"</string>
     <string name="native_d6a99dbee26515ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway\'iniz bildirdiğinde sağlayıcı sınırları burada görünecek."</string>
+    <string name="native_d6b3e8c828d37420" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Presence"</string>
     <string name="native_d6bfda034106ecd6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 sorun"</string>
     <string name="native_d6f931ca6d5f5b60" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"\"%1$s\" grubundaki ileti dizileri korunur ve yeniden Gruplandırılmamış bölümüne taşınır."</string>
     <string name="native_d70604e843046137" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Önerilen"</string>

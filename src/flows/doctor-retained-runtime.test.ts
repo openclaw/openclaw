@@ -4,9 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
-import { acquireGatewayMaintenanceCoordinator } from "../infra/state-database-coordinator.js";
-import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
@@ -89,16 +88,18 @@ async function runDoctor(repair: boolean, maintenance = true): Promise<string> {
   ctx.prompter.shouldRepair = repair;
   const run = () => runDoctorHealthContributionList(ctx, contributions);
   if (maintenance) {
-    const lease = acquireGatewayMaintenanceCoordinator({
-      databasePath: path.join(parent, "state/openclaw.sqlite"),
-      runtimeDirectory: path.join(parent, "locks"),
+    const lock = await acquireGatewayLock({
+      env: ctx.env,
+      role: "sqlite-maintenance",
+      allowInTests: true,
     });
-    const scope = createOpenClawDatabaseMaintenanceScope(lease.createSchemaFenceDelegate);
+    if (!lock) {
+      throw new Error("Expected Gateway maintenance ownership");
+    }
     try {
-      await scope.run(run);
+      await lock.run(run);
     } finally {
-      await scope.close();
-      lease.release();
+      await lock.release();
     }
   } else {
     await run();

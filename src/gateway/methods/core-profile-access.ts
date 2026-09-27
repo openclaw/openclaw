@@ -7,6 +7,7 @@ const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   // Wait for post-hello identity enrichment so an identified caller does not
   // cache a shared-only catalog before their personal accounts are available.
   "models.list",
+  "presence.query",
   "webSearch.status",
   "webSearch.test",
   // talk.config projects the caller's profile accent; without this gate a
@@ -45,7 +46,6 @@ const PROFILE_DEPENDENT_CORE_PREFIXES = [
   "session.",
   "sessions.",
   "taskSuggestions.",
-  "tasks.",
   "terminal.",
   "transcripts.",
   "users.authConnect.",

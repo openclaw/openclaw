@@ -155,7 +155,7 @@ class SecurePrefsTest {
 
     prefs.setSidebarPageOrder(listOf("threads", "home", "threads", "unknown"))
 
-    val expected = listOf("threads", "home", "settings", "work", "skills")
+    val expected = listOf("threads", "home", "skills", "work", "settings")
     assertEquals(expected, prefs.sidebarPageOrder.value)
     assertEquals(expected, testPrefs(context).sidebarPageOrder.value)
     assertEquals(
@@ -165,7 +165,7 @@ class SecurePrefsTest {
   }
 
   @Test
-  fun sidebarVisiblePagesDefaultToEveryCurrentDestinationAndPersistAValidatedSubset() {
+  fun sidebarVisiblePagesDefaultToMainPagesAndPersistAValidatedSubset() {
     val context = RuntimeEnvironment.getApplication()
     context
       .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)

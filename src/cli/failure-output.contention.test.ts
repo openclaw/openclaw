@@ -1,11 +1,11 @@
 import { expect, it } from "vitest";
-import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator-errors.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "./failure-output.js";
 
 it.each(["direct", "wrapped", "aggregate", "message-only"])(
   "preserves %s contention output and classifies the Doctor hint by error identity",
   (kind) => {
-    const cause = new StateDatabaseCoordinatorContentionError("state-lifecycle");
+    const cause = new GatewayStateOwnerContentionError("/synthetic/openclaw.sqlite");
     const error =
       kind === "direct"
         ? cause

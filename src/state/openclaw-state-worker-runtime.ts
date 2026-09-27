@@ -1,3 +1,4 @@
+import { executeAcpSessionMutationInWorker } from "../acp/runtime/session-meta-write.worker.js";
 import {
   readAuthProfileRows,
   SHARED_AUTH_STORE_STATE_KEY,
@@ -118,8 +119,6 @@ import {
   executeSkillUploadCommand,
 } from "../skills/lifecycle/upload-store.worker.js";
 import * as skillWorkshop from "../skills/workshop/store.worker.js";
-import { isTaskRegistryWorkerCommand } from "../tasks/task-registry.worker-contract.js";
-import { executeTaskRegistryCommand } from "../tasks/task-registry.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
 import {
   executeTranscriptWrite,
@@ -146,18 +145,12 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import type {
-  OpenClawStateWorkerOperations,
+  OpenClawStateWorkerBackend,
   OpenClawStateWorkerRuntimeCommand,
-  OpenClawStateWorkerInspectionOperations,
-  OpenClawStateWorkerCleanupOperations,
 } from "./openclaw-state-worker-contract.js";
 import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 import { executeUserProfileCommand, isUserProfileCommand } from "./user-profiles.worker.js";
-
-type Operations = OpenClawStateWorkerOperations &
-  OpenClawStateWorkerInspectionOperations &
-  OpenClawStateWorkerCleanupOperations;
 
 const log = createSubsystemLogger("state/worker");
 
@@ -179,7 +172,7 @@ export function executeSharedStateCommand(
   command: OpenClawStateWorkerRuntimeCommand,
   context: { databasePath: string },
   open: () => OpenClawStateDatabase,
-): Operations[keyof Operations]["output"] {
+): ReturnType<OpenClawStateWorkerBackend["execute"]> {
   // Dispatch preparation has loaded this module; do not open or observe token state.
   if (command.type === "deviceAuth.prepare") {
     return undefined;
@@ -294,9 +287,6 @@ export function executeSharedStateCommand(
       stateOptions(),
     );
   }
-  if (isTaskRegistryWorkerCommand(command)) {
-    return executeTaskRegistryCommand(command, stateOptions(), open);
-  }
   if (command.type === "doctor.workshopMigrationRecords.read") {
     return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
       ({ db }) => readWorkshopMigrationRecordsInDatabase(db, command.input.includeEvents),
@@ -308,6 +298,9 @@ export function executeSharedStateCommand(
     return command.input.artifactPreservingReadOnly
       ? withArtifactPreservingStateReads(read)
       : read();
+  }
+  if (command.type === "acp.prepareMutation" || command.type === "acp.commitMutation") {
+    return executeAcpSessionMutationInWorker(open(), command);
   }
   if (command.type === "plugins.conversationBindingApprovals.read") {
     return readPluginBindingApprovalsInDatabase(open().db);

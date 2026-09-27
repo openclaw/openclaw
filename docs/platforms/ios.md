@@ -110,6 +110,12 @@ These pages require the same connected `operator.admin` session as Settings.
 Without that access, they show the native Gateway connection guidance. Instances
 opens **Devices**, the Dashboard owner of paired nodes and connected clients.
 
+The native **New Thread** agent picker shows configured names or agent IDs as
+soon as the roster arrives. Resolved identities update each choice without
+delaying selection; configured names keep precedence and the Gateway's default
+identity is **Assistant**. The catalog refreshes when the picker opens and stays
+bound to the selected Gateway.
+
 ## Session colors
 
 Long-press a session in the sidebar or Sessions screen to open its session actions, then choose **Color**. Select red, blue, green, yellow, purple, orange, pink, or cyan. **Default** clears the color.

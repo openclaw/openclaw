@@ -50,12 +50,12 @@ import { recordConfigWriteMetadata, stampConfigWriteMetadata } from "./io.meta.j
 import {
   containsConfigIncludeDirective,
   hashConfigRaw,
+  hashConfigRevision,
   hasConfigMeta,
   resolveConfigForRead,
   resolveGatewayMode,
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
-import { hashConfigRevision } from "./io.snapshot.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
   ConfigWriteInputBasis,

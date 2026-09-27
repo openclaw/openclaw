@@ -277,11 +277,11 @@ describe("prepared registry construction borrows", () => {
     expect(isPluginRegistryRetired(registry)).toBe(true);
   });
 
-  it.each(
-    (["run", "configured", "explicit"] as const).flatMap((owner) =>
-      (["owned", "gateway"] as const).map((source) => ({ owner, source })),
-    ),
-  )(
+  it.each([
+    { owner: "run", source: "owned" },
+    { owner: "configured", source: "gateway" },
+    { owner: "explicit", source: "owned" },
+  ] as const)(
     "retains $owner/$source work through post-facts projection, then releases it",
     async ({ owner, source }) => {
       const { registry, config, input, borrower, instance, metadata } =

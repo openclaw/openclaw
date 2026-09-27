@@ -2484,7 +2484,6 @@ const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[] | (() => NodeTest
         configs: [
           "test/vitest/vitest.acp.config.ts",
           "test/vitest/vitest.shared-core.config.ts",
-          "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
         ],
         requiresDist: false,

@@ -369,10 +369,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         let createGate = self.createGate
         let createIsUnsupported = self.createIsUnsupported
         return OpenClawChatNewSessionRouteLease(
-            listAgents: {
-                OpenClawChatAgentsListResponse(
+            loadAgents: { onUpdate in
+                await onUpdate(OpenClawChatAgentsListResponse(
                     defaultId: "worker",
-                    agents: [OpenClawChatAgentChoice(id: "worker", workspaceGit: true)])
+                    agents: [OpenClawChatAgentChoice(id: "worker", workspaceGit: true)]))
             },
             createSession: { key, _, agentID, parentKey, _, _ in
                 let index = await state.recordCreate(key: key, agentID: agentID, parentKey: parentKey)
@@ -609,7 +609,8 @@ struct ChatViewModelSessionActionTests {
         let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         let lease = try await viewModel.newSessionRouteLease()
-        let response = try await lease.listAgents()
+        var response: OpenClawChatAgentsListResponse?
+        try await lease.loadAgents { response = $0 }
 
         await viewModel.startNewSession(
             agentID: response?.defaultId ?? "",

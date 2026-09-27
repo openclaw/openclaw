@@ -236,8 +236,8 @@ export type GatewayCloseParams = {
   disposeAllCodeModeRuns: () => Promise<void> | void;
   closeProviderTransportDispatcherPool: () => Promise<void>;
   cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
+  stopCronMaintenance?: () => Promise<void>;
   heartbeatRunner: HeartbeatRunner;
-  stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
@@ -245,7 +245,6 @@ export type GatewayCloseParams = {
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
-  taskUnsub: (() => void) | null;
   clients: Set<{
     connectionKind?: "gateway" | "worker";
     socket: { close: (code: number, reason: string) => void };
@@ -500,11 +499,7 @@ async function closeGatewayResources(
       () => (params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop()),
       warnings,
     );
-    await shutdownStep(
-      "task-registry-maintenance",
-      () => params.stopTaskRegistryMaintenance?.(),
-      warnings,
-    );
+    await shutdownStep("cron-maintenance", () => params.stopCronMaintenance?.(), warnings);
     for (const timer of params.nodePresenceTimers.values()) {
       clearInterval(timer);
     }
@@ -520,9 +515,6 @@ async function closeGatewayResources(
     }
     if (params.lifecycleUnsub) {
       await shutdownStep("lifecycle-unsub", () => params.lifecycleUnsub!(), warnings);
-    }
-    if (params.taskUnsub) {
-      await shutdownStep("task-unsub", () => params.taskUnsub!(), warnings);
     }
     params.chatRunState.clear();
     let clientCloseFailures = 0;

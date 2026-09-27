@@ -47,10 +47,6 @@ import { toPublicCronJob } from "../cron/public-job.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
-import {
-  abortActiveCronTaskRuns,
-  waitForActiveCronTaskRuns,
-} from "../cron/service/active-run-cancellation.js";
 import { applyJobPatch } from "../cron/service/jobs.js";
 import {
   resolveCronDeliverySessionKey,
@@ -127,6 +123,7 @@ import {
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { drainGatewayCron } from "./server-cron-drain.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronWebhook,
@@ -380,8 +377,6 @@ async function finalizeCronCompletionAnnouncement(params: {
     return finish(true);
   }
 }
-
-const CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS = 10_000;
 
 export function buildGatewayCronService(params: {
   scheduler: GatewayScheduler;
@@ -1441,26 +1436,11 @@ export function buildGatewayCronService(params: {
   };
   const stopAndDrainCron = async (preserveExitWatchers = false) => {
     stopCronLifecycle(preserveExitWatchers);
-    const exitWatchersStop = exitWatchersStopPromise ?? Promise.resolve();
-    const streamWatchersStop = stopStreamWatchers().then(
-      () => ({ ok: true as const }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    const abortedRuns = abortActiveCronTaskRuns("Gateway shutting down.");
-    const [activeRunDrain, , streamWatchersResult] = await Promise.all([
-      waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
-      exitWatchersStop,
-      streamWatchersStop,
-    ]);
-    if (!activeRunDrain.drained) {
-      cronLogger.warn(
-        { abortedRuns, activeRuns: activeRunDrain.active },
-        "cron: active runs did not drain before shutdown timeout",
-      );
-    }
-    if (!streamWatchersResult.ok) {
-      throw streamWatchersResult.error;
-    }
+    await drainGatewayCron({
+      exitWatchersStop: exitWatchersStopPromise ?? Promise.resolve(),
+      streamWatchersStop: stopStreamWatchers(),
+      logger: cronLogger,
+    });
   };
   cron.stopAndDrain = async () => {
     await stopAndDrainCron();

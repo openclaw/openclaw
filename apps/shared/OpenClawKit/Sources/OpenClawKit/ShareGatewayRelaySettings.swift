@@ -119,9 +119,7 @@ public enum ShareGatewayRelaySettings {
     }
 
     public static func loadLastEvent() -> String? {
-        let value = self.defaults.string(forKey: self.lastEventKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return value.isEmpty ? nil : value
+        self.defaults.string(forKey: self.lastEventKey)?.trimmedNonEmpty
     }
 
     private static func saveMetadata(_ config: ShareGatewayRelayConfig) {

@@ -15,7 +15,10 @@ import {
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
 import { refreshStartupPluginQuarantine } from "./doctor-config-preflight-plugin-verification.js";
-import { throwStartupMigrationGuardRejected } from "./doctor-startup-migration-refusal.js";
+import {
+  rethrowStartupConfigFailure,
+  throwStartupMigrationGuardRejected,
+} from "./doctor-startup-migration-refusal.js";
 import { cleanupStartupPluginSourceCaptures } from "./startup-plugin-source-captures.js";
 
 export type StartupConfigPreflightOptions = {
@@ -37,7 +40,14 @@ export async function runStartupConfigPreflight(
   options: StartupConfigPreflightOptions,
 ): Promise<StartupConfigPreflightResult> {
   const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
-  return await withSqliteReadOnlyWorkerScope(() => prepareStartupConfig(options));
+  try {
+    return await withSqliteReadOnlyWorkerScope(() => prepareStartupConfig(options));
+  } catch (error) {
+    if (options.gateway) {
+      rethrowStartupConfigFailure(error);
+    }
+    throw error;
+  }
 }
 
 async function prepareStartupConfig(

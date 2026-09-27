@@ -16,6 +16,10 @@ import {
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
+import {
+  matchesAcpSessionControlBinding,
+  type AcpSessionControlBinding,
+} from "../runtime/session-control-owner.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import {
   assertAcpRuntimeOwnerSupport,
@@ -38,21 +42,46 @@ import {
 /** Returns a reusable cached handle or initializes a fresh runtime session for the metadata. */
 export async function ensureManagerRuntimeHandle(params: {
   assertActive?: () => void;
+  expectedControlBinding?: AcpSessionControlBinding;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
   meta: SessionAcpMeta;
   selectedBackend?: string;
-  deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend">;
+  deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend" | "loadSessionEntryAsync">;
   runtimeHandles: ManagerRuntimeHandleCache;
   writeSessionMeta: WriteManagerSessionMeta;
   isCurrentActor?: () => boolean;
 }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
   const isCurrentActor = params.isCurrentActor ?? (() => true);
-  if (!isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
-  params.assertActive?.();
+  const expectedControlBinding = params.expectedControlBinding
+    ? { ...params.expectedControlBinding }
+    : undefined;
+  const assertCurrent = () => {
+    if (!isCurrentActor()) {
+      throw createSupersededActorError(params.sessionKey);
+    }
+    params.assertActive?.();
+  };
+  const assertControlBindingCurrent = async () => {
+    assertCurrent();
+    const current = await params.deps.loadSessionEntryAsync({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      clone: false,
+      assertCurrent,
+    });
+    assertCurrent();
+    if (
+      current?.storeReadFailed ||
+      (expectedControlBinding &&
+        !matchesAcpSessionControlBinding(current?.entry, expectedControlBinding))
+    ) {
+      throw createSupersededActorError(params.sessionKey);
+    }
+  };
+  assertCurrent();
   const agent =
     normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
   const mode = params.meta.mode;
@@ -96,6 +125,9 @@ export async function ensureManagerRuntimeHandle(params: {
       throw createSupersededActorError(params.sessionKey);
     }
     params.assertActive?.();
+    if (expectedControlBinding) {
+      await assertControlBindingCurrent();
+    }
     if (reusable) {
       if (!isCurrentActor()) {
         throw createSupersededActorError(params.sessionKey);
@@ -134,7 +166,10 @@ export async function ensureManagerRuntimeHandle(params: {
     previousIdentity != null &&
     !identityHasStableSessionId(previousIdentity);
   const ensureSession = async (resumeSessionId?: string) => {
-    params.assertActive?.();
+    if (expectedControlBinding) {
+      await assertControlBindingCurrent();
+    }
+    assertCurrent();
     const ensured = await withAcpRuntimeErrorBoundary({
       run: async () =>
         await runtime.ensureSession({
@@ -161,6 +196,7 @@ export async function ensureManagerRuntimeHandle(params: {
       });
       throw createSupersededActorError(params.sessionKey);
     }
+    assertCurrent();
     return ensured;
   };
   let ensured: AcpRuntimeHandle;
@@ -168,7 +204,10 @@ export async function ensureManagerRuntimeHandle(params: {
     if (!isCurrentActor()) {
       throw createSupersededActorError(params.sessionKey);
     }
-    params.assertActive?.();
+    if (expectedControlBinding) {
+      await assertControlBindingCurrent();
+    }
+    assertCurrent();
     await runtime.prepareFreshSession?.({
       persistedHandle,
       sessionKey: params.sessionKey,
@@ -191,7 +230,11 @@ export async function ensureManagerRuntimeHandle(params: {
         throw acpError;
       }
       params.assertActive?.();
-      if (isAcpOwnerRepairRequired(acpError) || acpError.code !== "ACP_SESSION_INIT_FAILED") {
+      if (
+        isAcpOwnerRepairRequired(acpError) ||
+        isSupersededActorError(acpError) ||
+        acpError.code !== "ACP_SESSION_INIT_FAILED"
+      ) {
         throw acpError;
       }
       logVerbose(
@@ -270,57 +313,51 @@ export async function ensureManagerRuntimeHandle(params: {
     previousMeta.cwd !== nextMeta.cwd ||
     !runtimeOptionsEqual(previousMeta.runtimeOptions, nextMeta.runtimeOptions) ||
     hasLegacyAcpIdentityProjection(previousMeta);
-  if (shouldPersistMeta) {
-    try {
+  try {
+    assertCurrent();
+    if (shouldPersistMeta) {
       await params.writeSessionMeta({
+        assertCommitAllowed: assertCurrent,
+        ...(expectedControlBinding ? { expectedControlBinding, failOnError: true } : {}),
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         isCurrentActor,
         mutate: (_current, entry) => {
-          if (!isCurrentActor()) {
-            return undefined;
-          }
-          if (!entry) {
-            return null;
-          }
-          return nextMeta;
+          assertCurrent();
+          return entry ? nextMeta : null;
         },
       });
-    } catch (error) {
-      // This handle has not entered the cache, so reset cleanup cannot capture it.
-      if (!isCurrentActor()) {
-        await closeSupersededRuntimeHandle({
-          runtime,
-          handle: nextHandle,
-          sessionKey: params.sessionKey,
-        });
-      }
-      throw error;
     }
-  }
-  if (!isCurrentActor()) {
-    await closeSupersededRuntimeHandle({
+    if (expectedControlBinding) {
+      await assertControlBindingCurrent();
+    }
+    assertCurrent();
+    params.runtimeHandles.set(params, {
       runtime,
       handle: nextHandle,
-      sessionKey: params.sessionKey,
+      backend: ensured.backend || backend.id,
+      agent,
+      mode,
+      cwd: effectiveCwd,
+      appliedControlSignature: undefined,
     });
-    throw createSupersededActorError(params.sessionKey);
+    return {
+      runtime,
+      handle: nextHandle,
+      meta: nextMeta,
+    };
+  } catch (error) {
+    // Ensure can reopen backend-owned state; task/binding loss grants no right to discard it.
+    if (!isCurrentActor()) {
+      await closeSupersededRuntimeHandle({
+        runtime,
+        handle: nextHandle,
+        sessionKey: params.sessionKey,
+      });
+    }
+    throw error;
   }
-  params.runtimeHandles.set(params, {
-    runtime,
-    handle: nextHandle,
-    backend: ensured.backend || backend.id,
-    agent,
-    mode,
-    cwd: effectiveCwd,
-    appliedControlSignature: undefined,
-  });
-  return {
-    runtime,
-    handle: nextHandle,
-    meta: nextMeta,
-  };
 }
 
 const SESSION_ACTOR_SUPERSEDED_DETAIL_CODE = "SESSION_ACTOR_SUPERSEDED";
@@ -330,6 +367,12 @@ export function createSupersededActorError(sessionKey: string): AcpRuntimeError 
     "ACP_SESSION_INIT_FAILED",
     `ACP session actor was superseded during runtime initialization for ${sessionKey}.`,
     { detailCode: SESSION_ACTOR_SUPERSEDED_DETAIL_CODE },
+  );
+}
+
+export function isSupersededActorError(error: unknown): boolean {
+  return (
+    error instanceof AcpRuntimeError && error.detailCode === SESSION_ACTOR_SUPERSEDED_DETAIL_CODE
   );
 }
 

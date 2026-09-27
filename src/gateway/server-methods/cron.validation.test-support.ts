@@ -238,3 +238,89 @@ export function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
     ...overrides,
   };
 }
+
+export function pluginEntries(...ids: string[]): OpenClawConfig["plugins"] {
+  return {
+    entries: Object.fromEntries(ids.map((id) => [id, { enabled: true }])),
+  };
+}
+
+export function telegramConfig(): OpenClawConfig {
+  return {
+    channels: {
+      telegram: {
+        botToken: "telegram-token",
+      },
+    },
+    plugins: pluginEntries("telegram"),
+  } as OpenClawConfig;
+}
+
+export function telegramSlackConfig(params: { includeMainSession?: boolean } = {}): OpenClawConfig {
+  return {
+    ...(params.includeMainSession ? { session: { mainKey: "main" } } : {}),
+    channels: {
+      telegram: {
+        botToken: "telegram-token",
+      },
+      slack: {
+        botToken: "xoxb-slack-token",
+        appToken: "xapp-slack-token",
+      },
+    },
+    plugins: pluginEntries("telegram", "slack"),
+  } as OpenClawConfig;
+}
+
+export function telegramDisabledAccountConfig(): OpenClawConfig {
+  return {
+    channels: {
+      telegram: {
+        accounts: {
+          primary: { botToken: "telegram-token-primary" },
+          retired: { botToken: "telegram-token-retired", enabled: false },
+        },
+      },
+    },
+    plugins: pluginEntries("telegram"),
+  } as OpenClawConfig;
+}
+
+export function msteamsConfig(): OpenClawConfig {
+  return {
+    channels: {
+      msteams: {
+        botToken: "teams-token",
+      },
+    },
+    plugins: pluginEntries("msteams"),
+  } as OpenClawConfig;
+}
+
+export function slackSynologyConfig(): OpenClawConfig {
+  return {
+    channels: {
+      slack: {
+        botToken: "xoxb-slack-token",
+        appToken: "xapp-slack-token",
+      },
+      "synology-chat": {
+        token: "synology-token",
+      },
+    },
+    plugins: pluginEntries("slack", "synology-chat"),
+  } as OpenClawConfig;
+}
+
+export function slackConfig(params: { includeMainSession?: boolean } = {}): OpenClawConfig {
+  return {
+    ...(params.includeMainSession ? { session: { mainKey: "main" } } : {}),
+    channels: {
+      slack: {
+        botToken: "xoxb-slack-token",
+        appToken: "xapp-slack-token",
+      },
+    },
+    plugins: pluginEntries("slack"),
+  } as OpenClawConfig;
+}
