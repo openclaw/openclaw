@@ -46,6 +46,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   presenceKey?: string;
   /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
   personPresence?: { onlineSince: number; lastActivityAt?: number };
+  /** Accepted interaction on this exact connection, never copied from another client. */
+  connectionLastActivityAt?: number;
   authenticatedUserId?: string;
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;

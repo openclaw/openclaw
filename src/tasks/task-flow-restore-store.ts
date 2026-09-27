@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -70,7 +70,6 @@ export async function runTaskFlowRestoreWorkerOperation<Key extends keyof Restor
       context,
       async (scope) => consume(await scope.execute(command), reconcileFlows),
       {
-        requireStateLifecycle: true,
         assertCurrent,
         createAdmission(retained) {
           settlement = retained.settled;

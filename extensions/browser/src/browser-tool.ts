@@ -333,8 +333,8 @@ export function createBrowserTool(
             signal,
             opts,
             sessionTabs: {
-              touch: () => {},
-              untrack: () => {},
+              touch: async () => {},
+              untrack: async () => {},
               trackOpened: async () => {
                 throw new Error("Dashboard owns its context.");
               },

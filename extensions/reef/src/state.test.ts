@@ -335,7 +335,7 @@ describe("Reef SQLite state", () => {
     const runtime = createRuntime(stateDir);
     const keys = await generateAndStoreKeys(runtime);
     expect(await loadKeys(createRuntime(stateDir))).toEqual(keys);
-    const observation = observeHostDataSql({ OPENCLAW_STATE_DIR: stateDir });
+    const observation = observeHostDataSql();
     const sql = observation.calls;
     await bindIdentity(runtime, "molty");
     await saveReefSetupSession(runtime, {
@@ -709,7 +709,7 @@ describe("Reef SQLite state", () => {
     const reopened = openStores(createRuntime(stateDir), keys);
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
-    const observation = observeHostDataSql({ OPENCLAW_STATE_DIR: stateDir });
+    const observation = observeHostDataSql();
     const sql = observation.calls;
     await expect(reopened.reviews.lookupDecision(review.approvalDigest)).resolves.toEqual({
       approved: true,
@@ -898,7 +898,7 @@ describe("Reef delivered markers", () => {
   }
 
   it("confirms delivered markers idempotently", async () => {
-    const observation = observeHostDataSql({ OPENCLAW_STATE_DIR: stateDir });
+    const observation = observeHostDataSql();
     const sql = observation.calls;
     const delivered = new ReefDeliveredStore(createRuntime(stateDir));
     await expect(delivered.status("m1")).resolves.toBeUndefined();

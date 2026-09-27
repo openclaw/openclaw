@@ -90,7 +90,11 @@ export async function prepareGatewayServerBootstrap(input: {
   const traceOriginAt = opts.processStartedAt ?? opts.startupStartedAt;
   const startupElapsedMs =
     typeof traceOriginAt === "number" ? Math.max(0, Date.now() - traceOriginAt) : 0;
-  const startupTrace = createGatewayStartupTrace(log, performance.now() - startupElapsedMs);
+  const startupTrace = createGatewayStartupTrace(
+    log,
+    performance.now() - startupElapsedMs,
+    opts.updateCanary,
+  );
   using startupTraceOwner = {
     transferred: false,
     [Symbol.dispose]() {

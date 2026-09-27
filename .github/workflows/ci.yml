@@ -2056,6 +2056,25 @@ jobs:
               });
             }
           }
+          // The trusted planner may name owners added after a frozen checkout.
+          // Project them out here so the runner never receives impossible work.
+          const projectFrozenNodeTestPlan = (plan) => {
+            const configs = plan.configs?.filter((config) => existsSync(config));
+            if (plan.configs?.length && !configs?.length) {
+              return null;
+            }
+            return { ...plan, configs };
+          };
+          const targetNodeTestShards = compatibilityTarget
+            ? rawNodeTestShards.flatMap((shard) => {
+                const groups = shard.groups
+                  ?.map(projectFrozenNodeTestPlan)
+                  .filter((group) => group !== null);
+                if (shard.groups?.length && !groups?.length) return [];
+                const projected = projectFrozenNodeTestPlan({ ...shard, groups });
+                return projected ? [projected] : [];
+              })
+            : rawNodeTestShards;
           // Node rows list every striped test file. Current targets pack the
           // projected runner contract; older targets keep their flat fields or
           // projected legacy groups because their shard runner predates the codec.
@@ -2069,7 +2088,7 @@ jobs:
                 })
               : null;
           const nodeTestGroupsCodec =
-            (rawNodeTestShards.length > 0 || uiTestGroups !== null) &&
+            (targetNodeTestShards.length > 0 || uiTestGroups !== null) &&
             existsSync(nodeTestGroupsCodecPath)
               ? await importTargetPlan(nodeTestGroupsCodecPath)
               : null;
@@ -2120,7 +2139,7 @@ jobs:
             "test/vitest/vitest.tooling-docker.config.ts",
           ]);
           // The same capped matrix owns compact and plugin work; admit its longest rows first.
-          const nodeTestShards = rawNodeTestShards
+          const nodeTestShards = targetNodeTestShards
             .toSorted((a, b) =>
               Number(b.runner === "runson-c8i-8xlarge") - Number(a.runner === "runson-c8i-8xlarge") ||
               (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
@@ -2200,7 +2219,7 @@ jobs:
             !frozenTarget && !compatibilityTarget && !releaseGate &&
             /^[0-9a-f]{40}$/u.test(checkoutRevision) && checkoutRevision === workflowRevision &&
             typeof nodeTestPlan.hasCompleteStartupCorpusCoverage === "function" &&
-            nodeTestPlan.hasCompleteStartupCorpusCoverage(rawNodeTestShards, startupCorpusTestFiles)
+            nodeTestPlan.hasCompleteStartupCorpusCoverage(targetNodeTestShards, startupCorpusTestFiles)
               ? checkoutRevision : "";
           if (startupCorpusNodeRevision) {
             // The exact-tree Node receipt makes this row's only test step a no-op.
@@ -4381,6 +4400,12 @@ jobs:
           vitest-fs-cache: "true"
           vitest-worker-cache: ${{ needs.preflight.outputs.frozen_target != 'true' && matrix.pretest_build_mode == null && (matrix.node_version == null || matrix.node_version == '24.x') && 'true' || 'false' }}
           node-compile-cache: "true"
+
+      - name: Apply frozen Node test compatibility
+        if: needs.preflight.outputs.checkout_revision == 'f773aa06a1a93b36b050f1a3f4b57d3d91311541'
+        uses: ./.ci-harness/.github/actions/frozen-node-test-compat
+        with:
+          target-sha: ${{ needs.preflight.outputs.checkout_revision }}
 
       - name: Setup pinned Bun test runtime
         if: matrix.requires_bun == true

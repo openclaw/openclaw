@@ -81,9 +81,13 @@ function matchesValidation(
   );
 }
 
-function hasRevokedValidation(pathname: string): boolean {
+export function hasRevokedOpenClawAgentDatabaseValidation(
+  pathname: string,
+  received?: OpenClawAgentDatabaseValidation,
+): boolean {
   const previous = validatedPaths.get(path.resolve(pathname));
   return (
+    (received !== undefined && Atomics.load(new Int32Array(received.valid), 0) !== 1) ||
     previous?.revoked === true ||
     (previous?.validation !== undefined &&
       Atomics.load(new Int32Array(previous.validation.valid), 0) !== 1)
@@ -172,7 +176,7 @@ export function captureOpenClawAgentDatabaseValidationTransfer(
       valid: received.valid,
       canonicalReady: received.canonicalReady,
     };
-    if (hasRevokedValidation(pathname)) {
+    if (hasRevokedOpenClawAgentDatabaseValidation(pathname)) {
       Atomics.store(new Int32Array(validation.canonicalReady), 0, 0);
     }
     invalidateOpenClawAgentDatabaseValidation(pathname);
@@ -215,7 +219,7 @@ export function hasOpenClawAgentCanonicalValidation(
     !pathname ||
     database.db.isTransaction ||
     validatedPaths.get(path.resolve(pathname))?.validation !== undefined ||
-    hasRevokedValidation(pathname) ||
+    hasRevokedOpenClawAgentDatabaseValidation(pathname) ||
     !hasPersistedOpenClawAgentCanonicalValidation(database)
   ) {
     return false;
@@ -262,7 +266,7 @@ export function adoptOpenClawAgentDatabaseValidation(
   if (getOpenClawAgentDatabaseValidation(database)) {
     return true;
   }
-  if (hasRevokedValidation(database.path)) {
+  if (hasRevokedOpenClawAgentDatabaseValidation(database.path)) {
     // Integrity handoff cannot replace the parent's requested canonical certification.
     Atomics.store(new Int32Array(validation.canonicalReady), 0, 0);
   }
@@ -314,7 +318,7 @@ function createValidationReceipt(
 export function setOpenClawAgentDatabaseValidation(
   database: ValidationDatabase,
 ): OpenClawAgentDatabaseValidation {
-  const revoked = hasRevokedValidation(database.path);
+  const revoked = hasRevokedOpenClawAgentDatabaseValidation(database.path);
   const validation = createValidationReceipt(
     database,
     isOpenClawAgentCanonicalStoreEmpty(database) ||

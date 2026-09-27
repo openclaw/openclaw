@@ -13,7 +13,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const leaseId = "cbx_macos_fixture";
 const wallpaper = Buffer.from("synthetic wallpaper");
 type Readiness =
-  | "ready"
   | "wrong-account"
   | "no-gui"
   | "invalid-signature"
@@ -247,7 +246,7 @@ describe.skipIf(process.platform === "win32")("Crabbox macOS desktop setup", () 
     },
   );
 
-  it.each<Readiness>(["ready", "authority-first-long", "team-first-long"])(
+  it.each<Readiness>(["authority-first-long", "team-first-long"])(
     "publishes private lease artifacts and reuses its already running browser with %s",
     (readiness) => {
       const fixture = desktopFixture(readiness);

@@ -244,7 +244,7 @@ it.each(handoffFailures)(
         failure === "runtime" ? "Runtime activation was not confirmed" : "source cleanup failed",
       );
       if (failure === "include-during-policy-read" || failure === "env-during-policy-read") {
-        await expect(finishing).rejects.toThrow("Retired plugin source acquired a current owner");
+        await expect(finishing).rejects.toThrow("still referenced by config");
       }
       expect(reload).toHaveBeenCalledOnce();
       expect(cleanup).not.toHaveBeenCalled();

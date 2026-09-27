@@ -151,10 +151,11 @@ describe("runDoctorSessionSqlite", () => {
     closeOpenClawStateDatabaseForTest();
     const openDatabase = nodeSqlite.openNodeSqliteDatabase;
     const sharedPath = resolveOpenClawStateSqlitePath(store.env);
+    const sharedFileUri = nodeSqlite.resolveExistingSqliteFileUri(sharedPath);
     const spy = vi
       .spyOn(nodeSqlite, "openNodeSqliteDatabase")
       .mockImplementation((file, options) => {
-        if (file === sharedPath && !options?.readOnly) {
+        if ((file === sharedPath || file === sharedFileUri) && !options?.readOnly) {
           throw Object.assign(new Error("fixture lease storage failure"), { code: "SQLITE_IOERR" });
         }
         return openDatabase(file, options);

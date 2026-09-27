@@ -296,11 +296,12 @@ describe("tree row snapshots", () => {
     ).toEqual(expect.arrayContaining(legacyRows));
   });
 
-  it("confirms cleared ancestor fields ahead of an overlapping list read", async () => {
+  it.each(["omitted", "null"])("keeps %s ancestor clears over a stale read", async (clear) => {
     vi.useFakeTimers();
+    const activitySummary = { state: "stale" as const, canEnsure: true };
     const h = treeHarness([
       child,
-      { ...parent, label: "Cleared label", snapshotAt: 100 },
+      { ...parent, label: "Cleared label", activitySummary, snapshotAt: 100 },
       grandparent,
     ]);
     try {
@@ -316,7 +317,12 @@ describe("tree row snapshots", () => {
             ancestorSessions: reference
               ? [settledGrandparent]
               : [
-                  { ...settledParent, ancestorRevision: "parent-revision", snapshotAt: 101 },
+                  {
+                    ...settledParent,
+                    ...(clear === "null" ? { activitySummary: null } : {}),
+                    ancestorRevision: "parent-revision",
+                    snapshotAt: 101,
+                  },
                   settledGrandparent,
                 ],
             ...(reference
@@ -341,7 +347,7 @@ describe("tree row snapshots", () => {
         sessionsResult(
           [
             settledChild,
-            { ...settledParent, label: "Stale read label", snapshotAt: 102 },
+            { ...settledParent, label: "Stale read label", activitySummary, snapshotAt: 102 },
             settledGrandparent,
           ],
           102,

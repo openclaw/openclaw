@@ -45,7 +45,7 @@ export function runBuiltRuntime(
   env: NodeJS.ProcessEnv,
   args: string[],
   timeout: number,
-  maxBuffer?: number,
+  options: Pick<Parameters<typeof runCliProcessChild>[0], "maxBuffer" | "onTestFinished"> = {},
 ) {
   return runCliProcessChild({
     nodeExecutable: isolatedRuntimeNodeExecPath,
@@ -54,7 +54,8 @@ export function runBuiltRuntime(
     cwd: runtimeRoot,
     env,
     timeoutMs: timeout,
-    maxBuffer: maxBuffer ?? 1024 * 1024,
+    maxBuffer: options.maxBuffer ?? 1024 * 1024,
+    ...(options.onTestFinished ? { onTestFinished: options.onTestFinished } : {}),
   });
 }
 

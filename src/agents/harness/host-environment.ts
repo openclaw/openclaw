@@ -1,3 +1,5 @@
+import path from "node:path";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
   installationTargetEnv,
@@ -9,6 +11,28 @@ import { resolveSessionAgentIdStrict } from "../agent-scope.js";
 import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+
+const MAX_NATIVE_OPERATION_CWD_BYTES = 4096;
+
+export function normalizeNativeOperationCwd(
+  value: unknown,
+  attemptCwd: string | undefined,
+): string {
+  if (typeof value !== "string") {
+    throw new Error("native operation cwd must be a string");
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error("native operation cwd must not be empty");
+  }
+  if (Buffer.byteLength(normalized, "utf8") > MAX_NATIVE_OPERATION_CWD_BYTES) {
+    throw new Error(`native operation cwd must not exceed ${MAX_NATIVE_OPERATION_CWD_BYTES} bytes`);
+  }
+  if (containsAsciiControlCharacter(normalized)) {
+    throw new Error("native operation cwd must not contain control characters");
+  }
+  return path.resolve(attemptCwd ?? process.cwd(), normalized);
+}
 
 /** Capture non-secret environment facts once; the harness owns their placement. */
 export function prepareAgentHarnessEnvironment(params: {

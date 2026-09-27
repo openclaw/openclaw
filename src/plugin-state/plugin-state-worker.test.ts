@@ -10,12 +10,12 @@ import {
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
-import { holdForeignLifecycle } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import { holdForeignWriter } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
 import {
   appendMemoryHostEvent,
   readMemoryHostEventRecords,
 } from "../plugin-sdk/memory-host-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -68,7 +68,7 @@ describe("worker plugin state", () => {
   it("opens cold state and sweeps reopened state without host data SQL", async () => {
     await withOpenClawTestState({ label: "plugin-state-worker-sweep" }, async (state) => {
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
-      const observation = observeHostDataSql(state.env);
+      const observation = observeHostDataSql();
       try {
         expect(existsSync(databasePath)).toBe(false);
         expect(await sweepExpiredPluginStateEntries({ env: state.env })).toBe(0);
@@ -116,23 +116,24 @@ describe("worker plugin state", () => {
     });
   });
 
-  it.each(
-    (["observe", "compareDelete"] as const).flatMap((operation) =>
-      (["parent", "foreign"] as const).map((owner) => ({ operation, owner })),
-    ),
-  )(
-    "preserves $owner lifecycle custody during $operation and releases it after settlement",
-    async ({ operation, owner }) => {
-      await withOpenClawTestState({ label: "plugin-state-lock-custody" }, async (state) => {
-        const assertActive = vi.fn();
+  it.each(["observe", "compareDelete"] as const)(
+    "revalidates %s authority after native writer contention and releases refused transactions",
+    async (operation) => {
+      await withOpenClawTestState({ label: "plugin-state-native-contention" }, async (state) => {
+        let current = true;
+        const revoked = new Error("plugin owner revoked after dispatch");
         const store = createPluginStateKeyedStore<string>(
           "memory-core",
           {
-            namespace: "lock-custody",
+            namespace: "writer-contention",
             retention: "retained",
             env: state.env,
           },
-          assertActive,
+          () => {
+            if (!current) {
+              throw revoked;
+            }
+          },
         );
         const messages = vi.spyOn(Worker.prototype, "postMessage");
         await store.register("workspace", "owner");
@@ -143,72 +144,67 @@ describe("worker plugin state", () => {
         }
         const observation = await store.observe("workspace");
         const captured = captureOpenClawStateWorkerContext({ env: state.env });
-        const foreign = owner === "foreign" ? await holdForeignLifecycle(captured) : undefined;
-        let held: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
+        const foreign = holdForeignWriter(captured);
+        const posted = createDeferredCore();
         const nativePost = worker.postMessage.bind(worker);
         const dispatch = vi
           .spyOn(worker, "postMessage")
           .mockImplementation((message, transferList) => {
             const request = asOptionalRecord(message);
+            nativePost(message, transferList);
             if (
               request?.type === "execute" &&
               request.input instanceof Uint8Array &&
               asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
             ) {
-              if (owner === "parent") {
-                // Preparation must borrow this same-process owner even after dispatch.
-                held = acquireStateDatabaseCoordinator({
-                  databasePath: resolveOpenClawStateSqlitePath(state.env),
-                  busyTimeoutMs: 0,
-                });
-              }
-              assertActive.mockClear();
+              posted.resolve();
             }
-            return nativePost(message, transferList);
           });
-        let completed = false;
-        const pending = (
+        const execute = () =>
           operation === "observe"
             ? store.observe("workspace")
             : store.compareAndApply("workspace", observation.comparison, {
                 operation: "delete",
                 action: "delete",
-              })
-        ).then(
-          (value) => {
-            completed = true;
-            return { ok: true, value } as const;
-          },
-          (error: unknown) => {
-            completed = true;
-            return { ok: false, error } as const;
-          },
+              });
+        const pending = execute().then(
+          (value) => ({ ok: true, value }) as const,
+          (error: unknown) => ({ ok: false, error }) as const,
         );
         try {
-          if (foreign) {
-            await vi.waitFor(() => expect(assertActive.mock.calls.length).toBeGreaterThan(4));
-            expect(completed).toBe(false);
-            foreign.release();
-          } else {
-            await vi.waitFor(() => expect(held).toBeDefined());
-          }
-          if (operation === "observe") {
-            await expect(pending).resolves.toMatchObject({ ok: true, value: { value: "owner" } });
-          } else {
-            await expect(pending).resolves.toEqual({ ok: true, value: { status: "applied" } });
-          }
-          expect(assertActive).toHaveBeenCalled();
+          await Promise.race([
+            posted.promise,
+            pending.then(() => {
+              throw new Error("Plugin operation settled before worker dispatch");
+            }),
+          ]);
+          // The dispatched operation must revalidate authority after acquiring the native writer.
+          current = false;
+          foreign.release();
+          await expect(pending).resolves.toMatchObject({
+            ok: false,
+            error: {
+              code:
+                operation === "observe" ? "PLUGIN_STATE_READ_FAILED" : "PLUGIN_STATE_WRITE_FAILED",
+              cause: revoked,
+            },
+          });
         } finally {
           dispatch.mockRestore();
-          held?.release();
-          await foreign?.close();
+          foreign.close();
           await pending;
+          current = true;
+        }
+        expect(await store.lookup("workspace")).toBe("owner");
+        // Claim the actual writer lock before closing the worker to prove refusal rolled back.
+        const nextOwner = holdForeignWriter(captured);
+        nextOwner.close();
+        if (operation === "observe") {
+          await expect(execute()).resolves.toMatchObject({ value: "owner" });
+        } else {
+          await expect(execute()).resolves.toEqual({ status: "applied" });
         }
         expect(await store.lookup("workspace")).toBe(operation === "observe" ? "owner" : undefined);
-        await closeOpenClawStateDatabaseAsync();
-        // A new independent claimant proves no delegate or native borrow survived drain.
-        const nextOwner = await holdForeignLifecycle(captured);
-        await nextOwner.close();
       });
     },
   );
@@ -223,7 +219,7 @@ describe("worker plugin state", () => {
         resultCount: 0,
         results: [],
       };
-      const observation = observeHostDataSql(state.env);
+      const observation = observeHostDataSql();
       const sql = observation.calls;
       const timings: Record<string, number> = {};
       try {

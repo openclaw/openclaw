@@ -5,6 +5,7 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -266,13 +267,11 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     entry: SubagentRunRecord,
     isSuccessor: (candidate: SubagentRunRecord) => boolean,
   ) {
-    let resolvePublication!: () => void;
+    const { promise, resolve } = createDeferredCore();
     const publication = {
       entry,
-      promise: new Promise<void>((resolve) => {
-        resolvePublication = resolve;
-      }),
-      resolve: () => resolvePublication(),
+      promise,
+      resolve,
       settled: false,
     };
     const scope: SubagentRetirementScope = {

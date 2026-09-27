@@ -195,7 +195,7 @@ describe("legacy node-host Doctor migration", () => {
       await gatewayLock.release();
     }
 
-    expect(blocked.warnings[0]).toContain("gateway already running");
+    expect(blocked.warnings[0]).toContain("OpenClaw state database is busy");
     expect(readCanonicalRow(env)).toBeUndefined();
     expect(fs.existsSync(sourcePath)).toBe(true);
   });

@@ -107,6 +107,8 @@ Calling `sessions.reclaim` while a turn is active cancels running and pending wo
 
 Cancellation does not wait for unrelated provider inspections. A prepared Stop can proceed before background maintenance that is still waiting for unrelated dispatches to finish; that maintenance waits for admitted Stops before it begins changing worker state. Once maintenance is ready, later Stops wait their turn. Final reconciliation and machine release still wait for admitted maintenance and earlier Stop, Move, or forced-destroy operations. A later dispatch or move of the same session waits for reclaim, so it cannot replace the worker before Stop finishes.
 
+Stop does not block dispatches for other sessions or leave them waiting for unrelated cloud provisions. Canceling a queued Move before it starts also releases its dispatch barrier. Existing maintenance and admitted Move or forced-destroy operations still keep their ordering.
+
 The result placement is `reclaimed` after an active worker is safely stopped. Reclaim also waits for an in-flight dispatch and retries pending teardown for a failed placement before returning `local`. No other placement states are successful reclaim results.
 
 Crabbox lease teardown reserves time for the CLI's full bounded release attempts, retries, cleanup observation, and process settlement. Inspection keeps its shorter timeout. Failed node enrollment also reserves time for diagnostics before teardown; optional image capture has its own additional budget.

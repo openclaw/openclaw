@@ -1,4 +1,3 @@
-// Proxy capture server records proxied HTTP traffic for deterministic test fixtures.
 import { randomUUID } from "node:crypto";
 import {
   createServer,
@@ -33,16 +32,11 @@ type BodyPreviewCapture = {
   truncated: boolean;
 };
 
-function isManagedProxyActive(env: NodeJS.ProcessEnv = process.env): boolean {
-  return isTruthyEnvValue(env["OPENCLAW_PROXY_ACTIVE"]);
-}
-
-function allowsDirectConnectWithManagedProxy(env: NodeJS.ProcessEnv = process.env): boolean {
-  return isTruthyEnvValue(env[DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE]);
-}
-
 function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.env): void {
-  if (!isManagedProxyActive(env) || allowsDirectConnectWithManagedProxy(env)) {
+  if (
+    !isTruthyEnvValue(env["OPENCLAW_PROXY_ACTIVE"]) ||
+    isTruthyEnvValue(env[DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE])
+  ) {
     return;
   }
   throw new Error(
@@ -178,12 +172,16 @@ function finishProxyResponseAfterUpstreamError(res: ServerResponse): void {
     res.destroy();
     return;
   }
-  res.writeHead(502, {
+  endProxyErrorResponse(res, 502, BAD_GATEWAY_BODY);
+}
+
+function endProxyErrorResponse(res: ServerResponse, status: number, body: string): void {
+  res.writeHead(status, {
     Connection: "close",
     "Content-Type": "text/plain; charset=utf-8",
-    "Content-Length": Buffer.byteLength(BAD_GATEWAY_BODY),
+    "Content-Length": Buffer.byteLength(body),
   });
-  res.end(BAD_GATEWAY_BODY);
+  res.end(body);
 }
 
 export async function startDebugProxyServer(params: {
@@ -213,7 +211,6 @@ export async function startDebugProxyServer(params: {
       try {
         target = normalizeTargetUrl(req);
       } catch (error) {
-        const message = "Invalid proxy target URL";
         void recordProxyEvent({
           protocol: "http",
           direction: "local",
@@ -224,13 +221,7 @@ export async function startDebugProxyServer(params: {
           path: req.url ?? "",
           errorText: error instanceof Error ? error.message : String(error),
         });
-        const responseBody = `${message}\n`;
-        res.writeHead(400, {
-          Connection: "close",
-          "Content-Type": "text/plain; charset=utf-8",
-          "Content-Length": Buffer.byteLength(responseBody),
-        });
-        res.end(responseBody);
+        endProxyErrorResponse(res, 400, "Invalid proxy target URL\n");
         return;
       }
       const targetProtocol = target.protocol === "https:" ? "https" : "http";
@@ -255,13 +246,7 @@ export async function startDebugProxyServer(params: {
           kind: "error",
           errorText: message,
         });
-        const responseBody = `${message}\n`;
-        res.writeHead(403, {
-          Connection: "close",
-          "Content-Type": "text/plain; charset=utf-8",
-          "Content-Length": Buffer.byteLength(responseBody),
-        });
-        res.end(responseBody);
+        endProxyErrorResponse(res, 403, `${message}\n`);
         return;
       }
       const requestCapture = createBodyPreviewCapture();
@@ -390,44 +375,40 @@ export async function startDebugProxyServer(params: {
   server.on("connect", (req, clientSocket, head) => {
     const flowId = randomUUID();
     let hostname = "127.0.0.1";
+    const recordConnectEvent = (
+      event: Pick<ProxyCaptureEventInput, "kind" | "errorText" | "headersJson">,
+    ) =>
+      void recordProxyEvent({
+        protocol: "connect",
+        direction: "local",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        ...event,
+      });
     let port;
     try {
       const parsed = parseConnectTarget(req.url);
       hostname = parsed.hostname;
       port = parsed.port;
     } catch (error) {
-      void recordProxyEvent({
-        protocol: "connect",
-        direction: "local",
+      recordConnectEvent({
         kind: "error",
-        flowId,
-        host: hostname,
-        path: req.url ?? "",
         errorText: error instanceof Error ? error.message : String(error),
       });
       clientSocket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
       return;
     }
-    void recordProxyEvent({
-      protocol: "connect",
-      direction: "local",
+    recordConnectEvent({
       kind: "connect",
-      flowId,
-      host: hostname,
-      path: req.url ?? "",
       headersJson: JSON.stringify(redactedCaptureHeaders(req.headers)),
     });
     try {
       assertDebugProxyDirectUpstreamAllowed();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      void recordProxyEvent({
-        protocol: "connect",
-        direction: "local",
+      recordConnectEvent({
         kind: "error",
-        flowId,
-        host: hostname,
-        path: req.url ?? "",
         errorText: message,
       });
       const responseBody = `${message}\n`;
@@ -450,13 +431,8 @@ export async function startDebugProxyServer(params: {
     });
     function onUpstreamConnectTimeout() {
       const message = `CONNECT upstream opening timed out after ${DEBUG_PROXY_CONNECT_TIMEOUT_MS}ms of inactivity`;
-      void recordProxyEvent({
-        protocol: "connect",
-        direction: "local",
+      recordConnectEvent({
         kind: "error",
-        flowId,
-        host: hostname,
-        path: req.url ?? "",
         errorText: message,
       });
       upstreamSocket.destroy();
@@ -467,25 +443,15 @@ export async function startDebugProxyServer(params: {
     }
     upstreamSocket.setTimeout(DEBUG_PROXY_CONNECT_TIMEOUT_MS, onUpstreamConnectTimeout);
     clientSocket.on("error", (error) => {
-      void recordProxyEvent({
-        protocol: "connect",
-        direction: "local",
+      recordConnectEvent({
         kind: "error",
-        flowId,
-        host: hostname,
-        path: req.url ?? "",
         errorText: error.message,
       });
       upstreamSocket.destroy();
     });
     upstreamSocket.on("error", (error) => {
-      void recordProxyEvent({
-        protocol: "connect",
-        direction: "local",
+      recordConnectEvent({
         kind: "error",
-        flowId,
-        host: hostname,
-        path: req.url ?? "",
         errorText: error.message,
       });
       clientSocket.destroy();

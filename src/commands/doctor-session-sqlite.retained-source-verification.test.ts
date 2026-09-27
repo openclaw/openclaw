@@ -522,7 +522,34 @@ describe("retained session source verification", () => {
               expect(fs.existsSync(target.storePath)).toBe(false);
               for (const move of target.completedMoves) {
                 if (move.kind === "transcript") {
-                  expect(fs.readFileSync(move.sourcePath)).toEqual(originals.get(move.archivePath));
+                  if (history === "missing-index") {
+                    expect(fs.readFileSync(move.sourcePath)).toEqual(
+                      originals.get(move.archivePath),
+                    );
+                  } else {
+                    expect(fs.existsSync(move.sourcePath)).toBe(false);
+                    const settledMoves = migrationRun
+                      .listSessionSqliteMigrationManifestPaths(state.env)
+                      .flatMap(
+                        (file) =>
+                          migrationRun.readSessionSqliteMigrationManifest(file)?.targets ?? [],
+                      )
+                      .flatMap((owner) => owner.completedMoves)
+                      .filter(
+                        (settled) =>
+                          settled.sourcePath === move.sourcePath &&
+                          settled.archivePath !== move.archivePath,
+                      );
+                    expect(settledMoves).toHaveLength(1);
+                    expect(settledMoves[0]!.artifact).toMatchObject({
+                      classification: "protected",
+                      reason: "indexed-historical-primary",
+                      disposal: { state: "retained" },
+                    });
+                    expect(fs.readFileSync(settledMoves[0]!.archivePath)).toEqual(
+                      originals.get(move.archivePath),
+                    );
+                  }
                 }
               }
             }

@@ -179,7 +179,6 @@ export function renderRoleTree(
   output: string[],
   options: CdpRoleSnapshotOptions,
   state: { truncated: boolean; recordIframePositions?: boolean; flattenInteractive?: boolean },
-  indentOffset = 0,
 ): void {
   const node = tree[index];
   if (!node) {
@@ -188,7 +187,7 @@ export function renderRoleTree(
   if (options.maxDepth !== undefined && node.depth > options.maxDepth) {
     return;
   }
-  const effectiveDepth = Math.max(0, node.depth + indentOffset);
+  const effectiveDepth = Math.max(0, node.depth);
   if (effectiveDepth > ROLE_SNAPSHOT_MAX_DEPTH) {
     state.truncated = true;
     return;
@@ -211,6 +210,6 @@ export function renderRoleTree(
     );
   }
   for (const child of node.children) {
-    renderRoleTree(tree, child, output, options, state, indentOffset);
+    renderRoleTree(tree, child, output, options, state);
   }
 }

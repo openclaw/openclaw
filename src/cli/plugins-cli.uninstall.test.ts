@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Plugins CLI uninstall tests cover plugin removal selection and uninstall output.
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -8,6 +7,7 @@ import { persistClawPackageRef } from "../claws/provenance.js";
 import type { ClawAddPlan } from "../claws/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { installedPluginRoot } from "../plugin-sdk/test-helpers/bundled-plugin-paths.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -30,6 +30,7 @@ import {
   runtimeErrors,
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
+  setPersistedPluginConfig,
   configWriteMock,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
@@ -87,10 +88,8 @@ describe("plugins cli uninstall", () => {
     planPluginUninstallMock.mockImplementation((params) =>
       actual.planPluginUninstall(params as Parameters<typeof actual.planPluginUninstall>[0]),
     );
-    applyPluginUninstallDirectoryRemovalMock.mockImplementation((removal) =>
-      actual.applyPluginUninstallDirectoryRemoval(
-        removal as Parameters<typeof actual.applyPluginUninstallDirectoryRemoval>[0],
-      ),
+    applyPluginUninstallDirectoryRemovalMock.mockImplementation(
+      actual.applyPluginUninstallDirectoryRemoval,
     );
     configWriteMock.mockImplementation(async (config) => {
       pluginCliConfigMock.mockReturnValue(config as OpenClawConfig);
@@ -480,7 +479,7 @@ describe("plugins cli uninstall", () => {
     const actual =
       await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
     let observedRemoval = false;
-    applyPluginUninstallDirectoryRemovalMock.mockImplementation(async (removal) => {
+    applyPluginUninstallDirectoryRemovalMock.mockImplementation(async (removal, assertCurrent) => {
       expect(pluginCliConfigMock().plugins?.entries?.alpha).toEqual({ enabled: false });
       expect(readInstallRecords()).toEqual(installRecords);
       expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
@@ -488,9 +487,7 @@ describe("plugins cli uninstall", () => {
         "owned plugin files",
       );
       observedRemoval = true;
-      return actual.applyPluginUninstallDirectoryRemoval(
-        removal as Parameters<typeof actual.applyPluginUninstallDirectoryRemoval>[0],
-      );
+      return actual.applyPluginUninstallDirectoryRemoval(removal, assertCurrent);
     });
     refreshPluginRegistryMock.mockImplementation(async () => {
       expect(readInstallRecords()).toEqual({});
@@ -553,13 +550,13 @@ describe("plugins cli uninstall", () => {
       let removed = false;
       const actual =
         await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
-      applyPluginUninstallDirectoryRemovalMock.mockImplementation(async (removal) => {
-        const result = await actual.applyPluginUninstallDirectoryRemoval(
-          removal as Parameters<typeof actual.applyPluginUninstallDirectoryRemoval>[0],
-        );
-        removed = result.directoryRemoved;
-        return result;
-      });
+      applyPluginUninstallDirectoryRemovalMock.mockImplementation(
+        async (removal, assertCurrent) => {
+          const result = await actual.applyPluginUninstallDirectoryRemoval(removal, assertCurrent);
+          removed = result.directoryRemoved;
+          return result;
+        },
+      );
       const { runPluginUninstallCommand } = await import("./plugins-uninstall-command.js");
       await expect(
         runPluginUninstallCommand(["alpha"], {
@@ -637,22 +634,25 @@ describe("plugins cli uninstall", () => {
       const actual =
         await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
       let failRemoval = retry;
-      applyPluginUninstallDirectoryRemovalMock.mockImplementation(async (removal) => {
-        expect(currentConfig.plugins?.load?.paths).toEqual([unrelatedPath]);
-        if (failRemoval) {
-          failRemoval = false;
-          return { directoryRemoved: false, warnings: ["simulated removal failure"] };
-        }
-        const result = await actual.applyPluginUninstallDirectoryRemoval(
-          removal as Parameters<typeof actual.applyPluginUninstallDirectoryRemoval>[0],
-        );
-        currentConfig = {
-          ...currentConfig,
-          logging: { level: "debug" },
-          plugins: { ...currentConfig.plugins, load: { paths: [unrelatedPath, addedPath] } },
-        };
-        return result;
-      });
+      const { readConfigFileSnapshotForWrite } = await import("../config/config.js");
+      const { snapshot } = await readConfigFileSnapshotForWrite();
+      applyPluginUninstallDirectoryRemovalMock.mockImplementation(
+        async (removal, assertCurrent) => {
+          expect(currentConfig.plugins?.load?.paths).toEqual([unrelatedPath]);
+          if (failRemoval) {
+            failRemoval = false;
+            return { directoryRemoved: false, warnings: ["simulated removal failure"] };
+          }
+          const result = await actual.applyPluginUninstallDirectoryRemoval(removal, assertCurrent);
+          currentConfig = {
+            ...currentConfig,
+            logging: { level: "debug" },
+            plugins: { ...currentConfig.plugins, load: { paths: [unrelatedPath, addedPath] } },
+          };
+          setPersistedPluginConfig(snapshot.path, currentConfig);
+          return result;
+        },
+      );
       if (retry) {
         await expect(
           runPluginsCommand(["plugins", "uninstall", "alpha", "--force"]),

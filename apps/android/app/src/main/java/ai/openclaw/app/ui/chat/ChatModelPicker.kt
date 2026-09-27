@@ -5,12 +5,6 @@ import ai.openclaw.app.GatewayModelUnavailableReason
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 
-internal data class ChatModelPickerSections(
-  val pinned: List<GatewayModelSummary>,
-  val recent: List<GatewayModelSummary>,
-  val remaining: List<GatewayModelSummary>,
-)
-
 internal enum class ChatModelPickerAction {
   Select,
   OpenProviders,
@@ -109,22 +103,19 @@ internal fun chatModelUnavailableText(reason: GatewayModelUnavailableReason?): N
     else -> null
   }
 
-internal fun chatModelPickerSections(
+internal fun chatModelPickerChoices(
   catalog: List<GatewayModelSummary>,
   favorites: List<String>,
   recents: List<String>,
-): ChatModelPickerSections {
+): List<GatewayModelSummary> {
   val choices = catalog.filter { it.manualSelectionAllowed != false }
   val modelsByRef = choices.associateBy { it.providerQualifiedRef() }
   val includedRefs = mutableSetOf<String>()
-  val pinned =
-    favorites.mapNotNull { ref ->
-      modelsByRef[ref]?.takeIf { includedRefs.add(ref) }
+  return buildList {
+    for (ref in favorites + recents) {
+      val model = modelsByRef[ref] ?: continue
+      if (includedRefs.add(ref)) add(model)
     }
-  val recent =
-    recents.mapNotNull { ref ->
-      modelsByRef[ref]?.takeIf { includedRefs.add(ref) }
-    }
-  val remaining = choices.filter { model -> includedRefs.add(model.providerQualifiedRef()) }
-  return ChatModelPickerSections(pinned = pinned, recent = recent, remaining = remaining)
+    addAll(choices.filter { includedRefs.add(it.providerQualifiedRef()) })
+  }
 }

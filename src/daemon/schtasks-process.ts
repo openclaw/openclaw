@@ -3,9 +3,9 @@ import { hostname } from "node:os";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
+import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortListener } from "../infra/ports-types.js";
-import { tryAcquireGatewayLifecycleCleanupCoordinator } from "../infra/state-database-coordinator.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
@@ -132,8 +132,12 @@ export function findInstalledGatewayChildPid(
 
 async function resolveScheduledTaskNodeHostProcess(
   env: GatewayServiceEnv,
+  installedCommand?: GatewayServiceCommandConfig | null,
 ): Promise<{ pid: number; port: number } | null> {
-  const command = await readScheduledTaskCommand(env).catch(() => null);
+  const command =
+    installedCommand === undefined
+      ? await readScheduledTaskCommand(env).catch(() => null)
+      : installedCommand;
   const installedArguments = command?.programArguments;
   if (!installedArguments?.length) {
     return null;
@@ -241,16 +245,14 @@ async function resolveScheduledTaskGatewayOwnership(
         );
       }
       // Both legacy discovery paths require exact installed argv. Older releases
-      // hold the coordinator without publishing a row and remain terminable.
+      // hold process ownership without publishing a row and remain terminable.
       if (pids.length > 0) {
         return null;
       }
       if (owner) {
         return null;
       }
-      const exclusion = tryAcquireGatewayLifecycleCleanupCoordinator({
-        databasePath: resolveOpenClawStateSqlitePath(ownerEnv),
-      });
+      const exclusion = tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(ownerEnv));
       if (!exclusion) {
         throw new Error(
           "Gateway lifecycle ownership is held without a published identity; leave it running and retry after startup finishes.",
@@ -458,10 +460,11 @@ export async function readBoundedScheduledTaskProcess(
 export async function resolveListenerBackedScheduledTaskRuntime(
   env: GatewayServiceEnv,
   deadlineMs?: number,
+  installedCommand?: GatewayServiceCommandConfig | null,
 ): Promise<Pick<GatewayServiceRuntime, "status" | "pid" | "detail"> | null> {
   if (deadlineMs !== undefined) {
     // Scheduler state remains authoritative without an exact running process.
-    const observed = await readBoundedScheduledTaskProcess(env, deadlineMs);
+    const observed = await readBoundedScheduledTaskProcess(env, deadlineMs, installedCommand);
     return observed?.pid
       ? {
           status: "running",
@@ -471,7 +474,7 @@ export async function resolveListenerBackedScheduledTaskRuntime(
       : null;
   }
   if (!shouldManageGatewayListenerPort(env)) {
-    const matched = await resolveScheduledTaskNodeHostProcess(env);
+    const matched = await resolveScheduledTaskNodeHostProcess(env, installedCommand);
     return matched
       ? {
           status: "running",
@@ -480,7 +483,10 @@ export async function resolveListenerBackedScheduledTaskRuntime(
         }
       : null;
   }
-  const command = await readScheduledTaskCommand(env).catch(() => null);
+  const command =
+    installedCommand === undefined
+      ? await readScheduledTaskCommand(env).catch(() => null)
+      : installedCommand;
   const context = {
     port: resolveScheduledTaskCommandPort(env, command),
   };

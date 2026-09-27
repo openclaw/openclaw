@@ -169,7 +169,6 @@ export function createOpenClawStateLeaseWorkerStorage(
         admission.assertCurrent();
         const cleanupContext = {
           environment: context.environment,
-          coordinatorRuntime: { ...context.coordinatorRuntime, keepAlive: false },
           existingSchemaPath: context.existingSchemaPath,
         };
         // Canonical close seals reads first; this owner retains only release authority.
@@ -197,7 +196,6 @@ export function createOpenClawStateLeaseWorkerStorage(
             cleanupContext,
             admission.assertCurrent,
             admission.createAdmission,
-            true,
           );
         } catch (error) {
           errors.push(error);

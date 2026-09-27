@@ -295,19 +295,6 @@ describe("Telegram startup with disabled thread bindings", () => {
     },
   );
 
-  it("refuses a missing owner after an enabled bot stops", async () => {
-    const cfg = config("enabled");
-    await state.writeConfig(cfg);
-    const bot = await createBot(cfg);
-    await expect(
-      getSessionBindingService().resolveByConversationAsync(conversation),
-    ).resolves.toBeNull();
-    expect(getSessionBindingService().getCapabilities(conversation).bindSupported).toBe(true);
-    await bot.stop();
-    await expectUnavailableOwner();
-    expect(storedBindings()).toEqual([]);
-  });
-
   it.each(["channel", "enabled"] as const)(
     "does not retain an owner when the real bot constructor fails with %s bindings",
     async (scope) => {

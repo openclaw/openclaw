@@ -679,7 +679,7 @@ describe("update-cli", () => {
       }
       const command =
         mode === "finalize"
-          ? updateFinalizeCommand({ yes: true, json: true, restart: false })
+          ? updateFinalizeCommand({ yes: true, json: true })
           : updateCommand({ yes: true, json: true });
       await command;
 

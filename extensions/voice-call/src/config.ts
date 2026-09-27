@@ -221,9 +221,9 @@ const VoiceCallRealtimeFastContextConfigSchema = z
   });
 const VoiceCallRealtimeAgentContextConfigSchema = z
   .object({
-    /** Inject a compact agent persona/context capsule into realtime voice instructions. */
+    /** Include configured identity and selected profile files alongside the always-on agent context. */
     enabled: z.boolean().default(false),
-    /** Maximum number of characters from the generated capsule to append. */
+    /** Maximum number of characters in the generated profile-file block. */
     maxChars: z.number().int().positive().default(6000),
     /** Include configured agent identity fields. */
     includeIdentity: z.boolean().default(true),

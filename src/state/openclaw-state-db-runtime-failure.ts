@@ -1,6 +1,6 @@
 import path from "node:path";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import type { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";

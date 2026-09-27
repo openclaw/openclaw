@@ -399,7 +399,7 @@ function clampToBudget(content: string, budget: number): string {
 }
 
 export function buildBootstrapContextFiles(
-  files: WorkspaceBootstrapFile[],
+  files: (Omit<WorkspaceBootstrapFile, "name"> & { name: string })[],
   opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;

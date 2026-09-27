@@ -477,7 +477,6 @@ describe("appendSessionTranscriptNote", () => {
             stateContext?: Parameters<typeof runOperation>[2],
             assertCurrent?: Parameters<typeof runOperation>[3],
             admission?: Parameters<typeof runOperation>[4],
-            requireStateLifecycle?: Parameters<typeof runOperation>[5],
           ) =>
             runOperation(
               store,
@@ -501,7 +500,6 @@ describe("appendSessionTranscriptNote", () => {
               stateContext,
               assertCurrent,
               admission,
-              requireStateLifecycle,
             ),
         );
       const first = appendSessionTranscriptNote(target, note, { config });

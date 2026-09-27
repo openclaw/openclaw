@@ -140,10 +140,7 @@ export type ChromeMcpProcessCleanupDeps = {
   taskkillProcessTree?: (pid: number) => Promise<void>;
 };
 
-export type ChromeMcpOwnedProcess = {
-  pid: number;
-  identity: string;
-};
+export type ChromeMcpOwnedProcess = Pick<ChromeMcpProcessSnapshot, "pid" | "identity">;
 
 export type ChromeMcpProcessCleanupTarget = {
   root: ChromeMcpOwnedProcess;
