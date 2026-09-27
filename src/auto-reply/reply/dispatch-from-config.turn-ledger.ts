@@ -56,7 +56,7 @@ type ReplyTurnLedger = {
   hasPendingDelivery: () => boolean;
   resolveTerminalDelivery: () => ReplyDeliveryState;
   /** Observe transport-settled visible deliveries for this turn. */
-  onVisibleDelivery: (listener: () => void) => () => void;
+  onVisibleDelivery: (listener: (payload: ReplyPayload) => void) => () => void;
 };
 
 export async function requireQueuedReplyDelivery(params: {
@@ -86,7 +86,7 @@ export async function requireQueuedReplyDelivery(params: {
 
 export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLedger {
   const outcomes = new Set<ReplyDispatchDeliveryOutcome>();
-  const visibleDeliveryListeners = new Set<() => void>();
+  const visibleDeliveryListeners = new Set<(payload: ReplyPayload) => void>();
   let pendingDelivery = false;
   let terminalDelivery: ReplyDeliveryState = "missing";
   const mayHaveDelivered = () => outcomes.has("delivered") || outcomes.has("failed-deliver");
@@ -103,7 +103,7 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
     outcomes.add(outcome);
     if (outcome === "delivered" && !pending) {
       for (const listener of visibleDeliveryListeners) {
-        listener();
+        listener(payload);
       }
     }
     if (kind === "tool" || !isReplyPayloadTerminalContent(payload)) {

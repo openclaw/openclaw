@@ -14,7 +14,7 @@ const MAX_PROGRESS_SUPERVISOR_INTERVAL_SECONDS = 2_147_483;
 afterEach(() => vi.useRealTimers());
 
 describe("progress supervisor", () => {
-  it("emits only after each quiet interval and marks its payload", async () => {
+  it("emits once per quiet period and rearms only after visible progress", async () => {
     vi.useFakeTimers();
     const emit = vi.fn();
     const supervisor = createProgressSupervisor({ enabled: true, emit });
@@ -26,6 +26,9 @@ describe("progress supervisor", () => {
     expect(emit).toHaveBeenCalledTimes(1);
     expect(isHostProgressSupervisorPayload(emit.mock.calls[0]![0])).toBe(true);
 
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_SUPERVISOR_INTERVAL_MS);
+    expect(emit).toHaveBeenCalledOnce();
+    supervisor.noteVisibleReply();
     await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_SUPERVISOR_INTERVAL_MS);
     expect(emit).toHaveBeenCalledTimes(2);
     await supervisor.stop();

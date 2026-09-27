@@ -112,9 +112,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       }
     },
   });
-  const removeVisibleDeliveryListener = state.turnLedger.onVisibleDelivery(
-    progressSupervisor.noteVisibleReply,
-  );
+  const removeVisibleDeliveryListener = state.turnLedger.onVisibleDelivery((payload) => {
+    if (!isHostProgressSupervisorPayload(payload)) {
+      progressSupervisor.noteVisibleReply();
+    }
+  });
   const {
     onBlockReply,
     onPreparedBlockReply,

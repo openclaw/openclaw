@@ -81,7 +81,6 @@ export function createProgressSupervisor(params: {
           if (emission === pending) {
             emission = undefined;
           }
-          schedule();
         });
       emission = pending;
     }, intervalMs);
