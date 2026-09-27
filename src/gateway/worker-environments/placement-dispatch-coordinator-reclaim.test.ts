@@ -1,5 +1,5 @@
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
@@ -111,13 +111,15 @@ it.each(["full sweep", "targeted sweep", "recovery"] as const)(
         laterDispatch,
       ]);
     }
-    expect(events).toEqual([
+    expect(events.slice(0, 4)).toEqual([
       `dispatch:${REQUEST.sessionId}`,
       `reclaim:${stopped.sessionId}`,
       "reclaim:another-stopped-session",
       "maintenance",
-      "reclaim:late-stopped-session",
+    ]);
+    expect(events.slice(4).toSorted()).toEqual([
       "dispatch:later-session",
+      "reclaim:late-stopped-session",
     ]);
   },
 );
@@ -249,11 +251,16 @@ it("preserves a queued move ahead of reclaim even when maintenance has not start
 });
 
 it.each(["sweep", "recovery"] as const)(
-  "preserves admitted %s effects before a later reclaim",
+  "preserves admitted %s effects without extending them through an unrelated reclaim",
   async (maintenance) => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
+    const releaseReclaim = createDeferredCore();
     const events: string[] = [];
+    const dispatch = vi.fn(async (request: typeof REQUEST) => ({
+      ...ACTIVE_PLACEMENT,
+      ...request,
+    }));
     const maintain = async () => {
       events.push("maintenance:start");
       entered.resolve();
@@ -261,6 +268,7 @@ it.each(["sweep", "recovery"] as const)(
       events.push("maintenance:finish");
     };
     const service = createCoordinatorTestService({
+      dispatch,
       reconcile: maintain,
       resumeProvisioning: admittedRecovery(maintain),
       reclaim: async (_request, _authorize, _beforeDrain, serialize) => {
@@ -268,7 +276,9 @@ it.each(["sweep", "recovery"] as const)(
           throw new Error("Reclaim fixture requires serialization");
         }
         return await serialize(async () => {
-          events.push("reclaim");
+          events.push("reclaim:start");
+          await releaseReclaim.promise;
+          events.push("reclaim:finish");
           return LOCAL_PLACEMENT;
         });
       },
@@ -280,13 +290,27 @@ it.each(["sweep", "recovery"] as const)(
         : coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {});
     await entered.promise;
     const stopping = coordinated.reclaim(REQUEST);
+    const sameSession = coordinated.dispatch(REQUEST);
+    const unrelated = coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
+    vi.useFakeTimers();
     try {
-      await setImmediatePromise();
+      await vi.advanceTimersByTimeAsync(0);
       expect([...events]).toEqual(["maintenance:start"]);
+      expect(dispatch).not.toHaveBeenCalled();
+      release.resolve();
+      await maintaining;
+      await vi.advanceTimersByTimeAsync(0);
+      expect([...events]).toEqual(["maintenance:start", "maintenance:finish", "reclaim:start"]);
+      expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual(["unrelated"]);
     } finally {
       release.resolve();
-      await Promise.all([maintaining, stopping]);
+      releaseReclaim.resolve();
+      vi.useRealTimers();
+      await Promise.all([maintaining, stopping, sameSession, unrelated]);
     }
-    expect(events).toEqual(["maintenance:start", "maintenance:finish", "reclaim"]);
+    expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual([
+      "unrelated",
+      REQUEST.sessionId,
+    ]);
   },
 );

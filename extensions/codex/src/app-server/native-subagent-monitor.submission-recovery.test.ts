@@ -160,9 +160,11 @@ describe("CodexNativeSubagentMonitor", () => {
       const consumeReleased = new Promise<void>((resolve) => {
         releaseHeldConsume = resolve;
       });
+      const heldConsumeEntered = createDeferred<void>();
       const heldConsume = vi.fn<CodexNativeSubagentSubmissionStore["consume"]>(
         async (_receipt, guard) => {
           guard();
+          heldConsumeEntered.resolve();
           await consumeReleased;
           throw new Error("Simulated receipt consume lost before commit.");
         },
@@ -280,9 +282,15 @@ describe("CodexNativeSubagentMonitor", () => {
           ]);
           if (scenario === "admitted" || scenario === "delivered-with-receipt") {
             await first.notify(turnStartedNotification("turn-b"));
+            if (scenario === "admitted") {
+              const { pending } = await firstConsumption.promise;
+              await expect(pending).resolves.toBe(true);
+            } else {
+              await heldConsumeEntered.promise;
+            }
             expect(taskRuntime.listTaskRecords()).toHaveLength(2);
             if (scenario === "delivered-with-receipt") {
-              await vi.waitFor(() => expect(heldConsume).toHaveBeenCalledOnce());
+              expect(heldConsume).toHaveBeenCalledOnce();
               expect(heldConsume.mock.calls[0]?.[0]).toEqual(expectedReceipt);
               await first.notify(
                 childTurnCompletedNotification({
@@ -319,10 +327,6 @@ describe("CodexNativeSubagentMonitor", () => {
           } else {
             expect(taskRuntime.listTaskRecords()).toHaveLength(1);
           }
-        }
-        if (scenario === "admitted") {
-          const { pending } = await firstConsumption.promise;
-          await expect(pending).resolves.toBe(true);
         }
         const beforeRestart = readRows();
         const receiptsBeforeRestart = firstBindingStore.readNativeSubagentSubmissions(

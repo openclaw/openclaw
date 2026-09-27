@@ -11,12 +11,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.gene
 
 type AgentProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "agent_provenance">;
 
-function fromRow(row: {
-  agent_id: string;
-  created_via: string;
-  creator_agent_id: string | null;
-  created_at_ms: number;
-}): AgentProvenance {
+function fromRow(row: AgentProvenanceDatabase["agent_provenance"]): AgentProvenance {
   let createdVia: AgentCreatedVia;
   switch (row.created_via) {
     case "operator":

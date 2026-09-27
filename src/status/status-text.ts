@@ -32,6 +32,7 @@ import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -52,7 +53,6 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.read.js";
-// Status text helpers render runtime status summaries for CLI output.
 import {
   buildCodexSyntheticUsageAuth,
   resolveUsageCredentialType,
@@ -66,8 +66,6 @@ import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import { appendSessionCostLine, buildStatusUptimeValue } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
-// Status text assembly gathers runtime/model/session/task facts, then delegates
-// final formatting to status-message.runtime through lazy imports.
 const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "anthropic",
   "github-copilot",
@@ -278,8 +276,6 @@ async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
   }
 }
 
-// Public status text builder for CLI/chat status commands. It resolves dynamic
-// runtime details just-in-time and returns the formatted multiline status body.
 export async function buildStatusText(params: BuildStatusTextParams): Promise<string> {
   return (await buildStatusReplyParts(params)).text;
 }
@@ -467,8 +463,7 @@ export async function buildStatusReplyParts(
       // Usage summary is optional operator context. Bound it tightly so a slow
       // provider usage probe cannot delay the status command.
       const usageSummaryTimeoutMs = useCodexSyntheticUsage ? 8000 : 3500;
-      let usageTimeout: NodeJS.Timeout | undefined;
-      const usageSummary = await Promise.race([
+      const usageSummary = await withTimeout(
         loadProviderUsageSummary({
           timeoutMs: usageSummaryTimeoutMs,
           providers: [currentUsageProvider],
@@ -479,17 +474,9 @@ export async function buildStatusReplyParts(
             ? [buildCodexSyntheticUsageAuth({ authProfileId: codexUsageAuthProfileId })]
             : undefined,
         }),
-        new Promise<never>((_, reject) => {
-          usageTimeout = setTimeout(
-            () => reject(new Error("usage summary timeout")),
-            usageSummaryTimeoutMs,
-          );
-        }),
-      ]).finally(() => {
-        if (usageTimeout) {
-          clearTimeout(usageTimeout);
-        }
-      });
+        usageSummaryTimeoutMs,
+        { message: "usage summary timeout" },
+      );
       const usageEntry = usageSummary.providers[0];
       if (
         usageEntry &&

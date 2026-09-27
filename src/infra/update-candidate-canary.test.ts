@@ -298,6 +298,13 @@ describe("update candidate canary", () => {
       databasePath = path.join(root, "runtime-budget.sqlite");
       await fs.writeFile(databasePath, "");
       await fs.truncate(databasePath, sqliteBytes);
+      // The sparse database models validation cost, not this host's free disk space.
+      const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+        targetPath,
+        checkedPath: targetPath,
+        availableBytes: 16 * 1024 ** 3,
+        totalBytes: 32 * 1024 ** 3,
+      }));
       const now = Date.now.bind(Date);
       let doctorElapsed = 0;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + doctorElapsed);
@@ -327,6 +334,7 @@ describe("update candidate canary", () => {
         }
       } finally {
         clock.mockRestore();
+        capacity.mockRestore();
       }
     },
   );

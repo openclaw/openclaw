@@ -247,13 +247,6 @@ export async function updateGitCheckout(params: {
       });
     }
   };
-  const runRequiredStep = async (name: string, argv: string[], reason: string) => {
-    const result = await runStep(workStep(name, argv, gitRoot));
-    if (!isFailedUpdateStep(result)) {
-      return null;
-    }
-    return mutationPrepared ? rollbackError(reason) : buildError(reason);
-  };
   const { result: statusCheck, dirty } = await runGitCleanCheckStep(
     step("clean-check", gitCleanCheckArgs(gitRoot), gitRoot),
   );
@@ -487,15 +480,17 @@ export async function updateGitCheckout(params: {
     }
     await prepareMutation(preflight.candidateSha);
     sourceMutationStarted = true;
-    const failure = await runRequiredStep(
-      "git-checkout",
-      activateBranch
-        ? ["git", "-C", gitRoot, "checkout", "-B", DEV_BRANCH, preflight.candidateSha]
-        : ["git", "-C", gitRoot, "checkout", "--detach", preflight.candidateSha],
-      "checkout-failed",
+    const checkout = await runStep(
+      workStep(
+        "git-checkout",
+        activateBranch
+          ? ["git", "-C", gitRoot, "checkout", "-B", DEV_BRANCH, preflight.candidateSha]
+          : ["git", "-C", gitRoot, "checkout", "--detach", preflight.candidateSha],
+        gitRoot,
+      ),
     );
-    if (failure) {
-      return failure;
+    if (isFailedUpdateStep(checkout)) {
+      return await rollbackError("checkout-failed");
     }
     createdDevBranchDuringUpdate = activateBranch && preflight.localDevBranchExists === false;
     if (createdDevBranchDuringUpdate && preflight.selectedDevUpstream) {

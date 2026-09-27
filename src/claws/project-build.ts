@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { link, lstat, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   CLAW_PROJECT_RESULT_SCHEMA_VERSION,
   ClawProjectError,
@@ -57,7 +57,10 @@ function assertValidatedBytes(
 export async function extractBuiltClawArtifact(
   artifact: string,
 ): Promise<AsyncDisposable & { packageRoot: string }> {
-  const workspace = await tempWorkspace({ rootDir: tmpdir(), prefix: "openclaw-claw-artifact-" });
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-claw-artifact-",
+  });
   try {
     await tar.x({ cwd: workspace.dir, file: resolve(artifact), strict: true });
     const packageRoot = workspace.path("package");

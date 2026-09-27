@@ -441,11 +441,14 @@ export type SessionTranscriptTurnPersistOptions = {
   /** Exact run provenance persisted on output rows and emitted on terminal assistant updates. */
   runId?: string;
   /**
-   * Complete appended or matched messages synchronously after guarded SQLite commit,
-   * before the write yields to cancellation, owner drain, or transcript publication.
+   * Accept appended or matched messages synchronously after guarded SQLite commit.
+   * Explicit completion work is joined before owner drain or transcript publication.
    * The canonical result preserves replay bytes. Throws cannot roll back committed rows.
    */
-  onMessageCommitted?: (result: TranscriptMessageAppendResult<unknown>) => void;
+  onMessageCommitted?: (
+    result: TranscriptMessageAppendResult<unknown>,
+    acceptCompletion: (complete: () => Promise<void>) => void,
+  ) => void;
   /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;
   /** Emit file-only updates even when every candidate message was skipped. */

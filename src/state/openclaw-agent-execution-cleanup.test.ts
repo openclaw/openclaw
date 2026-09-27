@@ -84,6 +84,7 @@ it("retains installed-schema repair ownership through retired agent lease cleanu
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
     existingSchemaPath: databasePath,
     admission: {
+      coordinationKey: "file:synthetic-state",
       databasePath,
       identity: { key: "file:synthetic-state", canonicalPath: databasePath },
       assertCurrent() {},

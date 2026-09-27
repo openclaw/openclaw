@@ -2709,6 +2709,11 @@ function resolveSplitNodeShards(name: string): NodeTestSplitShard[] | undefined 
 }
 
 export function nodeTestConfigRequiresCanonicalMetadata(config: string): boolean {
+  // Aggregate configs can be exclusive without owning canonical shard metadata.
+  // Check immutable project descriptors before discovering unrelated test files.
+  if (!canonicalNodeTestOwners.some((owner) => owner.projects.includes(config))) {
+    return false;
+  }
   const toolingOwner = canonicalNodeTestOwners.some(
     (owner) => owner.name === "core-tooling" && owner.projects.includes(config),
   );

@@ -84,9 +84,6 @@ export async function beginDoctorMaintenance(
   // ownership for every explicit repair before running those inspections.
   let stopped: PreManagedServiceStop | undefined;
   let stopDeadline: number | undefined;
-  let serviceMaintenance:
-    | typeof import("../cli/update-cli/update-command-service-maintenance.js")
-    | undefined;
   let gatewayOwner: Awaited<ReturnType<typeof acquireDoctorGatewayMaintenanceOwner>> | undefined;
   const warnings: string[] = [];
   const warn = (message: string) => {
@@ -196,10 +193,7 @@ export async function beginDoctorMaintenance(
         assertCustody?.();
         if (!retainStoppedInstallation) {
           await settle(async () => {
-            await serviceMaintenance?.maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-              stopped,
-              true,
-            );
+            await recovery?.restore(true);
           });
         }
       } finally {
@@ -464,9 +458,8 @@ export async function beginDoctorMaintenance(
         !externallyManaged &&
         (await shouldManageGatewayService(env))
       ) {
-        serviceMaintenance =
+        const { maybeStopManagedServiceBeforeMutableUpdate } =
           await import("../cli/update-cli/update-command-service-maintenance.js");
-        const { maybeStopManagedServiceBeforeMutableUpdate } = serviceMaintenance;
         inspectingActivation = true;
         const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
           updateInstallKind: "package",

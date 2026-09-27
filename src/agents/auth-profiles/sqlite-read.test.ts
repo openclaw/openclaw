@@ -36,6 +36,7 @@ beforeEach(() => {
   vi.spyOn(rootContext, "captureOpenClawStateWorkerContext").mockReturnValue({
     environment: { OPENCLAW_STATE_DIR: "/fixture" },
     admission: {
+      coordinationKey: "file:root",
       databasePath: "/fixture/state.sqlite",
       identity: { key: "file:root", canonicalPath: "/fixture/state.sqlite" },
       assertCurrent: () => {},

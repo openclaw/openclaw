@@ -98,10 +98,10 @@ export type TabAccessPolicy = {
     operation: CreatedTabOperation,
   ): Promise<void>;
   inspectTab(tabId: number, epoch?: TabAccessEpoch): Promise<TabAccessState>;
-  requireTab(tabId: number, epoch?: TabAccessEpoch): Promise<AccessibleBrowserTabSnapshot>;
-  requireTabAfterNavigation(
+  requireTab(
     tabId: number,
-    epoch: TabAccessEpoch,
+    epoch?: TabAccessEpoch,
+    afterNavigation?: boolean,
   ): Promise<AccessibleBrowserTabSnapshot>;
   listAccessibleTabs(options?: {
     allowDuringTransition?: boolean;

@@ -131,6 +131,7 @@ function createLeaseFixture() {
   const context: OpenClawStateWorkerContext = {
     maintenanceScope: maintenance,
     admission: {
+      coordinationKey: "synthetic-state",
       databasePath: "/synthetic/state.sqlite",
       identity: { key: "synthetic-state", canonicalPath: "/synthetic/state.sqlite" },
       assertCurrent: () => {},

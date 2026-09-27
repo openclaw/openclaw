@@ -5,7 +5,11 @@ import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { bundledPluginCallsite, bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mts";
-import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
+import {
+  collectCallExpressionLines,
+  runAsScript,
+  unwrapExpression,
+} from "./lib/ts-guard-utils.mts";
 
 const sourceRoots = ["extensions"];
 const enforcedFiles = new Set([
@@ -38,18 +42,10 @@ function findBlockedWebhookBodyReadLines(
   _fileName: string,
   sourceFile: ts.SourceFile,
 ): number[] {
-  const lines: number[] = [];
-  const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node)) {
-      const calleeName = getCalleeName(node.expression);
-      if (calleeName && blockedCallees.has(calleeName)) {
-        lines.push(toLine(sourceFile, node.expression));
-      }
-    }
-    node.forEachChild(visit);
-  };
-  visit(sourceFile);
-  return lines;
+  return collectCallExpressionLines(sourceFile, (node) => {
+    const calleeName = getCalleeName(node.expression);
+    return calleeName && blockedCallees.has(calleeName) ? node.expression : null;
+  });
 }
 
 /**

@@ -6,6 +6,7 @@ import { createManagedHandoffTestBinding } from "../../test/helpers/managed-hand
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyCliProfileEnv } from "../cli/profile.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
+import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import type { GatewayService } from "../daemon/service.js";
@@ -16,6 +17,7 @@ import { callGatewayCli } from "../gateway/call.js";
 import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import * as processAncestry from "../infra/restart-stale-pids.js";
 import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
 import * as sqliteWorkerStores from "../infra/sqlite-worker-store.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
@@ -146,6 +148,11 @@ const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY
 beforeEach(() => {
   handoffBinding.assertPath(resolveManagedUpdateLeaseDatabasePath());
   vi.clearAllMocks();
+  // Synthetic service platforms cannot inspect the host's native process ancestry.
+  vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+    pids: new Set([process.pid, process.ppid, 1]),
+    complete: true,
+  });
   mocks.resident.mockReset();
   mocks.audit.mockResolvedValue({ ok: true, issues: [] });
   mocks.installPlanBuilt = false;
@@ -262,11 +269,14 @@ async function runInstallationCase(params: {
       if (params.profile) {
         applyCliProfileEnv({ profile: params.profile, homedir: () => home });
       }
+      const sourcePath =
+        params.platform === "win32" ? resolveGatewayTaskScriptPath(process.env) : undefined;
       if (params.inspectionScenario) {
         openOpenClawStateDatabase();
         closeOpenClawStateDatabaseForTest();
       }
       let command: GatewayServiceCommandConfig = {
+        ...(sourcePath ? { sourcePath } : {}),
         programArguments: [
           mocks.runtimePath,
           path.join(oldRoot, "dist/index.js"),
@@ -384,7 +394,11 @@ async function runInstallationCase(params: {
           if (installFails) {
             throw new Error("Synthetic native install rollback");
           }
-          command = { programArguments: plan.programArguments, environment: { HOME: home } };
+          command = {
+            ...(sourcePath ? { sourcePath } : {}),
+            programArguments: plan.programArguments,
+            environment: { HOME: home },
+          };
           running = true;
         },
         restart: async () => {

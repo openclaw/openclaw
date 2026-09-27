@@ -24,6 +24,15 @@ export default {
     // `word-break: break-word` is deprecated but swapping it for overflow-wrap
     // changes min-content sizing in flex/grid text containers.
     "declaration-property-value-keyword-no-deprecated": [true, { ignoreKeywords: ["break-word"] }],
+    // Chromium builds one invalidation set for every non-subject :has(). A
+    // pseudo-element or universal selector after one widens it to whole
+    // subtrees, so each DOM insertion restyled every :has() anchor, the chat
+    // transcript included. Style the element directly, or set a state class
+    // or custom property on the :has() subject.
+    "selector-disallowed-list": [
+      [/:has\((?:[^()]|\([^()]*\))*\)[^\s>+~]*[\s>+~](?:.*::|(?:.*[\s>+~(])?\*)/s],
+      { splitList: true },
+    ],
   },
   overrides: [
     {

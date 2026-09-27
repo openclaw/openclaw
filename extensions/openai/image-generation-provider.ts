@@ -1,4 +1,3 @@
-// Openai provider module implements model/runtime integration.
 import path from "node:path";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -32,7 +31,6 @@ const OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL = "gpt-image-1.5";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_AZURE_OPENAI_IMAGE_TIMEOUT_MS = 600_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
-const DEFAULT_OUTPUT_EXTENSION = "png";
 const DEFAULT_SIZE = "1024x1024";
 const OPENAI_SUPPORTED_SIZES = [
   "1024x1024",
@@ -173,43 +171,27 @@ function resolveOutputMime(outputFormat?: ImageGenerationOutputFormat): {
       return { mimeType: "image/jpeg", extension: "jpg" };
     case "webp":
       return { mimeType: "image/webp", extension: "webp" };
-    case "png":
-    case undefined:
-      return { mimeType: DEFAULT_OUTPUT_MIME, extension: DEFAULT_OUTPUT_EXTENSION };
+    default:
+      return { mimeType: DEFAULT_OUTPUT_MIME, extension: "png" };
   }
-  return { mimeType: DEFAULT_OUTPUT_MIME, extension: DEFAULT_OUTPUT_EXTENSION };
 }
 
 type OpenAIImageRequest = Parameters<ImageGenerationProvider["generateImage"]>[0];
-type OpenAIImageOptions = NonNullable<OpenAIImageRequest["providerOptions"]>["openai"];
 
-function resolveOpenAIImageOutputCompression(
-  req: OpenAIImageRequest,
-  openai: OpenAIImageOptions,
-): number | undefined {
-  if (openai?.outputCompression === undefined) {
-    return undefined;
-  }
-  const outputFormat = req.outputFormat ?? "png";
-  return outputFormat === "jpeg" || outputFormat === "webp" ? openai.outputCompression : undefined;
-}
-
-function appendOpenAIImageOptions(
-  target: Record<string, unknown>,
-  req: Parameters<ImageGenerationProvider["generateImage"]>[0],
-): void {
+function resolveOpenAIImageOptions(req: OpenAIImageRequest): Record<string, unknown> {
   const openai = req.providerOptions?.openai;
   const background = openai?.background ?? req.background;
-  const outputCompression = resolveOpenAIImageOutputCompression(req, openai);
-  const entries: Record<string, unknown> = {
+  const outputCompression =
+    req.outputFormat === "jpeg" || req.outputFormat === "webp"
+      ? openai?.outputCompression
+      : undefined;
+  return {
     ...(req.quality !== undefined ? { quality: req.quality } : {}),
     ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
     ...(background !== undefined ? { background } : {}),
     ...(openai?.moderation !== undefined ? { moderation: openai.moderation } : {}),
     ...(outputCompression !== undefined ? { output_compression: outputCompression } : {}),
-    ...(openai?.user !== undefined ? { user: openai.user } : {}),
   };
-  Object.assign(target, entries);
 }
 
 function resolveOpenAIImageRequestModel(
@@ -238,9 +220,7 @@ function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[]
 }
 
 function isValidFlexibleOpenAIImageSize(model: string, size: string | undefined): size is string {
-  if (
-    !OPENAI_FLEXIBLE_IMAGE_MODELS.includes(model as (typeof OPENAI_FLEXIBLE_IMAGE_MODELS)[number])
-  ) {
+  if (!OPENAI_FLEXIBLE_IMAGE_MODELS.some((candidate) => candidate === model)) {
     return false;
   }
   if (size === "auto") {
@@ -544,9 +524,6 @@ async function generateOpenAICodexImage(params: {
   );
   const size = sizeResolution.size;
   const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
-  const openai = req.providerOptions?.openai;
-  const background = openai?.background ?? req.background;
-  const outputCompression = resolveOpenAIImageOutputCompression(req, openai);
   headers.set("Content-Type", "application/json");
   const content: Array<Record<string, unknown>> = [
     { type: "input_text", text: req.prompt },
@@ -575,11 +552,7 @@ async function generateOpenAICodexImage(params: {
             type: "image_generation",
             model,
             size,
-            ...(req.quality !== undefined ? { quality: req.quality } : {}),
-            ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
-            ...(background !== undefined ? { background } : {}),
-            ...(openai?.moderation !== undefined ? { moderation: openai.moderation } : {}),
-            ...(outputCompression !== undefined ? { output_compression: outputCompression } : {}),
+            ...resolveOpenAIImageOptions(req),
           },
         ],
         tool_choice: { type: "image_generation" },
@@ -659,9 +632,6 @@ export function buildOpenAIImageGenerationProvider(
       },
     },
     isConfigured: ({ cfg, agentDir }) => {
-      // generateImage already authenticates from a config apiKey; count a
-      // usable one (non-blank literal or secret ref) as configured here too,
-      // so image gen works from config alone, like chat.
       if (hasConfiguredSecretInput(cfg?.models?.providers?.openai?.apiKey)) {
         return true;
       }
@@ -826,8 +796,11 @@ export function buildOpenAIImageGenerationProvider(
         prompt: req.prompt,
         n: count,
         size,
+        ...resolveOpenAIImageOptions(req),
+        ...(req.providerOptions?.openai?.user !== undefined
+          ? { user: req.providerOptions.openai.user }
+          : {}),
       };
-      appendOpenAIImageOptions(body, req);
       const requestOptions = {
         url,
         headers: new Headers(headers),
@@ -837,35 +810,26 @@ export function buildOpenAIImageGenerationProvider(
         ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       };
-      const requestResult = isEdit
-        ? await (() => {
-            const form = new FormData();
-            for (const [key, value] of Object.entries(body)) {
-              form.set(key, String(value));
-            }
-            for (const [index, image] of inputImages.entries()) {
-              const mimeType = image.mimeType?.trim() || DEFAULT_OUTPUT_MIME;
-              form.append(
-                "image[]",
-                new Blob([bufferToBlobPart(image.buffer)], { type: mimeType }),
-                inferImageUploadFileName({
-                  fileName: image.fileName,
-                  mimeType,
-                  index,
-                }),
-              );
-            }
-
-            requestOptions.headers.delete("Content-Type");
-            return postMultipartRequest({
-              ...requestOptions,
-              body: form,
-            });
-          })()
-        : await (() => {
-            requestOptions.headers.set("Content-Type", "application/json");
-            return postJsonRequest({ ...requestOptions, body });
-          })();
+      const form = isEdit ? new FormData() : undefined;
+      if (form) {
+        for (const [key, value] of Object.entries(body)) {
+          form.set(key, String(value));
+        }
+        for (const [index, image] of inputImages.entries()) {
+          const mimeType = image.mimeType?.trim() || DEFAULT_OUTPUT_MIME;
+          form.append(
+            "image[]",
+            new Blob([bufferToBlobPart(image.buffer)], { type: mimeType }),
+            inferImageUploadFileName({ fileName: image.fileName, mimeType, index }),
+          );
+        }
+        requestOptions.headers.delete("Content-Type");
+      } else {
+        requestOptions.headers.set("Content-Type", "application/json");
+      }
+      const requestResult = form
+        ? await postMultipartRequest({ ...requestOptions, body: form })
+        : await postJsonRequest({ ...requestOptions, body });
       const { response, release } = requestResult;
       try {
         await assertOkOrThrowHttpError(

@@ -280,32 +280,6 @@ function resolveChatType(ctx: {
   return undefined;
 }
 
-function isAllowedChatType(
-  config: ResolvedActiveRecallPluginConfig,
-  ctx: {
-    sessionKey?: string;
-    messageProvider?: string;
-    channelId?: string;
-    mainKey?: string;
-  },
-): boolean {
-  const chatType = resolveChatType(ctx);
-  if (!chatType) {
-    return false;
-  }
-  return config.allowedChatTypes.includes(chatType);
-}
-
-function isPrivateRecallDestination(ctx: {
-  sessionKey?: string;
-  messageProvider?: string;
-  channelId?: string;
-  mainKey?: string;
-}): boolean {
-  const chatType = resolveChatType(ctx);
-  return chatType === "direct" || chatType === "explicit";
-}
-
 // Canonical peer keys end with <chatType>:<peerId...>, after optional channel
 // and account prefixes. Main sessions have no embedded peer; legacy dm is accepted.
 function resolveConversationId(ctx: {
@@ -372,12 +346,11 @@ export {
   isActiveMemoryGloballyEnabled,
   isActiveMemoryPluginEnabled,
   isAllowedChatId,
-  isAllowedChatType,
   isEligibleInteractiveSession,
   isEnabledForAgent,
-  isPrivateRecallDestination,
   isSessionActiveMemoryDisabled,
   lacksAdminToMutateActiveMemoryGlobal,
+  resolveChatType,
   resolveCommandSessionKey,
   setSessionActiveMemoryDisabled,
   shouldSkipActiveMemoryForHarnessSession,

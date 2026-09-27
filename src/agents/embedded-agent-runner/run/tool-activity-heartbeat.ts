@@ -35,7 +35,9 @@ export function wrapEmbeddedAttemptToolWithActivity<T extends AnyAgentTool>(
       withActivity(() => originalExecute(...args))) as typeof originalExecute,
   } as T;
   // Tool metadata is identity-keyed, so object spread is insufficient.
-  copyAgentToolMetadata(tool, wrappedTool);
+  copyAgentToolMetadata(tool, wrappedTool, (source) =>
+    wrapEmbeddedAttemptToolWithActivity(source, runId),
+  );
   const sourcePreparer = getInternalToolExecutionPreparer(tool);
   if (sourcePreparer) {
     attachInternalToolExecutionPreparer(wrappedTool, async (params) => {

@@ -1,4 +1,3 @@
-// Runs package update move, inventory, and cleanup steps.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { validRange } from "semver";
@@ -49,7 +48,6 @@ import {
   collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
   globalInstallArgs,
-  globalInstallFallbackArgs,
   listActivePnpmIsolatedGlobalPackages,
   resolveExpectedInstalledVersionFromSpec,
   verifyPackageUpdateRecovery,
@@ -516,21 +514,20 @@ export async function runGlobalPackageUpdateSteps(params: {
         return await packageUpdateFailure(preparedFallbackInstall.failedStep, steps);
       }
       stagedInstall = preparedFallbackInstall.stagedInstall;
-      const fallbackArgv = globalInstallFallbackArgs(
-        stagedInstall.installTarget,
-        preparedSpec.installSpec,
-        undefined,
-        stagedInstall.prefix,
-        preparedSpec.installCwd,
-        npmPreflight.policy ?? undefined,
-      );
-      if (!fallbackArgv) {
-        return await packageUpdateFailure(updateStep, steps);
-      }
       const fallbackStep = await classifyPackageUpdatePermissionFailure(
         await params.runStep({
           name: "package-install-omit-optional",
-          argv: fallbackArgv,
+          argv: [
+            ...globalInstallArgs(
+              stagedInstall.installTarget,
+              preparedSpec.installSpec,
+              undefined,
+              stagedInstall.prefix,
+              preparedSpec.installCwd,
+              npmPreflight.policy ?? undefined,
+            ),
+            "--omit=optional",
+          ],
           ...(preparedSpec.installCwd ? { cwd: preparedSpec.installCwd } : {}),
           ...installEnv,
           timeoutMs: workTimeoutMs,

@@ -358,13 +358,19 @@ export async function prepareGatewayKernelState(params: {
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
-  const authRateLimiter = createGatewayAuthRateLimiter(rateLimitConfig);
-  // Browser-origin attempts are throttled even when local CLI clients are exempt.
-  const browserAuthRateLimiter = createGatewayAuthRateLimiter({
-    ...rateLimitConfig,
-    exemptLoopback: false,
+  const authRateLimiter = createGatewayAuthRateLimiter(rateLimitConfig, {
+    scheduler,
+    id: "auth/main",
   });
-  const nodeReapprovalCoordinator = createNodeReapprovalCoordinator(rateLimitConfig);
+  // Browser-origin attempts are throttled even when local CLI clients are exempt.
+  const browserAuthRateLimiter = createGatewayAuthRateLimiter(
+    {
+      ...rateLimitConfig,
+      exemptLoopback: false,
+    },
+    { scheduler, id: "auth/browser" },
+  );
+  const nodeReapprovalCoordinator = createNodeReapprovalCoordinator(rateLimitConfig, { scheduler });
 
   const controlUiRootLifecycle = await startupTrace.measure("control-ui.root", () =>
     createGatewayControlUiRootLifecycle({
@@ -484,6 +490,7 @@ export async function prepareGatewayKernelState(params: {
     },
   });
   const createHttpTransportOptions = () => ({
+    scheduler: params.scheduler,
     cfg: cfgAtStart,
     getRuntimeConfig,
     bindHost,

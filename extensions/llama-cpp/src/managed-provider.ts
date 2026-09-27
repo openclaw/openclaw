@@ -8,8 +8,8 @@ import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider
 import {
   LLAMA_CPP_PROVIDER_ID,
   LLAMA_CPP_PROVIDER_LABEL,
+  LLAMA_CPP_LOCAL_AUTH_MARKER,
   buildLlamaCppProviderConfig,
-  resolveLlamaCppSyntheticApiKey,
 } from "./defaults.js";
 import {
   hasLlamaServerAuthorizationHeader,
@@ -126,7 +126,7 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
     resolveSyntheticAuth: ({ providerConfig }) =>
       providerConfig?.localService || shouldUseLlamaServerSyntheticAuth(providerConfig)
         ? {
-            apiKey: resolveLlamaCppSyntheticApiKey(),
+            apiKey: LLAMA_CPP_LOCAL_AUTH_MARKER,
             source: providerConfig?.localService
               ? "managed local llama.cpp server"
               : hasLlamaServerAuthorizationHeader(providerConfig?.headers)
@@ -136,7 +136,7 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
           }
         : undefined,
     shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) =>
-      resolvedApiKey?.trim() === resolveLlamaCppSyntheticApiKey() ||
+      resolvedApiKey?.trim() === LLAMA_CPP_LOCAL_AUTH_MARKER ||
       resolvedApiKey?.trim() === CUSTOM_LOCAL_AUTH_MARKER,
     normalizeConfig: ({ providerConfig }) =>
       providerConfig.localService

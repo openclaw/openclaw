@@ -389,6 +389,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     expect(tests[0]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual([
       ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
       "-only-testing:OpenClawTests/ChatTypingFocusTests",
+      "-only-testing:OpenClawTests/ChatSendHydrationTests",
     ]);
     for (const name of authClasses) {
       expect(readFileSync(`apps/ios/Tests/${name}.swift`, "utf8")).toContain(`struct ${name}`);
@@ -406,6 +407,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       expect.arrayContaining([
         ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
         "-only-testing:OpenClawTests/ChatTypingFocusTests",
+        "-only-testing:OpenClawTests/ChatSendHydrationTests",
         "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
         "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
         "-only-testing:OpenClawTests/OpenClawTypographyTests",

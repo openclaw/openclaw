@@ -117,6 +117,7 @@ function fixture(
     environment: { OPENCLAW_STATE_DIR: "/synthetic-state" },
     maintenanceScope: maintenance,
     admission: {
+      coordinationKey: "file:synthetic-state",
       databasePath: "/synthetic-state/lease.sqlite",
       identity: { key: "file:synthetic-state", canonicalPath: "/synthetic-state/lease.sqlite" },
       assertCurrent() {

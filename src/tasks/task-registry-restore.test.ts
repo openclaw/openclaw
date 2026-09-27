@@ -26,6 +26,7 @@ it.each(
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: "/synthetic/restore" },
     admission: {
+      coordinationKey: "fixture",
       databasePath: "/synthetic/restore/state.sqlite",
       identity: { key: "fixture", canonicalPath: "/synthetic/restore/state.sqlite" },
       assertCurrent() {
@@ -145,6 +146,7 @@ it.each(["retirement", "database replacement", "failed state"] as const)(
     const context: OpenClawStateWorkerContext = {
       environment: { OPENCLAW_STATE_DIR: "/synthetic/receipt-exit" },
       admission: {
+        coordinationKey: "fixture",
         databasePath: "/synthetic/receipt-exit/state.sqlite",
         identity: { key: "fixture", canonicalPath: "/synthetic/receipt-exit/state.sqlite" },
         assertCurrent() {

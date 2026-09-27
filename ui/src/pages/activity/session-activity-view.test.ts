@@ -26,6 +26,41 @@ describe("session activity semantics", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    [undefined, "Online"],
+    [0, "Online · Active"],
+    [120_000, "Online · Idle"],
+  ])("separates online identity from interaction age %s", (age, label) => {
+    const now = Date.now();
+    render(
+      renderSessionActivityView(
+        props({
+          rows: [row("agent:main:work", { id: "person" }, now)],
+          filters: { personId: "person", query: "", time: "7d" },
+          presenceViewers: [
+            {
+              id: "person",
+              identity: { type: "profile", id: "person" },
+              name: "Person",
+              watchedSessions: [],
+              entries: [
+                {
+                  ts: now,
+                  lastInputSeconds: 0,
+                  lastActivityAt: age === undefined ? undefined : now - age,
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+    expect(
+      container.querySelector(".activity-feed__identity .settings-status")?.textContent?.trim(),
+    ).toBe(label);
+  });
+
   it("leaves the page main landmark to the app shell", () => {
     render(renderSessionActivityView(props()), container);
 

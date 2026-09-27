@@ -43,7 +43,7 @@ export class TranscriptEndAnchor {
       !state.pendingInteractionAnchor &&
       !state.touching &&
       !state.touchScrolling &&
-      Math.abs((maxTranscriptScrollOffset(element) ?? 0) - element.scrollTop) <= 1
+      this.recordViewport(element)
     ) {
       // Only extend an observed end anchor. Physical end geometry alone can
       // come from a native clamp or persist just after reader input cancelled follow.
@@ -176,6 +176,22 @@ export class TranscriptEndAnchor {
     this.composerResizePending = null;
   }
 
+  get atEnd(): boolean {
+    return (
+      this.maxOffset !== null &&
+      this.lastOffset !== null &&
+      Math.abs(this.maxOffset - this.lastOffset) <= 1
+    );
+  }
+
+  recordViewport(element: HTMLDivElement | null): boolean {
+    // Native offsets must stay current even when no pane commit is needed.
+    // Composer resize uses the prior offset to distinguish a return from a clamp.
+    this.maxOffset = maxTranscriptScrollOffset(element);
+    this.lastOffset = element?.scrollTop ?? null;
+    return this.atEnd;
+  }
+
   clear(): void {
     this.cancelComposerResize();
     this.offset = null;
@@ -184,10 +200,7 @@ export class TranscriptEndAnchor {
   }
 
   capture(element: HTMLDivElement | null): void {
-    const max = maxTranscriptScrollOffset(element);
-    this.maxOffset = max;
-    this.lastOffset = element?.scrollTop ?? null;
-    this.offset = element && max !== null && Math.abs(max - element.scrollTop) <= 1 ? max : null;
+    this.offset = this.recordViewport(element) ? this.maxOffset : null;
   }
 
   reconcile(
@@ -196,9 +209,7 @@ export class TranscriptEndAnchor {
     suspended: boolean,
     follow: () => void,
   ): void {
-    const max = maxTranscriptScrollOffset(element);
-    this.maxOffset = max;
-    this.lastOffset = element?.scrollTop ?? null;
+    const atEnd = this.recordViewport(element);
     // A resized viewport can clamp a reader to the end without granting follow.
     if (!canFollow) {
       this.clear();
@@ -207,11 +218,11 @@ export class TranscriptEndAnchor {
     if (suspended) {
       return;
     }
-    if (!element || max === null) {
+    if (!element || this.maxOffset === null) {
       return;
     }
-    if (Math.abs(max - element.scrollTop) <= 1) {
-      this.offset = max;
+    if (atEnd) {
+      this.offset = this.maxOffset;
       return;
     }
     if (this.offset === null) {

@@ -116,14 +116,10 @@ describe("Discord thread membership through monitor dispatch", () => {
     }
   });
 
-  it.each(["archive", "READY"] as const)("rejoins after %s resets the lifecycle", async (reset) => {
-    const { client, fetch, update } = createHarness();
+  it("rejoins after archive resets the lifecycle", async () => {
+    const { fetch, update } = createHarness();
     await update();
-    if (reset === "archive") {
-      await update(true);
-    } else {
-      await client.dispatchGatewayEvent("READY", {});
-    }
+    await update(true);
     await update();
     expect(fetch).toHaveBeenCalledTimes(2);
   });

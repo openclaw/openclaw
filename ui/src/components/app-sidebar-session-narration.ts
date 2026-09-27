@@ -1,3 +1,8 @@
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+  resolveSafeTimeoutDelayMs,
+} from "@openclaw/gateway-client/browser";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
 import {
@@ -14,11 +19,11 @@ import {
   isSuppressedControlReplyText,
   stripSuppressedControlReplyToken,
 } from "../../../src/gateway/control-reply-text.js";
+import { extractAssistantPhaseText } from "../../../src/shared/chat-message-content.js";
 import { stripInlineDirectiveTagsForDisplay } from "../../../src/utils/directive-tags.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { stripHeartbeatTokenForDisplay } from "../lib/chat/heartbeat-display.ts";
-import { extractText } from "../lib/chat/message-extract.ts";
 import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
@@ -26,26 +31,38 @@ import {
   isUiGlobalSessionKey,
   normalizeAgentId,
 } from "../lib/sessions/session-key.ts";
+import { stripThinkingTags } from "../lib/strip-thinking-tags.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
 
 const SIDEBAR_NARRATION_SUBSCRIPTION_LIMIT = 6;
 const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
 const SIDEBAR_NARRATION_BUFFER_CHARS = 16_384;
+const SIDEBAR_NARRATION_RETRY_INITIAL_MS = 500;
+const SIDEBAR_NARRATION_RETRY_MAX_MS = 30_000;
 
 type SessionMessageSubscription = Awaited<ReturnType<SessionCapability["subscribeMessages"]>>;
 type NarrationSource = Pick<SessionCapability, "subscribeMessages" | "unsubscribeMessages">;
 
 type NarrationSubscription = {
+  key: string;
   source: NarrationSource;
+  connectionIdentity: object;
   subscription: SessionMessageSubscription;
   release?: Promise<void>;
 };
 
-type PendingSubscription = {
-  agentId: string | null;
-  operationId: symbol;
+type NarrationRetry = {
+  retryWindowMs: number;
+  retryAt: number;
+  timer: ReturnType<typeof globalThis.setTimeout> | null;
 };
+
+type PendingSubscription = NarrationRetry & { agentId: string | null };
+
+function createNarrationRetry(): NarrationRetry {
+  return { retryWindowMs: SIDEBAR_NARRATION_RETRY_INITIAL_MS, retryAt: 0, timer: null };
+}
 
 type NarrationActivity = { kind: "text"; text: string } | { kind: "line"; line: string };
 
@@ -128,7 +145,7 @@ export class SidebarSessionNarrationController {
   private agentId = "main";
   private desiredKeys = new Set<string>();
   private subscriptions = new Map<string, NarrationSubscription>();
-  private pendingReleases = new Set<NarrationSubscription>();
+  private pendingReleases = new Map<NarrationSubscription, NarrationRetry>();
   private pendingSubscriptions = new Map<string, PendingSubscription>();
   private internalRuntimeBlockDepth = new Map<string, number>();
   private internalRuntimeDelimiterTails = new Map<string, string>();
@@ -151,9 +168,6 @@ export class SidebarSessionNarrationController {
   ) {}
 
   sync(input: SidebarNarrationSyncInput): void {
-    for (const owned of this.pendingReleases) {
-      this.releaseSubscription(owned);
-    }
     if (!this.input) {
       this.visibilityDocument = globalThis.document ?? null;
       this.visibilityDocument?.addEventListener("visibilitychange", this.handleVisibilityChange);
@@ -175,6 +189,7 @@ export class SidebarSessionNarrationController {
     if (disconnected || !this.enabled) {
       this.desiredKeys = new Set();
       this.resetSubscriptions();
+      this.syncReleases();
       this.clearAllLines();
       return;
     }
@@ -218,11 +233,15 @@ export class SidebarSessionNarrationController {
       ) {
         this.releaseKey(key);
       }
-      if (this.subscriptions.has(key) || this.pendingSubscriptions.has(key)) {
+      if (
+        this.subscriptions.has(key) ||
+        (this.pendingSubscriptions.get(key)?.retryAt ?? 0) > Date.now()
+      ) {
         continue;
       }
       void this.subscribeKey(key);
     }
+    this.syncReleases();
   }
 
   handleEvent(event: GatewayEventFrame): void {
@@ -243,9 +262,6 @@ export class SidebarSessionNarrationController {
   }
 
   disconnect(): void {
-    for (const owned of this.pendingReleases) {
-      this.releaseSubscription(owned);
-    }
     this.visibilityDocument?.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.visibilityDocument = null;
     this.input = null;
@@ -253,46 +269,83 @@ export class SidebarSessionNarrationController {
     this.resetSubscriptions();
     this.clearAllLines();
     this.connected = false;
+    this.syncReleases();
   }
 
   private async subscribeKey(key: string): Promise<void> {
     const source = this.source;
+    const connectionIdentity = this.connectionIdentity;
     if (
       !source ||
-      !this.connectionIdentity ||
+      !connectionIdentity ||
       !this.connected ||
       !this.enabled ||
       !this.desiredKeys.has(key)
     ) {
       return;
     }
-    const operationId = Symbol(key);
-    const agentId = this.subscriptionAgentId(key);
-    this.pendingSubscriptions.set(key, { agentId, operationId });
+    const pending = this.pendingSubscriptions.get(key) ?? {
+      agentId: this.subscriptionAgentId(key),
+      ...createNarrationRetry(),
+    };
+    this.cancelRetry(pending);
+    // Both in-flight and non-retryable failures hold their slot until intent changes.
+    pending.retryAt = Infinity;
+    this.pendingSubscriptions.set(key, pending);
     try {
       const subscription = await source.subscribeMessages(key, {
-        agentId: agentId ?? undefined,
+        agentId: pending.agentId ?? undefined,
       });
-      const pending = this.pendingSubscriptions.get(key);
-      if (pending?.operationId === operationId) {
+      const owned = { key, source, connectionIdentity, subscription };
+      const current = this.pendingSubscriptions.get(key) === pending;
+      if (current) {
         this.pendingSubscriptions.delete(key);
       }
       if (
-        pending?.operationId !== operationId ||
+        !current ||
         source !== this.source ||
         !this.connected ||
         !this.enabled ||
         !this.desiredKeys.has(key)
       ) {
-        this.releaseSubscription({ source, subscription });
+        this.releaseSubscription(owned);
         return;
       }
-      this.subscriptions.set(key, { source, subscription });
-    } catch {
-      const pending = this.pendingSubscriptions.get(key);
-      if (pending?.operationId === operationId) {
-        this.pendingSubscriptions.delete(key);
+      this.subscriptions.set(key, owned);
+      this.syncReleases();
+    } catch (error) {
+      if (this.pendingSubscriptions.get(key) === pending) {
+        this.scheduleRetry(pending, error);
       }
+    }
+  }
+
+  private scheduleRetry(retry: NarrationRetry, error: unknown): void {
+    retry.retryAt = Infinity;
+    if (
+      !(error instanceof GatewayProtocolRequestTimeoutError) &&
+      (!(error instanceof GatewayProtocolRequestError) || !error.retryable)
+    ) {
+      return;
+    }
+    const hint = error instanceof GatewayProtocolRequestError ? error.retryAfterMs : undefined;
+    const floor = typeof hint === "number" && Number.isFinite(hint) ? Math.max(0, hint) : 0;
+    const delay = resolveSafeTimeoutDelayMs(floor + Math.random() * retry.retryWindowMs);
+    retry.retryWindowMs = Math.min(retry.retryWindowMs * 2, SIDEBAR_NARRATION_RETRY_MAX_MS);
+    retry.retryAt = Date.now() + delay;
+    retry.timer = globalThis.setTimeout(() => {
+      retry.timer = null;
+      retry.retryAt = 0;
+      if (this.input) {
+        this.sync(this.input);
+      }
+    }, delay);
+  }
+
+  private cancelRetry(retry: NarrationRetry): void {
+    if (retry.timer !== null) {
+      globalThis.clearTimeout(retry.timer);
+      retry.timer = null;
     }
   }
 
@@ -301,6 +354,10 @@ export class SidebarSessionNarrationController {
   }
 
   private releaseKey(key: string): void {
+    const pending = this.pendingSubscriptions.get(key);
+    if (pending) {
+      this.cancelRetry(pending);
+    }
     this.pendingSubscriptions.delete(key);
     const owned = this.subscriptions.get(key);
     this.subscriptions.delete(key);
@@ -311,21 +368,59 @@ export class SidebarSessionNarrationController {
   }
 
   private releaseSubscription(owned: NarrationSubscription): void {
-    if (owned.release) {
+    const retry = this.pendingReleases.get(owned) ?? createNarrationRetry();
+    if (owned.release || retry.retryAt > Date.now()) {
       return;
     }
-    this.pendingReleases.add(owned);
+    this.cancelRetry(retry);
+    retry.retryAt = Infinity;
+    this.pendingReleases.set(owned, retry);
     owned.release = owned.source
       .unsubscribeMessages(owned.subscription)
       .then(() => {
         this.pendingReleases.delete(owned);
       })
-      .catch(() => {
-        // The coordinator still owns this exact handle; retry on sync or disconnect.
+      .catch((error: unknown) => {
+        if (this.pendingReleases.get(owned) === retry && !this.releaseIsDesired(owned)) {
+          this.scheduleRetry(retry, error);
+        }
       })
       .finally(() => {
         owned.release = undefined;
+        this.syncReleases();
       });
+  }
+
+  private releaseIsDesired(owned: NarrationSubscription): boolean {
+    return (
+      owned.source === this.source &&
+      this.desiredKeys.has(owned.key) &&
+      (owned.subscription.agentId ?? null) === this.subscriptionAgentId(owned.key)
+    );
+  }
+
+  private syncReleases(): void {
+    for (const [owned, retry] of this.pendingReleases) {
+      if (!this.connected || owned.connectionIdentity !== this.connectionIdentity) {
+        this.cancelRetry(retry);
+        retry.retryAt = 0;
+        // DOM detachment pauses cleanup without retiring the socket's leases.
+        if (this.input || owned.connectionIdentity !== this.connectionIdentity) {
+          this.pendingReleases.delete(owned);
+        }
+        continue;
+      }
+      if (this.releaseIsDesired(owned)) {
+        this.cancelRetry(retry);
+        retry.retryAt = 0;
+        // Reacquire through the coordinator before retiring the old handle: a
+        // timed-out unsubscribe may already have removed its wire observer.
+        if (!this.subscriptions.has(owned.key)) {
+          continue;
+        }
+      }
+      this.releaseSubscription(owned);
+    }
   }
 
   private resetSubscriptions(): void {
@@ -368,7 +463,9 @@ export class SidebarSessionNarrationController {
       return;
     }
     const deltaText = typeof record.deltaText === "string" ? record.deltaText : "";
-    const messageText = message ? extractText(message) : null;
+    const messageText = message
+      ? stripThinkingTags(extractAssistantPhaseText(message) ?? "")
+      : null;
     const consumed = this.consumedStreamLength.get(key) ?? 0;
     // A newly subscribed sidebar can join mid-run. Within one run the server's
     // cumulative snapshot grows monotonically, so length arithmetic decides
@@ -376,7 +473,7 @@ export class SidebarSessionNarrationController {
     if (record.replace === true) {
       // Handle before any truthiness gate: an EMPTY replacement retracts the
       // narration line (streamLength 0 takes publishText's clearing path).
-      const replacement = deltaText || messageText || "";
+      const replacement = messageText ?? deltaText;
       this.publishText(key, {
         streamLength: replacement.length,
         fragment: replacement,
@@ -385,7 +482,7 @@ export class SidebarSessionNarrationController {
       return;
     }
     if (deltaText) {
-      if (messageText) {
+      if (messageText !== null) {
         const appends = consumed > 0 && messageText.length - deltaText.length === consumed;
         this.publishText(key, {
           streamLength: messageText.length,
@@ -404,7 +501,7 @@ export class SidebarSessionNarrationController {
       // silent until a cumulative snapshot or replacement aligns the stream.
       return;
     }
-    if (messageText) {
+    if (messageText !== null) {
       this.publishText(key, {
         streamLength: messageText.length,
         fragment: messageText,
@@ -513,6 +610,9 @@ export class SidebarSessionNarrationController {
       return;
     }
     const record = payload as Record<string, unknown>;
+    if (record.stream !== "tool") {
+      return;
+    }
     const key = this.matchingDesiredKey(record.sessionKey, record.agentId);
     if (!key) {
       return;
@@ -522,51 +622,13 @@ export class SidebarSessionNarrationController {
       return;
     }
     const data = record.data as Record<string, unknown> | undefined;
-    if (record.stream === "tool") {
-      const name = typeof data?.name === "string" ? data.name.trim() : "";
-      if (!name) {
-        return;
-      }
+    const name = typeof data?.name === "string" ? data.name.trim() : "";
+    if (name) {
       this.publishThrottled(key, {
         kind: "line",
         line: t("chat.sidebar.toolActivity", { tool: name }),
       });
-      return;
     }
-    if (record.stream !== "assistant") {
-      return;
-    }
-    const text = typeof data?.text === "string" ? data.text : "";
-    const delta = typeof data?.delta === "string" ? data.delta : "";
-    const consumed = this.consumedStreamLength.get(key) ?? 0;
-    if (data?.replace === true) {
-      const replacement = text || delta;
-      this.publishText(key, {
-        streamLength: replacement.length,
-        fragment: replacement,
-        reset: true,
-      });
-      return;
-    }
-    if (text) {
-      // Same monotonic-length contract as the chat path: append when the
-      // cumulative snapshot grew by exactly this event's delta, else rejoin.
-      if (delta && consumed > 0 && text.length - delta.length === consumed) {
-        this.publishText(key, { streamLength: text.length, fragment: delta, reset: false });
-      } else if (text.length !== consumed) {
-        this.publishText(key, { streamLength: text.length, fragment: text, reset: true });
-      }
-      return;
-    }
-    if (delta && consumed > 0) {
-      this.publishText(key, {
-        streamLength: consumed + delta.length,
-        fragment: delta,
-        reset: false,
-      });
-    }
-    // consumed === 0 with a bare delta: same mid-run-join hazard as the chat
-    // path — suppress until a cumulative snapshot aligns the stream.
   }
 
   private handleObserverEvent(payload: unknown): void {

@@ -366,6 +366,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
             pending.controller.signal,
             undefined,
             step.value.timing,
+            step.value.tables,
           );
         } catch (error) {
           failure = error;

@@ -172,13 +172,6 @@ function retireIdleScopedCommandLane(state: LaneState): void {
   }
 }
 
-function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
-  if (value === undefined || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return clampPositiveTimerTimeoutMs(value);
-}
-
 function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): QueuePriority {
   switch (priority) {
     case "foreground":
@@ -201,13 +194,13 @@ async function runQueueEntryTask(
   marker: CommandLaneTaskMarker,
 ): Promise<unknown> {
   const taskPromise = Promise.resolve().then(() => entry.task(marker));
-  const taskTimeoutMs = normalizeTaskTimeoutMs(entry.taskTimeoutMs);
+  const taskTimeoutMs = clampPositiveTimerTimeoutMs(entry.taskTimeoutMs);
   if (taskTimeoutMs === undefined) {
     return await taskPromise;
   }
 
   const taskTimeoutAbortGraceMs =
-    normalizeTaskTimeoutMs(entry.taskTimeoutAbortGraceMs) ?? taskTimeoutMs;
+    clampPositiveTimerTimeoutMs(entry.taskTimeoutAbortGraceMs) ?? taskTimeoutMs;
   const startedAtMs = Date.now();
   const readLastProgressAtMs = () => {
     let value: number | undefined;
@@ -567,11 +560,11 @@ export function enqueueCommandInLane<T>(
       queuedAheadAtEnqueue: 0,
       activeAheadAtEnqueue: 0,
       taskIdentity: opts?.taskIdentity ? { ...opts.taskIdentity } : undefined,
-      taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
+      taskTimeoutMs: clampPositiveTimerTimeoutMs(opts?.taskTimeoutMs),
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
       taskTimeoutSubscribe: opts?.taskTimeoutSubscribe,
       taskTimeoutAbortSignal: opts?.taskTimeoutAbortSignal,
-      taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
+      taskTimeoutAbortGraceMs: clampPositiveTimerTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
       onWait: opts?.onWait,
     };

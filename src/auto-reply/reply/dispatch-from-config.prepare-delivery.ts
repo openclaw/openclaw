@@ -237,8 +237,10 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     });
     if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
-      if (deliveryIntentId) {
-        throw new Error(result.error ?? "durable block reply delivery failed");
+      if (deliveryIntentId && result.queueCustody !== "held") {
+        throw new Error(result.error ?? "durable block reply delivery failed", {
+          cause: result.cause,
+        });
       }
     }
     if (hasAskUserPayload(payload) && !effectiveAbortSignal?.aborted && !result?.delivered) {

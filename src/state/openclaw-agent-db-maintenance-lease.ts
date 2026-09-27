@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { withSqliteIntegrityWorkerScope } from "../infra/sqlite-integrity-worker.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertNoOpenClawAgentDatabaseLeases,
@@ -105,14 +106,7 @@ async function runMaintenanceScope<T>(
               errors.push(error);
             }
           }
-          if (errors.length > 1) {
-            throw new AggregateError(errors, "Agent maintenance and nested work failed", {
-              cause: errors[0],
-            });
-          }
-          if (errors.length === 1) {
-            throw errors[0];
-          }
+          throwSqliteLifecycleErrors(errors, "Agent maintenance and nested work failed");
           if ("error" in outcome) {
             throw outcome.error;
           }

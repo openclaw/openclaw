@@ -554,8 +554,12 @@ restore or delete its environment while a write is pending. Registered synchrono
 V1 runtimes retain their captured adapter. Command redaction, task data, schemas,
 retention, and update behavior are unchanged.
 
-Worktree run-lease cleanup deletes the exact token and reads the Git unlock target
-through the shared-state worker. Failed deletions yield between bounded retries,
+Worktree run-lease admission and cleanup use the shared-state worker. Admission
+rechecks removal, exclusivity, and process liveness inside the insertion transaction,
+retaining the requesting process's PID and start time. Cleanup deletes the exact
+token and reads the Git unlock target. A failed result delivery permits compensation
+only after native settlement; unknown outcomes retain the original database custody
+for stale-process recovery. Failed deletions yield between bounded retries,
 retaining the original database admission and Git guard until deletion settles.
 Process exit retains its best-effort synchronous deletion because it cannot await
 a worker. Git-guard admission reads its registry target through the same retained
@@ -567,7 +571,7 @@ timer ends before terminal persistence. Cold worker startup belongs to admission
 normal idle retirement and memory-pressure eviction remain in effect. Detached
 worker opening evaluates live admission guards in their captured caller context,
 then releases that capture after native opening settles.
-Worktree run admission writes, task creation and progress, and the remaining native
+Task creation and progress and the remaining native
 cron transitions still need migration. This
 cutover preserves schemas, stored bytes, retention, configuration, and update behavior.
 

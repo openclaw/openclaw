@@ -17,6 +17,7 @@ import type {
 import {
   createOpenClawStateLeaseError as leaseError,
   createOpenClawStateLeaseAbortError as abortError,
+  createOpenClawStateLeaseLostError,
   OpenClawStateLeaseError,
 } from "./openclaw-state-lease-error.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
@@ -141,11 +142,7 @@ async function runStateLeaseOwnerInScope<T>(
       leaseLost.abort(
         cause instanceof OpenClawStateLeaseError
           ? cause
-          : leaseError(
-              "OPENCLAW_STATE_LEASE_LOST",
-              `${validated.leaseLabel} ${validated.scope}/${validated.key} was lost`,
-              cause,
-            ),
+          : createOpenClawStateLeaseLostError(validated, cause),
       );
     }
   };
@@ -374,11 +371,10 @@ async function runStateLeaseOwnerInScope<T>(
         runTimerRenewal(renewAndSchedule);
       } catch (error) {
         if (
-          error instanceof OpenClawStateLeaseError &&
-          error.code === "OPENCLAW_STATE_LEASE_LOST"
+          (error instanceof OpenClawStateLeaseError &&
+            error.code === "OPENCLAW_STATE_LEASE_LOST") ||
+          (confirmedExpiresAt !== undefined && Date.now() >= confirmedExpiresAt)
         ) {
-          abortLost(error);
-        } else if (confirmedExpiresAt !== undefined && Date.now() >= confirmedExpiresAt) {
           abortLost(error);
         }
       }

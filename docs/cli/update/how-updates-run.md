@@ -240,6 +240,15 @@ checks still run. Standalone Doctor lint and explicitly selected `--only` checks
 keep their normal scope. The candidate recognizes the private-copy markers already
 set by the published 2026.9.4 updater, so this reduces work on that first hop too.
 
+The rehearsal repair Doctor also defers pure advisory inspections, including
+security, provider catalog, and runtime tool-schema diagnostics, and records their
+IDs in its output without consuming repair-warning slots. Contributions that also perform repairs stay in
+the rehearsal, including auth profiles, plugin health repairs, skills, memory
+recall, and session transcripts. The live post-swap Doctor and final readiness
+checks keep their existing scope. This saving applies to published 2026.9.3–2026.9.6
+updaters that supply the private-copy markers; older drivers keep their existing
+behavior.
+
 These checks do not run an agent turn or require a usable model-auth route.
 OAuth-only installations and installations without provider credentials can update.
 Auth diagnostics are advisory; optional inference repair runs through triage only
@@ -894,7 +903,7 @@ the sentinel.
 
   </Step>
   <Step id="validate-the-candidate" title="Check the update">
-    Runs Doctor health checks, config and plugin planning, and the isolated migration and test Gateway checks described above. Validation failure leaves the old Gateway serving.
+    Runs Doctor health checks, config and plugin planning, and the isolated migration and test Gateway checks described above. Validation failure leaves the old Gateway serving. If validation leaves source edits in the temporary worktree, progress reports a failed candidate clean check.
   </Step>
   <Step title="Activate and verify">
     Stops the managed service, checks out the exact staged commit SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.

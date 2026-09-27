@@ -99,6 +99,7 @@ function mockCapturedContext() {
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: stateDir },
     admission: {
+      coordinationKey: `path:${databasePath}`,
       databasePath,
       identity: { key: `path:${databasePath}`, canonicalPath: databasePath },
       assertCurrent: () => {},

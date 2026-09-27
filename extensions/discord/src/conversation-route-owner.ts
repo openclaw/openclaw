@@ -40,17 +40,19 @@ export function inspectDiscordConversationRouteOwner(params: {
       userId: direct ? params.conversation.peerId : undefined,
       channelId: nativeConversationId,
     });
-  const route = resolveDiscordConversationRoute({
-    cfg: params.cfg,
-    accountId,
-    guildId: params.conversation.context?.guildId,
-    memberRoleIds: params.conversation.context?.memberRoleIds,
-    peer: { kind: params.conversation.kind, id: params.conversation.peerId },
-    parentConversationId: params.conversation.context?.parentPeerId,
-  });
+  const route = ({ boundAgentId }: { boundAgentId?: string }) =>
+    resolveDiscordConversationRoute({
+      cfg: params.cfg,
+      defaultAgentId: boundAgentId,
+      accountId,
+      guildId: params.conversation.context?.guildId,
+      memberRoleIds: params.conversation.context?.memberRoleIds,
+      peer: { kind: params.conversation.kind, id: params.conversation.peerId },
+      parentConversationId: params.conversation.context?.parentPeerId,
+    });
   const { runtimeRoute, configuredRoute } = resolveDiscordConversationBindingRoute({
     cfg: params.cfg,
-    route,
+    resolveRoute: route,
     accountId,
     runtimeConversationId,
     configuredConversationId: threadConversationId ?? nativeConversationId,
@@ -72,11 +74,12 @@ export function inspectDiscordConversationRouteOwner(params: {
     return {
       kind: "plugin" as const,
       pluginId: runtimeRoute.pluginId,
-      fallbackAgentId: route.agentId,
+      fallbackAgentId: runtimeRoute.route.agentId,
     };
   }
   return {
     kind: "agent" as const,
-    agentId: runtimeRoute.boundAgentId ?? configuredRoute?.boundAgentId ?? route.agentId,
+    agentId:
+      runtimeRoute.boundAgentId ?? configuredRoute?.boundAgentId ?? runtimeRoute.route.agentId,
   };
 }

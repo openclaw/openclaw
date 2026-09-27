@@ -415,16 +415,7 @@ function openStateReadConnectionResult(
       if (errors.length === 1 && errors[0] instanceof SnapshotCleanupIncompleteError) {
         return false;
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw createSqliteLifecycleAggregateError(
-          errors,
-          "Shared-state reader cleanup failed.",
-          errors[0],
-        );
-      }
+      throwSqliteLifecycleErrors(errors, "Shared-state reader cleanup failed.");
       closed = true;
       return true;
     },

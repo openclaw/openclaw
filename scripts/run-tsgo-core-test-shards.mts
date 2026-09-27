@@ -6,12 +6,8 @@ import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { CoreTsgoGraph } from "./check-tsgo-core-boundary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import {
-  distArtifactEntryArgs,
-  withDistArtifactOwnership,
-} from "./lib/dist-artifact-ownership.mts";
+import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
-import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   selectTsgoCoreTestShards,
@@ -22,31 +18,28 @@ import {
   TSGO_CORE_TEST_SHARDS,
   selectTsgoCoreTestStripe,
 } from "./lib/tsgo-core-test-shards.mts";
+import { prepareTsgoCommand, runPreparedTsgoCommand } from "./run-tsgo.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
-function runShard(config: string, env: NodeJS.ProcessEnv): Promise<number> {
-  return runManagedCommand({
-    bin: process.execPath,
-    shell: false,
-    args: distArtifactEntryArgs(
-      path.join(repoRoot, "scripts/run-tsgo.mts"),
-      // These graphs have no project references. Project mode rechecks root
-      // membership even when a restored build-info file is newer than a new root.
-      [
-        "-p",
-        config,
-        "--incremental",
-        // The package command pins this config's cache at the repository root.
-        ...(config === "test/tsconfig/tsconfig.test.root.json"
-          ? ["--tsBuildInfoFile", ".artifacts/tsgo-cache/test-root.tsbuildinfo"]
-          : []),
-      ],
-      { native: true },
-    ),
-    cwd: repoRoot,
+async function runShard(config: string, env: NodeJS.ProcessEnv): Promise<number> {
+  const command = prepareTsgoCommand(
+    // These graphs have no project references. Project mode rechecks root
+    // membership even when a restored build-info file is newer than a new root.
+    [
+      "-p",
+      config,
+      "--incremental",
+      // The package command pins this config's cache at the repository root.
+      ...(config === "test/tsconfig/tsconfig.test.root.json"
+        ? ["--tsBuildInfoFile", ".artifacts/tsgo-cache/test-root.tsbuildinfo"]
+        : []),
+    ],
     env,
-    requireProcessTreeExit: process.platform !== "win32",
-  });
+    repoRoot,
+  );
+  // One owner joins each native compiler. A second wrapper's escalation deadline
+  // can kill the cleanup owner before it releases its artifact claim.
+  return command ? await runPreparedTsgoCommand(command) : 0;
 }
 
 /** Runs selected canonical graphs under the same output and child-process owner. */

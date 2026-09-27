@@ -535,12 +535,14 @@ type SessionTranscriptWorkerError =
   | SessionTranscriptWorkerReadError
   | { kind: "delta-visibility"; partial: SessionHistoryDelta };
 
+export type SessionTranscriptWorkerSuccess<Value> = {
+  ok: true;
+  value: Value;
+  closedHistoryDatabase?: SessionTranscriptHistoryWorkerInput["database"];
+};
+
 export type SessionTranscriptWorkerReply<Kind extends keyof SessionTranscriptWorkerValues> =
-  | {
-      ok: true;
-      value: SessionTranscriptWorkerValues[Kind];
-      closedHistoryDatabase?: SessionTranscriptHistoryWorkerInput["database"];
-    }
+  | SessionTranscriptWorkerSuccess<SessionTranscriptWorkerValues[Kind]>
   | {
       ok: false;
       error: SessionTranscriptWorkerError;

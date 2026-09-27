@@ -96,7 +96,9 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
   if (repairActive) {
     return stop("unavailable", "Another installation repair is already running.");
   }
-  const parsedBudget = updateRepairBudgetSchema.safeParse(params.budget ?? {});
+  const parsedBudget = updateRepairBudgetSchema
+    .omit({ maxTurns: true })
+    .safeParse(params.budget ?? {});
   if (!parsedBudget.success) {
     return stop("aborted", "Invalid repair budget.");
   }
@@ -114,7 +116,6 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
   const cleanup = createAgentCleanupScope();
   repairActive = true;
   try {
-    const runtime = await import("./update-repair-agent.runtime.js");
     assertCurrent();
     finalValidation = await validateRepair(params, signal);
     assertCurrent();
@@ -125,12 +126,11 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
     if (finalValidation.ok) {
       return stop("repaired");
     }
-    if (budget.maxTurns === 0) {
-      return stop("unrepaired", "turn-budget");
-    }
     if (budget.maxToolCalls === 0) {
       return stop("aborted", "tool-call-budget");
     }
+    const runtime = await import("./update-repair-agent.runtime.js");
+    assertCurrent();
     const baselineScore = finalValidation.score;
     const selected = await runtime.withUpdateRepairEnvironment(params.target, () =>
       runtime.prepareUpdateRepairInference(signal, Math.max(1, deadline - Date.now())),
@@ -141,115 +141,107 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
     }
     const { route, modelFallbacks } = selected;
     params.onEvent?.({ type: "route-selected", model: route.model, provider: route.provider });
-    let remainingToolCalls = budget.maxToolCalls;
-    for (let turn = 1; turn <= budget.maxTurns; turn += 1) {
-      assertCurrent();
-      const previousScore = finalValidation.score;
-      const started = Date.now();
-      const timeoutMs = Math.min(budget.perTurnMs, deadline - started);
-      if (timeoutMs <= 0) {
-        return stop("aborted", "wall-clock-budget");
-      }
-      params.onEvent?.({
-        type: "turn-started",
-        turn,
-        model: route.model,
-        provider: route.provider,
-      });
-      const turnController = new AbortController();
-      const turnTimer = setTimeout(
-        () => turnController.abort(new Error("per-turn-budget")),
-        timeoutMs,
-      );
-      const turnSignal = AbortSignal.any([signal, turnController.signal]);
-      let outcome;
-      try {
-        outcome = await cleanup.run(() =>
-          runLocalUpdateRepairTurn({
-            target: params.target,
-            route,
-            modelFallbacks,
-            prompt: repairPrompt(params, finalValidation),
-            timeoutMs,
-            maxToolCalls: remainingToolCalls,
-            signal: turnSignal,
-            isCurrent: () => {
-              assertCurrent();
-              return true;
-            },
-          }),
-        );
-      } finally {
-        clearTimeout(turnTimer);
-      }
-      if (outcome.status === "unavailable") {
-        return stop("unavailable", outcome.reason);
-      }
-      const attempt: RepairAttempt = {
-        turn,
-        model: outcome.model,
-        provider: outcome.provider,
-        durationMs: Date.now() - started,
-        toolCalls: outcome.toolCalls,
-        summary: outcome.summary,
-        validation: {
-          ok: false,
-          score: previousScore,
-          summary: "Post-turn validation did not complete.",
-        },
-      };
-      attempts.push(attempt);
-      remainingToolCalls -= outcome.toolCalls;
-      finalValidation = attempt.validation;
-      // Even failed/timed-out turns may have changed files. Validate after the
-      // runner has drained; never infer repair from its self-reported result.
-      try {
-        assertCurrent();
-        if (cleanup.outcome === "uncertain") {
-          throw new Error(
-            "Repair cleanup is unconfirmed; further repair is blocked in this process.",
-          );
-        }
-        finalValidation = await validateRepair(params, signal);
-        attempt.validation = finalValidation;
-        params.onEvent?.({ type: "validation", turn, validation: finalValidation });
-      } catch (error) {
-        if (error instanceof UpdateRequesterRevokedError) {
-          attempt.validation = {
-            ...attempt.validation,
-            stopReason: error.code,
-            summary: error.code,
-          };
-          finalValidation = attempt.validation;
-        }
-        throw error;
-      } finally {
-        params.onEvent?.({ type: "turn-finished", ...attempt });
-      }
-      assertCurrent();
-      if (finalValidation.stopReason) {
-        return stop("unrepaired", finalValidation.stopReason);
-      }
-      if (finalValidation.score < previousScore) {
-        return stop("unrepaired", "Validation regressed after repair.");
-      }
-      if (finalValidation.ok) {
-        return stop("repaired");
-      }
-      if (turnController.signal.aborted || outcome.timedOut) {
-        return stop("aborted", "per-turn-budget");
-      }
-      if (remainingToolCalls <= 0) {
-        return stop("aborted", "tool-call-budget");
-      }
-      if (finalValidation.score === previousScore) {
-        return stop(
-          finalValidation.score > baselineScore ? "improved" : "unrepaired",
-          "Validation did not improve.",
-        );
-      }
+    assertCurrent();
+    const started = Date.now();
+    const timeoutMs = Math.min(budget.perTurnMs, deadline - started);
+    if (timeoutMs <= 0) {
+      return stop("aborted", "wall-clock-budget");
     }
-    return stop(finalValidation.score > baselineScore ? "improved" : "unrepaired", "turn-budget");
+    params.onEvent?.({
+      type: "turn-started",
+      turn: 1,
+      model: route.model,
+      provider: route.provider,
+    });
+    const turnController = new AbortController();
+    const turnTimer = setTimeout(
+      () => turnController.abort(new Error("per-turn-budget")),
+      timeoutMs,
+    );
+    const turnSignal = AbortSignal.any([signal, turnController.signal]);
+    let outcome;
+    try {
+      outcome = await cleanup.run(() =>
+        runLocalUpdateRepairTurn({
+          target: params.target,
+          route,
+          modelFallbacks,
+          prompt: repairPrompt(params, finalValidation),
+          timeoutMs,
+          maxToolCalls: budget.maxToolCalls,
+          signal: turnSignal,
+          isCurrent: () => {
+            assertCurrent();
+            return true;
+          },
+        }),
+      );
+    } finally {
+      clearTimeout(turnTimer);
+    }
+    if (outcome.status === "unavailable") {
+      return stop("unavailable", outcome.reason);
+    }
+    const attempt: RepairAttempt = {
+      turn: 1,
+      model: outcome.model,
+      provider: outcome.provider,
+      durationMs: Date.now() - started,
+      toolCalls: outcome.toolCalls,
+      summary: outcome.summary,
+      validation: {
+        ok: false,
+        score: baselineScore,
+        summary: "Post-turn validation did not complete.",
+      },
+    };
+    attempts.push(attempt);
+    finalValidation = attempt.validation;
+    // Even failed/timed-out turns may have changed files. Validate after the
+    // runner has drained; never infer repair from its self-reported result.
+    try {
+      assertCurrent();
+      if (cleanup.outcome === "uncertain") {
+        throw new Error(
+          "Repair cleanup is unconfirmed; further repair is blocked in this process.",
+        );
+      }
+      finalValidation = await validateRepair(params, signal);
+      attempt.validation = finalValidation;
+      params.onEvent?.({ type: "validation", turn: 1, validation: finalValidation });
+    } catch (error) {
+      if (error instanceof UpdateRequesterRevokedError) {
+        attempt.validation = {
+          ...attempt.validation,
+          stopReason: error.code,
+          summary: error.code,
+        };
+        finalValidation = attempt.validation;
+      }
+      throw error;
+    } finally {
+      params.onEvent?.({ type: "turn-finished", ...attempt });
+    }
+    assertCurrent();
+    if (finalValidation.stopReason) {
+      return stop("unrepaired", finalValidation.stopReason);
+    }
+    if (finalValidation.score < baselineScore) {
+      return stop("unrepaired", "Validation regressed after repair.");
+    }
+    if (finalValidation.ok) {
+      return stop("repaired");
+    }
+    if (turnController.signal.aborted || outcome.timedOut) {
+      return stop("aborted", "per-turn-budget");
+    }
+    if (outcome.toolCalls >= budget.maxToolCalls) {
+      return stop("aborted", "tool-call-budget");
+    }
+    if (finalValidation.score === baselineScore) {
+      return stop("unrepaired", "Validation did not improve.");
+    }
+    return stop("improved", "turn-budget");
   } catch (error) {
     return stop(
       "aborted",

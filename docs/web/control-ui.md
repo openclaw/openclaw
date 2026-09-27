@@ -27,9 +27,15 @@ While the initial connection or a route loads, shimmer placeholders reserve the 
 
 The selected chat loads before automatic sidebar task lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
 
+Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
+
 Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
 
 Live narration retains up to six visible running background sessions, plus the open session. Recency changes keep that window stable; when a session finishes or leaves the visible rows, the most recent eligible session fills its slot. Reconnecting selects a fresh window.
+
+If a narration subscription encounters a retryable failure or times out, it retries automatically with randomized exponential backoff, honoring the server's retry delay. Sidebar updates share the pending retry instead of sending more requests. Retries stop when that session leaves the narration window, the tab is hidden, or the connection closes; non-retryable errors wait for a new subscription intent or connection.
+
+Failed narration releases use the same backoff, including while the tab is hidden. If a session is needed again, its queued release is canceled and its subscription is renewed safely. Closing the Gateway connection cancels release retries.
 
 Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
 
@@ -65,6 +71,10 @@ the claw green. Failed tasks have a warning badge and timed-out tasks a clock ba
 Hover the row or focus it with the keyboard for a tooltip explaining the exact
 status. Reduced motion keeps the claw still. Tasks without a display title keep
 the generic **Subagent** label. Select a row to open its details.
+
+The **running tasks** indicator previews only active background tasks (running or
+queued). Its tooltip shows up to five tasks, with an overflow count for additional
+active tasks. Select the indicator to open the full task list, including finished tasks.
 
 Select a session's title in the chat header to rename it. Enter saves the name;
 Escape cancels the edit. While an input method is composing text, Enter and
