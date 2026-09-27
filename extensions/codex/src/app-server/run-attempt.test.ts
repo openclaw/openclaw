@@ -6915,7 +6915,7 @@ describe("runCodexAppServerAttempt", () => {
   it.each([
     { name: "supported model", supported: true, fastMode: true, expected: "ultrafast" },
     { name: "unsupported model", supported: false, fastMode: true, expected: "priority" },
-    { name: "Fast off", supported: true, fastMode: false, expected: null },
+    { name: "Fast off", supported: true, fastMode: false, expected: undefined },
     { name: "standalone setting", supported: true, fastMode: undefined, expected: "ultrafast" },
     {
       name: "auto activates after resume",
