@@ -79,6 +79,7 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
       artifact: TransferArtifact;
       artifactKey: string;
       ttlMs: number;
+      maxServes: 1 | 3;
       isAuthorized: () => boolean;
       signal?: AbortSignal;
     }): { token: string; expiresAtMs: number } {
@@ -101,7 +102,7 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
         artifactKey: params.artifactKey,
         artifact: { ...params.artifact },
         expiresAtMs: now() + params.ttlMs,
-        remainingServes: 3,
+        remainingServes: params.maxServes,
         abortController: new AbortController(),
         isAuthorized: params.isAuthorized,
       };
@@ -135,8 +136,6 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
       if (capability.active) {
         throw new ArtifactTransferBusyError();
       }
-      // A buffering proxy can finish receiving a bundle, then reset the downstream download.
-      // Allow three serial serves, still bound to one artifact and the original TTL/live owner.
       capability.remainingServes--;
       const authorization = { capability, abortController: new AbortController() };
       capability.active = authorization;

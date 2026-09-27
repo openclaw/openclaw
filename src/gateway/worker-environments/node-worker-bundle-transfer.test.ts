@@ -8,11 +8,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { NodeWorkerBundleInstaller } from "../../node-host/node-worker-bundle-installer.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   readWorkerBundleDirectoryManifest,
 } from "../../shared/worker-bundle-archive.js";
 import { hashWorkerBundleManifest } from "../../shared/worker-bundle-hash.js";
+import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../../worker/node-bundle-install-protocol.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
 import { handleNodeWorkerBundleTransferHttpRequest } from "./node-worker-bundle-transfer-http.js";
@@ -37,7 +39,9 @@ describe("node worker bundle transfer", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("streams one authorized Gateway artifact into an atomic node install", async () => {
+  it("consumes its grant after one atomic node install and rejects a second HTTP serve", async ({
+    onTestFinished,
+  }) => {
     const source = path.join(root, "source");
     const tarballPath = path.join(root, "bundle.tgz");
     await fs.mkdir(source, { recursive: true });
@@ -55,6 +59,7 @@ describe("node worker bundle transfer", () => {
     const service = createNodeWorkerBundleTransferService({
       generateToken: () => "A".repeat(43),
     });
+    onTestFinished(() => service.closeAll());
     const node: NodeWorkerSupervisorNodeProof = {
       nodeId: "node-1",
       connId: "conn-1",
@@ -81,13 +86,16 @@ describe("node worker bundle transfer", () => {
       isAuthorized: () => true,
     });
     const callback = createArtifactTransferHttpCallback(service);
+    const served = createDeferredCore();
     server = http.createServer((req, res) => {
       void handleNodeWorkerBundleTransferHttpRequest({
         req,
         res,
         clientIp: "127.0.0.1",
         callback,
-      }).catch((error: unknown) => res.destroy(error as Error));
+      })
+        .then(() => served.resolve())
+        .catch((error: unknown) => res.destroy(error as Error));
     });
     await new Promise<void>((resolve) => {
       server!.listen(0, "127.0.0.1", resolve);
@@ -104,6 +112,12 @@ describe("node worker bundle transfer", () => {
         gatewayUrl: `ws://127.0.0.1:${address.port}`,
       }),
     ).resolves.toEqual(prepared.input.build);
-    service.closeAll();
+    await served.promise;
+    const replay = await fetch(
+      `http://127.0.0.1:${address.port}${NODE_WORKER_BUNDLE_TRANSFER_PATH}/bundles/${bundleHash}`,
+      { headers: { authorization: `Bearer ${prepared.token}` } },
+    );
+    expect(replay.status).toBe(404);
+    await expect(replay.json()).resolves.toEqual({ error: "not_found" });
   });
 });
