@@ -16,7 +16,6 @@ import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import { PluginInstallRuntimeBatch } from "./install-runtime-batch.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
-import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-record-state.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
@@ -26,7 +25,10 @@ import {
   withPluginLifecycleLease,
 } from "./plugin-lifecycle-lease.js";
 import * as metadataWorker from "./plugin-metadata-state-worker.js";
-import { createInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
+import {
+  readPersistedInstalledPluginIndexRowSync,
+  createInstalledPluginIndex,
+} from "./test-helpers/installed-plugin-index.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
