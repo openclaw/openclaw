@@ -1,4 +1,3 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { RealtimeVoiceCloseDisposition } from "openclaw/plugin-sdk/realtime-voice";
 import type { RawData } from "ws";
@@ -71,7 +70,12 @@ export function createOpenAIRealtimeSessionLease(params: {
         session.retryIndex = 0;
       }
       clearTimeout(session.timer);
-      const { promise: closing, resolve, reject } = createDeferred<void>();
+      let resolve!: () => void;
+      let reject!: (error: unknown) => void;
+      const closing = new Promise<void>((accept, fail) => {
+        resolve = accept;
+        reject = fail;
+      });
       // Retirement removes admission before callbacks; the cleanup capability and
       // reservation remain owned until the remote operation actually settles.
       session.closing = closing;
