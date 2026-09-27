@@ -76,11 +76,13 @@ describe("AppSidebar session ownership", () => {
 
     result.owners = [{ type: "human", id: "profile-bob", label: "Bob" }];
     harness.publishList({ result, agentId: "main" });
+    await sidebar.sessionData.refreshSidebarSessions();
     await sidebar.updateComplete;
     expect(sidebar.sessionOwnerFilterId).toBe("profile-bob");
 
     result.owners = undefined;
     harness.publishList({ result, agentId: "main" });
+    await sidebar.sessionData.refreshSidebarSessions();
     await sidebar.updateComplete;
     expect(sidebar.sessionOwnerFilterId).toBe("profile-bob");
     expect(sidebar.querySelector('[data-session-key="agent:main:ada"]')).toBeNull();
@@ -89,6 +91,7 @@ describe("AppSidebar session ownership", () => {
 
     result.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
     harness.publishList({ result, agentId: "main" });
+    await sidebar.sessionData.refreshSidebarSessions();
     await sidebar.updateComplete;
     await sidebar.updateComplete;
     expect(sidebar.sessionOwnerFilterId).toBeNull();
@@ -199,6 +202,7 @@ describe("AppSidebar session ownership", () => {
       shared.participants = [];
       shared.participantCount = 5;
       harness.publishList({ result, agentId: "main" });
+      await sidebar.sessionData.refreshSidebarSessions();
       await sidebar.updateComplete;
       expect(sharedRow().querySelector(".session-owner-stack__overflow")?.textContent).toBe("+5");
 
