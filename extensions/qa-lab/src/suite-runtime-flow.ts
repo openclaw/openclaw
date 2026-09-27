@@ -28,7 +28,12 @@ import { createQaScenarioRuntimeApi, type QaScenarioRuntimeEnv } from "./scenari
 import * as suiteRuntimeAgentMedia from "./suite-runtime-agent-media.js";
 import * as suiteRuntimeAgentProcess from "./suite-runtime-agent-process.js";
 import * as suiteRuntimeAgentSession from "./suite-runtime-agent-session.js";
-import * as suiteRuntimeAgentTools from "./suite-runtime-agent-tools.js";
+import {
+  callPluginToolsMcp,
+  findSkill,
+  handleQaAction,
+  writeWorkspaceSkill,
+} from "./suite-runtime-agent-tools.js";
 import * as suiteRuntimeGateway from "./suite-runtime-gateway.js";
 import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -52,7 +57,10 @@ const qaSuiteScenarioIdentityDeps = {
   ...suiteRuntimeAgentMedia,
   ...suiteRuntimeAgentProcess,
   ...suiteRuntimeAgentSession,
-  ...suiteRuntimeAgentTools,
+  callPluginToolsMcp,
+  findSkill,
+  handleQaAction,
+  writeWorkspaceSkill,
   runQaCli,
   inspectQaExecutionIdentityStorage,
   readNativeQaSubagentRuns,

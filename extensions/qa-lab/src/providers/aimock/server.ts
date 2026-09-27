@@ -281,7 +281,9 @@ function createDebugMount(): Mountable {
             ? { complete: true, facts: extractRequestFacts(entry.body, observation.tools) }
             : observation.projection;
         if (plannedToolCallId) {
-          projection = { ...projection, facts: { ...projection.facts, plannedToolCallId } };
+          projection = projection.complete
+            ? { complete: true, facts: { ...projection.facts, plannedToolCallId } }
+            : { ...projection, facts: { ...projection.facts, plannedToolCallId } };
           if (observation.kind === "projected") {
             projection = boundRequestFacts(projection);
           }

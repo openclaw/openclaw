@@ -286,8 +286,8 @@ const qaMaturityTaxonomySchema = z
     surfaces: z.array(qaMaturitySurfaceSchema).default([]),
   })
   .superRefine((taxonomy, ctx) => {
-    const issue = (path: (string | number)[], message: string) =>
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
+    const issue = (issuePath: (string | number)[], message: string) =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: issuePath, message });
     const seenProfileIds = new Set<string>();
     for (const [profileIndex, profile] of taxonomy.profiles.entries()) {
       if (seenProfileIds.has(profile.id)) {
