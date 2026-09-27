@@ -475,7 +475,7 @@ workspace** in the sign-in prompt.
   them. This does not grant access to the Files upload API, audio or video input,
   or the transcription API.
 - SIWC credentials do not authorize image generation, audio transcription,
-  speech synthesis, video generation, or memory embeddings. Configure a separate
+  speech synthesis, or memory embeddings. Configure a separate
   compatible credential for those tools. Onboarding continues with the agent's
   emoji when no image-generation provider is available; an avatar is optional.
 - Responses requests use HTTP streaming. WebSocket inference and SIWC quota

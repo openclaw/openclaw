@@ -122,6 +122,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
             await resolveApiKeyForProvider({
               provider: params.provider,
               capability: params.capability,
+              modelBaseUrl: baseUrl,
               cfg: params.options.config,
               agentDir: params.options.agentDir,
             }),

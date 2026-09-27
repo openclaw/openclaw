@@ -107,12 +107,21 @@ afterEach(async () => {
 });
 
 describe("OpenAI embedding provider HTTP contract", () => {
-  it.each(["none", "codex", "api-key"])(
-    "selects only API-key embedding auth with SIWC and %s configured",
-    async (additional) => {
+  it.each([
+    { additional: "none", custom: false, binding: undefined },
+    { additional: "codex", custom: false, binding: undefined },
+    { additional: "token", custom: false, binding: undefined },
+    { additional: "api-key", custom: false, binding: undefined },
+    { additional: "token", custom: true, binding: undefined },
+    { additional: "token", custom: true, binding: "openai:api" },
+    { additional: "none", custom: true, binding: undefined },
+  ])(
+    "selects compatible embedding auth with SIWC and $additional (custom=$custom, binding=$binding)",
+    async ({ additional, custom, binding }) => {
       const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedding-auth-"));
       vi.stubEnv("OPENAI_API_KEY", "");
       try {
+        const server = custom ? await startEmbeddingServer() : undefined;
         saveAuthProfileStore(
           {
             version: 1,
@@ -143,7 +152,15 @@ describe("OpenAI embedding provider HTTP contract", () => {
                         expires: Date.now() + 3_600_000,
                       },
                     }
-                  : {}),
+                  : additional === "token"
+                    ? {
+                        "openai:api": {
+                          type: "token" as const,
+                          provider: "openai",
+                          token: "fixture-embedding-token",
+                        },
+                      }
+                    : {}),
             },
           },
           agentDir,
@@ -152,7 +169,18 @@ describe("OpenAI embedding provider HTTP contract", () => {
         const result = createOpenAiEmbeddingProvider(
           createOptions({
             agentDir,
-            config: { auth: { order: { openai: ["openai:siwc", "openai:api"] } } },
+            config: {
+              auth: { order: { openai: ["openai:siwc", "openai:api"] } },
+              ...(server
+                ? {
+                    models: {
+                      providers: {
+                        openai: { baseUrl: server.baseUrl, apiKey: binding, models: [] },
+                      },
+                    },
+                  }
+                : {}),
+            },
             remote: { apiKey: undefined },
           }),
         );
@@ -160,8 +188,18 @@ describe("OpenAI embedding provider HTTP contract", () => {
           await expect(result).resolves.toMatchObject({
             client: { headers: { Authorization: "Bearer fixture-embedding-api-key" } },
           });
+        } else if (server && additional === "token") {
+          const { provider } = await result;
+          await expect(provider.embed("hello")).resolves.toEqual([5, 1]);
+          expect(server.requests).toHaveLength(1);
+          expect(server.requests[0]).toMatchObject({
+            url: "/tenant/v1/embeddings",
+            authorization: "Bearer fixture-embedding-token",
+            body: { model: "text-embedding-3-small", input: ["hello"] },
+          });
         } else {
           await expect(result).rejects.toThrow('No API key found for provider "openai"');
+          expect(server?.requests ?? []).toHaveLength(0);
         }
       } finally {
         clearRuntimeAuthProfileStoreSnapshots();
