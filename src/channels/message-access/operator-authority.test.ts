@@ -1,19 +1,29 @@
 import { expect, it } from "vitest";
+import { withSlackIngressIdentityTestHarness } from "../../../extensions/slack/ingress.test-api.js";
 import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { buildExecAutoReviewTranscript } from "../../agents/exec-auto-review-transcript.js";
 import { castAgentMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import {
   captureCommandOwnerAssertion,
   getCommandOwnerAuthority,
 } from "../../auto-reply/command-owner-authority.js";
 import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-admission.js";
+import { buildInboundMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
 import { installDiscordRegistryHooks } from "../../auto-reply/test-helpers/command-auth-registry-fixture.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { prepareChannelOperatorAdmin } from "../../gateway/channel-operator-authority.js";
+import { createSessionMutationTestContext } from "../../gateway/server-methods/sessions-mutations.owner.test-support.js";
+import { resolveGatewayScopedTools } from "../../gateway/tool-resolution.js";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "../../plugin-sdk/test-helpers/contracts-testkit.js";
+import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { stageActivePluginRegistry } from "../../plugins/runtime.js";
 import { readConfigMachineState } from "../../state/config-machine-state.js";
 import {
@@ -25,10 +35,140 @@ import {
   unlinkUserChannelIdentity,
   resolveUserChannelAuthorizationPolicy,
 } from "../../state/user-channel-identities.js";
-import { linkEmail, setUserProfileRole } from "../../state/user-profiles.js";
-import { withAdminIngress } from "./operator-authority.test-support.js";
+import { linkEmail, setDisplayName, setUserProfileRole } from "../../state/user-profiles.js";
+import { buildChannelInboundEventContext } from "../inbound-event/context.js";
+import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
+import {
+  createCommandOwnerTestGateway,
+  withAdminIngress,
+} from "./operator-authority.test-support.js";
+import { createHostChannelIngressRuntime } from "./runtime.js";
 
 installDiscordRegistryHooks();
+
+it("exposes a verified linked requester in trusted metadata without widening owner tools", async () => {
+  await withAdminIngress(async ({ cfg, state, admins, context }) => {
+    const admin = admins[0]!;
+    setDisplayName(admin.profile.id, "Ada Lovelace");
+    for (const scenario of [
+      { sender: admin.identity.senderId, verified: true, role: "admin", linked: true, owner: true },
+      {
+        sender: admin.identity.senderId,
+        verified: false,
+        role: "admin",
+        linked: false,
+        owner: false,
+      },
+      { sender: "unlinked", verified: true, role: "admin", linked: false, owner: false },
+      {
+        sender: admin.identity.senderId,
+        verified: true,
+        role: "member",
+        linked: true,
+        owner: false,
+      },
+    ]) {
+      setUserProfileRole(admin.profile.id, scenario.role);
+      const ctx = await context(scenario.sender, scenario.verified);
+      const prompt = buildInboundMetaSystemPrompt({ ...ctx }, cfg);
+      const metadata = JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)![1]!);
+      expect(metadata.requester_profile).toEqual(
+        scenario.linked ? { id: admin.profile.id, display_name: "Ada Lovelace" } : undefined,
+      );
+      const { senderIsOwner } = resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true });
+      expect(senderIsOwner).toBe(scenario.owner);
+      const tools = resolveGatewayScopedTools({
+        cfg,
+        sessionKey: ctx.SessionKey!,
+        messageProvider: "discord",
+        senderIsOwner,
+        surface: "loopback",
+      }).tools;
+      expect(tools.some((tool) => tool.name === "sessions")).toBe(scenario.owner);
+      if (scenario.owner) {
+        const sessionKey = ctx.SessionKey!;
+        const scope = { agentId: "main", sessionKey, env: state.env };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "requester-assignment",
+          updatedAt: 1,
+          visibility: "shared",
+        });
+        const gateway = createSessionMutationTestContext(cfg);
+        const tool = tools.find((entry) => entry.name === "sessions")!;
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey,
+            gatewayContextResolver: () => gateway,
+            operationalRunInstance: { instanceId: "requester-instance", runId: "requester-run" },
+            receiptAuthority: () => true,
+          },
+          async () => {
+            const result = await tool.execute("assign-requester", {
+              action: "assign_owner",
+              ownerType: "human",
+              ownerId: metadata.requester_profile.id,
+            });
+            expect(result.details).toMatchObject({
+              status: "updated",
+              owner: { type: "human", id: admin.profile.id },
+            });
+          },
+        );
+        expect(loadSessionEntry(scope)?.owner?.actor).toMatchObject({
+          type: "human",
+          id: admin.profile.id,
+        });
+      }
+    }
+  });
+});
+
+it("refreshes requester facts on later turns and rejects unlinked or forged context", async () => {
+  await withAdminIngress(async ({ cfg, admins, context, retire }) => {
+    const admin = admins[0]!;
+    const original = await context(admin.identity.senderId);
+    expect(buildInboundMetaSystemPrompt(original, cfg)).toContain(admin.profile.id);
+    setDisplayName(admin.profile.id, "Current label");
+    expect(buildInboundMetaSystemPrompt(await context(admin.identity.senderId), cfg)).toContain(
+      '"display_name": "Current label"',
+    );
+    for (const forged of [
+      JSON.parse(JSON.stringify(original)),
+      { ...original, SenderId: admins[1]!.identity.senderId },
+      { ...original, AccountId: "different-account" },
+      { ...original, Provider: "slack" },
+      { ...original, Surface: "webchat" },
+      { ...original, OriginatingChannel: "slack" },
+      {
+        ...original,
+        ...Object.fromEntries(
+          Object.getOwnPropertySymbols(original).map((key) => [
+            key,
+            { profileId: admin.profile.id, isCurrent: () => true },
+          ]),
+        ),
+      },
+      {
+        Provider: "discord",
+        SenderId: admin.identity.senderId,
+        RequesterProfile: { id: admin.profile.id },
+      },
+    ]) {
+      expect(buildInboundMetaSystemPrompt(forged, cfg)).not.toContain("requester_profile");
+    }
+    unlinkUserChannelIdentity(admin.profile.id, admin.identity);
+    expect(buildInboundMetaSystemPrompt(original, cfg)).not.toContain("requester_profile");
+    expect(buildInboundMetaSystemPrompt(await context(admin.identity.senderId), cfg)).not.toContain(
+      "requester_profile",
+    );
+    linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
+    const relinked = await context(admin.identity.senderId);
+    expect(buildInboundMetaSystemPrompt(relinked, cfg)).toContain(admins[1]!.profile.id);
+    retire();
+    expect(buildInboundMetaSystemPrompt(relinked, cfg)).not.toContain("requester_profile");
+  });
+});
 
 it("keeps native policy readable by schema-19 predecessors without configured owners", async () => {
   await withAdminIngress(async ({ cfg, activatePolicy }) => {
@@ -447,5 +587,80 @@ it("keeps configured owners independent of Team role and identity links", async 
         .senderIsOwner,
     ).toBe(true);
     expect(assertions[1]).not.toThrow();
+  });
+});
+
+it("carries native Slack requester authority through preparation and keeps replayed relay input asserted", async () => {
+  await withAdminIngress(async ({ cfg, state, admins }) => {
+    cfg.channels = { slack: { accounts: { team: { allowFrom: ["*"] } } } };
+    const profile = admins[0]!.profile;
+    setDisplayName(profile.id, "Ada Lovelace");
+    linkUserChannelIdentity(profile.id, {
+      channelId: "slack",
+      accountId: "team",
+      senderId: "U123",
+    });
+    const gateway = createCommandOwnerTestGateway(cfg);
+    const owner = {
+      channelId: "slack",
+      isLive: () => true,
+      resolveGatewayContext: () => gateway,
+    };
+    const runtime = createPluginRuntimeMock({
+      channel: {
+        inbound: {
+          ingress: createHostChannelIngressRuntime(owner),
+          buildContext: createHostChannelInboundEventContextBuilder(
+            buildChannelInboundEventContext,
+            owner,
+          ),
+        },
+      },
+    });
+    await withSlackIngressIdentityTestHarness(
+      { cfg, runtime, stateDir: state.stateDir },
+      async ({ contexts, receiveSocket, receiveHttp }) => {
+        expect(contexts).toHaveLength(1);
+        const check = (index: number, linked: boolean, isOwner: boolean) => {
+          const turn = contexts[index]!;
+          const prompt = buildInboundMetaSystemPrompt(turn, cfg);
+          const metadata = JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)![1]!);
+          expect
+            .soft(metadata.requester_profile)
+            .toEqual(linked ? { id: profile.id, display_name: "Ada Lovelace" } : undefined);
+          const { senderIsOwner } = resolveCommandAuthorization({
+            cfg,
+            ctx: turn,
+            commandAuthorized: true,
+          });
+          expect.soft(senderIsOwner).toBe(isOwner);
+          const { tools } = resolveGatewayScopedTools({
+            cfg,
+            sessionKey: turn.SessionKey!,
+            messageProvider: "slack",
+            senderIsOwner,
+            surface: "loopback",
+          });
+          expect.soft(tools.some((tool) => tool.name === "sessions")).toBe(isOwner);
+        };
+        check(0, false, false);
+        for (const [index, user, role, linked, isOwner] of [
+          [1, "U123", "admin", true, true],
+          [2, "U_UNLINKED", "admin", false, false],
+          [3, "U123", "member", true, false],
+        ] as const) {
+          setUserProfileRole(profile.id, role);
+          await receiveSocket(user);
+          expect(contexts).toHaveLength(index + 1);
+          check(index, linked, isOwner);
+        }
+        setUserProfileRole(profile.id, "admin");
+        expect(await receiveHttp(false)).toBe(401);
+        expect(contexts).toHaveLength(4);
+        expect(await receiveHttp(true)).toBe(200);
+        expect(contexts).toHaveLength(5);
+        check(4, true, true);
+      },
+    );
   });
 });

@@ -1,4 +1,5 @@
 import { bindCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
+import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { takeChannelParticipantInput } from "./admission-evidence.js";
@@ -56,6 +57,24 @@ export function bindChannelParticipantInput(params: {
     batch.some((input) => JSON.stringify(input?.verifiedPrincipal) !== principalKey)
   ) {
     return;
+  }
+  const requester = batch.at(-1)?.requesterProfile;
+  if (
+    requester &&
+    params.context.SenderId === principal.senderId &&
+    (params.context.AccountId ?? "default") === principal.accountId &&
+    params.context.OriginatingChannel === principal.channelId &&
+    batch.every(
+      (input) => input?.requesterProfile?.id === requester.id && input.requesterProfile.isCurrent(),
+    )
+  ) {
+    bindRequesterProfile(params.context, {
+      ...requester,
+      isCurrent: () =>
+        params.owner.isLive() &&
+        params.owner.resolveGatewayContext?.() === gateway &&
+        batch.every((input) => input?.requesterProfile?.isCurrent()),
+    });
   }
   const authority = batch.at(-1)?.commandOwnerAuthority;
   if (!authority?.source || !authority.isCurrent(gateway.getRuntimeConfig())) {

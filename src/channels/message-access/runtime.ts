@@ -8,6 +8,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { prepareUserChannelIdentityAuthority } from "../../state/user-channel-identity-operations.js";
 import { recordChannelIngressResolution } from "./admission-evidence.js";
 import { decideChannelIngress } from "./decision.js";
 import { resolveChannelIngressEffectiveAllowFromLists } from "./effective-allow-from.js";
@@ -498,6 +499,10 @@ async function resolveChannelMessageIngressForOwner(
             senderId: subject.identifiers[0].value,
           }
         : undefined;
+    const requester =
+      verifiedPrincipal && participantGatewayContext
+        ? await prepareUserChannelIdentityAuthority(verifiedPrincipal)
+        : undefined;
     const commandOwnerAuthority =
       verifiedPrincipal && participantGatewayContext
         ? await prepareCommandOwnerAuthority(participantGatewayContext.getRuntimeConfig(), {
@@ -524,6 +529,14 @@ async function resolveChannelMessageIngressForOwner(
           },
       binding: participantBinding,
       verifiedPrincipal,
+      requesterProfile:
+        requester && ownerIsCurrent()
+          ? {
+              id: requester.linked.profileId,
+              displayName: requester.linked.displayName,
+              isCurrent: requester.isCurrent,
+            }
+          : undefined,
       commandOwnerAuthority: ownerIsCurrent() ? commandOwnerAuthority : undefined,
       promptedAt,
       owner: participantOwner,
