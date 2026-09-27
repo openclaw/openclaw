@@ -22,9 +22,18 @@ describe("resolveSkillWorkshopConfig", () => {
     ).toBe("auto");
   });
 
-  it("defaults review overflow handling to skip without a context cap", () => {
-    expect(resolveSkillWorkshopConfig().autonomous).toEqual({
+  it("preserves the existing review path when no guard is configured", () => {
+    expect(resolveSkillWorkshopConfig().autonomous).toEqual({ mode: "auto" });
+  });
+
+  it("defaults configured review guards to skip", () => {
+    expect(
+      resolveSkillWorkshopConfig({
+        skills: { workshop: { autonomous: { maxReviewContextTokens: 12_000 } } },
+      }).autonomous,
+    ).toEqual({
       mode: "auto",
+      maxReviewContextTokens: 12_000,
       overflowPolicy: "skip",
     });
   });
@@ -63,7 +72,7 @@ describe("resolveSkillWorkshopConfig", () => {
           },
         },
       } as never).autonomous,
-    ).toEqual({ mode: "auto", overflowPolicy: "skip" });
+    ).toEqual({ mode: "auto" });
   });
 
   it("validates review context limits against schema bounds", () => {

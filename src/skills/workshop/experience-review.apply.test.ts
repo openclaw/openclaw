@@ -809,7 +809,25 @@ describe("experience review maintenance", () => {
     expect(inspected?.record.autonomousCapture).toBeUndefined();
   });
 
-  it("passes the bounded context and records a skipped oversized review", async () => {
+  it("preserves the unbounded review path when no guard is configured", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-overflow-compatible-");
+    const openModelContextAsync = vi.spyOn(SessionManager, "openModelContextAsync");
+    const config = { skills: { workshop: { autonomous: { mode: "propose" as const } } } };
+    runEmbeddedAgent.mockResolvedValue({ meta: { durationMs: 1 } });
+    const candidate = await captureReviewFixture(
+      reviewFixture(workspaceDir, config, { sessionKey: "agent:main:overflow-compatible" }),
+    );
+
+    await runCapturedExperienceReview(candidate);
+
+    expect(openModelContextAsync).toHaveBeenCalledOnce();
+    expect(openModelContextAsync.mock.calls[0]?.[1]).not.toHaveProperty("limits");
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("contextTokenBudget");
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("reviewOverflowPolicy");
+  });
+
+  it("passes the configured bound and records a skipped oversized review", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-overflow-skip-");
     const openModelContextAsync = vi.spyOn(SessionManager, "openModelContextAsync");
     const config = {
@@ -819,7 +837,6 @@ describe("experience review maintenance", () => {
             mode: "propose" as const,
             maxReviewContextBytes: 16 * 1024 * 1024,
             maxReviewContextTokens: 25_000,
-            overflowPolicy: "skip" as const,
           },
         },
       },
@@ -933,6 +950,7 @@ describe("experience review maintenance", () => {
         workshop: {
           autonomous: {
             mode: "propose" as const,
+            maxReviewContextBytes: 4_096,
             overflowPolicy: "skip" as const,
           },
         },

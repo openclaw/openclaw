@@ -167,22 +167,25 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
       await fs.mkdir(executionRoot, { recursive: true });
     }
     const workshopCfg = resolveSkillWorkshopConfig(config);
-    const contextLimits: SessionModelContextLimits = {
-      maxBytes: workshopCfg.autonomous.maxReviewContextBytes ?? 32 * 1024 * 1024,
-      maxEvents: 10_000,
-      overflow: "reject",
-    };
+    const contextLimits: SessionModelContextLimits | undefined =
+      workshopCfg.autonomous.maxReviewContextBytes === undefined
+        ? undefined
+        : {
+            maxBytes: workshopCfg.autonomous.maxReviewContextBytes,
+            maxEvents: 10_000,
+            overflow: "reject",
+          };
     let sessionManager: Awaited<ReturnType<typeof SessionManager.openModelContextAsync>>;
     try {
       sessionManager = await SessionManager.openModelContextAsync(candidate.source, {
         cwd: executionRoot ?? workspaceDir,
         through: candidate.source,
         signal: abortSignal,
-        limits: contextLimits,
+        ...(contextLimits ? { limits: contextLimits } : {}),
       });
     } catch (error) {
-      // Even tool-result omission cannot fit the newest turn inside the bound.
-      if (error instanceof RangeError) {
+      // A configured complete-context bound rejects instead of dropping retained evidence.
+      if (contextLimits && error instanceof RangeError) {
         throw new SkillReviewOversizedContextError(error.message);
       }
       throw error;
@@ -270,7 +273,9 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
         ...(workshopCfg.autonomous.maxReviewContextTokens !== undefined
           ? { contextTokenBudget: workshopCfg.autonomous.maxReviewContextTokens }
           : {}),
-        reviewOverflowPolicy: workshopCfg.autonomous.overflowPolicy,
+        ...(workshopCfg.autonomous.overflowPolicy
+          ? { reviewOverflowPolicy: workshopCfg.autonomous.overflowPolicy }
+          : {}),
         toolExecutionAllow:
           mode === "auto" ? [...SKILL_WORKSHOP_MAINTENANCE_TOOLS] : ["skill_workshop"],
         skillWorkshopProposalOnly: mode === "propose",
@@ -313,6 +318,9 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
           : null;
     if (oversizedReason) {
       const policy = resolveSkillWorkshopConfig(config).autonomous.overflowPolicy;
+      if (!policy) {
+        throw error;
+      }
       await recordSkillExperienceReviewOutcome(
         foregroundPromptContext.agentId,
         workspaceDir,
