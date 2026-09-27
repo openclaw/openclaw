@@ -11,6 +11,7 @@ import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
 } from "../../harness/gateway-question.js";
+import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { retireQueuedUserMessage } from "../../sessions/queued-user-message-retirement.js";
 import {
@@ -41,6 +42,7 @@ type EmbeddedAgentActiveSessionSteerTarget = {
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
     canInject?: () => boolean,
+    currentInboundContext?: CurrentInboundPromptContext,
   ): Promise<void>;
   subscribe(listener: (event: unknown) => void): () => void;
 };
@@ -64,8 +66,9 @@ function steerActiveSession(
   imageOrder?: PromptImageOrderEntry[],
   queueIdentity?: string,
   canInject?: () => boolean,
+  currentInboundContext?: CurrentInboundPromptContext,
 ): Promise<void> {
-  if (canInject) {
+  if (currentInboundContext || canInject) {
     return activeSession.steer(
       text,
       images,
@@ -74,6 +77,7 @@ function steerActiveSession(
       imageOrder,
       queueIdentity,
       canInject,
+      currentInboundContext,
     );
   }
   if (media?.length || queueIdentity) {
@@ -160,6 +164,7 @@ async function steerAndWaitForTranscriptCommit(
   abortSignal?: AbortSignal,
   onQueueAccepted?: (accepted: boolean) => void,
   canInject?: () => boolean,
+  currentInboundContext?: CurrentInboundPromptContext,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -267,6 +272,7 @@ async function steerAndWaitForTranscriptCommit(
       imageOrder,
       queueIdentity,
       () => acceptanceOpen && (canInject?.() ?? true),
+      currentInboundContext,
     );
     void steer.then(
       () => {
@@ -367,6 +373,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
         options?.imageOrder,
         options?.queueIdentity,
         canInject,
+        options?.currentInboundContext,
       );
       options?.onQueueAccepted?.(true);
     } catch (error) {
@@ -388,6 +395,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       options.abortSignal,
       options.onQueueAccepted,
       canInject,
+      options.currentInboundContext,
     );
   } catch (error) {
     if (error instanceof EmbeddedSteeringAcceptedUnconfirmedError) {

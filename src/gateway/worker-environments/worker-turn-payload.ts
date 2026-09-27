@@ -7,7 +7,6 @@ import {
   readAdmittedRunOperatorAuthority,
   resolvePreparedRunAdmission,
   resolveAdmittedRunActiveAssertion,
-  type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import {
   isDefaultAgentRuntimeId,
@@ -61,43 +60,10 @@ type WorkerInitialMessagePlan =
       details: WorkerProviderReplayUnavailable | WorkerReplayMessageWindowUnavailable;
     };
 
-function buildWorkerAgentRuntimeIdentity(params: {
-  admittedRunContext: AdmittedRunContext;
+type PrepareWorkerAgentRuntimeIdentityParams = {
   agentId: string;
   sessionKey: string;
-  turn: Pick<
-    SessionPlacementTurnParams,
-    | "agentAccountId"
-    | "currentChannelId"
-    | "currentMessagingTarget"
-    | "currentThreadTs"
-    | "gatewayUiCommandTarget"
-    | "messageChannel"
-    | "messageProvider"
-  >;
   turnClaim: WorkerSessionTurnClaim;
-}): AgentRuntimeIdentityTokenParams {
-  const { turn } = params;
-  // Worker-local process keys isolate ephemeral state only. The signed caller
-  // identity retains the host-owned session and route used by approvals.
-  return {
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    operationalRunInstance: params.admittedRunContext.operationalRunInstance,
-    executionIdentityToken: params.admittedRunContext.executionIdentityToken,
-    turnSourceChannel: turn.messageChannel ?? turn.messageProvider,
-    turnSourceTo: turn.currentMessagingTarget ?? turn.currentChannelId,
-    turnSourceAccountId: turn.agentAccountId,
-    turnSourceThreadId: turn.currentThreadTs,
-    gatewayUiCommandTarget: turn.gatewayUiCommandTarget,
-    workerTurnClaim: params.turnClaim,
-  };
-}
-
-type PrepareWorkerAgentRuntimeIdentityParams = Omit<
-  Parameters<typeof buildWorkerAgentRuntimeIdentity>[0],
-  "admittedRunContext" | "turn"
-> & {
   runtimeInstanceId: string;
   turn: SessionPlacementTurnParams;
   placements: WorkerSessionPlacementStore;
@@ -140,14 +106,24 @@ export async function prepareWorkerAgentRuntimeIdentity(
     readAdmittedRunOperatorAuthority(admittedRunContext),
   );
   capability.receiptAuthority();
-  const runtimeIdentity = await capability.run((owner) => ({
-    ...buildWorkerAgentRuntimeIdentity({
-      ...params,
-      admittedRunContext,
-      turnClaim: owner.turnClaim,
-    }),
-    approvalAuthority: owner.delegatedAuthority,
-  }));
+  // Worker-local process keys isolate ephemeral state only. The signed caller
+  // identity retains the host-owned session and route used by approvals.
+  const runtimeIdentity = await capability.run((owner) => {
+    const { turn } = params;
+    return {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      operationalRunInstance: admittedRunContext.operationalRunInstance,
+      executionIdentityToken: admittedRunContext.executionIdentityToken,
+      turnSourceChannel: turn.messageChannel ?? turn.messageProvider,
+      turnSourceTo: turn.currentMessagingTarget ?? turn.currentChannelId,
+      turnSourceAccountId: turn.agentAccountId,
+      turnSourceThreadId: turn.currentThreadTs,
+      gatewayUiCommandTarget: turn.gatewayUiCommandTarget,
+      workerTurnClaim: owner.turnClaim,
+      approvalAuthority: owner.delegatedAuthority,
+    } satisfies AgentRuntimeIdentityTokenParams;
+  });
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,

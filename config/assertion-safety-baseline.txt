@@ -2364,7 +2364,6 @@ src/gateway/board-view-ticket.ts	1
 src/gateway/boot.ts	1
 src/gateway/call.ts	5
 src/gateway/chat-attachments.ts	4
-src/gateway/chat-display-projection.canvas.ts	13
 src/gateway/chat-display-projection.core.ts	5
 src/gateway/chat-display-projection.helpers.ts	10
 src/gateway/chat-display-projection.history.ts	1
@@ -2416,7 +2415,6 @@ src/gateway/server-http-upgrades.ts	2
 src/gateway/server-in-process-dispatch.ts	3
 src/gateway/server-instance-runtime.ts	3
 src/gateway/server-maintenance.ts	4
-src/gateway/server-methods-list.ts	1
 src/gateway/server-methods.ts	3
 src/gateway/server-methods/agent-run-handler.ts	1
 src/gateway/server-methods/agent-session-patch.ts	1
@@ -2442,7 +2440,6 @@ src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	4
 src/gateway/server-methods/cron.ts	3
-src/gateway/server-methods/device-scope-upgrade.ts	2
 src/gateway/server-methods/devices.ts	4
 src/gateway/server-methods/doctor.ts	3
 src/gateway/server-methods/exec-approval.ts	2
@@ -2461,7 +2458,6 @@ src/gateway/server-methods/nodes.read.ts	2
 src/gateway/server-methods/open-path.ts	1
 src/gateway/server-methods/plugin-approval.ts	2
 src/gateway/server-methods/plugin-host-hooks.ts	1
-src/gateway/server-methods/question.ts	2
 src/gateway/server-methods/restart-request.ts	8
 src/gateway/server-methods/session-catalog-terminal-start.ts	1
 src/gateway/server-methods/session-create-initial-turn.ts	2
@@ -2476,7 +2472,6 @@ src/gateway/server-methods/skills.ts	3
 src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
 src/gateway/server-methods/task-suggestions.ts	5
-src/gateway/server-methods/terminal-upload.ts	1
 src/gateway/server-methods/web.ts	1
 src/gateway/server-methods/wizard.ts	1
 src/gateway/server-node-events.ts	2
@@ -2487,7 +2482,6 @@ src/gateway/server-plugins.ts	2
 src/gateway/server-reload-restart.ts	2
 src/gateway/server-reload-utils.ts	1
 src/gateway/server-restart-sentinel-agent-delivery.ts	2
-src/gateway/server-runtime-handles.ts	8
 src/gateway/server-runtime-state-prepare.ts	1
 src/gateway/server-startup-bootstrap.ts	1
 src/gateway/server-startup-config-helpers.ts	1
