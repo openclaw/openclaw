@@ -37,7 +37,6 @@ import {
   mediaUrlValue,
   resolveBlockDownload,
   resolveMessageRunId,
-  resolveMessageTaskId,
   toArtifactSummary,
 } from "./server-methods/artifacts-content.js";
 import type { SessionTranscriptReader } from "./session-transcript-read-kernel.js";
@@ -49,7 +48,7 @@ import {
 const IMAGE_PAGE_MESSAGES = 32;
 const IMAGE_PAGE_BYTES = 256 * 1024;
 
-type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "taskId" | "messageRole">;
+type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "messageRole">;
 type ArtifactReaders = Pick<
   SessionTranscriptReader,
   "visitSessionMessagesAsync" | "readSessionMessagesPageWithStatsAsync"
@@ -172,7 +171,6 @@ function collectArtifactsFromMessage(params: {
   collection: { artifacts: ArtifactRecord[]; count: number };
   sessionKey: string;
   runId?: string;
-  taskId?: string;
   messageRole?: ArtifactsListParams["messageRole"];
   includeDownloadData?: boolean;
   downloadArtifactIds?: Set<string>;
@@ -184,11 +182,7 @@ function collectArtifactsFromMessage(params: {
   }
   const messageSeq = resolveMessageSeq(msg, params.messageFallbackSeq);
   const messageRunId = resolveMessageRunId(msg);
-  const messageTaskId = resolveMessageTaskId(msg);
   if (params.runId && messageRunId !== params.runId) {
-    return;
-  }
-  if (params.taskId && messageTaskId !== params.taskId) {
     return;
   }
   const content = readAssistantDisplayContent(msg);
@@ -279,7 +273,6 @@ function collectArtifactsFromMessage(params: {
       ...(download.sizeBytes !== undefined ? { sizeBytes: download.sizeBytes } : {}),
       sessionKey: params.sessionKey,
       ...(messageRunId ? { runId: messageRunId } : {}),
-      ...(messageTaskId ? { taskId: messageTaskId } : {}),
       messageSeq,
       source: previewOnly ? "session-transcript-preview" : "session-transcript",
       download: { mode: previewOnly ? "unsupported" : download.mode },
@@ -304,7 +297,6 @@ function createArtifactListCollector(query: Extract<SessionArtifactReadQuery, { 
       collection,
       sessionKey: query.sessionKey,
       runId: query.runId,
-      taskId: query.taskId,
       messageRole: query.messageRole,
       includeDownloadData: query.includeDownloadData,
       downloadArtifactIds,
@@ -335,7 +327,6 @@ export function readArtifactSummariesFromProjection(
     projection.resolved.sessionId,
     query.sessionKey,
     query.runId,
-    query.taskId,
     query.messageRole,
   ]);
   const revision = JSON.stringify([
@@ -390,7 +381,6 @@ export async function selectSessionArtifacts(
     const selection = {
       sessionKey: query.sessionKey,
       runId: query.runId,
-      taskId: query.taskId,
       messageRole: query.messageRole,
     };
     const artifact = parseTranscriptImageArtifactId(query.artifactId)
@@ -463,7 +453,6 @@ export async function selectSessionArtifacts(
         collection: { artifacts: collected, count: 0 },
         sessionKey: query.sessionKey,
         runId: query.runId,
-        taskId: query.taskId,
         messageRole: query.messageRole,
         imagesOnly: true,
       });
@@ -529,8 +518,7 @@ async function readTranscriptImageArtifact(
     !message ||
     !block ||
     (query.messageRole && message.role !== query.messageRole) ||
-    (query.runId && resolveMessageRunId(message) !== query.runId) ||
-    (query.taskId && resolveMessageTaskId(message) !== query.taskId)
+    (query.runId && resolveMessageRunId(message) !== query.runId)
   ) {
     return undefined;
   }

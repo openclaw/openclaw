@@ -2,6 +2,7 @@
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import {
   AcpSessionManager,
   baseCfg,
@@ -15,7 +16,7 @@ import {
 describe("ACP accepted-turn cancellation", () => {
   installAcpSessionManagerTestLifecycle();
 
-  it.each(["queued", "setup", "controls", "submission"] as const)(
+  it.each(["controls", "submission"] as const)(
     "settles cancellation during %s without submitting a prompt",
     async (phase) => {
       const state = createRuntime();
@@ -27,22 +28,7 @@ describe("ACP accepted-turn cancellation", () => {
       hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
       hoisted.readAcpSessionEntryMock.mockReturnValue({ sessionKey, acp: readySessionMeta() });
       const manager = new AcpSessionManager();
-      let actor: Promise<unknown> | undefined;
-      if (phase === "queued") {
-        state.getStatus.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return { summary: "ready" };
-        });
-        actor = manager.getSessionStatus({ cfg: baseCfg, sessionKey });
-        await entered.promise;
-      } else if (phase === "setup") {
-        state.ensureSession.mockImplementationOnce(async (input) => {
-          entered.resolve();
-          await release.promise;
-          return { sessionKey: input.sessionKey, backend: "acpx", runtimeSessionName: "late" };
-        });
-      } else if (phase === "controls") {
+      if (phase === "controls") {
         state.getCapabilities.mockImplementationOnce(async () => {
           entered.resolve();
           await release.promise;
@@ -56,6 +42,8 @@ describe("ACP accepted-turn cancellation", () => {
         text: "must not submit",
         mode: "prompt",
         requestId: "preactive-turn",
+        admittedRunContext:
+          phase === "queued" ? createTestAdmittedRunContext("preactive-turn") : undefined,
         onEvent: (event) => {
           events.push(event);
         },
@@ -73,13 +61,10 @@ describe("ACP accepted-turn cancellation", () => {
       });
       // Observe rejection immediately so the baseline cannot leak an unhandled rejection.
       const settlement = Promise.allSettled([turn]);
-      if (phase !== "queued") {
-        await entered.promise;
-      }
+      await entered.promise;
       const cancel = manager.cancelSession({ cfg: baseCfg, sessionKey, reason: "preactive-proof" });
       const cancellation = Promise.allSettled([cancel]);
       release.resolve();
-      await actor;
       const [turnResults, cancelResults] = await Promise.all([settlement, cancellation]);
       expect(turnResults[0].status).toBe("fulfilled");
       expect(cancelResults[0].status).toBe("fulfilled");

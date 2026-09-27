@@ -463,15 +463,15 @@ struct ChatInlineWidgetView: View {
     }
 
     #if os(iOS)
-    private func copySnapshot(_ image: ChatInlineWidgetSnapshotImage) {
+    private func copySnapshot(_ image: OpenClawPlatformImage) {
         UIPasteboard.general.image = image
     }
 
-    private func saveSnapshot(_ image: ChatInlineWidgetSnapshotImage) {
+    private func saveSnapshot(_ image: OpenClawPlatformImage) {
         self.sharedImage = ChatInlineWidgetSharedImage(image: image)
     }
     #elseif os(macOS)
-    private func copySnapshot(_ image: ChatInlineWidgetSnapshotImage) {
+    private func copySnapshot(_ image: OpenClawPlatformImage) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         guard pasteboard.writeObjects([image]) else {
@@ -480,7 +480,7 @@ struct ChatInlineWidgetView: View {
         }
     }
 
-    private func saveSnapshot(_ image: ChatInlineWidgetSnapshotImage) {
+    private func saveSnapshot(_ image: OpenClawPlatformImage) {
         guard let pngData = image.chatInlineWidgetPNGData else {
             self.exportErrorMessage = String(localized: "The widget image could not be encoded as PNG.")
             return
@@ -754,23 +754,6 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
 }
 
 @MainActor
-private func makeChatInlineWidgetWebView(
-    resource: OpenClawChatWidgetResource,
-    allowsScripts: Bool,
-    coordinator: ChatInlineWidgetNavigationDelegate) -> WKWebView
-{
-    let configuration = WKWebViewConfiguration()
-    configuration.websiteDataStore = .nonPersistent()
-    configuration.defaultWebpagePreferences.allowsContentJavaScript = allowsScripts
-    configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-    let webView = WKWebView(frame: .zero, configuration: configuration)
-    webView.navigationDelegate = coordinator
-    webView.allowsLinkPreview = false
-    webView.load(URLRequest(url: resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
-    return webView
-}
-
-@MainActor
 private struct ChatInlineWidgetWebView {
     let resource: OpenClawChatWidgetResource
     let loadGeneration: UUID
@@ -787,10 +770,15 @@ private struct ChatInlineWidgetWebView {
     }
 
     func makeWebView(coordinator: ChatInlineWidgetNavigationDelegate) -> WKWebView {
-        makeChatInlineWidgetWebView(
-            resource: self.resource,
-            allowsScripts: self.allowsScripts,
-            coordinator: coordinator)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = self.allowsScripts
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = coordinator
+        webView.allowsLinkPreview = false
+        webView.load(URLRequest(url: self.resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
+        return webView
     }
 
     func updateWebView(_ webView: WKWebView, coordinator: ChatInlineWidgetNavigationDelegate) {

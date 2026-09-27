@@ -109,6 +109,7 @@ export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extend
 export type PluginStateSyncKeyedStore<T> = {
   register(key: string, value: T, opts?: { ttlMs?: number }): void;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): boolean;
+  /** Expiry options are consumed after the synchronous updater returns. */
   update?: (
     key: string,
     updateValue: (current: T | undefined) => T | undefined,

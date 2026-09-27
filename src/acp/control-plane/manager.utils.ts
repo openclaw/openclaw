@@ -3,10 +3,14 @@ import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 /** Shared ACP manager normalization, resolution, and error helpers. */
 import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
 import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
-import { resolveSessionStorePathForAcp } from "../runtime/session-meta-store.js";
+import {
+  resolveSessionStorePathForAcp,
+  type AcpSessionStoreEntry,
+} from "../runtime/session-meta-store.js";
 import type { AcpSessionResolution, AcpSessionTarget } from "./manager.types.js";
 
 /** Resolves the agent id encoded in an ACP session key. */
@@ -16,11 +20,24 @@ export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "ma
 }
 
 /** Builds the stale-session error shown when ACP metadata is missing. */
-export function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {
+function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {
   return new AcpRuntimeError(
     "ACP_SESSION_INIT_FAILED",
     `ACP metadata is missing for ${sessionKey}. Recreate this ACP session with /acp spawn and rebind the thread.`,
   );
+}
+
+/** Project the selected store result without reopening storage. */
+export function resolveStoredAcpSession(
+  target: AcpSessionTarget,
+  stored: AcpSessionStoreEntry | null,
+): AcpSessionResolution {
+  if (stored?.acp) {
+    return { kind: "ready", ...target, meta: stored.acp, entry: stored.entry };
+  }
+  return isAcpSessionKey(target.sessionKey)
+    ? { kind: "stale", ...target, error: resolveMissingMetaError(target.sessionKey) }
+    : { kind: "none", ...target };
 }
 
 /** Converts a session resolution union into the runtime error callers should throw. */

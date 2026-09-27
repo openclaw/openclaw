@@ -7,6 +7,7 @@ import {
   verifyAndRepairCanonicalSqliteIndexes,
 } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity, assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
+import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
@@ -29,7 +30,10 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
-import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
+import {
+  hasDanglingSkillWorkshopCollectionReviewIndex,
+  openDoctorStateSchemaReadAdmission,
+} from "./openclaw-state-db-doctor-schema.js";
 import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
 import {
   assertOpenClawStateDatabaseOwner,
@@ -66,10 +70,7 @@ import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migrat
 import * as retirements from "./openclaw-state-db-table-retirements.js";
 import { recoverOrphanTaskDeliveryRows } from "./openclaw-state-db-task-delivery-recovery.js";
 import { describeAgentPathMigration } from "./openclaw-state-db.paths.js";
-import {
-  assertOpenClawStateWriteAllowed,
-  OpenClawStateOwnershipError,
-} from "./openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
@@ -83,7 +84,6 @@ export function repairStateSchema(
   warnings: string[];
 } {
   assertOpenClawStateSchemaRepairAllowed(pathname);
-  ensureOpenClawStatePermissions(pathname, env);
   // This private handle rebuilds referenced tables and is closed after repair.
   const db = openNodeSqliteDatabase(pathname, { enableForeignKeyConstraints: false });
   const rebuiltIndexNames = new Set<string>();
@@ -91,6 +91,14 @@ export function repairStateSchema(
   let ownershipRefused = false;
   try {
     setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+    const closeReadAdmission =
+      scope === "automatic" ? undefined : openDoctorStateSchemaReadAdmission(db);
+    try {
+      assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+    } finally {
+      closeReadAdmission?.();
+    }
+    ensureOpenClawStatePermissions(pathname, env);
     if (scope === "automatic") {
       return {
         changes: ensureOpenClawStateRuntimeSchema(db, pathname, env, {

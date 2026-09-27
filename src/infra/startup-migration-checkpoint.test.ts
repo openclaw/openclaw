@@ -11,16 +11,14 @@ import {
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  OpenClawStateOwnershipError,
-  STATE_SUPERVISION_KEY,
-} from "../state/openclaw-state-ownership.js";
+import { STATE_SUPERVISION_KEY } from "../state/openclaw-state-ownership.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { OpenClawStateOwnershipError } from "./sqlite-lifecycle-errors.js";
 import {
   acquireStartupMigrationLeaseWithWait,
   hasActiveStartupMigrationLease,
@@ -251,6 +249,7 @@ describe("startup migration lease", () => {
           timeoutMs: 0,
         }),
       ).rejects.toThrow(OpenClawStateOwnershipError);
+      expect(claimed).toBe(true);
     } finally {
       exec.mockRestore();
     }

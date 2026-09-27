@@ -1,11 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
@@ -118,8 +118,8 @@ describe("ACP raw alias lifecycle", () => {
           await upsertAcpSessionMeta({ ...fixture.scope, mutate: () => null });
         }
         expect(fixture.snapshot().rows).toEqual(retainedRows);
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
         expect(readAcpSessionMeta(fixture.scope)).toBeUndefined();
         expect(
           readAcpSessionMetaBatch({
@@ -198,20 +198,23 @@ describe("ACP raw alias lifecycle", () => {
         expect(before).toHaveLength(1);
         const updated = { ...CANONICAL_META, runtimeSessionName: "updated-runtime" };
         let rebound = false;
-        const originalPatch = sessionAccessor.patchSessionEntryWithKey;
-        const patch = vi
-          .spyOn(sessionAccessor, "patchSessionEntryWithKey")
-          .mockImplementation(async (...args) => {
-            const result = await originalPatch(...args);
-            if (!rebound) {
-              rebound = true;
-              db.prepare("UPDATE acp_sessions SET session_id = ? WHERE session_key = ?").run(
-                "replacement-revision",
-                aliasKey,
-              );
-            }
-            return result;
-          });
+        const unsubscribe = sessionChanges.subscribe((change) => {
+          if ("all" in change) {
+            return;
+          }
+          if (
+            !rebound &&
+            change.scope === "session-entry" &&
+            change.agentId === "main" &&
+            change.sessionKey === SESSION_KEY
+          ) {
+            rebound = true;
+            db.prepare("UPDATE acp_sessions SET session_id = ? WHERE session_key = ?").run(
+              "replacement-revision",
+              aliasKey,
+            );
+          }
+        });
         try {
           await upsertAcpSessionMeta({
             ...fixture.scope,
@@ -221,8 +224,9 @@ describe("ACP raw alias lifecycle", () => {
             },
           });
         } finally {
-          patch.mockRestore();
+          unsubscribe();
         }
+        expect(rebound).toBe(true);
         expect(fixture.snapshot().rows.filter((row) => row.session_key === aliasKey)).toEqual([
           { ...before[0], session_id: "replacement-revision" },
         ]);

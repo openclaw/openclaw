@@ -357,9 +357,6 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
   if (typeof value === "string") {
     return redactString(value);
   }
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactMigrationValueInternal(entry, seen));
-  }
   if (!value || typeof value !== "object") {
     return value;
   }
@@ -367,6 +364,14 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
     return REDACTED_MIGRATION_VALUE;
   }
   seen.add(value);
+  if (Array.isArray(value)) {
+    try {
+      return value.map((entry) => redactMigrationValueInternal(entry, seen));
+    } finally {
+      // Repeated arrays remain independently rendered; only active cycles are redacted.
+      seen.delete(value);
+    }
+  }
   const record = value as Record<string, unknown>;
   const next: Record<string, unknown> = {};
   const redactSensitiveDetailsValue =

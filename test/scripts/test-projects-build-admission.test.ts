@@ -17,7 +17,14 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 import { createControlledWorkerCompiler } from "./vitest-worker-artifacts.test-support.js";
 
-const commands = vi.hoisted(() => ({ prepare: vi.fn(), prepareE2e: vi.fn(), reader: vi.fn() }));
+const commands = vi.hoisted(() => ({
+  prepare: vi.fn(),
+  prepareE2e: vi.fn(),
+  reader: vi.fn(),
+  uiAssets: vi.fn(),
+  sourceLoader: vi.fn(),
+  runtimeBuildId: "fixture-runtime",
+}));
 vi.mock("../../scripts/lib/managed-child-process.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/managed-child-process.mts")>()),
   runManagedCommand: commands.prepare,
@@ -34,6 +41,14 @@ vi.mock("../../scripts/lib/vitest-shard-timings.mts", async (importOriginal) => 
   ...(await importOriginal<typeof import("../../scripts/lib/vitest-shard-timings.mts")>()),
   readShardTimings: () => new Map(),
   writeShardTimings: () => {},
+}));
+vi.mock("../../src/infra/control-ui-assets.ts", () => ({
+  inspectControlUiRootAssets: commands.uiAssets,
+}));
+// Vitest owns source transforms here; native CLI cases cover tooling registration.
+vi.mock("../../scripts/lib/tsx-cli-shim.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/tsx-cli-shim.mjs")>()),
+  registerToolingTsx: commands.sourceLoader,
 }));
 
 const { runManagedCommand: runCliCommand } = await vi.importActual<
@@ -56,10 +71,29 @@ const testProjectsUrl = new URL("../../scripts/test-projects.mts", import.meta.u
 let startCount = 0;
 
 beforeEach(() => {
-  commands.prepare.mockReset();
+  commands.prepare.mockReset().mockResolvedValue(0);
   commands.prepareE2e.mockReset().mockResolvedValue({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+  commands.uiAssets.mockReset().mockReturnValue({ kind: "ready", indexPath: "fixture-index" });
+  commands.sourceLoader.mockReset().mockResolvedValue(undefined);
+  commands.runtimeBuildId = "fixture-runtime";
+  const readFileSync = fs.readFileSync;
+  const buildInfoPath = path.resolve(import.meta.dirname, "../../dist/build-info.json");
+  vi.spyOn(fs, "readFileSync").mockImplementation(
+    (file, options?: BufferEncoding | fs.ReadFileSyncOptions | null) => {
+      const readOptions = typeof options === "string" ? { encoding: options } : (options ?? {});
+      // Mocked builders publish fixture metadata, never borrow the checkout's dist.
+      if (file === buildInfoPath && readOptions.encoding === "utf8") {
+        return JSON.stringify({ buildId: commands.runtimeBuildId });
+      }
+      return readFileSync(file, readOptions);
+    },
+  );
   commands.reader.mockReset().mockImplementation(() => ({
-    completion: Promise.resolve({ code: 0, signal: null, groupJoined: true }),
+    completion: Promise.resolve({
+      code: 0,
+      signal: null,
+      groupJoined: process.platform !== "win32",
+    }),
     getForwardedSignal: () => undefined,
   }));
   originalArgv = process.argv;
@@ -69,6 +103,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "");
   vi.stubEnv("OPENCLAW_E2E_SKIP_BUILD", "");
   vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", "");
+  vi.stubEnv("OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY", "");
   vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", "");
   terminal = createDeferred<unknown>();
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1059,6 +1094,176 @@ describe("test-projects build admission", () => {
   const ordinaryTooling = "test/scripts/run-vitest-state-cleanup.test.ts";
   const runtimeTooling = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
   const privateQaTooling = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
+  const uiConfig = "test/vitest/vitest.ui-e2e.config.ts";
+  const avatarTarget = "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts";
+  const mockUiTarget = "ui/src/e2e/chat-code-block-fences.e2e.test.ts";
+
+  it.each([false, true])(
+    "holds Gateway readers behind the matching UI build (mixed E2E=%s)",
+    async (mixed) => {
+      const runtime = createPreparationGate<number | NodeJS.ProcessEnv>(
+        mixed ? commands.prepareE2e : commands.prepare,
+      );
+      let assetBuildId = "previous-runtime";
+      commands.runtimeBuildId = assetBuildId;
+      commands.uiAssets.mockImplementation((_root, expectedBuildId) =>
+        assetBuildId === expectedBuildId
+          ? { kind: "ready", indexPath: "fixture-index" }
+          : { kind: "stale", indexPath: "fixture-index", buildId: assetBuildId },
+      );
+      await start(mixed ? [e2eTarget, avatarTarget] : [avatarTarget]);
+      await Promise.race([runtime.started, terminal.promise]);
+      const ui = createPreparationGate<number>(commands.prepare);
+      try {
+        expect(commands.reader).not.toHaveBeenCalled();
+        expect(commands.uiAssets).not.toHaveBeenCalled();
+        commands.runtimeBuildId = "rebuilt-runtime";
+        runtime.resolve(mixed ? { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" } : 0);
+        await Promise.race([ui.started, terminal.promise]);
+        expect(commands.reader).not.toHaveBeenCalled();
+        expect(commands.prepare.mock.lastCall?.[0]).toMatchObject({
+          args: ["scripts/ui.js", "build"],
+        });
+        expect(commands.uiAssets).toHaveBeenCalledWith(
+          path.resolve("dist/control-ui"),
+          "rebuilt-runtime",
+        );
+        assetBuildId = commands.runtimeBuildId;
+      } finally {
+        runtime.resolve(mixed ? { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" } : 0);
+        ui.resolve(0);
+        await terminal.promise;
+      }
+      const outcome = await terminal.promise;
+      if (outcome instanceof Error) {
+        throw outcome;
+      }
+      expect(outcome).toMatch(/^\[test\] passed /u);
+      expect(commands.prepareE2e).toHaveBeenCalledTimes(mixed ? 1 : 0);
+      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual(
+        mixed
+          ? [["scripts/ui.js", "build"]]
+          : [
+              ["scripts/run-node.mjs", "--version"],
+              ["scripts/ui.js", "build"],
+            ],
+      );
+      expect(commands.uiAssets).toHaveBeenCalledTimes(2);
+      expect(process.exitCode).toBe(0);
+    },
+  );
+
+  it.each(["nonzero", "still stale"])(
+    "admits no UI readers after a %s UI build",
+    async (outcome) => {
+      commands.uiAssets.mockReturnValue({
+        kind: "stale",
+        indexPath: "fixture-index",
+        buildId: "previous-runtime",
+      });
+      commands.prepare.mockImplementation(async ({ args }) =>
+        args[0] === "scripts/ui.js" && outcome === "nonzero" ? 7 : 0,
+      );
+      await start([avatarTarget]);
+      await terminal.promise;
+      expect(commands.reader).not.toHaveBeenCalled();
+      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual([
+        ["scripts/run-node.mjs", "--version"],
+        ["scripts/ui.js", "build"],
+      ]);
+      expect(process.exitCode).toBe(outcome === "nonzero" ? 7 : 1);
+      if (outcome === "still stale") {
+        expect(await terminal.promise).toMatchObject({
+          message: "Control UI setup left stale assets for runtime fixture-runtime",
+        });
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retains cancellation between runtime preparation and UI admission (mixed E2E=%s)",
+    async (mixed) => {
+      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+      const existingListeners = new Set(process.listeners("SIGTERM"));
+      const source = createPreparationGate<void>(commands.sourceLoader);
+      const exitBySignal = vi.fn(async () => {});
+      const running = runTestProjects(
+        exitBySignal,
+        mixed ? [e2eTarget, avatarTarget] : [avatarTarget],
+      );
+      const rejected = expect(running).rejects.toMatchObject({ name: "AbortError" });
+      try {
+        await withTestTimeout(
+          Promise.race([source.started, running]),
+          5_000,
+          "source loader admission",
+        );
+        const listeners = process
+          .listeners("SIGTERM")
+          .filter((listener) => !existingListeners.has(listener));
+        expect(listeners).toHaveLength(1);
+        listeners[0]!.call(process, "SIGTERM");
+      } finally {
+        source.resolve();
+        await rejected;
+      }
+      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual(
+        mixed ? [] : [["scripts/run-node.mjs", "--version"]],
+      );
+      expect(commands.uiAssets).not.toHaveBeenCalled();
+      expect(commands.reader).not.toHaveBeenCalled();
+      expect(exitBySignal).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+      expect(process.listeners("SIGTERM")).toEqual([...existingListeners]);
+    },
+  );
+
+  it.each<{
+    name: string;
+    args: string[];
+    include?: string[];
+    flag?: string;
+    build: boolean;
+  }>([
+    { name: "owned Gateway", args: [avatarTarget], build: true },
+    { name: "inherited Gateway", args: [uiConfig], include: [avatarTarget], build: true },
+    {
+      name: "native QA Gateway",
+      args: [uiConfig],
+      include: ["extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts"],
+      build: true,
+    },
+    { name: "empty include", args: [uiConfig], include: [], build: false },
+    { name: "inherited mock", args: [uiConfig], include: [mockUiTarget], build: false },
+    { name: "owned mock", args: [mockUiTarget], include: [avatarTarget], build: false },
+    { name: "owned over empty include", args: [avatarTarget], include: [], build: true },
+    {
+      name: "excluded Gateway",
+      args: [avatarTarget, "--", "--exclude", avatarTarget],
+      build: false,
+    },
+    ...[
+      "OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY",
+      "OPENCLAW_E2E_SKIP_BUILD",
+      "OPENCLAW_E2E_USE_PREBUILT_DIST",
+    ].map((flag) => ({ name: flag, args: [avatarTarget], flag, build: false })),
+  ])("prepares only selected Gateway assets: $name", async ({ args, include, build, flag }) => {
+    if (include) {
+      vi.stubEnv(
+        "OPENCLAW_VITEST_INCLUDE_FILE",
+        patternFiles.writePatternFile("ui-include.json", include),
+      );
+    }
+    if (flag) {
+      vi.stubEnv(flag, "1");
+    }
+    await start(args);
+    expect(await terminal.promise).toMatch(/^\[test\] passed /u);
+    expect(commands.prepare).toHaveBeenCalledTimes(build ? 1 : 0);
+    expect(commands.uiAssets).toHaveBeenCalledTimes(build ? 1 : 0);
+    expect(
+      commands.prepare.mock.calls.some(([command]) => command.args[0] === "scripts/ui.js"),
+    ).toBe(false);
+  });
 
   it.each([
     {

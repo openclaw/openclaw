@@ -42,7 +42,6 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
       const sessionKey = "agent:main:artifact-https";
       const sessionId = "artifact-https-session";
       const runId = "artifact-https-run";
-      const taskId = "artifact-https-task";
       const scope = { agentId: "main", sessionKey, sessionId, env: state.env };
       const binary = Buffer.from(Array.from({ length: 8192 }, (_, index) => index % 256));
       const fixtures = [
@@ -93,7 +92,7 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
                   }
                 : { data: fixture.bytes.toString("base64") }),
             })),
-            __openclaw: { id: "inline-artifacts", runId, messageTaskId: taskId },
+            __openclaw: { id: "inline-artifacts", runId },
           },
         },
       ];
@@ -146,7 +145,7 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
             return client;
           };
           const client = await connect("reader", ["operator.read"]);
-          const query = { sessionKey, runId, taskId, messageRole: "assistant" };
+          const query = { sessionKey, runId, messageRole: "assistant" };
           const listed = await client.request<ArtifactsListResult>("artifacts.list", query);
           expect(listed.artifacts).toHaveLength(fixtures.length);
           const request = async (

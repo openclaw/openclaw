@@ -191,16 +191,9 @@ function getEditCallRenderComponent(
   lastComponent: unknown,
 ): EditCallRenderComponent {
   if (lastComponent instanceof Box) {
-    const component = lastComponent as EditCallRenderComponent;
-    state.callComponent = component;
-    return component;
+    state.callComponent = lastComponent as EditCallRenderComponent;
   }
-  if (state.callComponent) {
-    return state.callComponent;
-  }
-  const component = createEditCallRenderComponent();
-  state.callComponent = component;
-  return component;
+  return (state.callComponent ??= createEditCallRenderComponent());
 }
 
 function getRenderablePreviewInput(
@@ -281,16 +274,14 @@ function getEditHeaderBg(
   settledError: boolean | undefined,
   theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): (text: string) => string {
-  if (preview) {
-    if ("error" in preview) {
-      return (text: string) => theme.bg("toolErrorBg", text);
-    }
-    return (text: string) => theme.bg("toolSuccessBg", text);
-  }
-  if (settledError) {
-    return (text: string) => theme.bg("toolErrorBg", text);
-  }
-  return (text: string) => theme.bg("toolPendingBg", text);
+  const color = preview
+    ? "error" in preview
+      ? "toolErrorBg"
+      : "toolSuccessBg"
+    : settledError
+      ? "toolErrorBg"
+      : "toolPendingBg";
+  return (text) => theme.bg(color, text);
 }
 
 function buildEditCallComponent(
@@ -357,10 +348,7 @@ export function createEditToolDefinition(
     outputSchema: EditToolOutputSchema,
     renderShell: "self",
     prepareArguments: prepareEditArguments,
-    async execute(toolCallId, input: EditToolInput, signal?: AbortSignal, onUpdate?, ctx?) {
-      void toolCallId;
-      void onUpdate;
-      void ctx;
+    async execute(_toolCallId, input, signal, _onUpdate, _ctx) {
       const assertCurrent = captureAgentToolSourceExecutionGuard();
       const { path, edits: originalEdits } = validateEditInput(input);
       const absolutePath = resolvePath(path, cwd);

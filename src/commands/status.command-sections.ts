@@ -24,7 +24,7 @@ type AgentStatusLike = {
   agents: AgentLocalStatus[];
 };
 
-type SummaryLike = Pick<StatusSummary, "tasks" | "taskAudit" | "heartbeat" | "sessions">;
+type SummaryLike = Pick<StatusSummary, "heartbeat" | "sessions">;
 type MemoryLike = MemoryStatusSnapshot | null;
 type SessionsRecentLike = StatusSummary["sessions"]["recent"][number];
 type EventLoopHealthLike = NonNullable<HealthSummary["eventLoop"]>;
@@ -73,34 +73,6 @@ export function buildStatusAgentsValue(params: {
     def?.lastActiveAgeMs != null ? params.formatTimeAgo(def.lastActiveAgeMs) : "unknown";
   const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
   return `${params.agentStatus.agents.length} · ${pending} · sessions ${params.agentStatus.totalSessions}${defSuffix}`;
-}
-
-export function buildStatusTasksValue(params: {
-  summary: Pick<SummaryLike, "tasks" | "taskAudit">;
-  warn: (value: string) => string;
-  muted: (value: string) => string;
-}) {
-  if (params.summary.tasks.total <= 0) {
-    return params.muted("none");
-  }
-  return [
-    `${params.summary.tasks.active} active`,
-    `${params.summary.tasks.byStatus.queued} queued`,
-    `${params.summary.tasks.byStatus.running} running`,
-    params.summary.tasks.failures > 0
-      ? params.warn(
-          `${params.summary.tasks.failures} issue${params.summary.tasks.failures === 1 ? "" : "s"}`,
-        )
-      : params.muted("no issues"),
-    params.summary.taskAudit.errors > 0
-      ? params.warn(
-          `audit ${params.summary.taskAudit.errors} error${params.summary.taskAudit.errors === 1 ? "" : "s"} · ${params.summary.taskAudit.warnings} warn`,
-        )
-      : params.summary.taskAudit.warnings > 0
-        ? params.muted(`audit ${params.summary.taskAudit.warnings} warn`)
-        : params.muted("audit clean"),
-    `${params.summary.tasks.total} tracked`,
-  ].join(" · ");
 }
 
 export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "heartbeat"> }) {

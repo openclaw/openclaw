@@ -208,7 +208,7 @@ the current turn:
 ## Related
 
 - [Automation](/automation) for cron, tasks, heartbeat, hooks,
-  standing orders, and Task Flow
+  standing orders, and workflows
 - [Agents](/concepts/agent) for the agent model, sessions, memory, and
   multi-agent coordination
 - [Tools and custom providers](/gateway/config-tools) for the canonical tool

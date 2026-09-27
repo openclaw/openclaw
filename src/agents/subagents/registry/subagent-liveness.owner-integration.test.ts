@@ -21,8 +21,6 @@ import {
 } from "../../../infra/agent-run-registry.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
-import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
-import { findTaskByRunId } from "../../../tasks/task-registry.js";
 import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
@@ -45,7 +43,6 @@ import {
   countActiveDescendantRuns,
   countPendingDescendantRuns,
   hasDescendantRunAwaitingSettle,
-  hasSubagentTaskOwner,
   isSubagentRunLive,
   isSubagentRunQueued,
   isSubagentSessionRunActive,
@@ -58,7 +55,9 @@ import {
   registerSubagentRun,
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { addSubagentRunForTests, testing } from "./subagent-registry.test-helpers.js";
+import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 const parent = "agent:main:liveness-parent";
@@ -235,7 +234,7 @@ it("retains an exact queued collector reservation without calling it executor-li
   expect(isSubagentRunQueued(entry)).toBe(true);
   expect(isSubagentRunQueued({ ...entry })).toBe(false);
   expect(isSubagentRunLive(entry)).toBe(false);
-  expect(findTaskByRunId(entry.runId)?.status).toBe("queued");
+  expect(resolveSubagentSessionStatus(subagentRuns.get(entry.runId))).toBe("queued");
   expect(launch).not.toHaveBeenCalled();
   // sessions.list projects compact copies for descendant accounting, while its
   // direct display lookup deliberately preserves the exact process-local row.
@@ -360,7 +359,7 @@ it("does not borrow a same-run-ID successor's live claim through a prepared obse
         expect(status).toMatch(/\brunning\b/i);
       }
     }
-    expect(findTaskByRunId(successor.runId)?.status).toBe("running");
+    expect(resolveSubagentSessionStatus(subagentRuns.get(successor.runId))).toBe("running");
     expect(countActiveRunsForSession(parent)).toBe(1);
     expect(countPendingDescendantRuns(parent)).toBe(1);
   } finally {
@@ -480,7 +479,7 @@ it("does not keep a recent orphan executor-live after its admitted owner closes"
   expect(getAgentRunContext(entry.runId)).toBeUndefined();
   expect(isSubagentRunLive(entry)).toBe(false);
   expect(isSubagentRunQueued(entry)).toBe(false);
-  expect(findTaskByRunId(entry.runId)?.status).toBe("running");
+  expect(resolveSubagentSessionStatus(subagentRuns.get(entry.runId))).toBe("running");
   expect.soft(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
   expect(countActiveRunsForSession(parent)).toBe(1);
   expect(
@@ -502,21 +501,12 @@ it("retains durable suspended completion debt without reporting a live executor 
   };
   entry.completion = { required: true, resultText: "completed result", capturedAt: start + 1 };
   persistSubagentRunsToDiskOrThrow(subagentRuns, [entry.runId]);
-  finalizeTaskRunByRunId({
-    runId: entry.runId,
-    runtime: "subagent",
-    sessionKey: entry.childSessionKey,
-    status: "succeeded",
-    endedAt: start + 1,
-  });
   now.mockReturnValue(olderThanCutoff);
   expect(countPendingDescendantRuns(parent)).toBe(1);
   expect(hasDescendantRunAwaitingSettle(parent)).toBe(true);
-  const task = findTaskByRunId(entry.runId)!;
   expect(
-    blockSubagentCompletionDelivery({
+    await blockSubagentCompletionDelivery({
       subagent: entry,
-      taskId: task.taskId,
       reason: "delivery budget exhausted",
       suspendedReason: "expiry",
     }),
@@ -529,16 +519,14 @@ it("retains durable suspended completion debt without reporting a live executor 
   expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
   expect(countActiveRunsForSession(parent)).toBe(0);
   subagentRuns.clear();
-  expect(
-    hasSubagentTaskOwner({
-      taskRunId: entry.runId,
-      childSessionKey: entry.childSessionKey,
-      requesterSessionKey: parent,
-    }),
-  ).toBe(true);
+  expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
+    childSessionKey: entry.childSessionKey,
+    requesterSessionKey: parent,
+    execution: entry.execution,
+  });
 });
 
-it("keeps a restart-preserved task owner distinct from an executor", async () => {
+it("keeps a restart-preserved native record distinct from an executor", async () => {
   const now = vi.spyOn(Date, "now").mockReturnValue(start);
   const entry = await register("interrupted-task");
   expect(
@@ -554,13 +542,11 @@ it("keeps a restart-preserved task owner distinct from an executor", async () =>
   expect(isSubagentRunLive(entry)).toBe(false);
   expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
   subagentRuns.clear();
-  expect(
-    hasSubagentTaskOwner({
-      taskRunId: entry.runId,
-      childSessionKey: entry.childSessionKey,
-      requesterSessionKey: parent,
-    }),
-  ).toBe(true);
+  expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
+    childSessionKey: entry.childSessionKey,
+    requesterSessionKey: parent,
+    execution: entry.execution,
+  });
 });
 
 it("makes an admitted child inactive when termination is recorded", async () => {

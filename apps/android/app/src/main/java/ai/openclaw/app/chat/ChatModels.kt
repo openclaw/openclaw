@@ -261,21 +261,6 @@ data class ChatDiffStat(
   val files: Int? = null,
 )
 
-data class ChatSubagentActivity(
-  val id: String,
-  val status: String,
-  val snippet: String?,
-  val diffStat: ChatDiffStat?,
-  val terminalSummary: String?,
-  val error: String?,
-  val startedAtMs: Long,
-  val endedAtMs: Long?,
-  val childSessionKey: String?,
-) {
-  val isWorking: Boolean
-    get() = status == "queued" || status == "running"
-}
-
 enum class ChatPlanStepStatus {
   Pending,
   InProgress,

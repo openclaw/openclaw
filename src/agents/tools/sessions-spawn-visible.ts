@@ -271,8 +271,9 @@ export async function maybeSpawnVisibleSession(params: {
     assertActive,
   });
   assertActive();
-  const completionRequesterSessionId =
-    requesterTarget.store[requesterTarget.canonicalKey]?.sessionId;
+  const requesterEntry = requesterTarget.store[requesterTarget.canonicalKey];
+  const completionRequesterSessionId = requesterEntry?.sessionId;
+  const completionRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
   const requesterKey = ownership.controllerSessionKey;
   const callerDepth = getSubagentDepthFromSessionStore(requesterKey, {
     cfg,
@@ -640,6 +641,7 @@ export async function maybeSpawnVisibleSession(params: {
           controllerSessionKey: ownership.controllerSessionKey,
           requesterSessionKey: ownership.completionRequesterSessionKey,
           completionRequesterSessionId,
+          completionRequesterLifecycleRevision,
           requesterOrigin: normalizeDeliveryContext({
             channel: params.options?.agentChannel,
             accountId: params.options?.agentAccountId,

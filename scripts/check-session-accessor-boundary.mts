@@ -100,7 +100,6 @@ const gatewaySessionServerMethodFiles = [
 
 const migratedSessionAccessorFiles = new Set([
   "packages/memory-host-sdk/src/host/session-files.ts",
-  "src/acp/control-plane/manager.background-task.ts",
   "src/acp/control-plane/manager.core.ts",
   "src/acp/runtime/session-meta.ts",
   "src/agents/subagents/spawn/acp-spawn.ts",
@@ -126,7 +125,6 @@ const migratedSessionAccessorFiles = new Set([
   "src/commands/sessions.ts",
   "src/commands/status.agent-local.ts",
   "src/status/summary.ts",
-  "src/commands/tasks.ts",
   "src/config/sessions/combined-store-gateway.ts",
   "src/config/sessions/delivery-info.ts",
   "src/config/sessions/goals.ts",
@@ -214,7 +212,6 @@ const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/session-reset-model.ts",
   "src/auto-reply/reply/session-updates.ts",
   "src/auto-reply/reply/session-usage.ts",
-  "src/commands/tasks.ts",
   "src/config/sessions/cleanup-service.ts",
   "src/config/sessions/goals.ts",
   "src/gateway/boot.ts",

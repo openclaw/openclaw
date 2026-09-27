@@ -41,7 +41,10 @@ import {
   createTestModelVisibilityPolicy,
   makeSuccessResult,
 } from "./agent-command.live-model-switch.test-helpers.js";
-import { registerAgentCommandRecoveryCases } from "./agent-command.restart-recovery.test-harness.js";
+import {
+  registerAgentCommandRecoveryCases,
+  withStoredAgentCommandRecoverySession,
+} from "./agent-command.restart-recovery.test-harness.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
@@ -738,7 +741,7 @@ vi.mock("./workspace.js", () => ({
 
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
-    resolveSession: (...args: unknown[]) => state.acpResolveSessionMock(...args),
+    resolveSessionAsync: async (...args: unknown[]) => state.acpResolveSessionMock(...args),
     runTurn: (...args: unknown[]) => state.acpRunTurnMock(...args),
   }),
 }));
@@ -3034,56 +3037,58 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   it("constrains recovery delivery to host-owned media before persistence and send", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue({
-      ...makeSuccessResult("openai", "gpt-5.4"),
-      payloads: [{ text: "ready", mediaUrls: ["/tmp/already-delivered.png"] }],
-    });
+    await withStoredAgentCommandRecoverySession(getAgentCommandRecoveryFixture(), async () => {
+      setupSingleAttemptFallback();
+      state.runAgentAttemptMock.mockResolvedValue({
+        ...makeSuccessResult("openai", "gpt-5.4"),
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/already-delivered.png"] }],
+      });
 
-    await agentCommand({
-      message: "deliver only missing generated media",
-      channel: "discord",
-      to: "channel:123",
-      deliver: true,
-      sourceReplyDeliveryMode: "automatic",
-      disableMessageTool: true,
-      forceRestartSafeTools: true,
-      internalDeliveryMediaUrls: ["/tmp/missing.png"],
-      runId: "image:task-policy:agent-loop",
-      inputProvenance: {
-        kind: "inter_session",
-        sourceChannel: "internal",
-        sourceTool: "image_generate",
-      },
-    });
+      await agentCommand({
+        message: "deliver only missing generated media",
+        channel: "discord",
+        to: "channel:123",
+        deliver: true,
+        sourceReplyDeliveryMode: "automatic",
+        disableMessageTool: true,
+        forceRestartSafeTools: true,
+        internalDeliveryMediaUrls: ["/tmp/missing.png"],
+        runId: "image:task-policy:agent-loop",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "internal",
+          sourceTool: "image_generate",
+        },
+      });
 
-    const deliveryParams = requireRecord(
-      mockCallArg(state.deliverAgentCommandResultMock),
-      "delivery params",
-    );
-    const expectedRecoveryPayloads = [
-      {
-        text: "ready",
-        mediaUrl: "/tmp/missing.png",
-        mediaUrls: ["/tmp/missing.png"],
-        audioAsVoice: undefined,
-        trustedLocalMedia: true,
-      },
-    ];
-    expect(requireRecord(deliveryParams.result, "delivery result").payloads).toEqual(
-      expectedRecoveryPayloads,
-    );
-    expect(deliveryParams.payloads).toEqual(expectedRecoveryPayloads);
-    expect(
-      state.persistSessionEntryMock.mock.calls.some((call) => {
-        const params = call[0] as { entry?: SessionEntry };
-        return (
-          params.entry?.restartRecoveryDeliveryMediaUrls?.[0] === "/tmp/missing.png" &&
-          params.entry.restartRecoveryDisableMessageTool === true &&
-          params.entry.restartRecoveryForceSafeTools === true
-        );
-      }),
-    ).toBe(true);
+      const deliveryParams = requireRecord(
+        mockCallArg(state.deliverAgentCommandResultMock),
+        "delivery params",
+      );
+      const expectedRecoveryPayloads = [
+        {
+          text: "ready",
+          mediaUrl: "/tmp/missing.png",
+          mediaUrls: ["/tmp/missing.png"],
+          audioAsVoice: undefined,
+          trustedLocalMedia: true,
+        },
+      ];
+      expect(requireRecord(deliveryParams.result, "delivery result").payloads).toEqual(
+        expectedRecoveryPayloads,
+      );
+      expect(deliveryParams.payloads).toEqual(expectedRecoveryPayloads);
+      expect(
+        state.persistSessionEntryMock.mock.calls.some((call) => {
+          const params = call[0] as { entry?: SessionEntry };
+          return (
+            params.entry?.restartRecoveryDeliveryMediaUrls?.[0] === "/tmp/missing.png" &&
+            params.entry.restartRecoveryDisableMessageTool === true &&
+            params.entry.restartRecoveryForceSafeTools === true
+          );
+        }),
+      ).toBe(true);
+    });
   });
 
   it("restores the exact generated-media policy for a preclaimed recovery run", async () => {
@@ -3514,45 +3519,39 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   it("stores and delivers with the prepared canonical current-run target", async () => {
-    setupSuccessfulAttempt();
-    setupBareStoredSession();
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: false });
-    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
-      baseDelivery: {},
-      resolvedChannel: "discord",
-      resolvedTo: "channel:1524410080953634829",
-      resolvedAccountId: "main",
-      deliveryTargetMode: "explicit",
+    await withStoredAgentCommandRecoverySession(getAgentCommandRecoveryFixture(), async (scope) => {
+      setupSuccessfulAttempt();
+      state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: false });
+      state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+        baseDelivery: {},
+        resolvedChannel: "discord",
+        resolvedTo: "channel:1524410080953634829",
+        resolvedAccountId: "main",
+        deliveryTargetMode: "explicit",
+      });
+
+      await runDiscordDelivery({ to: "channel:general" });
+
+      expect(sessionAccessor.loadSessionEntry(scope)?.pendingFinalDelivery).toMatchObject({
+        kind: "replayable",
+        text: "ok",
+        context: {
+          channel: "discord",
+          to: "channel:1524410080953634829",
+          accountId: "main",
+        },
+      });
+      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          opts: expect.objectContaining({
+            replyChannel: "discord",
+            replyTo: "channel:1524410080953634829",
+            replyAccountId: "main",
+            deliveryTargetMode: "explicit",
+          }),
+        }),
+      );
     });
-
-    await runDiscordDelivery({ to: "channel:general" });
-
-    const pendingEntries = state.persistSessionEntryMock.mock.calls
-      .map((call) => (call[0] as { entry?: SessionEntry }).entry)
-      .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery !== undefined);
-    expect(pendingEntries).toContainEqual(
-      expect.objectContaining({
-        pendingFinalDelivery: expect.objectContaining({
-          kind: "replayable",
-          text: "ok",
-          context: {
-            channel: "discord",
-            to: "channel:1524410080953634829",
-            accountId: "main",
-          },
-        }),
-      }),
-    );
-    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        opts: expect.objectContaining({
-          replyChannel: "discord",
-          replyTo: "channel:1524410080953634829",
-          replyAccountId: "main",
-          deliveryTargetMode: "explicit",
-        }),
-      }),
-    );
   });
 
   it("rejects a strict delivery target before the model run", async () => {

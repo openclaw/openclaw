@@ -1,12 +1,6 @@
-/**
- * Agent harness prompt and compaction hook helpers.
- *
- * Harness runtimes use this to run plugin hooks around prompt construction and
- * compaction while keeping hook failures non-fatal.
- */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { PluginHookBeforePromptBuildResult } from "../../plugins/types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CurrentInboundPromptContext } from "../embedded-agent-runner/run/params.js";
@@ -28,17 +22,17 @@ type AgentHarnessPromptBuildResult = {
 };
 
 type AgentHarnessDeveloperInstructionBuilder = {
-  build: (params: { toolsAllow?: string[] }) => string | undefined;
+  build: (params: { toolsAllow?: string[]; hasToolRestrictions: boolean }) => string | undefined;
 };
 
 /** Runs before-prompt hooks and returns the adjusted prompt fields. */
 export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   prompt: string;
   currentInboundContext?: CurrentInboundPromptContext;
-  currentUserMessage?: string;
+  currentUserMessage?: string | Pick<PersistedUserTurnMessage, "content" | "idempotencyKey">;
   currentUserMessageId?: string;
   developerInstructions: string | AgentHarnessDeveloperInstructionBuilder;
-  messages: unknown[];
+  messages: unknown[] | (() => Promise<unknown[]>);
   ctx: AgentHarnessHookContext;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   toolAuthority?: {
@@ -69,15 +63,31 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     };
   }
   const hookCtx = buildAgentHookContext(params.ctx);
+  const currentUserMessage = params.currentUserMessage;
+  const currentUserMessageText =
+    typeof currentUserMessage === "string"
+      ? currentUserMessage
+      : currentUserMessage
+        ? typeof currentUserMessage.content === "string"
+          ? currentUserMessage.content
+          : currentUserMessage.content
+              .flatMap((part) => (part.type === "text" ? [part.text] : []))
+              .join("\n")
+        : undefined;
+  const currentUserMessageId =
+    params.currentUserMessageId ??
+    (typeof currentUserMessage === "object" ? currentUserMessage.idempotencyKey : undefined);
   const promptEvent = {
     prompt: inputPrompt,
-    ...(typeof params.currentUserMessage === "string"
-      ? { currentUserMessage: params.currentUserMessage }
+    ...(typeof currentUserMessageText === "string"
+      ? { currentUserMessage: currentUserMessageText }
       : {}),
-    ...(typeof params.currentUserMessageId === "string"
-      ? { currentUserMessageId: params.currentUserMessageId }
-      : {}),
-    messages: params.messages,
+    ...(typeof currentUserMessageId === "string" ? { currentUserMessageId } : {}),
+    messages: hasPromptBuildHooks
+      ? typeof params.messages === "function"
+        ? await params.messages()
+        : params.messages
+      : [],
   };
 
   // Match the embedded runner's lifecycle order: heartbeat contributions are
@@ -125,10 +135,10 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
             return undefined;
           })
       : undefined;
-  const systemPrompt = resolvePromptBuildSystemPrompt({
-    developerInstructions,
-    promptBuildResult,
-  });
+  const systemPrompt =
+    typeof promptBuildResult?.systemPrompt === "string"
+      ? promptBuildResult.systemPrompt
+      : developerInstructions;
   const promptPrefix = joinPresentTextSegments([
     heartbeatResult?.prependContext,
     promptBuildResult?.prependContext,
@@ -170,17 +180,11 @@ function resolveDeveloperInstructions(
 ): string {
   return typeof instructions === "string"
     ? instructions
-    : (instructions.build({ toolsAllow }) ?? "");
-}
-
-function resolvePromptBuildSystemPrompt(params: {
-  developerInstructions: string;
-  promptBuildResult?: PluginHookBeforePromptBuildResult;
-}): string {
-  if (typeof params.promptBuildResult?.systemPrompt === "string") {
-    return params.promptBuildResult.systemPrompt;
-  }
-  return params.developerInstructions;
+    : (instructions.build({
+        toolsAllow,
+        hasToolRestrictions:
+          toolsAllow !== undefined && !toolsAllow.some((name) => name.trim() === "*"),
+      }) ?? "");
 }
 
 /** Runs best-effort before-compaction hooks for a harness session. */

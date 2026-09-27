@@ -284,7 +284,7 @@ export async function prepareSkillResourceDelivery(
       modelVisible:
         (snapshot.resolvedSkills?.some((selected) => selected.filePath === skill.filePath) ??
           false) ||
-        explicitSelections.some((selected) => selected.path === skill.filePath),
+        explicitlySelected,
       ...(skill.displayName ? { displayName: skill.displayName } : {}),
       description: skill.description,
       revision: bundle.revision,
