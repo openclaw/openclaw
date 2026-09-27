@@ -218,18 +218,13 @@ vi.mock(
   }),
 );
 
-vi.mock("../agents/agent-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/agent-scope.js")>(
-    "../agents/agent-scope.js",
-  );
-  return {
-    ...actual,
-    resolveAgentConfig: mocks.resolveAgentConfig,
-    resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-    resolveDefaultAgentId: mocks.resolveDefaultAgentId,
-    resolveSessionAgentId: mocks.resolveSessionAgentId,
-  };
-});
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
+  resolveAgentConfig: mocks.resolveAgentConfig,
+  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+  resolveSessionAgentId: mocks.resolveSessionAgentId,
+}));
 
 vi.mock("../infra/restart-sentinel.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/restart-sentinel.js")>()),
@@ -324,8 +319,7 @@ vi.mock("../channels/plugins/session-conversation.js", async (importOriginal) =>
   resolveSessionThreadInfo: mocks.parseSessionThreadInfo,
 }));
 
-vi.mock("../channels/plugins/session-thread-info-loaded.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../channels/plugins/session-thread-info-loaded.js")>()),
+vi.mock("../channels/plugins/session-thread-info-loaded.js", () => ({
   resolveLoadedSessionThreadInfo: mocks.parseSessionThreadInfo,
 }));
 

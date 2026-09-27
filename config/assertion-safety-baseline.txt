@@ -2143,7 +2143,6 @@ src/config/legacy.roster.ts	8
 src/config/legacy.ts	3
 src/config/markdown-tables.ts	3
 src/config/materialize.ts	2
-src/config/mcp-config-normalize.ts	1
 src/config/mcp-config.ts	1
 src/config/merge-patch.ts	1
 src/config/model-input-normalization.ts	2
@@ -2172,7 +2171,6 @@ src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-entry.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
-src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	6
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2

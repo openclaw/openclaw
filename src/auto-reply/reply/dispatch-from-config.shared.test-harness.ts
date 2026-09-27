@@ -270,12 +270,7 @@ const conversationBindingMocks = await vi.hoisted(async () => {
   return createDispatchConversationBindingMocks(vi);
 });
 const threadInfoMocks = vi.hoisted(() => ({
-  parseSessionThreadInfo: vi.fn<
-    (sessionKey: string | undefined) => {
-      baseSessionKey: string | undefined;
-      threadId: string | undefined;
-    }
-  >(),
+  parseSessionThreadInfo: vi.fn<typeof parseGenericThreadSessionInfo>(),
 }));
 
 export {
@@ -389,10 +384,7 @@ vi.mock("../../channels/plugins/session-conversation.js", async (importOriginal)
     threadInfoMocks.parseSessionThreadInfo(sessionKey ?? undefined),
 }));
 
-vi.mock("../../channels/plugins/session-thread-info-loaded.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../channels/plugins/session-thread-info-loaded.js")
-  >()),
+vi.mock("../../channels/plugins/session-thread-info-loaded.js", () => ({
   resolveLoadedSessionThreadInfo: (sessionKey: string | null | undefined) =>
     threadInfoMocks.parseSessionThreadInfo(sessionKey ?? undefined),
 }));
