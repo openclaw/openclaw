@@ -187,7 +187,6 @@ describe("shouldDeferWake", () => {
 
   describe("event-driven wakes after a prior run (regression for #75436)", () => {
     it.each<[name: string, source: Input["source"], reason: Input["reason"]]>([
-      ["defers exec-event wakes when now < nextDueMs", "exec-event", "exec-event"],
       ["defers cron wakes when now < nextDueMs", "cron", "cron:morning-brief"],
       ["defers hook wakes when now < nextDueMs", "hook", "hook:wake"],
       ["defers acp spawn stream wakes when now < nextDueMs", "acp-spawn", "acp:spawn:stream"],
@@ -198,6 +197,71 @@ describe("shouldDeferWake", () => {
         reason: "not-due",
         retryAtMs: 79_000,
       });
+    });
+  });
+
+  it("wakes for a completed exec after the spacing floor, before the next monitor tick", () => {
+    expect(
+      decide({
+        source: "exec-event",
+        reason: "exec-event",
+        now: 80_000,
+        nextDueMs: 1_849_000,
+        lastRunStartedAtMs: 49_000,
+      }),
+    ).toEqual({ defer: false });
+    expect(
+      decide({
+        source: "exec-event",
+        reason: "exec-event",
+        ...afterRun,
+      }),
+    ).toEqual({ defer: true, reason: "min-spacing", retryAtMs: 79_000 });
+  });
+
+  it("backs off a third consecutive exec completion without waiting for the monitor slot", () => {
+    expect(
+      decide({
+        source: "exec-event",
+        reason: "exec-event",
+        now: 80_000,
+        nextDueMs: 1_849_000,
+        lastRunStartedAtMs: 49_000,
+        consecutiveExecEventRuns: 2,
+        retainedWork: true,
+      }),
+    ).toEqual({ defer: true, reason: "min-spacing", retryAtMs: 109_000 });
+    expect(
+      decide({
+        source: "exec-event",
+        reason: "exec-event",
+        now: 109_000,
+        nextDueMs: 1_849_000,
+        lastRunStartedAtMs: 49_000,
+        consecutiveExecEventRuns: 2,
+        retainedWork: true,
+      }),
+    ).toEqual({ defer: false });
+  });
+
+  it("increases completion spacing but caps it at the monitor cadence", () => {
+    const common = {
+      source: "exec-event" as const,
+      reason: "exec-event",
+      now: 110_000,
+      nextDueMs: 1_849_000,
+      lastRunStartedAtMs: 49_000,
+      retainedWork: true,
+    };
+    expect(decide({ ...common, consecutiveExecEventRuns: 3 })).toEqual({
+      defer: true,
+      reason: "min-spacing",
+      retryAtMs: 169_000,
+    });
+    expect(decide({ ...common, consecutiveExecEventRuns: 20 })).toEqual({
+      defer: true,
+      reason: "min-spacing",
+      retryAtMs: 1_849_000,
     });
   });
 
