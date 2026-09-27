@@ -79,6 +79,19 @@ describe("PDF document extractor worker", () => {
     });
   });
 
+  it("preserves an explicitly empty page selection through the real worker", async () => {
+    const result = await createPdfDocumentExtractor().extract({ ...request, pageNumbers: [] });
+    expect(result).toEqual({
+      text: "",
+      images: [],
+      metadata: {
+        pages: { processed: [], total: 2, selection: "explicit", truncated: false },
+        textTruncated: false,
+        imagesTruncated: false,
+      },
+    });
+  });
+
   it("extracts selected pages through the public plugin and preserves the caller's buffer", async () => {
     const extractor = createPdfDocumentExtractor();
     expect(extractor).toMatchObject({ id: "pdf", mimeTypes: ["application/pdf"] });
