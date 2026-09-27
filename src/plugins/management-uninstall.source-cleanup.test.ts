@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import fsAsync from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { transformConfigFileWithRetry } from "../config/mutate.js";
+import { registerManagedRuntimeConfigWriteOwner } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { acquireFileLock, FILE_LOCK_TIMEOUT_ERROR_CODE } from "../infra/file-lock.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -86,6 +87,8 @@ async function createUninstallSourceFixture(
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  // Managed uninstall delegates activation to its Gateway's config owner.
+  onTestFinished(registerManagedRuntimeConfigWriteOwner(configPath));
   const installRecord = {
     source: "path" as const,
     sourcePath: path.join(root, "source"),
