@@ -59,7 +59,7 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
     if (!this.focused) {
       this.focused = true;
       this.querySelector<HTMLElement>(
-        "#sidebar-sessions-status .settings-segmented__btn--active",
+        "#sidebar-sessions-owner, #sidebar-sessions-status .settings-segmented__btn--active",
       )?.focus({
         preventScroll: true,
       });

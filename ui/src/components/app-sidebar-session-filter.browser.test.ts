@@ -90,17 +90,11 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
           expect(controls[index]!.right).toBeCloseTo(controls[0]!.right, 1);
         }
       };
+      const owners = page.getByRole("button", { name: "Owners: All owners", exact: true });
       await trigger.click();
-      await expect.element(active).toHaveFocus();
+      await expect.element(owners).toHaveFocus();
       await expect.poll(() => occlusion).toEqual([false, true]);
       await expectFits();
-      await userEvent.keyboard("{ArrowRight}");
-      await expect
-        .element(page.getByRole("radio", { name: "Archived", exact: true }))
-        .toHaveFocus();
-      expect(loadStoredSidebarSessionStatusFilter()).toBe("archived");
-      await userEvent.tab();
-      await expect.element(page.getByRole("button", { name: /^Owners:/ })).toHaveFocus();
       await userEvent.keyboard("{Enter}");
       await expect
         .element(page.getByRole("listbox", { name: "Owners", exact: true }))
@@ -129,10 +123,15 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expect.element(search).toHaveValue("");
       await expect.poll(() => sidebar.querySelectorAll(".picker-select__option").length).toBe(4);
       await userEvent.keyboard("{Escape}");
-      await expect
-        .element(page.getByRole("button", { name: "Owners: All owners", exact: true }))
-        .toHaveFocus();
+      await expect.element(owners).toHaveFocus();
       await expectFits();
+      await userEvent.tab();
+      await expect.element(active).toHaveFocus();
+      await userEvent.keyboard("{ArrowRight}");
+      await expect
+        .element(page.getByRole("radio", { name: "Archived", exact: true }))
+        .toHaveFocus();
+      expect(loadStoredSidebarSessionStatusFilter()).toBe("archived");
       await userEvent.tab();
       await expect
         .element(page.getByRole("switch", { name: "Show automation sessions", exact: true }))
@@ -192,9 +191,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
       await expect.poll(() => occlusion).toEqual([false, true, false]);
       await trigger.click();
-      await expect
-        .element(page.getByRole("radio", { name: "Archived", exact: true }))
-        .toHaveFocus();
+      await expect.element(owners).toHaveFocus();
       await expect.poll(() => occlusion).toEqual([false, true, false, true]);
       await trigger.click();
       expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();

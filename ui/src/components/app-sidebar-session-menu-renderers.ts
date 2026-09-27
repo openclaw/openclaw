@@ -423,21 +423,6 @@ export function renderSidebarSessionSortMenu(params: {
                 : nothing
             }
           </div>
-          ${segmented(
-            "sidebar-sessions-status",
-            t("sessionsView.status"),
-            params.statusFilter,
-            SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => ({
-              value,
-              label:
-                value === "active"
-                  ? t("common.active")
-                  : value === "archived"
-                    ? t("sessionsView.archived")
-                    : t("sessionsView.all"),
-            })),
-            params.onStatusFilterChange,
-          )}
           ${
             ownerVisible
               ? html`<div class="sidebar-session-menu-row">
@@ -478,6 +463,21 @@ export function renderSidebarSessionSortMenu(params: {
                 </div>`
               : nothing
           }
+          ${segmented(
+            "sidebar-sessions-status",
+            t("sessionsView.status"),
+            params.statusFilter,
+            SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => ({
+              value,
+              label:
+                value === "active"
+                  ? t("common.active")
+                  : value === "archived"
+                    ? t("sessionsView.archived")
+                    : t("sessionsView.all"),
+            })),
+            params.onStatusFilterChange,
+          )}
           ${switchItem("sidebar-sessions-cron", t("sessionsView.showCronSessions"), params.showCron, params.onShowCronChange)}
           ${switchItem("sidebar-sessions-system", t("sessionsView.showSystemSessions"), params.showSystem, params.onShowSystemChange)}
         </section>

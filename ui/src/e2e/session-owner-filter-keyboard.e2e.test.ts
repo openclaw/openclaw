@@ -51,12 +51,6 @@ suite.define(() => {
       const menu = page.locator(".sidebar-session-sort-menu");
       await expectBrowser(menu.getByRole("dialog")).toBeVisible();
       const active = menu.getByRole("radio", { name: "Active", exact: true });
-      await expectBrowser(active).toBeFocused();
-      await page.keyboard.press("ArrowRight");
-      await expectBrowser(menu.getByRole("radio", { name: "Archived", exact: true })).toBeChecked();
-      await page.keyboard.press("ArrowLeft");
-      await expectBrowser(active).toBeChecked();
-      await page.keyboard.press("Tab");
       const owners = menu.locator("#sidebar-sessions-owner");
       await expectBrowser(owners).toBeFocused();
       await page.keyboard.press("Enter");
@@ -75,6 +69,12 @@ suite.define(() => {
         .toBe(true);
       await expectBrowser(owners).toHaveAccessibleName("Owners: Ada Lovelace Byron");
       await owners.focus();
+      await page.keyboard.press("Tab");
+      await expectBrowser(active).toBeFocused();
+      await page.keyboard.press("ArrowRight");
+      await expectBrowser(menu.getByRole("radio", { name: "Archived", exact: true })).toBeChecked();
+      await page.keyboard.press("ArrowLeft");
+      await expectBrowser(active).toBeChecked();
       await page.keyboard.press("Tab");
       const automation = menu.getByRole("switch", {
         name: "Show automation sessions",
@@ -112,7 +112,7 @@ suite.define(() => {
       await expectBrowser(menu).toHaveCount(0);
       await expectBrowser(trigger).toBeFocused();
       await page.keyboard.press("Enter");
-      await expectBrowser(active).toBeFocused();
+      await expectBrowser(owners).toBeFocused();
       await expectBrowser(owners).toHaveAccessibleName("Owners: Ada Lovelace Byron");
       await page.keyboard.press("Shift+Tab");
       await expectBrowser(menu.getByRole("button", { name: "Reset", exact: true })).toBeFocused();
