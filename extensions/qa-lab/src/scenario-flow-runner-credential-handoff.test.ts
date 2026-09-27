@@ -15,6 +15,8 @@ type ReplySequence =
   | "late-file-write"
   | "json-file-ref"
   | "json5-config"
+  | "config-write-migrations"
+  | "unexpected-migration-marker"
   | "drops-embeddings-destination"
   | "drops-unrelated-config"
   | "invalid-single-value-ref"
@@ -157,6 +159,20 @@ async function runCredentialHandoffScenario(replySequence: ReplySequence) {
         if (replySequence === "json5-config") {
           configText = `// operator-authored config\n${JSON.stringify(updatedConfigValue)}`;
         }
+        if (replySequence === "config-write-migrations") {
+          configText = JSON.stringify({
+            ...updatedConfigValue,
+            meta: {
+              migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true },
+            },
+          });
+        }
+        if (replySequence === "unexpected-migration-marker") {
+          configText = JSON.stringify({
+            ...updatedConfigValue,
+            meta: { migrations: { unrelatedMarker: true } },
+          });
+        }
         if (replySequence === "drops-embeddings-destination") {
           configText = JSON.stringify({
             gateway: updatedConfigValue.gateway,
@@ -278,7 +294,17 @@ describe("operator key handoff scenario assertions", () => {
     expect(result.status).toBe("pass");
   });
 
-  it.each(["drops-embeddings-destination", "drops-unrelated-config"] as const)(
+  it("accepts config-write migration markers with the authorized key update", async () => {
+    const { result } = await runCredentialHandoffScenario("config-write-migrations");
+
+    expect(result.status).toBe("pass");
+  });
+
+  it.each([
+    "drops-embeddings-destination",
+    "drops-unrelated-config",
+    "unexpected-migration-marker",
+  ] as const)(
     "rejects an update that %s",
     async (replySequence) => {
       await expect(runCredentialHandoffScenario(replySequence)).rejects.toThrow(

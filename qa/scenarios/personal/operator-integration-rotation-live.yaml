@@ -185,12 +185,24 @@ flow:
           value:
             expr: |-
               (() => {
+                const initial = json5.parse(initialConfig);
                 const candidate = structuredClone(json5.parse(updatedConfig));
                 candidate.memory.search.remote.apiKey = config.oldKey;
-                if (updatedKey?.source === 'file' && !json5.parse(initialConfig).secrets?.providers?.[updatedKey.provider]) {
+                if (updatedKey?.source === 'file' && !initial.secrets?.providers?.[updatedKey.provider]) {
                   delete candidate.secrets.providers[updatedKey.provider];
                   if (Object.keys(candidate.secrets.providers).length === 0) delete candidate.secrets.providers;
                   if (Object.keys(candidate.secrets).length === 0) delete candidate.secrets;
+                }
+                for (const marker of ['modelPolicyAllowlist', 'utilityModelSeparation']) {
+                  if (candidate.meta?.migrations?.[marker] === true && initial.meta?.migrations?.[marker] === undefined) {
+                    delete candidate.meta.migrations[marker];
+                  }
+                }
+                if (candidate.meta?.migrations && Object.keys(candidate.meta.migrations).length === 0) {
+                  delete candidate.meta.migrations;
+                }
+                if (candidate.meta && Object.keys(candidate.meta).length === 0 && !initial.meta) {
+                  delete candidate.meta;
                 }
                 return candidate;
               })()
