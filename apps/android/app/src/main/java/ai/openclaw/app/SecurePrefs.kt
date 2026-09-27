@@ -261,6 +261,49 @@ class SecurePrefs(
   private val _voiceWakeEnabled = MutableStateFlow(plainPrefs.getBoolean(voiceWakeEnabledKey, false))
   val voiceWakeEnabled: StateFlow<Boolean> = _voiceWakeEnabled
 
+  private val _incomingCallsEnabled by lazy {
+    MutableStateFlow(isIncomingCallAllowed(gatewayRegistry.activeStableId.value))
+  }
+  val incomingCallsEnabled: StateFlow<Boolean> get() = _incomingCallsEnabled
+
+  fun setIncomingCallsEnabled(
+    value: Boolean,
+    gatewayStableId: String? = gatewayRegistry.activeStableId.value,
+  ) {
+    if (gatewayStableId == null || gatewayStableId != gatewayRegistry.activeStableId.value) return
+    plainPrefs.edit { putBoolean("voice.incomingCallsEnabled.$gatewayStableId", value) }
+    _incomingCallsEnabled.value = isIncomingCallAllowed(gatewayRegistry.activeStableId.value)
+  }
+
+  internal fun isIncomingCallAllowed(gatewayStableId: String?): Boolean =
+    gatewayStableId != null && gatewayStableId == gatewayRegistry.activeStableId.value &&
+      plainPrefs.getBoolean("voice.incomingCallsEnabled.$gatewayStableId", false)
+
+  internal fun clearIncomingCallConsent(gatewayStableId: String) {
+    plainPrefs.edit { remove("voice.incomingCallsEnabled.$gatewayStableId") }
+    _incomingCallsEnabled.value = isIncomingCallAllowed(gatewayRegistry.activeStableId.value)
+  }
+
+  /** Small expiry-bounded replay ledger survives process death without storing call content. */
+  @Synchronized
+  @Suppress("UseKtx") // KTX edit(commit = true) discards commit's Boolean; failed persistence must reject the call.
+  internal fun consumeIncomingCallId(
+    callId: String,
+    expiresAtMs: Long,
+  ): Boolean {
+    val now = System.currentTimeMillis()
+    val entries =
+      plainPrefs
+        .getStringSet("voice.incomingCallIds", emptySet())
+        .orEmpty()
+        .filter { (it.substringAfterLast('|').toLongOrNull() ?: 0L) > now }
+        .toMutableSet()
+    if (entries.any { it.substringBefore('|') == callId } || entries.size >= 128) return false
+    entries.add("$callId|$expiresAtMs")
+    // Commit before ringing so a process crash cannot reopen an accepted invitation.
+    return plainPrefs.edit().putStringSet("voice.incomingCallIds", entries).commit()
+  }
+
   private val _voiceWakeWords = MutableStateFlow(loadVoiceWakeWords())
   val voiceWakeWords: StateFlow<List<String>> = _voiceWakeWords
 
@@ -730,6 +773,7 @@ class SecurePrefs(
 
   private fun handleActiveGatewayChanged(stableId: String?) {
     _notificationForwardingSessionKey.value = loadNotificationForwardingSessionKey(stableId)
+    _incomingCallsEnabled.value = isIncomingCallAllowed(stableId)
   }
 
   private fun loadOrCreateInstanceId(): String {

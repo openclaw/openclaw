@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import type { BoundedSerialQueue } from "../../../shared/bounded-serial-queue.js";
@@ -22,6 +23,15 @@ import type { PreparedTalkSessionTarget } from "../session-target.types.js";
 import type { RelayToolCallLedger } from "./tool-call-ledger.js";
 
 export const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
+export function createRelaySessionLifetime() {
+  const id = randomUUID();
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(RELAY_SESSION_TTL_MS);
+  if (expiresAtMs === undefined) {
+    throw new Error("Realtime relay session expiry is outside the supported Date range");
+  }
+  return { id, expiresAtMs };
+}
+
 export const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_RELAY_SESSIONS_PER_CONN = 2;
 const MAX_RELAY_SESSIONS_GLOBAL = 64;
@@ -94,6 +104,7 @@ export type RelayAgentControlProviderSubmission = {
 
 type RelayProvider = RealtimeVoiceProviderPlugin;
 export class TalkRealtimeRelayOutputOwnership {
+  private continuousOutput = false;
   mode: "turn-bound" | "exact-response" = "turn-bound";
   phase: "unowned" | "owned" | "cancelling" | "discarding" = "unowned";
   outputGeneration = 0;
@@ -154,7 +165,13 @@ export class TalkRealtimeRelayOutputOwnership {
     if (this.discarding) {
       return undefined;
     }
-    const activeTurnId = this.activeTurnId();
+    // Continuous providers own an audio stream, not response.created boundaries.
+    // Their initial stream can arrive before any client microphone frame.
+    const activeTurnId =
+      this.activeTurnId() ??
+      (this.continuousOutput && claim && !this.suppressingOutput && this.mode === "turn-bound"
+        ? this.ensureTurn()
+        : undefined);
     if (
       this.phase !== "cancelling" &&
       activeTurnId &&
@@ -207,8 +224,8 @@ export class TalkRealtimeRelayOutputOwnership {
   bind(provider: RelayProvider, runAgentConsult: RealtimeVoiceAgentConsultRunner): RelayProvider {
     return {
       ...provider,
-      createBridge: (request) =>
-        provider.createBridge({
+      createBridge: (request) => {
+        const bridge = provider.createBridge({
           ...request,
           onEvent: (event) => {
             if (event.direction === "server") {
@@ -244,7 +261,10 @@ export class TalkRealtimeRelayOutputOwnership {
             request.onResponseDone?.(outcome);
           },
           runAgentConsult,
-        }),
+        });
+        this.continuousOutput = bridge.outputAudioMode === "continuous";
+        return bridge;
+      },
     };
   }
 }
@@ -288,6 +308,7 @@ export type RelaySession = {
   voiceSessionClose?: Promise<void>;
   closing?: { reason: "completed" | "error"; completion?: Promise<void> };
   failSession: (message: string) => void;
+  noteClientAudioAdmitted?: () => void;
 };
 
 export type CreateTalkRealtimeRelaySessionParams = {
@@ -303,6 +324,9 @@ export type CreateTalkRealtimeRelaySessionParams = {
   voiceChangeId?: string;
   voiceSelectionVoices?: readonly string[];
   initialItems?: Array<{ role: "user" | "assistant"; text: string }>;
+  greeting?: string;
+  /** Rechecks retained request/session authority immediately before opening speech. */
+  assertGreetingAllowed?: () => void;
   instructions: string;
   tools: RealtimeVoiceTool[];
   model?: string;

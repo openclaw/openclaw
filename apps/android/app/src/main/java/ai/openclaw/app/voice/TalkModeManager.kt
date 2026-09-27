@@ -347,7 +347,28 @@ class TalkModeManager internal constructor(
   private val interruptOnSpeech get() = configCache.get().value.interruptOnSpeech ?: false
   private var mainSessionKey: String = "main"
   private val speechLocale get() = configCache.get().value.speechLocale
-  private val realtimeRelayModelSupported get() = configCache.get().value.realtimeRelayModelSupported
+
+  @Volatile private var incomingCallSessionKey: String? = null
+
+  @Volatile private var incomingCallMuted = false
+  private val realtimeRelayModelSupported get() = incomingCallSessionKey != null || configCache.get().value.realtimeRelayModelSupported
+
+  /** Explicit call opt-in uses only Gateway relay; a failure never falls back to device STT. */
+  internal fun prepareIncomingCall(sessionKey: String?) {
+    incomingCallSessionKey = sessionKey
+    if (sessionKey == null) incomingCallMuted = false
+  }
+
+  internal fun setIncomingCallMuted(muted: Boolean) {
+    incomingCallMuted = muted
+  }
+
+  internal suspend fun awaitIncomingCallReady() {
+    withTimeout(25_000) {
+      awaitRealtimeSessionId(25_000)
+      checkNotNull(realtimeCaptureReady) { "Microphone unavailable" }.await()
+    }
+  }
 
   @Volatile private var pendingRunId: String? = null
   private var pendingFinal: CompletableDeferred<Boolean>? = null
@@ -942,6 +963,7 @@ class TalkModeManager internal constructor(
     state: String,
     message: JsonElement?,
   ) {
+    if (incomingCallSessionKey != null) return
     val activeSession = mainSessionKey.ifBlank { "main" }
     if (sessionKey != null && sessionKey != activeSession) return
 
@@ -1183,7 +1205,7 @@ class TalkModeManager internal constructor(
     val lease = change?.lease ?: session.captureRequestLease(gatewayStableId()) ?: error("Gateway not connected")
     val supportsVoiceSelection = listOf("talk.voice.get", "talk.voice.set", "talk.voice.complete").all(lease::supportsMethod)
     val transportGeneration = change?.gatewayGeneration ?: gatewayGeneration.get()
-    val sessionKey = change?.sessionKey ?: mainSessionKey.ifBlank { "main" }
+    val sessionKey = change?.sessionKey ?: incomingCallSessionKey ?: mainSessionKey.ifBlank { "main" }
     val create: suspend (String?) -> String = { requestedLanguage ->
       val params =
         buildJsonObject {
@@ -1191,6 +1213,9 @@ class TalkModeManager internal constructor(
           put("mode", JsonPrimitive("realtime"))
           put("transport", JsonPrimitive("gateway-relay"))
           put("brain", JsonPrimitive("agent-consult"))
+          if (incomingCallSessionKey != null && change == null) {
+            put("greeting", JsonPrimitive("The user has answered this call. Greet them briefly and explain why you called using the prepared briefing in shared session history. Do not invent facts or claim actions; ask what they would like to discuss."))
+          }
           if (supportsVoiceSelection) put("capabilities", JsonArray(listOf(JsonPrimitive("voice-selection"))))
           if (change != null) {
             put("voiceChangeId", JsonPrimitive(change.id))
@@ -1252,6 +1277,24 @@ class TalkModeManager internal constructor(
         runCatching { lease.request("talk.session.close", buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }.toString()) }
       }
       throw CancellationException("realtime talk stopped while connecting")
+    }
+    if (incomingCallSessionKey != null && change == null) {
+      // A post-Answer silent frame acknowledges adopted playback even when the user is muted.
+      // The Gateway waits for this admission before delivering the prepared greeting.
+      val readyAudio =
+        buildJsonObject {
+          put("sessionId", JsonPrimitive(sessionId))
+          put("audioBase64", JsonPrimitive(Base64.encodeToString(ByteArray(realtimeSampleRateHz * 2 / 50), Base64.NO_WRAP)))
+          put("timestamp", JsonPrimitive(SystemClock.elapsedRealtime()))
+        }
+      lease.request("talk.session.appendAudio", readyAudio.toString(), timeoutMs = 8_000) { enqueue ->
+        synchronized(realtimeCapturePauseLock) {
+          if (generation != startGeneration.get() || realtimeSessionId != sessionId || !lease.isCurrent() || !_isEnabled.value || stopRequested) {
+            throw CancellationException("incoming call stopped before playback readiness")
+          }
+          enqueue()
+        }
+      }
     }
     Log.d(tag, "realtime session ready relaySessionId=$sessionId")
   }
@@ -1586,6 +1629,7 @@ class TalkModeManager internal constructor(
                 if (isCurrent()) onAppliedAudioInputChanged(key)
               },
               communication = true,
+              telecomOwned = incomingCallSessionKey != null,
               isCurrent = isCurrent,
               onFocusLost = { failRealtimeRelay(sessionId, "audio focus lost", inputGeneration = inputGeneration) },
             )
@@ -1628,6 +1672,7 @@ class TalkModeManager internal constructor(
 
   private fun shouldAppendRealtimeCapturedFrame(length: Int): Boolean =
     length > 0 &&
+      !incomingCallMuted &&
       pendingRealtimeOutputClear == null &&
       realtimeCapturePause == null &&
       !localMediaPlaybackActive &&

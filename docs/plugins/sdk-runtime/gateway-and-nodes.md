@@ -10,6 +10,38 @@ sidebarTitle: "Gateway and nodes"
 
 Reach the Gateway and paired nodes from plugin code, and the events a long-lived Gateway service receives. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
 
+## Standalone CLI clients
+
+`callGatewayFromCli` from `openclaw/plugin-sdk/gateway-runtime` owns configured target
+selection, TLS, and Gateway authentication for standalone operator clients. Clients
+that need an existing signed device identity can require already approved grants
+without requesting a scope upgrade or writing authentication state:
+
+```typescript
+import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+
+const nodes = await callGatewayFromCli(
+  "node.list",
+  { expectUrl: "wss://gateway.example:18789", json: true },
+  {},
+  {
+    useStoredDeviceAuth: true,
+    requiredStoredDeviceAuthScopes: ["operator.read"],
+    sharedStateMode: "read-only",
+    progress: false,
+  },
+);
+```
+
+`expectUrl` checks the selected destination; it does not redirect the configured
+target. `useStoredDeviceAuth` omits implicit shared credentials and reuses the
+existing device identity and origin-bound token. Missing identity, token, or
+required grants fail closed; the client does not fall back to shared credentials.
+Explicit `token` or `password` options still take precedence, so omit those options
+when requiring stored device authentication. `sharedStateMode: "read-only"` prevents
+identity creation and authentication-state writes. These options do not bypass
+Gateway method scopes, session visibility, or node command policy.
+
 ## Gateway and node namespaces
 
 ### Session resource methods

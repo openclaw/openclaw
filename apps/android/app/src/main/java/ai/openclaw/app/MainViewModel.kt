@@ -634,6 +634,13 @@ class MainViewModel private constructor(
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
   val preferredAudioInputDevice: StateFlow<String?> = prefs.preferredAudioInputDevice
   val voiceWakeEnabled: StateFlow<Boolean> = prefs.voiceWakeEnabled
+  val incomingCallsEnabled: StateFlow<Boolean> = prefs.incomingCallsEnabled
+
+  fun setIncomingCallsEnabled(
+    enabled: Boolean,
+    gatewayStableId: String? = prefs.gatewayRegistry.activeStableId.value,
+  ) = ensureRuntime().setIncomingCallsEnabled(enabled, gatewayStableId)
+
   val voiceWakeWords: StateFlow<List<String>> = prefs.voiceWakeWords
   val voiceWakeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.voiceWakeAvailable }
   val voiceWakeIsListening: StateFlow<Boolean> = runtimeState(initial = false) { it.voiceWakeIsListening }

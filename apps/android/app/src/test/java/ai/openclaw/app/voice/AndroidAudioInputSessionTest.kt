@@ -63,6 +63,25 @@ class AndroidAudioInputSessionTest {
   }
 
   @Test
+  fun telecomOwnedCaptureNeverTakesFocusChangesRouteOrWithdrawsTelecomMode() {
+    val earpiece = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
+    val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(earpiece, speaker))
+    audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+    audioManager.setCommunicationDevice(earpiece)
+    val previousFocusRequest = shadowAudioManager.lastAudioFocusRequest
+    AndroidAudioInputSession.open(context, 24_000, 4_800, communication = true, telecomOwned = true).use { input ->
+      input.startRecording()
+      assertEquals(earpiece, audioManager.communicationDevice)
+      assertEquals(previousFocusRequest, shadowAudioManager.lastAudioFocusRequest)
+    }
+    assertEquals(earpiece, audioManager.communicationDevice)
+    assertEquals(AudioManager.MODE_IN_COMMUNICATION, audioManager.mode)
+    assertEquals(previousFocusRequest, shadowAudioManager.lastAudioFocusRequest)
+    audioManager.mode = AudioManager.MODE_NORMAL
+  }
+
+  @Test
   fun aRecorderThatReturnsWithoutStartingCannotReportCaptureReadiness() {
     AndroidAudioInputSession.open(context, 24_000, 4_800).use { input ->
       val original = ReflectionHelpers.getField<AudioRecord>(input, "audioRecord")

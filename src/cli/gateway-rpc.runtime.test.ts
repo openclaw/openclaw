@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import { addGatewayClientOptions } from "./gateway-rpc.js";
+import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
 const callGatewayMock = vi.fn(async () => ({ ok: true }));
@@ -139,6 +139,38 @@ describe("callGatewayFromCliRuntime", () => {
         useStoredDeviceAuth: true,
         requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
         requireLocalBackendSharedAuth: true,
+      }),
+    );
+  });
+
+  it("preserves pinned, read-only existing-device auth through the public SDK facade", async () => {
+    const params = { key: "agent:test:incoming-call:synthetic", idempotencyKey: "synthetic" };
+    await callGatewayFromCli(
+      "sessions.create",
+      { expectUrl: "wss://gateway.example:18789", json: true },
+      params,
+      {
+        useStoredDeviceAuth: true,
+        requiredStoredDeviceAuthScopes: ["operator.write"],
+        sharedStateMode: "read-only",
+        progress: false,
+      },
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        method: "sessions.create",
+        params,
+        expectUrl: "wss://gateway.example:18789",
+        // A pin must not become an override; canonical transport selects and checks the target.
+        url: undefined,
+        token: undefined,
+        password: undefined,
+        deviceIdentity: undefined,
+        scopes: undefined,
+        useStoredDeviceAuth: true,
+        requiredStoredDeviceAuthScopes: ["operator.write"],
+        sharedStateMode: "read-only",
       }),
     );
   });

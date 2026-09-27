@@ -177,6 +177,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -700,6 +701,21 @@ private fun VoiceSettingsScreen(
   val isConnected by viewModel.isConnected.collectAsState()
   val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
   val voiceWakeEnabled by viewModel.voiceWakeEnabled.collectAsState()
+  val incomingCallsEnabled by viewModel.incomingCallsEnabled.collectAsState()
+  val incomingCallGatewayId by viewModel.activeGatewayStableId.collectAsState()
+  var pendingIncomingCallGatewayId by remember { mutableStateOf<String?>(null) }
+  val incomingCallPermissions =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+      val consentGatewayId = pendingIncomingCallGatewayId
+      pendingIncomingCallGatewayId = null
+      if (consentGatewayId != null && grants.values.all { it }) {
+        runCatching {
+          ai.openclaw.app.calls.IncomingCallController
+            .registerAccount(context)
+        }.onSuccess { viewModel.setIncomingCallsEnabled(true, consentGatewayId) }
+          .onFailure { Toast.makeText(context, nativeString("Android call integration unavailable"), Toast.LENGTH_LONG).show() }
+      }
+    }
   val voiceWakeAvailable by viewModel.voiceWakeAvailable.collectAsState()
   val voiceWakeIsListening by viewModel.voiceWakeIsListening.collectAsState()
   val voiceWakeStatusText by viewModel.voiceWakeStatusText.collectAsState()
@@ -741,6 +757,47 @@ private fun VoiceSettingsScreen(
   }
 
   SettingsDetailFrame(title = nativeString("Voice"), subtitle = nativeString("Configure wake words, talk, and playback."), icon = Icons.Default.Mic, onBack = onBack) {
+    Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+      Text(text = nativeString("Incoming data calls"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      SettingsTogglePanel(
+        rows =
+          listOf(
+            SettingsToggleRow(
+              title = nativeString("Receive calls from this Gateway"),
+              subtitle = nativeString("Uses your private connection, including Tailscale. Microphone starts only after you answer."),
+              icon = Icons.Default.Mic,
+              checked = incomingCallsEnabled,
+              enabled = incomingCallGatewayId != null,
+              onCheckedChange = { enabled ->
+                if (!enabled) {
+                  viewModel.setIncomingCallsEnabled(false, incomingCallGatewayId)
+                } else {
+                  pendingIncomingCallGatewayId = incomingCallGatewayId
+                  incomingCallPermissions.launch(
+                    buildList {
+                      add(Manifest.permission.RECORD_AUDIO)
+                      if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+                    }.toTypedArray(),
+                  )
+                }
+              },
+            ),
+          ),
+      )
+      Text(
+        text = nativeString("Keep OpenClaw connected in the background and Tailscale running. Calls cannot arrive while the app is force-stopped, offline, or disconnected. Android may require unrestricted battery use for reliable background ringing."),
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+      )
+      if (Build.VERSION.SDK_INT >= 34) {
+        ClawSecondaryButton(text = nativeString("Allow full-screen call alerts"), onClick = {
+          context.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, "package:${context.packageName}".toUri()))
+        })
+      }
+      ClawSecondaryButton(text = nativeString("App notifications and battery settings"), onClick = {
+        context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()))
+      })
+    }
     Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
       Text(text = nativeString("Voice Wake"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       SettingsTogglePanel(

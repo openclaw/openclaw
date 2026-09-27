@@ -502,6 +502,25 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun incomingCallNeverSpeaksUnrelatedMainChatThroughNativeTts() {
+    val manager = createManager()
+    manager.ttsOnAllResponses = true
+    manager.prepareIncomingCall("agent:assistant:prepared-call")
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "unrelated-main-run", text = "private unrelated chat"))
+    assertEquals(0L, playbackGeneration(manager).get())
+  }
+
+  @Test
+  fun preparingIncomingCallPreservesPlatformMuteAppliedWhileRinging() {
+    val manager = createManager()
+    manager.setIncomingCallMuted(true)
+    manager.prepareIncomingCall("agent:assistant:prepared-call")
+    assertEquals(true, readPrivateField(manager, "incomingCallMuted"))
+    manager.prepareIncomingCall(null)
+    assertEquals(false, readPrivateField(manager, "incomingCallMuted"))
+  }
+
+  @Test
   fun nonPendingUserFinalDoesNotUseAllResponseTts() {
     val manager = createManager()
 

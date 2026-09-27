@@ -69,6 +69,10 @@ export async function callGatewayFromCli(
     expectFinal?: boolean;
     progress?: boolean;
     scopes?: OperatorScope[];
+    /** Reuse approved device auth instead of implicit shared credentials. Explicit credentials still take precedence. */
+    useStoredDeviceAuth?: boolean;
+    /** Require existing grants; never request a scope upgrade. Applies when using stored device auth. */
+    requiredStoredDeviceAuthScopes?: OperatorScope[];
     sharedStateMode?: "read-only";
   },
 ) {

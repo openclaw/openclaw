@@ -46,6 +46,8 @@ class InvokeDispatcher(
   motionPedometerAvailable: () -> Boolean,
   mobileUiAvailable: () -> Boolean,
   private val voiceWakeAvailable: () -> Boolean,
+  incomingCallAvailable: () -> Boolean = { false },
+  incomingCallInvoke: suspend (String, String?) -> GatewaySession.InvokeResult = { _, _ -> GatewaySession.InvokeResult.error("CALL_UNAVAILABLE", "Incoming calls unavailable") },
 ) {
   private class CommandGate(
     val isAvailable: () -> Boolean,
@@ -87,6 +89,7 @@ class InvokeDispatcher(
     CommandGate(debugBuild, unavailable("INVALID_REQUEST", "unknown command"))
   private val mobileUiGate =
     CommandGate(mobileUiAvailable, unavailable("MOBILE_UI_UNAVAILABLE", "accessibility service is not connected"))
+  private val incomingCallGate = CommandGate(incomingCallAvailable, unavailable("CALL_DISABLED", "enable Incoming data calls in Voice settings"))
 
   // Keep protocol ordering stable. The same entries advertise and dispatch each bound handler.
   private val commands =
@@ -96,6 +99,9 @@ class InvokeDispatcher(
       Command(OpenClawTalkCommand.PttStop.rawValue, talkHandler::handlePttStop),
       Command(OpenClawTalkCommand.PttCancel.rawValue, talkHandler::handlePttCancel),
       Command(OpenClawTalkCommand.PttOnce.rawValue, talkHandler::handlePttOnce, requiresForeground = true),
+      Command("talk.incoming", { incomingCallInvoke("talk.incoming", it) }, incomingCallGate),
+      Command("talk.callStatus", { incomingCallInvoke("talk.callStatus", it) }, incomingCallGate),
+      Command("talk.endCall", { incomingCallInvoke("talk.endCall", it) }, incomingCallGate),
       Command(OpenClawCameraCommand.List.rawValue, cameraHandler::handleList, cameraGate, requiresForeground = true),
       Command(OpenClawCameraCommand.Snap.rawValue, cameraHandler::handleSnap, cameraGate, requiresForeground = true),
       Command(OpenClawCameraCommand.Clip.rawValue, cameraHandler::handleClip, cameraGate, requiresForeground = true),
