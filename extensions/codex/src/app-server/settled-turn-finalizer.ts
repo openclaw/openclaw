@@ -79,7 +79,10 @@ export async function runCodexSettledTurnFinalization(
     developerInstructions: FINALIZER_DEVELOPER_INSTRUCTIONS,
     input: [{ type: "text", text: attempt.prompt, text_elements: [] }],
     requiredModalities: ["text"],
-    isolation: resolveCodexBoundedTurnIsolation(options),
+    isolation: resolveCodexBoundedTurnIsolation({
+      ...options,
+      requireIsolatedAuth: Boolean(authHandoff.preparedAuth || authHandoff.authProfileId),
+    }),
     historyItems,
     requireNoExternalCapabilities: true,
     allowEmptyText: true,

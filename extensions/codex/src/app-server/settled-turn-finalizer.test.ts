@@ -353,7 +353,7 @@ describe("runCodexSettledTurnFinalization", () => {
       );
       expect(mocks.runBounded).toHaveBeenCalledWith(
         expect.objectContaining({
-          isolation: ordinaryNativeHome ? "configured-transport" : "private-stdio",
+          isolation: "private-stdio",
           options,
           authRequirement: "subscription",
           preparedAuth: {
