@@ -373,6 +373,51 @@ that host and reload it; it does not overwrite a file silently.
 
 **Native embed mode.** Native hosts can inject `window.__OPENCLAW_NATIVE_EMBED__ = { platform: "ios", formFactor: "phone" }` at document start to show settings without Dashboard navigation chrome. Supported platforms are `ios`, `macos`, and `android`; form factors are `phone`, `pad`, and `desktop`. In this mode, `/settings` lists the same visible groups and destinations as the settings sidebar. Every embedded route outside the settings root provides a Back button and title, including pages reached through links or tabs such as Memory import, Plugins, and Skill Workshop. Back follows app navigation history; direct links fall back to the nearest settings parent (Memory for Memory import) or `/settings`. Layouts respect device safe areas and use touch controls at phone widths. The flag changes presentation only: Gateway scopes and the existing native device-settings capability still determine which settings are available. Ordinary browser loads keep their existing navigation.
 
+**Native conversation surface.** A native chat window can opt into a single web
+conversation by injecting these globals at document start in the trusted main frame:
+
+```js
+window.__OPENCLAW_NATIVE_EMBED__ = {
+  platform: "macos",
+  formFactor: "desktop",
+  surface: "conversation",
+};
+window.__OPENCLAW_NATIVE_CONVERSATION__ = { contract: 1 };
+```
+
+Chat keeps its pane header, transcript, composer, side panels, and overlays. The
+embedded Back/title heading and agent selector are omitted, and saved split panes
+are not restored. The web owns sending, drafts, and conversation interactions;
+the native window owns its surrounding navigation. Omitting `surface` preserves
+the settings embed described above.
+
+The host installs `window.webkit.messageHandlers.openclawConversation.postMessage`
+with Promise replies `{ ok: true }` or `{ ok: false, error }`. The lazy bridge
+publishes `__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__ = { contract: 1, documentId }`
+before sending `ready`. Messages carry the contract and a document ID. Command
+results echo the originating request's document ID, including `stale-document`
+rejections, so they cannot match another document's request. The host must verify
+the current document's ID before adopting readiness and clear its binding on navigation, reload, or process termination.
+
+Native commands use the `openclaw:native-conversation-command` window event with
+`detail: { contract: 1, documentId, requestId, type, payload }`. Supported commands
+are `navigate { agentId, sessionKey }`, `presentation { visible, active }`, and
+`focus-composer {}`. Each request receives one `command-result`; stale document
+IDs return `stale-document`, and unknown commands return `unsupported`. Navigation
+switches sessions in place and reports success after the target state reaches the
+host. It settles within 15 seconds of receipt, including queued commands and host
+acknowledgements; failures return `navigate-timeout` or `navigate-rejected`.
+The `visible` flag controls pane presentation. A visible, inactive window keeps
+rendering and accepting navigation; `active` only gates composer focus requests.
+Change-only `state` messages carry a monotonic revision,
+agent/session context, title, run activity, and connection state. Web session changes
+send `route-changed`; non-chat destinations send `open-dashboard { path, search? }`
+and leave the current conversation in place. Existing transcript file links,
+session links, and side-panel actions keep their in-pane handlers. A failed
+Dashboard handoff shows a toast without leaving the conversation.
+The canonical wire types and validation
+live in `ui/src/app/native-conversation-bridge.ts`.
+
 Choice fields that accept an explicit `null` value show it as a dropdown option. For optional fields, `null` remains distinct from clearing the setting or selecting its default. Rejected choices, such as a duplicate in a unique-value list, leave the previous selection in place.
 
 For an empty integer field without a default, step buttons initialize positive-only or negative-only ranges at the permitted endpoint, matching keyboard arrows. For example, a field with a minimum of 1 starts at 1 on the first increment.
@@ -536,13 +581,14 @@ The page redacts credential-bearing URL-like values before rendering and quotes 
 Open **Activity** from the sidebar's page picker, or visit `/activity` under the Control UI's base path. It has two tabs plus a deep-link inspector:
 
 - **Sessions** shows recent session activity grouped by day, with search, time, and people filters. Sessions sort newest first by their latest input or completed run, using the same time as the row's age and day group. Pins do not affect this order. Each row shows the human attribution and configured agent avatar/name. Subagent sessions are excluded from the feed, search results, and people counts. Active rows offer **Inspect run** when the Gateway has recorded a run reference.
+- The **Today** pulse shows one bar per hour of the local day, with counts of active sessions, new sessions, associated people, and sessions running now. It follows the current filters and counts matches beyond the 100-row window. Each session contributes to the hour of its latest activity.
 - Each session can show a rolling recap in one to three sentences: what was done and where the work stands. Recaps use the agent's [utility model](/gateway/config-agents/models#agents-defaults-model) and are shared across clients and Gateway restarts. Initial loading uses shimmer placeholders; an existing recap shimmers while refreshing. A failed refresh keeps the last recap and identifies the refresh failure. **Retry recap** requests another attempt after the Gateway's cooldown. Read-only viewers can read cached recaps but cannot request generation. On a page with mixed permissions, view-only sessions do not block recap generation for writable sessions.
 - Sessions with a GitHub checkout show associated branch PRs and their added/removed line counts. Hover or keyboard-focus a PR to preview its details, or select it to open GitHub. Before an open PR exists, the branch shows its diff against the default branch, including uncommitted work. These are checkout/PR statistics, not cumulative session edit counts; unavailable counts stay hidden, and retained stale data carries a warning.
-- Sessions can show up to four transcript images in one compact horizontal row. On narrow screens, scroll the previews sideways to see the remaining images. Select an image to expand it in the image viewer. Previews load as rows approach the viewport, reading bounded recent transcript pages; **Search older images** continues when more history remains. Existing thumbnails remain visible during refreshes and failed retries. Changing the session or connection clears the previous gallery.
+- Sessions can show up to four transcript images in one compact horizontal row. On narrow screens, scroll the previews sideways to see the remaining images. Select an image to expand it in the image viewer. Previews load as rows approach the viewport, reading bounded recent transcript pages; **Older images** continues when more history remains. Existing thumbnails remain visible during refreshes and failed retries. Changing the session or connection clears the previous gallery.
 - **Live activity** shows running and queued sessions above the ephemeral browser-local tool stream. The session snapshot comes from the Gateway; the tool stream uses the same `session.tool` and tool events that power Chat tool cards.
 - **Run inspector** is deep-link only and reads the Gateway's durable, immutable `audit.run.inspect` safe-only projection. The RPC contains required `decisionDisplays` and never a raw `decisions` field. Use **Inspect run** on an active session or the run ID link in Live activity, or open `/activity?view=run&run=<percent-encoded-run-id>` directly. Reloading or revisiting the link queries the Gateway again; it never reconstructs identity from Live activity.
 
-The Sessions view owns its query independently of the sidebar. Its people filter uses the Gateway's full visible-session associations before pagination, not the four-avatar participant preview. `sessions.list` accepts `involvingProfileId` and `includePeople`; the response reports the canonical selected profile ID, bounded people counts, and `peopleIncomplete`. Only Gateway profiles appear as people. Remote, agent, and unresolved identities cannot acquire profile names or links through an equal raw ID. Counts and dates describe associated sessions, not a person's last input; recorded participation, verified creation, and assigned responsibility remain distinct from permission to see a session. Old profile links follow profile merges. A limit notice identifies incomplete participant history or truncated results.
+The Sessions view owns its query independently of the sidebar. Its people filter uses the Gateway's full visible-session associations before pagination, not the four-avatar participant preview. `sessions.list` accepts `involvingProfileId` and `includePeople`; the response reports the canonical selected profile ID, bounded people counts, and `peopleIncomplete`. Only Gateway profiles appear as people. Remote, agent, and unresolved identities cannot acquire profile names or links through an equal raw ID. Counts and dates describe associated sessions, not a person's last input; recorded participation, verified creation, and assigned responsibility remain distinct from permission to see a session. Old profile links follow profile merges. The people popover notes incomplete participant history; a footer identifies truncated results.
 
 The Sessions view collects session-change events in a randomized four-to-five-second window that later events cannot postpone. After an automatic refresh completes, the next waits three times its duration, bounded between five and 15 seconds. Event-driven refreshes pause while the browser tab is hidden and catch up once when you return, respecting that cooldown. Changing filters or retrying a failed request still loads immediately. The sidebar's session capability also [reuses row snapshots and paces list reads](/web/control-ui/sessions-and-sidebar#sidebar-navigation). Activity links retain their search and people filters during initial loading and navigation.
 

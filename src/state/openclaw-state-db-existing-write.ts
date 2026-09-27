@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import {
   assertSqliteIntegrity,
@@ -30,7 +29,6 @@ import {
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { recoverOrphanTaskDeliveryRows } from "./openclaw-state-db-task-delivery-recovery.js";
 import { runManagedStateTransaction } from "./openclaw-state-db-transaction.js";
-import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 
@@ -43,14 +41,7 @@ function assertExistingOpenClawStateSchema(
   schemaSql: string,
 ): number {
   const version = assertSupportedStateSchemaVersion(db, pathname);
-  assertOpenClawStateDatabaseOwner(db, { pathname });
-  const metadata = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<Pick<DB, "schema_meta">>(db)
-      .selectFrom("schema_meta")
-      .select("schema_version")
-      .where("meta_key", "=", "primary"),
-  );
+  const metadata = assertOpenClawStateDatabaseOwner(db, { pathname });
   if (version < 1 || metadata?.schema_version !== version) {
     throw new Error("Existing-state schema metadata is inconsistent.");
   }

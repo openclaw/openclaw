@@ -192,10 +192,11 @@ internal data class SidebarSessionPresentation(
 
 internal fun sidebarRecentSessions(
   sessions: List<ChatSessionEntry>,
+  currentSessionKey: String = "",
 ): List<ChatSessionEntry> =
   sessions
     .asSequence()
-    .filter { it.archived != true }
+    .filter { isSessionVisibleInNavigation(it, currentSessionKey) }
     .sortedWith(
       compareByDescending<ChatSessionEntry> { it.pinned == true }
         .thenByDescending { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
@@ -207,8 +208,9 @@ internal fun sidebarSessionPresentation(
   knownGroups: List<String>,
   expanded: Boolean,
   excludedSessionKeys: Set<String> = emptySet(),
+  currentSessionKey: String = "",
 ): SidebarSessionPresentation {
-  val activeSessions = sidebarRecentSessions(sessions)
+  val activeSessions = sidebarRecentSessions(sessions, currentSessionKey)
   val pinned = activeSessions.filter { it.pinned == true }
   val recent =
     activeSessions.filter { session ->
@@ -481,6 +483,7 @@ internal fun OpenClawSidebar(
       knownGroups = storedGroups,
       expanded = sessionsExpanded,
       excludedSessionKeys = catalogSessionKeys,
+      currentSessionKey = activeSessionKey,
     )
   val pinnedSessions = recentPresentation.pinned
   val recentSections = recentPresentation.recentSections
@@ -868,7 +871,7 @@ internal fun OpenClawSidebar(
 
           SidebarCollapsibleHeader(
             label = nativeString("Recent"),
-            attention = if (recentExpanded) null else attentionFor(sidebarRecentSessions(sessions).filter { it.pinned != true && it.key !in catalogSessionKeys }.map { it.key }),
+            attention = if (recentExpanded) null else attentionFor(sidebarRecentSessions(sessions, activeSessionKey).filter { it.pinned != true && it.key !in catalogSessionKeys }.map { it.key }),
             expanded = recentExpanded,
             palette = palette,
             onClick = { recentExpanded = !recentExpanded },

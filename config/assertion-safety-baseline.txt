@@ -3054,7 +3054,6 @@ src/state/openclaw-schema-versions.ts	7
 src/state/openclaw-state-db-audit-migration.ts	5
 src/state/openclaw-state-db-delivery-queue-backfill.ts	1
 src/state/openclaw-state-db-legacy-backfills.ts	5
-src/state/openclaw-state-db-maintenance.ts	3
 src/state/openclaw-state-db-operator-approval-migration.ts	1
 src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	3

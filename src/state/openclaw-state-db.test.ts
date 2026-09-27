@@ -32,6 +32,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runt
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
@@ -4838,23 +4839,19 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const refusal = {
       changes: [],
       warnings: [
-        `Failed migrating shared state database schema at ${databasePath}: Error: SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`,
+        `Failed migrating shared state database schema at ${databasePath}: SqliteSchemaMismatchError: SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`,
       ],
     };
     // Warm canonical schema contracts before measuring a repeated Doctor refusal.
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual(refusal);
-    const get = vi.spyOn(StatementSync.prototype, "get");
-    const all = vi.spyOn(StatementSync.prototype, "all");
-    const iterate = vi.spyOn(StatementSync.prototype, "iterate");
+    const observer = observeSqliteReadSql(StatementSync.prototype);
     try {
       expect(repairOpenClawStateDatabaseSchema(options)).toEqual(refusal);
-      const reads = get.mock.calls.length + all.mock.calls.length + iterate.mock.calls.length;
+      const reads = observer.queries.length;
       expect.soft(reads).toBeGreaterThan(0);
       expect.soft(reads).toBeLessThanOrEqual(850);
     } finally {
-      get.mockRestore();
-      all.mockRestore();
-      iterate.mockRestore();
+      observer.restore();
     }
 
     const after = new DatabaseSync(databasePath, { readOnly: true });
@@ -4910,12 +4907,14 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
       const message = `SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`;
       if (migrationPath === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(new Error(message));
+        expect(() => openOpenClawStateDatabase(options)).toThrow(
+          new SqliteSchemaMismatchError(message),
+        );
       } else if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [],
           warnings: [
-            `Failed migrating shared state database schema at ${databasePath}: Error: ${message}`,
+            `Failed migrating shared state database schema at ${databasePath}: SqliteSchemaMismatchError: ${message}`,
           ],
         });
       } else {
@@ -4926,7 +4925,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
             operation: "gateway-startup",
             config: {},
           }),
-        ).rejects.toThrow(new Error(message));
+        ).rejects.toThrow(new SqliteSchemaMismatchError(message));
         expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
       }
 

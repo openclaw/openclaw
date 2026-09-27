@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
+import type { ConfigValidationIssue } from "../../config/types.js";
 import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import {
   adoptProcessPluginCache,
@@ -37,7 +38,7 @@ vi.mock("../../config/config.js", () => ({
   setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
 
-type ConfigIssue = { path: string; pathSegments?: Array<string | number>; message: string };
+type ConfigIssue = ConfigValidationIssue;
 
 function makeSnapshot() {
   return {
@@ -648,6 +649,24 @@ describe("ensureConfigReady", () => {
     expect(doctorRuntime.error).toHaveBeenCalledWith(expect.stringContaining("agentRuntime"));
     expect(getProcessPluginCache()).toBe(processCache);
   });
+
+  it.each(["", "run", "start", "restart"])(
+    "keeps gateway %s restartable when configuration could not be read",
+    async (subcommand) => {
+      setInvalidSnapshot({
+        issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" }],
+      });
+      const runtime = makeRuntime();
+      const confirm = vi.fn(async () => true);
+      await ensureConfigReady(
+        { runtime, commandPath: subcommand ? ["gateway", subcommand] : ["gateway"] },
+        { confirm, isInteractive: () => true },
+      );
+      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(confirm).not.toHaveBeenCalled();
+      expect(plainErrorCalls(runtime).join("\n")).not.toContain("doctor --fix");
+    },
+  );
 
   it("allows an explicit invalid-config override", async () => {
     setInvalidSnapshot();
