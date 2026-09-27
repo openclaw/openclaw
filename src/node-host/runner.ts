@@ -23,6 +23,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { logInfo } from "../logger.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
@@ -484,10 +485,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   }
 
   let stopping = false;
-  let resolveStopped: (() => void) | undefined;
-  const stopped = new Promise<void>((resolve) => {
-    resolveStopped = resolve;
-  });
+  const { promise: stopped, resolve: resolveStopped } = createDeferredCore();
   // A pending Promise alone does not keep Node alive. Pairing pauses can close
   // the last socket, so retain a handle until a signal finishes the foreground host.
   const lifetimeInterval = setInterval(() => {}, 1_000_000);
@@ -540,7 +538,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     } finally {
       removeSignalHandlers();
       process.exitCode = finalExitCode;
-      resolveStopped?.();
+      resolveStopped();
     }
   };
   const onSigint = AsyncLocalStorage.bind(() => void finish(130));

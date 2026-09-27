@@ -1,4 +1,5 @@
 import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
+import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
@@ -23,7 +24,7 @@ import {
 } from "../providers/openai-tool-projection.js";
 import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
 import { withPreparedToolSchemaNormalization } from "../providers/tool-schema-normalization-cache.js";
-import { resolveOpenAIStrictToolSetting, resolveProviderEndpoint } from "./host-policy.js";
+import { resolveProviderEndpoint } from "./host-policy.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import {
@@ -256,7 +257,7 @@ function convertTools(
           : undefined
         : resolveOpenAIStrictToolFlagWithDiagnostics(
             projection,
-            resolveOpenAIStrictToolSetting(model, {
+            getAiTransportHost().resolveOpenAIStrictToolSetting(model, {
               transport: "stream",
               supportsStrictMode: compat?.supportsStrictMode,
             }),

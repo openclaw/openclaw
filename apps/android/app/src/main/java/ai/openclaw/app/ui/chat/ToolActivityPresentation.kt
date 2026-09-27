@@ -36,7 +36,7 @@ internal fun completedToolGroupSummary(tools: List<ChatToolActivity>): String {
       .values
       .filter { it.isVisible }
   if (items.isEmpty()) return nativeString("Tool details")
-  return items.groupingBy { if (it.status == "failed" || it.status == "blocked") nativeString("\${it.title} (\${it.status})", it.title, it.status) else it.title }.eachCount().entries.joinToString(", ") { (title, count) ->
+  return items.groupingBy { if (it.status == "failed" || it.status == "blocked" || it.status == "skipped") nativeString("\${it.title} (\${it.status})", it.title, it.status) else it.title }.eachCount().entries.joinToString(", ") { (title, count) ->
     if (count == 1) title else nativeString("\$title ×\$count", title, count)
   }
 }
@@ -72,8 +72,12 @@ internal data class CompletedToolResultPresentation(
   val outcome: String?,
 )
 
+internal val ChatToolActivity.hasFailedOutcome: Boolean
+  get() = if (activity != null || activityPrepared) activity?.status == "failed" else isError
+
 internal fun completedToolResultPresentation(tool: ChatToolActivity): CompletedToolResultPresentation {
   val result = tool.result?.takeIf { it.isNotBlank() }
+  val isError = tool.hasFailedOutcome
   val hasDetail =
     if (completedToolKind(tool.name) == CompletedToolKind.Command) {
       completedCommandText(tool, singleLine = false)?.isNotBlank() == true
@@ -81,15 +85,23 @@ internal fun completedToolResultPresentation(tool: ChatToolActivity): CompletedT
       tool.detail?.isNotBlank() == true
     }
   return CompletedToolResultPresentation(
-    expandable = result != null || hasDetail || tool.isError,
-    output = result ?: if (tool.isError) nativeString("No output — tool failed.") else null,
-    outputLabel = if (tool.isError) nativeString("Tool error") else null,
-    outcome = if (tool.isError) nativeString("Failed") else null,
+    expandable = result != null || hasDetail || isError,
+    output = result ?: if (isError) nativeString("No output — tool failed.") else null,
+    outputLabel = if (isError) nativeString("Tool error") else null,
+    outcome =
+      when {
+        tool.activity?.status == "skipped" -> nativeString("Skipped")
+        tool.activity?.status == "blocked" -> nativeString("Blocked")
+        isError -> nativeString("Failed")
+        else -> null
+      },
   )
 }
 
 internal fun progressReceiptLabel(tool: ChatToolActivity): String {
-  if (tool.isError) return nativeString("Progress update failed")
+  if (tool.activity?.status == "skipped") return nativeString("Skipped")
+  if (tool.activity?.status == "blocked") return nativeString("Blocked")
+  if (tool.hasFailedOutcome) return nativeString("Progress update failed")
   val args = tool.arguments
   val steps = (args?.get("plan") as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
   if (steps.isNotEmpty()) {

@@ -1949,6 +1949,17 @@ class MainViewModel private constructor(
 
   internal fun captureChatShareOwner(): ChatComposerOwner = currentOrProvisionalChatComposerOwner()
 
+  internal fun chatComposerAgentName(owner: ChatComposerOwner): String? {
+    if (!isCurrentChatComposerOwner(owner)) return null
+    // Read the current catalog with its owner, not a separately collected Compose snapshot.
+    return owner.agentDisplayName(
+      runtimeRef.value
+        ?.gatewayAgents
+        ?.value
+        .orEmpty(),
+    )
+  }
+
   internal fun isCurrentChatComposerOwner(expected: ChatComposerOwner): Boolean =
     runtimeRef.value
       ?.gatewayConnectionHandoff

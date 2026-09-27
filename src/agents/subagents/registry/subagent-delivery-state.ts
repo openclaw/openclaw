@@ -36,6 +36,9 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
     createdAt: entry.createdAt,
     execution: {
       status: entry.execution.status,
+      ...(entry.execution.interruptionReason
+        ? { interruptionReason: entry.execution.interruptionReason }
+        : {}),
       ...(entry.execution.startedAt !== undefined ? { startedAt: entry.execution.startedAt } : {}),
       ...(entry.execution.endedAt !== undefined ? { endedAt: entry.execution.endedAt } : {}),
       ...(entry.execution.outcome ? { outcome: { status: entry.execution.outcome.status } } : {}),
@@ -55,6 +58,9 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
       ? {
           delivery: {
             status: entry.delivery.status,
+            ...(entry.delivery.disposition === "intentional_non_delivery"
+              ? { disposition: entry.delivery.disposition }
+              : {}),
             ...(entry.delivery.suspendedAt !== undefined
               ? { suspendedAt: entry.delivery.suspendedAt }
               : {}),

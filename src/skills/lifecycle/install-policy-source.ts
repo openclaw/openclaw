@@ -61,19 +61,11 @@ export function normalizeSkillInstallSpec(spec: SkillInstallSpec): SkillInstallS
   };
 }
 
-function resolveInstallId(spec: SkillInstallSpec, index: number): string {
-  return (spec.id ?? `${spec.kind}-${index}`).trim();
-}
-
 export function findInstallSpec(
   entry: SkillEntry,
   installId: string,
 ): SkillInstallSpec | undefined {
-  const specs = entry.metadata?.install ?? [];
-  for (const [index, spec] of specs.entries()) {
-    if (resolveInstallId(spec, index) === installId) {
-      return spec;
-    }
-  }
-  return undefined;
+  return entry.metadata?.install?.find(
+    (spec, index) => (spec.id ?? `${spec.kind}-${index}`).trim() === installId,
+  );
 }

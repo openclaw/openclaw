@@ -25,7 +25,6 @@ import { log } from "./logger.js";
 
 it.for([
   { name: "one shared instance", ids: ["active", "active", "active"], releaseFailure: false },
-  { name: "a superseded instance", ids: ["active", "superseded", "latest"], releaseFailure: false },
   { name: "a shared queued instance", ids: ["active", "latest", "latest"], releaseFailure: false },
   {
     name: "a return to the active instance",

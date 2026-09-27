@@ -193,7 +193,9 @@ export function renderWorkGroupSummary(
     group.messages.flatMap(({ message }) => readPreparedActivity(message)),
   );
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
-  const outcomes = describeToolGroup(activity).outcomes.filter(({ kind }) => kind !== "failed");
+  const outcomes = describeToolGroup(activity).outcomes.filter(
+    ({ kind }) => kind !== "failed" && kind !== "skipped",
+  );
   const content = html`
     <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
       <button
