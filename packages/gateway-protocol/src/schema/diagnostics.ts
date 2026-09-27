@@ -9,6 +9,8 @@ const DiagnosticsHeapProfileParamsSchema = Type.Object(
     samplingIntervalBytes: Type.Optional(
       Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
     ),
+    includeObjectsCollectedByMajorGC: Type.Optional(Type.Boolean()),
+    includeObjectsCollectedByMinorGC: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

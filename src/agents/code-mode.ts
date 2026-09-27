@@ -31,6 +31,7 @@ import {
   readRunId,
   resolveCodeModeConfig,
 } from "./code-mode-runtime.js";
+import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { executionTitleSchema } from "./schema/typebox.js";
@@ -246,13 +247,16 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         }),
       );
       markCodeModePermissionChangeResult(result, signal);
-      return {
-        ...formatToolSearchControlResult(result, runtime, {
-          terminalBatchStatus: result.status,
-          compact: true,
-        }),
-        ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
-      };
+      return recordCodeModeToolOutcome(
+        {
+          ...formatToolSearchControlResult(result, runtime, {
+            terminalBatchStatus: result.status,
+            compact: true,
+          }),
+          ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
+        },
+        result,
+      );
     },
   } as AnyAgentTool);
   const waitTool = markCodeModeControlTool({
@@ -289,13 +293,16 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         }),
       );
       markCodeModePermissionChangeResult(result, signal);
-      return {
-        ...formatToolSearchControlResult(result, runtime, {
-          terminalBatchStatus: result.status,
-          compact: true,
-        }),
-        ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
-      };
+      return recordCodeModeToolOutcome(
+        {
+          ...formatToolSearchControlResult(result, runtime, {
+            terminalBatchStatus: result.status,
+            compact: true,
+          }),
+          ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
+        },
+        result,
+      );
     },
   } as AnyAgentTool);
   return [execTool, waitTool];
