@@ -7,7 +7,10 @@ import * as workerStore from "../infra/sqlite-worker-store.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createOpenClawStateDatabaseAsyncLifecycle } from "./openclaw-state-db-async-lifecycle.js";
+import {
+  createOpenClawDatabaseMaintenanceScope,
+  createOpenClawStateDatabaseAsyncLifecycle,
+} from "./openclaw-state-db-async-lifecycle.js";
 import * as stateCache from "./openclaw-state-db-cache.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -126,6 +129,78 @@ it.each(["native", "zero", "changing"] as const)(
         releaseRetirement.resolve();
         await Promise.allSettled([registration]);
         retirement.mockRestore();
+      }
+    });
+  },
+);
+
+it.each(["same scope", "different scope"] as const)(
+  "refuses replacement from an active callback on a stale actor (%s)",
+  async (ownership) => {
+    await withOpenClawTestState({ label: "state-worker-active-replacement" }, async (state) => {
+      const inspectedPath = state.statePath("inspected.sqlite");
+      new DatabaseSync(inspectedPath).close();
+      const context = captureOpenClawStateWorkerContext({ path: inspectedPath, env: state.env });
+      const retained = await retainExistingReader(context);
+      const maintenance =
+        ownership === "different scope" ? createOpenClawDatabaseMaintenanceScope() : undefined;
+      const activeContext = maintenance
+        ? maintenance.run(() =>
+            captureOpenClawStateWorkerContext({ path: inspectedPath, env: state.env }),
+          )
+        : context;
+      const databasePath = resolveOpenClawStateSqlitePath(state.env);
+      const store = createPluginStateKeyedStore<string>("discord", {
+        namespace: "active-replacement",
+        maxEntries: 1,
+        env: state.env,
+      });
+      const retiring = createDeferredCore();
+      const retireActor = workerStore.retireSqliteWorkerActor;
+      const retirement = vi
+        .spyOn(workerStore, "retireSqliteWorkerActor")
+        .mockImplementation((identity) => {
+          retiring.resolve();
+          return retireActor(identity);
+        });
+      let registration: Promise<unknown> | undefined;
+      try {
+        try {
+          await runOpenClawStateWorkerOperation(
+            activeContext,
+            async () => {
+              mkdirSync(path.dirname(databasePath), { recursive: true });
+              renameSync(inspectedPath, databasePath);
+              registration = store.register("retained", "replacement");
+              // Observe retirement to fail without stranding the callback on its own close.
+              await expect(
+                Promise.race([
+                  registration.then(
+                    () => ({ outcome: "written" }),
+                    (error: unknown) => ({ outcome: "refused", error }),
+                  ),
+                  retiring.promise.then(() => ({ outcome: "retiring" })),
+                ]),
+              ).resolves.toMatchObject({
+                outcome: "refused",
+                error: {
+                  code: "PLUGIN_STATE_OPEN_FAILED",
+                  cause: { code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" },
+                },
+              });
+              expect(workerStore.isSqliteWorkerStoreAvailable(retained)).toBe(true);
+            },
+            { existingOnly: true },
+          );
+        } finally {
+          await Promise.allSettled([registration]);
+          retirement.mockRestore();
+        }
+        await store.register("retained", "replacement");
+        await expect(store.lookup("retained")).resolves.toBe("replacement");
+        expect(existsSync(inspectedPath)).toBe(false);
+      } finally {
+        await maintenance?.close();
       }
     });
   },

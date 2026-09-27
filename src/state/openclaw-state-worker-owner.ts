@@ -389,7 +389,10 @@ function createSharedStateWorkerOwner() {
             try {
               candidate.databaseAdmission.assertCurrent();
             } catch (error) {
-              if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
+              if (
+                !isStateDatabaseReadAdmissionInvalidatedError(error) ||
+                hasActiveActorOperations(candidate)
+              ) {
                 throw error;
               }
               // A revoked generation can leave a lazy actor after inode reuse.
