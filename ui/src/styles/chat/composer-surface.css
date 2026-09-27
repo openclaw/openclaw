@@ -1275,6 +1275,7 @@
     display: none;
   }
 
+  .chat-thread-viewport,
   .chat-thread {
     --chat-thread-padding-top: 0px;
     --chat-thread-padding-bottom: 0px;

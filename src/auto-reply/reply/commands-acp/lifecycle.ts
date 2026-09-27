@@ -14,11 +14,7 @@ import {
 } from "../../../acp/policy.js";
 import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
-import {
-  closeAdmittedRunDelegatedAuthority,
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../../../agents/admitted-run-context.js";
+import { closeAdmittedRunDelegatedAuthority } from "../../../agents/admitted-run-context.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import {
   resolveAcpSpawnRuntimePolicyError,
@@ -31,9 +27,13 @@ import {
 import { updateSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  getGatewayLocalUserIngress,
+  type GatewayLocalUserIngress,
+} from "../../../gateway/local-user-ingress.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import { consumeChannelRunAdmission } from "../channel-run-admission.js";
+import { prepareChannelRunAdmission } from "../channel-run-admission.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
@@ -373,25 +373,19 @@ async function runAcpSteer(params: {
   instruction: string;
   requestId: string;
   channelAdmissionEvidence?: ChannelAdmissionEvidence;
+  gatewayLocalUserIngress?: GatewayLocalUserIngress;
 }): Promise<string> {
   const acpManager = getAcpSessionManager();
   let output = "";
-  const channelAdmission = consumeChannelRunAdmission(params.channelAdmissionEvidence);
-  const admittedRunContext = await prepareAgentRunAdmission({
+  const admittedRunContext = await prepareChannelRunAdmission({
     assertSourceCurrent: params.assertOwnerCurrent,
     cfg: params.cfg,
-    operationalRunInstance: createOperationalRunInstanceRef(params.requestId),
-    facts: {
-      runId: params.requestId,
-      agentId: params.agentId,
-      ingress: {
-        kind: "acp",
-        boundary: "acp.command.steer",
-        state: channelAdmission.ingressState,
-      },
-      ...channelAdmission.facts,
-    },
-    onAdmitted: channelAdmission.onAdmitted,
+    runId: params.requestId,
+    agentId: params.agentId,
+    ingressKind: "acp",
+    boundary: "acp.command.steer",
+    evidence: params.channelAdmissionEvidence,
+    gatewayLocalUserIngress: params.gatewayLocalUserIngress,
   }).admit("acp");
 
   try {
@@ -474,6 +468,7 @@ export async function handleAcpSteerAction(
         instruction: parsed.value.instruction,
         requestId: `${resolveCommandRequestId(params)}:steer`,
         channelAdmissionEvidence: readChannelContextAdmissionEvidence(params.rootCtx ?? params.ctx),
+        gatewayLocalUserIngress: getGatewayLocalUserIngress(params.rootCtx ?? params.ctx),
       }),
     fallbackCode: "ACP_TURN_FAILED",
     fallbackMessage: "ACP steer failed before completion.",

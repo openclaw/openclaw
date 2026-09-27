@@ -357,7 +357,7 @@ export class SessionMenuActions {
     }
     const shortcut = view === "icon" ? "i" : view === "copy" ? "c" : undefined;
     return html`<wa-dropdown-item
-      class="session-menu__item"
+      class=${`session-menu__item${view === "assign-owner" ? " people-menu__submenu" : ""}`}
       ?disabled=${disabled}
       title=${title ?? nothing}
       data-shortcut=${shortcut ?? nothing}

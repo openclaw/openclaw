@@ -2,6 +2,7 @@
 import { VirtualizerController } from "@tanstack/lit-virtual";
 import type { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import {
   createTranscriptOffsetState,
   observeTranscriptOffset,
@@ -149,14 +150,14 @@ describe("transcript prepend anchor", () => {
       state: createTranscriptOffsetState(),
       getScrollElement: () => scroller,
       prependAnchor: anchor,
+      endAnchor: new TranscriptEndAnchor(),
+      canFollowEnd: () => true,
       isProgrammaticScroll: () => false,
       cancelScroll: () => anchor.clear(),
       requestUpdate: vi.fn(),
       onOffset: vi.fn(() => false),
       onReaderScroll: vi.fn(),
-      onComposerInput: vi.fn(),
       onComposerLayout: vi.fn(),
-      cancelComposerResize: vi.fn(),
     };
     const controller = new VirtualizerController<HTMLDivElement, HTMLElement>(
       {
