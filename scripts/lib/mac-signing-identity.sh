@@ -3,44 +3,33 @@
 ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"
 
 select_identity() {
-  local preferred available first
+  local identities selected
 
-  # Prefer a Developer ID Application cert.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Developer ID Application/ { print $2; exit }')"
-
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
+  # `security` can return nonzero while still printing usable identities. Parse
+  # its complete output once, but reject rows carrying a Keychain status suffix
+  # such as `(CSSMERR_TP_NOT_TRUSTED)` after the quoted identity.
+  identities="$(security find-identity -p codesigning -v 2>/dev/null)" || true
+  selected="$(printf '%s\n' "$identities" | awk -F'\"' '
+    NF >= 3 && $2 != "" && $3 ~ /^[[:space:]]*$/ {
+      rank = 4
+      if ($2 ~ /Developer ID Application/) rank = 1
+      else if ($2 ~ /Apple Distribution/) rank = 2
+      else if ($2 ~ /Apple Development/) rank = 3
+      if (!(rank in first)) first[rank] = $2
+    }
+    END {
+      for (rank = 1; rank <= 4; rank++) {
+        if (rank in first) {
+          print first[rank]
+          exit
+        }
+      }
+    }
+  ')"
+  if [ -z "$selected" ]; then
+    return 1
   fi
-
-  # Next, try Apple Distribution.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Distribution/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Then, try Apple Development.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Development/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Fallback to the first valid signing identity.
-  available="$(security find-identity -p codesigning -v 2>/dev/null \
-    | sed -n 's/.*\"\\(.*\\)\"/\\1/p')"
-
-  if [ -n "$available" ]; then
-    first="$(printf '%s\n' "$available" | head -n1)"
-    echo "$first"
-    return
-  fi
-
-  return 1
+  printf '%s\n' "$selected"
 }
 
 resolve_mac_signing_identity() {

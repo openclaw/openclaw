@@ -221,6 +221,34 @@ function runSigningEnvironmentBlock(signIdentity: string) {
   });
 }
 
+function runSigningKeyCheck(output: string) {
+  const root = makeTempRoot("openclaw-restart-mac-signing-key-test-");
+  const binDir = join(root, "bin");
+  mkdirSync(binDir);
+  const securityPath = join(binDir, "security");
+  writeFileSync(securityPath, `#!/bin/bash\nprintf '%s\\n' "$OPENCLAW_TEST_SECURITY_OUTPUT"\n`);
+  chmodSync(securityPath, 0o755);
+  const signingFunction = script.slice(
+    script.indexOf("check_signing_keys()"),
+    script.indexOf("canonicalize_app_bundle()"),
+  );
+  const harnessPath = writeHarness(root, "signing-key-harness.sh", [
+    "#!/bin/bash",
+    "source scripts/lib/mac-signing-identity.sh",
+    signingFunction,
+    "check_signing_keys",
+  ]);
+  return spawnSync("bash", [harnessPath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENCLAW_TEST_SECURITY_OUTPUT: output,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    },
+  });
+}
+
 function runProfileGuard(profile: string) {
   const root = makeTempRoot("openclaw-restart-mac-profile-test-");
   const start = script.indexOf('if [[ -n "${OPENCLAW_PROFILE:-}" ]]');
@@ -331,6 +359,22 @@ afterEach(() => {
 });
 
 describe("scripts/restart-mac.sh", () => {
+  it("rejects invalid Keychain rows during signing auto-detection", () => {
+    const result = runSigningKeyCheck(
+      '  1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "Apple Development: Invalid" (CSSMERR_TP_NOT_TRUSTED)\n     0 valid identities found',
+    );
+
+    expect(result.status).toBe(1);
+  });
+
+  it("accepts a valid non-Apple signing identity during signing auto-detection", () => {
+    const result = runSigningKeyCheck(
+      '  1) BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB "OpenClaw Internal Signing"\n     1 valid identity found',
+    );
+
+    expect(result.status).toBe(0);
+  });
+
   it("preserves an explicit signing identity through signed packaging", () => {
     const identity = "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)";
     const result = runSigningEnvironmentBlock(identity);

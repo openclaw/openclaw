@@ -6,6 +6,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/restart-mac-gateway.sh"
 source "${ROOT_DIR}/scripts/lib/mac-app-bundle.sh"
+source "${ROOT_DIR}/scripts/lib/mac-signing-identity.sh"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
 APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
@@ -92,8 +93,7 @@ acquire_lock() {
 }
 
 check_signing_keys() {
-  security find-identity -p codesigning -v 2>/dev/null \
-    | grep -Eq '(Developer ID Application|Apple Distribution|Apple Development)'
+  select_identity >/dev/null
 }
 
 canonicalize_app_bundle() {

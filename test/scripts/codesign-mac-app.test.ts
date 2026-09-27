@@ -1,6 +1,16 @@
 // Codesign Mac App tests cover codesign mac app script behavior.
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { chmod, link, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, type TestContext } from "vitest";
@@ -25,6 +35,34 @@ const codesignCommand = process.platform === "win32" ? "bash" : scriptPath;
 const codesignArgs = process.platform === "win32" ? [scriptPath] : [];
 // Signing integration exercises the real Darwin mutation fence, not a sandbox mock.
 const macIt = it.runIf(process.platform === "darwin");
+
+function runIdentitySelector(output: string, status = 0) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-signing-identity-test-"));
+  const binDir = path.join(root, "bin");
+  mkdirSync(binDir);
+  const securityPath = path.join(binDir, "security");
+  writeFileSync(
+    securityPath,
+    `#!/bin/bash\nprintf '%s\\n' "$OPENCLAW_TEST_SECURITY_OUTPUT"\nexit "$OPENCLAW_TEST_SECURITY_STATUS"\n`,
+  );
+  chmodSync(securityPath, 0o755);
+  const result = spawnSync(
+    "bash",
+    ["-c", "source scripts/lib/mac-signing-identity.sh; select_identity"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_TEST_SECURITY_OUTPUT: output,
+        OPENCLAW_TEST_SECURITY_STATUS: String(status),
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+    },
+  );
+  rmSync(root, { force: true, recursive: true });
+  return result;
+}
 
 async function runCodesignWithoutAllocation(
   mac: MacScriptFixture,
@@ -80,6 +118,32 @@ async function runElevationMetadataFixture(mac: MacScriptFixture, env: NodeJS.Pr
 }
 
 describe("codesign-mac-app temp file hygiene", () => {
+  it("rejects invalid Keychain rows and selects the highest-ranked valid identity", ({
+    expect,
+  }) => {
+    const result = runIdentitySelector(
+      [
+        '  1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "Developer ID Application: Invalid" (CSSMERR_TP_NOT_TRUSTED)',
+        '  2) BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB "Internal Signing"',
+        '  3) CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC "Apple Development: Valid"',
+        "     2 valid identities found",
+      ].join("\n"),
+      1,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("Apple Development: Valid");
+  });
+
+  it("fails identity selection when Keychain reports only invalid rows", ({ expect }) => {
+    const result = runIdentitySelector(
+      '  1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "OpenClaw Proof Internal Signing" (CSSMERR_TP_NOT_TRUSTED)\n     0 valid identities found',
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+  });
+
   it.concurrent("does not generate unused entitlement plist files", ({ mac, expect }) =>
     mac.lifetime.run(async () => {
       const script = readFileSync(scriptPath, "utf8");
