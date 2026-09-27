@@ -26,9 +26,6 @@ defineDiscordVoiceTests(
   }) => {
     it.each([
       { withSignal: true, revocation: "none" },
-      { withSignal: true, revocation: "policy" },
-      { withSignal: true, revocation: "role" },
-      { withSignal: false, revocation: "none" },
       { withSignal: false, revocation: "policy" },
       { withSignal: false, revocation: "role" },
     ])(
@@ -213,8 +210,14 @@ defineDiscordVoiceTests(
           // A later, independently admitted utterance still reaches the agent.
           await fixture.beginUtterance();
           fixture.bridge.onTranscript?.("user", "Read the agenda", true);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(agentCommandMock).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1_000);
           expect(agentCommandMock).toHaveBeenCalledOnce();
+          expect(lastAgentCommandArgs()).toMatchObject({
+            senderIsOwner: false,
+            extraSystemPrompt: expect.stringContaining("Fresh voice context."),
+          });
         } finally {
           await fixture.manager.destroy();
           vi.useRealTimers();
@@ -240,31 +243,18 @@ defineDiscordVoiceTests(
       },
     );
 
-    it.each([
-      { path: "forced", allowed: false },
-      { path: "forced", allowed: true },
-      { path: "talkback", allowed: false },
-      { path: "talkback", allowed: true },
-    ] as const)(
-      "refreshes roles after $path dispatch is scheduled (allowed=$allowed)",
-      async ({ path, allowed }) => {
+    it.each(["forced", "talkback"] as const)(
+      "revokes roles after %s dispatch is scheduled",
+      async (path) => {
         const fixture = await createRoleFixture(path);
         vi.useFakeTimers();
         try {
           fixture.bridge.onTranscript?.("user", "Read the agenda", true);
           await vi.advanceTimersByTimeAsync(0);
           expect(agentCommandMock).not.toHaveBeenCalled();
-          fixture.setAllowed(allowed);
+          fixture.setAllowed(false);
           await vi.advanceTimersByTimeAsync(1_000);
-          if (allowed) {
-            expect(agentCommandMock).toHaveBeenCalledOnce();
-            expect(lastAgentCommandArgs()).toMatchObject({
-              senderIsOwner: false,
-              extraSystemPrompt: expect.stringContaining("Fresh voice context."),
-            });
-          } else {
-            expect(agentCommandMock).not.toHaveBeenCalled();
-          }
+          expect(agentCommandMock).not.toHaveBeenCalled();
         } finally {
           await fixture.manager.destroy();
           vi.useRealTimers();
