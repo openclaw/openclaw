@@ -883,6 +883,9 @@ struct OpenClawChatComposer: View {
                 })
                 .padding(.horizontal, 4)
                 .padding(.vertical, self.usesDesktopModelMenu ? 0 : 3)
+                .onChange(of: self.viewModel.input) { _, _ in
+                    self.updateSlashPopoverPresentation()
+                }
             #elseif os(iOS)
             ChatComposerTextViewIOS(
                 text: self.inputText,
@@ -899,6 +902,16 @@ struct OpenClawChatComposer: View {
                 onHistoryDown: { !self.isSlashPopoverPresented && self.inputModel?.recallNextInput() == true })
                 .padding(.horizontal, self.cleanFieldTextInset)
                 .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
+                .onChange(of: self.viewModel.input) { _, _ in
+                    self.updateSlashPopoverPresentation()
+                }
+                .onChange(of: self.isFocused) { _, focused in
+                    if focused {
+                        self.updateSlashPopoverPresentation()
+                    } else {
+                        self.setSlashPanelPresented(false)
+                    }
+                }
             #else
             TextField(
                 "",
@@ -916,6 +929,16 @@ struct OpenClawChatComposer: View {
                 .focused(self.$isFocused)
                 .disabled(!self.isComposerEnabled)
                 .accessibilityIdentifier("chat-message-input")
+                .onChange(of: self.viewModel.input) { _, _ in
+                    self.updateSlashPopoverPresentation()
+                }
+                .onChange(of: self.isFocused) { _, focused in
+                    if focused {
+                        self.updateSlashPopoverPresentation()
+                    } else {
+                        self.setSlashPanelPresented(false)
+                    }
+                }
                 // SwiftUI exposes neither the caret row nor soft-wrap geometry.
                 // Start recall only from an empty draft; an active recall can
                 // still walk both directions through the shared state machine.
@@ -931,18 +954,6 @@ struct OpenClawChatComposer: View {
                 }
             #endif
         }
-        .onChange(of: self.viewModel.input) { _, _ in
-            self.updateSlashPopoverPresentation()
-        }
-        #if !os(macOS)
-        .onChange(of: self.isFocused) { _, focused in
-            if focused {
-                self.updateSlashPopoverPresentation()
-            } else {
-                self.setSlashPanelPresented(false)
-            }
-        }
-        #endif
     }
 }
 
