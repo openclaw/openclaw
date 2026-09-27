@@ -1,6 +1,3 @@
-/**
- * Plans which core, bundle MCP, and bundle LSP tools an attempt should build.
- */
 import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import {
   type CoreToolFactoryFamily,
@@ -147,28 +144,17 @@ function resolveCodingToolConstructionPlanForAllowlist(
       .filter(({ name }) => constructionMatchers.every((matches) => matches(name)))
       .map(({ family }) => family),
   );
-  let includePluginTools = false;
-  for (const name of normalized) {
-    const family = resolveCoreToolFactoryFamily(name);
-    if (family) {
-      continue;
-    }
-    // Only bundle-mcp is unambiguous; namespaced entries can belong to plugins.
-    if (name !== "bundle-mcp") {
-      includePluginTools = true;
-    }
-  }
-  const includeBaseCodingTools = coreFamilies.has("base-coding");
-  const includeShellTools = coreFamilies.has("shell");
-  const includeOpenClawTools = coreFamilies.has("openclaw");
-  // Channel delivery tools are constructed through plugin-capable runtime setup.
-  const includeChannelTools = includePluginTools;
+  // Only bundle-mcp is unambiguous; namespaced entries can belong to plugins.
+  const includePluginTools = normalized.some(
+    (name) => !resolveCoreToolFactoryFamily(name) && name !== "bundle-mcp",
+  );
 
   return {
-    includeBaseCodingTools,
-    includeShellTools,
-    includeChannelTools,
-    includeOpenClawTools,
+    includeBaseCodingTools: coreFamilies.has("base-coding"),
+    includeShellTools: coreFamilies.has("shell"),
+    // Channel delivery tools are constructed through plugin-capable runtime setup.
+    includeChannelTools: includePluginTools,
+    includeOpenClawTools: coreFamilies.has("openclaw"),
     includePluginTools,
   };
 }

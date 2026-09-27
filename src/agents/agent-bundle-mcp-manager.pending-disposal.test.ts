@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { startCatalogRecoveryMcpServer } from "./agent-bundle-mcp-catalog-recovery.test-support.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 
@@ -15,7 +16,9 @@ it("forgets an empty successor binding after the original idle disposal settles"
     holdTermination: terminate.promise,
   });
   let nowMs = Date.now();
+  const scheduler = createTestGatewayScheduler();
   const manager = createSessionMcpRuntimeManager({
+    scheduler,
     enableIdleSweepTimer: false,
     now: () => nowMs,
   });
@@ -66,7 +69,11 @@ it("forgets an empty successor binding after the original idle disposal settles"
     try {
       await manager.disposeAll();
     } finally {
-      await server.close();
+      try {
+        await server.close();
+      } finally {
+        await scheduler.stop();
+      }
     }
   }
 });

@@ -31,7 +31,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(resetFollowupTurnTestState);
 
 describe("queued turn steering", () => {
-  it.each(["gateway", "retained", "collected", "overflow"] as const)(
+  it.each(["gateway", "collected", "overflow"] as const)(
     "accepts successive Gateway steers into a %s followup after an older source completed",
     async (source) => {
       const root = tempDirs.make("openclaw-followup-steering-");

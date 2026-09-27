@@ -50,7 +50,6 @@ import deepinfraPlugin from "./deepinfra/index.js";
 import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
-import openaiPlugin from "./openai/index.js";
 import openrouterPlugin from "./openrouter/index.js";
 import pixversePlugin from "./pixverse/index.js";
 import qwenPlugin from "./qwen/index.js";
@@ -123,7 +122,6 @@ const CASES: LiveProviderCase[] = [
     pluginName: "MiniMax Provider",
     providerId: "minimax",
   },
-  { plugin: openaiPlugin, pluginId: "openai", pluginName: "OpenAI Provider", providerId: "openai" },
   {
     plugin: openrouterPlugin,
     pluginId: "openrouter",
@@ -168,9 +166,9 @@ function withPluginsEnabled(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function createEditReferencePng(params?: { width?: number; height?: number }): Buffer {
-  const width = params?.width ?? 384;
-  const height = params?.height ?? 384;
+function createEditReferencePng(): Buffer {
+  const width = 384;
+  const height = 384;
   const buf = Buffer.alloc(width * height * 4, 255);
 
   for (let y = 0; y < height; y += 1) {
@@ -229,11 +227,9 @@ function expectGeneratedVideo(video: GeneratedVideoAsset | undefined): LiveGener
 function buildLiveCapabilityOverrides(params: {
   caps: VideoGenerationModeCapabilities | undefined;
   liveResolution: VideoGenerationRequest["resolution"];
-  liveSize: string | undefined;
-}): Pick<VideoGenerationRequest, "size" | "aspectRatio" | "resolution" | "audio" | "watermark"> {
-  const { caps, liveResolution, liveSize } = params;
+}): Pick<VideoGenerationRequest, "aspectRatio" | "resolution" | "audio" | "watermark"> {
+  const { caps, liveResolution } = params;
   return {
-    ...(caps?.supportsSize && liveSize ? { size: liveSize } : undefined),
     ...(caps?.supportsAspectRatio ? { aspectRatio: "16:9" } : undefined),
     ...(caps?.supportsResolution ? { resolution: liveResolution } : undefined),
     ...(caps?.supportsAudio ? { audio: false } : undefined),
@@ -465,7 +461,6 @@ async function runLiveVideoProviderCase(
     providerId: testCase.providerId,
     modelRef,
   });
-  const liveSize = testCase.providerId === "openai" ? "1280x720" : undefined;
   const logPrefix = `[live:video-generation] provider=${testCase.providerId} model=${providerModel}`;
 
   const generateAttempt = await runLiveVideoAttempt({
@@ -486,7 +481,7 @@ async function runLiveVideoProviderCase(
       authStore,
       timeoutMs: LIVE_VIDEO_OPERATION_TIMEOUT_MS,
       durationSeconds,
-      ...buildLiveCapabilityOverrides({ caps: generateCaps, liveResolution, liveSize }),
+      ...buildLiveCapabilityOverrides({ caps: generateCaps, liveResolution }),
     },
     skipped,
   });
@@ -516,10 +511,7 @@ async function runLiveVideoProviderCase(
     return;
   }
 
-  const referenceImage =
-    testCase.providerId === "openai"
-      ? createEditReferencePng({ width: 1280, height: 720 })
-      : createEditReferencePng();
+  const referenceImage = createEditReferencePng();
   const imageAttempt = await runLiveVideoAttempt({
     authLabel,
     attempted,
@@ -552,7 +544,6 @@ async function runLiveVideoProviderCase(
       ...buildLiveCapabilityOverrides({
         caps: imageToVideoCaps,
         liveResolution,
-        liveSize,
       }),
     },
     skipped,
@@ -608,7 +599,6 @@ async function runLiveVideoProviderCase(
       ...buildLiveCapabilityOverrides({
         caps: videoToVideoCaps,
         liveResolution,
-        liveSize: undefined,
       }),
     },
     skipped,

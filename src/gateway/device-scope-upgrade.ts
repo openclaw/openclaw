@@ -1,4 +1,5 @@
 import type { ScopeUpgradeResult } from "../../packages/gateway-protocol/src/index.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getPairedDevice, getPendingDevicePairing } from "../infra/device-pairing.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
@@ -146,7 +147,7 @@ export class ScopeUpgradeCoordinator {
         }
       });
     }
-    return await entry.resultPromise;
+    return await racePromiseWithAbortSignal(entry.resultPromise, getAsyncWorkSignal());
   }
 
   private async waitForResult(entry: UpgradeEntry): Promise<ScopeUpgradeResult | null> {

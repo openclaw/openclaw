@@ -1,7 +1,4 @@
 import type { SessionPermissionMode } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
-/**
- * Shared process-local state for active and abandoned embedded-agent runs.
- */
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -27,12 +24,6 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OperationalRunInstanceRef } from "../admitted-run-context.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 
-/**
- * Shared process state for embedded-agent runs, queues, and snapshots.
- *
- * The maps are global-singleton backed so reloads and lazy imports inside the same gateway process
- * do not split active-run bookkeeping.
- */
 export type EmbeddedAgentQueueHandle = {
   kind?: "embedded";
   runId?: string;
@@ -166,6 +157,7 @@ export type AbandonedEmbeddedRun = {
 
 const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
 
+// Lazy imports and reloads in one Gateway process must retain the same run owners.
 const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedAgentQueueHandle>(),
   activeRunsByRunId: new Map<string, EmbeddedAgentQueueHandle>(),
@@ -353,14 +345,14 @@ function evictPriorLifecycleEmbeddedRuns(): void {
       EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
     }
   }
-  for (const [sessionKey, sessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {
-    if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
-      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(sessionKey);
-    }
-  }
-  for (const [sessionFile, sessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE) {
-    if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
-      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFile);
+  for (const index of [
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
+  ]) {
+    for (const [key, sessionId] of index) {
+      if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+        index.delete(key);
+      }
     }
   }
   for (const [sessionId, waiters] of EMBEDDED_RUN_WAITERS) {

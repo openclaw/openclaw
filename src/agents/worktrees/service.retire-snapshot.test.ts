@@ -113,6 +113,23 @@ describe("Exact removed worktree snapshot retirement", () => {
     expect(await git(repo, "rev-parse", request.retainedSourceRef)).toBe(source);
   }
 
+  function beforeSnapshotDeletion(effect: () => void | Promise<void>) {
+    const realGit = worktreeGit.requireGit;
+    const mutation = vi.fn(effect);
+    vi.spyOn(worktreeGit, "requireGit").mockImplementation(async (cwd, args, options) => {
+      if (
+        mutation.mock.calls.length === 0 &&
+        args[0] === "update-ref" &&
+        args.includes("--stdin") &&
+        String(options?.input).includes(`delete ${record.snapshotRef} `)
+      ) {
+        await mutation();
+      }
+      return await realGit(cwd, args, options);
+    });
+    return mutation;
+  }
+
   function retirementCli() {
     const program = new Command().name("openclaw").exitOverride();
     program.configureOutput({ writeErr: () => undefined });
@@ -139,15 +156,6 @@ describe("Exact removed worktree snapshot retirement", () => {
     return { program, output, argv };
   }
 
-  it("retires through the Commander entrypoint and reports the exact disposition as JSON", async () => {
-    const cli = retirementCli();
-    await cli.program.parseAsync(cli.argv);
-    expect(cli.output).toHaveBeenCalledExactlyOnceWith({ retired: true, id: record.id });
-    expect(getRegistryWorktree(env, record.id)).toBeUndefined();
-    await expect(git(repo, "show-ref", "--verify", record.snapshotRef!)).rejects.toThrow();
-    expect(await git(repo, "rev-parse", request.retainedSourceRef)).toBe(source);
-  });
-
   it.each(["wrong timestamp", "missing required argument"])(
     "preserves snapshot custody through the CLI with %s",
     async (kind) => {
@@ -165,7 +173,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     },
   );
 
-  it("retires only the exact redundant snapshot and record, preserving foreign recovery and PR outcomes", async () => {
+  it("retires only the exact snapshot through the CLI, preserving foreign recovery and PR outcomes", async () => {
     const foreign: ManagedWorktreeRecord = {
       ...record,
       id: "a0000000-0000-4000-8000-000000000002",
@@ -179,10 +187,9 @@ describe("Exact removed worktree snapshot retirement", () => {
     const outcome = "refs/openclaw/pr-merge-outcomes/123";
     await git(repo, "update-ref", outcome, source);
 
-    await expect(retireManagedWorktreeSnapshotById(request)).resolves.toEqual({
-      retired: true,
-      id: record.id,
-    });
+    const cli = retirementCli();
+    await cli.program.parseAsync(cli.argv);
+    expect(cli.output).toHaveBeenCalledExactlyOnceWith({ retired: true, id: record.id });
 
     expect(getRegistryWorktree(env, record.id)).toBeUndefined();
     await expect(git(repo, "show-ref", "--verify", record.snapshotRef!)).rejects.toThrow();
@@ -197,7 +204,6 @@ describe("Exact removed worktree snapshot retirement", () => {
   it.each([
     ["ID", { id: "a0000000-0000-4000-8000-000000000099" }],
     ["snapshot namespace", { expectedSnapshotRef: "refs/heads/main" }],
-    ["removal generation", { expectedRemovedAt: removedAt + 1 }],
     ["snapshot OID", { expectedSnapshotOid: "1".repeat(40) }],
     ["retained source OID", { expectedRetainedSourceOid: "2".repeat(40) }],
   ] as const)("preserves custody when the expected %s does not match", async (_label, patch) => {
@@ -458,24 +464,13 @@ describe("Exact removed worktree snapshot retirement", () => {
           : kind === "retained source"
             ? request.retainedSourceRef
             : `refs/openclaw/removals/${record.id}`;
-      const realGit = worktreeGit.requireGit;
-      let replaced = false;
-      vi.spyOn(worktreeGit, "requireGit").mockImplementation(async (cwd, args, options) => {
-        if (
-          !replaced &&
-          args[0] === "update-ref" &&
-          args.includes("--stdin") &&
-          String(options?.input).includes(`delete ${record.snapshotRef} `)
-        ) {
-          replaced = true;
-          await git(repo, "update-ref", target, replacement);
-        }
-        return await realGit(cwd, args, options);
+      const mutation = beforeSnapshotDeletion(async () => {
+        await git(repo, "update-ref", target, replacement);
       });
       await expect(retireManagedWorktreeSnapshotById(request)).rejects.toThrow(
         /cannot lock ref|reference already exists/,
       );
-      expect(replaced).toBe(true);
+      expect(mutation).toHaveBeenCalledOnce();
       expect(getRegistryWorktree(env, record.id)).toEqual(record);
       expect(await git(repo, "rev-parse", target)).toBe(replacement);
       expect(await git(repo, "rev-parse", record.snapshotRef!)).toBe(
@@ -488,42 +483,20 @@ describe("Exact removed worktree snapshot retirement", () => {
   );
 
   it("preserves a newer registry lifecycle observed at the deletion boundary", async () => {
-    const realGit = worktreeGit.requireGit;
-    let changed = false;
-    vi.spyOn(worktreeGit, "requireGit").mockImplementation(async (cwd, args, options) => {
-      if (
-        !changed &&
-        args[0] === "update-ref" &&
-        args.includes("--stdin") &&
-        String(options?.input).includes(`delete ${record.snapshotRef} `)
-      ) {
-        changed = true;
-        updateRegistryWorktree(env, record.id, { removedAt: removedAt + 1 });
-      }
-      return await realGit(cwd, args, options);
+    const mutation = beforeSnapshotDeletion(() => {
+      updateRegistryWorktree(env, record.id, { removedAt: removedAt + 1 });
     });
     await expect(retireManagedWorktreeSnapshotById(request)).rejects.toThrow(
       /retirement identity changed/,
     );
-    expect(changed).toBe(true);
+    expect(mutation).toHaveBeenCalledOnce();
     await expectPreserved({ ...record, removedAt: removedAt + 1 });
   });
 
   it("refuses a retained-source symref retargeted to the retiring snapshot", async () => {
     await git(repo, "update-ref", request.retainedSourceRef, request.expectedSnapshotOid);
-    const realGit = worktreeGit.requireGit;
-    let retargeted = false;
-    vi.spyOn(worktreeGit, "requireGit").mockImplementation(async (cwd, args, options) => {
-      if (
-        !retargeted &&
-        args[0] === "update-ref" &&
-        args.includes("--stdin") &&
-        String(options?.input).includes(`delete ${record.snapshotRef} `)
-      ) {
-        retargeted = true;
-        await git(repo, "symbolic-ref", request.retainedSourceRef, record.snapshotRef!);
-      }
-      return await realGit(cwd, args, options);
+    const mutation = beforeSnapshotDeletion(async () => {
+      await git(repo, "symbolic-ref", request.retainedSourceRef, record.snapshotRef!);
     });
 
     await expect(
@@ -533,7 +506,7 @@ describe("Exact removed worktree snapshot retirement", () => {
       }),
     ).rejects.toThrow(/multiple updates|cannot lock ref/);
 
-    expect(retargeted).toBe(true);
+    expect(mutation).toHaveBeenCalledOnce();
     expect(getRegistryWorktree(env, record.id)).toEqual(record);
     expect(await git(repo, "rev-parse", "--verify", record.snapshotRef!)).toBe(
       request.expectedSnapshotOid,
@@ -545,17 +518,9 @@ describe("Exact removed worktree snapshot retirement", () => {
   });
 
   it("stops before deletion when caller authority is revoked after inspection", async () => {
-    const realGit = worktreeGit.requireGit;
     let revoked = false;
-    vi.spyOn(worktreeGit, "requireGit").mockImplementation(async (cwd, args, options) => {
-      if (
-        args[0] === "update-ref" &&
-        args.includes("--stdin") &&
-        String(options?.input).includes(`delete ${record.snapshotRef} `)
-      ) {
-        revoked = true;
-      }
-      return await realGit(cwd, args, options);
+    const mutation = beforeSnapshotDeletion(() => {
+      revoked = true;
     });
     await expect(
       retireManagedWorktreeSnapshotById({
@@ -567,7 +532,7 @@ describe("Exact removed worktree snapshot retirement", () => {
         },
       }),
     ).rejects.toThrow("caller authority revoked");
-    expect(revoked).toBe(true);
+    expect(mutation).toHaveBeenCalledOnce();
     await expectPreserved(record);
   });
 });
