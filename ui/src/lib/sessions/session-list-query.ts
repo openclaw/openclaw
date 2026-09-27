@@ -30,6 +30,7 @@ import {
 
 const ROW_SNAPSHOT_REASONS = new Set([
   "patch",
+  "participants",
   "placement",
   "send",
   "steer",

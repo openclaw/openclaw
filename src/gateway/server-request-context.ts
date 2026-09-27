@@ -96,6 +96,7 @@ type GatewayRequestContextRuntime = Pick<
   Pick<
     GatewayCoreRuntime,
     | "getSessionRowProjection"
+    | "forgetConnectionAncestors"
     | "refreshGatewayHealthSnapshotWithRuntime"
     | "hasTalkNodeConnected"
     | "sharedGatewaySessionGenerationState"
@@ -533,6 +534,7 @@ export function createGatewayRequestContext(
     removeChatRun: runtime.removeChatRun,
     subscribeSessionEvents: sessionEventSubscribers.subscribe,
     unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
+    forgetConnectionAncestors: runtime.forgetConnectionAncestors,
     subscribeSessionMessageEvents: runtime.subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents: runtime.unsubscribeSessionMessageEvents,
     unsubscribeAllSessionEvents: (connId) => {

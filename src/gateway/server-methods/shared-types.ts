@@ -356,6 +356,7 @@ type GatewayTransportContext = {
   terminalSessions?: TerminalSessionManager;
   subscribeSessionEvents: (connId: string) => void;
   unsubscribeSessionEvents: (connId: string) => void;
+  forgetConnectionAncestors: (connId: string) => void;
   subscribeSessionMessageEvents: (
     connId: string,
     sessionKey: string,

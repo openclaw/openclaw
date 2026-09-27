@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -81,6 +82,56 @@ function treeHarness(rows = [child, parent, grandparent]) {
 }
 
 describe("tree row snapshots", () => {
+  it("applies participant snapshots locally while refreshing involvement-filtered membership", async () => {
+    vi.useFakeTimers();
+    const participants = [{ identity: { type: "profile" as const, id: "viewer" } }];
+    const updated = { ...settledChild, participants, participantCount: 1 };
+    let participated = false;
+    const request = vi.fn(async (_method: string, params?: unknown) =>
+      sessionsResult(
+        asOptionalRecord(params)?.involvingMe
+          ? participated
+            ? [updated]
+            : []
+          : [child, parent, grandparent],
+        100,
+      ),
+    );
+    const gateway = createGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(gateway.gateway);
+    const query = { agentId: "main", involvingMe: true };
+    const stop = sessions.subscribeList(query, () => {});
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      await sessions.refreshList({ ...query, force: true });
+      request.mockClear();
+      participated = true;
+      gateway.emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          agentId: "main",
+          reason: "participants",
+          session: updated,
+          ancestorSessions: [settledParent, settledGrandparent],
+          ts: 101,
+        },
+      });
+      expect(sessions.state.result?.sessions[0]).toEqual(updated);
+      expect(sessions.listSnapshot(query).result?.sessions).toEqual([]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.list",
+        expect.objectContaining({ involvingMe: true }),
+      );
+      expect(sessions.listSnapshot(query).result?.sessions).toEqual([updated]);
+    } finally {
+      stop();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["sessions.changed", "session.message"])(
     "keeps %s ancestor references equivalent to full snapshots without roster or descriptor reads",
     async (event) => {
