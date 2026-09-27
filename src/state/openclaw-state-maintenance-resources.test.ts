@@ -1,6 +1,11 @@
 import { afterEach, expect, it } from "vitest";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import {
+  listPluginStateInWorker,
+  lookupPluginStateInWorker,
+  registerPluginStateInWorker,
+} from "../plugin-state/plugin-state-worker-client.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
   captureWsEventAsync,
@@ -9,7 +14,6 @@ import {
 } from "../proxy-capture/runtime.js";
 import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import {
@@ -18,8 +22,6 @@ import {
 } from "./openclaw-agent-db.js";
 import { retainOpenClawStateDatabase } from "./openclaw-state-db-cache.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import { executeOpenClawStateWorker } from "./openclaw-state-worker-store.js";
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
@@ -27,39 +29,22 @@ afterEach(async () => {
 });
 
 function createSharedWorkerClient(env: NodeJS.ProcessEnv) {
-  const ownerKey = "agent:main:maintenance-resource";
-  const flowIds = new Map<string, string>();
+  const namespace = { env, pluginId: "maintenance-resources-fixture", namespace: "shared" };
   return {
-    async register(key: string, value: { value: string }) {
-      const flow = buildFlowRecord({
-        ownerKey,
-        controllerId: "tests/maintenance-resources",
-        goal: key,
-        stateJson: value,
+    register(key: string, value: { value: string }) {
+      return registerPluginStateInWorker({
+        ...namespace,
+        key,
+        valueJson: JSON.stringify(value),
+        maxEntries: 10,
+        overflowPolicy: "reject-new",
       });
-      await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "flows.createManaged",
-        input: { flow },
-      });
-      flowIds.set(key, flow.flowId);
     },
-    async lookup(key: string) {
-      const flowId = flowIds.get(key);
-      if (flowId === undefined) {
-        return undefined;
-      }
-      const flow = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "flows.current",
-        input: { flowId },
-      });
-      return flow?.stateJson;
+    lookup(key: string) {
+      return lookupPluginStateInWorker({ ...namespace, key });
     },
-    async entries() {
-      const flows = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "flows.list",
-        input: { ownerKey },
-      });
-      return flows.map((flow) => ({ key: flow.goal, value: flow.stateJson }));
+    entries() {
+      return listPluginStateInWorker(namespace);
     },
   };
 }

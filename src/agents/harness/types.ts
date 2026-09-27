@@ -613,23 +613,6 @@ type AgentHarnessModelCatalogCapability = {
   ): { accountType: string; authMode?: string } | undefined;
 };
 
-type AgentHarnessTaskHistoryCapability = {
-  /** Reads native task history without creating an OpenClaw child session. */
-  taskHistory?: {
-    taskKinds: readonly string[];
-    read(params: {
-      task: Readonly<import("../../tasks/task-registry.types.js").TaskRecord>;
-      cfg: OpenClawConfig;
-      cursor?: string;
-      limit: number;
-      /** Revalidate the task, requester access, and registered owner after awaited work. */
-      assertCurrent: () => void;
-    }): Promise<
-      import("../../../packages/gateway-protocol/src/schema/tasks.js").TasksHistoryResult
-    >;
-  };
-};
-
 type AgentHarnessSharedCapabilities = AgentHarnessCompactionCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
@@ -637,7 +620,6 @@ type AgentHarnessSharedCapabilities = AgentHarnessCompactionCapability &
   AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
-  AgentHarnessTaskHistoryCapability &
   AgentHarnessSessionLifecycleCapability;
 
 /**

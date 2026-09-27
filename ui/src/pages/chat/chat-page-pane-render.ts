@@ -63,6 +63,28 @@ type ChatPagePaneRenderOptions = {
   weight: number;
 };
 
+export function chatPagePaneOwnerKeys(
+  context: ApplicationContext | undefined,
+  layout: ChatSplitLayout,
+  retainedSessions: ReadonlyMap<string, readonly (string | undefined)[]>,
+): Set<string> {
+  const nextPaneKeys = new Set<string>();
+  for (const column of layout.columns) {
+    for (const pane of column.panes) {
+      const ownerKey = JSON.stringify([column.id, pane.id]);
+      for (const sessionKey of retainedSessions.get(pane.id) ?? []) {
+        if (
+          sessionKey !== undefined &&
+          (!context || !readDeletedSessionStartup(context, sessionKey))
+        ) {
+          nextPaneKeys.add(JSON.stringify([ownerKey, sessionKey]));
+        }
+      }
+    }
+  }
+  return nextPaneKeys;
+}
+
 export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
   const sessions = options.context?.sessions?.presentation.result?.sessions ?? [];
   return html`

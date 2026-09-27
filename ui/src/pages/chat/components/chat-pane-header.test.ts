@@ -15,7 +15,6 @@ import {
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
-import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
 import {
   chatPaneHeaderSessionRow as row,
   mountChatPaneHeader,
@@ -75,7 +74,6 @@ function mountIntegratedPresenceHeader(params: {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
         session,
         false,
         undefined,
@@ -146,7 +144,6 @@ describe("chat pane header", () => {
       panelLayoutActions: html`<button aria-label="Swap Chat and Dashboard"></button>`,
       discussionAction: html`<button data-action="discussion"></button>`,
       diffAction: html`<button data-action="diff"></button>`,
-      backgroundTasksAction: html`<button data-action="tasks"></button>`,
       workspaceAction: html`<button data-action="workspace"></button>`,
       sessionRailAction: html`<button data-action="rail"></button>`,
       sessionMenuAction: html`<button data-action="session-menu"></button>`,
@@ -608,7 +605,6 @@ describe("chat pane header", () => {
       session: undefined,
       panelActions: html`<span data-action="terminal"></span>`,
       diffAction: html`<span data-action="diff"></span>`,
-      backgroundTasksAction: html`<span data-action="tasks"></span>`,
       workspaceAction: html`<span data-action="workspace"></span>`,
       sessionRailAction: html`<span data-action="rail"></span>`,
     });

@@ -110,7 +110,7 @@ internal fun gatewayStatusLooksLikePairing(statusText: String): Boolean {
 /** Maps structured gateway auth failures to the compact labels used by status surfaces. */
 internal fun gatewayAuthRecoveryLabel(problem: GatewayConnectionProblem?): String? =
   when (problem?.code) {
-    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> nativeString("Setup code expired")
+    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> nativeString("Setup code no longer valid")
     "AUTH_TOKEN_MISSING" -> nativeString("Gateway token needed")
     "AUTH_TOKEN_NOT_CONFIGURED" -> nativeString("Gateway token not configured")
     "AUTH_PASSWORD_MISSING" -> nativeString("Gateway password needed")

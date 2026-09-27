@@ -150,8 +150,8 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
     expect(await store.readSession("missing")).toBeUndefined();
     expect(
       await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "tasks.get",
-        input: { taskId: "missing" },
+        type: "plugins.metadata.read",
+        input: { selector: "installed-index", artifactPreservingReadOnly: true },
       }),
     ).toBeUndefined();
   });
@@ -420,8 +420,8 @@ it("reads populated transcripts after existing-only status and through reopen wi
       captureOpenClawStateWorkerContext({ env }),
       (scope) =>
         scope.execute({
-          type: "tasks.statusSummary",
-          input: { now: Date.now(), preserveSourceArtifacts: false },
+          type: "plugins.conversationBindingApprovals.read",
+          input: undefined,
         }),
       { existingOnly: true },
     );
@@ -455,7 +455,7 @@ it("reads populated transcripts after existing-only status and through reopen wi
   const selector = transcriptSessionSelector(session);
   const started = performance.now();
   await withoutParentSql(async () => {
-    expect((await readStatus())?.state).toBe("ready");
+    expect(await readStatus()).toEqual([]);
     expect(await store.readSession(selector)).toEqual(session);
     expect(await store.listSessionEntries()).toMatchObject([
       { session, selector, hasSummary: true },

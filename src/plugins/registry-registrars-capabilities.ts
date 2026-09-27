@@ -53,26 +53,6 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
     });
   };
 
-  const registerDetachedTaskRuntime = (
-    record: PluginRecord,
-    runtime: Parameters<OpenClawPluginApi["registerDetachedTaskRuntime"]>[0],
-  ) => {
-    const existing = registry.detachedTaskRuntimes[0];
-    if (existing && existing.pluginId !== record.id) {
-      reportRegistrationError(
-        record,
-        `detached task runtime already registered by ${existing.pluginId}`,
-      );
-      return;
-    }
-    const next = { pluginId: record.id, runtime };
-    if (existing) {
-      registry.detachedTaskRuntimes.splice(0, 1, next);
-    } else {
-      registry.detachedTaskRuntimes.push(next);
-    }
-  };
-
   const registerInteractiveHandler = (
     record: PluginRecord,
     registration: Parameters<OpenClawPluginApi["registerInteractiveHandler"]>[0],
@@ -160,7 +140,6 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
 
   return {
     registerDecisionProvider,
-    registerDetachedTaskRuntime,
     registerInteractiveHandler,
     registerContextEngine,
     registerCompactionProvider,

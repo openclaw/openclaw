@@ -33,7 +33,7 @@ openclaw devices approve <requestId>
 
 ## Options
 
-- `--remote`: prefer `gateway.remote.url`; falls back to `gateway.tailscale.mode=serve|funnel` if that URL is unset. Ignores `device-pair` plugin `publicUrl`.
+- `--remote`: prefer `gateway.remote.url` and remote credentials; fall back to Tailscale Serve/Funnel when the remote URL is unset. Ignores `device-pair` plugin `publicUrl`; explicit `--url` or `--public-url` still takes precedence.
 - `--url <url>`: override the gateway URL used in the payload
 - `--public-url <url>`: override the public URL used in the payload
 - `--token <token>`: override the gateway token the bootstrap flow authenticates against
@@ -76,7 +76,21 @@ confirm it is stale, clear only its root handler, configure
 the Gateway. Custom Serve ports and retired named-Service routes require the
 same manual cleanup; Doctor prints the relevant guidance.
 
-With `--remote`, one of `gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` is required.
+Unless `--url` or `--public-url` is supplied, `--remote` requires either
+`gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` before URL resolution
+runs. `gateway.publicOrigin` alone does not satisfy that prerequisite.
+
+URL selection preserves existing routes: an explicit pairing override, a
+preferred remote URL, Tailscale Serve/Funnel, a non-preferred remote URL, then
+bind-derived addresses. For local QR setup, `gateway.publicOrigin` is the final
+fallback before the loopback-only error. Without `--remote`, the configured
+`plugins.entries.device-pair.config.publicUrl` supplies the override.
+Unlike QR setup, [cloud enrollment](/gateway/cloud-workers) explicitly asks the
+same resolver to prefer public ingress over discovery for fresh cloud workers.
+
+QR setup, join codes, and cloud enrollment preserve context paths in fully
+qualified URLs. The device-pair plugin's `/pair` command retains its historical
+origin-only URLs, including when the configured `publicUrl` contains a path.
 
 ## Auth resolution (no `--remote`)
 

@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -62,7 +61,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     }
   });
 
-  it.each(["file", "task", "close", "list"] as const)(
+  it.each(["file", "close", "list"] as const)(
     "shows a file tab before completion and honors the %s intent",
     async (intent) => {
       const context = await browser.newContext({
@@ -84,22 +83,6 @@ describeControlUiE2e("Control UI chat file links", () => {
             workspacePath: "src/slow.ts",
           },
         };
-        const task = {
-          id: "review-intent-task",
-          taskId: "review-intent-task",
-          kind: "subagent",
-          runtime: "subagent",
-          status: "running",
-          title: "Inspect current task",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          ownerKey: "agent:main:main",
-          childSessionKey: "agent:main:subagent:review-intent",
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          startedAt: Date.now(),
-          lastActivity: "Inspect the current task",
-        };
         const gateway = await installMockGateway(page, {
           deferredMethods: [
             "sessions.files.get",
@@ -120,24 +103,6 @@ describeControlUiE2e("Control UI chat file links", () => {
               files: [],
               browser: { path: "", entries: [] },
             },
-            "tasks.list": { tasks: intent === "task" ? [task] : [] },
-            "tasks.history": {
-              cases: [
-                {
-                  match: { taskId: task.id },
-                  response: {
-                    messages: [
-                      {
-                        role: "assistant",
-                        messageId: "review-intent-result",
-                        content: [{ type: "text", text: "Current task result." }],
-                        timestamp: Date.now(),
-                      },
-                    ],
-                  },
-                },
-              ],
-            },
           },
         });
         const response = await page.goto(`${server.baseUrl}chat`);
@@ -145,9 +110,7 @@ describeControlUiE2e("Control UI chat file links", () => {
         const indexSha256 = createHash("sha256")
           .update(await response!.body())
           .digest("hex");
-        if (intent === "task") {
-          await page.locator('button[data-subagent-task-id="review-intent-task"]').waitFor();
-        } else if (intent === "list") {
+        if (intent === "list") {
           await openChatSidePanelType(page, "Files");
           await gateway.waitForRequest("sessions.files.list");
         }
@@ -161,9 +124,7 @@ describeControlUiE2e("Control UI chat file links", () => {
 
         const fileTab = page.locator(".side-panel__header wa-tab").filter({ hasText: "slow.ts" });
         expect(await fileTab.count()).toBe(1);
-        if (intent === "task") {
-          await page.locator('button[data-subagent-task-id="review-intent-task"]').click();
-        } else if (intent === "close") {
+        if (intent === "close") {
           await page.getByRole("button", { name: "Close tab: slow.ts", exact: true }).click();
           await fileTab.waitFor({ state: "detached" });
         } else if (intent === "list") {
@@ -176,14 +137,11 @@ describeControlUiE2e("Control UI chat file links", () => {
           "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
         );
         const fileView = page.locator(".sidebar-file-view:visible");
-        const taskView = page.locator("[data-task-detail-panel]:visible");
         // Capture either settled outcome before the strict assertion, including a failing baseline.
         if ((await fileView.count()) > 0) {
           await expect
             .poll(() => fileView.locator(".cm-content").textContent())
             .toContain("export const loaded = true;");
-        } else if (intent === "task" && (await taskView.count()) > 0) {
-          await taskView.getByText("Current task result.", { exact: true }).waitFor();
         }
         fs.writeFileSync(
           path.join(artifactDir, "intent-requests.json"),
@@ -198,28 +156,13 @@ describeControlUiE2e("Control UI chat file links", () => {
               },
               files: await gateway.getRequests("sessions.files.get"),
               lists: await gateway.getRequests("sessions.files.list"),
-              taskHistory: (await gateway.getRequests("tasks.history")).filter(
-                (request) => asNullableRecord(request.params)?.taskId === task.id,
-              ),
             },
             null,
             2,
           ),
         );
         await page.screenshot({ path: path.join(artifactDir, `intent-${intent}-settled.png`) });
-        if (intent === "task") {
-          expect(await taskView.count()).toBe(1);
-          expect(await taskView.textContent()).toContain("Inspect current task");
-          expect(await taskView.textContent()).toContain("Current task result.");
-          expect(await fileView.count()).toBe(0);
-          expect(await page.locator(".sidebar-file-view").count()).toBe(1);
-          await fileTab.click();
-          await fileView.waitFor({ state: "visible" });
-          await expect
-            .poll(() => fileView.locator(".cm-content").textContent())
-            .toContain("export const loaded = true;");
-          expect(await gateway.getRequests("sessions.files.get")).toHaveLength(1);
-        } else if (intent === "close") {
+        if (intent === "close") {
           expect(await fileTab.count()).toBe(0);
           expect(await page.locator(".sidebar-file-view").count()).toBe(0);
         } else {

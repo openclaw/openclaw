@@ -119,8 +119,6 @@ import {
   executeSkillUploadCommand,
 } from "../skills/lifecycle/upload-store.worker.js";
 import * as skillWorkshop from "../skills/workshop/store.worker.js";
-import { isTaskRegistryWorkerCommand } from "../tasks/task-registry.worker-contract.js";
-import { executeTaskRegistryCommand } from "../tasks/task-registry.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
 import {
   executeTranscriptWrite,
@@ -288,9 +286,6 @@ export function executeSharedStateCommand(
         })?.record,
       stateOptions(),
     );
-  }
-  if (isTaskRegistryWorkerCommand(command)) {
-    return executeTaskRegistryCommand(command, stateOptions(), open);
   }
   if (command.type === "doctor.workshopMigrationRecords.read") {
     return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(

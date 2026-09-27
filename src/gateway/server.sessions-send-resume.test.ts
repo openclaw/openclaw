@@ -25,7 +25,6 @@ import { publishSystemEventStoreConfig } from "../config/sessions/session-store-
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { findTaskByRunId } from "../tasks/task-registry.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
@@ -103,7 +102,6 @@ async function arrangeAuthorityProof(name: string) {
   const previous = expectDefined(subagentRuns.get(previousRunId), "paused child");
   expect(markSubagentRunPausedAfterYield({ entry: previous })).toBe(true);
   persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
-  const task = expectDefined(findTaskByRunId(previousRunId), "paused task");
   const scope = { agentId: "main", sessionKey: child, sessionId, storePath };
   const finalEffect = vi.fn();
   // The provider can publish success only after real input custody is consumed.
@@ -154,10 +152,6 @@ async function arrangeAuthorityProof(name: string) {
     expect(subagentRuns.get(previousRunId)).toBe(previous);
     expect(previous.pauseReason).toBe("sessions_yield");
     expect(subagentRuns.has(runId)).toBe(false);
-    expect(findTaskByRunId(previousRunId)).toMatchObject({
-      taskId: task.taskId,
-      status: task.status,
-    });
   };
   return {
     parent,
@@ -166,7 +160,6 @@ async function arrangeAuthorityProof(name: string) {
     previousRunId,
     runId,
     scope,
-    task,
     finalEffect,
     send,
     expectUnadopted,
@@ -337,10 +330,6 @@ it("fences a cancelled successor after adoption before queued input consumption"
     await adopted.promise;
     expect(subagentRuns.has(proof.previousRunId)).toBe(false);
     expect(subagentRuns.get(proof.runId)).toMatchObject({ taskRunId: proof.previousRunId });
-    expect(findTaskByRunId(proof.previousRunId)).toMatchObject({
-      taskId: proof.task.taskId,
-      status: "running",
-    });
     expect(listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "queued" }],
@@ -366,10 +355,6 @@ it("fences a cancelled successor after adoption before queued input consumption"
       ],
       expect.anything(),
     );
-    expect(findTaskByRunId(proof.previousRunId)).toMatchObject({
-      taskId: proof.task.taskId,
-      status: "cancelled",
-    });
     // Custody remains unconsumed even though execution cleanup records interruption.
     expect(listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
@@ -420,7 +405,7 @@ it.each(["explicit", "automatic"] as const)(
       });
       await prepareGatewayReplyRuntimeForTest();
       publishSystemEventStoreConfig(getRuntimeConfig());
-      // Seed paused registry/canonical-task state without polling a nonexistent source execution.
+      // Seed paused native registry state without polling a nonexistent source execution.
       await registerSubagentRun({
         runId: previousRunId,
         childSessionKey: child,
@@ -435,8 +420,6 @@ it.each(["explicit", "automatic"] as const)(
       const previous = subagentRuns.get(previousRunId)!;
       markSubagentRunPausedAfterYield({ entry: previous });
       persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
-      const taskId = findTaskByRunId(previousRunId)?.taskId;
-      expect(taskId).toBeTruthy();
       agentCommandMock.mockImplementation(async (opts) => {
         const command = opts as AgentCommandGatewayIngressOpts;
         const runId = expectDefined(command.runId, "resume execution run id");
@@ -503,7 +486,6 @@ it.each(["explicit", "automatic"] as const)(
       expect(result.details).not.toHaveProperty("reply");
       await started.promise;
       expect(announce).not.toHaveBeenCalled();
-      expect(findTaskByRunId(previousRunId)?.taskId).toBe(taskId);
       release.resolve();
       await settleGatewaySessionStoreFixture(root);
       await vi.waitFor(() => expect(announce).toHaveBeenCalledTimes(1));
@@ -514,7 +496,7 @@ it.each(["explicit", "automatic"] as const)(
           roundOneReply: "Resumed child finished.",
         }),
       );
-      await vi.waitFor(() => expect(findTaskByRunId(previousRunId)?.status).toBe("succeeded"));
+      await vi.waitFor(() => expect(announce).toHaveBeenCalledTimes(1));
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();

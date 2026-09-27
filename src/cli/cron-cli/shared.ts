@@ -19,6 +19,7 @@ import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import { formatExactDuration } from "../../infra/format-time/format-duration-exact.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import { parseOffsetlessIsoDateTimeInTimeZone } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
@@ -435,6 +436,17 @@ export function parseCronStringList(input: unknown): string[] | undefined {
     .filter((entry): entry is string => Boolean(entry));
 }
 
+const INVALID_CRON_TIMEZONE_MESSAGE =
+  "Invalid --tz. Use an IANA timezone such as America/New_York.";
+
+export function parseCronTimezoneOption(value: unknown): string | undefined {
+  const timezone = normalizeOptionalString(value);
+  if (timezone && !resolveTimezone(timezone)) {
+    throw new CronCliError(INVALID_CRON_TIMEZONE_MESSAGE);
+  }
+  return timezone;
+}
+
 /**
  * Parse a one-shot `--at` value into an ISO string (UTC).
  *
@@ -451,8 +463,16 @@ export function parseAt(input: string, tz?: string): string | null {
   // If a timezone is provided and the input looks like an offset-less ISO datetime,
   // resolve it in the given IANA timezone so users get the time they expect.
   if (tz && isOffsetlessIsoDateTime(raw)) {
-    return parseOffsetlessIsoDateTimeInTimeZone(raw, tz);
+    const parsed = parseOffsetlessIsoDateTimeInTimeZone(raw, tz);
+    if (!parsed.ok) {
+      if (parsed.reason === "invalid-timezone") {
+        throw new CronCliError(INVALID_CRON_TIMEZONE_MESSAGE);
+      }
+      return null;
+    }
+    return parsed.iso;
   }
+  parseCronTimezoneOption(tz);
 
   const absolute = parseAbsoluteTimeMs(raw);
   if (absolute !== null) {

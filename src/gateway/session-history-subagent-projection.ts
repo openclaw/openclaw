@@ -15,7 +15,7 @@ import { createBoundSessionHistorySubagentProjection } from "./session-history-r
 import { prepareGatewaySessionStoreReadSources } from "./session-utils-store-sources.js";
 
 /** Bind source addresses and admission once, before an asynchronous history read. */
-export function prepareSessionHistorySubagentSources(
+function prepareSessionHistorySubagentSources(
   currentSource: SessionEntryReadSource,
   options: { env?: NodeJS.ProcessEnv; deferSources?: boolean } = {},
 ) {

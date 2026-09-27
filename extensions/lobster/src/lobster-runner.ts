@@ -5,7 +5,7 @@ import { Readable, Writable } from "node:stream";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 
-export type LobsterEnvelope =
+type LobsterEnvelope =
   | {
       ok: true;
       status: "ok" | "needs_approval" | "cancelled";

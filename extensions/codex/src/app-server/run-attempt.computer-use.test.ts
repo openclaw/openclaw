@@ -3,6 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
+import { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import type { v2 } from "./protocol.js";
 import {
   createStartedThreadHarness,
@@ -17,6 +18,7 @@ setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt", () => {
   it("routes Computer Use MCP elicitations through the native bridge and cancels the turn", async () => {
+    const cancelTurn = vi.spyOn(CodexNativeProcessAuthority.prototype, "cancelTurn");
     const turnStarted = createDeferred<void>();
     const turnInterrupted = createDeferred<void>();
     const bridgeSpy = vi
@@ -147,6 +149,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     expect(
       elicitation.requests.filter(({ method }) => method === "thread/backgroundTerminals/list"),
-    ).toEqual([{ method: "thread/backgroundTerminals/list", params: { threadId: "thread-1" } }]);
+    ).toEqual([]);
+    expect(cancelTurn).toHaveBeenCalledExactlyOnceWith(elicitation.client, "thread-1", "turn-1");
   });
 });

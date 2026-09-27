@@ -581,7 +581,7 @@ export async function preflightDiscordMessage(
     memberRoleIds,
   });
 
-  const mentionPolicyParams = {
+  const mentionPolicy = resolveDiscordMentionPolicy({
     isGuildMessage,
     isThread: Boolean(threadChannel),
     botId,
@@ -590,9 +590,8 @@ export async function preflightDiscordMessage(
       : undefined,
     channelConfig,
     guildInfo,
-  };
-  const shouldRequireMentionByConfig =
-    resolveDiscordMentionPolicy(mentionPolicyParams).requireMention;
+  });
+  const shouldRequireMentionByConfig = mentionPolicy.requireMention;
   const shouldRequireMention = resolvePreflightMentionRequirement({
     shouldRequireMention: shouldRequireMentionByConfig,
     bypassMentionRequirement,
@@ -631,7 +630,7 @@ export async function preflightDiscordMessage(
   }
 
   const { implicitMentionKinds, wasMentioned: wasNormallyMentioned } = resolveDiscordMentionState({
-    ...mentionPolicyParams,
+    botId,
     authorIsBot: Boolean(author.bot),
     hasAnyMention,
     isDirectMessage,
@@ -743,6 +742,7 @@ export async function preflightDiscordMessage(
     policy: {
       isGroup: isGuildMessage,
       requireMention: shouldRequireMention,
+      allowedImplicitMentionKinds: mentionPolicy.allowedImplicitMentionKinds,
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,

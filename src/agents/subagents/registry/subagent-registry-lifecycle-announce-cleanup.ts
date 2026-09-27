@@ -1,3 +1,4 @@
+import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
@@ -7,10 +8,12 @@ import {
   ensureDeliveryState,
   getDeliveryLastError,
   isDeliverySuspended,
+  clearSubagentPendingDelivery,
+  loadPendingFinalDeliveryPayload,
 } from "./subagent-delivery-state.js";
 import {
-  resolveCleanupCompletionReason,
   resolveAnnounceDeliveryDeadline,
+  resolveCleanupCompletionReason,
   resolveDeferredCleanupDecision,
   shouldSuspendPendingFinalDelivery,
 } from "./subagent-registry-cleanup.js";
@@ -33,15 +36,12 @@ import {
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
-  clearSubagentPendingDelivery,
   emitCompletionEndedHookIfNeeded,
   formatAnnounceDeliveryError,
   hasPriorRequesterDeliveryMirror,
-  loadPendingFinalDeliveryPayload,
   markPendingFinalDelivery,
   maskLifecycleIdentifier,
   recordAnnounceDeliveryResult,
-  safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
 import { finalizeResumedAnnounceGiveUp } from "./subagent-registry-lifecycle-give-up.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -159,21 +159,6 @@ const finalizeSubagentCleanup = async (
       );
     }
   };
-  if (
-    !skipRequesterDelivery &&
-    entry.expectsCompletionMessage === true &&
-    announceOutcome !== "delivered"
-  ) {
-    const resolution = await params.resolveSubagentTaskAsync(entry);
-    if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
-      return;
-    }
-    if (resolution.lookup === "available" && !resolution.task) {
-      suspendPendingFinalDelivery(context, { runId, entry, reason: "permanent_failure" });
-      return;
-    }
-  }
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
     const intentionalNonDelivery = entry.delivery?.disposition === "intentional_non_delivery";
     clearSubagentPendingDelivery(entry);
@@ -213,14 +198,6 @@ const finalizeSubagentCleanup = async (
       delivery.createdAt = undefined;
       delivery.attemptCount = undefined;
       delivery.nextAttemptAt = undefined;
-    }
-    if (!options?.skipDeliveryStatus) {
-      await safeSetSubagentTaskDeliveryStatus(params, {
-        entry,
-        deliveryStatus: delivery.status,
-        deliveryError: terminalNonDelivery ? getDeliveryLastError(entry) : undefined,
-        isCurrent: () => context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
-      });
     }
     entry.wakeOnDescendantSettle = undefined;
     const completion = ensureCompletionState(entry);
@@ -570,6 +547,25 @@ export const startSubagentAnnounceCleanupFlow = (
       if (!delivery.delivered && requesterTookCompletion()) {
         return;
       }
+      if (
+        !delivery.delivered &&
+        delivery.reason === "message_tool_delivery_missing" &&
+        delivery.disposition === "permanent_failure" &&
+        shouldSuspendPendingFinalDelivery(entry)
+      ) {
+        // Keep the live preimage unchanged until the native owner atomically
+        // verifies it and commits the failure facts with the blocked receipt.
+        latestDeliveryError = formatAnnounceDeliveryError(delivery);
+        await suspendPendingFinalDelivery(context, {
+          runId,
+          entry,
+          reason: "permanent_failure",
+          error: latestDeliveryError,
+          lastDropReason: delivery.reason,
+          enqueuedAt: delivery.enqueuedAt,
+        });
+        return;
+      }
       recordAnnounceDeliveryResult(entry, delivery, params.runs);
       if (delivery.delivered) {
         const deliveryState = ensureDeliveryState(entry);
@@ -581,11 +577,6 @@ export const startSubagentAnnounceCleanupFlow = (
         // Identified platform delivery precedes best-effort transcript
         // mirroring; task ownership must become durable at that same edge.
         params.persist(runId);
-        await safeSetSubagentTaskDeliveryStatus(params, {
-          entry,
-          deliveryStatus: "delivered",
-          isCurrent: () => context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
-        });
         latestDeliveryError = undefined;
         return;
       }
@@ -598,21 +589,6 @@ export const startSubagentAnnounceCleanupFlow = (
         deliveryState.status = "failed";
       }
       latestDeliveryError = formatAnnounceDeliveryError(delivery);
-      if (
-        delivery.reason === "message_tool_delivery_missing" &&
-        delivery.disposition === "permanent_failure" &&
-        shouldSuspendPendingFinalDelivery(entry)
-      ) {
-        // Commit the recoverable block at the execution-result edge, before
-        // best-effort mirrors or the detached announce tail can stall.
-        suspendPendingFinalDelivery(context, {
-          runId,
-          entry,
-          reason: "permanent_failure",
-          error: latestDeliveryError,
-        });
-        return;
-      }
       if (
         deliveryState.lastError !== latestDeliveryError ||
         deliveryState.lastDropReason !== previousDropReason
@@ -661,6 +637,26 @@ export const startSubagentAnnounceCleanupFlow = (
         );
       } finally {
         clearTimeout(deadlineTimer);
+      }
+      if (
+        context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration) &&
+        entry.delivery?.status !== "delivered" &&
+        (subagentRuns.isCompletionAuthorityRetired(entry) ||
+          (shouldSuspendPendingFinalDelivery(entry) &&
+            !isSystemEventStoreCurrent(
+              entry.requesterSessionKey,
+              entry.requesterStorePath,
+              entry.requesterAgentId,
+            )))
+      ) {
+        await suspendPendingFinalDelivery(context, {
+          runId,
+          entry,
+          reason: "permanent_failure",
+          error: "store replaced",
+          storeReplaced: true,
+        });
+        return;
       }
       await finalizeAnnounceCleanup(announceOutcome);
     },

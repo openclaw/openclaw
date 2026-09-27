@@ -93,6 +93,7 @@ export type ChatMediaResource<Value> = {
   abortController: AbortController | undefined;
   refresh: { at: number; timer: ReturnType<typeof setTimeout> } | undefined;
   retainUntil: number | undefined;
+  retainedImage?: HTMLImageElement;
   releaseAuthRecovery?: () => void;
 };
 
@@ -163,6 +164,16 @@ function detachChatMediaResourceSubscriber(
   resource.abortController = undefined;
 }
 
+export function readChatMediaResource<Value>(
+  kind: ChatMediaResourceKind,
+  cacheKey: string,
+): ChatMediaResource<Value> | undefined {
+  // SAFETY: Each namespaced key is created and read by the same typed resource owner.
+  return chatMediaResources.get(chatMediaResourceKey(kind, cacheKey)) as
+    | ChatMediaResource<Value>
+    | undefined;
+}
+
 export function observeChatMediaResource<Value>(
   kind: ChatMediaResourceKind,
   cacheKey: string,
@@ -171,7 +182,7 @@ export function observeChatMediaResource<Value>(
   cacheScope?: string,
 ): ChatMediaResource<Value> {
   const resourceKey = chatMediaResourceKey(kind, cacheKey);
-  let resource = chatMediaResources.get(resourceKey) as ChatMediaResource<Value> | undefined;
+  let resource = readChatMediaResource<Value>(kind, cacheKey);
   if (
     resource &&
     resource.subscribers.size === 0 &&

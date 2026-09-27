@@ -1,4 +1,5 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readThreadParentThreadId, readThreadSpawnSource } from "./native-subagent-assignment.js";
 import { resolveNativeModelParentOwner } from "./native-subagent-model-lookup.js";
 import {
   createNativeModelSourceOwner,
@@ -17,9 +18,7 @@ import type {
   NativeSubagentMonitorClient,
   ParentOwner,
   ParentState,
-  PreparedNativeReceiver,
 } from "./native-subagent-monitor-types.js";
-import { readThreadParentThreadId, readThreadSpawnSource } from "./native-subagent-task-ids.js";
 import { isJsonObject } from "./protocol.js";
 
 /** Equality joins input to one live source; it never grants another source's models. */
@@ -57,17 +56,8 @@ type InputDependencies = {
   retainTargetRevision: (threadId: string) => { isCurrent: () => boolean; release: () => void };
   currentModelExecution: (threadId: string) => ParentOwner | undefined;
   admissions: ReadonlyMap<string, NativeChildAdmissionEvidence[]>;
-  prepareReceiver: (
-    state: ParentState,
-    threadId: string,
-    assertCurrent?: () => void,
-  ) => Promise<PreparedNativeReceiver | undefined>;
-  registerChildThread: (
-    ...args: [
-      ...Parameters<AdmissionDrainDependencies["registerChildThread"]>,
-      assertCurrent?: () => void,
-    ]
-  ) => Promise<ChildState | undefined>;
+  prepareReceiver: (state: ParentState, threadId: string, nativeParentThreadId?: string) => boolean;
+  registerChildThread: AdmissionDrainDependencies["registerChildThread"];
   admit: (
     state: ParentState,
     owner: ParentOwner,
@@ -209,7 +199,7 @@ export async function prepareNativeModelToolInput(
     const targetThreadId = resolveInputTarget(request, dependencies);
     targetRevision = dependencies.retainTargetRevision(targetThreadId);
     const targetParent = dependencies.parents.get(targetThreadId);
-    let targetChild = dependencies.knownChildren.get(targetThreadId);
+    const targetChild = dependencies.knownChildren.get(targetThreadId);
     const targetConfiguration = targetChild?.configurationQualification;
     const targetRouting = request.readQualification(targetThreadId);
     assertTargetCurrent = () => {
@@ -323,34 +313,16 @@ export async function prepareNativeModelToolInput(
       preparedOwner.modelSource = preparedSource;
     }
     assertCurrent();
-    const prepared = await dependencies.prepareReceiver(state, thread.id, assertCurrent);
-    if (!prepared?.isCurrent()) {
+    const nativeParentThreadId = readThreadParentThreadId(thread);
+    if (!dependencies.prepareReceiver(state, thread.id, nativeParentThreadId)) {
       throw new Error("Codex native input receiver cannot retain this sender's admitted source");
     }
-    targetChild = prepared.known;
-    assertCurrent();
     if (!dependencies.knownChildren.has(thread.id) && !dependencies.parents.has(thread.id)) {
       const metadata = isJsonObject(thread) ? thread : undefined;
-      const child = await dependencies.registerChildThread(
-        state,
-        thread.id,
-        {
-          nativeParentThreadId: readThreadParentThreadId(metadata),
-          agentPath: readString(readThreadSpawnSource(metadata), "agent_path"),
-        },
-        assertCurrent,
-      );
-      const registeredChild = dependencies.knownChildren.get(thread.id);
-      if (
-        !child ||
-        dependencies.children.get(child.runId) !== child ||
-        registeredChild?.parent !== state ||
-        registeredChild.assignment.runId !== child.runId
-      ) {
-        throw new Error("Codex native input receiver changed during preparation");
-      }
-      targetChild = registeredChild;
-      assertCurrent();
+      dependencies.registerChildThread(state, thread.id, {
+        nativeParentThreadId: readThreadParentThreadId(metadata),
+        agentPath: readString(readThreadSpawnSource(metadata), "agent_path"),
+      });
     }
     const currentState =
       dependencies.parents.get(request.threadId) ??
@@ -402,19 +374,12 @@ type AdmissionDrainDependencies = {
   knownChildren: ReadonlyMap<string, KnownChild>;
   isCurrent: (state: ParentState) => boolean;
   currentChild: (threadId: string) => ChildState | undefined;
-  hasRecovery: (state: ParentState, threadId: string) => boolean;
   registerAgentPath: (state: ParentState, threadId: string, path: string) => void;
   registerChildThread: (
     state: ParentState,
     threadId: string,
-    options: {
-      agentPath?: string;
-      directOwner?: ParentOwner;
-      nativeParentThreadId?: string;
-      completionCustody?: ParentOwner["completionCustody"];
-    },
+    options: { agentPath?: string; directOwner?: ParentOwner; nativeParentThreadId?: string },
   ) => ChildState | undefined;
-  associateUnregisteredChildInteractions: (state: ParentState, threadId: string) => void;
   admitFollowupChild: (
     known: KnownChild,
     threadId: string,
@@ -438,18 +403,16 @@ export function drainNativeChildModelAdmissions(
     (!ownerIsCurrent &&
       !pending.some(
         (entry) =>
-          (entry.kind === "spawn" && entry.preparing && entry.owner === owner) ||
-          (entry.kind === "interaction" &&
-            (entry.admittedOwner === owner ||
-              entry.modelSource?.owner === owner ||
-              (entry.owner === owner && entry.modelSource))),
+          entry.kind === "interaction" &&
+          (entry.admittedOwner === owner ||
+            entry.modelSource?.owner === owner ||
+            (entry.owner === owner && entry.modelSource)),
       ))
   ) {
     return;
   }
   const remaining: NativeChildAdmissionEvidence[] = [];
   const affectedChildren = new Set<string>();
-  const unknownChildren = new Set<string>();
   for (const evidence of pending) {
     if (evidence.parentThreadId !== state.parentThreadId) {
       remaining.push(evidence);
@@ -476,15 +439,8 @@ export function drainNativeChildModelAdmissions(
       if (known && known.parent !== state) {
         continue;
       }
-      if (
-        !known ||
-        (!known.assignment.terminal &&
-          !known.assignment.nativeTurnId &&
-          !dependencies.currentChild(evidence.childThreadId) &&
-          dependencies.hasRecovery(state, evidence.childThreadId))
-      ) {
+      if (!known) {
         remaining.push(evidence);
-        unknownChildren.add(evidence.childThreadId);
         continue;
       }
       if (evidence.agentPath && !known.agentPaths.has(evidence.agentPath)) {
@@ -527,15 +483,13 @@ export function drainNativeChildModelAdmissions(
       affectedChildren.add(evidence.childThreadId);
       continue;
     }
-    if (!ownerIsCurrent && !(evidence.preparing && evidence.owner === owner)) {
+    if (!ownerIsCurrent) {
       continue;
     }
-    evidence.modelSource?.assertCurrent();
     const childState = dependencies.registerChildThread(state, evidence.childThreadId, {
       ...(evidence.agentPath === undefined ? {} : { agentPath: evidence.agentPath }),
       directOwner: owner,
       nativeParentThreadId: evidence.nativeParentThreadId,
-      completionCustody: evidence.completionCustody,
     });
     if (childState) {
       admitNativeChildModelExecution(
@@ -546,9 +500,6 @@ export function drainNativeChildModelAdmissions(
     }
   }
   dependencies.replaceAdmissions(turnId, remaining);
-  for (const threadId of unknownChildren) {
-    dependencies.associateUnregisteredChildInteractions(state, threadId);
-  }
   for (const threadId of affectedChildren) {
     const known = dependencies.knownChildren.get(threadId);
     if (known?.parent !== state) {

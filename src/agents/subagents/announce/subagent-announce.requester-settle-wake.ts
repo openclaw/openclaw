@@ -9,7 +9,6 @@ import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership
 import { logWarn } from "../../../logger.js";
 import { getSharedGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
-import { withTaskProgressRequesterContinuation } from "../../../tasks/task-progress-requester.js";
 import {
   type DeliveryContext,
   normalizeDeliveryContext,
@@ -24,7 +23,10 @@ import {
   withFollowupSuccessor,
 } from "../completion/session-followup-completion.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { selectConnectedSettledSubagentWave } from "../registry/subagent-registry-queries.js";
+import {
+  matchesSubagentRequesterSession,
+  selectConnectedSettledSubagentWave,
+} from "../registry/subagent-registry-queries.js";
 import {
   countActiveDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
@@ -32,10 +34,7 @@ import {
   hasDescendantRunAwaitingSettle,
   listSubagentRunsForRequester,
 } from "../registry/subagent-registry-read.js";
-import type {
-  RequesterSettleWakeState,
-  SubagentRunRecord,
-} from "../registry/subagent-registry.types.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { buildRequesterSettleWakeIdentity } from "../registry/subagent-requester-settle-identity.js";
 import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import { withRequesterCronAuthority } from "../requester-cron-authority.js";
@@ -53,27 +52,17 @@ import {
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
-  readChildCompletionFindings,
   dedupeLatestChildCompletionRows,
   filterCurrentDirectChildCompletionRows,
+  readChildCompletionFindings,
 } from "./subagent-announce-output.js";
 import { hasUsableSessionEntry } from "./subagent-announce.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
-
-export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
-
-type RequesterSettleWakeBatchCallbacks = {
-  transitionBatch: (
-    batch: readonly SubagentRunRecord[],
-    state: RequesterSettleWakeBatchState,
-  ) => void;
-  completeBatch: (
-    batch: readonly SubagentRunRecord[],
-    rearmGeneration?: number,
-    delivery?: SubagentAnnounceDeliveryResult,
-    onCommitted?: () => void,
-  ) => void;
-};
+import {
+  readSharedBatchState,
+  type RequesterSettleWakeBatchState,
+  type RequesterSettleWakeBatchCallbacks,
+} from "./subagent-announce.requester-settle-state.js";
 
 const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
@@ -89,34 +78,10 @@ function retainedYieldIdentity(state: RequesterSettleWakeBatchState) {
   };
 }
 
-function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSettleWakeBatchState {
-  const states = batch
-    .map((entry) => entry.requesterSettleWake)
-    .filter((state): state is RequesterSettleWakeState => Boolean(state));
-  const dispatching = states.find((state) => state.status === "dispatching");
-  const source = dispatching ?? states[0];
-  return {
-    status: source?.status ?? "pending",
-    attemptCount: Math.max(0, ...states.map((state) => state.attemptCount)),
-    ...(source?.replayCount !== undefined ? { replayCount: source.replayCount } : {}),
-    ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
-    ...(source?.batchRunIds ? { batchRunIds: [...source.batchRunIds] } : {}),
-    ...(states.some((state) => state.requesterYieldBatch === true)
-      ? { requesterYieldBatch: true }
-      : {}),
-    ...(states.some((state) => state.afterRequesterYield === true)
-      ? { afterRequesterYield: true }
-      : {}),
-    ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
-    ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
-    deferralCount: Math.max(0, ...states.map((state) => state.deferralCount ?? 0)),
-  };
-}
-
 /**
  * Wakes a top-level or explicitly yielded nested requester once its batch's last
- * child and descendants settle. Durable state transitions happen synchronously
- * through lifecycle-owned callbacks before and after every async delivery.
+ * child and descendants settle. Await lifecycle-owned durable state transitions
+ * before and after every delivery.
  */
 export async function maybeWakeRequesterAfterAllChildrenSettled(
   params: RequesterSettleWakeBatchCallbacks & {
@@ -169,12 +134,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       rearmGeneration: state.rearmGeneration,
     });
   };
-  const completeBatch = (
+  const completeBatch = async (
     batch: readonly SubagentRunRecord[],
     state: RequesterSettleWakeBatchState,
     delivery?: SubagentAnnounceDeliveryResult,
     requesterSessionId?: string,
-  ): void =>
+  ): Promise<void> =>
     params.completeBatch(batch, state.rearmGeneration, delivery, () =>
       finalizeRequesterAttachment(
         batch.map((entry) => entry.runId).toSorted(),
@@ -185,7 +150,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     );
   const admittedRearmGeneration = initialState.rearmGeneration;
   if (isCronSessionKey(requesterSessionKey)) {
-    completeBatch([params.settledEntry], initialState);
+    await completeBatch([params.settledEntry], initialState);
     return false;
   }
 
@@ -277,11 +242,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     settledBatch.every((entry) =>
       isSystemEventStoreCurrent(requesterSessionKey, entry.requesterStorePath, requesterAgentId),
     );
-  const retireReplacedStore = () => {
+  const retireReplacedStore = async (): Promise<boolean> => {
     if (isStoreCurrent()) {
       return false;
     }
-    completeBatch(settledBatch, selectedState, {
+    await completeBatch(settledBatch, selectedState, {
       delivered: false,
       path: "none",
       error: "store replaced",
@@ -290,7 +255,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     });
     return true;
   };
-  if (retireReplacedStore()) {
+  if (await retireReplacedStore()) {
     return false;
   }
   const followup = getFollowupForCohort(settledBatch);
@@ -320,10 +285,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   };
   if (isBatchDeliveryClosed()) {
     // Cancellation already owns the task result; only consume its obsolete wake.
-    completeBatch(settledBatch, selectedState);
+    await completeBatch(settledBatch, selectedState);
     return false;
   }
-  function deferBatch(
+  async function deferBatch(
     state: RequesterSettleWakeBatchState,
     countTowardsLimit = countActiveDescendantRuns(
       requesterSessionKey,
@@ -331,7 +296,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       requesterStorePath,
       rootRunIds,
     ) === 0,
-  ): void {
+  ): Promise<void> {
     const now = Date.now();
     if ((state.nextAttemptAt ?? 0) > now) {
       return;
@@ -341,14 +306,14 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     // an already completed sibling before the requester can receive it.
     const deferralCount = countTowardsLimit ? (state.deferralCount ?? 0) + 1 : 0;
     if (countTowardsLimit && deferralCount >= REQUESTER_SETTLE_WAKE_MAX_DEFERRALS) {
-      completeBatch(settledBatch, state, {
+      await completeBatch(settledBatch, state, {
         delivered: false,
         path: "none",
         error: "requester settle wake deferred too many times",
       });
       return;
     }
-    params.transitionBatch(settledBatch, {
+    await params.transitionBatch(settledBatch, {
       status: state.status,
       attemptCount: state.attemptCount,
       ...(state.replayCount !== undefined ? { replayCount: state.replayCount } : {}),
@@ -364,7 +329,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   }
   if (hasUnsettledDescendants) {
     if (frozenBatchRunIds && frozenBatchRunIds.length > 0) {
-      deferBatch(selectedState);
+      await deferBatch(selectedState);
     }
     return false;
   }
@@ -390,7 +355,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       !requesterYieldedAfterDelivery) ||
     (!requesterYieldedAfterDelivery && requesterDepth >= 1)
   ) {
-    completeBatch(settledBatch, selectedState);
+    await completeBatch(settledBatch, selectedState);
     return false;
   }
 
@@ -399,7 +364,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     requesterAgentId,
   );
   if (!hasUsableSessionEntry(requesterEntry)) {
-    completeBatch(settledBatch, selectedState, {
+    await completeBatch(settledBatch, selectedState, {
       delivered: false,
       path: "none",
       error: "requester session unavailable",
@@ -407,6 +372,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     return false;
   }
 
+  const requesterSessionId = requesterEntry.sessionId;
+  const requesterLifecycleRevision = requesterEntry.lifecycleRevision;
+  const requesterIdentity = {
+    sessionId: requesterSessionId,
+    lifecycleRevision: requesterLifecycleRevision,
+  };
   const completionRows = dedupeLatestChildCompletionRows(
     filterCurrentDirectChildCompletionRows(settledBatch, {
       requesterSessionKey,
@@ -421,7 +392,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   if (
     privateRows.some((entry) => entry.completionRequesterSessionId !== requesterEntry.sessionId)
   ) {
-    completeBatch(settledBatch, selectedState, {
+    await completeBatch(settledBatch, selectedState, {
       delivered: false,
       path: "none",
       reason: "completion_handoff_unavailable",
@@ -431,8 +402,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     });
     return false;
   }
+  const recoveryRows = completionRows.filter((entry) =>
+    matchesSubagentRequesterSession(entry, requesterIdentity),
+  );
   const preparedFindings = await readChildCompletionFindings(completionRows);
-  if (retireReplacedStore()) {
+  if (await retireReplacedStore()) {
     return false;
   }
   const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
@@ -443,6 +417,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     requireVisibleReply: requesterYieldedAfterDelivery,
     parentOnly,
     children: completionRows,
+    recoveryChildren: recoveryRows,
     preserveModelRouteNotice: !completionChannel || !isDeliverableMessageChannel(completionChannel),
   });
   const { batchKey: wakeKeyBase } = buildRequesterSettleWakeIdentity({
@@ -480,7 +455,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     }
     // Recheck owned descendants after loading findings and before dispatch.
     if (requesterHasUnsettledDescendants()) {
-      deferBatch(state);
+      await deferBatch(state);
       return false;
     }
 
@@ -491,7 +466,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       attemptIndex = Math.max(0, state.attemptCount - 1);
     } else {
       if (state.attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS) {
-        completeBatch(settledBatch, state, {
+        await completeBatch(settledBatch, state, {
           delivered: false,
           path: "none",
           error: state.lastError ?? "requester settle wake attempts exhausted",
@@ -505,7 +480,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         batchRunIds,
         ...retainedYieldIdentity(state),
       };
-      params.transitionBatch(settledBatch, state);
+      await params.transitionBatch(settledBatch, state);
     }
 
     const { runId: directIdempotencyKey } = buildRequesterSettleWakeIdentity({
@@ -516,9 +491,15 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       attemptIndex,
       parentOnly,
     });
-    const requesterSessionId = requesterEntry.sessionId;
-    const requesterLifecycleRevision = requesterEntry.lifecycleRevision;
     const isRequesterCurrent = () => {
+      const currentSession = loadRequesterSessionEntry(requesterSessionKey, requesterAgentId).entry;
+      if (
+        currentSession?.sessionId !== requesterSessionId ||
+        currentSession?.lifecycleRevision !== requesterLifecycleRevision ||
+        recoveryRows.some((entry) => !matchesSubagentRequesterSession(entry, requesterIdentity))
+      ) {
+        return false;
+      }
       if (followup) {
         try {
           followup.assertCurrent();
@@ -543,11 +524,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       ) {
         return false;
       }
-      const currentSession = loadRequesterSessionEntry(requesterSessionKey, requesterAgentId).entry;
-      return (
-        currentSession?.sessionId === requesterSessionId &&
-        currentSession?.lifecycleRevision === requesterLifecycleRevision
-      );
+      return true;
     };
     const isBatchCurrent = () => {
       const currentRuns = filterCurrentDirectChildCompletionRows(
@@ -573,17 +550,22 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       isBatchCurrent() &&
       isRequesterCurrent() &&
       !isBatchDeliveryClosed();
-    const settleRevokedBatch = (): boolean => {
-      if (isGatewayClosed() || !isBatchCurrent() || retireReplacedStore()) {
+    const settleRevokedBatch = async (): Promise<boolean> => {
+      if (isGatewayClosed() || !isBatchCurrent() || (await retireReplacedStore())) {
         return true;
       }
       if (isBatchDeliveryClosed() || !isRequesterCurrent()) {
-        completeBatch(settledBatch, state);
+        await completeBatch(settledBatch, state);
         return true;
       }
       return false;
     };
-    if (requesterAgentId && state.requesterYieldBatch && state.rearmGeneration !== undefined) {
+    if (
+      isSourceSessionEffectsAllowed() &&
+      requesterAgentId &&
+      state.requesterYieldBatch &&
+      state.rearmGeneration !== undefined
+    ) {
       transferRequesterFinalAttachment({
         requesterAgentId,
         requesterSessionKey,
@@ -597,58 +579,49 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     try {
       const dispatch = () =>
         subagentRuns.runWithCompletionBatchAuthority(settledBatch, () =>
-          withTaskProgressRequesterContinuation(
+          withRequesterCronAuthority(
             {
-              entries: settledBatch,
+              requesterSessionKey,
+              requesterSessionId,
+              requesterAgentId,
+              batch: settledBatch,
+              rearmGeneration: state.requesterYieldBatch ? state.rearmGeneration : undefined,
               runId: directIdempotencyKey,
-              requesterSessionId: requesterEntry.sessionId,
               isCurrent: isSourceSessionEffectsAllowed,
             },
             () =>
-              withRequesterCronAuthority(
-                {
-                  requesterSessionKey,
-                  requesterSessionId,
-                  requesterAgentId,
-                  batch: settledBatch,
-                  rearmGeneration: state.requesterYieldBatch ? state.rearmGeneration : undefined,
-                  runId: directIdempotencyKey,
-                  isCurrent: isSourceSessionEffectsAllowed,
-                },
-                () =>
-                  deliverSubagentAnnouncement({
-                    requesterSessionKey,
-                    requesterAgentId,
-                    requesterRunTimeoutSeconds:
-                      requesterDepth >= 1 && requesterRun
-                        ? (requesterRun.runTimeoutSeconds ?? 0)
-                        : undefined,
-                    triggerMessage: wakeMessage,
-                    steerMessage: wakeMessage,
-                    requesterSessionOrigin,
-                    directOrigin,
-                    sourceSessionKey: batchSessionKeys[0],
-                    settleWakeSourceSessionKeys: batchSessionKeys,
-                    sourceTool: "subagent_settle",
-                    targetRequesterSessionKey: requesterSessionKey,
-                    requesterIsSubagent: requesterDepth >= 1,
-                    expectsCompletionMessage: false,
-                    requireDirectDelivery: true,
-                    ...(parentOnly
-                      ? {
-                          completionTarget: "parent",
-                          completionRequesterSessionId: requesterEntry.sessionId,
-                        }
-                      : {}),
-                    ...(!parentOnly && requesterYieldedAfterDelivery
-                      ? { requireVisibleReply: true }
-                      : {}),
-                    directIdempotencyKey,
-                    signal: params.signal,
-                    resolveGatewayContext,
-                    isSourceSessionEffectsAllowed,
-                  }),
-              ),
+              deliverSubagentAnnouncement({
+                requesterSessionKey,
+                requesterAgentId,
+                requesterRunTimeoutSeconds:
+                  requesterDepth >= 1 && requesterRun
+                    ? (requesterRun.runTimeoutSeconds ?? 0)
+                    : undefined,
+                triggerMessage: wakeMessage,
+                steerMessage: wakeMessage,
+                requesterSessionOrigin,
+                directOrigin,
+                sourceSessionKey: batchSessionKeys[0],
+                settleWakeSourceSessionKeys: batchSessionKeys,
+                sourceTool: "subagent_settle",
+                targetRequesterSessionKey: requesterSessionKey,
+                requesterIsSubagent: requesterDepth >= 1,
+                expectsCompletionMessage: false,
+                requireDirectDelivery: true,
+                ...(parentOnly
+                  ? {
+                      completionTarget: "parent",
+                      completionRequesterSessionId: requesterEntry.sessionId,
+                    }
+                  : {}),
+                ...(!parentOnly && requesterYieldedAfterDelivery
+                  ? { requireVisibleReply: true }
+                  : {}),
+                directIdempotencyKey,
+                signal: params.signal,
+                resolveGatewayContext,
+                isSourceSessionEffectsAllowed,
+              }),
           ),
         );
       delivery = followup
@@ -662,12 +635,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
           )
         : await dispatch();
     } catch (error) {
-      if (settleRevokedBatch()) {
+      if (await settleRevokedBatch()) {
         return false;
       }
       const lastError = error instanceof Error ? error.message : String(error);
       if (isPermanentAnnounceDeliveryError(error)) {
-        completeBatch(settledBatch, state, {
+        await completeBatch(settledBatch, state, {
           delivered: false,
           path: "none",
           disposition: "permanent_failure",
@@ -683,7 +656,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         replayCount >= REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS ||
         retryDelayMs === undefined
       ) {
-        completeBatch(settledBatch, state, {
+        await completeBatch(settledBatch, state, {
           delivered: false,
           path: "none",
           error: lastError,
@@ -699,23 +672,23 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         ...retainedYieldIdentity(state),
         lastError,
       };
-      params.transitionBatch(settledBatch, state);
+      await params.transitionBatch(settledBatch, state);
       logWarn(
         `requester settle wake transport replay ${replayCount} scheduled in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
       );
       return false;
     }
     if (delivery.delivered) {
-      completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
+      await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
       return true;
     }
-    if (settleRevokedBatch()) {
+    if (await settleRevokedBatch()) {
       return false;
     }
     if (delivery.reason === "requester_turn_pending") {
       // An existing Gateway turn still owns the input. Observe the same request
       // without spending failure attempts or closing its completion obligation.
-      deferBatch({ ...state, lastError: undefined }, false);
+      await deferBatch({ ...state, lastError: undefined }, false);
       return false;
     }
     if (
@@ -724,7 +697,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       delivery.disposition === "intentional_non_delivery" ||
       delivery.reason === "requester_abandoned"
     ) {
-      completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
+      await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
       return false;
     }
 
@@ -732,7 +705,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptIndex];
     const lastError = delivery.error ?? delivery.reason ?? "undelivered";
     if (attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS || retryDelayMs === undefined) {
-      completeBatch(
+      await completeBatch(
         settledBatch,
         state,
         { ...delivery, error: lastError },
@@ -740,7 +713,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       );
       return false;
     }
-    params.transitionBatch(settledBatch, {
+    await params.transitionBatch(settledBatch, {
       status: "pending",
       attemptCount,
       nextAttemptAt: Date.now() + retryDelayMs,

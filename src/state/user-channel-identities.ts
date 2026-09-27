@@ -35,6 +35,7 @@ import { publishUserProfilesChange } from "./user-profile-list.js";
 import {
   requireResolvedUserProfileMetadataById,
   selectResolvedUserProfileMetadataById,
+  selectUserProfileEmails,
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema, UserProfileOwnerError } from "./user-profiles-schema.js";
@@ -391,14 +392,7 @@ export function resolveUserChannelIdentityInDatabase(
       return undefined;
     }
     const kysely = userProfilesDb(db);
-    const emails = executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("user_profile_emails")
-        .select("email")
-        .where("profile_id", "=", profile.id)
-        .orderBy("email", "asc"),
-    ).rows.map(({ email }) => email);
+    const emails = selectUserProfileEmails(db, profile.id);
     const loginEmails = emails.filter((email) => {
       const login = classifyTailscaleLogin(email);
       // Legacy email-shaped GitHub aliases must not revive a renamed login's grant.
