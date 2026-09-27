@@ -209,6 +209,9 @@ describe("plugins cli uninstall", () => {
         await withPluginLifecycleLease({ path: databasePath }, async (lease) => {
           await uninstall();
           lease.assertOwned();
+          expect(refreshPluginRegistryMock).toHaveBeenCalledWith(
+            expect.objectContaining({ filePath: databasePath }),
+          );
           expect(readInstallRecords()).toEqual({});
           expect(pluginCliConfigMock().plugins?.entries?.alpha).toEqual({ enabled: false });
           expect(

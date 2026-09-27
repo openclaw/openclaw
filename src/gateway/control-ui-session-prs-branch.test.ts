@@ -691,6 +691,9 @@ describe("session branch diff stats", () => {
         );
         expect(reads).toHaveBeenCalled();
         expect(reads.mock.calls.filter(([, args]) => args[0] === "rev-list")).toHaveLength(0);
+        expect(reads.mock.calls.filter(([, args]) => args[0] === "merge-base")).toHaveLength(
+          localWork === "unpushed" ? 1 : 0,
+        );
       } finally {
         reads.mockRestore();
       }
@@ -713,21 +716,24 @@ describe("session branch diff stats", () => {
     });
   });
 
-  it.each(["missing object", "malformed ref"])(
+  it.each(["missing object", "missing HEAD object", "malformed ref"])(
     "preserves unknown comparison behavior for equal remote tips with a %s",
     async (problem) => {
       await initializeFeatureBranch();
       await trackRemote("feature");
-      const value = problem === "missing object" ? "1".repeat(40) : "not-an-object-id";
+      const value = problem === "malformed ref" ? "not-an-object-id" : "1".repeat(40);
       for (const branch of ["main", "feature"]) {
         await fs.writeFile(
           path.join(root, ".git", "refs", "remotes", "origin", branch),
           `${value}\n`,
         );
       }
+      if (problem === "missing HEAD object") {
+        await fs.writeFile(path.join(root, ".git", "refs", "heads", "feature"), `${value}\n`);
+      }
       const result = await loadBranchState();
       expect(result.branch?.createUrl).toBe(
-        problem === "missing object"
+        problem !== "malformed ref"
           ? "https://github.com/openclaw/openclaw/pull/new/feature"
           : undefined,
       );

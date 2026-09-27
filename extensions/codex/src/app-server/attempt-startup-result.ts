@@ -6,7 +6,6 @@ import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
 import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./turn-router.js";
 
-/** Resources and bindings returned after a Codex attempt thread starts. */
 export type StartCodexAttemptThreadResult = {
   client: CodexAppServerClient;
   turnRouter: CodexAppServerTurnRouter;

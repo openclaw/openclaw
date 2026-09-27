@@ -100,10 +100,7 @@ struct WatchExecApprovalResolveEvent: Codable, Equatable, Sendable {
     var transport: String
 }
 
-struct WatchExecApprovalSnapshotRequestItem: Equatable, Sendable {
-    var approvalId: String
-    var activeResolutionAttemptId: String?
-}
+typealias WatchExecApprovalSnapshotRequestItem = OpenClawWatchExecApprovalSnapshotRequestItem
 
 struct WatchExecApprovalSnapshotRequestEvent: Equatable, Sendable {
     var requestId: String

@@ -156,6 +156,19 @@ complete original stripe on Node and adds the client portion on Bun. The shared
 Vitest config resolves `ws` to the installed package so its imports and mocks use
 the same module identity on both runtimes.
 
+The complete memory plugin config (`memory-lancedb` and `memory-wiki`) also
+supports Bun, with its existing isolated workers and database-worker exclusions.
+A paired Linux Testbox comparison with two workers passed the same 53 files,
+474 tests, and one platform skip on each runtime. Bun reduced complete test-command
+wall time from 58.72s to 52.79s cold and from 43.51s to 38.68s with warm caches
+and reversed runtime order: 10–11% faster, with warm aggregate RSS near 3.94 GiB
+on both. PR selections use Bun. Full Release Validation's plugin prerelease
+batch retains its complete Node inventory and adds Bun after each qualified
+memory group in the same worker slot. Separate database-worker tests remain
+on Node. Both runtimes preserve the selected files, exclusions, and worker caps;
+either failing fails the job. Historical targets without dual batch support
+retain their original Node execution.
+
 Pull requests and their release-gate fallback run compatible selections on Bun.
 Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs
 the complete original selection on Node and its compatible portion on Bun

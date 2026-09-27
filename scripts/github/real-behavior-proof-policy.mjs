@@ -114,10 +114,6 @@ export async function readBoundedGitHubApiJson(
   return JSON.parse(text);
 }
 
-async function cancelGitHubApiResponseBody(response) {
-  await response.body?.cancel?.().catch(() => undefined);
-}
-
 function normalizeLineEndings(text = "") {
   return text.replace(/\r\n?/g, "\n");
 }
@@ -170,10 +166,6 @@ function maskHtmlComments(text) {
       return maskedLine;
     })
     .join("\n");
-}
-
-function stripHtmlComments(text) {
-  return maskHtmlComments(text);
 }
 
 function isAutomationUser(user = {}, fallbackLogin = "") {
@@ -252,7 +244,7 @@ export async function isMaintainerTeamMember({
     );
     return body?.state === "active";
   } finally {
-    await cancelGitHubApiResponseBody(response);
+    await response.body?.cancel?.().catch(() => undefined);
   }
 }
 
@@ -336,10 +328,6 @@ function legacyProofFieldLineValue(line) {
   return match?.[1] ?? null;
 }
 
-function isAnyLegacyProofFieldLine(line) {
-  return legacyProofFieldLineValue(line) !== null;
-}
-
 function extractFieldValue(section, field) {
   const lines = maskHtmlComments(normalizeLineEndings(section)).split("\n");
   let fenceMarker = "";
@@ -361,7 +349,7 @@ function extractFieldValue(section, field) {
       const lineLocal = lines[next];
       if (
         !fenceMarker &&
-        (markdownHeadingLevel(lineLocal) > 0 || isAnyLegacyProofFieldLine(lineLocal))
+        (markdownHeadingLevel(lineLocal) > 0 || legacyProofFieldLineValue(lineLocal) !== null)
       ) {
         break;
       }
@@ -374,7 +362,7 @@ function extractFieldValue(section, field) {
 }
 
 function stripMarkdownFenceMarkers(value) {
-  return stripHtmlComments(normalizeLineEndings(value))
+  return maskHtmlComments(normalizeLineEndings(value))
     .split("\n")
     .filter((line) => !/^ {0,3}(?:`{3,}|~{3,})(?:.*)?$/.test(line))
     .join("\n")

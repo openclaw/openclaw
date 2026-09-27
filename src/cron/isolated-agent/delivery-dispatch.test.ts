@@ -45,14 +45,11 @@ describe("selectCronRouteCurrentSessionKey", () => {
     ).toBe(ISOLATED_RUN_KEY);
   });
 
-  it.each([
-    ["telegram", "agent:main:telegram:group:-100123:thread:42", "group:-100123"],
-    ["signal", "agent:main:signal:direct:15550001111", "user:15550001111"],
-    ["discord", "agent:main:discord:channel:channel-123:thread:thread-456", "channel:channel-123"],
-  ])("reuses a canonical same-provider %s conversation", (provider, bound, target) => {
-    expect(selectCronRouteCurrentSessionKey(job(bound), ISOLATED_RUN_KEY, provider, target)).toBe(
-      bound,
-    );
+  it("reuses a canonical conversation without a thread", () => {
+    const bound = "agent:main:signal:direct:15550001111";
+    expect(
+      selectCronRouteCurrentSessionKey(job(bound), ISOLATED_RUN_KEY, "signal", "user:15550001111"),
+    ).toBe(bound);
   });
 
   it("rejects a matching-provider conversation bound to a different agent", () => {

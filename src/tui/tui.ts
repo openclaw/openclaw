@@ -195,20 +195,14 @@ export function resolveTuiSessionKey(params: {
   sessionMainKey: string;
 }) {
   const trimmed = (params.raw ?? "").trim();
-  if (!trimmed) {
+  if (!trimmed || trimmed.toLowerCase() === "global") {
     return resolveCanonicalMainSessionKey({
       agentId: params.currentAgentId,
       mainKey: params.sessionMainKey,
       sessionScope: params.sessionScope,
     });
   }
-  const parsed = parseAgentSessionKey(trimmed);
-  if (parsed?.rest === "global") {
-    // Initial agent selection already consumed the explicit owner prefix. TUI operations
-    // need the literal sentinel so they carry that owner separately as agentId.
-    return "global";
-  }
-  if (trimmed === "global" || trimmed === "unknown") {
+  if (trimmed === "unknown") {
     return trimmed;
   }
   return toAgentStoreSessionKey({
@@ -245,7 +239,7 @@ export function resolveTuiSessionSelection(params: {
   const keepDurableBareKey =
     !parsed &&
     persistedOwner?.kind === "configured" &&
-    trimmed !== "global" &&
+    trimmed.toLowerCase() !== "global" &&
     trimmed !== "unknown" &&
     trimmed.toLowerCase() !== "main" &&
     trimmed.toLowerCase() !== mainKey;
@@ -1782,9 +1776,13 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       scheduleDynamicSlashCommandsRefresh();
       if (!state.autoMessageSent && autoMessage) {
         state.autoMessageSent = true;
-        await sendMessage(autoMessage, opts.initialMessageTimeoutMs);
-        if (!ownsConnection()) {
-          return;
+        if (resolveMessageAdmission(autoMessage).status === "blocked") {
+          chatLog.addSystem("initial message not sent — retry it after the session is ready");
+        } else {
+          await sendMessage(autoMessage, opts.initialMessageTimeoutMs);
+          if (!ownsConnection()) {
+            return;
+          }
         }
       }
       updateFooter();

@@ -153,7 +153,7 @@ async function seedImportedHistory(
     });
   }
   if (pendingPlugin) {
-    recordDeferredPluginMigrations({
+    await recordDeferredPluginMigrations({
       env: state.env,
       pending: [{ pluginId, reason: "Plugin migration pending", command: "openclaw doctor --fix" }],
     });

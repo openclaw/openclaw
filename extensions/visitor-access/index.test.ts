@@ -235,36 +235,24 @@ describe("visitor-access plugin lifecycle", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([
-    { label: "roles disabled", scope: undefined, assignedRole: null },
-    { label: "assigned default writer", scope: "operator.write", assignedRole: "staff" },
-    { label: "unassigned default writer", scope: "operator.write", assignedRole: null },
-    {
-      label: "missing assignment falling back to admin",
-      scope: "operator.admin",
-      assignedRole: "removed",
-    },
-    { label: "assigned default admin", scope: "operator.admin", assignedRole: "staff" },
-  ] as const)("preserves unbound staff admission with $label", ({ scope, assignedRole }) => {
-    const config: OpenClawConfig = scope
-      ? {
-          gateway: {
-            roles: {
-              default: "staff",
-              definitions: {
-                staff: { sessions: { others: "write" }, agents: "*", scopes: [scope] },
-              },
-            },
+  it("preserves unbound staff admission when staff is the default role", () => {
+    const config: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "staff",
+          definitions: {
+            staff: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
           },
-        }
-      : {};
+        },
+      },
+    };
     const registered = registerPlugin({}, config);
     expect(
       registered.authorize(
         {
           profileId: "staff-profile",
           emails: ["staff@example.test"],
-          assignedRole,
+          assignedRole: "staff",
         },
         false,
       ),
@@ -272,32 +260,26 @@ describe("visitor-access plugin lifecycle", () => {
     expect(registered.gatewayRequest).not.toHaveBeenCalled();
   });
 
-  it.each([false, undefined])(
-    "denies available visitor tools when trusted owner authority is %s",
-    async (senderIsOwner) => {
-      const policy = createPolicyFetch();
-      vi.stubGlobal("fetch", policy.fetcher);
-      const registered = registerPlugin({ senderIsOwner });
-      await registered.start();
-      policy.fetcher.mockClear();
+  it("denies available visitor tools without trusted owner authority", async () => {
+    const policy = createPolicyFetch();
+    vi.stubGlobal("fetch", policy.fetcher);
+    const registered = registerPlugin({ senderIsOwner: undefined });
+    await registered.start();
+    policy.fetcher.mockClear();
 
-      for (const name of ["visitor_invite", "visitor_revoke", "visitor_list"]) {
-        await expect(
-          registered.execute(
-            name,
-            name === "visitor_list" ? {} : { email: "visitor@example.test" },
-          ),
-        ).resolves.toMatchObject({
-          isError: true,
-          content: [{ type: "text", text: expect.stringContaining("Only administrators") }],
-        });
-      }
+    for (const name of ["visitor_invite", "visitor_revoke", "visitor_list"]) {
+      await expect(
+        registered.execute(name, name === "visitor_list" ? {} : { email: "visitor@example.test" }),
+      ).resolves.toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("Only administrators") }],
+      });
+    }
 
-      expect(policy.fetcher).not.toHaveBeenCalled();
-      expect(registered.gatewayRequest).not.toHaveBeenCalled();
-      expect(await registered.store.entries()).toEqual([]);
-    },
-  );
+    expect(policy.fetcher).not.toHaveBeenCalled();
+    expect(registered.gatewayRequest).not.toHaveBeenCalled();
+    expect(await registered.store.entries()).toEqual([]);
+  });
 
   it.each(["invocation", "manager"] as const)(
     "does not renew a grant after %s authority closes during access lookup",

@@ -8,18 +8,6 @@ import SwabbleKit
 import AppKit
 #endif
 
-enum VoiceWakeRuntimeTaskSupport {
-    static func wait(nanoseconds: UInt64) async -> Bool {
-        guard !Task.isCancelled else { return false }
-        do {
-            try await Task.sleep(nanoseconds: nanoseconds)
-        } catch {
-            return false
-        }
-        return !Task.isCancelled
-    }
-}
-
 /// Background listener that keeps the voice-wake pipeline alive outside the settings test view.
 actor VoiceWakeRuntime {
     static let shared = VoiceWakeRuntime()
@@ -163,8 +151,8 @@ actor VoiceWakeRuntime {
                 return
             }
 
-            self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-            guard let request = self.recognitionRequest else { return }
+            let request = SFSpeechAudioBufferRecognitionRequest()
+            self.recognitionRequest = request
             try SpeechRecognitionRequestPolicy.configurePassiveVoiceWake(
                 request,
                 supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition)
@@ -308,7 +296,9 @@ actor VoiceWakeRuntime {
                     triggerEndTime: self.activeTriggerEndTime,
                     triggers: config.triggers)
                 self.capturedTranscript = trimmed
-                self.updateHeardBeyondTrigger(withTrimmed: trimmed)
+                if !trimmed.isEmpty {
+                    self.heardBeyondTrigger = true
+                }
                 if update.isFinal {
                     self.committedTranscript = trimmed
                     self.volatileTranscript = ""
@@ -445,9 +435,9 @@ actor VoiceWakeRuntime {
         self.triggerOnlyTask?.cancel()
         let lastSeenAt = self.lastTranscriptAt
         let lastText = self.lastTranscript
-        let windowNanos = UInt64(self.triggerPauseWindow * 1_000_000_000)
+        let window = self.triggerPauseWindow
         self.triggerOnlyTask = Task { [weak self, lastSeenAt, lastText] in
-            guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: windowNanos) else { return }
+            guard await SimpleTaskSupport.waitForNextOperation(interval: window) else { return }
             guard let self else { return }
             await self.triggerOnlyPauseCheck(
                 lastSeenAt: lastSeenAt,
@@ -465,9 +455,9 @@ actor VoiceWakeRuntime {
         self.preDetectTask?.cancel()
         let lastSeenAt = self.lastTranscriptAt
         let lastText = self.lastTranscript
-        let windowNanos = UInt64(self.preDetectSilenceWindow * 1_000_000_000)
+        let window = self.preDetectSilenceWindow
         self.preDetectTask = Task { [weak self, lastSeenAt, lastText] in
-            guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: windowNanos) else { return }
+            guard await SimpleTaskSupport.waitForNextOperation(interval: window) else { return }
             guard let self else { return }
             await self.preDetectSilenceCheck(
                 lastSeenAt: lastSeenAt,
@@ -616,7 +606,7 @@ actor VoiceWakeRuntime {
                 return
             }
 
-            guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: 200_000_000) else { return }
+            guard await SimpleTaskSupport.waitForNextOperation(interval: 0.2) else { return }
         }
     }
 
@@ -719,8 +709,7 @@ actor VoiceWakeRuntime {
     private func scheduleRestartRecognizer(delay: TimeInterval = 0.7) {
         self.scheduledRestartTask?.cancel()
         self.scheduledRestartTask = Task { [weak self] in
-            let nanos = UInt64(max(0, delay) * 1_000_000_000)
-            guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: nanos) else { return }
+            guard await SimpleTaskSupport.waitForNextOperation(interval: max(0, delay)) else { return }
             guard let self else { return }
             await self.consumeScheduledRestart()
             await self.restartRecognizerIfIdleAndOverlayHidden()
@@ -737,12 +726,6 @@ actor VoiceWakeRuntime {
 
     func pauseForPushToTalk() {
         self.stop(dismissOverlay: false)
-    }
-
-    private func updateHeardBeyondTrigger(withTrimmed trimmed: String) {
-        if !self.heardBeyondTrigger, !trimmed.isEmpty {
-            self.heardBeyondTrigger = true
-        }
     }
 
     private static func trimmedAfterTrigger(_ text: String, triggers: [String]) -> String {

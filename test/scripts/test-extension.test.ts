@@ -481,6 +481,7 @@ describe("scripts/test-extension.mts", () => {
           "mattermost",
           "memory-core",
           "msteams",
+          "openai",
           "qa-lab",
           "telegram",
           "voice-call",
@@ -1037,6 +1038,97 @@ await new Promise(()=>{});export default {};`,
     expect(runParams.targets).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
     expect(runParams.targets).not.toContain("codex/src/app-server/run-attempt.test.ts");
     expect(runParams.targets).toContain("codex/src/app-server/client.test.ts");
+  });
+
+  it.each([
+    { args: [], nodeCode: 0, bunCode: 0 },
+    { args: [], nodeCode: 7, bunCode: 0 },
+    { args: [], nodeCode: 0, bunCode: 9 },
+    { args: [], nodeCode: 7, bunCode: 9 },
+    { args: ["--maxWorkers=4"], nodeCode: 0, bunCode: 0, combined: true },
+    {
+      args: ["--exclude=extensions/memory-lancedb/memory-cli.test.ts"],
+      nodeCode: 0,
+      bunCode: 0,
+    },
+    {
+      args: ["--reporter=json", "--outputFile=/tmp/extension-report.json"],
+      nodeCode: 0,
+      bunCode: 0,
+      combined: true,
+      bun: false,
+    },
+    { args: ["--watch"], nodeCode: 0, bunCode: 0, combined: true, bun: false },
+    { args: ["--shard=1/2"], nodeCode: 0, bunCode: 0, combined: true, bun: false },
+  ])("adds only qualified Bun work after Node with $args ($nodeCode/$bunCode)", async (row) => {
+    const memoryConfig = "test/vitest/vitest.extension-memory.config.ts";
+    const databaseConfig = "test/vitest/vitest.extension-database-workers.config.ts";
+    const configs = [memoryConfig, databaseConfig];
+    const targets = [
+      "extensions/memory-lancedb/config.test.ts",
+      "extensions/memory-lancedb/index.test.ts",
+    ];
+    const calls: RunGroupParams[] = [];
+    const result = await runExtensionBatchPlan(
+      {
+        extensionCount: 1,
+        extensionIds: ["memory-lancedb"],
+        estimatedCost: 2,
+        hasTests: true,
+        testFileCount: 2,
+        planGroups: configs.map((config, index) => ({
+          config,
+          extensionIds: ["memory-lancedb"],
+          roots: [targets[index]!],
+          estimatedCost: 1,
+          testFileCount: 1,
+        })),
+      },
+      {
+        env: {
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual",
+          OPENCLAW_VITEST_RUNTIME: "bun",
+          OPENCLAW_VITEST_MAX_WORKERS: "4",
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/extension-runtime-cache/",
+        },
+        vitestArgs: row.args,
+        runGroup: async (params) => {
+          calls.push(params);
+          return params.env?.OPENCLAW_VITEST_RUNTIME === "bun" ? row.bunCode : row.nodeCode;
+        },
+      },
+    );
+    expect(result).toBe(row.nodeCode || row.bunCode);
+    const node = calls.filter((call) => call.env?.OPENCLAW_VITEST_RUNTIME === "node");
+    const bun = calls.filter((call) => call.env?.OPENCLAW_VITEST_RUNTIME === "bun");
+    expect(node.map((call) => call.config)).toEqual(
+      row.combined ? ["test/vitest/vitest.database-worker-watch.config.ts"] : configs,
+    );
+    expect(node.flatMap((call) => call.targets).toSorted()).toEqual(
+      targets.map((file) => file.replace(/^extensions\//u, "")).toSorted(),
+    );
+    expect(bun).toHaveLength(row.bun === false ? 0 : 1);
+    if (row.bun !== false) {
+      expect(bun[0]).toMatchObject({
+        config: memoryConfig,
+        targets: ["memory-lancedb/config.test.ts"],
+        env: {
+          OPENCLAW_VITEST_MAX_WORKERS: "4",
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
+            path.resolve("/tmp/extension-runtime-cache") + "-bun",
+        },
+      });
+      expect(calls.indexOf(bun[0]!)).toBeGreaterThan(calls.indexOf(node[0]!));
+    }
+    for (const call of calls) {
+      expect(call.args).toEqual(relativizeExtensionVitestArgs(row.args));
+    }
+    expect(
+      node.every(
+        (call) =>
+          call.env?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH === "/tmp/extension-runtime-cache/",
+      ),
+    ).toBe(true);
   });
 
   it.each([

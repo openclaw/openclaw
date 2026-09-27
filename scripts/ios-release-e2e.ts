@@ -2,12 +2,20 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import {
+  collectNestedErrorCandidates,
+  extractErrorCodeOrErrno,
+} from "@openclaw/normalization-core/error-coercion";
 
 export const IOS_RELEASE_TESTS = [
   "OpenClawUITests/OpenClawSnapshotUITests/testLiveGatewayFreshInstallSetupAndRelaunch",
   "OpenClawUITests/OpenClawSnapshotUITests/testLiveGatewayChatRoundTripAndControlOverview",
 ] as const;
 export const MODEL_REF = "openai/ios-e2e";
+export const IOS_RELEASE_CHAT_FAILURE =
+  /IOS_RELEASE_CHAT_FAILURE (seed-[0-2]|final) (submission|reply) draft=(true|false) keyboard=(true|false) reply=(true|false) writing=(true|false) jump=(true|false) foreground=(true|false) input=(true|false) transcript=(true|false) send=(true|false)/u;
+export const IOS_RELEASE_TEST_FAILURE_LOCATION =
+  /(?:^|\/)OpenClawSnapshotUITests\.swift:([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu;
 export const SAMPLE_INTERVAL_MS = 1_000;
 export const MAX_SAMPLE_GAP_MS = 3_000;
 export type Mode = "stock" | "compare";
@@ -33,6 +41,7 @@ export type Operation =
   | "gateway-start"
   | "setup-code"
   | "native-test"
+  | "app-diagnostics"
   | "provider-rpc"
   | "test-results"
   | "simulator-measure"
@@ -78,11 +87,52 @@ export class OperationError extends Error {
         .filter(([match]) => output.toLowerCase().includes(match))
         .map(([, tag]) => tag),
     };
+    if (operation === "native-test") {
+      const chatFailure = output.match(IOS_RELEASE_CHAT_FAILURE);
+      if (chatFailure) {
+        this.diagnostic.context.push(
+          `chat-stage:${chatFailure[1]}`,
+          `chat-checkpoint:${chatFailure[2]}`,
+          `chat-draft-retained:${chatFailure[3]}`,
+          `chat-keyboard:${chatFailure[4]}`,
+          `chat-reply-present:${chatFailure[5]}`,
+          `chat-writing:${chatFailure[6]}`,
+          `chat-jump:${chatFailure[7]}`,
+          `chat-app-foreground:${chatFailure[8]}`,
+          `chat-input-present:${chatFailure[9]}`,
+          `chat-transcript-present:${chatFailure[10]}`,
+          `chat-send-present:${chatFailure[11]}`,
+        );
+      }
+      for (const status of ["started", "passed", "failed"] as const) {
+        if (
+          IOS_RELEASE_TESTS.some((test) => {
+            const [bundle, suite, name] = test.split("/");
+            return output.includes(`Test Case '-[${bundle}.${suite} ${name}]' ${status}`);
+          })
+        ) {
+          this.diagnostic.context.push(`xctest-${status}`);
+        }
+      }
+      // Keep failure locations actionable without exporting assertion text, paths, or credentials.
+      const lines = [...output.matchAll(IOS_RELEASE_TEST_FAILURE_LOCATION)].map(
+        (match) => match[1],
+      );
+      this.diagnostic.context.push(
+        ...[...new Set(lines)].slice(0, 8).map((line) => `xctest-line:${line}`),
+      );
+    }
   }
 }
 
-export function operationError(operation: Operation, error: unknown): OperationError {
-  const code = (error as { code?: string })?.code;
+export function operationError(operation: Operation, error: unknown, output = ""): OperationError {
+  const code = collectNestedErrorCandidates(error)
+    .map(extractErrorCodeOrErrno)
+    .find(
+      (candidate) =>
+        candidate &&
+        ["ETIMEDOUT", "ABORT_ERR", "ENOENT", "EACCES", "EPERM", "ENOSPC"].includes(candidate),
+    );
   const failure = new OperationError(
     operation,
     code === "ETIMEDOUT"
@@ -94,8 +144,10 @@ export function operationError(operation: Operation, error: unknown): OperationE
           : code === "EACCES"
             ? "permission-denied"
             : "failed",
+    undefined,
+    output,
   );
-  if (code && ["ETIMEDOUT", "ABORT_ERR", "ENOENT", "EACCES", "EPERM", "ENOSPC"].includes(code)) {
+  if (code) {
     failure.diagnostic.errorCode = code;
   }
   return failure;
@@ -228,6 +280,7 @@ export const gatewayEnv = {
   OPENCLAW_SKIP_CHANNELS: "0",
   OPENCLAW_SKIP_PROVIDERS: "0",
   OPENAI_API_KEY: "ios-e2e-synthetic-key",
+  OPENCLAW_DEBUG_MODEL_TRANSPORT: "1",
 };
 
 export function testRunnerEnv(setupCode: string): NodeJS.ProcessEnv {

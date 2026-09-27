@@ -28,15 +28,11 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
-/**
- * UI transcript role emitted by microphone capture and assistant streaming.
- */
 enum class VoiceConversationRole {
   User,
   Assistant,
 }
 
-/** UI transcript entry retained for recent voice turns. */
 data class VoiceConversationEntry(
   val id: String,
   val role: VoiceConversationRole,
@@ -314,7 +310,6 @@ internal class MicCaptureManager(
     sendQueuedIfIdle()
   }
 
-  /** Handles transcription and chat events that update live voice transcript/reply state. */
   fun handleGatewayEvent(
     event: String,
     payloadJson: String?,

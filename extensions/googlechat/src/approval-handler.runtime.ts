@@ -146,36 +146,24 @@ function buildActionSection(params: { actionFunction: string; view: PendingAppro
   actionTokens: GoogleChatApprovalActionToken[];
 } {
   const { actionFunction, view } = params;
-  const actionTokens = view.actions.map((action) => ({
-    token: googleChatApprovalControls.createToken(),
-    decision: action.decision,
-  }));
+  const actionTokens: GoogleChatApprovalActionToken[] = [];
+  const buttons = view.actions.map((action) => {
+    const token = googleChatApprovalControls.createToken();
+    actionTokens.push({ token, decision: action.decision });
+    return {
+      text: action.label,
+      onClick: {
+        action: {
+          function: actionFunction,
+          parameters: buildGoogleChatApprovalActionParameters(token),
+          loadIndicator: "SPINNER" as const,
+        },
+      },
+    };
+  });
   return {
     actionTokens,
-    section: {
-      widgets: [
-        {
-          buttonList: {
-            buttons: view.actions.map((action, index) => {
-              const actionToken = actionTokens[index];
-              if (!actionToken) {
-                throw new Error("Google Chat approval action token missing.");
-              }
-              return {
-                text: action.label,
-                onClick: {
-                  action: {
-                    function: actionFunction,
-                    parameters: buildGoogleChatApprovalActionParameters(actionToken.token),
-                    loadIndicator: "SPINNER" as const,
-                  },
-                },
-              };
-            }),
-          },
-        },
-      ],
-    },
+    section: { widgets: [{ buttonList: { buttons } }] },
   };
 }
 

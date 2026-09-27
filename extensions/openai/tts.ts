@@ -123,8 +123,10 @@ export async function openaiTTS(params: {
     readProviderBinaryResponse,
     resolveProviderRequestHeaders,
   } = await import("openclaw/plugin-sdk/provider-http");
-  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
-    await import("openclaw/plugin-sdk/proxy-capture");
+  const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
+  // The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
+  const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
+    proxyCaptureSdk;
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
 
@@ -151,7 +153,7 @@ export async function openaiTTS(params: {
     ...(extraBody == null ? {} : sanitizeExtraBodyRecord(extraBody)),
   });
   const requestUrl = `${baseUrl}/audio/speech`;
-  const debugProxyFetchPatchInstalled = isDebugProxyGlobalFetchPatchInstalled();
+  const debugProxyFetchPatchInstalled = proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled();
   const { response, release } = await fetchWithSsrFGuard({
     url: requestUrl,
     init: {
@@ -167,18 +169,21 @@ export async function openaiTTS(params: {
   });
   try {
     if (!debugProxyFetchPatchInstalled) {
-      captureHttpExchange({
-        url: requestUrl,
-        method: "POST",
-        requestHeaders,
-        requestBody,
-        response,
-        transport: "http",
-        meta: {
-          provider: "openai",
-          capability: "tts",
-        },
-      });
+      // Finalization retains capture failures; observe the Promise returned by the SDK view.
+      void captureHost
+        .captureHttpExchangeAsync?.({
+          url: requestUrl,
+          method: "POST",
+          requestHeaders,
+          requestBody,
+          response,
+          transport: "http",
+          meta: {
+            provider: "openai",
+            capability: "tts",
+          },
+        })
+        .catch(() => {});
     }
 
     await assertOkOrThrowProviderError(response, "OpenAI TTS API error");

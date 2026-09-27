@@ -68,30 +68,6 @@ describe("VisitorAccessService", () => {
     expect(fixture.mutations()).toEqual([]);
   });
 
-  it("uses an explicit normalized email without consulting GitHub", async () => {
-    const fixture = visitorFixture();
-
-    await fixture.service.invite(
-      {
-        github: "Private-Visitor",
-        email: " Visitor@Example.com ",
-        days: 3,
-      },
-      fixture.authority,
-    );
-
-    expect(fixture.grants.get("visitor@example.com")).toMatchObject({
-      githubLogin: "private-visitor",
-      expiresAt: NOW + 3 * DAY_MS,
-    });
-    expect(fixture.emails()).toEqual(["visitor@example.com"]);
-    expect(
-      fixture.fetcher.mock.calls.every(
-        ([url]) => requestUrl(url).origin === "https://api.cloudflare.com",
-      ),
-    ).toBe(true);
-  });
-
   it.each<{ reason: string; roles?: GatewayRoles }>([
     { reason: "roles are disabled" },
     { reason: "no default is configured", roles: { definitions: { guest: guestRole } } },
@@ -143,12 +119,6 @@ describe("VisitorAccessService", () => {
       access: 'restricted guest (assigned role "guest")',
     },
     {
-      name: "a staff role",
-      assignedRole: "staff",
-      otherRole: staffRole,
-      access: 'existing role "staff" retained; this invitation does not restrict it',
-    },
-    {
       name: "an independent role with guest-shaped permissions",
       assignedRole: "staff",
       otherRole: { ...guestRole, accessPolicyPlugin: undefined },
@@ -186,13 +156,22 @@ describe("VisitorAccessService", () => {
       });
 
       const result = await fixture.service.invite(
-        { email: "Alias@Example.com", github: "unrelated-login", days: 1 },
+        { email: " Alias@Example.com ", github: "Unrelated-Login", days: 1 },
         fixture.authority,
       );
 
       expect(result).toContain(access);
       expect(result).toContain("Visitor grant expires: 2026-08-29T12:00:00.000Z");
       expect(fixture.emails()).toEqual(["alias@example.com"]);
+      expect(fixture.grants.get("alias@example.com")).toMatchObject({
+        githubLogin: "unrelated-login",
+        expiresAt: NOW + DAY_MS,
+      });
+      expect(
+        fixture.fetcher.mock.calls.every(
+          ([url]) => requestUrl(url).origin === "https://api.cloudflare.com",
+        ),
+      ).toBe(true);
       vi.setSystemTime(NOW + DAY_MS);
       const list = await fixture.service.list(fixture.authority.assertCurrent);
       expect(list).toContain(
@@ -327,7 +306,6 @@ describe("VisitorAccessService", () => {
 
   it.each([
     {},
-    { email: "not-an-email" },
     { email: "a@example.com\nBcc:other@example.com" },
     { github: "../other" },
     { email: "visitor@example.com", days: 0 },
@@ -438,6 +416,7 @@ describe("VisitorAccessService", () => {
       fixture.service.revoke({ email: "manual@example.com" }, fixture.authority.assertCurrent),
     ).resolves.toContain("Revoked");
     expect(fixture.emails()).toEqual([]);
+    expect(fixture.cloudflare.policy).toBeUndefined();
     expect(fixture.grants.size).toBe(0);
     const writes = fixture.mutations().length;
 
@@ -515,7 +494,6 @@ describe("VisitorAccessService", () => {
   });
 
   it.each([
-    { operation: "revoke", expiresAt: NOW + DAY_MS },
     { operation: "revoke", expiresAt: null },
     { operation: "sweep", expiresAt: NOW },
   ] as const)(

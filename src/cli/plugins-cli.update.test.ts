@@ -37,6 +37,10 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
 import { registerPluginsCli } from "./plugins-cli.js";
+import {
+  expectInstallRecordsWrittenWithLease,
+  writtenIndexCustody,
+} from "./plugins-cli.update.test-support.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
@@ -112,17 +116,6 @@ function expectOfflineNoticeLogged() {
       message.includes("Updates saved; they will load on the next Gateway start."),
     ),
   ).toBe(true);
-}
-
-function expectInstallRecordsWrittenWithLease(records: unknown, config: unknown) {
-  expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).toHaveBeenCalledWith(
-    records,
-    expect.objectContaining({
-      config,
-      filePath: expect.any(String),
-      lease: expect.anything(),
-    }),
-  );
 }
 
 function expectSingleCallParams(mockFn: ReturnType<typeof vi.fn>) {
@@ -987,6 +980,7 @@ describe("plugins cli update", () => {
       config: cfg,
       installRecords: nextRecords,
       reason: "source-changed",
+      ...writtenIndexCustody(),
     });
     expectOfflineNoticeLogged();
   });
@@ -1057,6 +1051,7 @@ describe("plugins cli update", () => {
       },
       installRecords: nextRecords,
       reason: "source-changed",
+      ...writtenIndexCustody(),
     });
   });
 
@@ -1922,6 +1917,7 @@ describe("plugins cli update", () => {
       config: cfg,
       installRecords: nextRecords,
       reason: "source-changed",
+      ...writtenIndexCustody(),
     });
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin update committed");
     expect(pluginsCliRuntimeLogs).toContain("Updated alpha -> 1.1.0");
@@ -1995,6 +1991,7 @@ describe("plugins cli update", () => {
         config: {},
         installRecords: nextConfig.plugins?.installs,
         reason: "source-changed",
+        ...writtenIndexCustody(),
       });
       expect(runtimeErrors).toContain("Failed to update beta: registry timeout");
       expect(pluginsCliRuntimeLogs).toContain("Updated alpha -> 1.1.0");

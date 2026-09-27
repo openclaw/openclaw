@@ -271,7 +271,7 @@ export async function preparePendingAgentDatabase(
   } finally {
     scope.active = false;
   }
-  sessionChanges.emit({ all: true, scope: "stores" });
+  sessionChanges.emit({ all: true, scope: { agentId: refusal.agentId, topology: true } });
 }
 
 /** Runtime preparation adds its config-generation guard to the same admission borrow. */

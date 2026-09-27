@@ -1163,7 +1163,7 @@ extension OnboardingWizardView {
     private func advanceFromIntro() {
         // An interrupted first run replays the intro until the user explicitly continues.
         OnboardingStateStore.markFirstRunIntroSeen()
-        self.requestLocalNetworkAccess(reason: "onboarding_continue")
+        self.onRequestLocalNetworkAccess("onboarding_continue")
         self.statusLine = ""
         self.navigate(to: .welcome)
     }
@@ -1171,10 +1171,6 @@ extension OnboardingWizardView {
     private func requestLocalNetworkAccessIfPastIntro(reason: String) {
         // Keep the first-run intro focused; request local-network access when pairing starts.
         guard self.step != .intro else { return }
-        self.requestLocalNetworkAccess(reason: reason)
-    }
-
-    private func requestLocalNetworkAccess(reason: String) {
         self.onRequestLocalNetworkAccess(reason)
     }
 
@@ -1325,13 +1321,19 @@ extension OnboardingWizardView {
     private var gatewayTokenBinding: Binding<String> {
         Binding(
             get: { self.gatewayToken },
-            set: { self.persistGatewayToken($0) })
+            set: { value in
+                self.gatewayToken = value
+                self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
+            })
     }
 
     private var gatewayPasswordBinding: Binding<String> {
         Binding(
             get: { self.gatewayPassword },
-            set: { self.persistGatewayPassword($0) })
+            set: { value in
+                self.gatewayPassword = value
+                self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
+            })
     }
 
     private var manualHostBinding: Binding<String> {
@@ -1364,16 +1366,6 @@ extension OnboardingWizardView {
                     self.clearManualCredentialFields()
                 }
             })
-    }
-
-    private func persistGatewayToken(_ value: String) {
-        self.gatewayToken = value
-        self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
-    }
-
-    private func persistGatewayPassword(_ value: String) {
-        self.gatewayPassword = value
-        self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
     }
 
     private func persistGatewayCredentials(for stableID: String?) {
@@ -1581,10 +1573,7 @@ extension OnboardingWizardView {
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
         if problem.suggestsOnboardingReset {
             await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
-            self.gatewayToken = ""
-            self.gatewayPassword = ""
-            self.gatewayCredentialFieldStableID = nil
-            self.pendingManualAuthOverride = nil
+            self.clearManualCredentialFields()
             self.connectingGateway = nil
             self.connectMessage = nil
             self.issue = .none

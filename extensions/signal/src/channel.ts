@@ -73,7 +73,7 @@ const loadSignalApprovalReactionsModule = createLazyRuntimeModule(
 
 async function resolveSignalSendContext(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
-  accountId?: string;
+  accountId?: string | null;
   deps?: { [channelId: string]: unknown };
 }) {
   const send =
@@ -88,7 +88,7 @@ async function resolveSignalSendContext(params: {
 
 function resolveSignalSendTarget(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
-  accountId?: string;
+  accountId?: string | null;
   to: string;
 }) {
   return (
@@ -114,8 +114,8 @@ async function sendSignalOutbound(params: {
   assertDirectAdapterHandoff?: () => void;
 }) {
   const accountId = params.accountId ?? undefined;
-  const { send, maxBytes } = await resolveSignalSendContext({ ...params, accountId });
-  const to = resolveSignalSendTarget({ ...params, accountId });
+  const { send, maxBytes } = await resolveSignalSendContext(params);
+  const to = resolveSignalSendTarget(params);
   const replyOptions = await resolveSignalReplyOptions({
     cfg: params.cfg,
     to,
@@ -135,7 +135,7 @@ async function sendSignalOutbound(params: {
   });
 }
 
-function resolveSignalReplyOptions(params: {
+async function resolveSignalReplyOptions(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   to: string;
   accountId?: string | null;
@@ -145,31 +145,29 @@ function resolveSignalReplyOptions(params: {
 > {
   const replyToId = normalizeOptionalString(params.replyToId);
   if (!replyToId) {
-    return Promise.resolve({});
+    return {};
   }
   const accountId = resolveSignalAccount({
     cfg: params.cfg,
     accountId: params.accountId,
   }).accountId;
-  return resolveSignalReplyContextWithPersistence({
+  const persistedContext = await resolveSignalReplyContextWithPersistence({
     accountId,
     to: params.to,
     replyToId,
-  }).then((persistedContext) => {
-    const replyToAuthor =
-      persistedContext?.ambiguous === true ? undefined : persistedContext?.author;
-    const replyToBody =
-      persistedContext?.ambiguous === true
-        ? ""
-        : [persistedContext?.body, formatSignalMediaText(persistedContext?.media ?? [])]
-            .filter(Boolean)
-            .join("\n");
-    return {
-      replyToId,
-      ...(replyToAuthor ? { replyToAuthor } : {}),
-      ...(replyToBody ? { replyToBody } : {}),
-    };
   });
+  const replyToAuthor = persistedContext?.ambiguous === true ? undefined : persistedContext?.author;
+  const replyToBody =
+    persistedContext?.ambiguous === true
+      ? ""
+      : [persistedContext?.body, formatSignalMediaText(persistedContext?.media ?? [])]
+          .filter(Boolean)
+          .join("\n");
+  return {
+    replyToId,
+    ...(replyToAuthor ? { replyToAuthor } : {}),
+    ...(replyToBody ? { replyToBody } : {}),
+  };
 }
 
 function inferSignalTargetChatType(rawTo: string) {
@@ -255,19 +253,11 @@ function resolveSignalOutboundSessionRoute(params: {
 async function sendFormattedSignalText(
   ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendFormattedText"]>>[0],
 ) {
-  const { send, maxBytes } = await resolveSignalSendContext({
-    cfg: ctx.cfg,
-    accountId: ctx.accountId ?? undefined,
-    deps: ctx.deps,
-  });
+  const { send, maxBytes } = await resolveSignalSendContext(ctx);
   const limit = resolveTextChunkLimit(ctx.cfg, "signal", ctx.accountId ?? undefined, {
     fallbackLimit: 4000,
   });
-  const to = resolveSignalSendTarget({
-    cfg: ctx.cfg,
-    accountId: ctx.accountId ?? undefined,
-    to: ctx.to,
-  });
+  const to = resolveSignalSendTarget(ctx);
   const tableMode = resolveMarkdownTableMode({
     cfg: ctx.cfg,
     channel: "signal",
@@ -324,16 +314,8 @@ async function sendFormattedSignalMedia(
   ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendFormattedMedia"]>>[0],
 ) {
   ctx.abortSignal?.throwIfAborted();
-  const { send, maxBytes } = await resolveSignalSendContext({
-    cfg: ctx.cfg,
-    accountId: ctx.accountId ?? undefined,
-    deps: ctx.deps,
-  });
-  const to = resolveSignalSendTarget({
-    cfg: ctx.cfg,
-    accountId: ctx.accountId ?? undefined,
-    to: ctx.to,
-  });
+  const { send, maxBytes } = await resolveSignalSendContext(ctx);
+  const to = resolveSignalSendTarget(ctx);
   const tableMode = resolveMarkdownTableMode({
     cfg: ctx.cfg,
     channel: "signal",

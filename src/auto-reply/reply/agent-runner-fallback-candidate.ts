@@ -22,6 +22,7 @@ import {
 import { runEmbeddedFallbackCandidate } from "./agent-runner-embedded-candidate.js";
 import type { MessageToolDeliveryState } from "./agent-runner-event-handler.js";
 import type { EmbeddedAgentRunResult } from "./agent-runner-execution.types.js";
+import { bindReplyFallbackSteeringRoute } from "./agent-runner-fallback-authority.js";
 import type {
   AgentFallbackCandidateCommonParams,
   AgentFallbackCycleParams,
@@ -215,6 +216,13 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         });
       },
       runCandidate: async (provider, model, runOptions) => {
+        bindReplyFallbackSteeringRoute({
+          operation: turn.replyOperation,
+          provenance: runOptions.modelRoutingProvenance,
+          route: { provider, model },
+          config: params.runtimeConfig,
+          workspaceDir: turn.followupRun.run.workspaceDir,
+        });
         clearAgentRunTerminalWriteContext(params.preparedRunAdmission.operationalRunInstance);
         params.state.maintenanceAuthProfile = undefined;
         params.state.compactionRequestBudget = undefined;

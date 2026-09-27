@@ -37,7 +37,9 @@ import {
   groupChat,
   groupCommand,
   harness,
+  photo,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import { resetTelegramTopicNameCacheForTest } from "./runtime.test-support.js";
 
@@ -298,7 +300,9 @@ describe("Telegram recorded session destinations", () => {
   });
 
   it("admits plugin-bound ambient topics without replacing their channel session", async () => {
-    cfg.channels!.telegram!.groups = { "*": { requireMention: true } };
+    cfg.channels!.telegram!.groups = {
+      "*": { requireMention: true, requireMentionInBotThreads: true },
+    };
     const pluginId = "openclaw-codex-app-server";
     const registry = getActivePluginRegistry();
     if (!registry) {
@@ -321,7 +325,17 @@ describe("Telegram recorded session destinations", () => {
       pluginId: "openclaw-codex-app-server",
       pluginRoot: "/tmp/context-plugin",
     });
-    await receive(bot, groupCommand("ambient plugin input"));
+    await receive(bot, {
+      ...groupCommand("ambient plugin input"),
+      reply_to_message: {
+        message_id: 99,
+        date: 1736380700,
+        chat: groupChat,
+        from: telegramBotInfoForTest,
+        forum_topic_created: { name: "Plugin topic", icon_color: 7322096 },
+        reply_to_message: undefined,
+      },
+    });
     expect(claim).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ content: "ambient plugin input" }),
       expect.objectContaining({
@@ -332,6 +346,17 @@ describe("Telegram recorded session destinations", () => {
           conversationId: "-10042001:topic:99",
         }),
       }),
+    );
+    await receive(bot, {
+      ...groupCommand(""),
+      text: undefined,
+      caption: "ambient plugin media",
+      photo,
+    });
+    expect(claim).toHaveBeenCalledTimes(2);
+    expect(claim).toHaveBeenLastCalledWith(
+      expect.objectContaining({ content: expect.stringContaining("ambient plugin media") }),
+      expect.anything(),
     );
     expect(harness.replySpy).not.toHaveBeenCalled();
     expect(

@@ -326,30 +326,18 @@ class SecurePrefs(
     _displayName.value = trimmed
   }
 
-  fun setCameraEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(cameraEnabledKey, value) }
-    _cameraEnabled.value = value
-  }
+  fun setCameraEnabled(value: Boolean) = _cameraEnabled.persistBoolean(cameraEnabledKey, value)
 
   fun setLocationMode(mode: LocationMode) {
     plainPrefs.edit { putString(locationModeKey, mode.rawValue) }
     _locationMode.value = mode
   }
 
-  fun setLocationPreciseEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("location.preciseEnabled", value) }
-    _locationPreciseEnabled.value = value
-  }
+  fun setLocationPreciseEnabled(value: Boolean) = _locationPreciseEnabled.persistBoolean("location.preciseEnabled", value)
 
-  fun setPreventSleep(value: Boolean) {
-    plainPrefs.edit { putBoolean("screen.preventSleep", value) }
-    _preventSleep.value = value
-  }
+  fun setPreventSleep(value: Boolean) = _preventSleep.persistBoolean("screen.preventSleep", value)
 
-  fun setManualEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("gateway.manual.enabled", value) }
-    _manualEnabled.value = value
-  }
+  fun setManualEnabled(value: Boolean) = _manualEnabled.persistBoolean("gateway.manual.enabled", value)
 
   fun setManualHost(value: String) {
     val trimmed = value.trim()
@@ -362,15 +350,9 @@ class SecurePrefs(
     _manualPort.value = value
   }
 
-  fun setManualTls(value: Boolean) {
-    plainPrefs.edit { putBoolean("gateway.manual.tls", value) }
-    _manualTls.value = value
-  }
+  fun setManualTls(value: Boolean) = _manualTls.persistBoolean("gateway.manual.tls", value)
 
-  fun setOnboardingCompleted(value: Boolean) {
-    plainPrefs.edit { putBoolean("onboarding.completed", value) }
-    _onboardingCompleted.value = value
-  }
+  fun setOnboardingCompleted(value: Boolean) = _onboardingCompleted.persistBoolean("onboarding.completed", value)
 
   fun grantInstalledAppsDisclosureConsent() {
     plainPrefs.edit {
@@ -388,10 +370,7 @@ class SecurePrefs(
     _installedAppsSharingEnabled.value = false
   }
 
-  fun setAccessibilityControlEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(accessibilityControlEnabledKey, value) }
-    _accessibilityControlEnabled.value = value
-  }
+  fun setAccessibilityControlEnabled(value: Boolean) = _accessibilityControlEnabled.persistBoolean(accessibilityControlEnabledKey, value)
 
   private fun loadInstalledAppsSharingEnabled(): Boolean {
     val enabled = plainPrefs.getBoolean(installedAppsSharingEnabledKey, false)
@@ -451,10 +430,7 @@ class SecurePrefs(
     )
   }
 
-  internal fun setNotificationForwardingEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(notificationsForwardingEnabledKey, value) }
-    _notificationForwardingEnabled.value = value
-  }
+  internal fun setNotificationForwardingEnabled(value: Boolean) = _notificationForwardingEnabled.persistBoolean(notificationsForwardingEnabledKey, value)
 
   internal fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
     plainPrefs.edit { putString(notificationsForwardingModeKey, mode.rawValue) }
@@ -470,9 +446,7 @@ class SecurePrefs(
         .distinct()
         .sorted()
         .toList()
-    // Persist deterministic JSON so settings diffs and state restoration are stable.
-    val encoded = JsonArray(sanitized.map { JsonPrimitive(it) }).toString()
-    plainPrefs.edit { putString(notificationsForwardingPackagesKey, encoded) }
+    persistStringList(notificationsForwardingPackagesKey, sanitized)
     _notificationForwardingPackages.value = sanitized.toSet()
   }
 
@@ -752,26 +726,17 @@ class SecurePrefs(
     return resolved
   }
 
-  fun setVoiceMicEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(voiceMicEnabledKey, value) }
-    _voiceMicEnabled.value = value
-  }
+  fun setVoiceMicEnabled(value: Boolean) = _voiceMicEnabled.persistBoolean(voiceMicEnabledKey, value)
 
-  fun setVoiceWakeEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(voiceWakeEnabledKey, value) }
-    _voiceWakeEnabled.value = value
-  }
+  fun setVoiceWakeEnabled(value: Boolean) = _voiceWakeEnabled.persistBoolean(voiceWakeEnabledKey, value)
 
   fun setVoiceWakeWords(words: List<String>) {
     val sanitized = VoiceWakePreferences.sanitizeTriggerWords(words)
-    plainPrefs.edit { putString(voiceWakeWordsKey, JsonArray(sanitized.map(::JsonPrimitive)).toString()) }
+    persistStringList(voiceWakeWordsKey, sanitized)
     _voiceWakeWords.value = sanitized
   }
 
-  fun setSpeakerEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("voice.speakerEnabled", value) }
-    _speakerEnabled.value = value
-  }
+  fun setSpeakerEnabled(value: Boolean) = _speakerEnabled.persistBoolean("voice.speakerEnabled", value)
 
   fun setPreferredCameraFacing(value: String) {
     val facing = value.takeIf { it == "back" } ?: "front"
@@ -798,21 +763,17 @@ class SecurePrefs(
   }
 
   private fun loadPendingAppearancePreferences(): List<PendingAppearancePreference> {
-    val stored = plainPrefs.getString(appearancePendingPreferencesKey, null)
+    val stored = plainPrefs.getString(appearancePendingPreferencesKey, null) ?: return emptyList()
     val decoded =
-      stored?.let {
-        runCatching { json.decodeFromString<List<PendingAppearancePreference>>(it) }.getOrNull()
-      }
-    if (decoded != null) {
-      return deduplicatePendingAppearancePreferences(
-        decoded.filter { preference ->
-          preference.key in appearanceSyncKeys &&
-            !preference.gatewayStableId.isNullOrBlank() &&
-            !preference.profileId.isNullOrBlank()
-        },
-      )
-    }
-    return emptyList()
+      runCatching { json.decodeFromString<List<PendingAppearancePreference>>(stored) }.getOrNull()
+        ?: return emptyList()
+    return deduplicatePendingAppearancePreferences(
+      decoded.filter { preference ->
+        preference.key in appearanceSyncKeys &&
+          !preference.gatewayStableId.isNullOrBlank() &&
+          !preference.profileId.isNullOrBlank()
+      },
+    )
   }
 
   @Synchronized
@@ -1155,6 +1116,14 @@ class SecurePrefs(
     val sanitized = sanitizeSidebarVisiblePages(pageIds)
     persistStringList(sidebarVisiblePagesKey, sanitized)
     _sidebarVisiblePages.value = sanitized
+  }
+
+  private fun MutableStateFlow<Boolean>.persistBoolean(
+    key: String,
+    next: Boolean,
+  ) {
+    plainPrefs.edit { putBoolean(key, next) }
+    value = next
   }
 
   private fun persistStringList(

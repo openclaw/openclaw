@@ -2,10 +2,9 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.nonBlankString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 
 internal enum class CompletedToolKind { Command, Read, Edit, Write, Search, Fetch, Progress, Other }
 
@@ -47,8 +46,8 @@ internal fun completedCommandText(
   singleLine: Boolean = true,
 ): String? {
   val raw =
-    tool.arguments.string("command")
-      ?: tool.arguments.string("cmd")
+    tool.arguments.nonBlankString("command")
+      ?: tool.arguments.nonBlankString("cmd")
       ?: tool.detail?.substringAfter(": ", tool.detail)
   var command = raw?.trim()?.takeIf(String::isNotEmpty) ?: return null
   command = command.replace(Regex("^(?:/bin/)?(?:bash|zsh|sh)\\s+-lc\\s+"), "").trim()
@@ -94,14 +93,12 @@ internal fun progressReceiptLabel(tool: ChatToolActivity): String {
   val args = tool.arguments
   val steps = (args?.get("plan") as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
   if (steps.isNotEmpty()) {
-    val completed = steps.count { it.string("status") == "completed" }
+    val completed = steps.count { it.nonBlankString("status") == "completed" }
     val current =
-      steps.firstOrNull { it.string("status") == "in_progress" }
-        ?: steps.firstOrNull { it.string("status") == "pending" }
-        ?: steps.lastOrNull { it.string("status") == "completed" }
-    return nativeString("Progress updated — \$completed/\$total · \$step", completed, steps.size, current?.string("step").orEmpty()).trimEnd(' ', '·')
+      steps.firstOrNull { it.nonBlankString("status") == "in_progress" }
+        ?: steps.firstOrNull { it.nonBlankString("status") == "pending" }
+        ?: steps.lastOrNull { it.nonBlankString("status") == "completed" }
+    return nativeString("Progress updated — \$completed/\$total · \$step", completed, steps.size, current?.nonBlankString("step").orEmpty()).trimEnd(' ', '·')
   }
-  return if (!args.string("markdown").isNullOrBlank()) nativeString("Progress note updated") else nativeString("Progress cleared")
+  return if (!args.nonBlankString("markdown").isNullOrBlank()) nativeString("Progress note updated") else nativeString("Progress cleared")
 }
-
-private fun JsonObject?.string(key: String): String? = (this?.get(key) as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty)

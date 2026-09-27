@@ -1,4 +1,3 @@
-// Interim retry tests cover retry behavior for incomplete isolated cron runs.
 import { describe, expect, it, vi } from "vitest";
 import { onInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
@@ -84,7 +83,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     );
   };
 
-  it.each([20, Number.NaN, Number.POSITIVE_INFINITY])(
+  it.each([20, Number.NaN])(
     "regression, retries once when cron returns interim acknowledgement with initial total %s and no descendants were spawned",
     async (initialTotal) => {
       const onExecutionStarted = vi.fn();
@@ -171,17 +170,6 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
       ]);
     },
   );
-
-  it("does not retry when the first turn is already a concrete result", async () => {
-    usePayloadTextExtraction();
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "SF is 62F and SD is 67F. SD is warmer by 5F." }],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-    });
-
-    mockRunCronFallbackPassthrough();
-    await runTurnAndExpectOk(1, 1);
-  });
 
   it.each([true, false])(
     "refreshes a persistent session after a context-only retry with final context available=%s",

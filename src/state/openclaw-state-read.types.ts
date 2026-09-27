@@ -124,6 +124,8 @@ export type OpenClawStateReadAuthority = {
 export type OpenClawStateReadCommand =
   | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
+  | { type: "capture.readOnlyEvents"; sessionId: string; limit?: number }
+  | { type: "capture.readOnlyBlob"; blobId: string }
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
   | { type: "acpSessions.list" }
@@ -286,6 +288,18 @@ export type OpenClawStateReadReply = (
       history: ListTerminalOperatorApprovalsResult;
     }
   | PluginBlobReadReply
+  | {
+      ok: true;
+      type: "capture.readOnlyEvents";
+      sourceAdmitted: true;
+      events: Array<Record<string, unknown>>;
+    }
+  | {
+      ok: true;
+      type: "capture.readOnlyBlob";
+      sourceAdmitted: true;
+      blob: string | null;
+    }
   | { ok: true; type: "subagents.forChildSession"; sourceAdmitted: true; runs: SubagentRunRecord[] }
   | {
       ok: true;

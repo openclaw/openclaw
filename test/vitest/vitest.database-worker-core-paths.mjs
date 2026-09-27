@@ -268,9 +268,11 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli.test.ts",
   "src/cli/update-cli.windows-lifecycle.test.ts",
   "src/cli/update-cli.windows-recovery.test.ts",
+  "src/cli/update-cli/status.test.ts",
   "src/cli/update-cli/update-command-convergence-authority.test.ts",
   "src/cli/update-cli/update-command-doctor-authority-callers.test.ts",
   "src/cli/update-cli/update-command-doctor-capability.test.ts",
+  "src/cli/update-cli/update-command-finalize-refusal.test.ts",
   "src/cli/update-cli/update-command-plugin-caller.test.ts",
   "src/cli/update-cli/update-command-plugins.degradation.test.ts",
   "src/cli/update-cli/update-command-service-publication.test.ts",
@@ -559,6 +561,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/registry/subagent-registry-task-replacement.test.ts",
   "src/agents/subagents/registry/subagent-registry-read.prepared.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.authority.test.ts",
+  "src/agents/subagents/spawn/subagent-spawn.requester-incarnation.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.in-process-gateway.test.ts",
   "src/agents/tools/swarm-tools.integration.test.ts",
   "src/tasks/task-registry-session-index.test.ts",
@@ -602,6 +605,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/loader.gateway-bindings.test.ts",
   "src/infra/outbound/channel-bootstrap.lifecycle.test.ts",
   "src/plugins/setup-registry.lifecycle.test.ts",
+  "src/plugins/installed-plugin-index-store-write.custody.test.ts",
   "src/plugins/installed-plugin-index-store-write.receipt.test.ts",
   "src/plugins/install-record-commit.retention.test.ts",
   "src/plugins/management-service.policy-imports.test.ts",
@@ -609,6 +613,7 @@ export const databaseWorkerCoreTestFiles = [
 
   "src/plugins/installed-plugin-index-generation-precedence.test.ts",
   "src/plugins/installed-plugin-index-read-state.test.ts",
+  "src/plugins/installed-plugin-index-store.availability.test.ts",
   "src/plugins/installed-plugin-index-store.install-record-map.test.ts",
   "src/plugins/installed-plugin-index-store.test.ts",
   "src/plugins/install-record-commit.sqlite.test.ts",
@@ -677,6 +682,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-db-bloat.worker.test.ts",
   "src/commands/doctor-device-pairing.worker.test.ts",
   "src/commands/doctor-device-pairing.test.ts",
+  "src/cli/proxy-cli.runtime.test.ts",
   "src/commands/doctor-maintenance.worker.test.ts",
   "src/commands/doctor-lint.crabbox.test.ts",
   "src/fleet/doctor.runtime.test.ts",
@@ -686,6 +692,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/fleet/service.runtime.test.ts",
   "src/fleet/service-upgrade.runtime.test.ts",
   "src/fleet/service-removal.runtime.test.ts",
+  "src/flows/doctor-health-contribution-runners.config.deferred.test.ts",
   "src/flows/doctor-health.dangling-workshop-index.test.ts",
   "src/flows/doctor-health.managed-admission.test.ts",
   "src/flows/doctor-health.managed-approvals.test.ts",
@@ -718,6 +725,13 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-db.test.ts",
   "src/state/openclaw-state-db-read-admission.test.ts",
   "src/state/openclaw-state-db-schema-policy.test.ts",
+  "src/agents/provider-transport-fetch.capture.test.ts",
+  "src/proxy-capture/proxy-server.test.ts",
+  "src/proxy-capture/proxy-server.managed-proxy.test.ts",
+  "src/proxy-capture/runtime.guarded-fetch.test.ts",
+  "src/proxy-capture/runtime.lifecycle.test.ts",
+  "src/proxy-capture/runtime.input-admission.test.ts",
+  "src/proxy-capture/store.async.test.ts",
   "src/state/openclaw-state-maintenance-resources.test.ts",
   "src/tasks/task-registry.test.ts",
   "src/tasks/task-registry.test-support.test.ts",
@@ -798,6 +812,7 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/plugins/installed-plugin-index-store.availability.test.ts", "unitFast"],
   ["test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts", "unitFast"],
   ["src/infra/outbound/bound-delivery-router.test.ts", "unitFast"],
   ["src/agents/harness/agent-end-side-effects.no-verbatim-capture.test.ts", "unitFast"],
@@ -822,6 +837,8 @@ export const databaseWorkerCoreFormerFastKinds = new Map([
   ["src/commands/doctor/auth-alias-preservation.test.ts", "unitFast"],
   ["src/plugin-sdk/memory-host-events.test.ts", "unitFastFakeTimers"],
   ["src/plugin-sdk/outbound-media.bulk.test.ts", "unitFast"],
+  ["src/agents/provider-transport-fetch.capture.test.ts", "unitFast"],
+  ["src/proxy-capture/proxy-server.test.ts", "unitFast"],
 ]);
 
 export const DATABASE_WORKER_WATCH_OWNER_ENV_KEY = "OPENCLAW_VITEST_DATABASE_WORKER_WATCH_OWNER";

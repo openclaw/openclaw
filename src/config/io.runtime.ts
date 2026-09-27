@@ -113,11 +113,7 @@ export function loadConfig(options?: {
   return options?.pin === false ? loadFresh() : loadPinnedRuntimeConfig(loadFresh);
 }
 
-export function getRuntimeConfig(options?: {
-  skipPluginValidation?: boolean;
-  pin?: boolean;
-  skipShellEnvFallback?: boolean;
-}): OpenClawConfig {
+export function getRuntimeConfig(options?: Parameters<typeof loadConfig>[0]): OpenClawConfig {
   return loadConfig(options);
 }
 

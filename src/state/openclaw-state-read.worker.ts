@@ -86,7 +86,10 @@ import {
 } from "./openclaw-state-db-read-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
-import { readStateDiagnosticCommand } from "./openclaw-state-read-diagnostics.js";
+import {
+  isStateDiagnosticCommand,
+  readStateDiagnosticCommand,
+} from "./openclaw-state-read-diagnostics.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
@@ -399,10 +402,7 @@ serveOwnedWorkerTasks(
                     }),
                   };
                 }
-                if (
-                  command.type === "config.snapshot.read" ||
-                  command.type === "audit.run.inspect"
-                ) {
+                if (isStateDiagnosticCommand(command)) {
                   return readStateDiagnosticCommand(db, command);
                 }
                 if (command.type === "pluginBlob.entries") {

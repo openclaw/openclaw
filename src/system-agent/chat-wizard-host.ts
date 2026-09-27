@@ -46,6 +46,11 @@ export type ChatWizardAnswerResult = ChatWizardResult & {
   userHistoryText: string;
 };
 
+type HostedSetupWizard = (
+  prompter: WizardPrompter,
+  beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+) => Promise<void | HostedSetupCompletion>;
+
 export type ChatWizardHostDependencies = {
   runChannelSetupWizard?: (
     channel: string,
@@ -53,23 +58,10 @@ export type ChatWizardHostDependencies = {
     beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
     assertPersistentEffectCurrent?: () => void,
   ) => Promise<void | HostedSetupCompletion>;
-  runSkillsSetupWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runSearchSetupWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runGatewaySetupWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runMemoryImportWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-    onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
-  ) => Promise<HostedMemoryImportOutcome>;
+  runSkillsSetupWizard?: HostedSetupWizard;
+  runSearchSetupWizard?: HostedSetupWizard;
+  runGatewaySetupWizard?: HostedSetupWizard;
+  runMemoryImportWizard?: HostedRuntime["runHostedMemoryImport"];
   appendAuditEntry?: typeof import("./audit.js").appendSystemAgentAuditEntry;
 };
 
