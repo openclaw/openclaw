@@ -904,6 +904,11 @@ wa-switch {
   --wa-form-control-background-color: color-mix(in srgb, var(--border-strong) 60%, transparent);
   --wa-form-control-border-color: var(--muted);
   --wa-color-focus: var(--ring);
+  /* The library sizes the track at 1.75x its height and the thumb at 0.75em,
+     leaving fractional insets (3.75px at 14px) that pixel-snap unevenly and
+     push the thumb off-center. Whole-pixel insets keep it centered. */
+  --width: calc(var(--height) + 2 * round(calc(var(--height) * 0.375), 1px));
+  --thumb-size: calc(var(--height) - 2 * round(calc((var(--height) - 0.75em) / 2), 1px));
 }
 
 /* Keep neutral menu hover, keyboard focus, and open submenus on the active theme.
