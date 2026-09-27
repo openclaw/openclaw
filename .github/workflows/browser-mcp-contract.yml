@@ -22,6 +22,7 @@ on:
       - "test/vitest/vitest.extension-browser.config.ts"
       - "test/vitest/vitest.tooling.config.ts"
       - ".github/actions/setup-node-env/**"
+      - ".github/actions/setup-test-bun/**"
       - ".github/workflows/browser-mcp-contract.yml"
   workflow_dispatch:
 
@@ -55,3 +56,31 @@ jobs:
           install-bun: "false"
       - name: Exercise the pinned MCP server in Chromium
         run: pnpm test:e2e:browser-mcp
+
+  # The macOS and Linux desktop apps run the Browser plugin only on the pinned Bun fork.
+  contract-bun:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+      - uses: ./.github/actions/setup-test-bun
+      - name: Exercise the pinned MCP server in Chromium on Bun
+        env:
+          OPENCLAW_VITEST_RUNTIME: bun
+          OPENCLAW_BROWSER_MCP_E2E: "1"
+          OPENCLAW_BROWSER_WAIT_E2E: "1"
+          OPENCLAW_VITEST_MAX_WORKERS: "1"
+        run: |
+          node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium
+          node scripts/run-vitest.mjs \
+            extensions/browser/src/browser/chrome-mcp-options.test.ts \
+            extensions/browser/src/browser/chrome-mcp.chromium.test.ts \
+            extensions/browser/src/browser/chrome-mcp-labels.chromium.test.ts \
+            extensions/browser/src/browser/routes/agent.act.wait-visibility.chromium.test.ts
