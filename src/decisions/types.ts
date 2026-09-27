@@ -143,6 +143,8 @@ export interface DecisionRuntimeV1 {
       readonly rubricVersion: string;
       readonly timeoutMs: number;
       readonly signal: AbortSignal;
+      /** Consumer-owned opt-in, rechecked synchronously immediately before provider dispatch. */
+      readonly isEligible?: () => boolean;
     },
   ): Promise<DecisionOutcome>;
 }

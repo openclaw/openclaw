@@ -53,6 +53,66 @@ function expectSafeguardRuntime(
 }
 
 describe("buildEmbeddedExtensionFactories", () => {
+  it.each([true, false])(
+    "uses persisted owner eligibility instead of prepared agent (enabled=%s)",
+    (ownerEnabled) => {
+      const sessionManager = {
+        getSessionTarget: () => ({
+          agentId: "owner",
+          sessionId: "id",
+          sessionKey: "agent:owner:id",
+          storePath: "/synthetic",
+        }),
+      } as SessionManager;
+      buildEmbeddedExtensionFactories({
+        cfg: {
+          agents: {
+            defaults: {
+              experimental: { decisionAssistance: true },
+              compaction: { mode: "safeguard", semanticCuration: { mode: "shadow" } },
+            },
+            entries: {
+              owner: { decisionModel: ownerEnabled ? "fixture/owner" : "" },
+              prepared: { decisionModel: ownerEnabled ? "" : "fixture/prepared" },
+            },
+          },
+        },
+        sessionManager,
+        agentId: "prepared",
+        provider: "fixture",
+        modelId: "summary",
+        model: undefined,
+      });
+      expect(getCompactionSafeguardRuntime(sessionManager)?.agentId).toBe("owner");
+      expect(getCompactionSafeguardRuntime(sessionManager)?.semanticCurationMode).toBe(
+        ownerEnabled ? "shadow" : "off",
+      );
+    },
+  );
+
+  it("dispatches under the resolved main owner when the session has no target", () => {
+    const sessionManager = {} as SessionManager;
+    buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            experimental: { decisionAssistance: true },
+            decisionModel: "global-provider/global-model",
+            compaction: { mode: "safeguard", semanticCuration: { mode: "shadow" } },
+          },
+          entries: { main: { decisionModel: "owner-provider/owner-model" } },
+        },
+      },
+      sessionManager,
+      provider: "fixture",
+      modelId: "summary",
+      model: undefined,
+    });
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.semanticCurationMode).toBe("shadow");
+    expect(runtime?.agentId).toBe("main");
+  });
+
   it("uses the prepared context budget for safeguard sizing", () => {
     const sessionManager = {} as SessionManager;
     const factories = buildEmbeddedExtensionFactories({
@@ -127,6 +187,27 @@ describe("buildEmbeddedExtensionFactories", () => {
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 2,
     });
+  });
+
+  it("wires shadow semantic curation into safeguard runtime", () => {
+    const { sessionManager } = buildSafeguardFactories({
+      agents: {
+        defaults: {
+          experimental: { decisionAssistance: true },
+          decisionModel: "fixture/default",
+          compaction: {
+            mode: "safeguard",
+            semanticCuration: {
+              mode: "shadow",
+              timeoutMs: 650,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(getCompactionSafeguardRuntime(sessionManager)?.semanticCurationMode).toBe("shadow");
+    expect(getCompactionSafeguardRuntime(sessionManager)?.semanticCurationTimeoutMs).toBe(650);
   });
 
   it("wires the run workspace into safeguard runtime", () => {

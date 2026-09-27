@@ -102,6 +102,71 @@ afterEach(() => {
 });
 
 describe("registered decision capability", () => {
+  it.each(
+    ["preparation", "readiness"].flatMap((phase) =>
+      ["fixture/next-v1", "another-provider/next-v1"].map((decisionModel) => ({
+        phase,
+        decisionModel,
+      })),
+    ),
+  )(
+    "rejects a model changed to $decisionModel during $phase before dispatch",
+    async ({ phase, decisionModel }) => {
+      const replacement: OpenClawConfig = { agents: { defaults: { decisionModel } } };
+      let replaceOnReady = false;
+      const evaluate = vi.fn(async () => answer);
+      const fixture = registered(evaluate, () => {
+        if (replaceOnReady) {
+          replaceOnReady = false;
+          setRuntimeConfigSnapshot(replacement);
+        }
+        return true;
+      });
+      const guarded = { ...options(), isEligible: () => true };
+      setRuntimeConfigSnapshot(config);
+      await expect(fixture.run(guarded)).resolves.toMatchObject({ status: "ok" });
+      replaceOnReady = phase === "readiness";
+      const pending = fixture.run(guarded);
+      if (phase === "preparation") {
+        setRuntimeConfigSnapshot(replacement);
+      }
+      await expect(pending).resolves.toEqual({ status: "unavailable", reason: "retiring" });
+      expect(evaluate).toHaveBeenCalledOnce();
+      expect(fixture.registry.decisionProviders[0]?.host.inspect(replacement).activeRequests).toBe(
+        0,
+      );
+      setRuntimeConfigSnapshot(config);
+      await expect(fixture.run(guarded)).resolves.toMatchObject({ status: "ok" });
+      expect(evaluate).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("rechecks consumer opt-in after asynchronous authority preparation", async () => {
+    const evaluate = vi.fn(async () => answer);
+    const fixture = registered(evaluate);
+    let eligible = true;
+    const guarded = { ...options(), isEligible: () => eligible };
+    await expect(fixture.run(guarded)).resolves.toMatchObject({ status: "ok" });
+    const pending = fixture.run(guarded);
+    eligible = false;
+    await expect(pending).resolves.toEqual({ status: "unavailable", reason: "disabled" });
+    expect(evaluate).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks consumer opt-in after provider readiness reenters its owner", async () => {
+    const evaluate = vi.fn(async () => answer);
+    let eligible = true;
+    const fixture = registered(evaluate, () => {
+      eligible = false;
+      return true;
+    });
+    await expect(fixture.run({ ...options(), isEligible: () => eligible })).resolves.toEqual({
+      status: "unavailable",
+      reason: "disabled",
+    });
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
   it("keeps ordinary input rejection recoverable without retries or circuit poisoning", async () => {
     const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => ({
       status: "unavailable",
