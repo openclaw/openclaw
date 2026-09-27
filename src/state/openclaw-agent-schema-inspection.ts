@@ -68,6 +68,7 @@ export function inspectAgentDatabaseSchema(
   }
   const version = readSqliteUserVersion(database);
   const inspection: AgentSchemaInspection = { version };
+  let checkingShape = false;
   try {
     if (version > input.supportedVersion) {
       const writerAppVersion = readSqliteWriterAppVersion(database);
@@ -104,6 +105,7 @@ export function inspectAgentDatabaseSchema(
       agentId != null &&
       (!input.requireStartupMigrationReadiness || version > 0)
     ) {
+      checkingShape = true;
       assertOpenClawAgentDatabaseForMaintenance(database, {
         agentId,
         pathname: input.pathname,
@@ -113,7 +115,11 @@ export function inspectAgentDatabaseSchema(
     return inspection;
   } catch (error) {
     if (input.requireStartupMigrationReadiness) {
-      return { ...inspection, failure: toStringifiedError(error) };
+      return {
+        ...inspection,
+        failure: toStringifiedError(error),
+        ...(checkingShape ? { reason: formatErrorMessage(error) } : {}),
+      };
     }
     // Preserve the observed version even when shape validation fails, so Doctor
     // can still report a pending migration alongside the unreadable shape.

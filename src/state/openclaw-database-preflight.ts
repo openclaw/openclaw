@@ -43,6 +43,7 @@ import {
 import type {
   AgentDatabasePreflightStats,
   DeferredStateSchemaPublication,
+  IndeterminateOpenClawDatabase,
   OpenClawDatabaseSchemaPreflight,
   OpenClawDatabasePreflightOptions,
   OpenClawStateSchemaPreflightResult,
@@ -80,6 +81,9 @@ export type {
 
 export { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db.js";
 export { OpenClawDatabaseSchemaPreflightError } from "./openclaw-database-preflight.messages.js";
+
+// Public readiness rows stay serializable; their original failures belong to this inspection.
+const indeterminateCauses = new WeakMap<IndeterminateOpenClawDatabase, unknown>();
 
 /** Verify persisted runtime schemas before certifying repair or accepting restart. */
 export async function assertOpenClawDatabasesReady(
@@ -123,7 +127,7 @@ export async function assertOpenClawDatabasesReady(
     },
     options.operation === "doctor" ? "maintenance" : "runtime",
   );
-  const failures: Error[] = [];
+  const failures: unknown[] = [];
   for (const refusal of schemas.agentRefusals ?? []) {
     if (
       !options.config ||
@@ -142,28 +146,41 @@ export async function assertOpenClawDatabasesReady(
       }),
     );
   }
-  const [failure] = failures;
-  if (failure) {
+  if (schemas.indeterminate.length > 0) {
+    const causes = schemas.indeterminate.flatMap((row) =>
+      indeterminateCauses.has(row) ? [indeterminateCauses.get(row)] : [],
+    );
+    // Preserve a single strict inspection's typed refusal; multiple rows keep the complete report.
+    failures.push(
+      options.operation === "gateway-startup" &&
+        schemas.indeterminate.length === 1 &&
+        causes.length === 1
+        ? causes[0]
+        : new Error(
+            formatIndeterminateDatabaseReadiness(schemas.indeterminate, options.operation),
+            {
+              cause: new AggregateError(causes),
+            },
+          ),
+    );
+  }
+  if (failures.length > 0) {
     // A failed read must not hide another required store's proven repair or version refusal.
     throw failures.length === 1
-      ? failure
-      : new AggregateError(failures, "Required OpenClaw databases failed startup admission.");
+      ? failures[0]
+      : new AggregateError(failures, failures.map((error) => formatErrorMessage(error)).join("\n"));
   }
-  if (schemas.indeterminate.length === 0) {
-    if (options.operation === "gateway-startup") {
-      recordAgentDatabaseAdmissions(schemas.agentRefusals ?? [], {
-        env: options.env,
-        source: "startup",
-      });
-    }
-    if (options.operation === "doctor") {
-      for (const publication of schemas.deferredSchemaPublications ?? []) {
-        options.onDeferredSchemaPublication?.(publication);
-      }
-    }
-    return;
+  if (options.operation === "gateway-startup") {
+    recordAgentDatabaseAdmissions(schemas.agentRefusals ?? [], {
+      env: options.env,
+      source: "startup",
+    });
   }
-  throw new Error(formatIndeterminateDatabaseReadiness(schemas.indeterminate, options.operation));
+  if (options.operation === "doctor") {
+    for (const publication of schemas.deferredSchemaPublications ?? []) {
+      options.onDeferredSchemaPublication?.(publication);
+    }
+  }
 }
 
 /** Compare one explicit SQLite file with this release's canonical shared-state schema. */
@@ -577,19 +594,23 @@ export async function preflightOpenClawDatabaseSchemas(
             supportedVersion: supportedVersions.agent,
           });
         }
-        if (schemaInspection?.failure) {
+        if (schemaInspection.failure && !schemaInspection.reason) {
           throw schemaInspection.failure;
         }
         if (schemaInspection?.reason) {
           if (startup) {
-            throw new Error(schemaInspection.reason);
+            throw schemaInspection.failure ?? new Error(schemaInspection.reason);
           }
-          inspection.indeterminate.push({
+          const failure: IndeterminateOpenClawDatabase = {
             kind: "agent",
             path: agentPath,
             reason: schemaInspection.reason,
             ...(options.requireStartupMigrationReadiness ? { agentId: row.agentId } : {}),
-          });
+          };
+          if (schemaInspection.failure) {
+            indeterminateCauses.set(failure, schemaInspection.failure);
+          }
+          inspection.indeterminate.push(failure);
           return;
         }
         if (agentVersion > supportedVersions.agent) {

@@ -68,6 +68,8 @@ describe("agent database admission", () => {
       }).catch((error: unknown) => error);
       expect(findStartupMaintenanceRequiredError(failure)).toMatchObject({ kind: "newer-schema" });
       expect(failure).toBeInstanceOf(AggregateError);
+      expect(String(failure)).toContain(unavailablePath);
+      expect(String(failure)).toContain(newerPath);
     });
   });
 

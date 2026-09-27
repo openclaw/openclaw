@@ -346,7 +346,10 @@ export function listAgentDatabaseAdmissionRefusals(
 
 export class AgentDatabaseAdmissionError extends Error {
   constructor(readonly refusal: AgentDatabaseAdmissionRefusal) {
-    super(`${refusal.reason}\n${refusal.repairHint}`, { cause: refusalCauses.get(refusal) });
+    super(
+      `Agent ${refusal.agentId} (${refusal.paths.join(", ")}): ${refusal.reason}\n${refusal.repairHint}`,
+      { cause: refusalCauses.get(refusal) },
+    );
     this.name = "AgentDatabaseAdmissionError";
   }
 }
