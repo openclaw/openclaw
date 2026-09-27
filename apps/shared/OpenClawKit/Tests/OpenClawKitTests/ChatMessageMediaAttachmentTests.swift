@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
@@ -43,8 +44,10 @@ struct ChatMessageMediaAttachmentTests {
         #expect(reloaded.transcriptMessageID == "user-turn")
     }
 
-    @Test func `media facts do not duplicate existing file rows or inline image slots`() throws {
-        let message = try JSONDecoder().decode(OpenClawChatMessage.self, from: Data("""
+    @Test(arguments: ["null", "false", #"{"url":42}"#])
+    @MainActor
+    func `media facts do not duplicate existing file rows or inline image slots`(malformedFact: String) throws {
+        let raw = try JSONDecoder().decode(AnyCodable.self, from: Data("""
         {"role":"user","content":[
           {"type":"file","url":"media://inbound/report.pdf","mimeType":"application/pdf",
            "fileName":"report.pdf"},
@@ -52,15 +55,22 @@ struct ChatMessageMediaAttachmentTests {
           {"type":"image","mimeType":"image/png","content":"b3RoZXI="}
         ],"__openclaw":{"media":[
           {"url":"media://inbound/report.pdf","contentType":"application/pdf","fileName":"report.pdf"},
-          null,
+          \(malformedFact),
           {"url":"media://inbound/chart.png","kind":"image","contentType":"image/png"},
           {"url":"media://inbound/recording.mp3","kind":"audio","contentType":"audio/mpeg"}
         ],"mediaImageLayout":{"slots":[{"kind":"inline"},{"kind":"inline","factIndex":2}]}}}
         """.utf8))
 
+        let messages = OpenClawChatViewModel.decodeMessages([raw])
+        #expect(messages.count == 1)
+        let message = try #require(messages.first)
         #expect(message.content.count == 4)
         #expect(message.content.map(\.mediaKind) == [.file, .image, .image, .audio])
         #expect(message.content.last?.fileName == "recording.mp3")
+        let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
+        let reloaded = try JSONDecoder().decode(OpenClawChatMessage.self, from: JSONEncoder().encode(cached))
+        #expect(reloaded.content.map(\.mediaKind) == [.file, .image, .image, .audio])
+        #expect(reloaded.content.last?.fileName == "recording.mp3")
     }
 
     @Test func `decodes managed document envelope through history and cache`() throws {
