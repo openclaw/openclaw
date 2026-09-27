@@ -14,6 +14,7 @@ import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { hasExplicitSessionName } from "../session-title-state.js";
 import { formatForLog } from "../ws-log.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { measureSessionCollaborationPhase } from "./sessions-collaboration-diagnostics.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type {
   GatewayRequestContext,
@@ -131,7 +132,9 @@ function sessionDiscussionHandler(operation: "info" | "open"): GatewayRequestHan
           agentId: requestedAgent.agentId,
           sessionKey: params.sessionKey,
         });
-        const result = await provider[operation]({ sessionKey, agentId: requestedAgent.agentId });
+        const result = await measureSessionCollaborationPhase(`${method}.provider`, () =>
+          provider[operation]({ sessionKey, agentId: requestedAgent.agentId }),
+        );
         if (!validateResult(result)) {
           respond(
             false,
