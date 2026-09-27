@@ -3564,6 +3564,7 @@ export const en: TranslationMap & {
       splitRight: "Split right",
       splitDown: "Split down",
       closePane: "Close pane",
+      panePosition: "Column {column}, row {row} ({pane})",
       dropSplit: "Split",
       dropOpenHere: "Open here",
     },

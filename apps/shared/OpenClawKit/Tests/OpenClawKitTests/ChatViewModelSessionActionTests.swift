@@ -1066,7 +1066,7 @@ struct ChatViewModelSessionActionTests {
 
         #expect(viewModel.sessionBranches == newBranches)
         firstGate.release()
-        await firstRefresh.value
+        _ = await firstRefresh.value
 
         #expect(viewModel.sessionBranches == newBranches)
         #expect(viewModel.isLoadingSessionBranches == false)
@@ -1401,7 +1401,9 @@ struct ChatViewModelSessionActionTests {
         #expect(viewModel.sessionKey == "other")
         #expect(await transport.forkedParentKeys() == ["main"])
     }
+}
 
+extension ChatViewModelSessionActionTests {
     private func waitForForkStart(
         _ gate: SessionActionCompletionGate,
         timeout: Duration = .seconds(15)) async -> Bool
@@ -1487,7 +1489,10 @@ struct ChatViewModelSessionActionTests {
         // mutation must discard retained narration from the previous branch.
         viewModel.updateActiveSessionRunIDs(["completed-run"])
         viewModel.handleTransportEvent(.agent(OpenClawAgentEventPayload(
-            runId: "completed-run", seq: 1, stream: "item", ts: 1000,
+            runId: "completed-run",
+            seq: 1,
+            stream: "item",
+            ts: 1000,
             data: [
                 "kind": AnyCodable("preamble"), "itemId": AnyCodable("old-narration"),
                 "phase": AnyCodable("end"), "progressText": AnyCodable("Previous branch narration"),

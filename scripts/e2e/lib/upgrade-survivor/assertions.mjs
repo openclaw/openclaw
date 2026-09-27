@@ -320,10 +320,6 @@ function acceptsIntent(coverage, id) {
   return Array.isArray(coverage.acceptedIntents) && coverage.acceptedIntents.includes(id);
 }
 
-function hasCoverage(coverage) {
-  return Boolean(coverage);
-}
-
 function seedState() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
@@ -485,7 +481,7 @@ function assertConfigSurvived() {
     ],
   ]) {
     // Frozen recipes without coverage receipts predate these provider specimens.
-    if (!hasCoverage(coverage) || !acceptsIntent(coverage, `models-${providerId}`)) {
+    if (!coverage || !acceptsIntent(coverage, `models-${providerId}`)) {
       continue;
     }
     const provider = config.models?.providers?.[providerId];
@@ -519,7 +515,7 @@ function assertConfigSurvived() {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("discord"), "discord plugin allow entry missing");
     assert(pluginAllow.includes("telegram"), "telegram plugin allow entry missing");
-    if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
+    if (coverage && acceptsIntent(coverage, "configured-plugin-installs")) {
       assert(pluginAllow.includes("matrix"), "matrix plugin allow entry missing");
     } else {
       assert(pluginAllow.includes("whatsapp"), "whatsapp plugin allow entry missing");
@@ -527,12 +523,12 @@ function assertConfigSurvived() {
     if (scenario === "codex-allowlist-survival") {
       assert(pluginAllow.includes("codex"), "Codex plugin allow entry missing");
     }
-    if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
+    if (coverage && acceptsIntent(coverage, "feishu-channel")) {
       assert(pluginAllow.includes("feishu"), "feishu plugin allow entry missing");
     }
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "acpx-openclaw-tools-bridge")) {
+  if (coverage && acceptsIntent(coverage, "acpx-openclaw-tools-bridge")) {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("acpx"), "ACPX plugin allow entry missing");
     assert(config.plugins?.entries?.acpx?.enabled === true, "ACPX plugin entry changed");
@@ -542,7 +538,7 @@ function assertConfigSurvived() {
     );
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
+  if (coverage && acceptsIntent(coverage, "configured-plugin-installs")) {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("discord"), "configured install discord allow entry missing");
     assert(pluginAllow.includes("telegram"), "configured install telegram allow entry missing");
@@ -593,7 +589,7 @@ function assertConfigSurvived() {
     const whatsapp = config.channels?.whatsapp;
     assert(whatsapp?.enabled === true, "whatsapp enabled flag changed");
     const whatsappGroup = whatsapp.groups?.["120363000000000000@g.us"];
-    if (hasCoverage(coverage)) {
+    if (coverage) {
       assert(whatsappGroup?.requireMention === true, "whatsapp group policy changed");
     } else {
       assert(
@@ -612,7 +608,7 @@ function assertConfigSurvived() {
     );
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
+  if (coverage && acceptsIntent(coverage, "configured-plugin-installs")) {
     const matrix = config.channels?.matrix;
     assert(matrix?.enabled === true, "matrix enabled flag changed");
     assert(matrix?.homeserver === "https://matrix.example.invalid", "matrix homeserver changed");
@@ -623,7 +619,7 @@ function assertConfigSurvived() {
     );
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
+  if (coverage && acceptsIntent(coverage, "feishu-channel")) {
     const feishu = config.channels?.feishu;
     assert(feishu?.enabled === true, "feishu enabled flag changed");
     assert(feishu?.connectionMode === "webhook", "feishu connection mode changed");
@@ -635,7 +631,7 @@ function assertConfigSurvived() {
     );
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "logging")) {
+  if (coverage && acceptsIntent(coverage, "logging")) {
     assert(
       config.logging?.file === "~/openclaw-upgrade-survivor/gateway.jsonl",
       "logging.file tilde path changed",
@@ -1473,7 +1469,7 @@ function assertRecoveredPluginInstalls(args) {
 function assertConfiguredPluginInstalls() {
   const coverage = getCoverage();
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
-  if (!hasCoverage(coverage) || !acceptsIntent(coverage, "configured-plugin-installs")) {
+  if (!coverage || !acceptsIntent(coverage, "configured-plugin-installs")) {
     return;
   }
   if (stage === "baseline") {

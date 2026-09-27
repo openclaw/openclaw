@@ -12,6 +12,7 @@ import {
   type WorkerConnectParams,
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
@@ -212,11 +213,14 @@ class PublicWorkerHarness {
       pushLiveEvent: async () => ({ ok: false, details: { reason: "invalid-event" } }),
     };
     this.preauthBudget = createPreauthConnectionBudget(options.preauthLimit ?? 8);
-    this.publicRateLimiter = createGatewayAuthRateLimiter({
-      maxAttempts: options.rateLimitMaxAttempts ?? 10,
-      exemptLoopback: false,
-      pruneIntervalMs: 0,
-    });
+    this.publicRateLimiter = createGatewayAuthRateLimiter(
+      {
+        maxAttempts: options.rateLimitMaxAttempts ?? 10,
+        exemptLoopback: false,
+        pruneIntervalMs: 0,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
     this.httpServer = createGatewayHttpServer({
       clients: this.clients,
       controlUiEnabled: true,

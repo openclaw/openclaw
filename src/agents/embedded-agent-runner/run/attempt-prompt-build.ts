@@ -1,7 +1,3 @@
-/**
- * Builds the prompt after session preparation and before provider submission.
- * It may assume session, hook, cache, and context-engine inputs are ready.
- */
 import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
@@ -50,6 +46,7 @@ import {
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
+import type { CurrentUserTimestampMatch } from "./attempt-history.js";
 import {
   normalizeCurrentPromptTextForLlmBoundary,
   usesEscapedRuntimeContext,
@@ -72,9 +69,6 @@ import {
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-/**
- * Assembles hook, orphan-repair, steering, and cache inputs for one prompt.
- */
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 type OrphanRepairPlan = ReturnType<typeof resolveOrphanRepairPlan>;
 type PromptBuildHookContext = Parameters<typeof resolvePromptBuildHookResult>[0]["hookCtx"];
@@ -163,7 +157,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         messages: promptBuildMessages,
         hookCtx,
         hookRunner: input.hookRunner,
-        bootstrapContextRunKind: attempt.bootstrapContextRunKind,
       });
   const callableToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
   // Regenerate owned capability guidance before composing hook additions, without
@@ -349,9 +342,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   };
 }
 
-/**
- * Compiles current-turn prompt text, hidden runtime context, and hook messages.
- */
 type PromptContextAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "config"
@@ -373,16 +363,10 @@ type PromptAssemblyContext = {
   heartbeatSummary?: Pick<HeartbeatSummary, "ackMaxChars" | "prompt">;
 };
 
-type CurrentUserTimestampOverride = {
-  timestamp: number;
-  text: string;
-  alternateText?: string;
-};
-
 type EmbeddedAttemptPromptContext = {
   aggregatePressureEngaged: boolean;
   contextTokenBudget: number;
-  currentUserTimestampOverride?: CurrentUserTimestampOverride;
+  currentUserTimestampOverride?: CurrentUserTimestampMatch;
   effectivePrompt: string;
   hookMessagesForCurrentPrompt: AgentMessage[];
   llmBoundaryPromptForPrecheck: string;

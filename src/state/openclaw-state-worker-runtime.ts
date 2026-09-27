@@ -18,14 +18,9 @@ import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import {
-  isWorktreeRegistryReadCommand,
-  executeWorktreeRegistryReadCommand,
-} from "../agents/worktrees/registry-read.worker.js";
-import {
-  retireMissingWorktreeInWorker,
-  deferWorktreeCleanupInWorker,
-} from "../agents/worktrees/registry-retirement.worker.js";
-import { executeWorktreeRunLeaseCommand } from "../agents/worktrees/run-lease-store.worker.js";
+  isWorktreeWorkerCommand,
+  executeWorktreeWorkerCommand,
+} from "../agents/worktrees/dispatch.worker.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
 import {
@@ -48,9 +43,8 @@ import {
 import { executeFleetRegistryCommand } from "../fleet/registry.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
 import {
-  readManagedImageRecordInDatabase,
-  listManagedImageRecordEntriesInDatabase,
-  listManagedImageOriginalMediaIdsInDatabase,
+  executeManagedImageRecordCommand,
+  isManagedImageRecordCommand,
 } from "../gateway/managed-image-record-store.kernel.js";
 import {
   executeOperatorApprovalCommand,
@@ -360,13 +354,6 @@ export function executeSharedStateCommand(
       (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
     );
   }
-  if (command.type === "plugins.deferredMigrations.record") {
-    return recordDeferredPluginMigrationsInWorker(command.input, {
-      database: open(),
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-    });
-  }
   if (
     command.type === "plugins.deferredMigrations.read" ||
     command.type === "plugins.deferredMigrations.completions.read"
@@ -489,14 +476,8 @@ export function executeSharedStateCommand(
     default:
       break;
   }
-  if (command.type === "managedImages.read") {
-    return readManagedImageRecordInDatabase(database.db, command.input.attachmentId);
-  }
-  if (command.type === "managedImages.entries") {
-    return listManagedImageRecordEntriesInDatabase(database.db, command.input.sessionKey);
-  }
-  if (command.type === "managedImages.originalMediaIds") {
-    return listManagedImageOriginalMediaIdsInDatabase(database.db);
+  if (isManagedImageRecordCommand(command)) {
+    return executeManagedImageRecordCommand(command, database);
   }
   if (isApnsRegistrationWorkerCommand(command)) {
     return executeApnsRegistrationCommand(command, database);
@@ -521,6 +502,9 @@ export function executeSharedStateCommand(
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   };
+  if (command.type === "plugins.deferredMigrations.record") {
+    return recordDeferredPluginMigrationsInWorker(command.input, writeOptions);
+  }
   if (
     command.type === "nativeHookRelay.write" ||
     command.type === "nativeHookRelay.renew" ||
@@ -671,17 +655,8 @@ export function executeSharedStateCommand(
       writeOptions,
     );
   }
-  if (isWorktreeRegistryReadCommand(command)) {
-    return executeWorktreeRegistryReadCommand(database.db, command);
-  }
-  if (command.type === "worktrees.retireMissing") {
-    return retireMissingWorktreeInWorker(command.input, writeOptions);
-  }
-  if (command.type === "worktrees.deferCleanup") {
-    return deferWorktreeCleanupInWorker(command.input, writeOptions);
-  }
-  if (command.type === "worktrees.releaseRunLease" || command.type === "worktrees.reapRunLeases") {
-    return executeWorktreeRunLeaseCommand(command, writeOptions);
+  if (isWorktreeWorkerCommand(command)) {
+    return executeWorktreeWorkerCommand(command, writeOptions);
   }
   if (isProjectRegistryCommand(command)) {
     return executeProjectRegistryCommand(command, writeOptions);

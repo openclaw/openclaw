@@ -93,6 +93,28 @@ async function expectUnstartedChildHistory(
 }
 
 describe("queued collector session projection", () => {
+  it("rejects an already-cancelled collector before starting spawn effects", async () => {
+    const effectsStarted = vi.fn();
+    await expect(
+      nativeSpawn.spawnSubagentDirect(
+        { task: "cancelled collector", collect: true, context: "isolated" },
+        {
+          agentSessionKey: parentKey,
+          requesterRunId: "parent-turn",
+          assertActive: () => {
+            throw new Error("requester already cancelled");
+          },
+          onSpawnEffectsStart: effectsStarted,
+        },
+      ),
+    ).resolves.toEqual({
+      status: "error",
+      error: "sessions_spawn could not read the requester session: requester already cancelled",
+    });
+    expect(effectsStarted).not.toHaveBeenCalled();
+    expect(launchedRunIds).toEqual([]);
+  });
+
   it("lists both labeled collectors before the second launches without inventing its runtime", async () => {
     const context = requestContext();
     const broadcast = vi.fn();
@@ -311,6 +333,9 @@ describe("queued collector session projection", () => {
         label.trim(),
         label.trim(),
       ]);
+      releaseSwarmRun(results[0]!.runId!);
+      await waitForLaunch(expectDefined(second.runId, "second collector run"));
+      expect(launchedRunIds).toEqual(results.map((result) => result.runId));
     } finally {
       releaseFirstRequester.resolve();
       await first;
@@ -318,58 +343,71 @@ describe("queued collector session projection", () => {
     }
   });
 
-  it("withdraws FIFO admission when requester acquisition fails", async () => {
-    const releaseFirstRequester = createDeferred();
-    const requester = vi
-      .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
-      .mockImplementationOnce(async () => {
-        await releaseFirstRequester.promise;
-        throw new Error("requester read failed");
+  it.each(["failure", "cancellation"] as const)(
+    "withdraws FIFO admission after requester acquisition %s",
+    async (outcome) => {
+      const releaseFirstRequester = createDeferred();
+      const abort = new AbortController();
+      const readRequester = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
+      const requester = vi
+        .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
+        .mockImplementationOnce(async (params) => {
+          const target = outcome === "cancellation" ? await readRequester(params) : undefined;
+          await releaseFirstRequester.promise;
+          if (outcome === "failure") {
+            throw new Error("requester read failed");
+          }
+          return expectDefined(target, "prepared requester");
+        });
+      const started = createDeferred<string>();
+      const unsubscribe = onAgentEvent((event) => {
+        if (event.stream === "lifecycle" && event.data.phase === "start") {
+          started.resolve(event.runId);
+        }
       });
-    const started = createDeferred<string>();
-    const unsubscribe = onAgentEvent((event) => {
-      if (event.stream === "lifecycle" && event.data.phase === "start") {
-        started.resolve(event.runId);
+      const effectsStarted = vi.fn();
+      const spawn = (label: string, assertActive?: () => void) =>
+        nativeSpawn.spawnSubagentDirect(
+          {
+            task: "Wait for cancellation",
+            label,
+            collect: true,
+            context: "isolated",
+            lightContext: true,
+          },
+          {
+            agentSessionKey: parentKey,
+            requesterRunId: "parent-turn",
+            requesterTurnRunId: "parent-turn",
+            onSpawnEffectsStart: effectsStarted,
+            assertActive,
+          },
+        );
+      const first = spawn("Failed requester", () => abort.signal.throwIfAborted());
+      try {
+        const second = await spawn("Surviving collector");
+        expect(second.status).toBe("accepted");
+        expect(launchedRunIds).toEqual([]);
+        expect(effectsStarted).toHaveBeenCalledTimes(1);
+        if (outcome === "cancellation") {
+          abort.abort(new Error("requester read cancelled"));
+        }
+        releaseFirstRequester.resolve();
+        expect(await first).toEqual({
+          status: "error",
+          error: `sessions_spawn could not read the requester session: requester read ${outcome === "failure" ? "failed" : "cancelled"}`,
+        });
+        expect(effectsStarted).toHaveBeenCalledTimes(2);
+        expect(await started.promise).toBe(second.runId);
+        expect(launchedRunIds).toEqual([second.runId]);
+      } finally {
+        releaseFirstRequester.resolve();
+        await first;
+        unsubscribe();
+        requester.mockRestore();
       }
-    });
-    const effectsStarted = vi.fn();
-    const spawn = (label: string) =>
-      nativeSpawn.spawnSubagentDirect(
-        {
-          task: "Wait for cancellation",
-          label,
-          collect: true,
-          context: "isolated",
-          lightContext: true,
-        },
-        {
-          agentSessionKey: parentKey,
-          requesterRunId: "parent-turn",
-          requesterTurnRunId: "parent-turn",
-          onSpawnEffectsStart: effectsStarted,
-        },
-      );
-    const first = spawn("Failed requester");
-    try {
-      const second = await spawn("Surviving collector");
-      expect(second.status).toBe("accepted");
-      expect(launchedRunIds).toEqual([]);
-      expect(effectsStarted).toHaveBeenCalledTimes(1);
-      releaseFirstRequester.resolve();
-      expect(await first).toEqual({
-        status: "error",
-        error: "sessions_spawn could not read the requester session: requester read failed",
-      });
-      expect(effectsStarted).toHaveBeenCalledTimes(2);
-      expect(await started.promise).toBe(second.runId);
-      expect(launchedRunIds).toEqual([second.runId]);
-    } finally {
-      releaseFirstRequester.resolve();
-      await first;
-      unsubscribe();
-      requester.mockRestore();
-    }
-  });
+    },
+  );
 
   it("keeps preactivation and held cancellation reservations pending until withdrawal", async () => {
     const { entry } = await createQueuedReservation();

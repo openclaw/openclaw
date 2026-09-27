@@ -492,30 +492,14 @@ internal fun projectWearChatEvent(payload: JsonElement): JsonObject? {
   }
 }
 
-internal fun projectedWearMessageText(message: JsonElement?): String? {
-  val content = (message as? JsonObject)?.get("content")
-  val text =
-    when (content) {
-      is JsonPrimitive -> {
-        content.contentOrNull
-      }
-
-      is JsonArray -> {
-        content.joinToString(separator = "") { part ->
-          when (part) {
-            is JsonPrimitive -> part.contentOrNull.orEmpty()
-            is JsonObject -> part.stringOrNull("text").orEmpty()
-            else -> ""
-          }
-        }
-      }
-
-      else -> {
-        null
-      }
-    }
+internal fun wearStreamMessageText(message: JsonElement?): String? {
+  val source = message as? JsonObject ?: return null
+  if (source.stringOrNull("role") == null) return null
   // Empty canonical content is a replacement, not an absent message/delta.
-  return text
+  return when (source["content"]) {
+    is JsonPrimitive, is JsonArray -> wearReplyText(source)
+    else -> null
+  }
 }
 
 private fun projectHistory(source: JsonObject): JsonObject =

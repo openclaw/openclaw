@@ -133,6 +133,9 @@ public struct OpenClawChatView: View {
     @State private var searchMessageID: UUID?
     @State private var isSearchPresented = false
     @State private var composerFocusRequest = 0
+    #if os(macOS)
+    @Environment(\.openClawChatWindowCommands) private var windowCommands
+    #endif
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
     #if os(iOS)
     @State private var selectTextMessage: OpenClawChatMessage?
@@ -297,9 +300,13 @@ extension OpenClawChatView {
                         rows: self.transcriptRows,
                         sessionKey: self.viewModel.sessionKey,
                         isEnabled: self.isDesktopLayout && self.showsComposer,
+                        focusRequest: self.windowCommands?.findRequest ?? 0,
                         selectedMessageID: self.$searchMessageID,
                         isPresented: self.$isSearchPresented,
                         onSelect: self.revealSearchMessage))
+                    .onChange(of: self.windowCommands?.composerFocusRequest) { _, _ in
+                        self.composerFocusRequest += 1
+                    }
                     .onChange(of: self.searchMessageID) { previousID, _ in
                         self.scrollCommand.cancel(targetID: previousID)
                     }

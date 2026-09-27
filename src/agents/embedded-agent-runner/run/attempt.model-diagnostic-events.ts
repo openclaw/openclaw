@@ -2,9 +2,6 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
-/**
- * Emits diagnostic model-call events around embedded-agent stream functions.
- */
 import type { StreamFn } from "../../runtime/index.js";
 import {
   createModelLifecycle,
@@ -42,13 +39,7 @@ async function safeReturnIterator(
       Promise.resolve(returnResult).catch(() => undefined),
       new Promise<void>((resolve) => {
         timeout = setTimeout(resolve, MODEL_CALL_STREAM_RETURN_TIMEOUT_MS);
-        const unref =
-          typeof timeout === "object" && timeout
-            ? (timeout as { unref?: () => void }).unref
-            : undefined;
-        if (unref) {
-          unref.call(timeout);
-        }
+        timeout.unref?.();
       }),
     ]);
   } finally {
@@ -138,12 +129,6 @@ function observeModelCallIterator<T>(
   }
 }
 
-function observeModelCallFinalResult<T>(result: T, lifecycle: ModelCallLifecycle): T {
-  lifecycle.observer.observeFinalResult(lifecycle.eventBase, lifecycle.startedAt, result);
-  lifecycle.emitCompleted();
-  return result;
-}
-
 function createSharedResultObserver(
   stream: unknown,
   lifecycle: ModelCallLifecycle,
@@ -160,7 +145,15 @@ function createSharedResultObserver(
       cached = Promise.resolve()
         .then(() => resultFn.call(stream))
         .then(
-          (resolved) => observeModelCallFinalResult(resolved, lifecycle),
+          (resolved) => {
+            lifecycle.observer.observeFinalResult(
+              lifecycle.eventBase,
+              lifecycle.startedAt,
+              resolved,
+            );
+            lifecycle.emitCompleted();
+            return resolved;
+          },
           (err: unknown) => {
             lifecycle.emitError(err);
             throw err;
@@ -180,7 +173,7 @@ function observeModelCallStream(
 ): AsyncIterable<unknown> {
   const observedResult = createSharedResultObserver(stream, lifecycle);
   const observedIterator = () =>
-    observeModelCallIterator(createIterator(), lifecycle, observedResult)[Symbol.asyncIterator]();
+    observeModelCallIterator(createIterator(), lifecycle, observedResult);
   let hasNonConfigurableIterator;
   try {
     hasNonConfigurableIterator =

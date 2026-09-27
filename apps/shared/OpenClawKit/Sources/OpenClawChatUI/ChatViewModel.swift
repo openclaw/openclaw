@@ -89,9 +89,9 @@ public final class OpenClawChatViewModel {
     /// Setters are module-internal for the sending extension only.
     public internal(set) var isSending = false
     public internal(set) var isSendingAttachmentDraft = false
+    public internal(set) var isSubmittingDraft = false
     private var deferredExternalSessionKey: String?
     private var deferredDeliveryIdentity: DeferredDeliveryIdentity?
-    var isSubmittingDraft = false
     @ObservationIgnored
     var isCreatingSession = false
     var attachmentStagingCount = 0
