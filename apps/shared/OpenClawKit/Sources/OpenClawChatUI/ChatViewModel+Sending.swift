@@ -45,7 +45,11 @@ extension OpenClawChatViewModel {
                 + "inputLen=\(input.count) attachments=\(attachments.count) "
                 + "pending=\(pendingRunCount) sending=\(isSending) "
                 + "health=\(healthOK)")
-        Task { await self.performSend() }
+        // Reserve the accepted draft before scheduling work so initial route
+        // hydration cannot retire its owner before asynchronous validation starts.
+        guard let draft = captureSendDraft() else { return }
+        isSubmittingDraft = true
+        Task { await self.performSend(draft) }
     }
 
     public func loadSlashCommandsIfNeeded() {
@@ -360,15 +364,8 @@ extension OpenClawChatViewModel {
         case liveOnly
     }
 
-    private func performSend() async {
-        guard let draft = captureSendDraft() else { return }
-
-        // Own every asynchronous validation/probe below. Slash catalog lookup
-        // can suspend, so taking this gate later permits duplicate enqueues.
-        // It also makes the captured reply selection single-submission; exact
-        // target identity keeps a later re-selection safe from completion.
-        // Keep it separate from isSending: local /compact checks that flag.
-        isSubmittingDraft = true
+    private func performSend(_ draft: SendDraft) async {
+        // Admission covers every validation/probe; local /compact uses the separate isSending flag.
         defer { self.isSubmittingDraft = false }
 
         guard await self.validateSendDraft(draft) else { return }

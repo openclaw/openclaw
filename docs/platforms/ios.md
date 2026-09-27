@@ -27,6 +27,7 @@ Availability: The official iPhone app is available on the [App Store](https://ap
 - Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
 - Assistant file attachments have a **Download file** action. Tap it to fetch the managed file and open the system share sheet, where you can choose **Save to Files** or another app. Downloads use the current Gateway connection and its scoped artifact access; an expired or removed file must be sent again. Documents are limited to 100 MB.
 - Dictation shows when it is starting and listening, a live microphone waveform, and the words recognized so far. Tap **Done** to add the transcript to your draft or **Cancel** to discard it. Attachments show **Preparing attachments…** while loading and **Sending attachments…** during delivery; failed photo loads show an error so you can select them again.
+- Preserves Markdown paragraph breaks, including before lists and while responses are streaming.
 - Renders completed Mermaid code fences as inline diagrams, with source/copy controls and a full-screen zoomable preview. Diagram rendering uses bundled assets and works offline.
 - Long-press a message or open its actions menu and choose **Select Text** to select and copy any span in a native text view; code fences show a copy button that copies the raw code.
 - **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
@@ -109,11 +110,25 @@ These pages require the same connected `operator.admin` session as Settings.
 Without that access, they show the native Gateway connection guidance. Instances
 opens **Devices**, the Dashboard owner of paired nodes and connected clients.
 
+The native **New Thread** agent picker shows configured names or agent IDs as
+soon as the roster arrives. Resolved identities update each choice without
+delaying selection; configured names keep precedence and the Gateway's default
+identity is **Assistant**. The catalog refreshes when the picker opens and stays
+bound to the selected Gateway.
+
 ## Session colors
 
 Long-press a session in the sidebar or Sessions screen to open its session actions, then choose **Color**. Select red, blue, green, yellow, purple, orange, pink, or cyan. **Default** clears the color.
 
 A colored session has a narrow leading stripe in session lists and a small dot beside its title in Chat. Unset colors show neither marker. The Gateway stores color names, not hex values; the app adjusts their hues for light and dark appearances.
+
+## Message times and models
+
+Completed message groups show relative time for the past week and a compact
+local date for older messages, alongside usage when available. VoiceOver reads
+the exact date, time, and time zone. Assistant replies show their recorded
+originating model when known; selecting another model does not change older
+replies. Streaming text, commentary, and tool activity do not gain these footers.
 
 ## Sources in chat
 

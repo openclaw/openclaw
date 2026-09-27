@@ -6,6 +6,7 @@ import {
   type deliverAgentHarnessTaskCompletion,
   type AgentHarnessCompletionDelivery,
   type AgentHarnessScopedSetDeliveryStatusParams,
+  type AgentHarnessScopedCreateRunningTaskRunParams,
   type AgentHarnessTaskRecord,
   type AgentHarnessTaskRuntime,
   type AgentHarnessTaskRuntimeScope,
@@ -118,6 +119,51 @@ export function captureNativeSubagentMonitorWork() {
       recovery.mockRestore();
       completion.mockRestore();
     },
+  };
+}
+
+export function observeCompletionAttempts() {
+  const attempts = new Map<Promise<void>, string>();
+  const started = new Set<{ runId: string; resolve: (attempt: Promise<void>) => void }>();
+  const prototype = CodexNativeSubagentCompletionDelivery.prototype;
+  const observer = vi.spyOn(prototype, "deliverPending");
+  prototype.deliverPending = function (
+    this: CodexNativeSubagentCompletionDelivery,
+    state,
+    child,
+    trigger,
+  ) {
+    const attempt = observer.call(this, state, child, trigger);
+    attempts.set(attempt, child.runId);
+    for (const waiter of started) {
+      if (waiter.runId === child.runId) {
+        started.delete(waiter);
+        waiter.resolve(attempt);
+      }
+    }
+    return attempt;
+  };
+  onTestFinished(() => observer.mockRestore());
+  return {
+    next(runId: string) {
+      return new Promise<void>((resolve, reject) => {
+        started.add({ runId, resolve: (attempt) => void attempt.then(resolve, reject) });
+      });
+    },
+    async settle(runId?: string) {
+      // Join the real persistence owner, including attempts accepted by its completion callbacks.
+      while (true) {
+        const batch = [...attempts].filter(([, id]) => runId === undefined || id === runId);
+        if (batch.length === 0) {
+          return;
+        }
+        for (const [attempt] of batch) {
+          attempts.delete(attempt);
+        }
+        await Promise.all(batch.map(([attempt]) => attempt));
+      }
+    },
+    restore: () => observer.mockRestore(),
   };
 }
 
@@ -252,6 +298,30 @@ export function createRuntime() {
       vi.fn<AgentHarnessTaskRuntime["recordTaskRunProgressByRunId"]>(update),
     finalizeTaskRunByRunId: vi.fn<AgentHarnessTaskRuntime["finalizeTaskRunByRunId"]>(update),
     listTaskRecords: vi.fn((): AgentHarnessTaskRecord[] => [...records.values()]),
+    tryCreateRunningTaskRunAsync: vi.fn(
+      async (params: AgentHarnessScopedCreateRunningTaskRunParams) =>
+        taskRuntime.tryCreateRunningTaskRun(params),
+    ),
+    createRunningTaskRunAsync: vi.fn(async (params: AgentHarnessScopedCreateRunningTaskRunParams) =>
+      taskRuntime.createRunningTaskRun(params),
+    ),
+    recordTaskRunProgressByRunIdAsync: vi.fn(
+      async (params: Parameters<AgentHarnessTaskRuntime["recordTaskRunProgressByRunId"]>[0]) =>
+        taskRuntime.recordTaskRunProgressByRunId(params),
+    ),
+    finalizeTaskRunByRunIdAsync: vi.fn(
+      async (params: Parameters<AgentHarnessTaskRuntime["finalizeTaskRunByRunId"]>[0]) =>
+        taskRuntime.finalizeTaskRunByRunId(params),
+    ),
+    setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(
+      async (params: AgentHarnessScopedSetDeliveryStatusParams) =>
+        taskRuntime.setDetachedTaskDeliveryStatusByRunId(params),
+    ),
+    prepareTaskRecordsRead: vi.fn(async () => () => taskRuntime.listTaskRecords()),
+    prepareTaskRunRead: vi.fn(
+      async (runId: string) => () =>
+        taskRuntime.listTaskRecords().filter((task) => task.runId === runId),
+    ),
     setDetachedTaskDeliveryStatusByRunId: vi.fn(
       (params: AgentHarnessScopedSetDeliveryStatusParams) => update(params),
     ),

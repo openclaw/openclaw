@@ -64,7 +64,7 @@ export function scheduleResumeSubagentRun(
 ): void {
   const params = context.options;
   const timer = setTimeout(() => {
-    context.deleteScheduledResumeTimer(timer);
+    context.scheduledResumeTimers.delete(timer);
     void runWithGatewayIndependentRootWorkAdmission(async () => {
       if (params.runs.get(runId) !== entry) {
         return;
@@ -99,7 +99,7 @@ export function scheduleResumeSubagentRun(
     });
   }, delayMs);
   timer.unref?.();
-  context.addScheduledResumeTimer(timer);
+  context.scheduledResumeTimers.add(timer);
 }
 
 export function runDetachedCleanupAttempt(
@@ -121,7 +121,7 @@ export function runDetachedCleanupAttempt(
     void runWithSubagentCleanupWorkAdmission(async () => {
       try {
         await args.run();
-        context.clearCleanupFailureCount(args.entry);
+        context.cleanupFailureCounts.delete(args.entry);
       } catch (err) {
         defaultRuntime.log(
           `[warn] subagent cleanup finalize failed (${args.runId}): ${String(err)}`,
@@ -476,7 +476,7 @@ export async function completeTerminalEffects(
     mutated ||
     (completeParams.recoverInterrupted === true &&
       !isProvisionalKill &&
-      !context.hasProgressEnded(entry));
+      !context.progressEndedEntries.has(entry));
   if (shouldPublishTerminalStatus && !suppressedForSteerRestart && !suppressSessionEffects) {
     emitSessionLifecycleEvent({
       sessionKey: entry.childSessionKey,
@@ -485,8 +485,8 @@ export async function completeTerminalEffects(
       label: entry.label,
     });
     // The enclosing steer/session-effects guard admits only the real terminal generation.
-    if (!isProvisionalKill && !context.hasProgressEnded(entry)) {
-      context.markProgressEnded(entry);
+    if (!isProvisionalKill && !context.progressEndedEntries.has(entry)) {
+      context.progressEndedEntries.add(entry);
       await params.emitSubagentProgressEndedForRun(entry);
       refreshSessionEffectsSuppression();
       if (!isCurrentTerminalCallback()) {

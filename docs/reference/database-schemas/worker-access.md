@@ -65,7 +65,7 @@ through their existing domain adapter, such as
 `runOpenClawStateWorkerOperation`. The connection-bound Kysely kernel and
 transaction callback remain synchronous **inside the worker**. Complete
 asynchronous planning first, then reread authoritative rows inside the admitted
-transaction. Preserve FIFO order, coordinator custody, transaction/commit grants,
+transaction. Preserve FIFO order, physical database identity, transaction/commit grants,
 and settlement of accepted write-capable work.
 
 Published agent and shared-state database timers dispatch periodic WAL checkpoints
@@ -82,7 +82,16 @@ their owners; durability, schemas, retention, and update behavior are unchanged.
 Worker authority requests wait for the retained host owner's grant or refusal;
 host scheduling delays do not expire that authority. The host still checks current
 authority before granting, and broker failure joins worker exit before releasing
-custody. Coordinator-lock and broker-capacity admission keep their own deadlines.
+custody. Native SQLite and broker-capacity admission keep their own deadlines.
+Startup, schema work, and offline maintenance use the installation's single
+process owner. Ordinary writes acquire their actual SQLite transaction; they do
+not acquire a separate coordination database or carry a lock-directory namespace.
+
+A shared-state open that observes an existing file retains its physical identity
+and refuses if that generation disappears or changes before publication. It does
+not recreate a missing file. Preparing a new database directory and quarantining
+orphaned sidecars require the existing schema-maintenance owner; later permission
+hardening never recreates a removed directory.
 
 Each SQLite broker worker admits up to 128 running and queued requests. A busy
 worker's admission queue does not consume another worker's request capacity;
@@ -523,10 +532,19 @@ read, preserves preferred-run and backing-record selection, and rechecks abort,
 runtime ownership, and lifecycle authority after awaiting. Synchronous permission,
 kill, and requester-wake commits retain their native boundary, as do shipped custom
 runtime hooks. Those boundaries do not provide a fallback for worker read failures.
-Other native task mutation callers remain migration debt. Slow main-thread
-coordinator warnings include the caller stack as well as the operation label,
-captured only after a wait exceeds 100 ms. Schemas, retention, and update behavior
-are unchanged.
+Other native task mutation callers remain migration debt. Transaction diagnostics
+report slow native admission and transaction holds with the operation label.
+Schemas, retention, and update behavior are unchanged.
+
+Concurrent first opens wait for owner-record publication and a transient schema
+initializer within one database busy timeout. Incomplete records never grant
+access; each attempt rechecks ownership, and records that remain malformed still
+refuse admission. This wait ends before a user mutation callback is entered;
+callbacks and uncertain rollbacks are never replayed. Existing handles and true
+offline maintenance retain their normal admission rules.
+Completed leases discard their saved async context. Exact retained native handles
+can be disposed after request revocation; new application mutations still require
+live operation authority.
 
 Background exec registration and terminal writes use the existing task creation
 receipt and worker. A command that exits during registration joins its running
@@ -536,8 +554,12 @@ restore or delete its environment while a write is pending. Registered synchrono
 V1 runtimes retain their captured adapter. Command redaction, task data, schemas,
 retention, and update behavior are unchanged.
 
-Worktree run-lease cleanup deletes the exact token and reads the Git unlock target
-through the shared-state worker. Failed deletions yield between bounded retries,
+Worktree run-lease admission and cleanup use the shared-state worker. Admission
+rechecks removal, exclusivity, and process liveness inside the insertion transaction,
+retaining the requesting process's PID and start time. Cleanup deletes the exact
+token and reads the Git unlock target. A failed result delivery permits compensation
+only after native settlement; unknown outcomes retain the original database custody
+for stale-process recovery. Failed deletions yield between bounded retries,
 retaining the original database admission and Git guard until deletion settles.
 Process exit retains its best-effort synchronous deletion because it cannot await
 a worker. Git-guard admission reads its registry target through the same retained
@@ -549,15 +571,15 @@ timer ends before terminal persistence. Cold worker startup belongs to admission
 normal idle retirement and memory-pressure eviction remain in effect. Detached
 worker opening evaluates live admission guards in their captured caller context,
 then releases that capture after native opening settles.
-Worktree run admission writes, task creation and progress, and the remaining native
+Task creation and progress and the remaining native
 cron transitions still need migration. This
 cutover preserves schemas, stored bytes, retention, configuration, and update behavior.
 
 Native cron receipt guards read deletion authority through their transaction's
 admitted connection. Other synchronous current-authority readers may reuse that
-same thread's coordinated write transaction, including its pending lifecycle rows;
+same thread's managed write transaction, including its pending lifecycle rows;
 ordinary discovery reads retain committed-state isolation. This avoids preparing
-a child-process snapshot while holding the shared-state write coordinator. Agent
+a child-process snapshot while holding the shared-state write transaction. Agent
 database admission refusals remain with their in-memory admission owner. Schemas,
 retention, configuration, and update behavior are unchanged.
 

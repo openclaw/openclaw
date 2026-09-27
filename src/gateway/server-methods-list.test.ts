@@ -246,6 +246,8 @@ describe("listGatewayMethods", () => {
       "portal.session.open",
       "portal.session.close",
       "cron.history",
+      "presence.activity",
+      "presence.query",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -312,6 +314,8 @@ describe("listGatewayMethods", () => {
       "portal.session.open",
       "portal.session.close",
       "cron.history",
+      "presence.activity",
+      "presence.query",
     ]);
   });
 
@@ -507,6 +511,8 @@ describe("listGatewayMethods", () => {
       "portal.session.open",
       "portal.session.close",
       "cron.history",
+      "presence.activity",
+      "presence.query",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

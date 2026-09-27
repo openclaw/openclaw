@@ -91,7 +91,7 @@ async function createFixture(historyOwner?: ReturnType<typeof nativeHistoryOwner
   });
   onTestFinished(() => {
     unsubscribe();
-    monitor.dispose();
+    return monitor.dispose();
   });
   (await registerParent(monitor, undefined, undefined, historyOwner)).bindTurn("parent-turn");
   return { client, runtime, monitor, events };
@@ -292,7 +292,7 @@ describe("native wait assignment projection", () => {
       } else if (scenario === "ended-turn") {
         await endTurn(client, "waiter", "waiter-turn", "interrupted");
       } else if (scenario === "retired-parent") {
-        monitor.retireParent("parent-thread");
+        await monitor.retireParent("parent-thread");
       }
       const eventCount = events.length;
       await acceptFollowup(client, receiverParent);

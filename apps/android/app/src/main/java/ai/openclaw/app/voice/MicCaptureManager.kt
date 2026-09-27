@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.node.parseJsonParamsObject
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -21,8 +22,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
@@ -78,8 +77,6 @@ internal class MicCaptureManager(
     private const val maxConversationEntries = 40
     private const val pendingRunTimeoutMs = 45_000L
   }
-
-  private val json = Json { ignoreUnknownKeys = true }
 
   private val _micEnabled = MutableStateFlow(false)
   val micEnabled: StateFlow<Boolean> = _micEnabled
@@ -319,13 +316,7 @@ internal class MicCaptureManager(
       return
     }
     if (event != "chat") return
-    if (payloadJson.isNullOrBlank()) return
-    val payload =
-      try {
-        json.parseToJsonElement(payloadJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return
+    val payload = parseJsonParamsObject(payloadJson) ?: return
 
     val runId =
       pendingRunId ?: run {
@@ -340,9 +331,9 @@ internal class MicCaptureManager(
 
     when (payload["state"].asStringOrNull()) {
       "delta" -> {
-        val deltaText = ChatEventText.assistantTextFromPayload(payload)
-        if (!deltaText.isNullOrBlank()) {
-          upsertPendingAssistant(text = deltaText.trim(), isStreaming = true)
+        val text = ChatEventText.assistantStreamTextFromPayload(payload)
+        if (text != null) {
+          upsertPendingAssistant(text = text, isStreaming = true)
         }
       }
 
@@ -807,13 +798,7 @@ internal class MicCaptureManager(
   }
 
   private fun handleTranscriptionEvent(payloadJson: String?) {
-    if (payloadJson.isNullOrBlank()) return
-    val obj =
-      try {
-        json.parseToJsonElement(payloadJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return
+    val obj = parseJsonParamsObject(payloadJson) ?: return
     val sessionId = obj["transcriptionSessionId"].asStringOrNull() ?: obj["sessionId"].asStringOrNull()
     val currentSession = transcriptionSession
     if (currentSession == null || sessionId != currentSession.id) return
@@ -928,8 +913,6 @@ internal class MicCaptureManager(
         PackageManager.PERMISSION_GRANTED
     )
 }
-
-private fun kotlinx.serialization.json.JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
 private fun kotlinx.serialization.json.JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
 

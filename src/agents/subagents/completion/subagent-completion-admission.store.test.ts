@@ -570,7 +570,7 @@ describe("atomic subagent completion admission store", () => {
           resumedRuns: new Set<string>(),
           resolveSubagentTask: () => ({ lookup: "available", task: ordinary.task }),
         },
-        hasScheduledRequesterSettleWakeRun: () => true,
+        scheduledRequesterSettleWakeRuns: new WeakSet([ordinary.subagent]),
       } as unknown as Parameters<typeof suspendPendingFinalDelivery>[0],
       {
         runId: ordinary.subagent.runId,

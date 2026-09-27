@@ -51,7 +51,10 @@ describe("reset during ensured runtime metadata publication", () => {
       ...target,
       cfg: baseCfg,
       meta: persisted,
-      deps: { requireRuntimeBackend: () => ({ id: "acpx", runtime: state.runtime }) },
+      deps: {
+        requireRuntimeBackend: () => ({ id: "acpx", runtime: state.runtime }),
+        loadSessionEntryAsync: async () => null,
+      },
       runtimeHandles: cache,
       writeSessionMeta,
     };

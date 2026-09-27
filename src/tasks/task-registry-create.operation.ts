@@ -46,7 +46,7 @@ export type TaskCreateOperations = {
   /** Upserts must throw on persistence failure; returning acknowledges the write. */
   upsertDelivery: (state: TaskDeliveryState) => void;
   upsertTask: (task: TaskRecord, deliveryState?: TaskDeliveryState) => void;
-  /** Publish after the successful transaction, or immediately after a store-owned commit. */
+  /** Native adapters stage rollback-safe state; worker adapters publish after commit. */
   deferCommit: (publish: () => void) => void;
   retainTaskCommit?: (taskId: string) => void;
   onCommitted: (commit: TaskCreateCommit) => void;

@@ -164,6 +164,7 @@ export function createAgentTurnService(
     try {
       assertAdmissionCurrent?.();
       const content = await prepareAgentContentPhase({
+        assertAdmissionCurrent: assertRequestCurrent,
         request,
         cfg,
         context,
@@ -181,7 +182,7 @@ export function createAgentTurnService(
         modelOverride,
         explicitRecipientSession,
         knownAgents,
-      });
+      }).catch(dedupeLifecycle.handlePreparationFailure(assertAdmissionCurrent));
       if (!content) {
         return;
       }

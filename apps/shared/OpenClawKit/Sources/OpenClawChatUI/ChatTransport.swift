@@ -544,7 +544,7 @@ public struct OpenClawChatSessionGroupsRouteLease: Sendable {
 /// One physical gateway connection captured while new-session options are
 /// shown. Agent capabilities and the resulting create request share the route.
 public struct OpenClawChatNewSessionRouteLease: Sendable {
-    public typealias ListAgents = @Sendable () async throws -> OpenClawChatAgentsListResponse?
+    public typealias LoadAgents = @Sendable (@escaping OpenClawChatAgentCatalogUpdate) async throws -> Void
     public typealias CreateSession = @Sendable (
         _ key: String,
         _ label: String?,
@@ -553,19 +553,19 @@ public struct OpenClawChatNewSessionRouteLease: Sendable {
         _ worktree: Bool?,
         _ worktreeBaseRef: String?) async throws -> OpenClawChatCreateSessionResponse
 
-    private let listAgentsImpl: ListAgents
+    private let loadAgentsImpl: LoadAgents
     private let createSessionImpl: CreateSession
 
     public init(
-        listAgents: @escaping ListAgents,
+        loadAgents: @escaping LoadAgents,
         createSession: @escaping CreateSession)
     {
-        self.listAgentsImpl = listAgents
+        self.loadAgentsImpl = loadAgents
         self.createSessionImpl = createSession
     }
 
-    public func listAgents() async throws -> OpenClawChatAgentsListResponse? {
-        try await self.listAgentsImpl()
+    public func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws {
+        try await self.loadAgentsImpl(onUpdate)
     }
 
     public func createSession(
@@ -902,7 +902,7 @@ public protocol OpenClawChatTransport: Sendable {
         agentID: String?) async throws -> OpenClawChatSessionsListResponse
     func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry]
     func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease?
-    func listAgents() async throws -> OpenClawChatAgentsListResponse?
+    func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease?
     func listSessionGroups() async throws -> OpenClawChatSessionGroupsResponse?
     func putSessionGroups(names: [String]) async throws -> OpenClawChatSessionGroupsMutationResponse
@@ -1136,7 +1136,7 @@ extension OpenClawChatTransport {
     public func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease? {
         let transport = self
         return OpenClawChatNewSessionRouteLease(
-            listAgents: { try await transport.listAgents() },
+            loadAgents: { try await transport.loadAgents(onUpdate: $0) },
             createSession: { key, label, agentID, parentSessionKey, worktree, worktreeBaseRef in
                 try await transport.createSession(
                     key: key,
@@ -1266,8 +1266,8 @@ extension OpenClawChatTransport {
         try await self.listSessions(limit: limit, search: nil, archived: archived)
     }
 
-    public func listAgents() async throws -> OpenClawChatAgentsListResponse? {
-        nil
+    public func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws {
+        await onUpdate(nil)
     }
 
     public func listSessionGroups() async throws -> OpenClawChatSessionGroupsResponse? {

@@ -473,6 +473,13 @@ Proxy launch arguments are rejected to avoid changing a shared daemon's login.
 
 ## Native subagent status
 
+Native task tracking requires a host with asynchronous, exact-assignment task
+persistence. A task runtime without these capabilities can still register an
+ordinary Codex turn; native task admission reports an OpenClaw upgrade requirement.
+Task creation, status updates, and cleanup await persistence without blocking
+the Gateway event loop. Cleanup settles accepted task writes before releasing
+the native subscription; it does not wait for a later reply delivery.
+
 Native Codex subagents appear under their parent in OpenClaw's task view.
 Their current execution, task result, and result delivery are separate facts.
 An approval or input request shows what needs attention. A native mailbox wait

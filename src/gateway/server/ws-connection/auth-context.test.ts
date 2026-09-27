@@ -1,5 +1,6 @@
 // WebSocket auth-context tests cover token, password, bootstrap, and device-token decision state.
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 
@@ -485,13 +486,16 @@ describe("resolveConnectAuthDecision", () => {
   });
 
   it("serializes concurrent bootstrap-token failures before checking the next attempt", async () => {
-    const rateLimiter = createGatewayAuthRateLimiter({
-      maxAttempts: 3,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      exemptLoopback: false,
-      pruneIntervalMs: 0,
-    });
+    const rateLimiter = createGatewayAuthRateLimiter(
+      {
+        maxAttempts: 3,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: false,
+        pruneIntervalMs: 0,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
     let activeBootstrapChecks = 0;
     let maxActiveBootstrapChecks = 0;
     const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => {

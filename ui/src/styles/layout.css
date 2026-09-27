@@ -1754,7 +1754,11 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-session-group-presence--idle {
-  opacity: 0.45;
+  background: var(--warn);
+}
+
+.sidebar-session-group-presence--unknown {
+  background: var(--muted);
 }
 
 .sidebar-session-catalog-load-more {
@@ -2588,8 +2592,22 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-online__person--away {
-  filter: grayscale(0.8);
-  opacity: 0.45;
+  color: var(--muted);
+}
+
+.sidebar-online__person-status {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: calc(11px * var(--control-ui-text-scale));
+}
+
+.sidebar-online__person[data-presence-activity="active"] .sidebar-online__person-status {
+  color: var(--ok);
+}
+
+.sidebar-online__person[data-presence-activity="idle"] .sidebar-online__person-status {
+  color: var(--warn);
 }
 
 .sidebar-online__person .viewer-avatar {
@@ -2611,7 +2629,6 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   justify-content: center;
   flex: none;
-  margin-left: auto;
   color: var(--muted);
   opacity: 0;
   transition: opacity var(--duration-fast) ease;

@@ -63,24 +63,13 @@ export type OpenAIRealtimeVoiceProviderConfig = {
   azureApiVersion?: string;
 };
 
-export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
-  apiKey?: string;
-  callId?: string;
-  gaSessionPolicy?: RealtimeGaSessionPolicy;
-  model?: string;
-  voice?: OpenAIRealtimeVoice;
-  temperature?: number;
-  vadThreshold?: number;
-  silenceDurationMs?: number;
-  prefixPaddingMs?: number;
-  interruptResponseOnInputAudio?: boolean;
-  minBargeInAudioEndMs?: number;
-  reasoningEffort?: string;
-  azureEndpoint?: string;
-  azureDeployment?: string;
-  azureApiVersion?: string;
-  logger: Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "warn">;
-};
+export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
+  Omit<OpenAIRealtimeVoiceProviderConfig, "voice"> & {
+    callId?: string;
+    gaSessionPolicy?: RealtimeGaSessionPolicy;
+    voice?: OpenAIRealtimeVoice;
+    logger: Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "warn">;
+  };
 
 export const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
 // Picker suggestions surfaced through talk.catalog. Free-form model values are still accepted.

@@ -385,20 +385,12 @@ export function createReadToolDefinition(
     parameters: readToolInputSchema,
     outputSchema: readToolOutputSchema,
     async execute(
-      toolCallId,
-      {
-        path,
-        offset,
-        limit,
-        cursor = 0,
-        optional,
-      }: { path: string; offset?: number; limit?: number; cursor?: number; optional?: true },
-      signal?: AbortSignal,
-      onUpdate?,
-      ctx?,
+      _toolCallId,
+      { path, offset, limit, cursor = 0, optional },
+      signal,
+      _onUpdate,
+      ctx,
     ) {
-      void toolCallId;
-      void onUpdate;
       if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
         throw new Error("Offset must be an integer at least 1");
       }

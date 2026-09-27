@@ -156,7 +156,7 @@ async function createFixture(
       releaseHistory();
       await owner.unregister();
       connected = false;
-      monitor.dispose();
+      await monitor.dispose();
     },
   };
 }

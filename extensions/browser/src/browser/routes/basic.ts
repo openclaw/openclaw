@@ -1,9 +1,3 @@
-/**
- * Basic browser control routes.
- *
- * Serves status, doctor, start/stop, profile management, and simple health
- * endpoints for the browser control server.
- */
 import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
 import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
@@ -334,7 +328,6 @@ function parseHeadlessStartOverride(params: {
   return { ok: true, headless };
 }
 
-/** Register basic browser lifecycle, status, doctor, and profile endpoints. */
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
   app.get("/system-profiles", async (req, res) => {
     await sendBasicJsonResponse({

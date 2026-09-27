@@ -49,10 +49,6 @@ export type WikiPageContradictionCluster = {
   }>;
 };
 
-function parseTimestamp(value?: string): number | null {
-  return parseDateStringTimestampMs(value) ?? null;
-}
-
 function normalizeClaimTextKey(text: string): string {
   return normalizeLowercaseStringOrEmpty(text.replace(/\s+/g, " "));
 }
@@ -65,8 +61,8 @@ function normalizeTextKey(text: string): string {
 
 function buildFreshnessFromTimestamp(params: { timestamp?: string; now?: Date }): WikiFreshness {
   const now = params.now ?? new Date();
-  const timestampMs = parseTimestamp(params.timestamp);
-  if (timestampMs === null || !params.timestamp) {
+  const timestampMs = parseDateStringTimestampMs(params.timestamp);
+  if (timestampMs === undefined || !params.timestamp) {
     return {
       level: "unknown",
       reason: "missing updatedAt",
@@ -91,8 +87,8 @@ function resolveLatestTimestamp(candidates: Array<string | undefined>): string |
   let bestValue: string | undefined;
   let bestMs = -1;
   for (const candidate of candidates) {
-    const parsed = parseTimestamp(candidate);
-    if (parsed === null || !candidate || parsed <= bestMs) {
+    const parsed = parseDateStringTimestampMs(candidate);
+    if (parsed === undefined || !candidate || parsed <= bestMs) {
       continue;
     }
     bestMs = parsed;

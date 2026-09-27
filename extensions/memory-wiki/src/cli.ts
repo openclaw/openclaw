@@ -247,22 +247,6 @@ function isMemoryWikiImportResult(value: unknown): value is MemoryWikiImportedSo
   );
 }
 
-function validateWikiGatewayResult(
-  method: "wiki.status" | "wiki.doctor" | "wiki.bridge.import",
-  value: unknown,
-): MemoryWikiStatus | MemoryWikiDoctorReport | MemoryWikiImportedSourceSyncResult {
-  if (method === "wiki.status" && isMemoryWikiStatus(value)) {
-    return value;
-  }
-  if (method === "wiki.doctor" && isMemoryWikiDoctorReport(value)) {
-    return value;
-  }
-  if (method === "wiki.bridge.import" && isMemoryWikiImportResult(value)) {
-    return value;
-  }
-  throw new Error(`Invalid Gateway response for ${method}.`);
-}
-
 async function callWikiGateway(method: "wiki.status", agentId?: string): Promise<MemoryWikiStatus>;
 async function callWikiGateway(
   method: "wiki.doctor",
@@ -282,15 +266,31 @@ async function callWikiGateway(
     agentId ? { agentId } : undefined,
     { progress: false },
   );
-  return validateWikiGatewayResult(method, result);
+  if (
+    (method === "wiki.status" && isMemoryWikiStatus(result)) ||
+    (method === "wiki.doctor" && isMemoryWikiDoctorReport(result)) ||
+    (method === "wiki.bridge.import" && isMemoryWikiImportResult(result))
+  ) {
+    return result;
+  }
+  throw new Error(`Invalid Gateway response for ${method}.`);
 }
 
 function normalizeCliStringList(values?: string[]): string[] | undefined {
-  if (!values) {
-    return undefined;
-  }
-  const uniqueValues = uniqueStrings(normalizeStringEntries(values));
+  const uniqueValues = uniqueStrings(normalizeStringEntries(values ?? []));
   return uniqueValues.length > 0 ? uniqueValues : undefined;
+}
+
+function resolveCliMutationMetadata(opts: WikiApplyMetadataCommandOptions) {
+  const sourceIds = normalizeCliStringList(opts.sourceId);
+  const contradictions = normalizeCliStringList(opts.contradiction);
+  const questions = normalizeCliStringList(opts.question);
+  return {
+    ...(sourceIds ? { sourceIds } : {}),
+    ...(contradictions ? { contradictions } : {}),
+    ...(questions ? { questions } : {}),
+    ...(opts.status?.trim() ? { status: opts.status.trim() } : {}),
+  };
 }
 
 function collectCliValues(value: string, acc: string[] = []) {
@@ -373,12 +373,12 @@ function addWikiSearchConfigOptions<T extends Command>(command: T): T {
 }
 
 function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
-  const error = new Error(message) as Error & { code: string; exitCode: number };
-  error.name = "InvalidArgumentError";
   // Commander recognizes parser failures by code; keep the import type-only for bundled plugin deps.
-  error.code = "commander.invalidArgument";
-  error.exitCode = 1;
-  return error;
+  return Object.assign(new Error(message), {
+    name: "InvalidArgumentError",
+    code: "commander.invalidArgument",
+    exitCode: 1,
+  });
 }
 
 function parseWikiConfidenceOption(value: string): number {
@@ -741,7 +741,8 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (title: string, opts: WikiApplySynthesisCommandOptions) => {
       const { appConfig, config } = requireCommandContext();
-      const sourceIds = normalizeCliStringList(opts.sourceId);
+      const metadata = resolveCliMutationMetadata(opts);
+      const sourceIds = metadata.sourceIds;
       if (!sourceIds) {
         throw new Error("wiki apply synthesis requires at least one --source-id.");
       }
@@ -753,15 +754,9 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
           op: "create_synthesis",
           title,
           body,
+          ...metadata,
           sourceIds,
-          ...(normalizeCliStringList(opts.contradiction)
-            ? { contradictions: normalizeCliStringList(opts.contradiction) }
-            : {}),
-          ...(normalizeCliStringList(opts.question)
-            ? { questions: normalizeCliStringList(opts.question) }
-            : {}),
           ...(typeof opts.confidence === "number" ? { confidence: opts.confidence } : {}),
-          ...(opts.status?.trim() ? { status: opts.status.trim() } : {}),
         },
       });
       writeOutput(formatJsonOrText(result, opts.json, renderWikiMutationSummary));
@@ -783,21 +778,12 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
         mutation: {
           op: "update_metadata",
           lookup,
-          ...(normalizeCliStringList(opts.sourceId)
-            ? { sourceIds: normalizeCliStringList(opts.sourceId) }
-            : {}),
-          ...(normalizeCliStringList(opts.contradiction)
-            ? { contradictions: normalizeCliStringList(opts.contradiction) }
-            : {}),
-          ...(normalizeCliStringList(opts.question)
-            ? { questions: normalizeCliStringList(opts.question) }
-            : {}),
+          ...resolveCliMutationMetadata(opts),
           ...(opts.clearConfidence
             ? { confidence: null }
             : typeof opts.confidence === "number"
               ? { confidence: opts.confidence }
               : {}),
-          ...(opts.status?.trim() ? { status: opts.status.trim() } : {}),
         },
       });
       writeOutput(formatJsonOrText(result, opts.json, renderWikiMutationSummary));

@@ -381,6 +381,8 @@ export async function prepareGatewayLifecycle(params: {
     const notice = resolveGatewayShutdownNotice(options);
     lifecycle.closePreludeStarted = true;
     markGatewaySuspendExiting();
+    authRateLimiter.dispose();
+    browserAuthRateLimiter.dispose();
     runtime.scheduler.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();
     // Publish the exact cancellation before withdrawing capabilities or running
@@ -507,7 +509,14 @@ export async function prepareGatewayLifecycle(params: {
         removeChatRun,
         agentRunSeq,
         broadcast,
-        nodeSendToSession,
+        nodeSendToSession: (
+          sessionKey,
+          event,
+          payload,
+          opts?: Parameters<typeof nodeSendToSession>[3],
+        ) => {
+          void nodeSendToSession(sessionKey, event, payload, opts);
+        },
         resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
         markMainSessionsAbortedForRestart: async (restart) => {
           await shutdownRuntime.markRestartAbortedMainSessions({

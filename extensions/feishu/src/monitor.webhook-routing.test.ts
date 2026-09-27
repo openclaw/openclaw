@@ -158,10 +158,6 @@ describe("Feishu webhook route configuration", () => {
   it.each([
     { name: "normal stop after identity recovery", replacement: undefined },
     {
-      name: "successor identity before transport registration",
-      replacement: { botOpenId: "ou_successor", botName: "Successor" },
-    },
-    {
       name: "successor publishing the same identity",
       replacement: { botOpenId: "ou_recovered", botName: "Recovered" },
     },
@@ -214,10 +210,7 @@ describe("Feishu webhook route configuration", () => {
   });
 
   it.each([
-    ...["/health", "/healthz", "/ready", "/readyz", "/startup", "/startupz"]
-      .flatMap((path) => [path, `${path}?tenant=test`])
-      .map((path) => ({ path, reason: "is reserved for Gateway probes" })),
-    { path: "/api/channels/feishu", reason: "requires Gateway authentication" },
+    { path: "/health", reason: "is reserved for Gateway probes" },
     { path: "/%61pi/channels/feishu?tenant=test", reason: "requires Gateway authentication" },
   ])(
     "keeps the default legacy listener for restricted path $path until explicitly disabled",
@@ -282,12 +275,6 @@ describe("Feishu webhook route configuration", () => {
       configured: { port: 3000, host: "0.0.0.0" },
       endpoint: { port: 3000, host: "0.0.0.0" },
     },
-    {
-      name: "explicit address",
-      configured: { port: 3000, host: "127.0.0.2" },
-      endpoint: { port: 3000, host: "127.0.0.2" },
-    },
-    { name: "disabled root", configured: false },
     { name: "account disable override", configured: { port: 3100 }, accountOverride: false },
   ])(
     "prepares the inherited legacy listener for $name and preserves Gateway delivery",

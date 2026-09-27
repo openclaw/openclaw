@@ -55,7 +55,6 @@ import { readGatewayServiceStateForUpdate } from "./update-command-service-plan.
 import { compensateOriginalManagedService } from "./update-command-service-recovery.js";
 import {
   maybeRestartService,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   resolveUpdatedGatewayRestartPort,
   type PreManagedServiceStop,
@@ -512,8 +511,7 @@ export async function rollbackFailedUpdate(params: {
     if (stopped.windowsTaskAutoStartRecovery) {
       params.onGatewayStartAttempted?.();
     }
-    await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-      stopped,
+    await stopped.windowsTaskAutoStartRecovery?.restore(
       true,
       createWindowsTaskAutoStartGuard({
         root: serviceRoot,

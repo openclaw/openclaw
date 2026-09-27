@@ -24,7 +24,6 @@ export async function runTaskRegistryWorkerOperation<Key extends keyof Operation
   let settlement: Promise<SqliteWorkerOperationSettlement> | undefined;
   try {
     return await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
-      requireStateLifecycle: true,
       assertCurrent,
       createAdmission(retained) {
         settlement = retained.settled;

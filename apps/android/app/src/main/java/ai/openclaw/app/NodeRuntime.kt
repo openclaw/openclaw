@@ -55,6 +55,7 @@ import ai.openclaw.app.gateway.isTailscaleGatewayHost
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.gateway.parseChatSendAck
+import ai.openclaw.app.gateway.parseGatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.resolveGatewaySourcePreviewConfig
 import ai.openclaw.app.i18n.NativeText
@@ -93,7 +94,6 @@ import ai.openclaw.app.node.resolveGatewayThemeFamily
 import ai.openclaw.app.node.resolveGatewayThemeMode
 import ai.openclaw.app.node.resolveProfileAccentArgb
 import ai.openclaw.app.systemagent.SystemAgentChatController
-import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.systemagent.SystemAgentGatewayAccess
 import ai.openclaw.app.voice.AndroidOnDeviceVoiceWakeRecognizer
 import ai.openclaw.app.voice.GatewayTranscriptionSession
@@ -1766,7 +1766,7 @@ class NodeRuntime private constructor(
       captureLease = { operatorSession.captureRequestLease() },
     )
 
-  private val systemAgentChatController by lazy {
+  internal val systemAgentChatController by lazy {
     SystemAgentChatController(
       scope = scope,
       access = {
@@ -1798,8 +1798,6 @@ class NodeRuntime private constructor(
       json = json,
     )
   }
-  internal val systemAgentChatState: StateFlow<SystemAgentChatState>
-    get() = systemAgentChatController.state
 
   private data class SecondaryOperatorRuntime(
     val endpoint: GatewayEndpoint?,
@@ -5728,39 +5726,6 @@ class NodeRuntime private constructor(
     chat.switchSession(sessionKey, ownerAgentId)
   }
 
-  internal fun refreshSystemAgentChat() {
-    systemAgentChatController.refresh()
-  }
-
-  internal fun clearSystemAgentChatInput() {
-    systemAgentChatController.clearInputForBackground()
-  }
-
-  internal fun sendSystemAgentChatInput() {
-    systemAgentChatController.sendInput()
-  }
-
-  internal fun setSystemAgentChatInput(value: String) {
-    systemAgentChatController.setInput(value)
-  }
-
-  internal fun answerSystemAgentQuestion(
-    messageId: String,
-    optionLabel: String,
-  ) {
-    systemAgentChatController.answerQuestion(messageId, optionLabel)
-  }
-
-  internal fun skipSystemAgentQuestion(messageId: String) {
-    systemAgentChatController.skipQuestion(messageId)
-  }
-
-  internal fun restartSystemAgentChat() {
-    systemAgentChatController.restart()
-  }
-
-  internal fun consumeSystemAgentChatHandoff() = systemAgentChatController.openHandoff()
-
   fun selectChatAgent(agentId: String) {
     val normalizedAgentId = agentId.trim()
     if (normalizedAgentId.isEmpty()) return
@@ -6154,19 +6119,13 @@ class NodeRuntime private constructor(
       null
     }
 
-  private fun parseGatewayUpdateAvailable(payloadJson: String?): GatewayUpdateAvailableSummary? {
-    return try {
+  private fun parseGatewayUpdateAvailable(payloadJson: String?): GatewayUpdateAvailableSummary? =
+    try {
       val root = payloadJson?.let { json.parseToJsonElement(it).asObjectOrNull() }
-      val update = root?.get("updateAvailable").asObjectOrNull() ?: return null
-      GatewayUpdateAvailableSummary(
-        currentVersion = update.nonBlankString("currentVersion"),
-        latestVersion = update.nonBlankString("latestVersion"),
-        channel = update.nonBlankString("channel"),
-      )
+      parseGatewayUpdateAvailableSummary(root?.get("updateAvailable").asObjectOrNull())
     } catch (_: Throwable) {
       null
     }
-  }
 
   private fun parseTalkSessionId(response: String): String {
     val root = json.parseToJsonElement(response).asObjectOrNull()
@@ -9231,7 +9190,7 @@ class NodeRuntime private constructor(
           id = id,
           name = name,
           enabled = obj.boolean("enabled"),
-          scheduleLabel = cronScheduleLabel(schedule),
+          scheduleLabel = cronScheduleLabel(schedule?.get("kind").asStringOrNull(), schedule),
           promptPreview = cronPayloadPreview(payload),
           nextRunAtMs = state.long("nextRunAtMs"),
           lastRunStatus = cronJobLastRunStatus(state),
@@ -9458,38 +9417,25 @@ class NodeRuntime private constructor(
     return ids
       .map { id ->
         val summary = channels?.get(id).asObjectOrNull()
-        val accountRows = parseChannelAccounts(accounts?.get(id) as? JsonArray)
+        val accountRows =
+          (accounts?.get(id) as? JsonArray)
+            ?.mapNotNull { it.asObjectOrNull()?.takeIf { account -> account.nonBlankString("accountId") != null } }
+            .orEmpty()
         GatewayChannelSummary(
           id = id,
           label = labels[id] ?: channelDisplayLabel(id),
           accountCount = accountRows.size,
-          enabled = summary.boolean("enabled") || accountRows.any { it.enabled },
-          configured = summary.boolean("configured") || accountRows.any { it.configured },
-          linked = summary.boolean("linked") || accountRows.any { it.linked },
-          running = summary.boolean("running") || accountRows.any { it.running },
-          connected = summary.boolean("connected") || accountRows.any { it.connected },
+          enabled = summary.boolean("enabled") || accountRows.any { it.boolean("enabled") },
+          configured = summary.boolean("configured") || accountRows.any { it.boolean("configured") },
+          linked = summary.boolean("linked") || accountRows.any { it.boolean("linked") },
+          running = summary.boolean("running") || accountRows.any { it.boolean("running") },
+          connected = summary.boolean("connected") || accountRows.any { it.boolean("connected") },
           error =
             summary.nonBlankString("lastError")
-              ?: accountRows.firstNotNullOfOrNull { it.error },
+              ?: accountRows.firstNotNullOfOrNull { it.nonBlankString("lastError") },
         )
       }.sortedWith(compareByDescending<GatewayChannelSummary> { it.enabled || it.configured }.thenBy { it.label.lowercase() })
   }
-
-  private fun parseChannelAccounts(accounts: JsonArray?): List<GatewayChannelAccountSummary> =
-    accounts
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        obj.nonBlankString("accountId") ?: return@mapNotNull null
-        GatewayChannelAccountSummary(
-          enabled = obj.boolean("enabled"),
-          configured = obj.boolean("configured"),
-          linked = obj.boolean("linked"),
-          running = obj.boolean("running"),
-          connected = obj.boolean("connected"),
-          error =
-            obj.nonBlankString("lastError"),
-        )
-      }.orEmpty()
 
   private fun parseStringMap(map: JsonObject?): Map<String, String> =
     map
@@ -9553,28 +9499,6 @@ class NodeRuntime private constructor(
       .asReversed()
       .take(4)
   }
-
-  private fun cronScheduleLabel(schedule: JsonObject?): NativeText =
-    when (schedule?.get("kind").asStringOrNull()) {
-      "at" -> {
-        nativeText("One time")
-      }
-
-      "every" -> {
-        schedule.long("everyMs")?.let(::formatCronInterval) ?: nativeText("Repeating")
-      }
-
-      "cron" -> {
-        schedule
-          .nonBlankString("expr")
-          ?.let(::verbatimText)
-          ?: nativeText("Cron")
-      }
-
-      else -> {
-        nativeText("Scheduled")
-      }
-    }
 
   private fun cronPayloadPreview(payload: JsonObject?): NativeText {
     val text =
@@ -10091,15 +10015,6 @@ data class GatewayChannelSummary(
   val id: String,
   val label: String,
   val accountCount: Int,
-  val enabled: Boolean,
-  val configured: Boolean,
-  val linked: Boolean,
-  val running: Boolean,
-  val connected: Boolean,
-  val error: String?,
-)
-
-private data class GatewayChannelAccountSummary(
   val enabled: Boolean,
   val configured: Boolean,
   val linked: Boolean,

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import {
   canRepairLegacyAuditEventsSchema,
   hasCanonicalAuditEventsSchema,
@@ -58,15 +58,11 @@ export function migrateWorkerPlacementExecutionModeSchema(
       db.exec(`ALTER TABLE worker_session_placements ADD COLUMN ${definition};`);
     }
   }
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS worker_session_placements (",
+  const placementSchema = extractSqliteTableSchema(
+    OPENCLAW_STATE_SCHEMA_SQL,
+    "worker_session_placements",
+    { errorMessage: "Canonical worker placement schema block is missing" },
   );
-  const endMarker = "\n) STRICT;";
-  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
-  if (start < 0 || end < 0) {
-    throw new Error("Canonical worker placement schema block is missing");
-  }
-  const placementSchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length);
   const canonical = openNodeSqliteDatabase(":memory:");
   let canonicalColumns: string[];
   try {

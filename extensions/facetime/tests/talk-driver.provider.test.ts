@@ -43,7 +43,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", () => ({
-  resolveRealtimeBootstrapContextInstructions: async () => undefined,
+  resolveRealtimeVoiceAgentContextInstructions: async () =>
+    "Agent context: shared voice agent context.",
 }));
 
 const providerMocks = await vi.hoisted(async () => {
@@ -183,7 +184,7 @@ describe("FaceTime realtime provider boundary", () => {
       },
     );
 
-    const { driver } = await startConnectedDriver(
+    const { driver, socket } = await startConnectedDriver(
       startParams({
         fullConfig,
         config: resolveFaceTimeConfig({
@@ -194,6 +195,14 @@ describe("FaceTime realtime provider boundary", () => {
     );
 
     expect(driver.realtimeActive()).toBe(true);
+    expect(sentEvents(socket)).toContainEqual(
+      expect.objectContaining({
+        type: "session.update",
+        session: expect.objectContaining({
+          instructions: expect.stringContaining("Agent context: shared voice agent context."),
+        }),
+      }),
+    );
     expect(providerMocks.resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: fullConfig, agentDir }),
     );
@@ -208,15 +217,6 @@ describe("FaceTime realtime provider boundary", () => {
       audioMs: [1_000],
       playedItemMs: [500],
       truncatedMs: [],
-    },
-    {
-      name: "enabled",
-      interrupt: true,
-      playedMs: 500,
-      completed: false,
-      audioMs: [1_000],
-      playedItemMs: [500],
-      truncatedMs: [500],
     },
     {
       name: "early echo guard",

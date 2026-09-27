@@ -572,14 +572,9 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     msg.quote ?? (externalReply as (Message & { quote?: Message["quote"] }) | undefined)?.quote;
   const rawQuoteText = quote?.text;
   const quoteText = resolveTelegramTextContent(rawQuoteText);
-  let body;
-  let kind: TelegramReplyTarget["kind"] = "reply";
+  let body = quoteText.trim();
+  const kind: TelegramReplyTarget["kind"] = body ? "quote" : "reply";
   const filteredQuoteText = hadUnsafeTelegramText(rawQuoteText, quoteText);
-
-  body = quoteText.trim();
-  if (body) {
-    kind = "quote";
-  }
 
   const replyLike = reply ?? externalReply;
   const externalOrigin = reply ? undefined : msg.external_reply?.origin;

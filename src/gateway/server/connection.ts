@@ -6,6 +6,7 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/serv
 import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { recordPairedNodeDisconnection } from "../../infra/device-pairing-node.js";
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -27,7 +28,6 @@ import {
 import type { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
-import { formatError } from "../server-utils.js";
 import { cleanupTalkConnection } from "../talk/session-registry.js";
 import type { WebSocketHeartbeatDiagnostics } from "../websocket-keepalive.js";
 import { formatForLog, logWs } from "../ws-log.js";

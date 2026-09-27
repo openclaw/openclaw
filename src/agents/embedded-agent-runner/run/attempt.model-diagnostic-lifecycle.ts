@@ -1,3 +1,4 @@
+import { modelRequestBodyState } from "@openclaw/ai/internal/openai";
 import { withProviderAcceptanceObserver, type ProviderAcceptance } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -363,6 +364,9 @@ function withDiagnosticRequestContext(
   const originalOnPayload = options?.onPayload;
   const originalOnResponse = options?.onResponse;
   const onPayload: NonNullable<ModelCallStreamOptions>["onPayload"] = (payload, model) => {
+    if (modelRequestBodyState(requestOptions).enabled) {
+      return originalOnPayload?.(payload, model);
+    }
     if (!originalOnPayload) {
       observer.assignRequestPayloadBytes(payload);
       return undefined;
@@ -403,6 +407,9 @@ function withDiagnosticRequestContext(
     ...((options?.headers || traceparent) && { headers }),
     onPayload,
     onResponse,
+  };
+  modelRequestBodyState(requestOptions).onBytes = (bytes) => {
+    observer.state.requestPayloadBytes = bytes;
   };
   return withProviderAcceptanceObserver(requestOptions, (acceptance) => {
     if (observer.state.terminalEventEmitted) {

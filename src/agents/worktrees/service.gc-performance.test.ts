@@ -9,6 +9,7 @@ import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import * as checkoutInspection from "./checkout-inspection.js";
 import { requireGit } from "./git.js";
 import * as registry from "./registry.js";
+import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import { resolveRepository } from "./service-preparation.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import {
@@ -149,13 +150,17 @@ function addLeasedWorktree(env: NodeJS.ProcessEnv, root: string, id: string) {
     createdAt: 1,
     lastActiveAt: 1,
   });
-  registry.admitWorktreeRunLeaseRow(env, {
-    worktreeId: id,
-    token: id,
-    pid: process.pid,
-    startTime: null,
-    now: 1,
-  });
+  stateDatabase.runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      admitWorktreeRunLeaseInDatabase(db, {
+        worktreeId: id,
+        token: id,
+        pid: process.pid,
+        startTime: null,
+        now: 1,
+      }),
+    { env },
+  );
 }
 
 it("protects a sweep of live leases without writer admission or checkout inspection", async () => {

@@ -226,15 +226,12 @@ describe("CLI process harness cleanup", () => {
     const source = path.join(stateDir, "fixture");
     fs.mkdirSync(source);
     fs.writeFileSync(path.join(source, "index.cjs"), "module.exports = 'retained';");
-    const { tryAcquireExclusiveSqliteCoordinator } = await import("../infra/sqlite-coordinator.js");
+    const { acquireSqliteStagingToken } = await import("../infra/sqlite-staging-token.js");
     const prior = path.join(stateDir, "tmp", "plugin-captures", "previous-command");
     fs.mkdirSync(path.join(prior, "captures"), { recursive: true });
     fs.writeFileSync(path.join(prior, "captures", "source.js"), "retained source");
-    const lease = tryAcquireExclusiveSqliteCoordinator(path.join(prior, "owner.sqlite"));
-    if (!lease) {
-      throw new Error("Fixture capture lease was not acquired");
-    }
-    lease.release();
+    const release = acquireSqliteStagingToken(prior, "create");
+    release();
     const aged = new Date(Date.now() - 2 * 60 * 60_000);
     fs.utimesSync(prior, aged, aged);
     const clock = createGatewaySchedulerClock(Date.now());

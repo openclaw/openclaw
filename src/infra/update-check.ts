@@ -102,6 +102,7 @@ type NpmTagStatus = {
   tag: string;
   version: string | null;
   error?: string;
+  metadata?: Awaited<ReturnType<typeof fetchNpmPackageTargetStatus>>;
 };
 
 export type UpdateCheckResult = {
@@ -585,6 +586,7 @@ export async function fetchNpmTagVersion(params: {
     tag,
     version: res.version,
     error: res.error,
+    metadata: res,
   };
 }
 

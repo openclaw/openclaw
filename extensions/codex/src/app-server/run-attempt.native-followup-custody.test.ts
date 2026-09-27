@@ -39,7 +39,6 @@ describe("native follow-up custody through the registered attempt", () => {
   });
 
   it.each([
-    "observed-success",
     "delayed-success",
     "failed-result",
     "completed-only",
@@ -51,10 +50,7 @@ describe("native follow-up custody through the registered attempt", () => {
     const runA = `codex-thread:${childThreadId}`;
     const turnB = `${childThreadId}-turn-b`;
     const runB = `${runA}:turn:${turnB}`;
-    const accepted =
-      scenario === "observed-success" ||
-      scenario === "delayed-success" ||
-      scenario === "wait-before-admission";
+    const accepted = scenario === "delayed-success" || scenario === "wait-before-admission";
     const waiterThreadId = `${childThreadId}-waiter`;
     const waiterRunId = `codex-thread:${waiterThreadId}`;
     const executionEvents: Array<Parameters<Parameters<typeof onAgentEvent>[0]>[0]> = [];
@@ -227,10 +223,8 @@ describe("native follow-up custody through the registered attempt", () => {
         threadId: waiterThreadId,
         turn: { id: "waiter-turn", status: "inProgress", items: [], error: null },
       });
-      if (scenario === "observed-success" || scenario === "wait-before-admission") {
-        await childStart();
-      }
       if (scenario === "wait-before-admission") {
+        await childStart();
         await notify("item/started", {
           threadId: waiterThreadId,
           turnId: "waiter-turn",

@@ -26,7 +26,6 @@ import {
   detectGlobalInstallManagerForRoot,
   createGlobalInstallEnv,
   globalInstallArgs,
-  globalInstallFallbackArgs,
   isPackageTargetAlreadyCurrent,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
@@ -803,19 +802,6 @@ describe("update global helpers", () => {
       "--trust",
       "openclaw@github:openclaw/openclaw#main",
     ]);
-    expect(globalInstallFallbackArgs("npm", "openclaw@latest")).toEqual([
-      "npm",
-      "i",
-      "-g",
-      "--allow-scripts=openclaw",
-      "openclaw@latest",
-      "--omit=optional",
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=error",
-      "--min-release-age=0",
-    ]);
-    expect(globalInstallFallbackArgs("pnpm", "openclaw@latest")).toBeNull();
   });
 
   it("resolves npm prefix layouts for normal global roots", () => {

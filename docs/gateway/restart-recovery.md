@@ -123,6 +123,12 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+Cron shutdown gives execution cleanup and durable result writes the same cleanup
+window. Finishing the job's execution does not by itself complete the drain:
+result persistence must also settle, or the Gateway reports the remaining work
+when the window expires. Exit-watcher failures are reported after these drains
+settle.
+
 On Linux and macOS, this also applies when startup recovers from an unsupported
 Node version and the service manager tracks a launcher parent. The launcher
 forwards the stop signal and waits for the serving Gateway to drain within the

@@ -394,14 +394,7 @@ export function assertOpenClawAgentDatabaseLease(
     env: params.env,
     initializationAgentPaths: [params.path],
   });
-  const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
-  const held = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("agent_database_leases")
-      .select(["agent_id", "path", "owner_pid", "owner_start_time"])
-      .where("lease_id", "=", leaseId),
-  );
+  const held = readAgentDatabaseLease(database.db, leaseId);
   if (
     !held ||
     held.agent_id !== params.agentId ||
@@ -496,13 +489,7 @@ export function readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim(
     env: params.env,
     initializationAgentPaths: [params.path],
   });
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db)
-      .selectFrom("agent_database_leases")
-      .select(["agent_id", "path", "owner_pid", "owner_start_time"])
-      .where("lease_id", "=", leaseId),
-  );
+  const row = readAgentDatabaseLease(database.db, leaseId);
   if (!row) {
     throw new Error("SQLite reclamation Worker lost its admitted lease receipt");
   }
@@ -524,13 +511,7 @@ export function releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
   onInvalidation?: () => void,
 ): void {
   const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
-  const row = executeSqliteQueryTakeFirstSync(
-    database,
-    db
-      .selectFrom("agent_database_leases")
-      .select(["agent_id", "path", "owner_pid", "owner_start_time"])
-      .where("lease_id", "=", receipt.leaseId),
-  );
+  const row = readAgentDatabaseLease(database, receipt.leaseId);
   if (!row) {
     return;
   }
@@ -549,6 +530,16 @@ export function releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
   executeSqliteQuerySync(
     database,
     db.deleteFrom("agent_database_leases").where("lease_id", "=", receipt.leaseId),
+  );
+}
+
+function readAgentDatabaseLease(database: DatabaseSync, leaseId: string) {
+  return executeSqliteQueryTakeFirstSync(
+    database,
+    getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database)
+      .selectFrom("agent_database_leases")
+      .select(["agent_id", "path", "owner_pid", "owner_start_time"])
+      .where("lease_id", "=", leaseId),
   );
 }
 
@@ -711,12 +702,7 @@ function assertNoExistingAgentDatabaseLeases(
 ): void {
   withExistingAgentLeaseWrite(maintenance, options, (db) => {
     const query = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(db);
-    const rows = executeSqliteQuerySync(
-      db,
-      query
-        .selectFrom("agent_database_leases")
-        .select(["agent_id", "lease_id", "owner_pid", "owner_start_time", "path"]),
-    ).rows;
+    const rows = readAgentDatabaseLeases(db);
     for (const row of rows) {
       const currentStart = getFileLockProcessStartTime(row.owner_pid);
       if (

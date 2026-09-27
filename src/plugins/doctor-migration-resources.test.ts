@@ -5,9 +5,9 @@ import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/doctor-migra
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
 import type { PluginDoctorStateMigration } from "./doctor-contract-module.js";
-import { collectPluginDoctorMigrationBackupResources } from "./doctor-contract-registry.js";
+import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
-import { collectPluginDoctorMigrationResources } from "./doctor-migration-resources.js";
+import { preparePluginDoctorMigrationResources } from "./doctor-migration-resources.js";
 import { waitForPluginCacheRetirement } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -58,9 +58,11 @@ it("admits the actual bundled Canvas legacy migration with an honest recovery-se
   const detect = vi.spyOn(migration, "detectLegacyState");
   const migrate = vi.spyOn(migration, "migrateLegacyState");
   const input = params();
-  await expect(
-    collectPluginDoctorMigrationResources([{ pluginId: "canvas", migration }], input),
-  ).resolves.toEqual([]);
+  const result = await preparePluginDoctorMigrationResources(
+    [{ pluginId: "canvas", migration }],
+    input,
+  );
+  expect(result.resources).toEqual([]);
   expect(input.warnings).toEqual([
     {
       kind: "undeclared-migration-resources",
@@ -76,7 +78,7 @@ it("admits the actual bundled Canvas legacy migration with an honest recovery-se
 it("records one warning per undeclared owner while preserving separate owners", async () => {
   const migration = canvasMigrations[0]!;
   const input = params();
-  await collectPluginDoctorMigrationResources(
+  await preparePluginDoctorMigrationResources(
     [
       { pluginId: "canvas", migration },
       { pluginId: "canvas", migration: { ...migration, id: "second-action" } },
@@ -99,9 +101,11 @@ it("keeps declared resources and forwards strict locality without running the mi
     collectBackupResources: collect,
     migrateLegacyState: migrate,
   };
-  await expect(
-    collectPluginDoctorMigrationResources([{ pluginId: "declared-owner", migration }], input),
-  ).resolves.toEqual([{ path: source, kind: "sqlite" }]);
+  const result = await preparePluginDoctorMigrationResources(
+    [{ pluginId: "declared-owner", migration }],
+    input,
+  );
+  expect(result.resources).toEqual([{ path: source, kind: "sqlite" }]);
   expect(collect).toHaveBeenCalledOnce();
   expect(collect.mock.calls[0]?.[0].requireLocalResources).toBe(true);
   expect(collect.mock.calls[0]?.[0].stateDir).toBe(stateDir);
@@ -126,12 +130,11 @@ it("preserves a declared inventory through the SDK plan adapter and contract coe
   if (!coerced) {
     throw new Error("Missing adapted migration");
   }
-  await expect(
-    collectPluginDoctorMigrationResources(
-      [{ pluginId: "planned-owner", migration: coerced }],
-      input,
-    ),
-  ).resolves.toEqual([{ path: source, kind: "sqlite" }]);
+  const result = await preparePluginDoctorMigrationResources(
+    [{ pluginId: "planned-owner", migration: coerced }],
+    input,
+  );
+  expect(result.resources).toEqual([{ path: source, kind: "sqlite" }]);
   expect(collectBackupResources).toHaveBeenCalledOnce();
   expect(collectBackupResources).toHaveBeenCalledWith(
     expect.objectContaining({ stateDir, requireLocalResources: true }),
@@ -152,7 +155,7 @@ it("does not downgrade a malformed adapter declaration to an undeclared warning"
     >,
   });
   await expect(
-    collectPluginDoctorMigrationResources([{ pluginId: "invalid-owner", migration }], input),
+    preparePluginDoctorMigrationResources([{ pluginId: "invalid-owner", migration }], input),
   ).rejects.toThrow("collectBackupResources");
   expect(resolvePlans).not.toHaveBeenCalled();
   expect(input.warnings).toEqual([]);
@@ -192,7 +195,7 @@ it.each([
     collectBackupResources: collect as PluginDoctorStateMigration["collectBackupResources"],
   };
   await expect(
-    collectPluginDoctorMigrationResources([{ pluginId: "invalid-owner", migration }], input),
+    preparePluginDoctorMigrationResources([{ pluginId: "invalid-owner", migration }], input),
   ).rejects.toThrow(message);
   expect(input.warnings).toEqual([]);
 });
@@ -229,7 +232,7 @@ it.each(["undeclared", "declared", "malformed"] as const)(
     };`,
     );
     const input = params();
-    const result = collectPluginDoctorMigrationBackupResources({
+    const result = preparePluginDoctorMigrationBackupResources({
       ...input,
       config: {
         plugins: {
@@ -244,10 +247,10 @@ it.each(["undeclared", "declared", "malformed"] as const)(
       await expect(result).rejects.toThrow("collectBackupResources");
       expect(input.warnings).toEqual([]);
     } else if (declaration === "declared") {
-      await expect(result).resolves.toEqual([{ path: resourcePath, kind: "sqlite" }]);
+      expect((await result).resources).toEqual([{ path: resourcePath, kind: "sqlite" }]);
       expect(input.warnings).toEqual([]);
     } else {
-      await expect(result).resolves.toEqual([]);
+      expect((await result).resources).toEqual([]);
       expect(input.warnings).toEqual([
         expect.objectContaining({ kind: "undeclared-migration-resources", pluginId }),
       ]);

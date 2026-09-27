@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as publications from "../infra/sqlite-post-commit.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import * as coordinator from "../infra/state-database-coordinator.js";
 import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
 import { readTaskFlowRecord } from "../tasks/task-flow-registry.store.kernel.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 it.each(["create", "update"] as const)(
-  "preserves the committed managed %s result when coordinator cleanup fails",
+  "preserves the committed managed %s result when post-commit publication fails",
   async (operation) => {
     const flow = buildFlowRecord({
       controllerId: "tests/committed-result",
@@ -41,30 +41,18 @@ it.each(["create", "update"] as const)(
       createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
     );
     const database = openOpenClawStateDatabase();
-    let committed = false;
-    let cleanupFailed = false;
-    const exec = database.db.exec.bind(database.db);
-    vi.spyOn(database.db, "exec").mockImplementation((sql) => {
-      exec(sql);
-      committed ||= sql === "COMMIT";
-    });
-    const acquire = coordinator.acquireStateDatabaseCoordinator;
-    vi.spyOn(coordinator, "acquireStateDatabaseCoordinator").mockImplementation((params) => {
-      const lease = acquire(params);
-      return {
-        path: lease.path,
-        get closed() {
-          return lease.closed;
-        },
-        release() {
-          lease.release();
-          if (committed && !cleanupFailed) {
-            cleanupFailed = true;
-            throw new Error("Synthetic coordinator cleanup failure after commit");
-          }
-        },
-      };
-    });
+    let publicationFailed = false;
+    const defer = publications.deferSqlitePostCommitPublication;
+    vi.spyOn(publications, "deferSqlitePostCommitPublication").mockImplementation((db, publish) =>
+      defer(db, () => {
+        publish();
+        if (db === database.db && !publicationFailed) {
+          expect(db.isTransaction).toBe(false);
+          publicationFailed = true;
+          throw new Error("Synthetic post-commit publication failure");
+        }
+      }),
+    );
     let result: unknown;
     let failure: unknown;
     try {
@@ -90,7 +78,7 @@ it.each(["create", "update"] as const)(
       vi.restoreAllMocks();
       await backend.close();
     }
-    expect(cleanupFailed).toBe(true);
+    expect(publicationFailed).toBe(true);
     const persisted = readTaskFlowRecord(openOpenClawStateDatabase().db, flow.flowId);
     expect(persisted).toMatchObject({
       flowId: flow.flowId,

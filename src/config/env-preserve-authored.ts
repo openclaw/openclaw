@@ -6,30 +6,22 @@ import {
   type EnvTemplateToken,
 } from "./env-substitution.js";
 
-export function containsAuthoredUnescapedEnvTemplate(value: unknown): boolean {
+function containsAuthoredEnvTemplate(value: unknown, matches: (value: string) => boolean): boolean {
   if (typeof value === "string") {
-    return containsEnvVarReference(value);
+    return matches(value);
   }
-  if (Array.isArray(value)) {
-    return value.some((item) => containsAuthoredUnescapedEnvTemplate(item));
-  }
-  if (isPlainObject(value)) {
-    return Object.values(value).some((item) => containsAuthoredUnescapedEnvTemplate(item));
-  }
-  return false;
+  const children = Array.isArray(value) ? value : isPlainObject(value) ? Object.values(value) : [];
+  return children.some((item) => containsAuthoredEnvTemplate(item, matches));
+}
+
+export function containsAuthoredUnescapedEnvTemplate(value: unknown): boolean {
+  return containsAuthoredEnvTemplate(value, containsEnvVarReference);
 }
 
 export function containsAuthoredEscapedEnvTemplate(value: unknown): boolean {
-  if (typeof value === "string") {
-    return scanEnvTemplateTokens(value).some((ref) => ref.kind === "escaped");
-  }
-  if (Array.isArray(value)) {
-    return value.some((item) => containsAuthoredEscapedEnvTemplate(item));
-  }
-  if (isPlainObject(value)) {
-    return Object.values(value).some((item) => containsAuthoredEscapedEnvTemplate(item));
-  }
-  return false;
+  return containsAuthoredEnvTemplate(value, (text) =>
+    scanEnvTemplateTokens(text).some((ref) => ref.kind === "escaped"),
+  );
 }
 
 /**

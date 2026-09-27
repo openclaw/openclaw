@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -670,20 +670,11 @@ function findTranscriptEventInRows(
 export function readTranscriptEventMessage(
   event: TranscriptEvent,
 ): Record<string, unknown> | undefined {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return undefined;
-  }
-  const message = (event as { message?: unknown }).message;
-  return message && typeof message === "object" && !Array.isArray(message)
-    ? (message as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(asOptionalRecord(event)?.message);
 }
 
 export function readTranscriptEventId(event: TranscriptEvent): string | undefined {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return undefined;
-  }
-  const id = (event as { id?: unknown }).id;
+  const id = asOptionalRecord(event)?.id;
   return typeof id === "string" && id.trim() ? id : undefined;
 }
 

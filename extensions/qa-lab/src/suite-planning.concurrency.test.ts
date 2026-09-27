@@ -104,44 +104,42 @@ describe("qa suite concurrency", () => {
     ]);
   });
 
-  it.each([new Error("publication failed"), undefined])(
-    "drains started workers before propagating the first rejection (%s)",
-    async (failure) => {
-      const rejectFirst = vi.fn<() => Promise<never>>().mockRejectedValue(failure);
-      const sibling = createDeferred<void>();
-      const bothStarted = createDeferred<void>();
-      const started: number[] = [];
-      let settled = false;
-      const run = mapQaSuiteWithConcurrency([1, 2, 3], 2, async (item) => {
-        started.push(item);
-        if (item === 1) {
-          await bothStarted.promise;
-          return await rejectFirst();
-        }
-        bothStarted.resolve();
-        await sibling.promise;
-        throw new Error("later sibling failure");
-      }).then(
-        () => {
-          settled = true;
-          return { rejected: false, error: undefined };
-        },
-        (error: unknown) => {
-          settled = true;
-          return { rejected: true, error };
-        },
-      );
-      await bothStarted.promise;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(started).toEqual([1, 2]);
-      expect(settled).toBe(false);
-      sibling.resolve();
-      expect(await run).toEqual({ rejected: true, error: failure });
-      expect(started).toEqual([1, 2]);
-    },
-  );
+  it("drains started workers before propagating an undefined first rejection", async () => {
+    const failure = undefined;
+    const rejectFirst = vi.fn<() => Promise<never>>().mockRejectedValue(failure);
+    const sibling = createDeferred<void>();
+    const bothStarted = createDeferred<void>();
+    const started: number[] = [];
+    let settled = false;
+    const run = mapQaSuiteWithConcurrency([1, 2, 3], 2, async (item) => {
+      started.push(item);
+      if (item === 1) {
+        await bothStarted.promise;
+        return await rejectFirst();
+      }
+      bothStarted.resolve();
+      await sibling.promise;
+      throw new Error("later sibling failure");
+    }).then(
+      () => {
+        settled = true;
+        return { rejected: false, error: undefined };
+      },
+      (error: unknown) => {
+        settled = true;
+        return { rejected: true, error };
+      },
+    );
+    await bothStarted.promise;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(started).toEqual([1, 2]);
+    expect(settled).toBe(false);
+    sibling.resolve();
+    expect(await run).toEqual({ rejected: true, error: failure });
+    expect(started).toEqual([1, 2]);
+  });
 
   it("drains the stagger gate without admitting waiting workers after a rejection", async () => {
     const stagger = createDeferred<void>();

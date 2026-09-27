@@ -1,4 +1,5 @@
 import type { ZodIssue } from "zod";
+import type { AcpSessionWriteOperations } from "../acp/runtime/session-meta-write.types.js";
 import type { AuthProfileRowRead, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
 import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
 import type { McpOAuthReadOperations } from "../agents/mcp-oauth-store.kernel.js";
@@ -14,6 +15,7 @@ import type {
 } from "../agents/workspace-state-store.kernel.js";
 import type { WorktreeRegistryReadOperations } from "../agents/worktrees/registry-read.worker.js";
 import type { WorktreeRetirementOperations } from "../agents/worktrees/registry-retirement.worker.js";
+import type { WorktreeRunLeaseRowInput } from "../agents/worktrees/run-lease-store.kernel.js";
 import type { AuditEventListQuery, AuditEventListPage } from "../audit/audit-event-types.js";
 import type { AuditWriterOperations } from "../audit/audit-event-writer.types.js";
 import type { ChannelIngressWorkerOperations } from "../channels/message/ingress-queue.worker-contract.js";
@@ -62,10 +64,7 @@ import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
 } from "../infra/sqlite-wal-write-admission.js";
-import type {
-  SqliteWorkerPreparedBackend,
-  SqliteWorkerStateLifecycle,
-} from "../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerPreparedBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import type { TelemetryWorkerOperations } from "../infra/telemetry-worker-contract.js";
 import type {
@@ -112,6 +111,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
   TuiLastSessionWorkerOperations &
+  AcpSessionWriteOperations &
   WorktreeRetirementOperations &
   WorktreeRegistryReadOperations &
   SessionStateWorkerOperations &
@@ -151,6 +151,7 @@ export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
   OpenClawStateLeaseLifecycleOperations &
   ManagedImageRecordWorkerOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
+    "worktrees.admitRunLease": { input: WorktreeRunLeaseRowInput; output: void };
     "worktrees.reapRunLeases": { input: { scopes: string[] }; output: void };
     "worktrees.releaseRunLease": {
       input: { worktreeId: string; token: string };
@@ -360,8 +361,6 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
 /** Host-only admission options; never serialized with a worker command. */
 export type OpenClawStateWorkerOperationOptions = {
   preparation?: OpenClawStateWorkerOpenPreparation;
-  /** Acquire matching lifecycle custody for each dispatched command. */
-  requireStateLifecycle?: SqliteWorkerStateLifecycle;
   existingOnly?: boolean;
   assertCurrent?: (commandType?: PropertyKey) => void;
   createAdmission?: SqliteWorkerAdmissionFactory;

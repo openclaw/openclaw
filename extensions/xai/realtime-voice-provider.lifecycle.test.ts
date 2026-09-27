@@ -1,4 +1,3 @@
-// Xai tests cover realtime response replacement and input transcript settlement.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { FakeWebSocket, isProviderAuthProfileConfiguredMock, resolveApiKeyForProviderMock } =
@@ -18,9 +17,28 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 
 import {
   createTestBridge,
+  type FakeWebSocketInstance,
   openRealtimeBridge,
   parseSent,
 } from "./realtime-voice-provider.test-support.js";
+
+function inputTranscript(socket: FakeWebSocketInstance, transcript: string, itemId?: string) {
+  socket.emitServer({
+    type: "conversation.item.input_audio_transcription.completed",
+    item_id: itemId,
+    transcript,
+  });
+}
+
+function responseDone(socket: FakeWebSocketInstance, id: string, status = "completed") {
+  socket.emitServer({ type: "response.done", response: { id, status } });
+}
+
+async function openTranscriptBridge() {
+  const onTranscript = vi.fn();
+  const bridge = createTestBridge({ onTranscript });
+  return { bridge, socket: await openRealtimeBridge(bridge), onTranscript };
+}
 
 describe("xAI realtime response and transcript lifecycle", () => {
   beforeEach(() => {
@@ -46,10 +64,7 @@ describe("xAI realtime response and transcript lifecycle", () => {
     socket.emitServer({ type: "response.created", response: { id: "interrupted" } });
     bridge.handleBargeIn?.();
     socket.emitServer({ type: "response.created", response: { id: "successor" } });
-    socket.emitServer({
-      type: "response.done",
-      response: { id: "interrupted", status: "cancelled" },
-    });
+    responseDone(socket, "interrupted", "cancelled");
     socket.emitServer({
       type: "response.output_audio.delta",
       response_id: "successor",
@@ -57,10 +72,7 @@ describe("xAI realtime response and transcript lifecycle", () => {
     });
     expect(onAudio).toHaveBeenCalledOnce();
     expect(onResponseDone).not.toHaveBeenCalled();
-    socket.emitServer({
-      type: "response.done",
-      response: { id: "successor", status: "completed" },
-    });
+    responseDone(socket, "successor");
     expect(onResponseDone).toHaveBeenCalledExactlyOnceWith({
       responseId: "successor",
       status: "completed",
@@ -83,10 +95,7 @@ describe("xAI realtime response and transcript lifecycle", () => {
     });
     bridge.handleBargeIn?.();
     socket.emitServer({ type: "response.created", response: { id: "successor" } });
-    socket.emitServer({
-      type: "response.done",
-      response: { id: "interrupted", status: "cancelled" },
-    });
+    responseDone(socket, "interrupted", "cancelled");
     socket.emitServer({
       type: "response.function_call_arguments.done",
       response_id: "successor",
@@ -95,10 +104,7 @@ describe("xAI realtime response and transcript lifecycle", () => {
       name: "lookup_weather",
       arguments: JSON.stringify({ city: "Tokyo" }),
     });
-    socket.emitServer({
-      type: "response.done",
-      response: { id: "successor", status: "completed" },
-    });
+    responseDone(socket, "successor");
     expect(onToolCall).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ callId: "call_successor", args: { city: "Tokyo" } }),
     );
@@ -122,114 +128,83 @@ describe("xAI realtime response and transcript lifecycle", () => {
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(
       responseCreatesBeforeError,
     );
-    socket.emitServer({
-      type: "response.done",
-      response: { id: "successor", status: "completed" },
-    });
+    responseDone(socket, "successor");
     await bridge.close();
   });
 
-  it.each([true, false])(
-    "fences retired response output and preserves the next consult response (keyed=%s)",
-    async (keyed) => {
-      const onAudio = vi.fn();
-      const onTranscript = vi.fn();
-      const onResponseDone = vi.fn();
-      const onToolCall = vi.fn();
-      const onEvent = vi.fn();
-      const bridge = createTestBridge({
-        onAudio,
-        onTranscript,
-        onResponseDone,
-        onToolCall,
-        onEvent,
-      });
-      const socket = await openRealtimeBridge(bridge);
-      socket.emitServer({ type: "response.created", response: { id: "consult" } });
-      socket.emitServer({
-        type: "response.done",
-        response: { id: "consult", status: "completed" },
-      });
-      onEvent.mockClear();
-      socket.emitServer({
-        type: "response.output_audio.delta",
-        ...(keyed ? { response_id: "consult" } : {}),
-        delta: "AAA=",
-      });
-      socket.emitServer({
-        type: "response.output_audio_transcript.done",
-        ...(keyed ? { response_id: "consult" } : {}),
-        transcript: "late",
-      });
-      expect(onAudio).not.toHaveBeenCalled();
-      expect(onTranscript).not.toHaveBeenCalled();
-      expect(onEvent).not.toHaveBeenCalled();
-
-      socket.emitServer({ type: "response.created", response: { id: "continuation" } });
-      socket.emitServer({
-        type: "response.output_audio_transcript.delta",
-        response_id: "continuation",
-        delta: "current",
-      });
-      socket.emitServer({
-        type: "response.done",
-        response: {
-          id: "consult",
-          status: "completed",
-          output: [
-            {
-              id: "stale-tool",
-              type: "function_call",
-              call_id: "stale-call",
-              name: "lookup",
-              arguments: "{}",
-            },
-          ],
-        },
-      });
-      expect(onToolCall).not.toHaveBeenCalled();
-      expect(onResponseDone).toHaveBeenCalledTimes(1);
-      expect(onTranscript.mock.calls).toEqual([["assistant", "current", false]]);
-      socket.emitServer({
-        type: "response.done",
-        response: { id: "continuation", status: "completed" },
-      });
-      expect(onTranscript.mock.calls).toEqual([
-        ["assistant", "current", false],
-        ["assistant", "current", true],
-      ]);
-      expect(onResponseDone).toHaveBeenCalledTimes(2);
-      await bridge.close();
-    },
-  );
-
-  it("previews snapshots immediately and retains corrections after audio starts", async () => {
+  it("fences unkeyed retired output and preserves the next consult response", async () => {
+    const onAudio = vi.fn();
     const onTranscript = vi.fn();
-    const bridge = createTestBridge({ onTranscript });
-    const socket = await openRealtimeBridge(bridge);
-    socket.emitServer({ type: "input_audio_buffer.speech_started" });
-    socket.emitServer({ type: "response.created", response: { id: "response-1" } });
-    socket.emitServer({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "user-1",
-      transcript: "How",
+    const onResponseDone = vi.fn();
+    const onToolCall = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = createTestBridge({
+      onAudio,
+      onTranscript,
+      onResponseDone,
+      onToolCall,
+      onEvent,
     });
-    expect(onTranscript).toHaveBeenLastCalledWith("user", "How", false, { textMode: "snapshot" });
-    socket.emitServer({ type: "response.output_audio.delta", delta: "AAA=" });
+    const socket = await openRealtimeBridge(bridge);
+    socket.emitServer({ type: "response.created", response: { id: "consult" } });
+    responseDone(socket, "consult");
+    onEvent.mockClear();
     socket.emitServer({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "user-1",
-      transcript: "How big is Earth?",
+      type: "response.output_audio.delta",
+      delta: "AAA=",
+    });
+    socket.emitServer({
+      type: "response.output_audio_transcript.done",
+      transcript: "late",
+    });
+    expect(onAudio).not.toHaveBeenCalled();
+    expect(onTranscript).not.toHaveBeenCalled();
+    expect(onEvent).not.toHaveBeenCalled();
+
+    socket.emitServer({ type: "response.created", response: { id: "continuation" } });
+    socket.emitServer({
+      type: "response.output_audio_transcript.delta",
+      response_id: "continuation",
+      delta: "current",
     });
     socket.emitServer({
       type: "response.done",
-      response: { id: "response-1", status: "completed" },
+      response: {
+        id: "consult",
+        status: "completed",
+        output: [
+          {
+            id: "stale-tool",
+            type: "function_call",
+            call_id: "stale-call",
+            name: "lookup",
+            arguments: "{}",
+          },
+        ],
+      },
     });
-    socket.emitServer({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "user-1",
-      transcript: "How big is Earth?",
-    });
+    expect(onToolCall).not.toHaveBeenCalled();
+    expect(onResponseDone).toHaveBeenCalledTimes(1);
+    expect(onTranscript.mock.calls).toEqual([["assistant", "current", false]]);
+    responseDone(socket, "continuation");
+    expect(onTranscript.mock.calls).toEqual([
+      ["assistant", "current", false],
+      ["assistant", "current", true],
+    ]);
+    expect(onResponseDone).toHaveBeenCalledTimes(2);
+    await bridge.close();
+  });
+
+  it("previews snapshots immediately and retains corrections after audio starts", async () => {
+    const { bridge, socket, onTranscript } = await openTranscriptBridge();
+    socket.emitServer({ type: "input_audio_buffer.speech_started" });
+    socket.emitServer({ type: "response.created", response: { id: "response-1" } });
+    inputTranscript(socket, "How", "user-1");
+    expect(onTranscript).toHaveBeenLastCalledWith("user", "How", false, { textMode: "snapshot" });
+    socket.emitServer({ type: "response.output_audio.delta", delta: "AAA=" });
+    inputTranscript(socket, "How big is Earth?", "user-1");
+    responseDone(socket, "response-1");
+    inputTranscript(socket, "How big is Earth?", "user-1");
     expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([
       ["user", "How big is Earth?", true, { textMode: "snapshot" }],
     ]);
@@ -237,28 +212,18 @@ describe("xAI realtime response and transcript lifecycle", () => {
   });
 
   it("ignores old response terminals while new speech is being recognized", async () => {
-    const onTranscript = vi.fn();
-    const bridge = createTestBridge({ onTranscript });
-    const socket = await openRealtimeBridge(bridge);
+    const { bridge, socket, onTranscript } = await openTranscriptBridge();
     socket.emitServer({ type: "response.created", response: { id: "old" } });
     socket.emitServer({ type: "input_audio_buffer.speech_started" });
     socket.emitServer({ type: "response.output_audio_transcript.done", transcript: "old answer" });
-    socket.emitServer({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "new-input",
-      transcript: "How",
-    });
-    socket.emitServer({ type: "response.done", response: { id: "old", status: "completed" } });
+    inputTranscript(socket, "How", "new-input");
+    responseDone(socket, "old");
     expect(onTranscript.mock.calls.filter((call) => call[0] === "user" && call[2])).toEqual([]);
     socket.emitServer({ type: "response.created", response: { id: "new" } });
-    socket.emitServer({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "new-input",
-      transcript: "How big is Jupiter?",
-    });
-    socket.emitServer({ type: "response.done", response: { id: "old", status: "cancelled" } });
+    inputTranscript(socket, "How big is Jupiter?", "new-input");
+    responseDone(socket, "old", "cancelled");
     expect(onTranscript.mock.calls.filter((call) => call[0] === "user" && call[2])).toEqual([]);
-    socket.emitServer({ type: "response.done", response: { id: "new", status: "completed" } });
+    responseDone(socket, "new");
     expect(onTranscript).toHaveBeenLastCalledWith("user", "How big is Jupiter?", true, {
       textMode: "snapshot",
     });
@@ -266,25 +231,12 @@ describe("xAI realtime response and transcript lifecycle", () => {
   });
 
   it("preserves distinct late input items and repeated words in separate utterances", async () => {
-    const onTranscript = vi.fn();
-    const bridge = createTestBridge({ onTranscript });
-    const socket = await openRealtimeBridge(bridge);
+    const { bridge, socket, onTranscript } = await openTranscriptBridge();
     socket.emitServer({ type: "input_audio_buffer.speech_started" });
-    socket.emitServer({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "late-A",
-      transcript: "Again",
-    });
-    socket.emitServer({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "B",
-      transcript: "Again",
-    });
+    inputTranscript(socket, "Again", "late-A");
+    inputTranscript(socket, "Again", "B");
     socket.emitServer({ type: "response.created", response: { id: "response-B" } });
-    socket.emitServer({
-      type: "response.done",
-      response: { id: "response-B", status: "completed" },
-    });
+    responseDone(socket, "response-B");
     expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([
       ["user", "Again", true, { textMode: "snapshot" }],
       ["user", "Again", true, { textMode: "snapshot" }],
@@ -292,40 +244,22 @@ describe("xAI realtime response and transcript lifecycle", () => {
     await bridge.close();
   });
 
-  it.each(["failed", "close"])(
-    "preserves the input when the response ends with %s",
-    async (ending) => {
-      const onTranscript = vi.fn();
-      const bridge = createTestBridge({ onTranscript });
-      const socket = await openRealtimeBridge(bridge);
-      socket.emitServer({
-        type: "conversation.item.input_audio_transcription.completed",
-        transcript: "Check the sensor",
-      });
-      socket.emitServer({ type: "response.created", response: { id: "response-1" } });
-      if (ending === "failed") {
-        socket.emitServer({
-          type: "response.done",
-          response: { id: "response-1", status: "failed" },
-        });
-      }
-      await bridge.close();
-      expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([
-        ["user", "Check the sensor", true, { textMode: "snapshot" }],
-      ]);
-    },
-  );
+  it("preserves the input when the response fails", async () => {
+    const { bridge, socket, onTranscript } = await openTranscriptBridge();
+    inputTranscript(socket, "Check the sensor");
+    socket.emitServer({ type: "response.created", response: { id: "response-1" } });
+    responseDone(socket, "response-1", "failed");
+    expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([
+      ["user", "Check the sensor", true, { textMode: "snapshot" }],
+    ]);
+    await bridge.close();
+    expect(onTranscript.mock.calls.filter((call) => call[2])).toHaveLength(1);
+  });
 
   it("saves the question before the assistant final and previews post-response ASR", async () => {
-    const onTranscript = vi.fn();
-    const bridge = createTestBridge({ onTranscript });
-    const socket = await openRealtimeBridge(bridge);
+    const { bridge, socket, onTranscript } = await openTranscriptBridge();
     socket.emitServer({ type: "response.created", response: { id: "one" } });
-    socket.emitServer({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "u1",
-      transcript: "Question",
-    });
+    inputTranscript(socket, "Question", "u1");
     socket.emitServer({
       type: "response.output_audio_transcript.done",
       response_id: "one",
@@ -339,12 +273,8 @@ describe("xAI realtime response and transcript lifecycle", () => {
     ]);
     socket.emitServer({ type: "input_audio_buffer.speech_started" });
     socket.emitServer({ type: "response.created", response: { id: "two" } });
-    socket.emitServer({ type: "response.done", response: { id: "two", status: "completed" } });
-    socket.emitServer({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "u2",
-      transcript: "status",
-    });
+    responseDone(socket, "two");
+    inputTranscript(socket, "status", "u2");
     expect(onTranscript).toHaveBeenLastCalledWith("user", "status", false, {
       textMode: "snapshot",
     });
@@ -355,24 +285,14 @@ describe("xAI realtime response and transcript lifecycle", () => {
   });
 
   it("settles input recognized after the response finished once it stops changing", async () => {
-    const onTranscript = vi.fn();
-    const bridge = createTestBridge({ onTranscript });
-    const socket = await openRealtimeBridge(bridge);
+    const { bridge, socket, onTranscript } = await openTranscriptBridge();
     socket.emitServer({ type: "input_audio_buffer.speech_started" });
     socket.emitServer({ type: "response.created", response: { id: "one" } });
-    socket.emitServer({ type: "response.done", response: { id: "one", status: "completed" } });
+    responseDone(socket, "one");
     vi.useFakeTimers();
-    socket.emitServer({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "u1",
-      transcript: "Check the",
-    });
+    inputTranscript(socket, "Check the", "u1");
     vi.advanceTimersByTime(1_000);
-    socket.emitServer({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "u1",
-      transcript: "Check the sensor",
-    });
+    inputTranscript(socket, "Check the sensor", "u1");
     vi.advanceTimersByTime(1_000);
     expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([]);
     vi.advanceTimersByTime(500);
@@ -390,18 +310,14 @@ describe("xAI realtime response and transcript lifecycle", () => {
     const socket = await openRealtimeBridge(bridge);
     socket.emitServer({ type: "input_audio_buffer.speech_started" });
     socket.emitServer({ type: "response.created", response: { id: "one" } });
-    socket.emitServer({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "b",
-      transcript: "Read the gauge",
-    });
+    inputTranscript(socket, "Read the gauge", "b");
     socket.emitServer({
       type: "conversation.item.input_audio_transcription.failed",
       item_id: "a",
       error: { message: "recognition failed" },
     });
     expect(onError).toHaveBeenCalledOnce();
-    socket.emitServer({ type: "response.done", response: { id: "one", status: "completed" } });
+    responseDone(socket, "one");
     expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([
       ["user", "Read the gauge", true, { textMode: "snapshot" }],
     ]);

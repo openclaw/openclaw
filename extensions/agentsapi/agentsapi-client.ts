@@ -292,14 +292,12 @@ export class AgentsApiClient {
     if (session.status !== "requires_action") {
       return [];
     }
-    const calls: AgentsApiFunctionCall[] = [];
-    for (const action of session.required_actions) {
+    return session.required_actions.map((action) => {
       if (action.type !== "function_call") {
         throw new Error("Agents API hosted prototype cannot reconnect an environment_connection");
       }
-      calls.push(action);
-    }
-    return calls;
+      return action;
+    });
   }
 
   async toolResult(

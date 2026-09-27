@@ -238,6 +238,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
     __openclaw: {
       ...(metadata.toolOutput ? { toolOutput: metadata.toolOutput } : {}),
       ...(metadataId ? { id: metadataId } : {}),
+      ...(typeof metadata.runId === "string" ? { runId: metadata.runId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       ...(turnBoundary ? { turnBoundary: true } : {}),

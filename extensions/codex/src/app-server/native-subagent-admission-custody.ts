@@ -1,10 +1,15 @@
-import { emitAgentEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  emitAgentEvent,
+  formatErrorMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   captureAgentHarnessTaskAssignment,
   matchesAgentHarnessTaskAssignment,
   type AgentHarnessCompletionCustody,
   type AgentHarnessTaskAssignment,
   type AgentHarnessTaskRecord,
+  type AgentHarnessTaskRuntime,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   MAX_PENDING_CHILD_ADMISSION_EVIDENCE,
@@ -42,6 +47,10 @@ export class CodexNativeSubagentAdmissionCustody {
   // Notifications can precede turn/start's response. Binding selects the parent;
   // custody must remain with that evidence until it is consumed or discarded.
   private readonly pending = new Map<string, NativeChildAdmissionEvidence[]>();
+  private readonly taskRuntimeBindings = new WeakMap<
+    AgentHarnessTaskRuntime,
+    { state: ParentState; runtime: AgentHarnessTaskRuntime }
+  >();
 
   constructor(
     private readonly dependencies: {
@@ -49,36 +58,47 @@ export class CodexNativeSubagentAdmissionCustody {
       knownChild: (id: string) => KnownChild | undefined;
       childState: (runId: string) => ChildState | undefined;
       runtime: NativeSubagentMonitorRuntime;
+      onTaskWritesSettled?: (state: ParentState) => void;
     },
   ) {}
 
-  prepareParentTaskRuntime(state: ParentState, executionPid: number | undefined): void {
+  async prepareParentTaskRuntime(
+    state: ParentState,
+    executionPid: number | undefined,
+  ): Promise<void> {
     if (!state.requesterSessionKey || !state.taskRuntimeScope) {
       return;
     }
-    if (!state.taskRuntime) {
-      const runtime = this.dependencies.runtime.createAgentHarnessTaskRuntime({
-        runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
-        taskKind: CODEX_NATIVE_SUBAGENT_TASK_KIND,
-        scope: state.taskRuntimeScope,
-        runIdPrefix: CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX,
-        executionPid,
-      });
-      state.taskRuntime = {
+    let taskRuntime = state.taskRuntime;
+    const binding = taskRuntime && this.taskRuntimeBindings.get(taskRuntime);
+    if (!taskRuntime || binding?.state !== state) {
+      // Recovery keeps the captured SDK owner; receipt advancement belongs to this parent.
+      const runtime =
+        binding?.runtime ??
+        taskRuntime ??
+        this.dependencies.runtime.createAgentHarnessTaskRuntime({
+          runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
+          taskKind: CODEX_NATIVE_SUBAGENT_TASK_KIND,
+          scope: state.taskRuntimeScope,
+          runIdPrefix: CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX,
+          executionPid,
+        });
+      const isCurrentParent = () => this.dependencies.parentState(state.parentThreadId) === state;
+      taskRuntime = {
         ...runtime,
-        recordTaskRunProgressByRunId: this.followAssignmentTransition(
-          runtime.recordTaskRunProgressByRunId.bind(runtime),
-        ),
-        finalizeTaskRunByRunId: this.followAssignmentTransition(
-          runtime.finalizeTaskRunByRunId.bind(runtime),
-        ),
-        setDetachedTaskDeliveryStatusByRunId: this.followAssignmentTransition(
-          runtime.setDetachedTaskDeliveryStatusByRunId.bind(runtime),
-        ),
+        ...(runtime.recordTaskRunProgressByRunIdAsync
+          ? {
+              recordTaskRunProgressByRunIdAsync: this.followAssignmentTransitionAsync(
+                runtime.recordTaskRunProgressByRunIdAsync.bind(runtime),
+                isCurrentParent,
+              ),
+            }
+          : {}),
         ...(runtime.finalizeTaskRunByRunIdAsync
           ? {
               finalizeTaskRunByRunIdAsync: this.followAssignmentTransitionAsync(
                 runtime.finalizeTaskRunByRunIdAsync.bind(runtime),
+                isCurrentParent,
               ),
             }
           : {}),
@@ -86,14 +106,14 @@ export class CodexNativeSubagentAdmissionCustody {
           ? {
               setDetachedTaskDeliveryStatusByRunIdAsync: this.followAssignmentTransitionAsync(
                 runtime.setDetachedTaskDeliveryStatusByRunIdAsync.bind(runtime),
+                isCurrentParent,
               ),
             }
           : {}),
       };
+      state.taskRuntime = taskRuntime;
+      this.taskRuntimeBindings.set(taskRuntime, { state, runtime });
     }
-    // Cached parents retain their original adapter; a new registration must not
-    // accept native work after that owner retires or lacks exact settlement.
-    state.taskRuntime.assertTaskAssignmentSupported();
     state.mirror ??= new CodexNativeSubagentTaskMirror(
       {
         parentThreadId: state.parentThreadId,
@@ -103,25 +123,33 @@ export class CodexNativeSubagentAdmissionCustody {
         onTaskCreated: (assignment) =>
           this.bindTaskEventSink(this.dependencies.childState(assignment.runId), assignment),
         getCompletionCustody: (runId) => this.dependencies.childState(runId)?.completionCustody,
+        onSettled: () => this.dependencies.onTaskWritesSettled?.(state),
       },
-      state.taskRuntime,
+      taskRuntime,
     );
-  }
-
-  private followAssignmentTransition<T extends { expectedTask?: AgentHarnessTaskAssignment }>(
-    transition: (params: T) => AgentHarnessTaskRecord[],
-  ): (params: T) => AgentHarnessTaskRecord[] {
-    return (params) => {
-      const records = transition(params);
-      return this.advanceAssignmentTransition(records, params.expectedTask);
-    };
+    // Older hosts may run ordinary turns; native admission checks these capabilities.
+    if (!state.mirror.supportsAsyncPersistence) {
+      return;
+    }
+    const readTaskRecords = await taskRuntime.prepareTaskRecordsRead!();
+    readTaskRecords();
+    if (this.dependencies.parentState(state.parentThreadId) !== state) {
+      throw new Error("Codex native subagent parent registration is no longer current");
+    }
+    // Keep the guarded resident accessor so later committed rows remain visible.
+    state.readTaskRecords = readTaskRecords;
   }
 
   private followAssignmentTransitionAsync<T extends { expectedTask?: AgentHarnessTaskAssignment }>(
     transition: (params: T) => Promise<AgentHarnessTaskRecord[]>,
+    isCurrentParent: () => boolean,
   ): (params: T) => Promise<AgentHarnessTaskRecord[]> {
-    return async (params) =>
-      this.advanceAssignmentTransition(await transition(params), params.expectedTask);
+    return async (params) => {
+      const records = await transition(params);
+      return isCurrentParent()
+        ? this.advanceAssignmentTransition(records, params.expectedTask)
+        : records;
+    };
   }
 
   private advanceAssignmentTransition(
@@ -393,29 +421,56 @@ export class CodexNativeSubagentAdmissionCustody {
     event: Pick<Parameters<typeof emitAgentEvent>[0], "stream" | "data">,
   ): void {
     const parent = this.dependencies.parentState(child.parentThreadId);
-    const scope = parent?.taskRuntimeScope;
-    if (child.completionCustody && scope) {
-      if (!child.emitTaskEvent) {
-        throw new Error("Native task event assignment has not been bound");
-      }
-      child.emitTaskEvent(event);
-      return;
-    }
-    if (child.expectedTask) {
-      // Interrupted turns release execution custody, but their late observations
-      // still belong to the original assignment and must never reach its replacement.
-      const records = parent?.taskRuntime
-        ?.listTaskRecords()
-        .filter((task) => task.runId === child.runId);
-      const record = records?.[0];
+    const emit = async () => {
       if (
-        records?.length !== 1 ||
-        !record ||
-        !matchesAgentHarnessTaskAssignment(record, child.expectedTask)
+        this.dependencies.parentState(child.parentThreadId) !== parent ||
+        this.dependencies.childState(child.runId) !== child
       ) {
         return;
       }
-    }
-    emitAgentEvent({ ...event, runId: child.runId, agentId: child.agentId });
+      const scope = parent?.taskRuntimeScope;
+      if (child.completionCustody && scope) {
+        if (!child.emitTaskEvent) {
+          throw new Error("Native task event assignment has not been bound");
+        }
+        child.emitTaskEvent(event);
+        return;
+      }
+      const expectedTask = child.expectedTask;
+      if (expectedTask) {
+        // Interrupted turns release execution custody, but their late observations
+        // still belong to the original assignment and must never reach its replacement.
+        if (!parent?.taskRuntime?.prepareTaskRunRead) {
+          throw new Error("Codex native task activity requires prepared task reads.");
+        }
+        const read = await parent.taskRuntime.prepareTaskRunRead(child.runId);
+        if (
+          this.dependencies.parentState(child.parentThreadId) !== parent ||
+          this.dependencies.childState(child.runId) !== child ||
+          !child.expectedTask ||
+          !matchesAgentHarnessTaskAssignment(child.expectedTask, expectedTask)
+        ) {
+          return;
+        }
+        const records = read();
+        const record = records[0];
+        if (
+          records.length !== 1 ||
+          !record ||
+          !matchesAgentHarnessTaskAssignment(record, expectedTask)
+        ) {
+          return;
+        }
+      }
+      emitAgentEvent({ ...event, runId: child.runId, agentId: child.agentId });
+    };
+    const pending = parent?.mirror ? parent.mirror.queueTaskEvent(emit) : emit();
+    void pending.catch((error: unknown) => {
+      embeddedAgentLog.warn("Failed to emit Codex native task activity", {
+        parentThreadId: child.parentThreadId,
+        runId: child.runId,
+        error: formatErrorMessage(error),
+      });
+    });
   }
 }

@@ -157,7 +157,7 @@ function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
 export function buildChildCompletionFindings(
   children: Array<ChildCompletionRow>,
 ): string | undefined {
-  const sorted = [...children].toSorted((a, b) => {
+  const sorted = children.toSorted((a, b) => {
     if (a.createdAt !== b.createdAt) {
       return a.createdAt - b.createdAt;
     }

@@ -13,7 +13,7 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import * as acpCleanup from "./task-registry-acp-cleanup.js";
 import {
   configureTaskRegistryMaintenance,
@@ -85,17 +85,13 @@ describe("task maintenance plugin expiry", () => {
         ) ?? [];
       const before = readRows();
       expect(before).toHaveLength(4);
-      let holder: ReturnType<typeof holdStateDatabaseCoordinator> | undefined;
+      let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
       const actualCleanup = acpCleanup.cleanupOrphanedParentOwnedAcpSessions;
       const cleanupObserver = vi
         .spyOn(acpCleanup, "cleanupOrphanedParentOwnedAcpSessions")
         .mockImplementationOnce(async (...args) => {
           await actualCleanup(...args);
-          holder = holdStateDatabaseCoordinator(
-            context.admission.databasePath,
-            context.coordinatorRuntime,
-            5_000,
-          );
+          holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 5_000);
           await holder.ready;
         });
       const timerObserved = createDeferred<number>();
@@ -113,7 +109,7 @@ describe("task maintenance plugin expiry", () => {
         .mockImplementation((...args) => {
           const held = holder;
           if (!held) {
-            throw new Error("Expiry entered before the post-cleanup coordinator hold");
+            throw new Error("Expiry entered before the post-cleanup write transaction");
           }
           liveAtSweepEntry = Date.now() < expiresWhileHeldAt;
           timer = setTimeout(() => {
@@ -172,7 +168,7 @@ describe("task maintenance plugin expiry", () => {
         ).toBe(0);
         const held = holder;
         if (!held) {
-          throw new Error("Maintenance did not reach the post-cleanup coordinator hold");
+          throw new Error("Maintenance did not reach the post-cleanup write transaction");
         }
         expect(maintenanceSettled).toBe(false);
         await withTestTimeout(
