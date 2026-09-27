@@ -324,17 +324,12 @@ export type ChannelMentionAdapter = {
     cfg: OpenClawConfig | undefined;
     agentId?: string;
   }) => RegExp[];
-  stripPatterns?: (params: {
-    ctx: MsgContext;
-    cfg: OpenClawConfig | undefined;
-    agentId?: string;
-  }) => string[];
-  stripMentions?: (params: {
-    text: string;
-    ctx: MsgContext;
-    cfg: OpenClawConfig | undefined;
-    agentId?: string;
-  }) => string;
+  stripPatterns?: (
+    params: Parameters<NonNullable<ChannelMentionAdapter["stripRegexes"]>>[0],
+  ) => string[];
+  stripMentions?: (
+    params: Parameters<NonNullable<ChannelMentionAdapter["stripRegexes"]>>[0] & { text: string },
+  ) => string;
 };
 
 export type ChannelStreamingAdapter = {
@@ -554,10 +549,9 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[];
-  resolveRemoteInboundAttachmentRoots?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => string[];
+  resolveRemoteInboundAttachmentRoots?: NonNullable<
+    ChannelMessagingAdapter["resolveInboundAttachmentRoots"]
+  >;
   /**
    * Bundled plugins that need inbound conversation resolution before runtime
    * bootstrap can mirror it through a top-level `thread-binding-api.ts` surface.

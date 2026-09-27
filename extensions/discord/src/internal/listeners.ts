@@ -42,9 +42,9 @@ type DiscordReactionDispatchData = {
   rawMessage?: APIMessage;
 };
 
-abstract class BaseListener<T = unknown> {
+abstract class BaseListener {
   abstract readonly type: string;
-  abstract handle(data: T, client: Client): Promise<void> | void;
+  abstract handle(data: unknown, client: Client): Promise<void> | void;
 }
 
 export abstract class ReadyListener extends BaseListener {
@@ -55,44 +55,67 @@ export abstract class ResumedListener extends BaseListener {
   readonly type = GatewayDispatchEvents.Resumed;
 }
 
-export abstract class GuildCreateListener extends BaseListener<
-  GatewayGuildCreateDispatchData | APIUnavailableGuild
-> {
+export abstract class GuildCreateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.GuildCreate;
+  abstract override handle(
+    data: GatewayGuildCreateDispatchData | APIUnavailableGuild,
+    client: Client,
+  ): Promise<void> | void;
 }
 
-export abstract class GuildDeleteListener extends BaseListener<GatewayGuildDeleteDispatchData> {
+export abstract class GuildDeleteListener extends BaseListener {
   readonly type = GatewayDispatchEvents.GuildDelete;
+  abstract override handle(
+    data: GatewayGuildDeleteDispatchData,
+    client: Client,
+  ): Promise<void> | void;
 }
 
-export abstract class MessageCreateListener extends BaseListener<APIMessage> {
+export abstract class MessageCreateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.MessageCreate;
+  abstract override handle(data: APIMessage, client: Client): Promise<void> | void;
 }
 
-export abstract class InteractionCreateListener extends BaseListener<APIInteraction> {
+export abstract class InteractionCreateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.InteractionCreate;
+  abstract override handle(data: APIInteraction, client: Client): Promise<void> | void;
 }
 
-export abstract class MessageReactionAddListener extends BaseListener<DiscordReactionDispatchData> {
+export abstract class MessageReactionAddListener extends BaseListener {
   readonly type = GatewayDispatchEvents.MessageReactionAdd;
+  abstract override handle(data: DiscordReactionDispatchData, client: Client): Promise<void> | void;
 }
 
-export abstract class MessageReactionRemoveListener extends BaseListener<DiscordReactionDispatchData> {
+export abstract class MessageReactionRemoveListener extends BaseListener {
   readonly type = GatewayDispatchEvents.MessageReactionRemove;
+  abstract override handle(data: DiscordReactionDispatchData, client: Client): Promise<void> | void;
 }
 
-export abstract class PresenceUpdateListener extends BaseListener<GatewayPresenceUpdateDispatchData> {
+export abstract class PresenceUpdateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.PresenceUpdate;
+  abstract override handle(
+    data: GatewayPresenceUpdateDispatchData,
+    client: Client,
+  ): Promise<void> | void;
 }
 
-export abstract class VoiceStateUpdateListener extends BaseListener<APIVoiceState> {
+export abstract class VoiceStateUpdateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.VoiceStateUpdate;
+  abstract override handle(data: APIVoiceState, client: Client): Promise<void> | void;
 }
 
-export abstract class ThreadUpdateListener extends BaseListener<GatewayThreadUpdateDispatchData> {
+export abstract class ThreadUpdateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.ThreadUpdate;
+  abstract override handle(
+    data: GatewayThreadUpdateDispatchData,
+    client: Client,
+  ): Promise<void> | void;
 }
 
-export abstract class ThreadDeleteListener extends BaseListener<GatewayThreadDeleteDispatchData> {
+export abstract class ThreadDeleteListener extends BaseListener {
   readonly type = GatewayDispatchEvents.ThreadDelete;
+  abstract override handle(
+    data: GatewayThreadDeleteDispatchData,
+    client: Client,
+  ): Promise<void> | void;
 }

@@ -150,8 +150,7 @@ function isPosixShortOption(token: string, option: string): boolean {
   if (token.length < 2 || token[0] !== "-" || token[1] === "-") {
     return false;
   }
-  const flags = token.slice(1);
-  return !flags.includes("-") && flags.includes(option);
+  return !token.includes("-", 1) && token.includes(option, 1);
 }
 
 /** Return how many argv tokens a POSIX shell option consumes while scanning. */

@@ -19,6 +19,7 @@ import type {
 import type { ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import type { resolveElevatedPermissions } from "./reply-elevated.js";
 import type { ReplyModelLevelResolver } from "./reply-model-levels.js";
 import type { TypingController } from "./typing.js";
 
@@ -56,11 +57,7 @@ export type HandleCommandsParams = {
   agentId: string;
   agentDir?: string;
   directives: InlineDirectives;
-  elevated: {
-    enabled: boolean;
-    allowed: boolean;
-    failures: Array<{ gate: string; key: string }>;
-  };
+  elevated: ReturnType<typeof resolveElevatedPermissions>;
   sessionEntry?: SessionEntry;
   /** Snapshot captured before command handlers mutate the active entry. */
   initialSessionEntry?: SessionEntry;
