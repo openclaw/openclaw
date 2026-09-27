@@ -49,7 +49,12 @@ import {
   reconcileTaskFlowWorkerPublication,
   type PendingTaskFlowPublication,
 } from "./task-flow-worker-publication.js";
-import { createAsyncRegistryRestore, createSyncRegistryReader } from "./task-registry-restore.js";
+import {
+  createAsyncRegistryRestore,
+  createSyncRegistryReader,
+  isRegistryRestoreRetryDue,
+  resolveRegistryRestoreRetryAtMs,
+} from "./task-registry-restore.js";
 
 export type { TaskFlowUpdateResult } from "./task-flow-registry.types.js";
 
@@ -89,6 +94,7 @@ type TaskFlowRegistryRestoreState =
       error: Error;
       message: string;
       admission: OpenClawStateDatabaseReadAdmission;
+      retryAtMs?: number;
     };
 let taskFlowRegistryRestoreState: TaskFlowRegistryRestoreState = { status: "uninitialized" };
 
@@ -105,7 +111,13 @@ function failTaskFlowRegistryRestore(
   recordFlowProjectionWrite();
   const message = formatErrorMessage(error);
   const restoreError = new Error(`Task-flow registry restore failed: ${message}`, { cause: error });
-  taskFlowRegistryRestoreState = { status: "failed", error: restoreError, message, admission };
+  taskFlowRegistryRestoreState = {
+    status: "failed",
+    error: restoreError,
+    message,
+    admission,
+    retryAtMs: resolveRegistryRestoreRetryAtMs(error),
+  };
   log.warn("Failed to restore task-flow registry", {
     error: message,
     consoleMessage: `Failed to restore task-flow registry: ${message}`,
@@ -158,7 +170,11 @@ function restoreTaskFlowRegistryOnce(): void {
     case "ready":
       return;
     case "failed":
-      throw state.error;
+      if (!isRegistryRestoreRetryDue(state)) {
+        throw state.error;
+      }
+      // A transient failure's retry restores again; the failure stays recorded until it succeeds.
+      break;
     case "restoring":
       throw new Error("Task-flow registry restore is already in progress.");
     case "uninitialized":

@@ -31,7 +31,12 @@ import {
   listTasksFromIndex,
   normalizeTaskTimestamps,
 } from "./task-registry-records.js";
-import { createAsyncRegistryRestore, createSyncRegistryReader } from "./task-registry-restore.js";
+import {
+  createAsyncRegistryRestore,
+  createSyncRegistryReader,
+  isRegistryRestoreRetryDue,
+  resolveRegistryRestoreRetryAtMs,
+} from "./task-registry-restore.js";
 import type { TaskRegistryRestoreResult } from "./task-registry-restore.worker.js";
 import {
   createPendingTaskRegistryMutation,
@@ -110,6 +115,7 @@ type TaskRegistryRestoreState =
       error: Error;
       admission: OpenClawStateDatabaseReadAdmission;
       store: TaskRegistryStore;
+      retryAtMs?: number;
     };
 let taskRegistryRestoreState: TaskRegistryRestoreState = { status: "uninitialized" };
 export function emitTaskRegistryObserverEvent(createEvent: () => TaskRegistryObserverEvent): void {
@@ -193,6 +199,8 @@ export function assertTaskRegistryRestoreNotFailed(): void {
     return;
   }
   // Same-identity failures outlive read-admission generations until an explicit reload.
+  // A transient failure stays recorded while a retry restore runs, so drain-time delivery
+  // keeps failing closed until a complete snapshot is installed.
   throw state.error;
 }
 
@@ -239,7 +247,7 @@ function restoreTaskRegistryOnce() {
   if (state.status === "ready") {
     return;
   }
-  if (state.status === "failed") {
+  if (state.status === "failed" && !isRegistryRestoreRetryDue(state)) {
     throw state.error;
   }
   if (state.status === "restoring") {
@@ -436,6 +444,7 @@ function failTaskRegistryRestore(
     error: restoreError,
     admission,
     store: getTaskRegistryStore(),
+    retryAtMs: resolveRegistryRestoreRetryAtMs(error),
   };
   // Compact console logs omit structured metadata, so keep the rejected value visible there too.
   taskRegistryLog.warn("Failed to restore task registry", {
