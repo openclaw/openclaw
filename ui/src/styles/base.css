@@ -896,9 +896,13 @@ a:hover {
 }
 
 /* Web Awesome defaults checked switches to brand blue. Keep every switch on
-   the Control UI accent, matching native check controls and custom switches. */
+   the Control UI accent, matching native check controls and custom switches.
+   Its off state (track fill, border, thumb) defaults to the library's
+   blue-grey neutrals, so derive that from the theme tokens as well. */
 wa-switch {
   --wa-form-control-activated-color: var(--accent);
+  --wa-form-control-background-color: color-mix(in srgb, var(--border-strong) 60%, transparent);
+  --wa-form-control-border-color: var(--muted);
   --wa-color-focus: var(--ring);
 }
 
