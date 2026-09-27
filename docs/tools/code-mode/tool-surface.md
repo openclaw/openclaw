@@ -236,8 +236,8 @@ enforcement remains unchanged. The finalized projection is carried through
 bridge calls and continuation resume; consumers do not reconstruct it from the
 catalog.
 
-The catalog omits code-mode control tools (`exec`, `wait`, `tool_search_code`,
-`tool_search`, `tool_describe`, `tool_call`) and direct-only tools. Controls
+The catalog omits code-mode control tools (`exec`, `wait`, `tool_search`,
+`tool_describe`, `tool_call`) and direct-only tools. Controls
 must not recurse through the catalog; direct-only tools remain model-visible
 because their structured results cannot cross the JSON guest bridge.
 
@@ -256,8 +256,8 @@ is active.
 
 When Code Mode engages through forced `true` or `"auto"` activation:
 
-- OpenClaw does not expose `tool_search_code`, `tool_search`, `tool_describe`,
-  or `tool_call` as model-visible tools.
+- OpenClaw does not expose `tool_search`, `tool_describe`, or `tool_call` as
+  model-visible tools.
 - The same cataloging idea moves inside the guest runtime.
 - The guest runtime receives bare async globals plus callable search/describe
   handles for native tools, plus on-demand MCP search handles.
@@ -266,7 +266,7 @@ When Code Mode engages through forced `true` or `"auto"` activation:
 - Nested calls dispatch through the same OpenClaw executor path that Tool
   Search uses.
 
-See [Tool Search](/tools/tool-search) for the OpenClaw compact catalog bridge
+See [Tool Search](/tools/tool-search) for the OpenClaw structured catalog surface
 that code mode supersedes for active runs.
 
 ## Tool names and collisions

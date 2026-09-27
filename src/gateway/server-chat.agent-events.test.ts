@@ -2778,47 +2778,6 @@ describe("agent event handler", () => {
     });
   });
 
-  it("projects tool-search bridge calls like native channel verbose tool events", () => {
-    const { nodeSendToSession, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-1",
-    });
-
-    registerAgentRunContext("run-tool-search-node", {
-      sessionKey: "session-1",
-      verboseLevel: "on",
-    });
-
-    emitAgentEvent(
-      handler,
-      "run-tool-search-node",
-      "tool",
-      {
-        phase: "start",
-        name: "tool_search_code",
-        toolCallId: "tool-search-node-1",
-        args: {
-          code: 'return await openclaw.tools.call("openclaw:core:exec", { command: "echo hi" });',
-        },
-      },
-      { ts: 1_234 },
-    );
-
-    const payload = requireMockArg(nodeSendToSession, 0, 2, "node tool-search payload") as {
-      stream?: string;
-      data?: { name?: string; args?: Record<string, unknown> };
-    };
-    expect(payload.stream).toBe("tool");
-    expect(payload.data).toEqual({
-      phase: "start",
-      name: "exec",
-      toolCallId: "tool-search-node-1",
-      bridgeToolName: "tool_search_code",
-      bridgeTargetToolName: "openclaw:core:exec",
-      bridgeVerb: "call",
-      args: { command: "echo hi" },
-    });
-  });
-
   it("hydrates node session tool events with session ownership metadata", () => {
     const { nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",

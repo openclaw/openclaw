@@ -203,7 +203,10 @@ a.activity-current-work__row:hover {
   padding: 0;
   margin-left: -1px;
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  font-size: var(--control-ui-text-lg);
+}
+
+.activity-feed__people-clear svg {
+  stroke-width: 2;
 }
 
 .activity-feed__people-trigger:focus-visible,

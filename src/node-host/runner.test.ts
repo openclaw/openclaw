@@ -18,6 +18,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   lastCapturedOptions,
+  loadResumableNodeHostGateway,
   mocks,
   resetRunnerTestState,
   runNodeHost,
@@ -408,6 +409,20 @@ describe("runNodeHost", () => {
     afterEach(() => {
       vi.unstubAllEnvs();
       mocks.resolveGatewayCredentialsWithSecretInputs.mockResolvedValue({});
+    });
+
+    it("offers the saved endpoint for resume only with a paired node credential", async () => {
+      mocks.loadDeviceIdentityIfPresent.mockReturnValue({
+        deviceId: "device-test",
+        publicKeyPem: "public-key-test",
+        privateKeyPem: "private-key-test",
+      });
+      await expect(loadResumableNodeHostGateway()).resolves.toEqual(gateway);
+
+      // A failed first enrollment saves the endpoint without issuing a device token.
+      mocks.loadDeviceAuthTokenReadOnly.mockResolvedValue(null);
+      await expect(loadResumableNodeHostGateway()).resolves.toBeUndefined();
+      expect(mocks.configureNodeHost).not.toHaveBeenCalled();
     });
 
     describe("expired fallback setup codes", () => {

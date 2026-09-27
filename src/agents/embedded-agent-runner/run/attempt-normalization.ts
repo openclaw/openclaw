@@ -4,7 +4,6 @@ import { normalizeUsage, type UsageLike } from "../../usage.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import { log } from "../logger.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "../replay-state.js";
-import type { EmbeddedAgentRunResult } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import {
   mergeAttemptRunStatsIntoAccumulator,
@@ -27,7 +26,7 @@ import {
   type createIdleTimeoutBreakerState,
 } from "./idle-timeout-breaker.js";
 import { resolveReplayInvalidFlag } from "./incomplete-turn-resolution.js";
-import { resolveRunRetryKind, type RunRetryKind } from "./retry-budget.js";
+import { resolveRunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
@@ -65,43 +64,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
   recordedCompactionCount?: number;
   replayState: ReplayState;
   lastRetryFailoverReason: Parameters<typeof resolveRunFailoverDecision>[0]["failoverReason"];
-}): Promise<
-  | { action: "complete"; result: EmbeddedAgentRunResult }
-  | {
-      action: "retry";
-      retryKind: RunRetryKind;
-      bootstrapPromptWarningSignaturesSeen: string[];
-      lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-      replayState: ReplayState;
-    }
-  | {
-      action: "proceed";
-      bootstrapPromptWarningSignaturesSeen: string[];
-      lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-      replayState: ReplayState;
-      attempt: ReturnType<typeof normalizeEmbeddedRunAttemptResult>;
-      sessionIdUsed: string;
-      sessionFileUsed: string | undefined;
-      currentAttemptAssistant: ReturnType<
-        typeof normalizeEmbeddedRunAttemptResult
-      >["currentAttemptAssistant"];
-      currentAttemptCompletedAssistant: ReturnType<
-        typeof normalizeEmbeddedRunAttemptResult
-      >["currentAttemptCompletedAssistant"];
-      attemptAssistant: ReturnType<
-        typeof normalizeEmbeddedRunAttemptResult
-      >["currentAttemptAssistant"];
-      terminalState: ReturnType<typeof resolveEmbeddedRunAttemptTerminalState>;
-      setTerminalLifecycleMeta: NonNullable<
-        ReturnType<typeof normalizeEmbeddedRunAttemptResult>["setTerminalLifecycleMeta"]
-      >;
-      attemptCompactionCount: number;
-      activeErrorContext: ReturnType<typeof resolveReportedModelRef>;
-      resolveReplayInvalidForAttempt: (incompleteTurnText?: string | null) => boolean;
-      assistantErrorText: string | undefined;
-      canRestartForLiveSwitch: boolean;
-    }
-> {
+}) {
   const { runInput, preparedRuntime, dispatchedAttempt, sessionPromptState, provider, modelId } =
     input;
   const params = runInput.runParams;
@@ -240,7 +203,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     });
     // Escalating provider failures throw above; only returned results carry a terminal stop.
     result.meta.modelFallbackStopReason = "idle_timeout_circuit_breaker";
-    return { action: "complete", result };
+    return { action: "complete" as const, result };
   }
   if (attempt.contextBudgetStatus) {
     input.contextRecoveryState.lastContextBudgetStatus = attempt.contextBudgetStatus;
@@ -292,7 +255,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
       toolMetas: attempt.toolMetas,
     });
     return {
-      action: "retry",
+      action: "retry" as const,
       retryKind,
       bootstrapPromptWarningSignaturesSeen,
       lastRunPromptUsage,
@@ -300,7 +263,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     };
   }
   return {
-    action: "proceed",
+    action: "proceed" as const,
     bootstrapPromptWarningSignaturesSeen,
     lastRunPromptUsage,
     replayState,

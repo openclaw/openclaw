@@ -125,31 +125,17 @@ function normalizeModelRefs(models: readonly string[]) {
   return uniqueStrings(normalizeStringEntries(models));
 }
 
-function resolveCandidateThinkingDefault(params: {
-  model: string;
-  candidateThinkingDefault?: QaThinkingLevel;
-  candidateThinkingByModel?: Record<string, QaThinkingLevel>;
-  candidateModelOptions?: Record<string, QaCharacterModelOptions>;
-}) {
-  return (
-    params.candidateModelOptions?.[params.model]?.thinkingDefault ??
-    params.candidateThinkingByModel?.[params.model] ??
-    params.candidateThinkingDefault ??
-    DEFAULT_CHARACTER_THINKING_BY_MODEL[params.model] ??
-    DEFAULT_CHARACTER_THINKING
-  );
-}
-
-function resolveCandidateFastMode(params: {
-  model: string;
-  candidateFastMode?: boolean;
-  candidateModelOptions?: Record<string, QaCharacterModelOptions>;
-}) {
-  return (
-    params.candidateModelOptions?.[params.model]?.fastMode ??
-    params.candidateFastMode ??
-    isQaFastModeModelRef(params.model)
-  );
+function resolveCandidateOptions(params: QaCharacterEvalParams, model: string) {
+  const modelOptions = params.candidateModelOptions?.[model];
+  return {
+    thinkingDefault:
+      modelOptions?.thinkingDefault ??
+      params.candidateThinkingByModel?.[model] ??
+      params.candidateThinkingDefault ??
+      DEFAULT_CHARACTER_THINKING_BY_MODEL[model] ??
+      DEFAULT_CHARACTER_THINKING,
+    fastMode: modelOptions?.fastMode ?? params.candidateFastMode ?? isQaFastModeModelRef(model),
+  };
 }
 
 function resolveJudgeOptions(params: {
@@ -501,17 +487,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   const candidatesStartedAt = Date.now();
   const { results: runs } = await runTasksWithConcurrency({
     tasks: models.map((model, index) => async () => {
-      const thinkingDefault = resolveCandidateThinkingDefault({
-        model,
-        candidateThinkingDefault: params.candidateThinkingDefault,
-        candidateThinkingByModel: params.candidateThinkingByModel,
-        candidateModelOptions: params.candidateModelOptions,
-      });
-      const fastMode = resolveCandidateFastMode({
-        model,
-        candidateFastMode: params.candidateFastMode,
-        candidateModelOptions: params.candidateModelOptions,
-      });
+      const { thinkingDefault, fastMode } = resolveCandidateOptions(params, model);
       const modelOutputDir = path.join(runsDir, `${index + 1}-${sanitizePathPart(model)}`);
       const runStartedAt = Date.now();
       logCharacterEvalProgress(

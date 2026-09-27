@@ -1,15 +1,14 @@
-// Coverage for classifying SDK tools into the embedded runner runtime surface.
 import { describe, expect, it } from "vitest";
+import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { isCodeModeControlTool, markCodeModeControlTool } from "./code-mode-control-tools.js";
 import {
   collectRegisteredToolNames,
   toSessionToolAllowlist,
 } from "./embedded-agent-runner/tool-name-allowlist.js";
-import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 
-describe("splitSdkTools", () => {
+describe("session tool definition metadata", () => {
   const tools = [
     createStubTool("read"),
     createStubTool("exec"),
@@ -18,11 +17,8 @@ describe("splitSdkTools", () => {
     createStubTool("browser"),
   ];
 
-  it("routes all tools to customTools even when not sandboxed", () => {
-    const { customTools } = splitSdkTools({
-      tools,
-      sandboxEnabled: false,
-    });
+  it("preserves all registered tools in session definitions", () => {
+    const customTools = toToolDefinitions(tools, undefined, undefined);
     expect(customTools.map((tool) => tool.name)).toEqual([
       "read",
       "exec",
@@ -37,10 +33,11 @@ describe("splitSdkTools", () => {
       ...createStubTool("wait"),
       hideFromChannelProgress: true,
     };
-    const { customTools } = splitSdkTools({
-      tools: [hiddenWait, createStubTool("plugin_wait")],
-      sandboxEnabled: false,
-    });
+    const customTools = toToolDefinitions(
+      [hiddenWait, createStubTool("plugin_wait")],
+      undefined,
+      undefined,
+    );
 
     expect(customTools[0]).toMatchObject({
       name: "wait",
@@ -51,10 +48,7 @@ describe("splitSdkTools", () => {
 
   it("preserves Code Mode control identity through both production adapters", () => {
     const source = markCodeModeControlTool(createStubTool("exec"));
-    const { customTools } = splitSdkTools({
-      tools: [source],
-      sandboxEnabled: false,
-    });
+    const customTools = toToolDefinitions([source], undefined, undefined);
     const definition = customTools[0];
     if (!definition) {
       throw new Error("missing converted Code Mode tool");
@@ -67,10 +61,11 @@ describe("splitSdkTools", () => {
   it("keeps OpenClaw-managed custom tools in OpenClaw runtime's session allowlist", () => {
     // Session tools are OpenClaw-managed custom tools; dropping them from the
     // allowlist would break inter-agent routing even when sandboxing is enabled.
-    const { customTools } = splitSdkTools({
-      tools: [createStubTool("read"), createStubTool("sessions_spawn")],
-      sandboxEnabled: true,
-    });
+    const customTools = toToolDefinitions(
+      [createStubTool("read"), createStubTool("sessions_spawn")],
+      undefined,
+      undefined,
+    );
     const allowlist = toSessionToolAllowlist(collectRegisteredToolNames(customTools));
 
     expect(customTools.map((tool) => tool.name)).toContain("sessions_spawn");

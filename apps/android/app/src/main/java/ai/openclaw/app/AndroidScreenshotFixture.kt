@@ -37,6 +37,7 @@ internal object AndroidScreenshotFixture {
     get() = scene in setOf(AndroidScreenshotScene.CompletedWork, AndroidScreenshotScene.ActiveWork, AndroidScreenshotScene.WorkBoundaries)
 
   const val gatewayId = "android-screenshot-gateway"
+  val browserFocusAvailable: Boolean get() = scene == AndroidScreenshotScene.Browser
   const val controlUiBaseUrl = "http://127.0.0.1:18789"
   val mainSessionKey: String get() = if (workScene) "agent:main:node-work-proof" else "agent:main:node-screenshot"
   val sourcePreviewConfig: GatewaySourcePreviewConfig?
@@ -130,6 +131,8 @@ internal object AndroidScreenshotFixture {
             branchHistory(activeLeaf.get())
           } else if (scene == AndroidScreenshotScene.Sources) {
             sourceHistory()
+          } else if (scene == AndroidScreenshotScene.Browser) {
+            browserHistory(paramsJson)
           } else if (workScene) {
             workHistory()
           } else {
@@ -165,7 +168,7 @@ internal object AndroidScreenshotFixture {
         }
 
         "question.list" -> {
-          Json.encodeToString(QuestionListResult(if (workScene) emptyList() else questionRecords.get().filter { it.status == "pending" && it.expiresAtMs > System.currentTimeMillis() }))
+          Json.encodeToString(QuestionListResult(if (workScene || scene == AndroidScreenshotScene.Browser) emptyList() else questionRecords.get().filter { it.status == "pending" && it.expiresAtMs > System.currentTimeMillis() }))
         }
 
         "question.get" -> {
@@ -497,6 +500,53 @@ internal object AndroidScreenshotFixture {
       }
     }.toString()
 
+  private fun browserHistory(paramsJson: String?): String {
+    val sessionKey =
+      paramsJson?.let {
+        Json
+          .parseToJsonElement(it)
+          .jsonObject["sessionKey"]
+          ?.jsonPrimitive
+          ?.contentOrNull
+      } ?: mainSessionKey
+    val secondSession = sessionKey == "agent:main:node-browser-reading"
+    val title = if (secondSession) "Reading list" else "Travel checklist"
+    val targetId = if (secondSession) "browser-reading-proof" else "browser-proof"
+    val url = if (secondSession) "https://example.test/reading" else "https://example.test/travel"
+    return buildJsonObject {
+      put("sessionId", JsonPrimitive(if (secondSession) "screenshot-browser-reading" else "screenshot-browser-travel"))
+      put("sessionInfo", session(sessionKey, title, 1_783_555_320_000))
+      putJsonArray("messages") {
+        add(chatMessage("user", "Open my ${title.lowercase()} in the browser.", 1_783_555_260_000))
+        addJsonObject {
+          put("role", JsonPrimitive("toolResult"))
+          put("id", JsonPrimitive("$targetId-result"))
+          put("runId", JsonPrimitive("$targetId-run"))
+          put("toolName", JsonPrimitive("browser"))
+          put("toolCallId", JsonPrimitive("$targetId-call"))
+          put("timestamp", JsonPrimitive(1_783_555_275_000))
+          putJsonObject("details") {
+            putJsonObject("browserTab") {
+              put("target", JsonPrimitive("host"))
+              put("profile", JsonPrimitive("openclaw"))
+              put("targetId", JsonPrimitive(targetId))
+              put("url", JsonPrimitive(url))
+              put("title", JsonPrimitive(title))
+            }
+          }
+          put("content", JsonPrimitive("Opened $title in the agent's browser."))
+        }
+        addJsonObject {
+          put("role", JsonPrimitive("assistant"))
+          put("runId", JsonPrimitive("$targetId-run"))
+          put("phase", JsonPrimitive("final_answer"))
+          put("timestamp", JsonPrimitive(1_783_555_290_000))
+          put("content", JsonPrimitive("The **${title.lowercase()}** is ready. You can continue here while reviewing the browser."))
+        }
+      }
+    }.toString()
+  }
+
   private fun sourceHistory(): String =
     buildJsonObject {
       put("sessionId", JsonPrimitive("screenshot-sources"))
@@ -799,6 +849,17 @@ internal object AndroidScreenshotFixture {
   }
 
   private fun sessionList(paramsJson: String?): String {
+    if (scene == AndroidScreenshotScene.Browser) {
+      return buildJsonObject {
+        putJsonArray("sessions") {
+          add(session(mainSessionKey, "Travel checklist", 1_783_555_320_000))
+          add(session("agent:main:node-browser-reading", "Reading list", 1_783_555_200_000))
+        }
+        put("count", JsonPrimitive(2))
+        put("totalCount", JsonPrimitive(2))
+        put("hasMore", JsonPrimitive(false))
+      }.toString()
+    }
     val spawnedBy =
       paramsJson
         ?.let {

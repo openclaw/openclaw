@@ -1,5 +1,5 @@
-import { asObjectRecord } from "../config/channel-compat-normalization.js";
-import { normalizeChannelConfigEntries } from "../config/channel-doctor-helpers.js";
+import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeChannelConfigEntries } from "../config/channel-config-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ChannelDoctorConfigMutation,

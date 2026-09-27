@@ -1,6 +1,3 @@
-/**
- * Steers active embedded sessions and waits for transcript commits when needed.
- */
 import { toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
@@ -25,10 +22,6 @@ import type {
   EmbeddedAgentQueueMessageResult,
 } from "../run-state.js";
 
-/**
- * Minimal active-session surface needed to steer a running attempt and observe
- * whether the queued user message reached the transcript.
- */
 type EmbeddedAgentActiveSessionSteerTarget = {
   agent?: {
     cancelSteeringMessage?: (
@@ -39,7 +32,6 @@ type EmbeddedAgentActiveSessionSteerTarget = {
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
-/** Default wait for a steered user message to appear in the active transcript. */
 const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
 
 class EmbeddedSteeringAcceptedUnconfirmedError extends Error {
@@ -313,10 +305,6 @@ function resolveQuestionAuthority(
   );
 }
 
-/**
- * Steers the active session directly or waits for transcript commitment when a
- * caller needs delivery proof before returning.
- */
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,

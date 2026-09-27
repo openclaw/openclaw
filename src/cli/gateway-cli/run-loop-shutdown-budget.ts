@@ -7,6 +7,7 @@ import {
   GATEWAY_SUPERVISOR_EXIT_MARGIN_MS,
 } from "../../infra/gateway-shutdown-budget.js";
 import { readSystemdStopTimeout } from "../../infra/systemd-stop-timeout.js";
+import type { GatewayRunSignalAction } from "./run-loop-request.js";
 
 export async function resolveGatewayShutdownBudget(
   supervisor: string | null,
@@ -71,13 +72,14 @@ export async function resolveGatewayShutdownBudget(
 
 export function resolveGatewayShutdownDrainBudget(params: {
   budget: { nativeStopBudget: boolean; timeoutMs: number; reserveMs: number };
-  isRestart: boolean;
+  action: GatewayRunSignalAction;
   forceRestart: boolean;
   restartWithoutSupervisor: boolean;
   acceptedAtMs: number;
   requestedRestartDrainTimeoutMs?: number;
 }) {
-  const { budget, isRestart } = params;
+  const { budget, action } = params;
+  const isRestart = action !== "stop";
   const requested = params.requestedRestartDrainTimeoutMs;
   const elapsedMs = performance.now() - params.acceptedAtMs;
   const remaining = requested === undefined ? undefined : Math.max(0, requested - elapsedMs);
@@ -114,10 +116,13 @@ export function resolveGatewayShutdownDrainBudget(params: {
     drainTimeoutMs: isRestart
       ? restartDrainTimeoutMs
       : Math.max(0, budget.timeoutMs - budget.reserveMs),
-    forceExitMs: !isRestart
-      ? budget.timeoutMs
-      : restartDrainTimeoutMs === undefined
-        ? undefined
-        : restartTimeoutMs(restartDrainTimeoutMs),
+    // A supervisor SIGTERM owns the stop deadline. Its shorter drain request
+    // must not discard time still available for checkpointing and native close.
+    forceExitMs:
+      !isRestart || (action === "external-restart" && budget.nativeStopBudget)
+        ? budget.timeoutMs
+        : restartDrainTimeoutMs === undefined
+          ? undefined
+          : restartTimeoutMs(restartDrainTimeoutMs),
   };
 }

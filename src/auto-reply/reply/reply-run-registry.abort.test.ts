@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import type { ReplyBackendHandle } from "./reply-run-registry.contracts.js";
 import {
   abortActiveReplyRuns,
   clearReplyRunForResetBySessionId,
@@ -12,6 +13,18 @@ import {
 } from "./reply-run-registry.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { testing } from "./reply-run-registry.test-support.js";
+
+function createRunningOperation(
+  upstreamAbortSignal?: AbortSignal,
+  overrides: Pick<ReplyBackendHandle, "isStreaming" | "isAbortable"> = {},
+) {
+  const operation = createTestReplyOperation({ upstreamAbortSignal });
+  const cancel = vi.fn();
+  const backend = { kind: "embedded" as const, cancel, isStreaming: () => true, ...overrides };
+  operation.attachBackend(backend);
+  operation.setPhase("running");
+  return { operation, cancel, backend };
+}
 
 describe("reply run registry cancellation", () => {
   afterEach(() => {
@@ -66,19 +79,10 @@ describe("reply run registry cancellation", () => {
 
   it("keeps retained terminal failures immutable across late aborts", () => {
     const upstreamAbort = new AbortController();
-    const cancel = vi.fn();
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:failed-final",
-      sessionId: "session-failed-final",
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel,
+    const { operation, cancel } = createRunningOperation(upstreamAbort.signal, {
       isStreaming: () => false,
       isAbortable: () => true,
     });
-    operation.setPhase("running");
     operation.retainFailureUntilComplete();
 
     operation.fail("run_failed", new Error("provider failed"));
@@ -92,51 +96,22 @@ describe("reply run registry cancellation", () => {
     expect(cancel).not.toHaveBeenCalled();
   });
 
-  it("records upstream cancellation as an aborted operation", () => {
+  it.each([
+    { reason: new Error("caller cancelled"), code: "aborted_by_user", cancelReason: "user_abort" },
+    {
+      reason: createAgentRunRestartAbortError(),
+      code: "aborted_for_restart",
+      cancelReason: "restart",
+    },
+  ])("records upstream cancellation as $code", ({ reason, code, cancelReason }) => {
     const upstreamAbort = new AbortController();
-    const cancel = vi.fn();
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:upstream-cancelled",
-      sessionId: "session-upstream-cancelled",
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => true,
-    });
-    operation.setPhase("running");
+    const { operation, cancel } = createRunningOperation(upstreamAbort.signal);
+    upstreamAbort.abort(reason);
 
-    upstreamAbort.abort(new Error("caller cancelled"));
-
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+    expect(operation.result).toEqual({ kind: "aborted", code });
     expect(operation.phase).toBe("aborted");
     expect(operation.abortSignal.aborted).toBe(true);
-    expect(cancel).toHaveBeenCalledWith("user_abort");
-    operation.complete();
-  });
-
-  it("records upstream restart cancellation separately", () => {
-    const upstreamAbort = new AbortController();
-    const cancel = vi.fn();
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:upstream-restart",
-      sessionId: "session-upstream-restart",
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => true,
-    });
-    operation.setPhase("running");
-
-    upstreamAbort.abort(createAgentRunRestartAbortError());
-
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-    expect(operation.phase).toBe("aborted");
-    expect(operation.abortSignal.aborted).toBe(true);
-    expect(cancel).toHaveBeenCalledWith("restart");
+    expect(cancel).toHaveBeenCalledWith(cancelReason);
     operation.complete();
   });
 
@@ -158,18 +133,7 @@ describe("reply run registry cancellation", () => {
 
   it("does not cancel the backend twice when upstream abort follows a user abort", () => {
     const upstreamAbort = new AbortController();
-    const cancel = vi.fn();
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:duplicate-cancel",
-      sessionId: "session-duplicate-cancel",
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => true,
-    });
-    operation.setPhase("running");
+    const { operation, cancel } = createRunningOperation(upstreamAbort.signal);
 
     expect(operation.abortByUser()).toBe(true);
     upstreamAbort.abort(createAgentRunRestartAbortError());
@@ -182,53 +146,35 @@ describe("reply run registry cancellation", () => {
 
   it("rejects aborts while the attached backend is finalizing", () => {
     let abortable = false;
-    const cancel = vi.fn();
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:finalizing",
-      sessionId: "session-finalizing",
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel,
+    const { operation, cancel } = createRunningOperation(undefined, {
       isStreaming: () => false,
       isAbortable: () => abortable,
     });
-    operation.setPhase("running");
 
-    expect(replyRunRegistry.abort("agent:main:finalizing")).toBe(false);
+    expect(replyRunRegistry.abort(operation.key)).toBe(false);
     expect(abortActiveReplyRuns({ mode: "all" })).toBe(false);
     expect(operation.result).toBeNull();
     expect(cancel).not.toHaveBeenCalled();
 
     abortable = true;
-    expect(replyRunRegistry.abort("agent:main:finalizing")).toBe(true);
+    expect(replyRunRegistry.abort(operation.key)).toBe(true);
     expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
     expect(cancel).toHaveBeenCalledWith("user_abort");
   });
 
   it("keeps abort frozen after the backend detaches for reply delivery", () => {
-    const cancel = vi.fn();
     const upstreamAbort = new AbortController();
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:delivery-finalizing",
-      sessionId: "session-delivery-finalizing",
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    const backend = {
-      kind: "embedded" as const,
-      cancel,
+    const { operation, cancel, backend } = createRunningOperation(upstreamAbort.signal, {
       isStreaming: () => false,
       isAbortable: () => false,
-    };
-    operation.attachBackend(backend);
-    operation.setPhase("running");
+    });
     operation.freezeAbort();
     operation.detachBackend(backend);
 
     expect(operation.phase).toBe("running");
     expect(isReplyRunAbortableForSignal(upstreamAbort.signal)).toBe(false);
     expect(isReplyRunAbortableForSignal(new AbortController().signal)).toBe(true);
-    expect(replyRunRegistry.abort("agent:main:delivery-finalizing")).toBe(false);
+    expect(replyRunRegistry.abort(operation.key)).toBe(false);
     expect(operation.result).toBeNull();
     expect(cancel).not.toHaveBeenCalled();
 
@@ -236,7 +182,7 @@ describe("reply run registry cancellation", () => {
     expect(operation.abortSignal.aborted).toBe(false);
 
     operation.complete();
-    expect(replyRunRegistry.isActive("agent:main:delivery-finalizing")).toBe(false);
+    expect(replyRunRegistry.isActive(operation.key)).toBe(false);
     expect(isReplyRunAbortableForSignal(upstreamAbort.signal)).toBe(false);
   });
 

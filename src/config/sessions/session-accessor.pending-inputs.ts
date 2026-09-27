@@ -46,6 +46,7 @@ import {
   parseSessionPendingInputMessage,
   projectSessionPendingInput,
   readSessionPendingInputByKey,
+  readSessionPendingInputReceipts,
   readSessionPendingInputOwnerIds,
   registerSessionPendingInputOwner,
   finishSessionPendingInputOwner,
@@ -249,25 +250,30 @@ export async function stageSessionPendingInput(
           };
         }
         complete = (outcome) =>
-          runOpenClawAgentWriteTransaction((current) => {
-            if (finished) {
-              throw new Error("Input completion owner has already been released");
-            }
-            // Abort may itself be the outcome. The producer still must own the
-            // original controller, lifecycle and session at the commit boundary.
-            (options.assertCompletionCurrent ?? options.assertCurrent)();
-            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-            if (
-              readSessionEntryRow(current, resolved.sessionKey)?.entry.sessionId !== scope.sessionId
-            ) {
-              throw new Error("Input completion no longer owns the admitted session");
-            }
-            return writeSessionInputCompletion(
-              current,
-              { ...completionScope, requestHash },
-              outcome,
-            );
-          }, databaseOptions);
+          runOpenClawAgentWriteTransaction(
+            (current) => {
+              if (finished) {
+                throw new Error("Input completion owner has already been released");
+              }
+              // Abort may itself be the outcome. The producer still must own the
+              // original controller, lifecycle and session at the commit boundary.
+              (options.assertCompletionCurrent ?? options.assertCurrent)();
+              assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+              if (
+                readSessionEntryRow(current, resolved.sessionKey)?.entry.sessionId !==
+                scope.sessionId
+              ) {
+                throw new Error("Input completion no longer owns the admitted session");
+              }
+              return writeSessionInputCompletion(
+                current,
+                { ...completionScope, requestHash },
+                outcome,
+              );
+            },
+            databaseOptions,
+            { operationLabel: "session.pending-input.record-outcome" },
+          );
       }
       if (existing) {
         if (
@@ -353,59 +359,63 @@ export async function stageSessionPendingInput(
       }
       const inputId = existing?.input_id ?? randomUUID();
       ensureSessionPendingInputsSchema(database.db);
-      const source = runOpenClawAgentWriteTransaction((current) => {
-        options.assertCurrent();
-        if (
-          readSessionEntryRow(current, resolved.sessionKey)?.entry.sessionId !== scope.sessionId
-        ) {
-          return undefined;
-        }
-        if (existing) {
-          // A reconnect supplies fresh admission, never the previous run's closure.
-          // Keep accepted bytes and order; only wholly unconsumed input may change owners.
-          const result = executeSqliteQuerySync(
-            current.db,
-            getSessionKysely(current.db)
-              .updateTable("session_pending_inputs")
-              .set({ state: "queued", lifecycle_generation: lifecycleGeneration })
-              .where("input_id", "=", inputId)
-              .where("session_key", "=", resolved.sessionKey)
-              .where("session_id", "=", scope.sessionId)
-              .where("run_id", "=", options.runId)
-              .where("lifecycle_generation", "=", existing.lifecycle_generation)
-              .where("request_hash", "=", requestHash)
-              .where("message_json", "=", existing.message_json)
-              .where("state", "=", existing.state)
-              .where("consumed_event_id", "is", null),
-          );
-          if (result.numAffectedRows !== 1n) {
+      const source = runOpenClawAgentWriteTransaction(
+        (current) => {
+          options.assertCurrent();
+          if (
+            readSessionEntryRow(current, resolved.sessionKey)?.entry.sessionId !== scope.sessionId
+          ) {
             return undefined;
           }
-        } else {
-          executeSqliteQuerySync(
-            current.db,
-            getSessionKysely(current.db).insertInto("session_pending_inputs").values({
-              input_id: inputId,
-              session_key: resolved.sessionKey,
-              session_id: scope.sessionId,
-              idempotency_key: idempotencyKey,
-              run_id: options.runId,
-              request_hash: requestHash,
-              message_json: messageJson,
-              lifecycle_generation: lifecycleGeneration,
-              state: "queued",
-              accepted_at: Date.now(),
-            }),
-          );
-        }
-        const physical = readOpenClawAgentDatabaseIdentity(current);
-        return {
-          agentId: current.agentId,
-          path: current.path,
-          databaseIdentity: physical.identity,
-          databaseBirthtime: physical.birthtime,
-        };
-      }, databaseOptions);
+          if (existing) {
+            // A reconnect supplies fresh admission, never the previous run's closure.
+            // Keep accepted bytes and order; only wholly unconsumed input may change owners.
+            const result = executeSqliteQuerySync(
+              current.db,
+              getSessionKysely(current.db)
+                .updateTable("session_pending_inputs")
+                .set({ state: "queued", lifecycle_generation: lifecycleGeneration })
+                .where("input_id", "=", inputId)
+                .where("session_key", "=", resolved.sessionKey)
+                .where("session_id", "=", scope.sessionId)
+                .where("run_id", "=", options.runId)
+                .where("lifecycle_generation", "=", existing.lifecycle_generation)
+                .where("request_hash", "=", requestHash)
+                .where("message_json", "=", existing.message_json)
+                .where("state", "=", existing.state)
+                .where("consumed_event_id", "is", null),
+            );
+            if (result.numAffectedRows !== 1n) {
+              return undefined;
+            }
+          } else {
+            executeSqliteQuerySync(
+              current.db,
+              getSessionKysely(current.db).insertInto("session_pending_inputs").values({
+                input_id: inputId,
+                session_key: resolved.sessionKey,
+                session_id: scope.sessionId,
+                idempotency_key: idempotencyKey,
+                run_id: options.runId,
+                request_hash: requestHash,
+                message_json: messageJson,
+                lifecycle_generation: lifecycleGeneration,
+                state: "queued",
+                accepted_at: Date.now(),
+              }),
+            );
+          }
+          const physical = readOpenClawAgentDatabaseIdentity(current);
+          return {
+            agentId: current.agentId,
+            path: current.path,
+            databaseIdentity: physical.identity,
+            databaseBirthtime: physical.birthtime,
+          };
+        },
+        databaseOptions,
+        { operationLabel: "session.pending-input.stage" },
+      );
       if (!source) {
         return undefined;
       }
@@ -519,31 +529,35 @@ function readPendingInputRows(
   }
   const snapshot = result.value;
   if (snapshot.staleIds.length) {
-    const interrupted = runOpenClawAgentWriteTransaction((database) => {
-      const db = getSessionKysely(database.db);
-      const candidates = executeSqliteQuerySync(
-        database.db,
-        db
-          .selectFrom("session_pending_inputs")
-          .select(["input_id", "session_key", "session_id", "lifecycle_generation"])
-          .where("input_id", "in", snapshot.staleIds)
-          .where("state", "=", "queued")
-          .where("consumed_event_id", "is", null),
-      ).rows;
-      const ownedIds = readSessionPendingInputOwnerIds(database, candidates);
-      const ids = candidates.flatMap((row) => (ownedIds.has(row.input_id) ? [] : [row.input_id]));
-      if (ids.length) {
-        executeSqliteQuerySync(
+    const interrupted = runOpenClawAgentWriteTransaction(
+      (database) => {
+        const db = getSessionKysely(database.db);
+        const candidates = executeSqliteQuerySync(
           database.db,
           db
-            .updateTable("session_pending_inputs")
-            .set({ state: "interrupted" })
-            .where("input_id", "in", ids)
+            .selectFrom("session_pending_inputs")
+            .select(["input_id", "session_key", "session_id", "lifecycle_generation"])
+            .where("input_id", "in", snapshot.staleIds)
+            .where("state", "=", "queued")
             .where("consumed_event_id", "is", null),
-        );
-      }
-      return new Set(ids);
-    }, databaseOptions);
+        ).rows;
+        const ownedIds = readSessionPendingInputOwnerIds(database, candidates);
+        const ids = candidates.flatMap((row) => (ownedIds.has(row.input_id) ? [] : [row.input_id]));
+        if (ids.length) {
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("session_pending_inputs")
+              .set({ state: "interrupted" })
+              .where("input_id", "in", ids)
+              .where("consumed_event_id", "is", null),
+          );
+        }
+        return new Set(ids);
+      },
+      databaseOptions,
+      { operationLabel: "session.pending-input.interrupt-stale" },
+    );
     for (const row of snapshot.rows) {
       if (interrupted.has(row.input_id)) {
         row.state = "interrupted";
@@ -705,31 +719,7 @@ export function listSessionPendingInputReceipts(
     ) {
       return [];
     }
-    const rows = executeSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("session_pending_inputs")
-        .select(["run_id", "consumed_event_id"])
-        .where("session_key", "=", resolved.sessionKey)
-        .where("session_id", "=", scope.sessionId)
-        .where("run_id", "in", runIds)
-        .orderBy("seq", "asc")
-        .limit(51),
-    ).rows;
-    // A run ID is correlation, not unique authority. Never retire an ambiguous
-    // provisional message when another source with that run is still pending.
-    if (rows.length > 50 || new Set(rows.map((row) => row.run_id)).size !== rows.length) {
-      throw new Error("Pending input receipt lookup has ambiguous source run IDs");
-    }
-    return rows.map((row) =>
-      row.consumed_event_id == null
-        ? { runId: row.run_id, state: "pending" as const }
-        : {
-            runId: row.run_id,
-            state: "consumed" as const,
-            consumedByEventId: row.consumed_event_id,
-          },
-    );
+    return readSessionPendingInputReceipts(database, resolved, runIds);
   }, toDatabaseOptions(resolved));
   return result.found ? result.value : [];
 }

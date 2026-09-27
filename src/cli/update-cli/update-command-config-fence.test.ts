@@ -655,9 +655,9 @@ it.each([
       ? [await fs.readdir(stateDir), await fs.readdir(path.dirname(includePath))]
       : [];
     let reachedCommit = false;
+    let revokedDuringSync = false;
     const owned = withUpdateCommandExecutor(run.runId, async (executor) => {
       const fence = await executor.enter(home);
-      const io = createConfigIO({ configPath, env, observe: false, pluginValidation: "skip" });
       const revoke = () => {
         const db = openNodeSqliteDatabase(path.join(control, "managed-update-handoffs.sqlite"));
         try {
@@ -669,17 +669,21 @@ it.each([
           db.close();
         }
       };
+      if (late) {
+        const fsync = syncFs.fsyncSync;
+        vi.spyOn(syncFs, "fsyncSync").mockImplementation((fd) => {
+          fsync(fd);
+          if (reachedCommit && !revokedDuringSync) {
+            revoke();
+            revokedDuringSync = true;
+          }
+        });
+      }
+      const io = createConfigIO({ configPath, env, observe: false, pluginValidation: "skip" });
       const beforeCommit = async () => {
         reachedCommit = true;
         if (revoked && !late) {
           revoke();
-        }
-        if (late) {
-          const fsync = syncFs.fsyncSync;
-          vi.spyOn(syncFs, "fsyncSync").mockImplementationOnce((fd) => {
-            fsync(fd);
-            revoke();
-          });
         }
       };
       return await withConfigWriteLock(
@@ -732,6 +736,7 @@ it.each([
       }
     }
     expect(reachedCommit).toBe(true);
+    expect(revokedDuringSync).toBe(late);
     if (included && process.platform !== "win32") {
       expect((await fs.stat(path.dirname(includePath))).mode & 0o7777).toBe(0o3700);
     }

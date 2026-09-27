@@ -146,6 +146,11 @@ Unversioned ClawHub installs keep an unversioned recorded spec so `openclaw plug
 
 When legacy metadata supplies `files[]` without an archive digest, OpenClaw verifies the canonical extracted paths and SHA-256 hashes before installing. Harmless archive spellings such as backslash separators may normalize to those paths; missing, changed, or extra files and named unsupported records still fail verification. Root-only records that create no output are ignored. Server-provided paths and generated `_meta.json` metadata remain strictly validated.
 
+ZIP archives with entry names that differ only by case or Unicode normalization
+are rejected on every platform. ClawHub fallback verification reports the archive
+conflict; the package author must rename the colliding entries and publish a
+corrected archive before installation can continue.
+
 ### Config includes and invalid-config repair
 
 If your `plugins` section, or the `plugins.entries.<id>` entry being changed, is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to the deepest included file that owns the change and leave `openclaw.json` untouched. Root includes (every section of a config whose root object authors `$include`), include arrays, includes with sibling overrides, changes spanning several include files, and an include whose own file still authors a nested `$include` fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.

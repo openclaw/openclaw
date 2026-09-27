@@ -23,6 +23,11 @@ registerBrowserEnglish();
 
 export type BrowserRequestClient = Pick<GatewayBrowserClient, "request">;
 
+type BrowserSessionTabScope = {
+  sessionKey: string;
+  referencedTabs: readonly BrowserTabTarget[];
+};
+
 export type BrowserDashboardTarget = {
   sessionKey: string;
   agentId?: string;
@@ -167,12 +172,19 @@ function withoutBrowserTarget(value: unknown): Record<string, unknown> {
   return result;
 }
 
+export function browserRequestReferencedTabs(
+  tabs: readonly BrowserTabTarget[],
+): BrowserTabTarget[] {
+  return tabs.slice(-64);
+}
+
 /** Bind every browser operation to one route and one live panel scope. */
 export function bindBrowserRequestClient(
   client: BrowserRequestClient,
   route?: BrowserRoute,
   current: () => boolean = () => true,
   dashboard?: BrowserDashboardTarget,
+  tabScope?: () => BrowserSessionTabScope,
 ): BrowserRequestClient {
   return {
     async request<T>(
@@ -201,8 +213,9 @@ export function bindBrowserRequestClient(
           ? await client.request<T>("browser.dashboard.request", scopedParams, options)
           : await client.request<T>("browser.dashboard.request", scopedParams);
       }
+      const session = !dashboard && method === BROWSER_REQUEST_METHOD ? tabScope?.() : undefined;
       const routedParams =
-        route || dashboard
+        route || dashboard || session
           ? {
               ...envelope,
               ...(route
@@ -213,6 +226,16 @@ export function bindBrowserRequestClient(
                   }
                 : {}),
               ...(dashboard ? { dashboard } : {}),
+              ...(session
+                ? {
+                    tabScope: {
+                      sessionKey: session.sessionKey,
+                      ...(envelope?.method === "GET" && envelope.path === "/tabs"
+                        ? { referencedTabs: browserRequestReferencedTabs(session.referencedTabs) }
+                        : {}),
+                    },
+                  }
+                : {}),
             }
           : params;
       return options

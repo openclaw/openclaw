@@ -196,39 +196,6 @@ describe("reply turn admission rotation", () => {
     }
   });
 
-  it("accepts a rotation already published by the expected active run", async () => {
-    const sessionKey = "agent:main:telegram:topic:compaction-before-admission";
-    const sessionId = "pre-compact-session";
-    const nextSessionId = "post-compact-session";
-    const storePath = createSessionStoreFor(sessionKey, sessionId);
-    const active = await admitTestReplyOperation({
-      sessionKey,
-      sessionId,
-      storePath,
-    });
-    active.setPhase("preflight_compacting");
-    active.updateSessionId(nextSessionId);
-    await replaceSessionEntry({ sessionKey, storePath }, {
-      sessionId: nextSessionId,
-      updatedAt: Date.now(),
-    } as SessionEntry);
-    active.complete();
-
-    const result = await admitTestReplyTurn({
-      sessionKey,
-      sessionId,
-      expectedSessionId: sessionId,
-      expectedActiveOperations: [active],
-      storePath,
-    });
-
-    expect(result.status).toBe("owned");
-    if (result.status === "owned") {
-      expect(result.operation.sessionId).toBe(nextSessionId);
-      result.operation.complete();
-    }
-  });
-
   it("accepts a rotation published by the live owner after the caller snapshot", async () => {
     const sessionKey = "agent:main:telegram:topic:late-compaction-owner";
     const sessionId = "pre-compact-session";
@@ -292,6 +259,7 @@ describe("reply turn admission rotation", () => {
   });
 
   it.each([
+    ["completed", (operation: ReplyOperation) => operation.complete()],
     [
       "failed",
       (operation: ReplyOperation) => {

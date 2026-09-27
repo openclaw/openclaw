@@ -111,6 +111,7 @@ const representativeConfigSteps: ConfigStep[] = [
   configSetJsonFile("channels-discord", "discord-channel", "channels.discord"),
   configSetJsonFile("channels-telegram", "telegram-channel", "channels.telegram"),
   configSetJsonFile("channels-whatsapp", "whatsapp-channel", "channels.whatsapp"),
+  configSetJsonFile("tools-tool-search", "tool-search", "tools.toolSearch"),
 ];
 
 const configuredPluginInstallSteps = [

@@ -215,6 +215,13 @@ generated configuration-schema baselines remain contract guards. Runner matrix
 caps protect shared runner-registration capacity and remain blocking. Explicit
 benchmark qualification verdicts retain their requested acceptance criteria.
 
+The workflow file-size guard in `test/scripts/ci-workflow-guards.test.ts` also
+stays blocking. GitHub refuses any workflow file above 512,000 bytes (500 KiB)
+with a run that has no jobs, so every PR and main CI run stops without a failing
+check. The guard fails at 480,000 bytes, while CI can still report it. Shrink the
+file before raising the limit; for example, share byte-identical runner
+expressions, steps, and scripts through YAML anchors and aliases.
+
 ## Local check gates and changed routing
 
 ### Config baseline count ratchet
