@@ -23,7 +23,7 @@ talk.speak talk.mode commands.list models.list models.authStatus models.authLogo
 tools.effective tools.invoke mcp.app.view mcp.app.listTools mcp.app.listResources
 mcp.app.listResourceTemplates mcp.app.readResource mcp.app.callTool mcp.app.updateModelContext
 board.get board.update board.widget.put board.widget.grant board.widget.appView board.event
-audit.list audit.activity.list users.list users.self users.linkEmail users.merge users.setDisplayName
+audit.list audit.activity.list users.list users.self users.linkEmail users.setDisplayName
 users.setAvatar users.setRole users.listAuthLinks users.listModelAccounts users.selectModelAccount
 users.linkAuthProfile users.unlinkAuthProfile users.authConnect.start users.authConnect.answer
 users.authConnect.status users.authConnect.cancel users.authConnect.catalog
