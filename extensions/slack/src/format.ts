@@ -15,9 +15,6 @@ import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
 
 function isAllowedSlackAngleToken(token: string): boolean {
-  if (!token.startsWith("<") || !token.endsWith(">")) {
-    return false;
-  }
   const inner = token.slice(1, -1);
   return (
     inner.startsWith("@") ||
@@ -39,7 +36,6 @@ function escapeSlackMrkdwnContent(text: string, mentions?: "escape"): string {
     return text;
   }
 
-  SLACK_ANGLE_TOKEN_RE.lastIndex = 0;
   const out: string[] = [];
   let lastIndex = 0;
 
