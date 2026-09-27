@@ -20,7 +20,14 @@ import {
   getSubagentRunsForChildSession,
   subagentRuns,
 } from "../registry/subagent-registry-memory.js";
-import { withSubagentRegistryWriteAuthority } from "../registry/subagent-registry-persistence.js";
+import {
+  assertSubagentRegistryWriteSourceCurrent,
+  withSubagentRegistryWriteAuthority,
+} from "../registry/subagent-registry-persistence.js";
+import {
+  assertSubagentReadContext,
+  readFullSubagentRuns,
+} from "../registry/subagent-registry-read-cache.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import {
   admitSubagentCompletionDelivery,
@@ -164,15 +171,32 @@ export function resolveCorrelatedSubagentDelivery(
 export async function settleCorrelatedSubagentDelivery(
   queued: QueuedSessionDelivery,
   outcome: SessionDeliverySettledOutcome,
+  queueContext: OpenClawStateWorkerContext,
 ): Promise<void> {
   if (queued.kind !== "agentTurn" || queued.owner?.kind !== "subagent_completion") {
     return;
   }
+  assertSubagentReadContext(queueContext);
+  if (!subagentRuns.has(queued.owner.runId)) {
+    const persisted = await readFullSubagentRuns(
+      queueContext,
+      { kind: "ids", runIds: [queued.owner.runId] },
+      { current: true },
+    );
+    assertSubagentReadContext(queueContext);
+    if (persisted.has(queued.owner.runId) && !subagentRuns.has(queued.owner.runId)) {
+      throw new Error("Subagent completion recovery is waiting for registry restoration");
+    }
+  }
   const current = subagentRuns.get(queued.owner.runId);
+  const alreadyDelivered =
+    outcome === "recovered" &&
+    current?.delivery?.status === "delivered" &&
+    current.delivery.queueId === undefined;
   if (
     !current ||
-    current.delivery?.queueId !== queued.id ||
-    current.delivery.generation !== queued.owner.generation
+    current.delivery?.generation !== queued.owner.generation ||
+    (!alreadyDelivered && current.delivery.queueId !== queued.id)
   ) {
     return;
   }
@@ -181,23 +205,27 @@ export async function settleCorrelatedSubagentDelivery(
   const delivery = ensureDeliveryState(subagent);
   if (outcome !== "recovered") {
     await blockSubagentCompletionDelivery({
+      context: queueContext,
       subagent: current,
       reason: queued.lastError ?? "completion delivery failed",
       suspendedReason: "permanent_failure",
     });
     return;
   }
-  Object.assign(delivery, {
-    status: "delivered" as const,
-    disposition: "delivered" as const,
-    deliveredAt: now,
-    announcedAt: now,
-    lastError: undefined,
-    nextAttemptAt: undefined,
-    queueId: undefined,
-  });
-  delivery.payload = undefined;
-  await settleSubagentCompletionDelivery({ subagent });
+  if (!alreadyDelivered) {
+    Object.assign(delivery, {
+      status: "delivered" as const,
+      disposition: "delivered" as const,
+      deliveredAt: now,
+      announcedAt: now,
+      lastError: undefined,
+      nextAttemptAt: undefined,
+      queueId: undefined,
+    });
+    delivery.payload = undefined;
+  }
+  await settleSubagentCompletionDelivery({ subagent, queueId: queued.id, context: queueContext });
+  assertSubagentRegistryWriteSourceCurrent(queueContext);
   if (
     subagentRuns.get(current.runId) !== current ||
     current.delivery?.generation !== queued.owner.generation ||
@@ -205,6 +233,11 @@ export async function settleCorrelatedSubagentDelivery(
   ) {
     return;
   }
+  const committed = structuredClone(current);
   const { resumeSubagentRun } = await import("../registry/subagent-registry.js");
+  assertSubagentRegistryWriteSourceCurrent(queueContext);
+  if (subagentRuns.get(current.runId) !== current || !isDeepStrictEqual(current, committed)) {
+    return;
+  }
   resumeSubagentRun(subagent.runId);
 }

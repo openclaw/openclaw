@@ -98,7 +98,7 @@ export const settleQueuedSessionDelivery: SettleSessionDeliveryFn = async (
   outcome,
   queueContext,
 ) => {
-  await settleCorrelatedSubagentDelivery(entry, outcome);
+  await settleCorrelatedSubagentDelivery(entry, outcome, queueContext);
   await removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id, queueContext);
 };
 
