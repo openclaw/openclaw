@@ -13,11 +13,11 @@ extension OpenClawChatViewModel {
         var sessionRoutingContract: String?
     }
 
-    func replaceMessages(_ messages: [OpenClawChatMessage]) {
-        let messages = self.narration.reconcile(messages)
-        guard self.messages != messages else { return }
-        self.messages = messages
-        self.seedInputHistory(from: messages)
+    func replaceMessages(_ messages: [OpenClawChatMessage], narrationSettled: Bool = false) {
+        let reconciled = self.narration.reconcile(messages, settled: narrationSettled)
+        guard self.messages != reconciled.messages || reconciled.changed else { return }
+        self.messages = reconciled.messages
+        self.seedInputHistory(from: reconciled.messages)
         markTimelineChanged()
     }
 

@@ -1047,6 +1047,7 @@ public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {
     let diffStat: ChatToolDiffStat?
     var activity: OpenClawAgentActivityItem?
     var isComplete: Bool = false
+    var runID: String?
 }
 
 public struct OpenClawGatewayHealthOK: Codable, Sendable {

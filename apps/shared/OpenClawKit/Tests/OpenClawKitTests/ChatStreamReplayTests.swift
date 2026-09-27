@@ -441,7 +441,7 @@ struct ChatStreamReplayTests {
             window.close()
         }
 
-        // Native math labels expose rendered content without global accessibility or focus state.
+        /// Native math labels expose rendered content without global accessibility or focus state.
         func expectRendered(_ expected: [String]) {
             host.layoutSubtreeIfNeeded()
             // Subview order is stacking order, not the vertical order seen by the reader.
@@ -450,7 +450,7 @@ struct ChatStreamReplayTests {
             }.sorted { lhs, rhs in
                 host.isFlipped ? lhs.frame.minY < rhs.frame.minY : lhs.frame.maxY > rhs.frame.maxY
             }
-            #expect(rendered.map { $0.label.latex } == expected)
+            #expect(rendered.map(\.label.latex) == expected)
             #expect(rendered.allSatisfy {
                 $0.label.error == nil && $0.frame.width > 0 && $0.frame.height > 0 &&
                     host.bounds.contains($0.frame)
@@ -491,6 +491,78 @@ struct ChatStreamReplayTests {
         return view.subviews.flatMap { Self.mathLabels(in: $0) }
     }
     #endif
+
+    @Test @MainActor func `settled history retires unsaved narration without erasing live or lagging work`() async throws {
+        let harness = try await StreamReplayHarness.bootstrapped()
+        defer { harness.vm.detachTransport() }
+        let runId = try await harness.send("Review the layout")
+        let now = Int(Date().timeIntervalSince1970 * 1000)
+        let user = replayRawMessage(
+            role: "user", text: "Review the layout", timestamp: Double(now), idempotencyKey: "\(runId):user")
+        let final = replayRawMessage(
+            role: "assistant", text: "The layout is ready.", timestamp: Double(now + 300),
+            runId: runId, messageId: "settled-final")
+        let narration = "Inspecting the layout."
+        harness.transport.emit(replayNarrationEvent(
+            runId: runId, itemId: "unsaved", text: narration, seq: 1, timestamp: now + 100))
+        try await harness.converge("sealed narration is visible") { vm in
+            vm.transcriptMessages.contains { ChatMessageVisibleText.visibleText(in: $0) == narration }
+        }
+
+        func history(
+            _ messages: [AnyCodable], active: Bool? = nil,
+            inFlightRun: OpenClawChatInFlightRun? = nil) -> OpenClawChatHistoryPayload
+        {
+            OpenClawChatHistoryPayload(
+                sessionKey: "main", sessionId: "sess-replay", messages: messages, thinkingLevel: "off",
+                sessionInfo: active.map { .init(hasActiveRun: $0, activeRunIds: $0 ? [runId] : []) },
+                inFlightRun: inFlightRun)
+        }
+        func hasNarration() -> Bool {
+            harness.vm.transcriptMessages.contains { ChatMessageVisibleText.visibleText(in: $0) == narration }
+        }
+        func apply(_ payload: OpenClawChatHistoryPayload) {
+            #expect(harness.vm.applyHistoryPayload(
+                payload, for: harness.vm.beginHistoryRequest(), preservingOptimisticLocalMessages: true))
+        }
+
+        // Missing snapshots are not settlement; persistence can still be pending.
+        apply(history([user], active: true))
+        #expect(hasNarration())
+        apply(history([user], active: false, inFlightRun: .init(runId: runId, text: "")))
+        #expect(hasNarration())
+
+        let beforeLiveEvent = harness.vm.beginHistoryRequest()
+        harness.vm.handleTransportEvent(replayNarrationEvent(
+            runId: runId, itemId: "unsaved", text: narration, seq: 2, timestamp: now + 200))
+        #expect(harness.vm.applyHistoryPayload(
+            history([user], active: false), for: beforeLiveEvent, preservingOptimisticLocalMessages: true))
+        #expect(hasNarration())
+
+        let beforeTerminal = harness.vm.beginHistoryRequest()
+        await harness.transport.setHistory(history([user], active: true))
+        harness.transport.emit(replayFinalEvent(
+            runId: runId, text: "The layout is ready.", timestamp: Double(now + 300)))
+        try await harness.converge("terminal event releases the run") { $0.pendingRunCount == 0 }
+        apply(history([user], active: false))
+        #expect(hasNarration())
+        _ = harness.vm.applyHistoryPayload(
+            history([user, final], active: false), for: beforeTerminal, preservingOptimisticLocalMessages: true)
+        #expect(hasNarration())
+        apply(history([user, final]))
+        #expect(hasNarration())
+        apply(history([], active: false))
+        #expect(hasNarration())
+
+        // Explicit idle is published only after terminal persistence settles.
+        // The missing preamble must not survive as a second durable transcript.
+        apply(history([user, final], active: false))
+        #expect(!hasNarration())
+        #expect(harness.vm.transcriptMessages.map { ChatMessageVisibleText.visibleText(in: $0) } == [
+            "Review the layout", "The layout is ready.",
+        ])
+    }
+
     @Test @MainActor func `sealed narration stays ordered through tool work and canonical settlement`() async throws {
         let harness = try await StreamReplayHarness.bootstrapped()
         defer { harness.vm.detachTransport() }

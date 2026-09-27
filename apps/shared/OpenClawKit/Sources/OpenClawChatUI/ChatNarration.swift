@@ -82,21 +82,25 @@ struct ChatNarration {
         return result
     }
 
-    mutating func reconcile(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
+    mutating func reconcile(
+        _ messages: [OpenClawChatMessage],
+        settled: Bool) -> (messages: [OpenClawChatMessage], changed: Bool)
+    {
         var messages = messages
+        let previousCount = self.segments.count
         self.segments.removeAll { segment in
             guard let itemID = segment.itemID,
                   let index = messages.firstIndex(where: {
                       $0.streamSegmentID == itemID &&
                           ($0.transcriptRunID ?? $0.streamFallback?.runId) == segment.runID
                   })
-            else { return false }
+            else { return settled }
             // Retire the transient copy while preserving the canonical Markdown
             // and the live row's SwiftUI identity across the handoff.
             messages[index].id = segment.message.id
             return true
         }
-        return messages
+        return (messages, self.segments.count != previousCount)
     }
 }
 
@@ -109,6 +113,9 @@ extension OpenClawChatViewModel {
         guard event.stream == "item", event.data["kind"]?.value as? String == "preamble",
               self.ownsLiveTelemetryRun(event.runId)
         else { return }
+        // Live commentary supersedes older idle snapshots; replay must not
+        // invalidate the history response that owns its own adoption.
+        if !self.isApplyingRunSnapshot { self.invalidateRunSnapshots() }
         self.narration.receive(event, history: self.messages)
         self.markTimelineChanged()
     }

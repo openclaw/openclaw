@@ -736,7 +736,8 @@ extension OpenClawChatViewModel {
                     startedAt: evt.ts.map(Double.init) ?? Date().timeIntervalSince1970 * 1000,
                     isError: nil,
                     diffStat: nil,
-                    activity: self.turnToolCallsById[toolCallId]?.activity)
+                    activity: self.turnToolCallsById[toolCallId]?.activity,
+                    runID: evt.runId)
             } else if phase == "input_delta",
                       let pending = self.turnToolCallsById[toolCallId],
                       let diff = evt.data["diff"]?.dictionaryValue,
@@ -753,7 +754,8 @@ extension OpenClawChatViewModel {
                     isError: pending.isError,
                     diffStat: ChatToolDiffStat(added: added, removed: removed),
                     activity: pending.activity,
-                    isComplete: pending.isComplete)
+                    isComplete: pending.isComplete,
+                    runID: pending.runID)
             } else if phase == "result" {
                 if var pending = self.turnToolCallsById[toolCallId], pending.activity != nil {
                     pending.isComplete = true
