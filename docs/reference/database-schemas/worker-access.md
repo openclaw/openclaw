@@ -106,6 +106,15 @@ provides the typed single-command `execute` method.
 
 ## Carry facts, publish after commit
 
+Session branch summaries retain compact counts and headlines in the transcript
+read worker, keyed by physical database identity and the transcript rewrite/append
+watermark. After a complete scan verifies unique indexed identities and backward
+ancestry, ordinary message appends extend the active summary using only the new
+sequence range. Rewrites, navigation changes, and legacy or irregular graphs use
+the complete scanner. First reads still scale with transcript length; cached
+append refreshes scale with new messages and branch count. No schema, stored
+transcript, retention, or configuration changes are required.
+
 Proxy capture sessions, events, payload compression, queries, and purge operations
 execute through the shared-state worker. Bundled HTTP and WebSocket capture
 callers use asynchronous operations. Each accepted capture retains its original
