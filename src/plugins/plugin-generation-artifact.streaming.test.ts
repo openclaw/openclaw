@@ -9,6 +9,7 @@ const temp = useAutoCleanupTempDirTracker(afterEach);
 const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   for (const artifact of artifacts.splice(0)) {
     artifact.dispose();
   }
@@ -140,5 +141,46 @@ it("captures from the pinned descriptor when descriptor paths are unavailable", 
   });
   const artifact = source.capture();
   expect(fs.readFileSync(artifact.resolve(source.filename), "utf8")).toBe("captured");
+  expect(artifact.assertSourceCurrent).not.toThrow();
+});
+
+it("captures exact plugin bytes after Bun on macOS returns EBADF for descriptor copies", () => {
+  const bytes = Buffer.alloc(172_832, "B");
+  const source = fixture(bytes);
+  const realProcess = process;
+  vi.stubGlobal(
+    "process",
+    new Proxy(realProcess, {
+      get(target, property) {
+        if (property === "platform") {
+          return "darwin";
+        }
+        if (property === "versions") {
+          return { ...target.versions, bun: "1.4.2" };
+        }
+        return Reflect.get(target, property, target);
+      },
+    }),
+  );
+
+  const copyFileSync = fs.copyFileSync;
+  let injectedEbafd = false;
+  vi.spyOn(fs, "copyFileSync").mockImplementation((from, to, mode) => {
+    if (
+      typeof from === "string" &&
+      from.startsWith("/dev/fd/") &&
+      typeof to === "string" &&
+      to.endsWith(`${path.sep}fixture.bin`)
+    ) {
+      injectedEbafd = true;
+      throw Object.assign(new Error("Bad file descriptor"), { code: "EBADF" });
+    }
+    return copyFileSync(from, to, mode);
+  });
+
+  const artifact = source.capture();
+
+  expect(injectedEbafd).toBe(true);
+  expect(fs.readFileSync(artifact.resolve(source.filename))).toEqual(bytes);
   expect(artifact.assertSourceCurrent).not.toThrow();
 });
