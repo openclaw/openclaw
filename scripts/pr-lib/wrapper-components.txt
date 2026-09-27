@@ -337,6 +337,7 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.system-agent.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tier-eval.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tool-policy-conflicts.ts
+src/commands/doctor/shared/legacy-config-migrations.runtime.tool-search.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts
 src/commands/doctor/shared/legacy-config-migrations.ts
