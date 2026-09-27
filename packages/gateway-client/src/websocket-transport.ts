@@ -7,7 +7,7 @@ import {
   parseGatewayIpAddress,
   parseHostForAddressChecks,
 } from "./client-address-utils.js";
-import type { ClientOptions, GatewayWebSocketTargetOptions } from "./websocket.js";
+import type { GatewayWebSocketClientOptions, GatewayWebSocketTargetOptions } from "./websocket.js";
 
 const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<string>([
   "loopback",
@@ -89,10 +89,13 @@ export function resolveGatewayWebSocketTransport(
   params: GatewayWebSocketTargetOptions & {
     url: string;
     env?: NodeJS.ProcessEnv;
-    options: Omit<ClientOptions, "checkServerIdentity" | "rejectUnauthorized" | "finishRequest">;
+    options: Omit<
+      GatewayWebSocketClientOptions,
+      "checkServerIdentity" | "rejectUnauthorized" | "finishRequest"
+    >;
     normalizeTlsFingerprint?: (fingerprint: string | undefined) => string;
   },
-): { options: ClientOptions } {
+): { options: GatewayWebSocketClientOptions } {
   const usesTls = isWssUrl(params.url);
   if (params.tlsFingerprint && !usesTls) {
     throw new GatewayWebSocketTransportConfigurationError(
@@ -128,7 +131,7 @@ export function resolveGatewayWebSocketTransport(
       "gateway tls fingerprint must be a SHA-256 fingerprint",
     );
   }
-  const options: ClientOptions = { ...params.options };
+  const options: GatewayWebSocketClientOptions = { ...params.options };
   if (usesTls && params.tlsServerName) {
     const peerName = params.tlsServerName;
     // SNI accepts DNS names, while certificate identity also permits IP SANs.
@@ -144,7 +147,7 @@ export function resolveGatewayWebSocketTransport(
 
 // The enrolled auxiliary streams share pin enforcement without inheriting URL policy.
 export function applyGatewayWebSocketTlsPin(
-  options: Pick<ClientOptions, "headers" | "rejectUnauthorized" | "finishRequest">,
+  options: Pick<GatewayWebSocketClientOptions, "headers" | "rejectUnauthorized" | "finishRequest">,
   expectedFingerprint: string,
   normalize = normalizeTlsFingerprint,
 ): void {
