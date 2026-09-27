@@ -146,6 +146,7 @@ beforeEach(() => {
   setDetachedTaskLifecycleRuntime(mocks.runtime, "queued-registration-fixture");
   mocks.context = {
     admission: {
+      coordinationKey: "original-db",
       databasePath: "/synthetic/state.sqlite",
       identity: { key: "original-db", canonicalPath: "/synthetic/state.sqlite" },
       assertCurrent: () => {},

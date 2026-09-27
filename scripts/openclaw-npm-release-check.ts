@@ -1,5 +1,4 @@
 #!/usr/bin/env -S node --import tsx
-// Openclaw Npm Release Check script supports OpenClaw repository automation.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -15,9 +14,8 @@ import {
 import { collectForbiddenPackedPathErrors } from "./lib/packed-cargo-policy.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
-  compareReleaseVersions as compareReleaseVersionsBase,
   collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
-  parseReleaseVersion as parseReleaseVersionBase,
+  parseReleaseVersion,
 } from "./lib/release-version.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -41,18 +39,6 @@ type ParsedReleaseTag = {
   baseVersion: string;
   channel: "stable" | "alpha" | "beta";
   correctionNumber?: number;
-};
-
-type ParsedReleaseVersion = {
-  alphaNumber?: number;
-  baseVersion: string;
-  betaNumber?: number;
-  channel: "stable" | "alpha" | "beta";
-  correctionNumber?: number;
-  month: number;
-  patch: number;
-  version: string;
-  year: number;
 };
 
 type NpmPublishPlan = {
@@ -145,14 +131,6 @@ function isLocalDependencySpec(value: string | undefined): boolean {
   return /^(?:file|link|workspace):/u.test(value ?? "");
 }
 
-export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
-  return parseReleaseVersionBase(version);
-}
-
-export function compareReleaseVersions(left: string, right: string): number | null {
-  return compareReleaseVersionsBase(left, right);
-}
-
 export function resolveNpmPublishPlan(
   version: string,
   _currentBetaVersion?: string | null,
@@ -170,24 +148,16 @@ export function resolveNpmPublishPlan(
         ? "alpha"
         : "beta";
 
-  if (parsedVersion.channel === "alpha") {
-    if (publishTag !== "alpha") {
-      throw new Error("Alpha prereleases must publish to the alpha dist-tag.");
+  if (parsedVersion.channel !== "stable") {
+    if (publishTag !== parsedVersion.channel) {
+      const label = parsedVersion.channel === "alpha" ? "Alpha" : "Beta";
+      throw new Error(
+        `${label} prereleases must publish to the ${parsedVersion.channel} dist-tag.`,
+      );
     }
     return {
-      channel: "alpha",
-      publishTag: "alpha",
-      mirrorDistTags: [],
-    };
-  }
-
-  if (parsedVersion.channel === "beta") {
-    if (publishTag !== "beta") {
-      throw new Error("Beta prereleases must publish to the beta dist-tag.");
-    }
-    return {
-      channel: "beta",
-      publishTag: "beta",
+      channel: parsedVersion.channel,
+      publishTag: parsedVersion.channel,
       mirrorDistTags: [],
     };
   }

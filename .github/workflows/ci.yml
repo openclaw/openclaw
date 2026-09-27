@@ -2202,6 +2202,11 @@ jobs:
             typeof nodeTestPlan.hasCompleteStartupCorpusCoverage === "function" &&
             nodeTestPlan.hasCompleteStartupCorpusCoverage(rawNodeTestShards, startupCorpusTestFiles)
               ? checkoutRevision : "";
+          if (startupCorpusNodeRevision) {
+            // The exact-tree Node receipt makes this row's only test step a no-op.
+            const startupTask = checksFastCoreTasks.findIndex(({ task }) => task === "startup-corpus");
+            if (startupTask >= 0) checksFastCoreTasks.splice(startupTask, 1);
+          }
           // Targeted jobs cannot discover repository-scanning boundary tests
           // through imports. Keep the full boundary gate inside build-artifacts
           // when that lane runs; test-only targeted plans carry their own
@@ -4438,6 +4443,10 @@ jobs:
             scripts/lib/direct-run.mjs
             scripts/lib/local-check-runtime.mts
             scripts/lib/numeric-options.mjs
+            scripts/lib/vitest-plan-scheduling.mts
+            scripts/lib/vitest-local-scheduling.mts
+            scripts/lib/arg-utils.mts
+            scripts/lib/arg-utils.runtime.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 

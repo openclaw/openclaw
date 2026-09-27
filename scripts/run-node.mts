@@ -47,7 +47,7 @@ import {
 import { listCoreRuntimePostBuildOutputs, runRuntimePostBuild } from "./runtime-postbuild.mts";
 import { listTsdownOutputRoots } from "./tsdown-build.mts";
 
-type RunNodeInjectedChild = {
+type RunNodeChild = {
   kill?: (signal?: NodeJS.Signals) => boolean | void;
   on(event: string, callback: (...args: never[]) => void): unknown;
   off?(event: string, callback: (...args: never[]) => void): unknown;
@@ -56,7 +56,6 @@ type RunNodeInjectedChild = {
   stdout?: Pick<NodeJS.ReadableStream, "on">;
 };
 
-type RunNodeChild = RunNodeInjectedChild;
 type RunNodeSpawn = (command: string, args: string[], options: SpawnOptions) => unknown;
 type RunNodeSpawnSync = (
   command: string,
@@ -689,14 +688,8 @@ const hasErrorCode = (error: unknown, code: string) =>
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "unknown error";
 
-const parsePositiveIntegerEnv = (env: NodeJS.ProcessEnv, name: string, fallback: number) => {
-  const raw = env[name];
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-};
+const parsePositiveIntegerEnv = (env: NodeJS.ProcessEnv, name: string, fallback: number) =>
+  parsePositiveInteger(env[name]) ?? fallback;
 
 const resolveRunNodeOutputLogPath = (deps: RunNodeDeps) => {
   const outputLog = deps.env[RUN_NODE_OUTPUT_LOG_ENV]?.trim();

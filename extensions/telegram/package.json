@@ -5,7 +5,6 @@
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
   "dependencies": {
-    "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
     "abort-controller": "3.0.0",
     "grammy": "1.46.0",

@@ -1,8 +1,5 @@
 import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
-/**
- * Prepares CLI backend run context: backend config, prompts, bootstrap context,
- * MCP, auth epoch, and reusable session metadata.
- */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -150,11 +147,7 @@ import {
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
-import {
-  buildCliMcpGrantContext,
-  finalizeCliMcpGrant,
-  normalizeOptionalMcpContextValue,
-} from "./mcp-grant-context.js";
+import { buildCliMcpGrantContext, finalizeCliMcpGrant } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
 import {
@@ -249,17 +242,14 @@ function prependCliSessionDriftUserContext(
   };
 }
 
-/** Overrides preparation dependencies for CLI runner tests. */
 function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
 }
 
-/** Restores preparation dependencies after CLI runner tests. */
 function resetCliRunnerPrepareTestDeps(): void {
   Object.assign(prepareDeps, defaultPrepareDeps);
 }
 
-/** Returns whether profile-owned prepared execution should skip local CLI epoch hashing. */
 function shouldSkipLocalCliCredentialEpoch(params: {
   authEpochMode?: CliBackendAuthEpochMode;
   authProfileId?: string;
@@ -299,7 +289,6 @@ function shouldResolveAuthProfileForExecution(params: {
   return params.authCredential.type === "api_key" || params.authCredential.type === "token";
 }
 
-/** Builds the complete context required to execute a CLI-backed agent run. */
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
@@ -761,8 +750,8 @@ async function prepareCliRunContextWithinReadFence(
 
   const modelId = (params.model ?? "default").trim() || "default";
   const modelProvider =
-    normalizeOptionalMcpContextValue(params.modelProvider) ??
-    normalizeOptionalMcpContextValue(params.provider) ??
+    normalizeOptionalString(params.modelProvider) ??
+    normalizeOptionalString(params.provider) ??
     params.provider;
   const normalizedCatalogModel = normalizeCliModel(modelId, backendResolved.config);
   const normalizedModel =
@@ -834,7 +823,6 @@ async function prepareCliRunContextWithinReadFence(
         messages: await loadOpenClawHistoryMessages(),
         hookCtx: promptBuildHookContext,
         hookRunner: promptBuildHookRunner,
-        bootstrapContextRunKind: params.bootstrapContextRunKind,
       });
     } catch (error) {
       cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
@@ -1481,23 +1469,12 @@ async function prepareCliRunContextWithinReadFence(
       : prepareExecutionContext;
     try {
       params.assertCurrent?.();
+      // Only bundled backends receive this private credential bridge.
+      const backendPrepareContext = backendAuthPolicy
+        ? { ...privatePrepareExecutionContext, authCredential }
+        : privatePrepareExecutionContext;
       preparedExecution =
-        (await backendResolved.prepareExecution?.(
-          (backendAuthPolicy
-            ? {
-                ...privatePrepareExecutionContext,
-                // The core-internal auth policy table owns this private credential and isolated
-                // completion bridge; third-party backends cannot opt into either capability.
-                authCredential,
-              }
-            : privatePrepareExecutionContext) as typeof prepareExecutionContext & {
-            authCredential?: AuthProfileCredential;
-            isolatedCompletionCwd?: string;
-            isolatedCompletionModelId?: string;
-            isolatedCompletionPrompt?: string;
-            isolatedCompletionSystemPrompt?: string;
-          },
-        )) ?? undefined;
+        (await backendResolved.prepareExecution?.(backendPrepareContext)) ?? undefined;
     } catch (error) {
       if (error instanceof CliBackendAuthProfilePreparationError && effectiveAuthProfileId) {
         // Preserve the selected-profile fact across lazy plugin preparation so

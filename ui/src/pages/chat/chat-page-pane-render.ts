@@ -56,6 +56,7 @@ type ChatPagePaneRenderOptions = {
   onSplitRight?: (paneId: string) => void;
   ownerKey: string;
   pane: ChatSplitPane;
+  panePosition: { column: number; row: number };
   sessionSlots: readonly (string | undefined)[];
   splitMode: boolean;
   unbound: boolean;
@@ -142,6 +143,11 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               aria-hidden=${presented ? "false" : "true"}
               ?inert=${!presented}
               .paneId=${options.pane.id}
+              .paneLabel=${t("chat.splitView.panePosition", {
+                column: String(options.panePosition.column),
+                row: String(options.panePosition.row),
+                pane: options.pane.id,
+              })}
               .presentationId=${JSON.stringify([options.pane.id, sessionKey])}
               .chatMessagesBySession=${options.chatMessagesBySession}
               .sessionSnapshotStore=${options.sessionSnapshotStore}

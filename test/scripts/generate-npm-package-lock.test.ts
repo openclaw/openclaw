@@ -1043,11 +1043,33 @@ describe("generate-npm-package-lock", () => {
     };
 
     const parent = writeParent("parent", { forked: "1.0.0" }, false);
+    const overlap = writeParent("overlap", { forked: "1.0.0", blocked: "1.0.0" }, false);
+    const modern = writeParent("modern", { forked: "2.0.0", blocked: "2.0.0" }, false);
     const unrelated = writeParent("unrelated", { forked: "1.0.0", blocked: "1.0.0" }, true);
     const violator = writeParent("violator", { forked: "1.0.0", replacement: "1.0.0" }, true);
+    const broadSource = path.join(root, "broad");
+    writePackage(broadSource, {
+      name: "broad",
+      version: "1.0.0",
+      main: "index.js",
+      optionalDependencies: { overlap: "1.0.0" },
+      peerDependencies: { forked: ">=1" },
+      peerDependenciesMeta: { forked: { optional: true } },
+    });
+    const broad = packPackage(broadSource);
+    const leafPackages = ["1.0.0", "2.0.0"].map((version) => {
+      const source = path.join(root, `leaf-${version}`);
+      writePackage(source, { name: "leaf", version, main: "index.js" });
+      return packPackage(source);
+    });
     const forkedPackages = ["1.0.0", "2.0.0"].map((version) => {
       const source = path.join(root, `forked-${version}`);
-      writePackage(source, { name: "forked", version, main: "index.js" });
+      writePackage(source, {
+        name: "forked",
+        version,
+        main: "index.js",
+        dependencies: { leaf: version },
+      });
       return packPackage(source);
     });
     const blockedPackages = ["1.0.0", "2.0.0"].map((version) => {
@@ -1087,6 +1109,27 @@ describe("generate-npm-package-lock", () => {
             tarball: parent.tarball,
           },
         },
+        overlap: {
+          "1.0.0": {
+            integrity: overlap.artifact.integrity,
+            manifest: overlap.manifest,
+            tarball: overlap.tarball,
+          },
+        },
+        modern: {
+          "1.0.0": {
+            integrity: modern.artifact.integrity,
+            manifest: modern.manifest,
+            tarball: modern.tarball,
+          },
+        },
+        broad: {
+          "1.0.0": {
+            integrity: broad.artifact.integrity,
+            manifest: broad.manifest,
+            tarball: broad.tarball,
+          },
+        },
         unrelated: {
           "1.0.0": {
             integrity: unrelated.artifact.integrity,
@@ -1103,6 +1146,12 @@ describe("generate-npm-package-lock", () => {
         },
         forked: Object.fromEntries(
           forkedPackages.map(({ artifact, manifest, tarball }) => [
+            artifact.version,
+            { integrity: artifact.integrity, manifest, tarball },
+          ]),
+        ),
+        leaf: Object.fromEntries(
+          leafPackages.map(({ artifact, manifest, tarball }) => [
             artifact.version,
             { integrity: artifact.integrity, manifest, tarball },
           ]),
@@ -1165,6 +1214,7 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
         path.join(root, "pnpm-workspace.yaml"),
         JSON.stringify({
           overrides: {
+            parent: "1.0.0",
             forked: "2.0.0",
             blocked: "2.0.0",
             replacement: "2.0.0",
@@ -1178,10 +1228,15 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
         JSON.stringify({
           packages: {
             "parent@1.0.0": {},
+            "overlap@1.0.0": {},
+            "modern@1.0.0": {},
+            "broad@1.0.0": { optionalDependencies: { overlap: "1.0.0" } },
             "unrelated@1.0.0": {},
             "violator@1.0.0": {},
             "forked@1.0.0": {},
             "forked@2.0.0": {},
+            "leaf@1.0.0": {},
+            "leaf@2.0.0": {},
             "blocked@1.0.0": {},
             "blocked@2.0.0": {},
             "replacement@1.0.0": {},
@@ -1189,14 +1244,19 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
           },
           snapshots: {
             "parent@1.0.0": { dependencies: { forked: "1.0.0" } },
+            "overlap@1.0.0": { dependencies: { forked: "1.0.0", blocked: "1.0.0" } },
+            "modern@1.0.0": { dependencies: { forked: "2.0.0", blocked: "2.0.0" } },
+            "broad@1.0.0": { optionalDependencies: { overlap: "1.0.0" } },
             "unrelated@1.0.0": {
               dependencies: { forked: "1.0.0", blocked: "2.0.0" },
             },
             "violator@1.0.0": {
               dependencies: { forked: "2.0.0", replacement: "2.0.0" },
             },
-            "forked@1.0.0": {},
-            "forked@2.0.0": {},
+            "forked@1.0.0": { dependencies: { leaf: "1.0.0" } },
+            "forked@2.0.0": { dependencies: { leaf: "2.0.0" } },
+            "leaf@1.0.0": {},
+            "leaf@2.0.0": {},
             "blocked@1.0.0": {},
             "blocked@2.0.0": {},
             "replacement@1.0.0": {},
@@ -1288,6 +1348,49 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
       expect(rangedRoots.packages["node_modules/blocked"].version).toBe("2.0.0");
       expect(rangedRoots.packages["node_modules/unrelated/node_modules/forked"]).toBeUndefined();
       expect(rangedRoots.packages["node_modules/unrelated/node_modules/blocked"]).toBeUndefined();
+
+      const installedVersions = (generatedPackages: Record<string, unknown>, name: string) =>
+        Object.entries(generatedPackages)
+          .filter(
+            ([lockPath]) =>
+              lockPath === `node_modules/${name}` || lockPath.endsWith(`/node_modules/${name}`),
+          )
+          .map(([, metadata]) => {
+            if (
+              typeof metadata !== "object" ||
+              metadata === null ||
+              !("version" in metadata) ||
+              typeof metadata.version !== "string"
+            ) {
+              throw new Error(`missing ${name} version metadata`);
+            }
+            return metadata.version;
+          })
+          .toSorted();
+
+      writeFileSync(
+        path.join(root, "pnpm-workspace.yaml"),
+        JSON.stringify({
+          overrides: {
+            overlap: "^1.0.0",
+            forked: "2.0.0",
+            blocked: "2.0.0",
+            leaf: "2.0.0",
+            "overlap@^1.0.0>forked": "1.0.0",
+            "overlap@1.0.0>blocked": "1.0.0",
+            "forked@1.0.0>leaf": "1.0.0",
+          },
+        }),
+      );
+      const rangedParent = generateLock({ broad: "1.0.0", modern: "1.0.0" }, artifacts);
+      expect(installedVersions(rangedParent.packages, "forked")).toEqual(["1.0.0", "2.0.0"]);
+      expect(installedVersions(rangedParent.packages, "blocked")).toEqual(["1.0.0", "2.0.0"]);
+      expect(installedVersions(rangedParent.packages, "leaf")).toEqual(["1.0.0", "2.0.0"]);
+
+      writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
+      const inferredBranches = generateLock({ broad: "1.0.0", modern: "1.0.0" }, artifacts);
+      expect(installedVersions(inferredBranches.packages, "forked")).toEqual(["1.0.0", "2.0.0"]);
+      expect(installedVersions(inferredBranches.packages, "leaf")).toEqual(["1.0.0", "2.0.0"]);
     } finally {
       registry.kill();
     }
@@ -1417,7 +1520,7 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
           scenario === "tampered"
             ? "local package artifact integrity mismatch"
             : scenario === "wrong-version"
-              ? "violates workspace overrides: node_modules/fixture-dep locked 2.0.0, expected 1.0.0"
+              ? "npm lock differs from local package artifact: fixture-dep@1.0.0"
               : scenario === "symlink-escape"
                 ? "local package artifact escapes package root"
                 : "invalid local package artifact",

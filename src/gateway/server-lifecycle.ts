@@ -11,7 +11,10 @@ import {
 } from "../infra/diagnostic-events.js";
 import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
 import { upsertPresence } from "../infra/system-presence.js";
-import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
+import {
+  startGatewayDiagnosticHeartbeat,
+  stopGatewayDiagnosticHeartbeat,
+} from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
@@ -378,6 +381,8 @@ export async function prepareGatewayLifecycle(params: {
     const notice = resolveGatewayShutdownNotice(options);
     lifecycle.closePreludeStarted = true;
     markGatewaySuspendExiting();
+    authRateLimiter.dispose();
+    browserAuthRateLimiter.dispose();
     runtime.scheduler.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();
     // Publish the exact cancellation before withdrawing capabilities or running
@@ -427,7 +432,7 @@ export async function prepareGatewayLifecycle(params: {
     disposeNodeConnectionNotifications(nodeRegistry);
     watchNodeHttpRuntime.close();
     await shutdownRuntime.runGatewayClosePrelude({
-      stopDiagnostics: stopDiagnosticHeartbeat,
+      stopDiagnostics: stopGatewayDiagnosticHeartbeat,
       clearSkillsRefreshTimer: () => {
         if (!runtimeState?.skillsRefreshTimer) {
           return;
@@ -504,7 +509,14 @@ export async function prepareGatewayLifecycle(params: {
         removeChatRun,
         agentRunSeq,
         broadcast,
-        nodeSendToSession,
+        nodeSendToSession: (
+          sessionKey,
+          event,
+          payload,
+          opts?: Parameters<typeof nodeSendToSession>[3],
+        ) => {
+          void nodeSendToSession(sessionKey, event, payload, opts);
+        },
         resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
         markMainSessionsAbortedForRestart: async (restart) => {
           await shutdownRuntime.markRestartAbortedMainSessions({
@@ -608,6 +620,7 @@ export async function prepareGatewayLifecycle(params: {
     });
   };
 
+  stopGatewayDiagnosticHeartbeat();
   const configureDiagnostics = (config: OpenClawConfig) => {
     if (lifecycle.closePreludeStarted) {
       return;
@@ -615,12 +628,12 @@ export async function prepareGatewayLifecycle(params: {
     const enabled = isDiagnosticsEnabled(config);
     setDiagnosticsEnabledForProcess(enabled);
     if (!enabled) {
-      stopDiagnosticHeartbeat();
+      stopGatewayDiagnosticHeartbeat();
       return;
     }
-    // Gateway lifecycle owns both this existing heartbeat timer and the monitor
+    // Gateway lifecycle owns both this heartbeat job and the monitor
     // it samples, so startup failure and normal close tear them down together.
-    startDiagnosticHeartbeat(undefined, {
+    startGatewayDiagnosticHeartbeat(runtime.scheduler, undefined, {
       getConfig: getRuntimeConfig,
       startupGraceMs: 60_000,
       testTimings: resolveQaDiagnosticHeartbeatTimings(process.env),

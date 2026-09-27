@@ -1,6 +1,8 @@
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
-import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  asFiniteNumber,
+  finiteSecondsToTimerSafeMilliseconds,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -151,18 +153,10 @@ export function normalizeResolvedModel(params: {
       return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     }
     const record = cost as Partial<Model["cost"]>;
-    const input =
-      typeof record.input === "number" && Number.isFinite(record.input) ? record.input : 0;
-    const output =
-      typeof record.output === "number" && Number.isFinite(record.output) ? record.output : 0;
-    const cacheRead =
-      typeof record.cacheRead === "number" && Number.isFinite(record.cacheRead)
-        ? record.cacheRead
-        : 0;
-    const cacheWrite =
-      typeof record.cacheWrite === "number" && Number.isFinite(record.cacheWrite)
-        ? record.cacheWrite
-        : 0;
+    const input = asFiniteNumber(record.input) ?? 0;
+    const output = asFiniteNumber(record.output) ?? 0;
+    const cacheRead = asFiniteNumber(record.cacheRead) ?? 0;
+    const cacheWrite = asFiniteNumber(record.cacheWrite) ?? 0;
     if (
       input === record.input &&
       output === record.output &&
@@ -182,7 +176,7 @@ export function normalizeResolvedModel(params: {
       modelName: params.model.name,
       input: params.model.input,
     }),
-    cost: normalizeModelCost((params.model as { cost?: unknown }).cost),
+    cost: normalizeModelCost(params.model.cost),
   } as Model & ProviderRuntimeModel;
   const runtimeHooks = params.runtimeHooks ?? resolveRuntimeHooks();
   const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({
@@ -257,10 +251,6 @@ export function normalizeResolvedModel(params: {
       model: modelWithToolSearch,
     }),
   );
-}
-
-export function normalizeTransportBaseUrl(baseUrl: unknown): string | undefined {
-  return normalizeOptionalString(baseUrl);
 }
 
 export function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {

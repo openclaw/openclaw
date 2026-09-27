@@ -309,8 +309,7 @@ type ToolResultTruncationOptions = {
   minimumRawWeight?: number;
 };
 
-const DEFAULT_SUFFIX = (truncatedChars: number) =>
-  formatContextLimitTruncationNotice(truncatedChars);
+const DEFAULT_SUFFIX = formatContextLimitTruncationNotice;
 const COMPACT_RECOVERY_SUFFIX = (truncatedChars: number) =>
   `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; narrow args]`;
 const AGGREGATE_ELISION_MARKER =
@@ -771,17 +770,6 @@ function resolveToolResultBudgets(params: {
     ),
   };
 }
-
-type ToolResultReductionPotential = {
-  maxChars: number;
-  aggregateBudgetChars: number;
-  toolResultCount: number;
-  totalToolResultChars: number;
-  oversizedCount: number;
-  oversizedReducibleChars: number;
-  aggregateReducibleChars: number;
-  maxReducibleChars: number;
-};
 
 type ToolResultBranchEntry = {
   id: string;
@@ -1479,7 +1467,7 @@ export function estimateToolResultReductionPotential(params: {
   contextWindowTokens: number;
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
-}): ToolResultReductionPotential {
+}) {
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
   const branch = buildToolResultPlanningBranch(params.messages);
 
