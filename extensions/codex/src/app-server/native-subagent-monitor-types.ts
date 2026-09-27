@@ -6,7 +6,6 @@ import type {
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
   AgentHarnessTaskRuntime,
-  AgentHarnessTaskRecord,
   AgentHarnessTaskRuntimeScope,
   AgentHarnessTaskAssignment,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
@@ -119,7 +118,13 @@ export type DirectSpawnEvidence = {
 };
 export type NativeChildAdmissionEvidence = DirectSpawnEvidence &
   (
-    | { kind: "spawn" }
+    | {
+        kind: "spawn";
+        owner?: ParentOwner;
+        preparing?: true;
+        modelSource?: NativeModelSourceCustody;
+        completionCustody?: AgentHarnessCompletionCustody;
+      }
     | {
         kind: "interaction";
         nativeTurnId?: string;
@@ -156,8 +161,6 @@ export type ParentState = {
   historyOwner?: CodexNativeSubagentHistoryOwner;
   agentId?: string;
   taskRuntime?: AgentHarnessTaskRuntime;
-  /** Observed lineage only; writes and delivery require fresh exact-assignment reads. */
-  readTaskRecords?: () => AgentHarnessTaskRecord[];
   mirror?: CodexNativeSubagentTaskMirror;
   submissionStore?: CodexNativeSubagentSubmissionStore;
 };
@@ -226,6 +229,11 @@ export type KnownChild = {
     completionCustody?: AgentHarnessCompletionCustody;
   }>;
   agentPaths: Set<string>;
+};
+
+export type PreparedNativeReceiver = {
+  known: KnownChild | undefined;
+  isCurrent: () => boolean;
 };
 
 export type RecoveredCompletion = CodexNativeSubagentCompletion & {

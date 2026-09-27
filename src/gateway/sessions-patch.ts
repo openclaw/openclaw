@@ -1,4 +1,3 @@
-// Session patch applier for gateway session metadata and model/runtime overrides.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -51,6 +50,7 @@ import {
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
+import { normalizeSessionToolOverrides } from "../config/sessions/session-tool-overrides.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -95,7 +95,6 @@ import {
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
-import { normalizeSessionToolOverrides } from "./session-tool-overrides.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";

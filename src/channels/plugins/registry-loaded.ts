@@ -21,6 +21,19 @@ type ChannelPluginView = {
 
 let cachedChannelPluginView: ChannelPluginView | undefined;
 
+export function compareChannelPlugins(
+  a: Pick<ActiveChannelPluginRuntimeShape, "id" | "meta">,
+  b: Pick<ActiveChannelPluginRuntimeShape, "id" | "meta">,
+): number {
+  const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id);
+  const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id);
+  // Explicit plugin order wins; known built-ins keep their product order;
+  // unknown extension channels sort after them by id for deterministic lists.
+  const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
+  const orderB = b.meta.order ?? (indexB === -1 ? 999 : indexB);
+  return orderA !== orderB ? orderA - orderB : a.id.localeCompare(b.id);
+}
+
 function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelPluginView {
   const snapshot = getActivePluginChannelRegistrySnapshotFromState();
   const currentRegistry = registry === undefined || registry === snapshot.registry;
@@ -47,18 +60,7 @@ function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelP
     }
   }
 
-  const sorted = [...byId.values()].toSorted((a, b) => {
-    const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id);
-    const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id);
-    // Explicit plugin order wins; known built-ins keep their product order;
-    // unknown extension channels sort after them by id for deterministic lists.
-    const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
-    const orderB = b.meta.order ?? (indexB === -1 ? 999 : indexB);
-    if (orderA !== orderB) {
-      return orderA - orderB;
-    }
-    return a.id.localeCompare(b.id);
-  });
+  const sorted = [...byId.values()].toSorted(compareChannelPlugins);
 
   const view = {
     snapshot: currentRegistry ? snapshot : { registry: selectedRegistry, version: 0 },

@@ -96,12 +96,18 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
   const status =
     tool.phase !== "result"
       ? "running"
-      : approval || skipped
-        ? "blocked"
-        : tool.status === "unknown"
-          ? undefined
-          : (tool.status ??
-            (tool.isError === true ? "failed" : tool.isError === false ? "completed" : undefined));
+      : skipped && details.deniedReason === "steering"
+        ? "skipped"
+        : approval || skipped
+          ? "blocked"
+          : tool.status === "unknown"
+            ? undefined
+            : (tool.status ??
+              (tool.isError === true
+                ? "failed"
+                : tool.isError === false
+                  ? "completed"
+                  : undefined));
   return projectAgentActivityItem(
     {
       itemId: `tool:${tool.toolCallId}`,

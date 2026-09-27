@@ -93,13 +93,6 @@ not recreate a missing file. Preparing a new database directory and quarantining
 orphaned sidecars require the existing schema-maintenance owner; later permission
 hardening never recreates a removed directory.
 
-Cached shared-state actors also retain their original read admission. Before reuse,
-the owner checks that admission even when a new caller has a matching file identity.
-Relocation or inode reuse retires an invalid idle actor before opening the current
-path; active work must settle before replacement. This prevents Doctor and plugin
-migrations from recreating retired database paths or acquiring leases in the wrong
-database. Existing update drivers and stored schemas need no migration.
-
 Each SQLite broker worker admits up to 128 running and queued requests. A busy
 worker's admission queue does not consume another worker's request capacity;
 independent workers continue serving their databases. Requests on the same worker
@@ -467,6 +460,11 @@ prepared facts, so uncertain backing state keeps the task alive for a later pass
 Synchronous operator inspection uses the same selected-row reader. An unavailable
 schema refuses the read rather than reporting missing backing sessions. Canonical
 admission, malformed-row handling, retention, and update behavior are unchanged.
+
+Task registry publication keeps retained readers available when a concurrent
+publication exactly matches the canonical readback, including delivery metadata.
+Changed or unreconciled facts still require preparation; receipt and observer
+invalidation retain their write-witness checks.
 
 Cron task reconciliation reads durable outcomes and applies recovery or loss in
 the shared-state worker. The final recovery check and lost-task write share one

@@ -20,6 +20,7 @@ describe("tool-card outcomes", () => {
   it.each([
     { status: "failed", label: "failed" },
     { status: "blocked", label: "Blocked" },
+    { status: "skipped", label: "Skipped" },
     { status: undefined, label: "Outcome unknown" },
     { status: "completed", label: "Completed" },
   ] as const)(
@@ -37,6 +38,7 @@ describe("tool-card outcomes", () => {
       const host = createHost({ chatRunId: "run-outcome" });
       handleAgentEvent(host, agentEvent("run-outcome", 1, "item", item));
       const live = host.chatToolMessages[0];
+      expect(live).toBeDefined();
       const saved = {
         role: "assistant",
         messageId: "stored-call",

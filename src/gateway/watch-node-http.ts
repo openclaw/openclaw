@@ -1,4 +1,3 @@
-// watchOS direct-node transport.
 // Apple Watch cannot use generic WebSockets on-device, so node events use bounded HTTPS polls.
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -44,6 +43,7 @@ import {
   resolveNodePairingState,
 } from "../infra/device-pairing.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   isNodePairingSetupBootstrapProfile,
   isVoiceNodePairingSetupBootstrapProfile,
@@ -203,10 +203,7 @@ function resolveWatchClientAddress(
 function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {
   let aborted = false;
   let settled = false;
-  let resolveCompleted: (completed: boolean) => void = () => undefined;
-  const completed = new Promise<boolean>((resolve) => {
-    resolveCompleted = resolve;
-  });
+  const completion = createDeferredCore<boolean>();
   const settle = (value: boolean) => {
     if (settled) {
       return;
@@ -214,7 +211,7 @@ function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {
     settled = true;
     res.off("finish", onFinish);
     res.off("close", onClose);
-    resolveCompleted(value);
+    completion.resolve(value);
   };
   const onFinish = () => settle(true);
   const onClose = () => {
@@ -223,7 +220,7 @@ function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {
   };
   res.once("finish", onFinish);
   res.once("close", onClose);
-  return { completed, isAborted: () => aborted };
+  return { completed: completion.promise, isAborted: () => aborted };
 }
 
 function hasOnlyBoundedWatchSurface(connect: ConnectParams): boolean {

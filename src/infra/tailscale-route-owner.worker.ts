@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   TAILSCALE_ROUTE_OWNER_ARG,
   type TailscaleRouteOwnerMessage,
@@ -81,10 +82,7 @@ export function runTailscaleRouteOwner(
   let ready = false;
   let stopping = false;
   let forceTimer: NodeJS.Timeout | undefined;
-  let resolveExit!: (exit: TailscaleRouteOwnerExit) => void;
-  const exited = new Promise<TailscaleRouteOwnerExit>((resolve) => {
-    resolveExit = resolve;
-  });
+  const exit = createDeferredCore<TailscaleRouteOwnerExit>();
   const child = spawn(command, args, {
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
@@ -129,9 +127,9 @@ export function runTailscaleRouteOwner(
     if (!stopping || !ready) {
       sendMessage({ type: "failed", code, signal, stdout, stderr });
     }
-    resolveExit({ code, signal, stopping });
+    exit.resolve({ code, signal, stopping });
   });
-  return { exited, stop };
+  return { exited: exit.promise, stop };
 }
 
 if (process.argv[2] === TAILSCALE_ROUTE_OWNER_ARG) {

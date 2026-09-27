@@ -4,6 +4,7 @@ import ai.openclaw.app.AndroidScreenshotFixture
 import ai.openclaw.app.AndroidScreenshotScene
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayConnectionDisplay
+import ai.openclaw.app.GatewayConnectionHandoff
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.GatewayModelUnavailableReason
 import ai.openclaw.app.GatewayTalkSetupIssue
@@ -213,6 +214,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowDialog
 import org.robolectric.shadows.ShadowSpeechRecognizer
+import org.robolectric.util.ReflectionHelpers
 import java.io.File
 import java.io.IOException
 import java.util.Base64
@@ -288,16 +290,87 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  @Config(qualifiers = "w1000dp-h1000dp-hdpi")
+  fun placeholderFollowsComposerOwnerWithoutChangingBoundDrafts() {
+    val scale = mutableStateOf(1f)
+    val model = showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, fontScale = { scale.value })
+    val agents = ReflectionHelpers.getField<MutableStateFlow<List<GatewayAgentSummary>>>(runtime, "_gatewayAgents")
+    val handoff = ReflectionHelpers.getField<MutableStateFlow<GatewayConnectionHandoff>>(runtime, "gatewayConnectionHandoffState")
+    val originalSession = model.chatSessionKey.value
+    val originalGateway = model.activeGatewayStableId.value
+    val editor = composerEditor()
+    val missing = mutableListOf<String>()
+
+    fun observe(
+      name: String,
+      placeholder: String,
+    ) {
+      captureComposerProof(name)
+      if (composeRule.onAllNodesWithText(placeholder, useUnmergedTree = true).fetchSemanticsNodes().isEmpty()) {
+        missing += "$name: $placeholder"
+      }
+    }
+
+    composeRule.runOnIdle {
+      agents.value = listOf(GatewayAgentSummary("main", "Atlas", null), GatewayAgentSummary("lyra", "Lyra", null))
+    }
+    observe("agent-atlas", "Message Atlas")
+    val atlasOwner = model.captureChatShareOwner()
+    editor.performTextReplacement("  Atlas draft\nkeep spacing  ")
+    composeRule.runOnIdle { model.switchChatSession("agent:lyra:placeholder", "lyra") }
+    observe("agent-lyra", "Message Lyra")
+    editor.performTextReplacement("Lyra draft")
+    composeRule.runOnIdle { model.switchChatSession(originalSession, "main") }
+    editor.assertTextEquals("  Atlas draft\nkeep spacing  ")
+    composeRule.runOnIdle {
+      assertEquals(atlasOwner, model.captureChatShareOwner())
+      agents.value = agents.value.map { if (it.id == "main") it.copy(name = "Atlas Research and Accessibility Assistant") else it }
+      scale.value = 2f
+    }
+    editor.assertTextEquals("  Atlas draft\nkeep spacing  ")
+    editor.performTextReplacement("")
+    observe("long-name-large-font", "Message Atlas Research and Accessibility Assistant")
+    assertComposerControlsVisible(primaryAction = null)
+    composeRule.runOnIdle {
+      scale.value = 1f
+      handoff.value = GatewayConnectionHandoff(pending = true)
+    }
+    observe("gateway-handoff", "Message")
+    composeRule.runOnIdle {
+      agents.value = emptyList()
+      prefs.gatewayRegistry.upsert(GatewayRegistryEntry("placeholder-other-gateway", GatewayRegistryEntryKind.DISCOVERED, "Other gateway"))
+      prefs.gatewayRegistry.setActive("placeholder-other-gateway")
+      handoff.value = GatewayConnectionHandoff()
+    }
+    observe("gateway-no-catalog", "Message main")
+    composeRule.runOnIdle { agents.value = listOf(GatewayAgentSummary("main", "Orion", null)) }
+    observe("gateway-orion", "Message Orion")
+    composeRule.runOnIdle {
+      agents.value = emptyList()
+      prefs.gatewayRegistry.setActive(originalGateway)
+    }
+    val operatorSession = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+    val onDisconnected = ReflectionHelpers.getField<(String) -> Unit>(operatorSession, "onDisconnected")
+    composeRule.runOnIdle { onDisconnected("Offline") }
+    observe("offline-owner", "Message main")
+    editor.performTextReplacement("Offline draft")
+    editor.assertTextEquals("Offline draft")
+    composeRule.runOnIdle { model.switchChatSession("agent:lyra:placeholder", "lyra") }
+    editor.assertTextEquals("Lyra draft")
+    editor.performTextReplacement("")
+    observe("offline-lyra", "Message lyra")
+    assertTrue("Missing owner-bound placeholders: $missing", missing.isEmpty())
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
   fun fullWidthEditorKeepsItsOriginAndIdentityWithOneToolbarRow() {
-    val width = mutableStateOf(390.dp)
-    showChat(currentViewportWidth = { width.value }, viewportHeight = { 640.dp })
+    val width = mutableStateOf(360.dp)
+    val fontScale = mutableStateOf(1f)
+    showChat(currentViewportWidth = { width.value }, viewportHeight = { 720.dp }, fontScale = { fontScale.value }, useChatShell = true)
     val editor = composerEditor()
     val editorId = editor.fetchSemanticsNode().id
-    val hint = composeRule.onNodeWithText(nativeString("Message OpenClaw"), useUnmergedTree = true).getUnclippedBoundsInRoot()
-    val empty = editor.getUnclippedBoundsInRoot()
-    val surface = composeRule.onNodeWithTag("chat-composer-surface").getUnclippedBoundsInRoot()
-    assertTrue("Editor must use the full writing area", empty.right - empty.left >= surface.right - surface.left - 32.dp)
+    editor.performClick()
+    applyChatImeInsets()
 
     fun assertToolbarOrder(primaryAction: String) {
       val left =
@@ -315,22 +388,45 @@ class ChatComposerLayoutTest {
       }
       assertEquals("The model starts beside +", left[0].right.value, left[1].left.value, 1f)
       assertEquals("Effort stays beside the model", left[1].right.value, left[2].left.value, 1f)
-      composeRule.onNodeWithContentDescription(nativeString("Permissions")).assertDoesNotExist()
+      val modelLabel = composeRule.onNodeWithText("GPT-5.2", useUnmergedTree = true).getUnclippedBoundsInRoot()
+      assertEquals("The model label is centered with the toolbar icons", ((primary.top + primary.bottom) / 2).value, ((modelLabel.top + modelLabel.bottom) / 2).value, 1f)
+      assertTrue("The complete toolbar stays above the IME", primary.bottom <= 500.dp)
     }
-    assertComposerControlsVisible()
-    assertToolbarOrder("Stop")
-    editor.performTextReplacement(nativeString("Message OpenClaw"))
-    val typed = editor.getUnclippedBoundsInRoot()
-    assertEquals("Hint and typed text share the horizontal origin", hint.left.value, typed.left.value, 1f)
-    assertEquals("Typing does not move the writing area", empty.top.value, typed.top.value, 1f)
-    composeRule.runOnIdle { width.value = 320.dp }
-    assertComposerControlsVisible(primaryAction = "Send")
-    assertToolbarOrder("Send")
-    val send = composeRule.onNodeWithContentDescription(nativeString("Send")).getUnclippedBoundsInRoot()
-    val modelLabel = composeRule.onNodeWithText("GPT-5.2", useUnmergedTree = true).getUnclippedBoundsInRoot()
-    assertEquals("The model label is centered with the toolbar icons", ((send.top + send.bottom) / 2).value, ((modelLabel.top + modelLabel.bottom) / 2).value, 1f)
-    assertEquals("Resizing must retain the same editor", editorId, editor.fetchSemanticsNode().id)
-    editor.assertTextEquals(nativeString("Message OpenClaw"))
+
+    for ((viewportWidth, scale) in listOf(360.dp to 1f, 320.dp to 1f, 320.dp to 2f)) {
+      composeRule.runOnIdle {
+        width.value = viewportWidth
+        fontScale.value = scale
+      }
+      editor.performTextReplacement("")
+      val surface = composeRule.onNodeWithTag("chat-composer-surface").getUnclippedBoundsInRoot()
+      val empty = editor.getUnclippedBoundsInRoot()
+      val hint = composeRule.onNodeWithText(nativeString("Message \$agentName", "Molty"), useUnmergedTree = true)
+      val hintBounds = hint.getUnclippedBoundsInRoot()
+      val hintLayouts = mutableListOf<TextLayoutResult>()
+      hint.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(hintLayouts)) }
+      val hintBaseline = hintBounds.top - surface.top + with(composeRule.density) { hintLayouts.single().firstBaseline.toDp() }
+      assertTrue("Editor must use the full writing area", empty.right - empty.left >= surface.right - surface.left - 32.dp)
+
+      for ((state, draft) in listOf("empty" to "", "single" to "Message", "two" to "Message\nSecond", "multi" to "Message\nSecond\nThird\nFourth\nFifth\nSixth")) {
+        editor.performTextReplacement(draft)
+        val bounds = editor.getUnclippedBoundsInRoot()
+        val currentSurface = composeRule.onNodeWithTag("chat-composer-surface").getUnclippedBoundsInRoot()
+        val layouts = mutableListOf<TextLayoutResult>()
+        editor.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+        val firstBaseline = bounds.top - currentSurface.top + with(composeRule.density) { layouts.single().firstBaseline.toDp() }
+        captureComposerProof("${viewportWidth.value.toInt()}-${scale.toInt()}x-$state")
+        assertEquals("Hint and draft share the horizontal origin", hintBounds.left.value, bounds.left.value, 1f)
+        assertEquals("The top text inset stays stable as the draft grows", (empty.top - surface.top).value, (bounds.top - currentSurface.top).value, 1f)
+        assertEquals("The first baseline stays stable relative to the composer", hintBaseline.value, firstBaseline.value, 1f)
+        assertEquals("Resizing must retain the same editor", editorId, editor.fetchSemanticsNode().id)
+        editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(draft))).assertIsFocused()
+        val primaryAction = if (draft.isEmpty()) "Stop" else "Send"
+        assertComposerControlsVisible(primaryAction = primaryAction)
+        assertToolbarOrder(primaryAction)
+        assertTrue("The editor stays above the IME", bounds.bottom <= 500.dp)
+      }
+    }
   }
 
   @Test
@@ -1368,7 +1464,7 @@ class ChatComposerLayoutTest {
     listOf(1.3f, 1.5f, 2f).forEach { scale ->
       composeRule.runOnIdle { fontScale.value = scale }
       editor.performTextReplacement("")
-      composeRule.onNodeWithText(nativeString("Message OpenClaw"), useUnmergedTree = true).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Message \$agentName", "Molty"), useUnmergedTree = true).assertIsDisplayed()
       val blank = editor.getUnclippedBoundsInRoot()
       assertComposerControlsVisible(talkActive = true)
       composeRule.onNodeWithText("GPT-5.2", useUnmergedTree = true).assertIsDisplayed()
