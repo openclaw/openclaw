@@ -456,7 +456,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         signal,
         beforeProvision,
       );
-      let installation = preparedNode?.installation;
+      let installation: WorkerInstallationArtifact | undefined = preparedNode?.installation;
       cancellation?.assertActive();
       if (
         record.state === "requested" &&
