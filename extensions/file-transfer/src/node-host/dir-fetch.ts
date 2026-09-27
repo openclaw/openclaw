@@ -1,10 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
+import { root as fsRoot } from "@openclaw/fs-safe/root";
 import { ArchiveLimitError } from "openclaw/plugin-sdk/archive";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
-import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { inspectDirFetchArchive } from "../shared/dir-fetch-archive.js";
 import {
   DIR_FETCH_DEFAULT_MAX_BYTES,
@@ -112,24 +111,23 @@ async function listTreeEntries(
       code: "CANONICAL_PATH_CHANGED",
     });
   }
-  async function visit(relativeDir: string): Promise<boolean> {
-    const entries = await rootHandle.list(relativeDir, { withFileTypes: true });
-    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-      const rel = path.posix.join(relativeDir === "." ? "" : relativeDir, entry.name);
-      results.push(rel);
-      if (results.length > maxEntries) {
-        return false;
-      }
-      if (entry.isDirectory) {
-        const ok = await visit(rel);
-        if (!ok) {
-          return false;
-        }
+  for await (const entry of rootHandle.walk("", { symlinkPolicy: "include", maxEntries })) {
+    if (entry.kind === "truncated") {
+      return "TOO_MANY";
+    }
+    results.push(entry.relativePath);
+  }
+  return results.toSorted((left, right) => {
+    const a = left.split("/");
+    const b = right.split("/");
+    for (const [index, part] of a.entries()) {
+      const other = b[index];
+      if (other === undefined || part !== other) {
+        return other === undefined ? 1 : part.localeCompare(other) || (part < other ? -1 : 1);
       }
     }
-    return true;
-  }
-  return (await visit(".")) ? results : "TOO_MANY";
+    return a.length - b.length;
+  });
 }
 
 export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchResult> {
