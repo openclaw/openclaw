@@ -23,7 +23,10 @@ import {
   withFollowupSuccessor,
 } from "../completion/session-followup-completion.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { selectConnectedSettledSubagentWave } from "../registry/subagent-registry-queries.js";
+import {
+  matchesSubagentRequesterSession,
+  selectConnectedSettledSubagentWave,
+} from "../registry/subagent-registry-queries.js";
 import {
   countActiveDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
@@ -31,10 +34,7 @@ import {
   hasDescendantRunAwaitingSettle,
   listSubagentRunsForRequester,
 } from "../registry/subagent-registry-read.js";
-import type {
-  RequesterSettleWakeState,
-  SubagentRunRecord,
-} from "../registry/subagent-registry.types.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { buildRequesterSettleWakeIdentity } from "../registry/subagent-requester-settle-identity.js";
 import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import { withRequesterCronAuthority } from "../requester-cron-authority.js";
@@ -58,21 +58,11 @@ import {
 } from "./subagent-announce-output.js";
 import { hasUsableSessionEntry } from "./subagent-announce.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
-
-export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
-
-type RequesterSettleWakeBatchCallbacks = {
-  transitionBatch: (
-    batch: readonly SubagentRunRecord[],
-    state: RequesterSettleWakeBatchState,
-  ) => void | Promise<void>;
-  completeBatch: (
-    batch: readonly SubagentRunRecord[],
-    rearmGeneration?: number,
-    delivery?: SubagentAnnounceDeliveryResult,
-    onCommitted?: () => void,
-  ) => void | Promise<void>;
-};
+import {
+  readSharedBatchState,
+  type RequesterSettleWakeBatchState,
+  type RequesterSettleWakeBatchCallbacks,
+} from "./subagent-announce.requester-settle-state.js";
 
 const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
@@ -85,30 +75,6 @@ function retainedYieldIdentity(state: RequesterSettleWakeBatchState) {
     ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true as const } : {}),
     ...(state.afterRequesterYield === true ? { afterRequesterYield: true as const } : {}),
     ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
-  };
-}
-
-function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSettleWakeBatchState {
-  const states = batch
-    .map((entry) => entry.requesterSettleWake)
-    .filter((state): state is RequesterSettleWakeState => Boolean(state));
-  const dispatching = states.find((state) => state.status === "dispatching");
-  const source = dispatching ?? states[0];
-  return {
-    status: source?.status ?? "pending",
-    attemptCount: Math.max(0, ...states.map((state) => state.attemptCount)),
-    ...(source?.replayCount !== undefined ? { replayCount: source.replayCount } : {}),
-    ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
-    ...(source?.batchRunIds ? { batchRunIds: [...source.batchRunIds] } : {}),
-    ...(states.some((state) => state.requesterYieldBatch === true)
-      ? { requesterYieldBatch: true }
-      : {}),
-    ...(states.some((state) => state.afterRequesterYield === true)
-      ? { afterRequesterYield: true }
-      : {}),
-    ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
-    ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
-    deferralCount: Math.max(0, ...states.map((state) => state.deferralCount ?? 0)),
   };
 }
 
@@ -406,6 +372,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     return false;
   }
 
+  const requesterSessionId = requesterEntry.sessionId;
+  const requesterLifecycleRevision = requesterEntry.lifecycleRevision;
+  const requesterIdentity = {
+    sessionId: requesterSessionId,
+    lifecycleRevision: requesterLifecycleRevision,
+  };
   const completionRows = dedupeLatestChildCompletionRows(
     filterCurrentDirectChildCompletionRows(settledBatch, {
       requesterSessionKey,
@@ -430,6 +402,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     });
     return false;
   }
+  const recoveryRows = completionRows.filter((entry) =>
+    matchesSubagentRequesterSession(entry, requesterIdentity),
+  );
   const preparedFindings = await readChildCompletionFindings(completionRows);
   if (await retireReplacedStore()) {
     return false;
@@ -442,6 +417,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     requireVisibleReply: requesterYieldedAfterDelivery,
     parentOnly,
     children: completionRows,
+    recoveryChildren: recoveryRows,
     preserveModelRouteNotice: !completionChannel || !isDeliverableMessageChannel(completionChannel),
   });
   const { batchKey: wakeKeyBase } = buildRequesterSettleWakeIdentity({
@@ -515,9 +491,15 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       attemptIndex,
       parentOnly,
     });
-    const requesterSessionId = requesterEntry.sessionId;
-    const requesterLifecycleRevision = requesterEntry.lifecycleRevision;
     const isRequesterCurrent = () => {
+      const currentSession = loadRequesterSessionEntry(requesterSessionKey, requesterAgentId).entry;
+      if (
+        currentSession?.sessionId !== requesterSessionId ||
+        currentSession?.lifecycleRevision !== requesterLifecycleRevision ||
+        recoveryRows.some((entry) => !matchesSubagentRequesterSession(entry, requesterIdentity))
+      ) {
+        return false;
+      }
       if (followup) {
         try {
           followup.assertCurrent();
@@ -542,11 +524,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       ) {
         return false;
       }
-      const currentSession = loadRequesterSessionEntry(requesterSessionKey, requesterAgentId).entry;
-      return (
-        currentSession?.sessionId === requesterSessionId &&
-        currentSession?.lifecycleRevision === requesterLifecycleRevision
-      );
+      return true;
     };
     const isBatchCurrent = () => {
       const currentRuns = filterCurrentDirectChildCompletionRows(

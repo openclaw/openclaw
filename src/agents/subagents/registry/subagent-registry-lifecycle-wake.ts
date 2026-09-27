@@ -42,7 +42,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 type RequesterSettleWakeBatchState =
-  import("../announce/subagent-announce.requester-settle-wake.js").RequesterSettleWakeBatchState;
+  import("../announce/subagent-announce.requester-settle-state.js").RequesterSettleWakeBatchState;
 
 const isCurrentRequesterSettleWakeBatch = (
   context: SubagentLifecycleWakeContext,

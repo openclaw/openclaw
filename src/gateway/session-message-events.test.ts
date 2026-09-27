@@ -768,7 +768,7 @@ describe("session.message websocket events", () => {
       expectRecordFields(event.payload, {
         sessionKey: entry.childSessionKey,
         reason: "subagent-status",
-        status: "failed",
+        status: "interrupted",
         endedAt: completion.endedAt,
         spawnedBy: entry.requesterSessionKey,
       });

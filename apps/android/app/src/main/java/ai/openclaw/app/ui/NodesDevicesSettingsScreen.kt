@@ -13,9 +13,9 @@ import ai.openclaw.app.canApproveGatewayDevicePairing
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawListItem
+import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
-import ai.openclaw.app.ui.design.ClawSeparatedColumn
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
@@ -23,7 +23,6 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.badgeInitials
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -388,9 +387,7 @@ private fun <T> NodesSection(
       style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
-    ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-      ClawSeparatedColumn(items = items, dividerColor = ClawTheme.colors.border, row = row)
-    }
+    ClawListPanel(items = items, row = row)
   }
 }
 

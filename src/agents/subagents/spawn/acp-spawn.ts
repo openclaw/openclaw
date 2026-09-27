@@ -294,8 +294,9 @@ export async function spawnAcpDirect(
     assertActive: ctx.assertActive,
   });
   ctx.assertActive?.();
-  const completionRequesterSessionId =
-    requesterTarget.store[requesterTarget.canonicalKey]?.sessionId;
+  const requesterEntry = requesterTarget.store[requesterTarget.canonicalKey];
+  const completionRequesterSessionId = requesterEntry?.sessionId;
+  const completionRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
   const hasSubagentEnvelope = isSubagentEnvelopeSession(requesterInternalKey, {
     cfg,
     store: subagentStore,
@@ -650,6 +651,7 @@ export async function spawnAcpDirect(
         controllerSessionKey,
         requesterSessionKey: ownership.completionRequesterSessionKey,
         completionRequesterSessionId,
+        completionRequesterLifecycleRevision,
         requesterOrigin,
         progressOrigin,
         requesterDisplayKey: ownership.completionRequesterDisplayKey,

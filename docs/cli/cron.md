@@ -195,6 +195,10 @@ If an isolated run times out before the first model request, `openclaw automatio
 
 `--at <datetime>` schedules a one-shot run. Offset-less datetimes are treated as UTC unless you also pass `--tz <iana>`, which interprets the wall-clock time in the given timezone.
 
+Invalid `--tz` values are rejected before saving a job; use an IANA timezone such as
+`America/New_York`. Invalid timestamps and nonexistent local times during a
+daylight-saving transition are reported separately as `--at` errors.
+
 <Note>
 One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Intentional silence and successful executions with explicit `delivery.bestEffort: true` complete and delete normally. Use `--keep-after-run` to preserve successful jobs too.
 </Note>

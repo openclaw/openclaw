@@ -256,6 +256,16 @@ describe("subagent registry seam flow", () => {
     return handler;
   };
 
+  async function settleLifecycle(event: Parameters<ReturnType<typeof getLifecycleHandler>>[0]) {
+    const settleRootWork = observeRootWork();
+    try {
+      getLifecycleHandler()(event);
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      await settleRootWork();
+    }
+  }
+
   beforeAll(async () => {
     const registry = await import("./subagent-registry.test-helpers.js");
     mod = createSubagentRegistryHarness(registry);
@@ -1975,9 +1985,7 @@ describe("subagent registry seam flow", () => {
       runTimeoutSeconds: 1,
     });
 
-    const lifecycleHandler = getLifecycleHandler();
-
-    lifecycleHandler?.({
+    await settleLifecycle({
       runId: "run-lifecycle-success-after-deadline",
       stream: "lifecycle",
       data: {
@@ -1987,23 +1995,19 @@ describe("subagent registry seam flow", () => {
       },
     });
 
-    await waitForFast(() => {
-      const run = findRequesterRun("run-lifecycle-success-after-deadline");
-      expect(run?.execution.endedAt).toBe(startedAt + 1_000);
-      expectRecordFields(
-        run?.execution.outcome,
-        {
-          status: "timeout",
-          startedAt,
-          endedAt: startedAt + 1_000,
-          elapsedMs: 1_000,
-        },
-        "late first lifecycle timeout outcome",
-      );
-    });
-    await waitForFast(() => {
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    });
+    const run = findRequesterRun("run-lifecycle-success-after-deadline");
+    expect(run?.execution.endedAt).toBe(startedAt + 1_000);
+    expectRecordFields(
+      run?.execution.outcome,
+      {
+        status: "timeout",
+        startedAt,
+        endedAt: startedAt + 1_000,
+        elapsedMs: 1_000,
+      },
+      "late first lifecycle timeout outcome",
+    );
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
   it("uses observed lifecycle start time when applying explicit run deadline", async () => {
@@ -2018,9 +2022,7 @@ describe("subagent registry seam flow", () => {
       runTimeoutSeconds: 60,
     });
 
-    const lifecycleHandler = getLifecycleHandler();
-
-    lifecycleHandler?.({
+    await settleLifecycle({
       runId: "run-lifecycle-observed-start",
       stream: "lifecycle",
       data: {
@@ -2030,23 +2032,19 @@ describe("subagent registry seam flow", () => {
       },
     });
 
-    await waitForFast(() => {
-      const run = findRequesterRun("run-lifecycle-observed-start");
-      expect(run?.execution.endedAt).toBe(createdAt + 65_000);
-      expectRecordFields(
-        run?.execution.outcome,
-        {
-          status: "ok",
-          startedAt: observedStartedAt,
-          endedAt: createdAt + 65_000,
-          elapsedMs: 55_000,
-        },
-        "observed lifecycle start success outcome",
-      );
-    });
-    await waitForFast(() => {
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    });
+    const run = findRequesterRun("run-lifecycle-observed-start");
+    expect(run?.execution.endedAt).toBe(createdAt + 65_000);
+    expectRecordFields(
+      run?.execution.outcome,
+      {
+        status: "ok",
+        startedAt: observedStartedAt,
+        endedAt: createdAt + 65_000,
+        elapsedMs: 55_000,
+      },
+      "observed lifecycle start success outcome",
+    );
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
   it("keeps in-flight explicit deadline timeout stable during cleanup", async () => {
@@ -2146,9 +2144,7 @@ describe("subagent registry seam flow", () => {
       },
     });
 
-    const lifecycleHandler = getLifecycleHandler();
-
-    lifecycleHandler?.({
+    await settleLifecycle({
       runId: "run-refresh-pending-timeout-payload",
       stream: "lifecycle",
       data: {
@@ -2158,24 +2154,22 @@ describe("subagent registry seam flow", () => {
       },
     });
 
-    await waitForFast(() => {
-      const announceParams = findRecordCallArg(
-        mocks.runSubagentAnnounceFlow,
-        0,
-        "refreshed pending delivery announce",
-        (record) => record.childRunId === "run-refresh-pending-timeout-payload",
-      );
-      expectRecordFields(
-        announceParams.outcome,
-        {
-          status: "ok",
-          startedAt: createdAt + 10_000,
-          endedAt: createdAt + 65_000,
-          elapsedMs: 55_000,
-        },
-        "refreshed pending delivery outcome",
-      );
-    });
+    const announceParams = findRecordCallArg(
+      mocks.runSubagentAnnounceFlow,
+      0,
+      "refreshed pending delivery announce",
+      (record) => record.childRunId === "run-refresh-pending-timeout-payload",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      {
+        status: "ok",
+        startedAt: createdAt + 10_000,
+        endedAt: createdAt + 65_000,
+        elapsedMs: 55_000,
+      },
+      "refreshed pending delivery outcome",
+    );
   });
 
   it.each([
