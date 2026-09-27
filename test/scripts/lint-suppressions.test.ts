@@ -251,7 +251,12 @@ describe("production lint suppressions", () => {
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/loader-load-context.ts|unicorn/no-array-sort|1",
+        // The returning base stamps private fields on existing host objects without Proxy traps.
+        "src/plugins/plugin-instance-owned-values.ts|eslint/no-constructor-return|1",
+        "src/plugins/plugin-instance-owned-values.ts|typescript/no-extraneous-class|1",
         "src/plugins/plugin-return-value.ts|typescript/prefer-promise-reject-errors|1",
+        // Reflect.apply supplies the captured then method's exact original receiver.
+        "src/plugins/plugin-return-value.ts|typescript/unbound-method|1",
         "src/plugins/plugin-return-value.ts|unicorn/no-thenable|1",
         "src/plugins/provider-auth-persistence.ts|preserve-caught-error|2",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
