@@ -277,7 +277,6 @@ extensions/discord/src/internal/api.messages.ts	9
 extensions/discord/src/internal/api.reactions.ts	1
 extensions/discord/src/internal/api.users.ts	3
 extensions/discord/src/internal/api.webhooks.ts	1
-extensions/discord/src/internal/client.ts	1
 extensions/discord/src/internal/command-comparison.ts	1
 extensions/discord/src/internal/command-deploy.ts	3
 extensions/discord/src/internal/commands.ts	6
@@ -327,7 +326,7 @@ extensions/discord/src/monitor/provider.deploy-errors.ts	11
 extensions/discord/src/monitor/provider.deploy.ts	4
 extensions/discord/src/monitor/provider.lifecycle.ts	2
 extensions/discord/src/monitor/provider.startup-log.ts	1
-extensions/discord/src/monitor/provider.startup.ts	2
+extensions/discord/src/monitor/provider.startup.ts	1
 extensions/discord/src/monitor/reply-context.ts	1
 extensions/discord/src/monitor/reply-safety.ts	1
 extensions/discord/src/monitor/rest-fetch.ts	3
@@ -484,7 +483,6 @@ extensions/imessage/src/client.ts	3
 extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
 extensions/imessage/src/monitor/conversation-repair.ts	1
-extensions/imessage/src/monitor/monitor-provider.ts	1
 extensions/imessage/src/probe.ts	1
 extensions/imessage/src/remote-host.ts	1
 extensions/imessage/src/send.ts	2
@@ -616,10 +614,9 @@ extensions/matrix/src/test-runtime.ts	9
 extensions/matrix/src/tool-actions.ts	1
 extensions/mattermost/src/channel.ts	6
 extensions/mattermost/src/gateway-auth-bypass.ts	3
-extensions/mattermost/src/mattermost/client.ts	8
+extensions/mattermost/src/mattermost/client.ts	6
 extensions/mattermost/src/mattermost/directory.ts	2
 extensions/mattermost/src/mattermost/interactions.ts	4
-extensions/mattermost/src/mattermost/model-picker.ts	1
 extensions/mattermost/src/mattermost/monitor-reactions.ts	2
 extensions/mattermost/src/mattermost/monitor-slash.ts	1
 extensions/mattermost/src/mattermost/monitor-websocket.ts	1
@@ -707,7 +704,6 @@ extensions/msteams/src/attachments/graph.ts	1
 extensions/msteams/src/attachments/shared.ts	2
 extensions/msteams/src/channel.ts	4
 extensions/msteams/src/delegated-state.ts	1
-extensions/msteams/src/directory-live.ts	1
 extensions/msteams/src/errors.ts	2
 extensions/msteams/src/feedback-invoke.ts	2
 extensions/msteams/src/file-consent.ts	1
@@ -715,8 +711,6 @@ extensions/msteams/src/graph.ts	2
 extensions/msteams/src/inbound.ts	1
 extensions/msteams/src/media-helpers.ts	1
 extensions/msteams/src/messenger.ts	1
-extensions/msteams/src/monitor-handler.ts	1
-extensions/msteams/src/monitor-handler/inbound-content.ts	1
 extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
 extensions/msteams/src/monitor.ts	5
@@ -1067,7 +1061,7 @@ extensions/telegram/src/channel-actions.ts	1
 extensions/telegram/src/client-fetch.ts	5
 extensions/telegram/src/doctor-contract.ts	3
 extensions/telegram/src/doctor.ts	10
-extensions/telegram/src/fetch.ts	10
+extensions/telegram/src/fetch.ts	8
 extensions/telegram/src/forum-service-message.ts	1
 extensions/telegram/src/group-history-window.ts	1
 extensions/telegram/src/inline-buttons.ts	1
@@ -1162,10 +1156,9 @@ extensions/whatsapp/src/approval-handler.runtime.ts	1
 extensions/whatsapp/src/auth-store.ts	3
 extensions/whatsapp/src/auto-reply/monitor.ts	2
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	4
-extensions/whatsapp/src/auto-reply/monitor/process-message.ts	2
 extensions/whatsapp/src/channel-outbound.ts	1
 extensions/whatsapp/src/connection-controller-runtime-context.ts	1
-extensions/whatsapp/src/connection-controller.ts	3
+extensions/whatsapp/src/connection-controller.ts	2
 extensions/whatsapp/src/connection-owner.ts	1
 extensions/whatsapp/src/group-config-path.ts	3
 extensions/whatsapp/src/inbound/durable-payload.ts	2
@@ -1176,13 +1169,11 @@ extensions/whatsapp/src/inbound/media.ts	2
 extensions/whatsapp/src/inbound/message-delivery.ts	1
 extensions/whatsapp/src/inbound/message-enrichment.ts	3
 extensions/whatsapp/src/inbound/outbound-mentions.ts	1
-extensions/whatsapp/src/inbound/send-api.ts	5
-extensions/whatsapp/src/inbound/socket-session.ts	1
 extensions/whatsapp/src/qa-driver.runtime.ts	1
 extensions/whatsapp/src/quoted-message.ts	1
 extensions/whatsapp/src/reconnect.ts	1
 extensions/whatsapp/src/security-fix.ts	2
-extensions/whatsapp/src/session-errors.ts	20
+extensions/whatsapp/src/session-errors.ts	15
 extensions/whatsapp/src/session.ts	4
 extensions/whatsapp/src/setup-finalize.ts	2
 extensions/whatsapp/src/targets-runtime.ts	2
@@ -1424,7 +1415,7 @@ src/agents/agent-tool-definition-adapter.ts	4
 src/agents/agent-tool-metadata.ts	2
 src/agents/agent-tools.abort.ts	1
 src/agents/agent-tools.before-tool-call.diagnostics.ts	1
-src/agents/agent-tools.before-tool-call.wrapper.ts	4
+src/agents/agent-tools.before-tool-call.wrapper.ts	3
 src/agents/agent-tools.execution-preparer.ts	2
 src/agents/agent-tools.params.ts	5
 src/agents/agent-tools.policy.ts	1
@@ -1463,7 +1454,6 @@ src/agents/btw-transcript.ts	5
 src/agents/btw.ts	8
 src/agents/bundle-mcp-config.ts	5
 src/agents/cache-trace.ts	3
-src/agents/channel-tools.ts	3
 src/agents/cli-auth-epoch.ts	1
 src/agents/cli-backends.ts	1
 src/agents/cli-credentials.ts	9
@@ -1482,7 +1472,6 @@ src/agents/cli-runner/execute-node-claude.ts	5
 src/agents/cli-runner/execute.ts	3
 src/agents/cli-runner/prepare.ts	5
 src/agents/cli-runner/session-history.ts	3
-src/agents/code-mode-namespaces.ts	5
 src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
 src/agents/code-mode.ts	2
@@ -1496,10 +1485,8 @@ src/agents/compaction-real-conversation.ts	9
 src/agents/compaction-usage.ts	3
 src/agents/compaction.ts	4
 src/agents/content-blocks.ts	1
-src/agents/context-cache-projection.ts	1
 src/agents/context-cache.ts	1
 src/agents/context-runtime-state.ts	4
-src/agents/context.ts	2
 src/agents/cron-creator-authority-context.ts	1
 src/agents/custom-api-registry.ts	2
 src/agents/delegation-capability.ts	1
@@ -1674,13 +1661,12 @@ src/agents/prepared-model-runtime.ts	1
 src/agents/provider-attribution.ts	6
 src/agents/provider-auth-aliases.ts	1
 src/agents/provider-http-errors.ts	1
-src/agents/provider-local-service.ts	3
+src/agents/provider-local-service.ts	1
 src/agents/provider-model-route.ts	1
-src/agents/provider-request-config.ts	6
-src/agents/provider-secret-egress.ts	3
+src/agents/provider-request-config.ts	5
+src/agents/provider-secret-egress.ts	1
 src/agents/provider-tool-policy.ts	1
 src/agents/provider-transport-fetch.ts	2
-src/agents/run-wait.ts	2
 src/agents/runtime-plan/build.ts	4
 src/agents/runtime-plan/tools.ts	3
 src/agents/runtime/proxy.ts	7
@@ -1699,7 +1685,7 @@ src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
 src/agents/session-tool-result-guard.ts	3
-src/agents/session-transcript-repair.ts	4
+src/agents/session-transcript-repair.ts	2
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-extensions.ts	1
 src/agents/sessions/agent-session-models.ts	2
@@ -1752,7 +1738,6 @@ src/agents/tool-call-id.ts	8
 src/agents/tool-catalog.ts	1
 src/agents/tool-display-common.ts	1
 src/agents/tool-images.ts	3
-src/agents/tool-mutation-names.ts	2
 src/agents/tool-policy-shared.ts	1
 src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
@@ -1818,7 +1803,7 @@ src/agents/tools/web-search-provider-common.ts	1
 src/agents/tools/web-search-provider-config.ts	1
 src/agents/tools/web-shared.ts	4
 src/agents/tools/web-tool-runtime-context.ts	1
-src/agents/transcript-policy.ts	2
+src/agents/transcript-policy.ts	1
 src/agents/transcript-redact-replay.ts	1
 src/agents/transcript-redact.ts	2
 src/agents/transport-message-transform.ts	2
@@ -2380,7 +2365,6 @@ src/gateway/board-view-ticket.ts	1
 src/gateway/boot.ts	1
 src/gateway/call.ts	5
 src/gateway/chat-attachments.ts	4
-src/gateway/chat-display-projection.canvas.ts	13
 src/gateway/chat-display-projection.core.ts	5
 src/gateway/chat-display-projection.helpers.ts	10
 src/gateway/chat-display-projection.history.ts	1
@@ -2432,7 +2416,6 @@ src/gateway/server-http-upgrades.ts	2
 src/gateway/server-in-process-dispatch.ts	3
 src/gateway/server-instance-runtime.ts	3
 src/gateway/server-maintenance.ts	4
-src/gateway/server-methods-list.ts	1
 src/gateway/server-methods.ts	3
 src/gateway/server-methods/agent-run-handler.ts	1
 src/gateway/server-methods/agent-session-patch.ts	1
@@ -2458,7 +2441,6 @@ src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	4
 src/gateway/server-methods/cron.ts	3
-src/gateway/server-methods/device-scope-upgrade.ts	2
 src/gateway/server-methods/devices.ts	4
 src/gateway/server-methods/doctor.ts	3
 src/gateway/server-methods/exec-approval.ts	2
@@ -2477,7 +2459,6 @@ src/gateway/server-methods/nodes.read.ts	2
 src/gateway/server-methods/open-path.ts	1
 src/gateway/server-methods/plugin-approval.ts	2
 src/gateway/server-methods/plugin-host-hooks.ts	1
-src/gateway/server-methods/question.ts	2
 src/gateway/server-methods/restart-request.ts	8
 src/gateway/server-methods/session-catalog-terminal-start.ts	1
 src/gateway/server-methods/session-create-initial-turn.ts	2
@@ -2492,7 +2473,6 @@ src/gateway/server-methods/skills.ts	3
 src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
 src/gateway/server-methods/task-suggestions.ts	5
-src/gateway/server-methods/terminal-upload.ts	1
 src/gateway/server-methods/web.ts	1
 src/gateway/server-methods/wizard.ts	1
 src/gateway/server-node-events.ts	2
@@ -2503,7 +2483,6 @@ src/gateway/server-plugins.ts	2
 src/gateway/server-reload-restart.ts	2
 src/gateway/server-reload-utils.ts	1
 src/gateway/server-restart-sentinel-agent-delivery.ts	2
-src/gateway/server-runtime-handles.ts	8
 src/gateway/server-runtime-state-prepare.ts	1
 src/gateway/server-startup-bootstrap.ts	1
 src/gateway/server-startup-config-helpers.ts	1

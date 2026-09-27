@@ -95,6 +95,8 @@ Closing a connecting tab cancels that opening or attachment request. Other tabs 
 
 Conversation-owned sessions opened from a Chat session's Terminal panel are not bound to a browser connection. `terminal.attach` adds each browser as a viewer without taking ownership, and closing an established viewer tab detaches only that browser. Conversation-owned PTYs remain until the exact-session agent closes them, their shell exits, the session is archived, policy disables them, or the Gateway shuts down. `terminal.list` marks each entry as connection- or agent-owned.
 
+Resetting an Incognito session closes its conversation-owned terminals and cancels pending terminal opens before deleting the session.
+
 All Gateway terminal PTYs are process-local. A Gateway restart ends them; the
 PTY sessions and their scrollback are not recovered after the new process starts.
 

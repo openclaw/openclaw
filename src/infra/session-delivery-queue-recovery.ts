@@ -121,6 +121,7 @@ function resolveSessionRetryEligibility(entry: QueuedSessionDelivery, now: numbe
 }
 
 type SessionDeliveryDrainContext = {
+  now?: () => number;
   logLabel: string;
   log: SessionDeliveryRecoveryLogger;
   queueContext: OpenClawStateWorkerContext;
@@ -159,7 +160,7 @@ async function processPendingSessionDelivery(opts: {
   }
 
   if (!opts.bypassBackoff) {
-    const retryEligibility = resolveSessionRetryEligibility(entry, Date.now());
+    const retryEligibility = resolveSessionRetryEligibility(entry, (context.now ?? Date.now)());
     if (!retryEligibility.eligible) {
       return {
         status: "backoff",

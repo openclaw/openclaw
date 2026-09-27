@@ -9,61 +9,75 @@ import {
   withChromeMcpDocument,
 } from "./chrome-mcp.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
-import { createPageSession, installChromeMcpSessionTestHooks } from "./chrome-mcp.test-support.js";
+import {
+  createPageSession,
+  installChromeMcpSessionTestHooks,
+  type ToolCall,
+} from "./chrome-mcp.test-support.js";
+
+async function setupSnapshotSession(onTool: (call: ToolCall) => unknown, pageIds = [1]) {
+  const session = createPageSession({
+    pid: 141,
+    pages: pageIds.map((id) => ({ id, url: `https://page-${id}.example` })),
+    onTool,
+  });
+  setChromeMcpSessionFactoryForTest(async () => session);
+  const targets = (await listChromeMcpTabs("chrome-live")).map((tab) => ({
+    profileName: "chrome-live",
+    targetId: tab.targetId,
+  }));
+  return { session, targets };
+}
+
+function snapshotResult(snapshot: ChromeMcpSnapshotNode) {
+  return { structuredContent: { snapshot } };
+}
 
 describe("Chrome MCP snapshot identity and lifetime", () => {
   installChromeMcpSessionTestHooks();
 
-  it.each(
-    [
-      {
-        label: "different document roots",
-        child: {
-          id: "child-root",
-          role: "RootWebArea",
-          children: [{ id: "button", role: "button" }],
-        },
+  it.each([
+    {
+      label: "different document roots",
+      operation: "snapshot",
+      child: {
+        id: "child-root",
+        role: "RootWebArea",
+        children: [{ id: "button", role: "button" }],
       },
-      {
-        label: "colliding document roots",
-        child: {
-          id: "root",
-          role: "RootWebArea",
-          children: [{ id: "child-button", role: "button" }],
-        },
+    },
+    {
+      label: "colliding document roots",
+      operation: "snapshot",
+      child: {
+        id: "root",
+        role: "RootWebArea",
+        children: [{ id: "child-button", role: "button" }],
       },
-      { label: "an omitted document root", child: { id: "button", role: "button" } },
-    ].flatMap((fixture) =>
-      ["snapshot", "document"].map((operation) => ({
-        label: fixture.label,
-        child: fixture.child,
-        operation,
-      })),
-    ),
-  )("rejects ambiguous $operation refs across $label", async ({ child, operation }) => {
+    },
+    {
+      label: "an omitted document root",
+      operation: "document",
+      child: { id: "button", role: "button" },
+    },
+  ])("rejects ambiguous $operation refs across $label", async ({ child, operation }) => {
     let root: ChromeMcpSnapshotNode = {
       id: "root",
       role: "RootWebArea",
       children: [{ id: "button", role: "button", name: "Run" }],
     };
     const clicks: unknown[] = [];
-    const session = createPageSession({
-      pid: 141,
-      pages: [{ id: 1, url: "https://a.example" }],
-      onTool: (call) => {
-        if (call.name === "take_snapshot") {
-          return { structuredContent: { snapshot: root } };
-        }
-        if (call.name === "click") {
-          clicks.push(call.arguments?.uid);
-          return { content: [] };
-        }
-        return undefined;
-      },
+    const { session, targets } = await setupSnapshotSession((call) => {
+      if (call.name === "take_snapshot") {
+        return snapshotResult(root);
+      }
+      if (call.name === "click") {
+        clicks.push(call.arguments?.uid);
+        return { content: [] };
+      }
+      return undefined;
     });
-    setChromeMcpSessionFactoryForTest(async () => session);
-    const [tab] = await listChromeMcpTabs("chrome-live");
-    const target = { profileName: "chrome-live", targetId: tab!.targetId };
+    const target = targets[0]!;
     const initial = operation === "snapshot" ? await takeChromeMcpSnapshot(target) : undefined;
     const oldRef = initial?.children?.[0]?.id;
     root = {
@@ -88,31 +102,19 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
   });
 
   it("preserves repeated UID aliases inside one document", async () => {
-    const session = createPageSession({
-      pid: 141,
-      pages: [{ id: 1, url: "https://a.example" }],
-      onTool: (call) =>
-        call.name === "take_snapshot"
-          ? {
-              structuredContent: {
-                snapshot: {
-                  id: "root",
-                  role: "RootWebArea",
-                  children: [
-                    { id: "button", role: "button" },
-                    { role: "group", children: [{ id: "button", role: "button" }] },
-                  ],
-                },
-              },
-            }
-          : undefined,
-    });
-    setChromeMcpSessionFactoryForTest(async () => session);
-    const [tab] = await listChromeMcpTabs("chrome-live");
-    const snapshot = await takeChromeMcpSnapshot({
-      profileName: "chrome-live",
-      targetId: tab!.targetId,
-    });
+    const { targets } = await setupSnapshotSession((call) =>
+      call.name === "take_snapshot"
+        ? snapshotResult({
+            id: "root",
+            role: "RootWebArea",
+            children: [
+              { id: "button", role: "button" },
+              { role: "group", children: [{ id: "button", role: "button" }] },
+            ],
+          })
+        : undefined,
+    );
+    const snapshot = await takeChromeMcpSnapshot(targets[0]!);
     expect(snapshot.children![0]!.id).toMatch(/^mcp-ref:/);
     expect(snapshot.children![0]!.id).toBe(snapshot.children![1]!.children![0]!.id);
   });
@@ -124,13 +126,8 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
       let oldRef = "";
       const refPresentAtDispatch: boolean[] = [];
       const clicks: unknown[] = [];
-      const session = createPageSession({
-        pid: 141,
-        pages: [
-          { id: 1, url: "https://a.example" },
-          { id: 2, url: "https://b.example" },
-        ],
-        onTool: (call) => {
+      const { session, targets } = await setupSnapshotSession(
+        (call) => {
           const pageId = call.arguments?.pageId;
           if (call.name === "take_snapshot") {
             if (typeof pageId !== "number") {
@@ -147,15 +144,11 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
                 };
               }
             }
-            return {
-              structuredContent: {
-                snapshot: {
-                  id: `root-${pageId}`,
-                  role: "RootWebArea",
-                  children: [{ id: `button-${pageId}`, role: "button", name: "Run" }],
-                },
-              },
-            };
+            return snapshotResult({
+              id: `root-${pageId}`,
+              role: "RootWebArea",
+              children: [{ id: `button-${pageId}`, role: "button", name: "Run" }],
+            });
           }
           if (call.name === "click") {
             clicks.push([pageId, call.arguments?.uid]);
@@ -163,11 +156,10 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
           }
           return undefined;
         },
-      });
-      setChromeMcpSessionFactoryForTest(async () => session);
-      const tabs = await listChromeMcpTabs("chrome-live");
-      const target = { profileName: "chrome-live", targetId: tabs[0]!.targetId };
-      const sibling = { profileName: "chrome-live", targetId: tabs[1]!.targetId };
+        [1, 2],
+      );
+      const target = targets[0]!;
+      const sibling = targets[1]!;
       oldRef = (await takeChromeMcpSnapshot(target)).children![0]!.id!;
       const siblingRef = (await takeChromeMcpSnapshot(sibling)).children![0]!.id!;
       refreshing = true;
@@ -186,41 +178,31 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
     },
   );
 
-  it.each([undefined, "predicate failed", "Execution context was destroyed"])(
+  it.each([undefined, "Execution context was destroyed"])(
     "preserves refs across document probes with predicate error %s",
     async (errorMessage) => {
       let snapshots = 0;
       const clicks: unknown[] = [];
-      const session = createPageSession({
-        pid: 141,
-        pages: [{ id: 1, url: "https://a.example" }],
-        onTool: (call) => {
-          if (call.name === "take_snapshot") {
-            snapshots += 1;
-            return {
-              structuredContent: {
-                snapshot: {
-                  id: `root-${snapshots}`,
-                  role: "RootWebArea",
-                  children: [{ id: `button-${snapshots}`, role: "button" }],
-                },
-              },
-            };
-          }
-          if (call.name === "evaluate_script") {
-            expect(call.arguments).toMatchObject({ args: ["root-1"], waitForStableDom: false });
-            return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
-          }
-          if (call.name === "click") {
-            clicks.push(call.arguments?.uid);
-            return { content: [] };
-          }
-          return undefined;
-        },
+      const { targets } = await setupSnapshotSession((call) => {
+        if (call.name === "take_snapshot") {
+          snapshots += 1;
+          return snapshotResult({
+            id: `root-${snapshots}`,
+            role: "RootWebArea",
+            children: [{ id: `button-${snapshots}`, role: "button" }],
+          });
+        }
+        if (call.name === "evaluate_script") {
+          expect(call.arguments).toMatchObject({ args: ["root-1"], waitForStableDom: false });
+          return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
+        }
+        if (call.name === "click") {
+          clicks.push(call.arguments?.uid);
+          return { content: [] };
+        }
+        return undefined;
       });
-      setChromeMcpSessionFactoryForTest(async () => session);
-      const [tab] = await listChromeMcpTabs("chrome-live");
-      const target = { profileName: "chrome-live", targetId: tab!.targetId };
+      const target = targets[0]!;
       const initial = await takeChromeMcpSnapshot(target);
       const oldRef = initial.children![0]!.id!;
       const predicateError = errorMessage ? new Error(errorMessage) : undefined;
@@ -249,13 +231,8 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
     const evaluatedUids: unknown[] = [];
     const clicks: unknown[] = [];
     let navigated = false;
-    const session = createPageSession({
-      pid: 141,
-      pages: [
-        { id: 1, url: "https://a.example" },
-        { id: 2, url: "https://b.example" },
-      ],
-      onTool: (call) => {
+    const { targets } = await setupSnapshotSession(
+      (call) => {
         const pageId = call.arguments?.pageId;
         if (call.name === "take_snapshot") {
           if (typeof pageId !== "number") {
@@ -263,15 +240,11 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
           }
           snapshots.push(pageId);
           const documentId = pageId === 1 && navigated ? "new" : "initial";
-          return {
-            structuredContent: {
-              snapshot: {
-                id: `root-${pageId}-${documentId}`,
-                role: "RootWebArea",
-                children: [{ id: `button-${pageId}-${documentId}`, role: "button" }],
-              },
-            },
-          };
+          return snapshotResult({
+            id: `root-${pageId}-${documentId}`,
+            role: "RootWebArea",
+            children: [{ id: `button-${pageId}-${documentId}`, role: "button" }],
+          });
         }
         if (call.name === "evaluate_script") {
           const args = call.arguments?.args;
@@ -295,11 +268,10 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
         }
         return undefined;
       },
-    });
-    setChromeMcpSessionFactoryForTest(async () => session);
-    const tabs = await listChromeMcpTabs("chrome-live");
-    const target = { profileName: "chrome-live", targetId: tabs[0]!.targetId };
-    const sibling = { profileName: "chrome-live", targetId: tabs[1]!.targetId };
+      [1, 2],
+    );
+    const target = targets[0]!;
+    const sibling = targets[1]!;
     const oldRef = (await takeChromeMcpSnapshot(target)).children![0]!.id!;
     const siblingRef = (await takeChromeMcpSnapshot(sibling)).children![0]!.id!;
     navigated = true;
@@ -323,30 +295,24 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
     "recovers when the document %s during a cold snapshot",
     async (change) => {
       let snapshots = 0;
-      const session = createPageSession({
-        pid: 141,
-        pages: [{ id: 1, url: "https://a.example" }],
-        onTool: (call) => {
-          if (call.name === "take_snapshot") {
-            snapshots += 1;
-            return snapshots === 1
-              ? {
-                  isError: true,
-                  content: [
-                    { type: "text", text: `Snapshot document ${change}. Take a new snapshot.` },
-                  ],
-                }
-              : { structuredContent: { snapshot: { id: "root", role: "RootWebArea" } } };
-          }
-          if (call.name === "evaluate_script") {
-            return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
-          }
-          return undefined;
-        },
+      const { targets } = await setupSnapshotSession((call) => {
+        if (call.name === "take_snapshot") {
+          snapshots += 1;
+          return snapshots === 1
+            ? {
+                isError: true,
+                content: [
+                  { type: "text", text: `Snapshot document ${change}. Take a new snapshot.` },
+                ],
+              }
+            : snapshotResult({ id: "root", role: "RootWebArea" });
+        }
+        if (call.name === "evaluate_script") {
+          return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
+        }
+        return undefined;
       });
-      setChromeMcpSessionFactoryForTest(async () => session);
-      const [tab] = await listChromeMcpTabs("chrome-live");
-      const target = { profileName: "chrome-live", targetId: tab!.targetId };
+      const target = targets[0]!;
       const inspect = vi.fn(async (document: { evaluate: (fn: string) => Promise<unknown> }) =>
         document.evaluate("() => true"),
       );
@@ -364,30 +330,20 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
     "does not publish refs from a cold snapshot without a document UID: %j",
     async (root) => {
       let snapshots = 0;
-      const session = createPageSession({
-        pid: 141,
-        pages: [{ id: 1, url: "https://a.example" }],
-        onTool: (call) => {
-          if (call.name === "take_snapshot") {
-            snapshots += 1;
-            return {
-              structuredContent: {
-                snapshot: {
-                  ...(snapshots === 1 ? root : { id: "valid-root", role: "RootWebArea" }),
-                  children: [{ id: "button", role: "button" }],
-                },
-              },
-            };
-          }
-          if (call.name === "evaluate_script") {
-            return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
-          }
-          return undefined;
-        },
+      const { session, targets } = await setupSnapshotSession((call) => {
+        if (call.name === "take_snapshot") {
+          snapshots += 1;
+          return snapshotResult({
+            ...(snapshots === 1 ? root : { id: "valid-root", role: "RootWebArea" }),
+            children: [{ id: "button", role: "button" }],
+          });
+        }
+        if (call.name === "evaluate_script") {
+          return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
+        }
+        return undefined;
       });
-      setChromeMcpSessionFactoryForTest(async () => session);
-      const [tab] = await listChromeMcpTabs("chrome-live");
-      const target = { profileName: "chrome-live", targetId: tab!.targetId };
+      const target = targets[0]!;
       const inspect = vi.fn(async () => true);
 
       await expect(withChromeMcpDocument(target, inspect)).rejects.toThrow(

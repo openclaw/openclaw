@@ -258,7 +258,11 @@ export async function resolveBranchLanding(
   // PRs may share a head; their distinct landing receipts still need individual checks below.
   const landedShas = new Set(landedHeads.map((head) => head.sha));
   const mergeBase =
-    defaultSha && headSha ? await gitOutput(root, ["merge-base", defaultSha, headSha]) : null;
+    defaultSha && headSha
+      ? defaultSha === headSha
+        ? headSha
+        : await gitOutput(root, ["merge-base", defaultSha, headSha])
+      : null;
   // The stats base is the newest commit whose content is known-published:
   // the ordinary default-branch merge base, or a merged PR head related to
   // HEAD by ancestry (a HEAD trailing the merged tip is fully landed, so

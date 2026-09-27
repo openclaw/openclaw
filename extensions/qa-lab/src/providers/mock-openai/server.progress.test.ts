@@ -25,7 +25,7 @@ const APPROVAL_RESTRICTED_OUTPUT = APPROVAL_OUTPUT.replace(
   "allow-once|deny\nAllow Always is unavailable for this command.\n",
 );
 const APPROVAL_UNAVAILABLE_OUTPUT =
-  "Exec approval is required, but no interactive approval client is currently available.\n\nApprove it from the Web UI or terminal UI. Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox. Then retry the command. You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.";
+  "Exec approval is required, but no interactive approval client is currently available.\n\nApprove it from the Web UI. Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox. Then retry the command. You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.";
 const UNKNOWN_OUTPUT =
   "Node command outcome is unknown for node-1.\nThe command may have executed. Do not rerun it automatically.\n\nCommand:\ntrue\n\nDetails: node disconnected";
 

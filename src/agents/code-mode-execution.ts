@@ -30,7 +30,6 @@ import {
   cancelPendingBridgeStates,
   cancelPendingBridgeStatesById,
   codeModeAbortedResult,
-  createCodeModeBridgeDispatchState,
   createCodeModeRunOwner,
   createPendingBridgeStates,
   pendingBridgeRequestsReplaySafe,
@@ -73,7 +72,7 @@ export async function runCodeModeExec(params: {
     validateInput: true,
   });
   params.onRuntime?.(runtime);
-  const bridgeDispatch = createCodeModeBridgeDispatchState();
+  const bridgeDispatch = { started: false };
   const budget: CodeModeCallBudget = { deadlineMs: performance.now() + config.timeoutMs };
   const namespaceCatalog = runtime.namespaceEntries();
   const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, namespaceCatalog);

@@ -5,6 +5,7 @@ import {
   assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
 } from "../config/sessions/session-store-read-candidates.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -193,6 +194,7 @@ export async function withSessionRowDatabaseFacts(
           assertCurrent();
         }
       },
+      projectionLane,
     );
   } finally {
     for (const continuation of continuations.toReversed()) {

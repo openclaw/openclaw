@@ -48,7 +48,6 @@ import {
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
   type SessionEntry,
-  deleteSessionEntryLifecycle,
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
@@ -122,6 +121,7 @@ import {
   closeAcpRuntimeForSession,
   closeChildAcpRuntimesForParent,
 } from "./session-reset-acp.js";
+import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
 import {
@@ -1155,38 +1155,26 @@ export async function performGatewaySessionReset(params: {
         if (!entry) {
           return invalidSessionRequest(`unknown session: ${params.key}`);
         }
-        await emitGatewayBeforeResetPluginHook({
-          cfg,
+        const deleted = await deleteIncognitoSessionForReset({
           key: params.key,
-          messages: beforeResetMessages,
+          agentId,
+          storePath,
           target,
-          storePath,
           entry,
-          reason: params.reason,
-        });
-        const deleted = await deleteSessionEntryLifecycle({
           commitGuard,
-          agentId: target.agentId,
-          archiveTranscript: false,
-          deleteDeliveryArtifacts: true,
-          deleteTranscriptWithoutArchive: true,
-          expectedEntry: entry,
-          expectedSessionId: entry.sessionId,
-          expectedUpdatedAt: entry.updatedAt,
-          storePath,
-          target: {
-            canonicalKey: target.canonicalKey,
-            storeKeys: target.storeKeys,
-          },
+          beforeDelete: () =>
+            emitGatewayBeforeResetPluginHook({
+              cfg,
+              key: params.key,
+              messages: beforeResetMessages,
+              target,
+              storePath,
+              entry,
+              reason: params.reason,
+            }),
         });
-        if (!deleted.deleted) {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.UNAVAILABLE,
-              `Session ${params.key} changed before reset. Retry.`,
-            ),
-          };
+        if (!deleted.ok) {
+          return deleted;
         }
         handleSessionStateSessionDeleted(target.canonicalKey, agentId);
         notifyGatewaySessionReset(target.canonicalKey, target.agentId);
@@ -1210,7 +1198,7 @@ export async function performGatewaySessionReset(params: {
           agentId: target.agentId,
           storePath,
           incognitoDeleted: true,
-          deletedSessionId: deleted.deletedSessionId,
+          deletedSessionId: deleted.value.deletedSessionId,
         };
       }
 

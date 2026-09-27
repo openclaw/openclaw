@@ -42,6 +42,18 @@ fs-safe still maps the retired `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHO
 
 Use `require` when all native-capable operations must fail if the platform binding is unavailable. `auto` allows documented JavaScript fallbacks; no-clobber Root moves and Windows secure credential reads always require their native primitives.
 
+The Linux GNU addons in fs-safe 0.20.0 target glibc 2.28 and load on Ubuntu
+20.04's glibc 2.31. Older addons can fail with a missing `GLIBC_2.33` or
+`GLIBC_2.34` requirement. When a loader error reaches update diagnostics,
+support reports retain the missing numeric GLIBC version while redacting paths.
+
+Candidate update snapshots copy plugin files through fs-safe's portable
+create-only publication path. They do not require a no-clobber move: copying
+preserves the serving files, rejects an existing destination, and checks the
+source against the admitted inventory. SQLite snapshots keep their separate
+integrity, content, and publication checks. An unavailable addon alone does not
+justify skipping those checks or abandoning a snapshot that can be made safely.
+
 ## What stays protected without native acceleration
 
 With the helper off, OpenClaw still gets fs-safe's Node-only guardrails:

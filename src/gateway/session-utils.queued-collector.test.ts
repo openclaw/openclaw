@@ -15,6 +15,7 @@ import {
   releaseSubagentRun,
   releaseSubagentRunKillClaim,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import * as nativeSpawn from "../agents/subagents/spawn/subagent-spawn.js";
 import {
   activateSwarmRun,
   holdQueuedSwarmRun,
@@ -23,7 +24,12 @@ import {
   reserveSwarmRun,
 } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
-import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
@@ -267,11 +273,102 @@ describe("queued collector session projection", () => {
 
   it("keeps native spawn's normalized duplicate-label contract", async () => {
     const label = `  ${"Shared collector title ".repeat(4)}  `;
-    await spawnCollectors([label, label]);
-    expect((await listChildren(requestContext())).sessions.map((row) => row.label)).toEqual([
-      label.trim(),
-      label.trim(),
-    ]);
+    const releaseFirstRequester = createDeferred();
+    const readRequester = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
+    const requester = vi
+      .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
+      .mockImplementationOnce(async (params) => {
+        await releaseFirstRequester.promise;
+        return await readRequester(params);
+      });
+    const spawn = () =>
+      nativeSpawn.spawnSubagentDirect(
+        {
+          task: "Wait for cancellation",
+          label,
+          collect: true,
+          context: "isolated",
+          lightContext: true,
+        },
+        {
+          agentSessionKey: parentKey,
+          requesterRunId: "parent-turn",
+          requesterTurnRunId: "parent-turn",
+        },
+      );
+    const first = spawn();
+    try {
+      // Finish the second preparation while the first still owns FIFO admission.
+      const second = await spawn();
+      releaseFirstRequester.resolve();
+      const results = [await first, second];
+      expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
+      await Promise.race(
+        results.map((result) => waitForLaunch(expectDefined(result.runId, "collector run"))),
+      );
+      expect(launchedRunIds).toEqual([results[0]!.runId]);
+      expect((await listChildren(requestContext())).sessions.map((row) => row.label)).toEqual([
+        label.trim(),
+        label.trim(),
+      ]);
+    } finally {
+      releaseFirstRequester.resolve();
+      await first;
+      requester.mockRestore();
+    }
+  });
+
+  it("withdraws FIFO admission when requester acquisition fails", async () => {
+    const releaseFirstRequester = createDeferred();
+    const requester = vi
+      .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
+      .mockImplementationOnce(async () => {
+        await releaseFirstRequester.promise;
+        throw new Error("requester read failed");
+      });
+    const started = createDeferred<string>();
+    const unsubscribe = onAgentEvent((event) => {
+      if (event.stream === "lifecycle" && event.data.phase === "start") {
+        started.resolve(event.runId);
+      }
+    });
+    const effectsStarted = vi.fn();
+    const spawn = (label: string) =>
+      nativeSpawn.spawnSubagentDirect(
+        {
+          task: "Wait for cancellation",
+          label,
+          collect: true,
+          context: "isolated",
+          lightContext: true,
+        },
+        {
+          agentSessionKey: parentKey,
+          requesterRunId: "parent-turn",
+          requesterTurnRunId: "parent-turn",
+          onSpawnEffectsStart: effectsStarted,
+        },
+      );
+    const first = spawn("Failed requester");
+    try {
+      const second = await spawn("Surviving collector");
+      expect(second.status).toBe("accepted");
+      expect(launchedRunIds).toEqual([]);
+      expect(effectsStarted).toHaveBeenCalledTimes(1);
+      releaseFirstRequester.resolve();
+      expect(await first).toEqual({
+        status: "error",
+        error: "sessions_spawn could not read the requester session: requester read failed",
+      });
+      expect(effectsStarted).toHaveBeenCalledTimes(2);
+      expect(await started.promise).toBe(second.runId);
+      expect(launchedRunIds).toEqual([second.runId]);
+    } finally {
+      releaseFirstRequester.resolve();
+      await first;
+      unsubscribe();
+      requester.mockRestore();
+    }
   });
 
   it("keeps preactivation and held cancellation reservations pending until withdrawal", async () => {
@@ -639,8 +736,30 @@ describe("queued collector session projection", () => {
 
   it("keeps the controlling parent authoritative when native completion routing differs", async () => {
     const completionOwner = "agent:main:dashboard:completion-recipient";
+    replaceSessionEntrySync(
+      { sessionKey: completionOwner, agentId: "main" },
+      { sessionId: "original-completion-owner", updatedAt: Date.now() },
+    );
     const context = requestContext();
-    const [, second] = await spawnCollectors(undefined, completionOwner);
+    const spawn = nativeSpawn.spawnSubagentDirect;
+    const spawning = vi
+      .spyOn(nativeSpawn, "spawnSubagentDirect")
+      .mockImplementation((params, ctx) =>
+        spawn(params, {
+          ...ctx,
+          onSpawnEffectsStart: () =>
+            replaceSessionEntrySync(
+              { sessionKey: completionOwner, agentId: "main" },
+              { sessionId: "replacement-completion-owner", updatedAt: Date.now() },
+            ),
+        }),
+      );
+    const [first, second] = await spawnCollectors(undefined, completionOwner).finally(() =>
+      spawning.mockRestore(),
+    );
+    expect(subagentRuns.get(first!.runId!)?.completionRequesterSessionId).toBe(
+      "original-completion-owner",
+    );
     const entry = expectDefined(subagentRuns.get(second!.runId!), "proxied queued collector");
     expect(entry).toMatchObject({
       controllerSessionKey: parentKey,

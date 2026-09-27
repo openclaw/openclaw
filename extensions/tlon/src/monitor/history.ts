@@ -138,6 +138,28 @@ export function createChannelHistoryCache() {
   };
 }
 
+export async function fetchThreadRootAuthor(
+  api: { scry: (path: string) => Promise<unknown> },
+  channelNest: string,
+  parentId: string,
+  runtime?: RuntimeEnv,
+): Promise<string | null> {
+  // Keep remote identifiers within the authenticated channel-post namespace.
+  if (!/^chat\/~?[a-z-]+\/[a-z0-9-]+$/i.test(channelNest) || !/^\d+(?:\.\d{3})*$/.test(parentId)) {
+    return null;
+  }
+  try {
+    const data = asRecord(
+      await api.scry(`/channels/v4/${channelNest}/posts/post/id/${formatUd(parentId)}.json`),
+    );
+    const essay = asRecord(data?.essay);
+    return typeof essay?.author === "string" ? essay.author : null;
+  } catch (error: unknown) {
+    runtime?.log?.(`[tlon] Could not identify thread root author: ${formatErrorMessage(error)}`);
+    return null;
+  }
+}
+
 /**
  * Fetch thread/reply history for a specific parent post.
  * Used to get context when entering a thread conversation.

@@ -3,7 +3,6 @@ import {
   createChannelPartialDeliveryError,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
-// Msteams plugin module implements reply dispatcher behavior.
 import {
   normalizeAgentPlanSteps,
   resolveChannelPreviewStreamMode,
@@ -69,22 +68,10 @@ export function createMSTeamsReplyDispatcher(params: {
   );
   const isTypingSupported = conversationType === "personal" || conversationType === "groupchat";
 
-  /**
-   * Keepalive cadence for the typing indicator while the bot is running
-   * (including long tool chains). Bot Framework 1:1 TurnContext proxies
-   * expire after ~30s of inactivity; sending a typing activity every 8s
-   * keeps the proxy alive so the post-tool reply can still land via the
-   * turn context. Sits in the middle of the 5-10s range recommended in
-   * #59731.
-   */
+  // Bot Framework turn proxies expire after ~30s idle; keep them alive through tool calls.
   const TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
 
-  /**
-   * TTL ceiling for the typing keepalive loop. The default in
-   * createTypingCallbacks is 60s, which is too short for the Teams long tool
-   * chains described in #59731 (60s+ total runs are common). Give tool
-   * chains up to 10 minutes before auto-stopping the keepalive.
-   */
+  // Teams tool chains can exceed the shared typing callback's 60s default (#59731).
   const TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 
   const sendTypingIndicator = async () => {
@@ -162,9 +149,6 @@ export function createMSTeamsReplyDispatcher(params: {
     progressSeed: `${params.accountId ?? "default"}:${params.conversationRef.conversation?.id ?? ""}`,
   });
 
-  // Resolve block-streaming preference from the canonical nested config
-  // (`streaming.mode = "block"` or `streaming.block.enabled = true`); legacy
-  // flat `blockStreaming` is migrated by `openclaw doctor --fix`.
   const teamsStreamMode = resolveChannelPreviewStreamMode(msteamsCfg, "partial");
   const blockStreamingResolved =
     teamsStreamMode === "block" ? true : resolveChannelStreamingBlockEnabled(msteamsCfg);
@@ -394,13 +378,7 @@ export function createMSTeamsReplyDispatcher(params: {
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
     onReplyStart: async () => {
-      // Always start the typing keepalive loop when typing is enabled and
-      // supported by this conversation type. The sendTypingIndicator gate
-      // skips actual sends while the stream card is visually active, so
-      // during the first text segment the user only sees the streaming UI.
-      // Once the stream finalizes (between segments / during tool chains),
-      // the loop starts sending typing activities and keeps the Bot Framework
-      // TurnContext alive so the post-tool reply can still land. See #59731.
+      // The indicator gate suppresses sends during streams and resumes them between segments.
       if (typingIndicatorEnabled) {
         await typingCallbacks?.onReplyStart?.();
       }
@@ -525,19 +503,9 @@ export function createMSTeamsReplyDispatcher(params: {
         pendingSettlement = undefined;
       }));
 
-  // Pipe agent tool/plan/approval/command events into the stream controller's
-  // progress-draft surface. In "progress" stream mode this lets the live
-  // streaming card show "Searching the schema..." → "Generating SQL..." as
-  // tools fire (instead of the rotating "Thinking..." label sitting unchanged
-  // for the duration of a long tool chain). In other modes these calls are
-  // no-ops on the controller side.
   const shouldSuppressDefaultToolProgressMessages =
     streamController.hasStream() && teamsStreamMode === "progress";
 
-  // Forward the rich pipeline event payload through to the channel-streaming
-  // formatters. The formatters accept the canonical union shape; the pipeline
-  // payload is structurally compatible but tsgo can't see through the
-  // optional-property unions for this signature, so we cast at the boundary.
   type PipelinePayload = Record<string, unknown>;
 
   const progressCallbacks = streamController.hasStream()
@@ -597,16 +565,10 @@ export function createMSTeamsReplyDispatcher(params: {
           }
         : {}),
       ...progressCallbacks,
-      // When progress mode is active, suppress openclaw's default block-style
-      // tool-progress messages so they don't duplicate alongside the
-      // streaming card's progress lines.
+      // Progress is already visible in the native card.
       ...(shouldSuppressDefaultToolProgressMessages
         ? { suppressDefaultToolProgressMessages: true }
         : {}),
-      // Pass-through to the reply pipeline. `false` = "use block streaming"
-      // (the default when streaming.mode=block or streaming.block.enabled=true).
-      // `true` = "do not use it".
-      // `undefined` = "no preference" — let the pipeline decide.
       disableBlockStreaming: blockStreamingResolved == null ? undefined : !blockStreamingResolved,
       onModelSelected,
     },

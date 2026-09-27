@@ -864,21 +864,25 @@ it.each(
     );
     if (cold) {
       await probe.expectPending(work);
-      let laterRan = false;
+      expect(loadSessionEntryReadOnly(f.input)?.label).toBe("kept");
       const later = own(
-        runExclusiveSqliteSessionWrite(
-          f.scope,
-          async () => {
-            laterRan = true;
-            expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
-          },
-          "session.transcript.batch",
-        ),
+        applySessionEntryReplacements({
+          storePath: f.databasePath,
+          sessionKeys: [f.input.sessionKey],
+          skipMaintenance: true,
+          update: (entries) => ({
+            result: undefined,
+            replacements: entries.map(({ entry, sessionKey }) => ({
+              sessionKey,
+              entry: { ...entry, label: "foreground" },
+            })),
+          }),
+        }),
       );
       // Validation has no writer permit; the finalizer acquires it for its native commit.
       await later;
       expect(preparationWriterRan).toBe(true);
-      expect(laterRan).toBe(true);
+      expect(loadSessionEntryReadOnly(f.input)?.label).toBe("foreground");
       expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
       probe.release.resolve();
       await work;
@@ -886,7 +890,7 @@ it.each(
       await work;
     }
     expect(preparationWriterRan).toBe(true);
-    expect(loadSessionEntryReadOnly(f.input)?.label).toBe("kept");
+    expect(loadSessionEntryReadOnly(f.input)?.label).toBe(cold ? "foreground" : "kept");
     expectMaintenanceArchived(f);
     await probe.expectHealthy(cold ? 1 : 0);
   },
