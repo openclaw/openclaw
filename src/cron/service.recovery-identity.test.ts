@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -10,18 +9,17 @@ import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { waitForActiveCronTaskRuns } from "./service/active-run-cancellation.js";
+import { findCronRunRecoveryInDatabase } from "./service/run-history-recovery.js";
 import {
   observeCronRecoveryForTest,
   recoverCronRunForTest,
 } from "./service/run-recovery.test-support.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
-import { findCronTaskRunRecoveryInDatabase } from "./service/task-runs.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-recovery-identity-" });
-let uuidCounter = 0xffffffffffff;
 
 function pendingPayload() {
   return {
@@ -32,7 +30,7 @@ function pendingPayload() {
 
 function rejectSchedulerWrite(jobId: string) {
   const db = openOpenClawStateDatabase().db;
-  // The terminal task commits independently of the scheduler's outcome write.
+  // Run history commits independently of the scheduler's outcome write.
   db.exec(`
     CREATE TEMP TRIGGER reject_identity_scheduler_write
     BEFORE UPDATE ON cron_jobs
@@ -51,11 +49,6 @@ describe("cron recovery run identity", () => {
     { name: "advancing clock", edit: "predecessor", advanceMs: 1, staleProposal: false },
     { name: "stale predecessor proposal", edit: "none", advanceMs: 0, staleProposal: true },
   ] as const)("recovers the pending run with $name", async ({ edit, advanceMs, staleProposal }) => {
-    // Keep real admission/task producers, but force their UUID tie-break order.
-    const uuids = vi.spyOn(crypto, "randomUUID").mockImplementation(() => {
-      const suffix = (uuidCounter--).toString(16).padStart(12, "0");
-      return `00000000-0000-4000-8000-${suffix}`;
-    });
     const { storePath } = await makeStorePath();
     const storeKey = cronStoreKey(storePath);
     const firstStartedAt = Date.now();
@@ -152,6 +145,19 @@ describe("cron recovery run identity", () => {
       run = undefined;
       await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: true, active: 0 });
       expect((await readJob()).state.runningAtMs).toBe(pendingStartedAt);
+      runOpenClawStateWriteTransaction(({ db }) => {
+        // Worker-generated history IDs cannot be controlled by a host UUID spy.
+        // Make the predecessor win timestamp ties so only exact receipt recovery is correct.
+        const rank = db.prepare(
+          "UPDATE task_runs SET task_id = ? WHERE runtime = 'cron' AND source_id = ? AND terminal_summary = ?",
+        );
+        expect(rank.run(`z-predecessor-history:${job.id}`, job.id, "first completed").changes).toBe(
+          1,
+        );
+        expect(rank.run(`a-pending-history:${job.id}`, job.id, "pending completed").changes).toBe(
+          1,
+        );
+      });
       const history = readHistory();
       expect(history).toHaveLength(2);
       expect(history.every((entry) => entry.status === "ok")).toBe(true);
@@ -163,7 +169,7 @@ describe("cron recovery run identity", () => {
         await cron.update(job.id, { state: { triggerState: { owner: "replacement" } } });
       }
       const fallback = runOpenClawStateWriteTransaction(({ db }) =>
-        findCronTaskRunRecoveryInDatabase({
+        findCronRunRecoveryInDatabase({
           database: db,
           storeKey,
           jobId: job.id,
@@ -202,7 +208,6 @@ describe("cron recovery run identity", () => {
       await run?.catch(() => undefined);
       cron.stop();
       restarted?.stop();
-      uuids.mockRestore();
     }
   });
 });

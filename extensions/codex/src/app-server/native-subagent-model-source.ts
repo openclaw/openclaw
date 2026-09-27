@@ -1,4 +1,3 @@
-import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   matchingNativeModelAdmissions,
   matchingNativeModelCause as matchingCause,
@@ -382,15 +381,13 @@ type ModelSourceDependencies = {
   isCurrent: (state: ParentState) => boolean;
   assertInputCurrent: (threadId: string, owner: ParentOwner) => void;
   hasPendingInput: (request: NativeModelSourceRequest) => boolean;
-  pendingChildPreparation: (threadId: string) => Promise<boolean> | undefined;
   onExecutionAdmitted: (known: KnownChild, threadId: string) => void;
   registerChildExecution: (
     state: ParentState,
     request: NativeModelSourceRequest,
-    assertCurrent: () => void,
     agentPath?: string,
     completionCustody?: ParentOwner["completionCustody"],
-  ) => Promise<void>;
+  ) => void;
 };
 
 function captureExecutionOwner(
@@ -442,7 +439,7 @@ function executionOwner(
   request: NativeModelSourceRequest,
   state: ParentState,
   dependencies: ModelSourceDependencies,
-): ParentOwner | undefined | Promise<ParentOwner | undefined> {
+): ParentOwner | undefined {
   if (state.parentThreadId === request.threadId) {
     return [...state.owners.values()].find(
       (owner) => owner.turnId === request.turnId && !owner.modelExecutionSettled,
@@ -462,33 +459,15 @@ function executionOwner(
     admittedOwner?.unqualifiedModelExecution &&
     request.parentThreadId
   ) {
-    const sources = admitted.flatMap((entry) => (entry.modelSource ? [entry.modelSource] : []));
-    const assertCurrent = () => {
-      request.signal?.throwIfAborted();
-      for (const source of sources) {
-        source.assertCurrent();
-      }
-    };
-    assertCurrent();
-    return racePromiseWithAbortSignal(
-      dependencies.registerChildExecution(
-        state,
-        request,
-        assertCurrent,
-        admitted[0]?.agentPath,
-        admitted[0]?.completionCustody,
-      ),
-      request.signal,
-    ).then(() => {
-      request.signal?.throwIfAborted();
-      if (!dependencies.isCurrent(state) || !dependencies.knownChildren.has(request.threadId)) {
-        return undefined;
-      }
-      for (const entry of admitted) {
-        entry.modelSource?.assertCurrent();
-      }
-      return executionOwner(request, state, dependencies);
-    });
+    for (const entry of admitted) {
+      entry.modelSource?.assertCurrent();
+    }
+    dependencies.registerChildExecution(
+      state,
+      request,
+      admitted[0]?.agentPath,
+      admitted[0]?.completionCustody,
+    );
   }
   const known = dependencies.knownChildren.get(request.threadId);
   if (
@@ -510,6 +489,12 @@ function executionOwner(
       execution.bindTurn(request.turnId);
     }
     if (execution.executionOwner.turnId === request.turnId) {
+      if (!child.nativeTurnId && !known.assignment.unanchored) {
+        // Direct spawn already retained this execution before turn/started.
+        // Pin the admitted inference locator on that same initial assignment.
+        child.nativeTurnId = request.turnId;
+        known.assignment.nativeTurnId = request.turnId;
+      }
       return execution.executionOwner;
     }
   }
@@ -544,10 +529,16 @@ function executionOwner(
     return undefined;
   }
   if (
-    child?.nativeTurnId === request.turnId &&
+    child &&
+    (!child.nativeTurnId || child.nativeTurnId === request.turnId) &&
     !child.terminal &&
-    !child.settledWithoutCompletion
+    !child.settledWithoutCompletion &&
+    !known.assignment.unanchored
   ) {
+    // An admitted inference carries the exact initial child turn even when its
+    // turn/started notification was lost. Never recover this locator by history subtraction.
+    child.nativeTurnId = request.turnId;
+    known.assignment.nativeTurnId = request.turnId;
     child.modelExecution = modelSource;
     child.completionCustody ??= completionCustody?.retain();
   } else if (pending) {
@@ -578,13 +569,6 @@ export async function captureNativeModelSource(
 ): Promise<NativeModelSourceCapture | undefined> {
   for (;;) {
     request.signal?.throwIfAborted();
-    const preparation = dependencies.pendingChildPreparation(request.threadId);
-    if (preparation) {
-      if (!(await racePromiseWithAbortSignal(preparation, request.signal))) {
-        return undefined;
-      }
-      continue;
-    }
     const parent = request.parentThreadId
       ? dependencies.knownChildren.get(request.parentThreadId)
       : undefined;
@@ -605,12 +589,7 @@ export async function captureNativeModelSource(
     ) {
       return undefined;
     }
-    const selected = executionOwner(request, state, dependencies);
-    const owner = selected instanceof Promise ? await selected : selected;
-    request.signal?.throwIfAborted();
-    if (!dependencies.isCurrent(state)) {
-      return undefined;
-    }
+    const owner = executionOwner(request, state, dependencies);
     if (owner) {
       dependencies.assertInputCurrent(request.threadId, owner);
       return captureExecutionOwner(owner, () =>

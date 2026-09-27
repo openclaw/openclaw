@@ -357,7 +357,6 @@ const COMMAND_CASES: readonly CommandCase[] = [
     exitBudgetMs: 8_000,
   }),
   responseCase("sessionsHelp", ["sessions", "--help"]),
-  responseCase("tasksHelp", ["tasks", "--help"]),
   responseCase("messageHelp", ["message", "--help"]),
   responseCase("pairingHelp", ["pairing", "--help"]),
   responseCase("authHelp", ["auth", "--help"]),
@@ -376,7 +375,6 @@ const COMMAND_CASES: readonly CommandCase[] = [
     firstOutputBudgetMs: 1_500,
     exitBudgetMs: 3_000,
   }),
-  responseCase("webhooksHelp", ["webhooks", "--help"]),
   {
     id: "health",
     name: "health",
@@ -405,24 +403,6 @@ const COMMAND_CASES: readonly CommandCase[] = [
     id: "sessionsJson",
     name: "sessions --json",
     args: ["sessions", "--json"],
-    presets: ["real"],
-  },
-  {
-    id: "tasksJson",
-    name: "tasks --json",
-    args: ["tasks", "--json"],
-    presets: ["real"],
-  },
-  {
-    id: "tasksListJson",
-    name: "tasks list --json",
-    args: ["tasks", "list", "--json"],
-    presets: ["real"],
-  },
-  {
-    id: "tasksAuditJson",
-    name: "tasks audit --json",
-    args: ["tasks", "audit", "--json"],
     presets: ["real"],
   },
   {

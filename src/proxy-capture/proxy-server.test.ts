@@ -249,13 +249,13 @@ type StreamingProxyOrigin = {
 };
 
 async function startStreamingProxyOrigin(responseBodyBytes: number): Promise<StreamingProxyOrigin> {
-  const responseClosed = createDeferredCore();
   const state = {
     closedResponses: 0,
     drainWaits: 0,
     finishedResponses: 0,
     queuedBytes: 0,
   };
+  const responseClosed = createDeferredCore();
   const chunk = Buffer.alloc(64 * 1024, "x");
   const server = createHttpServer((req, res) => {
     req.resume();
@@ -550,9 +550,8 @@ describe("startDebugProxyServer", () => {
       const healthy = await getThroughProxy(proxy.proxyUrl, `${origin.url}/healthy`);
       expect(healthy).toMatchObject({ body: "ok", complete: true, statusCode: 200 });
       await proxy.stop();
-      const captureEvents = (await readCaptureEvents(settings.sessionId, 20)).filter(
-        (event) => event.path === "/capture",
-      );
+      const events = await readCaptureEvents(settings.sessionId, 20);
+      const captureEvents = events.filter((event) => event.path === "/capture");
       const capturedRequest = captureEvents.find((event) => event.kind === "request");
       expect(capturedRequest).toBeDefined();
       expect(captureEvents.filter((event) => event.kind === "error")).toEqual([
@@ -563,11 +562,9 @@ describe("startDebugProxyServer", () => {
         }),
       ]);
       expect(captureEvents.filter((event) => event.kind === "response")).toEqual([]);
-      expect(
-        (await readCaptureEvents(settings.sessionId, 20)).filter(
-          (event) => event.path === "/healthy" && event.kind === "error",
-        ),
-      ).toEqual([]);
+      expect(events.filter((event) => event.path === "/healthy" && event.kind === "error")).toEqual(
+        [],
+      );
     } finally {
       await proxy.stop();
       await origin.stop();
@@ -601,9 +598,8 @@ describe("startDebugProxyServer", () => {
       const healthy = await getThroughProxy(proxy.proxyUrl, `${origin.url}/healthy`);
       expect(healthy).toMatchObject({ body: "ok", complete: true, statusCode: 200 });
       await proxy.stop();
-      const captureEvents = (await readCaptureEvents(settings.sessionId, 20)).filter(
-        (event) => event.path === "/capture",
-      );
+      const events = await readCaptureEvents(settings.sessionId, 20);
+      const captureEvents = events.filter((event) => event.path === "/capture");
       const capturedRequest = captureEvents.find((event) => event.kind === "request");
       expect(capturedRequest).toBeDefined();
       expect(captureEvents.filter((event) => event.kind === "error")).toEqual([
@@ -614,11 +610,9 @@ describe("startDebugProxyServer", () => {
         }),
       ]);
       expect(captureEvents.filter((event) => event.kind === "response")).toEqual([]);
-      expect(
-        (await readCaptureEvents(settings.sessionId, 20)).filter(
-          (event) => event.path === "/healthy" && event.kind === "error",
-        ),
-      ).toEqual([]);
+      expect(events.filter((event) => event.path === "/healthy" && event.kind === "error")).toEqual(
+        [],
+      );
     } finally {
       await proxy.stop();
       await origin.stop();

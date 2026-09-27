@@ -18,6 +18,7 @@ import {
   CronRunReceiptRevisionError,
   finishCronRunReceiptInDatabase,
 } from "./run-receipt-store.js";
+import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import {
   loadCronRuntimeAuthorities,
   repairCronRuntimeAuthorityRows,
@@ -101,6 +102,7 @@ export function releaseCronReservationsInWorker(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const { rows, jobs } = loadRuntimeRows(db, input.storeKey, input.jobIds);
+      const receiptSchema = prepareCronRunReceiptWriteSchema(db);
       const preparation = prepareCronRuntimeMutation("cron.releaseReservations", input.nonce, {
         deletionBlocked:
           input.requireCurrentReceipt === true &&
@@ -129,6 +131,7 @@ export function releaseCronReservationsInWorker(
         if (!input.terminal) {
           finishCronRunReceiptInDatabase({
             database: db,
+            receiptSchema,
             handle: reservation.runReceipt,
             status: "skipped",
             finishedAtMs: preparation.nowMs,
@@ -168,7 +171,7 @@ export function releaseCronReservationsInWorker(
         outcome.jobs.push(job);
       }
       if (input.terminal && !preparation.deferTerminal) {
-        finishCronRunReceiptInDatabase({ database: db, ...input.terminal });
+        finishCronRunReceiptInDatabase({ database: db, receiptSchema, ...input.terminal });
       }
       return retainCronRuntimeMutationOutcome("cron.releaseReservations", db, input.nonce, outcome);
     },
@@ -184,7 +187,11 @@ export function finishCronReceiptInWorker(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       prepareCronRuntimeMutation("cron.finishReceipt", input.nonce, {});
-      finishCronRunReceiptInDatabase({ database: db, ...input.terminal });
+      finishCronRunReceiptInDatabase({
+        database: db,
+        receiptSchema: prepareCronRunReceiptWriteSchema(db),
+        ...input.terminal,
+      });
       return retainCronRuntimeMutationOutcome("cron.finishReceipt", db, input.nonce, {});
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },

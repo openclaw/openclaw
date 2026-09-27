@@ -61,12 +61,6 @@ import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
-import { captureTaskRetentionSource } from "../tasks/task-registry-retention-source.js";
-import {
-  readTaskRecord,
-  readTaskRegistryMutationSnapshotInDatabase,
-  readTaskRegistrySnapshot,
-} from "../tasks/task-registry.store.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
 import {
@@ -319,22 +313,6 @@ serveOwnedWorkerTasks(
               command.type === "devicePairing.bootstrapContext"
             ) {
               return executeDevicePairingRead(db, input.databasePath, command);
-            }
-            if (command.type === "tasks.mutationSnapshot") {
-              return {
-                type: command.type,
-                snapshot:
-                  command.input === undefined
-                    ? readTaskRegistrySnapshot({ db, path: input.databasePath })
-                    : readTaskRegistryMutationSnapshotInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "tasks.retentionSource") {
-              const task = readTaskRecord(db, command.taskId);
-              return {
-                type: command.type,
-                source: task ? captureTaskRetentionSource(task) : undefined,
-              };
             }
             if (command.type === "subagents.forChildSession") {
               return {

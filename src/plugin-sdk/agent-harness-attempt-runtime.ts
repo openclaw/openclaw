@@ -14,6 +14,7 @@ export {
 } from "../agents/harness/attempt-events.js";
 export { selectSupportedReasoningEffort } from "../agents/harness/reasoning-effort.js";
 export {
+  resolveAgentHarnessHistoryLimits,
   resolveAgentWorkspaceMemoryRouting,
   shouldIncludeAgentHarnessRuntimeContext,
 } from "../agents/harness/prompt-context.js";

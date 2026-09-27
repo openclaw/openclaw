@@ -9,14 +9,20 @@ import {
 import { recordAuditEventInDatabase } from "./audit-event-store.js";
 import { recordExecutionDecisionFactInDatabase } from "./execution-decision-facts.js";
 import { receipt } from "./execution-decision-facts.test-support.js";
-import { ExecutionDecisionCursorError } from "./execution-decision-receipts.js";
+import {
+  ExecutionDecisionCursorError,
+  isExecutionDecisionCursor,
+} from "./execution-decision-receipts.js";
 import { createExecutionIdentityAdmissionToken } from "./execution-identity-admission.js";
 import { inspectExecutionIdentityRun } from "./execution-identity-context.js";
 import {
   prepareExecutionIdentityContextAtAdmission,
   recordDeniedApprovalForRun,
 } from "./execution-identity.test-support.js";
-import { bindExecutionOwnerLifecycleMetadata } from "./execution-owner-lifecycle-binding-store.js";
+import {
+  bindExecutionOwnerLifecycleMetadata,
+  ensureExecutionOwnerLifecycleBindingSchema,
+} from "./execution-owner-lifecycle-binding-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const now = 200;
@@ -25,8 +31,6 @@ const stages = [
   { prefix: "m", owner: "audit_events" },
   { prefix: "g", owner: "tool-policy" },
   { prefix: "c", owner: "cron_run_receipts" },
-  { prefix: "t", owner: "task_runs" },
-  { prefix: "f", owner: "flow_runs" },
 ] as const;
 type Stage = (typeof stages)[number]["prefix"];
 let options: { env: { OPENCLAW_STATE_DIR: string } };
@@ -44,6 +48,7 @@ beforeAll(async () => {
   options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("decision-cursors-") } };
   const database = openOpenClawStateDatabase(options);
   db = database.db;
+  ensureExecutionOwnerLifecycleBindingSchema(db);
   for (const scope of ["local", "foreign", "sibling"]) {
     const context = prepareExecutionIdentityContextAtAdmission(
       {
@@ -112,28 +117,14 @@ beforeAll(async () => {
         now,
         now,
       );
-      db.prepare(`INSERT INTO task_runs (
-        task_id, runtime, owner_key, scope_kind, task, status, delivery_status,
-        notify_policy, created_at
-      ) VALUES (?, 'cron', 'fixture-owner', 'system', 'fixture task', 'succeeded',
-        'not_applicable', 'silent', ?)`).run(`task-${id}`, now);
-      db.prepare(`INSERT INTO flow_runs (
-        flow_id, owner_key, status, notify_policy, goal, created_at, updated_at
-      ) VALUES (?, 'fixture-owner', 'succeeded', 'silent', 'fixture goal', ?, ?)`).run(
-        `flow-${id}`,
-        now,
-        now,
-      );
-      for (const ownerKind of ["cron", "task", "flow"] as const) {
-        expect(
-          bindExecutionOwnerLifecycleMetadata({
-            db,
-            ownerKind,
-            ownerId: `${ownerKind}-${id}`,
-            binding: context,
-          }),
-        ).toBe("bound");
-      }
+      expect(
+        bindExecutionOwnerLifecycleMetadata({
+          db,
+          ownerKind: "cron",
+          ownerId: "cron-" + id,
+          binding: context,
+        }),
+      ).toBe("bound");
     }
   }
 });
@@ -159,15 +150,38 @@ const removeAnchor: Record<Stage, () => void> = {
   c: () => {
     db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = ?").run("cron-local-1");
   },
-  t: () => {
-    db.prepare("DELETE FROM task_runs WHERE task_id = ?").run("task-local-1");
-  },
-  f: () => {
-    db.prepare("DELETE FROM flow_runs WHERE flow_id = ?").run("flow-local-1");
-  },
 };
 
 describe("inspection decision cursor rejection matrix", () => {
+  it.each(["t", "f"])(
+    "reports well-formed retired %s cursors as no longer retained",
+    async (prefix) => {
+      for (const suffix of ["0:0", "1:1", "200:1", "9007199254740991:9007199254740991"]) {
+        const cursor = prefix + ":" + suffix;
+        expect(isExecutionDecisionCursor(cursor)).toBe(true);
+        await expect(inspect(cursor)).rejects.toThrow(
+          "decision cursor is no longer retained; restart inspection without --cursor",
+        );
+      }
+      for (const suffix of [
+        "-1:1",
+        "1:-1",
+        "1.5:1",
+        "1:1.5",
+        "01:1",
+        "1:01",
+        "9007199254740992:1",
+        "1:9007199254740992",
+        "1",
+        "1:1:extra",
+      ]) {
+        const cursor = prefix + ":" + suffix;
+        expect(isExecutionDecisionCursor(cursor)).toBe(false);
+        await expect(inspect(cursor)).rejects.toThrow("invalid execution decision cursor");
+      }
+    },
+  );
+
   it.each(stages)(
     "rejects malformed and unretained $prefix anchors through inspection",
     async ({ prefix, owner }) => {

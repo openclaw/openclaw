@@ -70,7 +70,10 @@ internal fun NodesDevicesSettingsScreen(
 
   SettingsDetailFrame(
     title = nativeString("Nodes & Devices"),
-    subtitle = nativeString("Live nodes, paired phones, and pending device requests."),
+    subtitle =
+      nativeString(
+        "Nodes are devices such as phones (including iPhone and Android), watches, and computers that offer capabilities, not agents or chat contacts. Known nodes stay listed when offline. Paired devices show Gateway access; the same device can appear in both groups. Notifications and push output are not agent conversations.",
+      ),
     icon = Icons.Default.Cloud,
     onBack = onBack,
   ) {

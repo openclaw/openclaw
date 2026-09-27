@@ -1,7 +1,22 @@
 import path from "node:path";
+import type { SessionModelContextLimits } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import type { AgentHarnessAttemptParamsV2 } from "./types.js";
+
+/** Bound transcript reads to the model budget while preserving complete messages. */
+export function resolveAgentHarnessHistoryLimits(
+  contextTokenBudget?: number,
+): SessionModelContextLimits {
+  return {
+    maxBytes: Math.min(
+      64 * 1024 * 1024,
+      Math.max(1024, Math.floor((contextTokenBudget ?? 128_000) * 8)),
+    ),
+    maxEvents: 10_000,
+    toolResultOverflow: "omit",
+  };
+}
 
 export function shouldIncludeAgentHarnessRuntimeContext(
   params: Pick<AgentHarnessAttemptParamsV2, "bootstrapContextMode" | "bootstrapContextRunKind">,

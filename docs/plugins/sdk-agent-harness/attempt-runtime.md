@@ -150,10 +150,16 @@ extracts its text parts and `idempotencyKey` for ordinary and authorized hooks.
 String input and a separate `currentUserMessageId` remain supported. The harness
 owns the fallback when no admitted message exists.
 
+Supply `messages` as an array or an async loader, which runs only when a `before_prompt_build`
+hook needs history. Heartbeat-only contributions do not read conversation history.
+The production-private `resolveAgentHarnessHistoryLimits` helper applies the shared
+Codex and Agents API transcript read budget.
+
 The `developerInstructions.build` callback receives `toolsAllow` and
 `hasToolRestrictions`. Omitted policy or a trimmed `*` entry is unrestricted;
-an empty list or a list without `*` is restrictive. The backend must apply or
-reject restrictions inside that callback, before authorized recall runs.
+an empty list or a list without `*` is restrictive. Backends enforcing per-turn
+restrictions apply or reject them inside that callback, before authorized recall
+runs. Agents API continues with hook context but does not enforce hook tool lists.
 
 Official harnesses use the JavaScript-only private
 `openclaw/plugin-sdk/agent-harness-attempt-runtime` for deadlines, cancellation,

@@ -125,6 +125,8 @@ async function createCompilerContext(
     noEmit: false,
     // Declaration diagnostics are checked explicitly; unrelated untyped external JS stays valid.
     noEmitOnError: false,
+    // Parallel emit can copy readonly flags from unrelated inferred union properties.
+    singleThreaded: true,
     removeComments: true,
     sourceMap: false,
   };

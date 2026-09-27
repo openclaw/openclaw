@@ -441,7 +441,6 @@ export function readCard(db: DatabaseSync, row: Row, preloaded?: CardChildRows):
     agentId: stringValue(row, "agent_id"),
     sessionKey: stringValue(row, "session_key"),
     runId: stringValue(row, "run_id"),
-    taskId: stringValue(row, "task_id"),
     sourceUrl: stringValue(row, "source_url"),
     execution,
     startedAt: numberValue(row, "started_at"),

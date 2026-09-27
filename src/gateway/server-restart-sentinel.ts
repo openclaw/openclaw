@@ -3,7 +3,6 @@ import {
   resolveCorrelatedSubagentDelivery,
   settleCorrelatedSubagentDelivery,
 } from "../agents/subagents/completion/subagent-completion-delivery.js";
-import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcherCore } from "../auto-reply/reply/provider-dispatcher.js";
 import { recordInboundSession } from "../channels/session.js";
@@ -12,6 +11,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import { removeCronRunContinuationSessionIfIdle } from "../cron/run-continuation-cleanup.js";
 import {
   captureDeliveryQueueStateContext,
   resolveDeliveryQueueStateEnv,
@@ -53,10 +53,8 @@ import {
   updateRunReportInputFromSentinel,
 } from "../infra/update-run-report.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
 import {
   type DeliveryContext,
   mergeDeliveryContext,
@@ -66,7 +64,11 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { deliverQueuedGeneratedMediaAgentTurn } from "./server-restart-sentinel-agent-delivery.js";
 import {
   buildQueuedRestartContinuation,
+  isRestartContinuationBusyPayload,
+  isRestartContinuationBusyRetry,
+  resolveQueuedRestartContinuationMessageId,
   RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
+  RESTART_CONTINUATION_BUSY_RETRY_ERROR,
 } from "./server-restart-sentinel-continuation-intent.js";
 import {
   deliverRestartSentinelNotice,
@@ -88,8 +90,6 @@ const log = createSubsystemLogger("gateway/restart-sentinel");
 const RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS = process.env.VITEST ? 1 : 6_000;
 const CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS = process.env.VITEST ? 1 : 2_000;
 const CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS = 900;
-const RESTART_CONTINUATION_BUSY_RETRY_ERROR =
-  "restart continuation deferred because previous run is still shutting down";
 let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
 
 /** Settles every queue entry through its durable producer before cron cleanup. */
@@ -101,8 +101,6 @@ export const settleQueuedSessionDelivery: SettleSessionDeliveryFn = async (
   await settleCorrelatedSubagentDelivery(entry, outcome);
   await removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id, queueContext);
 };
-
-type QueuedAgentTurnSessionDelivery = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>;
 
 function cloneRestartSentinelPayload(
   payload: RestartSentinelPayload | null,
@@ -137,23 +135,6 @@ async function waitForRetry(delayMs: number) {
   });
 }
 
-function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
-  return (
-    typeof payload.text === "string" && payload.text.trim() === REPLY_RUN_STILL_SHUTTING_DOWN_TEXT
-  );
-}
-
-function isRestartContinuationBusyRetry(entry: QueuedSessionDelivery | null): boolean {
-  return entry?.lastError === RESTART_CONTINUATION_BUSY_RETRY_ERROR;
-}
-
-function resolveQueuedRestartContinuationMessageId(entry: QueuedAgentTurnSessionDelivery): string {
-  if (isRestartContinuationBusyRetry(entry) && entry.retryCount > 0) {
-    return `${entry.messageId}:retry:${entry.retryCount}`;
-  }
-  return entry.messageId;
-}
-
 function resolveQueuedSessionDeliveryContext(
   entry: QueuedSessionDelivery,
 ): DeliveryContext | undefined {
@@ -176,6 +157,16 @@ export async function deliverQueuedSessionDelivery(params: {
 }) {
   params.queueContext.admission.assertCurrent();
   const queuedEntry = resolveCorrelatedSubagentDelivery(params.entry);
+  if (queuedEntry.kind === "agentTurn" && queuedEntry.requesterBinding) {
+    await deliverQueuedGeneratedMediaAgentTurn({
+      ...params,
+      ...queuedEntry.requesterBinding,
+      entry: queuedEntry,
+      runtimeContextFragments: queuedEntry.runtimeContextFragments,
+      canonicalKey: queuedEntry.requesterBinding.sessionKey,
+    });
+    return;
+  }
   const { cfg, agentId, entry, storePath, canonicalKey } = loadSessionEntry(
     queuedEntry.sessionKey,
     {

@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Removed SDK surfaces and the replacement for each removed or deprecated API"
 read_when:
   - A removed export, hook, or manifest field is breaking your plugin
@@ -353,24 +354,23 @@ timeline for current status.
 
   </Accordion>
 
-  <Accordion title="runtime.tasks.flow -> runtime.tasks.managedFlows">
-    **Old**: `runtime.tasks.flow` (singular) returned a live task-flow
-    accessor.
-
-    **New**: `runtime.tasks.managedFlows` keeps the managed TaskFlow mutation
-    runtime for plugins that create, update, cancel, or run child tasks from a
-    flow. Use `runtime.tasks.flows` when the plugin only needs DTO-based
-    reads.
-
-    ```typescript
-    // Before
-    const flow = api.runtime.tasks.flow.fromToolContext(ctx);
-    // After
-    const flow = api.runtime.tasks.managedFlows.fromToolContext(ctx);
-    ```
-
-    The legacy aliases were removed in July 2026.
-
+  <Accordion title="Tasks and TaskFlow APIs removed">
+    The Tasks registry and TaskFlow orchestration APIs have been removed,
+    including `api.runtime.tasks`, `registerDetachedTaskRuntime`, and the
+    `agent-harness-task-runtime` SDK subpath. No compatibility facade remains.
+    Use native subagent launch/wait/history APIs, cron run history, and the
+    ordinary Lobster runner for their respective operations. Harness completion
+    routing uses the completion-only `agent-harness-completion` subpath.
+    This removal does not change the physical database schemas. Existing
+    `task_runs`, `task_delivery_state`, and `flow_runs` tables, columns, and indexes
+    remain unchanged. Cron reads and writes only its `runtime = 'cron'` history
+    rows in `task_runs`; non-Cron Task and TaskFlow rows remain untouched and
+    unused by the runtime. The Codex plugin's
+    [Doctor migration](/gateway/doctor/config-migrations#native-codex-recovery-after-tasks-removal)
+    preserves eligible owner-stamped native recovery facts in existing parent
+    binding metadata, leaving source rows byte-identical. It adds no runtime Task
+    reader or replacement SDK surface; current requester authority still governs
+    completion delivery. See the [versioning contract](/reference/database-schemas/versioning).
   </Accordion>
 
   <Accordion title="Embedded extension factories -> agent tool-result middleware">

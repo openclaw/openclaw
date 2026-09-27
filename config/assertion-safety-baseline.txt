@@ -521,7 +521,6 @@ extensions/lmstudio/src/models.ts	2
 extensions/lmstudio/src/stream.ts	3
 extensions/lobster/index.ts	2
 extensions/lobster/src/lobster-runner.ts	4
-extensions/lobster/src/lobster-tool.ts	1
 extensions/logbook/index.ts	5
 extensions/logbook/src/analyze.ts	8
 extensions/logbook/src/config.ts	1
@@ -1686,7 +1685,6 @@ src/agents/subagents/announce/subagent-announce-completion-delivery.ts	2
 src/agents/subagents/announce/subagent-announce-delivery-retry.ts	2
 src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/announce/subagent-announce-output.ts	6
-src/agents/subagents/completion/subagent-completion-admission.store.ts	2
 src/agents/subagents/registry/subagent-recovery-state.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry-restore.ts	1
@@ -1758,7 +1756,7 @@ src/agents/tools/sessions-tool.ts	1
 src/agents/tools/sessions-yield-tool.ts	1
 src/agents/tools/skill-workshop-tool-helpers.ts	3
 src/agents/tools/structured-output-tool.ts	2
-src/agents/tools/subagents-tool.ts	2
+src/agents/tools/subagents-tool.ts	1
 src/agents/tools/system-agent-tool.ts	1
 src/agents/tools/task-suggestion-tools.ts	2
 src/agents/tools/terminal-tool.ts	1
@@ -2767,7 +2765,7 @@ src/plugin-sdk/approval-auth-helpers.ts	1
 src/plugin-sdk/approval-handler-runtime.ts	1
 src/plugin-sdk/approval-native-helpers.ts	1
 src/plugin-sdk/approval-reaction-binding.ts	2
-src/plugin-sdk/channel-config-helpers.ts	17
+src/plugin-sdk/channel-config-helpers.ts	15
 src/plugin-sdk/channel-config-ui-hints.ts	1
 src/plugin-sdk/channel-entry-contract.ts	6
 src/plugin-sdk/channel-inbound.ts	2
@@ -2776,7 +2774,6 @@ src/plugin-sdk/channel-outbound.ts	1
 src/plugin-sdk/channel-replay-guard.ts	2
 src/plugin-sdk/core.ts	4
 src/plugin-sdk/dedupe-runtime.ts	1
-src/plugin-sdk/discord.ts	3
 src/plugin-sdk/extension-shared.ts	6
 src/plugin-sdk/facade-activation-check.runtime.ts	2
 src/plugin-sdk/facade-loader.ts	2
@@ -2794,12 +2791,11 @@ src/plugin-sdk/provider-auth-result.ts	3
 src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
-src/plugin-sdk/provider-enable-config.ts	2
 src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	5
 src/plugin-sdk/provider-stream-shared.ts	14
 src/plugin-sdk/provider-stream.ts	1
-src/plugin-sdk/provider-tools.ts	8
+src/plugin-sdk/provider-tools.ts	5
 src/plugin-sdk/qa-channel-protocol.ts	1
 src/plugin-sdk/qa-channel.ts	15
 src/plugin-sdk/qa-lab.ts	2
@@ -2811,7 +2807,6 @@ src/plugin-sdk/secret-ref-runtime.ts	2
 src/plugin-sdk/session-store-runtime-internal.ts	1
 src/plugin-sdk/session-store-runtime.ts	5
 src/plugin-sdk/session-transcript-runtime.ts	6
-src/plugin-sdk/session-visibility.ts	1
 src/plugin-sdk/setup-credential.ts	1
 src/plugin-sdk/ssrf-policy.ts	1
 src/plugin-sdk/status-helpers.ts	7
@@ -3040,7 +3035,6 @@ src/snapshot/git-backup-codec.ts	7
 src/snapshot/git-backup.ts	2
 src/snapshot/local-repository.ts	6
 src/snapshot/manifest.ts	1
-src/state/agent-deletion-journal.ts	15
 src/state/config-machine-state.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-board-schema.ts	1
@@ -3063,7 +3057,6 @@ src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	3
 src/state/openclaw-state-db-schema-repair.ts	2
 src/state/openclaw-state-ownership.ts	1
-src/state/user-profiles-tailscale-avatar.ts	2
 src/state/user-profiles.ts	1
 src/status/summary.runtime.ts	1
 src/system-agent/agent-turn.ts	2
@@ -3087,16 +3080,6 @@ src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2
 src/talk/provider-resolver.ts	1
 src/talk/turn-context-tracker.ts	2
-src/tasks/agent-harness-task-runtime-scope.ts	1
-src/tasks/generated-media-task-activity.ts	1
-src/tasks/task-flow-registry.store.ts	1
-src/tasks/task-flow-registry.ts	1
-src/tasks/task-flow-registry.types.ts	2
-src/tasks/task-registry.process-state.ts	1
-src/tasks/task-registry.sqlite.shared.ts	1
-src/tasks/task-registry.ts	1
-src/tasks/task-registry.types.ts	2
-src/tasks/task-status.ts	1
 src/trajectory/export.ts	14
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	4

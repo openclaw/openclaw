@@ -10,13 +10,13 @@ export type RequesterSettleWakeBatchCallbacks = {
   transitionBatch: (
     batch: readonly SubagentRunRecord[],
     state: RequesterSettleWakeBatchState,
-  ) => void;
+  ) => void | Promise<void>;
   completeBatch: (
     batch: readonly SubagentRunRecord[],
     rearmGeneration?: number,
     delivery?: SubagentAnnounceDeliveryResult,
     onCommitted?: () => void,
-  ) => void;
+  ) => void | Promise<void>;
 };
 
 export function readSharedBatchState(

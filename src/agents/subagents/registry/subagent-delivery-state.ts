@@ -1,9 +1,11 @@
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type {
+  PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
   SubagentRunReadRecord,
 } from "./subagent-registry-read.types.js";
 import type {
+  RequesterSettleWakeState,
   SubagentCompletionState,
   SubagentRunMaintenanceRecord,
   SubagentRunRecord,
@@ -264,3 +266,59 @@ export function getDeliveryLastError(entry: SubagentRunRecord): string | undefin
   const error = entry.delivery?.lastError;
   return typeof error === "string" && error.trim() ? error : undefined;
 }
+
+export const markRequesterSettleWakePending = (
+  entry: SubagentRunRecord,
+  options?: { retireAfterSettle?: boolean },
+) => {
+  const existing = entry.requesterSettleWake;
+  entry.requesterSettleWake = {
+    ...structuredClone(existing),
+    status: existing?.status ?? "pending",
+    attemptCount: existing?.attemptCount ?? 0,
+    ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true
+      ? { retireAfterSettle: true }
+      : {}),
+  } satisfies RequesterSettleWakeState;
+};
+
+export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
+  const delivery = ensureDeliveryState(entry);
+  delivery.payload = undefined;
+  delivery.createdAt = undefined;
+  delivery.lastAttemptAt = undefined;
+  delivery.nextAttemptAt = undefined;
+  delivery.attemptCount = undefined;
+  delivery.lastError = undefined;
+  delivery.suspendedAt = undefined;
+  delivery.suspendedReason = undefined;
+  if (delivery.status !== "delivered" && delivery.status !== "failed") {
+    clearDeliveryState(entry);
+  }
+};
+
+export const loadPendingFinalDeliveryPayload = (
+  entry: SubagentRunRecord,
+): PendingFinalDeliveryPayload => {
+  return {
+    requesterSessionKey: entry.delivery?.payload?.requesterSessionKey ?? entry.requesterSessionKey,
+    requesterOrigin: entry.delivery?.payload?.requesterOrigin ?? entry.requesterOrigin,
+    requesterDisplayKey: entry.delivery?.payload?.requesterDisplayKey ?? entry.requesterDisplayKey,
+    childSessionKey: entry.delivery?.payload?.childSessionKey ?? entry.childSessionKey,
+    childRunId: entry.delivery?.payload?.childRunId ?? entry.runId,
+    task: entry.delivery?.payload?.task ?? entry.task,
+    label: entry.delivery?.payload?.label ?? entry.label,
+    startedAt: entry.delivery?.payload?.startedAt ?? entry.execution.startedAt,
+    endedAt: entry.delivery?.payload?.endedAt ?? entry.execution.endedAt,
+    outcome: entry.delivery?.payload?.outcome ?? entry.execution.outcome,
+    expectsCompletionMessage:
+      entry.delivery?.payload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
+    completionTarget: entry.completionTarget,
+    completionRequesterSessionId: entry.completionRequesterSessionId,
+    spawnMode: entry.delivery?.payload?.spawnMode ?? entry.spawnMode,
+    wakeOnDescendantSettle:
+      entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
+    // Completion is the terminal-reply owner; a retry payload can predate its final receipt.
+    terminalReply: entry.completion?.terminalReply ?? entry.delivery?.payload?.terminalReply,
+  };
+};

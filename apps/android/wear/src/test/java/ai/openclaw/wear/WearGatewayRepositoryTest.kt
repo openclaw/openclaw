@@ -54,7 +54,7 @@ class WearGatewayRepositoryTest {
         RecordingRequester { method, _ ->
           assertEquals(WearRpcMethod.AgentPulse, method)
           json.parseToJsonElement(
-            """{"tasks":{"state":"ready","scope":"bounded","queued":2,"running":3,"completed":5,"failed":1,"activeAtLimit":false,"recentAtLimit":true},"swarm":{"state":"active","scope":"selected-session","groups":2,"running":4,"done":6,"failed":1,"phases":[{"queued":1,"running":2,"done":3,"failed":0,"hidden":4}],"morePhases":false},"approvals":{"state":"ready","pending":2}}""",
+            """{"swarm":{"state":"active","scope":"selected-session","groups":2,"running":4,"done":6,"failed":1,"phases":[{"queued":1,"running":2,"done":3,"failed":0,"hidden":4}],"morePhases":false},"approvals":{"state":"ready","pending":2}}""",
           )
         }
       val repository = WearGatewayRepository(requester)
@@ -66,13 +66,6 @@ class WearGatewayRepositoryTest {
           selectedSessionKey = "agent:main",
         )
 
-      assertEquals(WearAgentPulseTaskState.Ready, pulse.tasks.state)
-      assertEquals(2, pulse.tasks.queued)
-      assertEquals(3, pulse.tasks.running)
-      assertEquals(5, pulse.tasks.completed)
-      assertEquals(1, pulse.tasks.failed)
-      assertEquals(false, pulse.tasks.activeAtLimit)
-      assertEquals(true, pulse.tasks.recentAtLimit)
       assertEquals(WearAgentPulseSwarmState.Active, pulse.swarm.state)
       assertEquals(2, pulse.swarm.groups)
       assertEquals(4, pulse.swarm.running)
@@ -98,7 +91,7 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { _, _ ->
           json.parseToJsonElement(
-            """{"tasks":{"state":"unavailable"},"swarm":{"state":"idle","scope":"selected-session"},"approvals":{"state":"refreshing"}}""",
+            """{"swarm":{"state":"idle","scope":"selected-session"},"approvals":{"state":"refreshing"}}""",
           )
         }
 
@@ -109,8 +102,6 @@ class WearGatewayRepositoryTest {
           selectedSessionKey = " ",
         )
 
-      assertEquals(WearAgentPulseTaskState.Unavailable, pulse.tasks.state)
-      assertNull(pulse.tasks.running)
       assertEquals(WearAgentPulseSwarmState.Idle, pulse.swarm.state)
       assertNull(pulse.swarm.groups)
       assertEquals(WearAgentPulseApprovalsState.Refreshing, pulse.approvals.state)
@@ -128,11 +119,9 @@ class WearGatewayRepositoryTest {
     runTest {
       val invalidPayloads =
         listOf(
-          """{"tasks":{"state":"future"},"swarm":{"state":"unavailable"},"approvals":{"state":"unavailable"}}""",
-          """{"tasks":{"state":"ready","scope":"bounded","queued":-1,"running":0,"completed":0,"failed":0,"activeAtLimit":false,"recentAtLimit":false},"swarm":{"state":"unavailable"},"approvals":{"state":"unavailable"}}""",
-          """{"tasks":{"state":"unavailable"},"swarm":{"state":"active","scope":"selected-session","groups":1,"running":0,"done":0,"failed":0,"phases":[{"queued":0,"running":0,"done":0,"failed":0,"hidden":-1}],"morePhases":false},"approvals":{"state":"unavailable"}}""",
-          """{"tasks":{"state":"unavailable"},"swarm":{"state":"unavailable"},"approvals":{"state":"ready","pending":-1}}""",
-          """{"tasks":{"state":"unavailable"},"swarm":{"state":"active","scope":"selected-session","groups":1,"running":0,"done":0,"failed":0,"phases":[{},{},{},{},{},{},{},{},{}],"morePhases":true},"approvals":{"state":"unavailable"}}""",
+          """{"swarm":{"state":"active","scope":"selected-session","groups":1,"running":0,"done":0,"failed":0,"phases":[{"queued":0,"running":0,"done":0,"failed":0,"hidden":-1}],"morePhases":false},"approvals":{"state":"unavailable"}}""",
+          """{"swarm":{"state":"unavailable"},"approvals":{"state":"ready","pending":-1}}""",
+          """{"swarm":{"state":"active","scope":"selected-session","groups":1,"running":0,"done":0,"failed":0,"phases":[{},{},{},{},{},{},{},{},{}],"morePhases":true},"approvals":{"state":"unavailable"}}""",
         )
 
       invalidPayloads.forEach { payload ->

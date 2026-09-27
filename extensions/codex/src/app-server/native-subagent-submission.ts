@@ -7,7 +7,7 @@ import {
 } from "./native-subagent-history-owner.js";
 
 const identifier = z.string().refine((value) => Boolean(value.trim()));
-const submissionSchema = z
+export const submissionSchema = z
   .object({
     parentTurnId: identifier,
     callId: identifier,
