@@ -9,14 +9,9 @@ import {
 } from "./events.js";
 import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-method-policy.js";
 
-type GatewayMethodChannelPlugin = {
-  gatewayMethods?: readonly string[];
-  gatewayMethodDescriptors?: readonly { name: string }[];
-};
-
 function listChannelGatewayMethods(): string[] {
   const methods: string[] = [];
-  for (const plugin of listLoadedChannelPlugins() as GatewayMethodChannelPlugin[]) {
+  for (const plugin of listLoadedChannelPlugins()) {
     // Plugins may still expose legacy names while newer plugins expose descriptors.
     // Merge both so method discovery stays compatible during descriptor adoption.
     methods.push(...(plugin.gatewayMethods ?? []));

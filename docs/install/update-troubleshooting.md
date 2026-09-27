@@ -400,7 +400,13 @@ Doctor preserves the captures and reports that PID and the inspection failure
 (including a missing or unreadable package manifest);
 this remains a maintenance warning and does not fail the update. Retry
 `openclaw doctor --fix` after resolving the reported inspection problem.
-Windows host-wide capture cleanup remains report-only.
+On macOS, unreadable arguments from a process owned by another UID do not block
+cleanup; Doctor records that exclusion once at debug level. Unreadable arguments
+from the same UID, or an unknown UID, still preserve legacy captures. Doctor also
+preserves legacy capture roots owned by another UID, including in privileged runs. Managed
+native captures use their recorded custody and installed-index references rather
+than the host process census, as they do during startup cleanup.
+Windows host-wide legacy capture cleanup remains report-only.
 
 ## Reason codes
 

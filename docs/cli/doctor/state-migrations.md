@@ -34,6 +34,13 @@ and deferred. Doctor reports the retained source and continues independent migra
 startup reports remaining readiness advisories. An advisory never hides a separate
 required-store refusal.
 
+If Doctor is interrupted during an agent schema or media migration, stop other
+OpenClaw processes using that state and rerun `openclaw doctor --fix`. Doctor
+reclaims a recorded migration owner only when its host, PID, and process start
+identity prove that process has ended. Uncommitted database changes roll back;
+the next pass resumes pending work while retaining the pre-migration backups.
+Older leases without process identity keep their existing expiry before retry.
+
 A step blocked solely by an earlier refusal keeps
 `refusal.code: "blocked-by-prior-refusal"` and includes `originatingRefusal` with
 the first refusal's `stepId`, reason `code`, and human-readable `message`.

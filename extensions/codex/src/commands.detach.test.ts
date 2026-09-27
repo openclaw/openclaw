@@ -19,6 +19,7 @@ import {
   useCodexCommandTestState,
   writeTestBinding,
 } from "./commands.test-support.js";
+import type { CodexAppServerConversationBindingData } from "./conversation-binding-data.js";
 import { handleCodexConversationInboundClaim } from "./conversation-binding-hooks.js";
 
 describe("codex detach command", () => {
@@ -28,6 +29,30 @@ describe("codex detach command", () => {
       tempDir = stateDir;
     },
   });
+
+  function publicBinding(
+    bindingId: string,
+    data: Partial<
+      Pick<CodexAppServerConversationBindingData, "workspaceDir" | "start" | "source">
+    > = {},
+  ) {
+    return {
+      bindingId: "binding-public",
+      pluginId: "codex",
+      pluginRoot: tempDir,
+      channel: "test",
+      accountId: "default",
+      conversationId: "conversation",
+      boundAt: 1,
+      data: {
+        kind: "codex-app-server-session" as const,
+        version: 2 as const,
+        bindingId,
+        workspaceDir: "/repo",
+        ...data,
+      },
+    };
+  }
 
   it("detaches the current conversation and clears the Codex app-server thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -70,21 +95,7 @@ describe("codex detach command", () => {
         handleCodexCommand(
           createContext("detach", sessionFile, {
             detachConversationBinding,
-            getCurrentConversationBinding: async () => ({
-              bindingId: "binding-1",
-              pluginId: "codex",
-              pluginRoot: "/plugin",
-              channel: "test",
-              accountId: "default",
-              conversationId: "conversation",
-              boundAt: 1,
-              data: {
-                kind: "codex-app-server-session",
-                version: 2,
-                bindingId: "binding-data-1",
-                workspaceDir: "/repo",
-              },
-            }),
+            getCurrentConversationBinding: async () => publicBinding(identity.bindingId),
           }),
           {
             deps: createDeps({
@@ -157,22 +168,11 @@ describe("codex detach command", () => {
             }
           },
           detachConversationBinding,
-          getCurrentConversationBinding: async () => ({
-            bindingId: "binding-public-revoked-detach",
-            pluginId: "codex",
-            pluginRoot: tempDir,
-            channel: "test",
-            accountId: "default",
-            conversationId: "conversation",
-            boundAt: 1,
-            data: {
-              kind: "codex-app-server-session",
-              version: 2,
-              bindingId: identity.bindingId,
+          getCurrentConversationBinding: async () =>
+            publicBinding(identity.bindingId, {
               workspaceDir: tempDir,
               start: { id: originalBinding.conversationStartId },
-            },
-          }),
+            }),
         }),
         {
           deps: createDeps({
@@ -250,20 +250,10 @@ describe("codex detach command", () => {
             createContext("detach", undefined, {
               sessionKey: destinationSessionKey,
               detachConversationBinding,
-              getCurrentConversationBinding: async () => ({
-                bindingId: "binding-public",
-                pluginId: "codex",
-                pluginRoot: "/plugin",
-                channel: "test",
-                accountId: "default",
-                conversationId: "conversation",
-                boundAt: 1,
-                data: {
-                  kind: "codex-app-server-session",
-                  version: 2,
-                  bindingId: identity.bindingId,
-                  workspaceDir: "/repo",
-                  ...(sourceSessionKey
+              getCurrentConversationBinding: async () =>
+                publicBinding(
+                  identity.bindingId,
+                  sourceSessionKey
                     ? {
                         source: {
                           agentId: "main",
@@ -272,9 +262,8 @@ describe("codex detach command", () => {
                           threadId: "thread-source",
                         },
                       }
-                    : {}),
-                },
-              }),
+                    : {},
+                ),
             }),
             { deps: createDeps() },
           ),
@@ -326,21 +315,7 @@ describe("codex detach command", () => {
       const result = await handleCodexCommand(
         createContext("detach", undefined, {
           detachConversationBinding,
-          getCurrentConversationBinding: async () => ({
-            bindingId: "binding-1",
-            pluginId: "codex",
-            pluginRoot: "/plugin",
-            channel: "test",
-            accountId: "default",
-            conversationId: "conversation",
-            boundAt: 1,
-            data: {
-              kind: "codex-app-server-session",
-              version: 2,
-              bindingId: identity.bindingId,
-              workspaceDir: "/repo",
-            },
-          }),
+          getCurrentConversationBinding: async () => publicBinding(identity.bindingId),
         }),
         { deps: createDeps() },
       );
@@ -411,22 +386,11 @@ describe("codex detach command", () => {
         const result = await handleCodexCommand(
           createContext("detach", undefined, {
             detachConversationBinding,
-            getCurrentConversationBinding: async () => ({
-              bindingId: "binding-public-clear-failure",
-              pluginId: "codex",
-              pluginRoot: tempDir,
-              channel: "test",
-              accountId: "default",
-              conversationId: "conversation",
-              boundAt: 1,
-              data: {
-                kind: "codex-app-server-session",
-                version: 2,
-                bindingId: identity.bindingId,
+            getCurrentConversationBinding: async () =>
+              publicBinding(identity.bindingId, {
                 workspaceDir: tempDir,
                 start: { id: originalBinding.conversationStartId },
-              },
-            }),
+              }),
           }),
           {
             deps: createDeps({
@@ -503,22 +467,10 @@ describe("codex detach command", () => {
       historyCoveredThrough: "2026-01-01T00:00:00.000Z",
     } satisfies CodexAppServerThreadBinding;
     await writeTestBinding(identity, originalBinding);
-    const publicBinding = {
-      bindingId: "binding-public-original-context",
-      pluginId: "codex",
-      pluginRoot: tempDir,
-      channel: "test",
-      accountId: "default",
-      conversationId: "conversation",
-      boundAt: 1,
-      data: {
-        kind: "codex-app-server-session" as const,
-        version: 2 as const,
-        bindingId: identity.bindingId,
-        workspaceDir: tempDir,
-        start: { id: originalBinding.conversationStartId },
-      },
-    };
+    const conversation = publicBinding(identity.bindingId, {
+      workspaceDir: tempDir,
+      start: { id: originalBinding.conversationStartId },
+    });
     const detachConversationBinding = vi.fn(async () => {
       throw new Error("public conversation binding store write failed");
     });
@@ -535,13 +487,13 @@ describe("codex detach command", () => {
       .mockResolvedValue(harness.client);
     const resolvePublic = vi
       .spyOn(getSessionBindingService(), "resolveByConversation")
-      .mockReturnValue({ bindingId: publicBinding.bindingId } as never);
+      .mockReturnValue({ bindingId: conversation.bindingId } as never);
 
     try {
       const result = await handleCodexCommand(
         createContext("detach", undefined, {
           detachConversationBinding,
-          getCurrentConversationBinding: async () => publicBinding,
+          getCurrentConversationBinding: async () => conversation,
         }),
         {
           deps: createDeps({
@@ -570,7 +522,7 @@ describe("codex detach command", () => {
             commandAuthorized: true,
             senderIsOwner: true,
           },
-          { channelId: "test", pluginBinding: publicBinding },
+          { channelId: "test", pluginBinding: conversation },
           { bindingStore: testCodexAppServerBindingStore, timeoutMs: 500 },
         ),
       ).resolves.toEqual({
@@ -641,21 +593,8 @@ describe("codex detach command", () => {
       const result = await handleCodexCommand(
         createContext("detach", undefined, {
           detachConversationBinding,
-          getCurrentConversationBinding: async () => ({
-            bindingId: "binding-public-rollback-failure",
-            pluginId: "codex",
-            pluginRoot: tempDir,
-            channel: "test",
-            accountId: "default",
-            conversationId: "conversation",
-            boundAt: 1,
-            data: {
-              kind: "codex-app-server-session",
-              version: 2,
-              bindingId: identity.bindingId,
-              workspaceDir: tempDir,
-            },
-          }),
+          getCurrentConversationBinding: async () =>
+            publicBinding(identity.bindingId, { workspaceDir: tempDir }),
         }),
         {
           deps: createDeps({

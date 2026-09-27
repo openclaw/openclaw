@@ -377,8 +377,9 @@
 }
 
 /* Chromium forces native placeholders to clip while focused. Every composer
-   renders a noneditable sibling that keeps the ellipsis, so the native
-   placeholder only supplies semantics. */
+   renders a noneditable sibling that keeps the ellipsis while the native
+   placeholder supplies semantics. A :has() probe for that sibling made each
+   transcript insertion restyle the whole document. */
 .agent-chat__composer-combobox > :is(textarea, input)::placeholder {
   color: transparent;
 }

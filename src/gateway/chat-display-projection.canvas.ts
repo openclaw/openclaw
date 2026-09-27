@@ -1,4 +1,7 @@
-import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord as readObjectRecord,
+  asOptionalRecord as readRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
@@ -144,23 +147,13 @@ export function messageHasToolResultShape(message: Record<string, unknown>): boo
     return true;
   }
   const content = Array.isArray(message.content) ? message.content : [];
-  if (
-    content.some(
-      (block) =>
-        block &&
-        typeof block === "object" &&
-        isToolResultHistoryBlockType((block as { type?: unknown }).type),
-    )
-  ) {
+  if (content.some((block) => isToolResultHistoryBlockType(readObjectRecord(block)?.type))) {
     return true;
   }
-  const hasToolCallBlock = content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      isToolHistoryBlockType((block as { type?: unknown }).type) &&
-      !isToolResultHistoryBlockType((block as { type?: unknown }).type),
-  );
+  const hasToolCallBlock = content.some((block) => {
+    const type = readObjectRecord(block)?.type;
+    return isToolHistoryBlockType(type) && !isToolResultHistoryBlockType(type);
+  });
   const hasToolId =
     typeof message.toolCallId === "string" ||
     typeof message.tool_call_id === "string" ||
@@ -171,10 +164,10 @@ export function messageHasToolResultShape(message: Record<string, unknown>): boo
 }
 
 export function extractChatHistoryBlockText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
+  const entry = readObjectRecord(message);
+  if (!entry) {
     return undefined;
   }
-  const entry = message as Record<string, unknown>;
   if (typeof entry.content === "string") {
     return entry.content;
   }
@@ -185,13 +178,7 @@ export function extractChatHistoryBlockText(message: unknown): string | undefine
     return undefined;
   }
   const textParts = entry.content
-    .map((block) => {
-      if (!block || typeof block !== "object") {
-        return undefined;
-      }
-      const typed = block as { text?: unknown };
-      return typeof typed.text === "string" ? typed.text : undefined;
-    })
+    .map((block) => readObjectRecord(block)?.text)
     .filter((value): value is string => typeof value === "string");
   return textParts.length > 0 ? textParts.join("\n") : undefined;
 }
@@ -242,18 +229,12 @@ export function appendChatCanvasBlocks<T>(
     // Only retained blocks participate: rejecting an id collision must not
     // reserve that preview's different URL for subsequent previews.
     const alreadyPresent = baseContent.some((block) => {
-      if (!block || typeof block !== "object") {
-        return false;
-      }
-      const typed = block as { type?: unknown; preview?: unknown };
-      return (
-        typed.type === "canvas" &&
-        typed.preview &&
-        typeof typed.preview === "object" &&
-        (((typed.preview as { viewId?: unknown }).viewId &&
-          (typed.preview as { viewId?: unknown }).viewId === preview.viewId) ||
-          ((typed.preview as { url?: unknown }).url &&
-            (typed.preview as { url?: unknown }).url === preview.url))
+      const typed = readObjectRecord(block);
+      const existing = typed?.type === "canvas" ? readObjectRecord(typed.preview) : undefined;
+      return Boolean(
+        existing &&
+        ((existing.viewId && existing.viewId === preview.viewId) ||
+          (existing.url && existing.url === preview.url)),
       );
     });
     if (!alreadyPresent) {
@@ -281,10 +262,10 @@ export function appendChatCanvasBlocksToMessage(
 }
 
 function messageContainsToolHistoryContent(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
+  const entry = readObjectRecord(message);
+  if (!entry) {
     return false;
   }
-  const entry = message as Record<string, unknown>;
   if (
     typeof entry.toolCallId === "string" ||
     typeof entry.tool_call_id === "string" ||
@@ -296,12 +277,7 @@ function messageContainsToolHistoryContent(message: unknown): boolean {
   if (!Array.isArray(entry.content)) {
     return false;
   }
-  return entry.content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    return isToolHistoryBlockType((block as { type?: unknown }).type);
-  });
+  return entry.content.some((block) => isToolHistoryBlockType(readObjectRecord(block)?.type));
 }
 
 export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown[] {
@@ -314,11 +290,10 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
   let lastRenderableAssistantIndex = -1;
   const pending: ChatCanvasPreview[] = [];
   for (let index = 0; index < next.length; index++) {
-    const message = next[index];
-    if (!message || typeof message !== "object") {
+    const entry = readObjectRecord(next[index]);
+    if (!entry) {
       continue;
     }
-    const entry = message as Record<string, unknown>;
     const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
     if (role === "assistant") {
       lastAssistantIndex = index;

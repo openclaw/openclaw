@@ -4461,7 +4461,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 .content > * + * {
-  margin-top: var(--content-stack-gap, 20px);
+  margin-top: 20px;
 }
 
 .shell--settings .content:has(> .connection-action-block) {
@@ -4574,7 +4574,20 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   overflow: hidden;
   padding: 0;
   gap: 0;
-  --content-stack-gap: 0px;
+}
+
+/* Name the children: a universal subject under this :has() restyles the whole
+   document on every insertion inside .content, including each chat row. */
+.content:has(.plugin-tab-embed)
+  > :is(
+    .connection-action-block,
+    openclaw-sidebar-attention,
+    openclaw-sidebar-update-card,
+    .native-embed-header,
+    .settings-embed-list,
+    openclaw-router-outlet
+  ) {
+  margin-top: 0;
 }
 
 .content:has(.plugin-tab-embed) > openclaw-router-outlet {

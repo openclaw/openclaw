@@ -4,6 +4,7 @@ import type {
   SessionParticipantProjection,
 } from "../config/sessions/session-membership-facts.types.js";
 import { withPreparedSessionParticipants } from "../config/sessions/session-participant-prepared-read.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-agent-db.js";
@@ -287,6 +288,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
               groups = undefined;
             }
           },
+          projectionLane,
         );
       } finally {
         for (const continuation of continuations.toReversed()) {
