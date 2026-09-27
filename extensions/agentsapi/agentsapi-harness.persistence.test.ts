@@ -103,12 +103,10 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
     const runtime = createPluginRuntimeMock({ config: { current: () => config } });
     runtime.state.openKeyedStore = <T>(
       options: Parameters<typeof runtime.state.openKeyedStore>[0],
-    ) =>
-      createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env: state.env });
+    ) => createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env: state.env });
     runtime.state.openSyncKeyedStore = <T>(
       options: Parameters<typeof runtime.state.openSyncKeyedStore>[0],
-    ) =>
-      createPluginStateSyncKeyedStoreForTests<T>("agentsapi", { ...options, env: state.env });
+    ) => createPluginStateSyncKeyedStoreForTests<T>("agentsapi", { ...options, env: state.env });
     const register = () => {
       const registerAgentHarness = vi.fn<OpenClawPluginApi["registerAgentHarness"]>();
       plugin.register(createTestPluginApi({ id: "agentsapi", runtime, registerAgentHarness }));
