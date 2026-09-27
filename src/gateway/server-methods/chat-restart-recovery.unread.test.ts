@@ -61,10 +61,10 @@ it("counts a terminal restart-safe admission as unread activity", async () => {
   });
 });
 
-it("keeps a hidden Goal admission quiet when it ends terminal", async () => {
+it("carries the browser visibility fact on a hidden Goal request", () => {
   // A Goal request is admitted before the browser-client eligibility check, so
-  // the request has to carry the visibility fact instead of being assumed from
-  // its own existence (see #155690).
+  // the request has to carry the visibility fact instead of the terminal write
+  // assuming it from the admission's mere existence (see #155690).
   const request = createRestartSafeChatRequest({
     cfg: {} as OpenClawConfig,
     controlUiVisible: false,
@@ -77,7 +77,9 @@ it("keeps a hidden Goal admission quiet when it ends terminal", async () => {
     controlUiVisible: false,
     fingerprint: "goal-restart-safe-fingerprint",
   });
+});
 
+it("keeps a hidden Goal admission quiet when it ends terminal", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const target = {
       agentId: "main",
@@ -103,7 +105,7 @@ it("keeps a hidden Goal admission quiet when it ends terminal", async () => {
         ...target,
         admittedSessionId: target.sessionId,
         clientRunId: runId,
-        controlUiVisible: request?.controlUiVisible ?? false,
+        controlUiVisible: false,
         startedAt: 1_000,
         error: "Internal worker unavailable",
         status: "failed",
