@@ -307,22 +307,26 @@ export async function prunePublishedSessionArchivesByRetention(params: {
     params.scope,
     async () => {
       let removed = 0;
-      runOpenClawAgentWriteTransaction((transactionDb) => {
-        const db = getSessionKysely(transactionDb.db);
-        for (const row of removable) {
-          const result = executeSqliteQuerySync(
-            transactionDb.db,
-            db
-              .deleteFrom("session_transcript_archives")
-              .where("session_id", "=", row.session_id)
-              .where("generation", "=", row.generation)
-              .where("archive_name", "=", row.archive_name)
-              .where("created_at", "=", row.created_at)
-              .where("published_at", "=", row.published_at),
-          );
-          removed += Number(result.numAffectedRows ?? 0n);
-        }
-      }, toDatabaseOptions(params.scope));
+      runOpenClawAgentWriteTransaction(
+        (transactionDb) => {
+          const db = getSessionKysely(transactionDb.db);
+          for (const row of removable) {
+            const result = executeSqliteQuerySync(
+              transactionDb.db,
+              db
+                .deleteFrom("session_transcript_archives")
+                .where("session_id", "=", row.session_id)
+                .where("generation", "=", row.generation)
+                .where("archive_name", "=", row.archive_name)
+                .where("created_at", "=", row.created_at)
+                .where("published_at", "=", row.published_at),
+            );
+            removed += Number(result.numAffectedRows ?? 0n);
+          }
+        },
+        toDatabaseOptions(params.scope),
+        { operationLabel: "session.archive.prune-retention" },
+      );
       return removed;
     },
     "session.archive.retention-commit",
