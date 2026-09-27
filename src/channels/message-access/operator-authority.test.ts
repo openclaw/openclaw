@@ -1,26 +1,25 @@
 import { expect, it, vi } from "vitest";
-import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
+import {
+  bindOperatorModelExecution,
+  resolveAdmittedRunActiveAssertion,
+} from "../../agents/admitted-run-context.js";
 import { buildExecAutoReviewTranscript } from "../../agents/exec-auto-review-transcript.js";
 import { castAgentMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import {
   captureCommandOwnerAssertion,
+  CommandOwnerRevokedError,
   getCommandOwnerAuthority,
 } from "../../auto-reply/command-owner-authority.js";
 import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-admission.js";
+import { prepareInternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
 } from "../../auto-reply/reply/inbound-meta.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { installDiscordRegistryHooks } from "../../auto-reply/test-helpers/command-auth-registry-fixture.js";
-import {
-  loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
 import { prepareChannelOperatorAdmin } from "../../gateway/channel-operator-authority.js";
-import { createSessionMutationTestContext } from "../../gateway/server-methods/sessions-mutations.owner.test-support.js";
 import { resolveGatewayScopedTools } from "../../gateway/tool-resolution.js";
 import {
   createPluginRegistryFixture,
@@ -48,6 +47,7 @@ import {
   type BuiltChannelInboundEventContext,
 } from "../inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
+import { registerOperatorAssignmentTests } from "./operator-assignment.test-support.js";
 import {
   createCommandOwnerTestGateway,
   withAdminIngress,
@@ -55,6 +55,7 @@ import {
 import { createHostChannelIngressRuntime } from "./runtime.js";
 
 installDiscordRegistryHooks();
+registerOperatorAssignmentTests();
 
 it("reads linked identity once per admitted sender, including unlinked senders", async () => {
   await withAdminIngress(async ({ admins, context }) => {
@@ -76,7 +77,7 @@ it("reads linked identity once per admitted sender, including unlinked senders",
 });
 
 it("exposes a verified linked requester in trusted metadata without widening owner tools", async () => {
-  await withAdminIngress(async ({ cfg, state, admins, context }) => {
+  await withAdminIngress(async ({ cfg, admins, context }) => {
     const admin = admins[0]!;
     setDisplayName(admin.profile.id, "Ada Lovelace");
     for (const scenario of [
@@ -114,41 +115,6 @@ it("exposes a verified linked requester in trusted metadata without widening own
         surface: "loopback",
       }).tools;
       expect(tools.some((tool) => tool.name === "sessions")).toBe(scenario.owner);
-      if (scenario.owner) {
-        const sessionKey = ctx.SessionKey!;
-        const scope = { agentId: "main", sessionKey, env: state.env };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "requester-assignment",
-          updatedAt: 1,
-          visibility: "shared",
-        });
-        const gateway = createSessionMutationTestContext(cfg);
-        const tool = tools.find((entry) => entry.name === "sessions")!;
-        await withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey,
-            gatewayContextResolver: () => gateway,
-            operationalRunInstance: { instanceId: "requester-instance", runId: "requester-run" },
-            receiptAuthority: () => true,
-          },
-          async () => {
-            const result = await tool.execute("assign-requester", {
-              action: "assign_owner",
-              ownerType: "human",
-              ownerId: metadata.requester_profile.id,
-            });
-            expect(result.details).toMatchObject({
-              status: "updated",
-              owner: { type: "human", id: admin.profile.id },
-            });
-          },
-        );
-        expect(loadSessionEntry(scope)?.owner?.actor).toMatchObject({
-          type: "human",
-          id: admin.profile.id,
-        });
-      }
     }
   });
 });
@@ -459,7 +425,7 @@ it.each([
 it.each(["allowed", "revoked", "replaced", "unavailable"] as const)(
   "resumes only the original plugin grant when it is %s",
   async (change) => {
-    await withAdminIngress(async ({ cfg, admins, activatePolicy }) => {
+    await withAdminIngress(async ({ cfg, admins, activatePolicy, context }) => {
       const pluginId = "channel-owner-access";
       const originalId = "86633673-b1dd-4500-85e2-b6e6e490810f";
       let grantId: string | undefined = originalId;
@@ -494,10 +460,38 @@ it.each(["allowed", "revoked", "replaced", "unavailable"] as const)(
       const original = await prepareChannelOperatorAdmin(cfg, admins[0]!.identity);
       const reference = original!.recoveryReference!;
       expect(reference).toBeDefined();
-      if (change === "revoked" || change === "replaced") {
-        lifetime.abort();
-        grantId = change === "revoked" ? undefined : "78a7c3d0-c3a6-49a5-91e7-02c153e39ab5";
-        lifetime = new AbortController();
+      const authority =
+        change === "revoked"
+          ? prepareInternalGetReplyOptions(undefined, await context(admins[0]!.identity.senderId))
+              ?.operatorAuthority
+          : undefined;
+      const models =
+        change === "revoked"
+          ? [
+              bindOperatorModelExecution(authority, undefined),
+              bindOperatorModelExecution(authority, undefined),
+            ]
+          : [];
+      try {
+        for (const model of models) {
+          expect(model?.signal.aborted).toBe(false);
+        }
+        if (change === "revoked" || change === "replaced") {
+          lifetime.abort();
+          grantId = change === "revoked" ? undefined : "78a7c3d0-c3a6-49a5-91e7-02c153e39ab5";
+          lifetime = new AbortController();
+        }
+        for (const model of models) {
+          expect(model?.signal.aborted).toBe(true);
+          expect(model?.signal.reason).toBeInstanceOf(CommandOwnerRevokedError);
+          expect(model?.signal.reason).toMatchObject({
+            message: "Channel operator authority changed; send a new request.",
+          });
+        }
+      } finally {
+        for (const model of models) {
+          model?.release();
+        }
       }
       unavailable = change === "unavailable";
       await closeOpenClawStateDatabaseAsync();

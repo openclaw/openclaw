@@ -223,5 +223,18 @@ export async function prepareChannelOperatorAdmin(
         )
       : undefined);
   assertCurrent();
-  return { ...captured.authority, recoveryReference };
+  return {
+    ...captured.authority,
+    recoveryReference,
+    operatorProfile: {
+      profileId: prepared.linked.profileId,
+      assignedRole: prepared.linked.role,
+      scopes: resolveOperatorRolePolicyForAssignment(
+        prepared.linked.profileId,
+        prepared.linked.role,
+        cfg,
+      )?.scopes ?? ["operator.admin"],
+      gatewayAccessGrant: captured.grant,
+    },
+  };
 }
