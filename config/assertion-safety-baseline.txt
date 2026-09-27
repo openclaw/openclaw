@@ -2465,7 +2465,6 @@ src/hooks/policy.ts	1
 src/infra/advertised-lan-host.ts	1
 src/infra/agent-event-lifecycle.ts	1
 src/infra/agent-events.ts	2
-src/infra/agent-lifecycle-error.ts	1
 src/infra/approval-errors.ts	5
 src/infra/approval-gateway-resolver.ts	5
 src/infra/approval-handler-runtime.ts	15
@@ -2536,7 +2535,6 @@ src/infra/oauth-loopback-callback.ts	1
 src/infra/openclaw-cli-shim.ts	1
 src/infra/openclaw-root.ts	1
 src/infra/outbound/agent-delivery.ts	2
-src/infra/outbound/channel-selection.ts	2
 src/infra/outbound/conversation-delivery.ts	1
 src/infra/outbound/deliver-channel.ts	4
 src/infra/outbound/deliver-payload.ts	1
@@ -2584,7 +2582,7 @@ src/infra/sqlite-integrity.ts	2
 src/infra/sqlite-readonly-location.ts	3
 src/infra/sqlite-schema-contract.ts	8
 src/infra/sqlite-snapshot.ts	2
-src/infra/sqlite-strict.ts	7
+src/infra/sqlite-strict.ts	6
 src/infra/sqlite-wal.ts	4
 src/infra/state-migrations.acp-replay.ts	1
 src/infra/state-migrations.audit-backup.ts	1
@@ -2614,7 +2612,7 @@ src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2
 src/infra/state-migrations.workspace-setup.ts	1
-src/infra/system-presence.ts	2
+src/infra/system-presence.ts	1
 src/infra/system-run-approval-binding.ts	1
 src/infra/tailscale.ts	7
 src/infra/tmp-openclaw-dir.ts	3
