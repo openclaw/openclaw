@@ -69,7 +69,10 @@ import {
   migrateLegacyCurrentConversationBindings,
   migrateLegacyPluginBindingApprovals,
 } from "./state-migrations.runtime-state.js";
-import { createLegacyAcpSessionEntry } from "./state-migrations.session-store.test-support.js";
+import {
+  createConfig,
+  createLegacyAcpSessionEntry,
+} from "./state-migrations.session-store.test-support.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 import { loadVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
@@ -412,26 +415,6 @@ function insertCurrentConversationBindingRow(
       updated_at: 1,
     }),
   );
-}
-
-function createConfig(): OpenClawConfig {
-  return {
-    agents: {
-      list: [{ id: "worker-1", default: true }],
-    },
-    session: {
-      mainKey: "desk",
-    },
-    channels: {
-      chatapp: {
-        defaultAccount: "alpha",
-        accounts: {
-          beta: {},
-          alpha: {},
-        },
-      },
-    },
-  } as OpenClawConfig;
 }
 
 function createEnv(stateDir: string): NodeJS.ProcessEnv {
