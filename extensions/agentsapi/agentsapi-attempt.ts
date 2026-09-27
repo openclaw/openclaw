@@ -7,6 +7,7 @@ import {
   emitAgentHarnessAttemptEvent,
   AgentHarnessProjectionSettlement,
   racePromiseWithAbortSignal,
+  resolveAgentHarnessHistoryLimits,
   type AgentHarnessAttemptTimeout,
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
@@ -250,19 +251,25 @@ export async function runAgentsApiAttempt(
       params.userTurnTranscriptRecorder?.message ??
       (await params.userTurnTranscriptRecorder?.resolveMessage());
     assertCurrent();
-    const history = await SessionManager.openModelContextAsync(target, {
-      cwd: params.workspaceDir,
-      admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
-      signal: controller.signal,
-    });
-    assertCurrent();
     const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: params.prompt,
       currentInboundContext: params.currentInboundContext,
       currentUserMessage: admittedMessage ?? params.prompt,
       // Agents API cannot narrow native tools per turn; hook toolsAllow is advisory here.
       developerInstructions: instructions,
-      messages: history.buildSessionContext().messages,
+      messages: async () => {
+        assertCurrent();
+        const history = await SessionManager.openModelContextAsync(target, {
+          cwd: params.workspaceDir,
+          admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+          signal: controller.signal,
+          limits: resolveAgentHarnessHistoryLimits(
+            params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
+          ),
+        });
+        assertCurrent();
+        return history.buildSessionContext().messages;
+      },
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       toolAuthority: {

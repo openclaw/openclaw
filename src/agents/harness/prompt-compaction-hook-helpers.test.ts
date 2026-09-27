@@ -18,6 +18,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     "preserves the admitted request through projected prompts (authorized=%s)",
     async (authorized) => {
       const handler = vi.fn(async (_event: unknown) => undefined);
+      const history = [{ role: "user", content: "Earlier request" }];
       initializeGlobalHookRunner(
         createMockPluginRegistry([
           {
@@ -35,7 +36,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
         },
         currentUserMessage: "hello",
         currentUserMessageId: "message-1",
-        messages: [],
+        messages: async () => history,
         developerInstructions: "base",
         ctx: {},
         toolAuthority: {
@@ -53,7 +54,33 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
         currentUserMessage: "hello",
         currentUserMessageId: "message-1",
         prompt: expect.stringContaining("Prior conversation:"),
+        messages: history,
       });
+    },
+  );
+
+  it.each([false, true])(
+    "builds prompts without reading history when only heartbeat hooks can run (heartbeat=%s)",
+    async (heartbeat) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "heartbeat_prompt_contribution",
+            handler: () => ({ prependContext: "Heartbeat reminder." }),
+          },
+        ]),
+      );
+      const result = await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "Current request",
+        developerInstructions: "base",
+        messages: async () => {
+          throw new Error("History is unavailable");
+        },
+        ctx: { trigger: heartbeat ? "heartbeat" : "user" },
+      });
+      expect(result.prompt).toBe(
+        heartbeat ? "Heartbeat reminder.\n\nCurrent request" : "Current request",
+      );
     },
   );
 

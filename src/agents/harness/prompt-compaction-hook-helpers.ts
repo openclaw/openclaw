@@ -32,7 +32,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   currentUserMessage?: string | Pick<PersistedUserTurnMessage, "content" | "idempotencyKey">;
   currentUserMessageId?: string;
   developerInstructions: string | AgentHarnessDeveloperInstructionBuilder;
-  messages: unknown[];
+  messages: unknown[] | (() => Promise<unknown[]>);
   ctx: AgentHarnessHookContext;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   toolAuthority?: {
@@ -83,7 +83,11 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       ? { currentUserMessage: currentUserMessageText }
       : {}),
     ...(typeof currentUserMessageId === "string" ? { currentUserMessageId } : {}),
-    messages: params.messages,
+    messages: hasPromptBuildHooks
+      ? typeof params.messages === "function"
+        ? await params.messages()
+        : params.messages
+      : [],
   };
 
   // Match the embedded runner's lifecycle order: heartbeat contributions are

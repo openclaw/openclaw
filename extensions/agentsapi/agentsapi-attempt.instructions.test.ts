@@ -16,6 +16,7 @@ const {
   fetchWithSsrFGuardMock,
   prepareAgentWorkspaceContextMock,
   watchedSessionsContextMock,
+  openModelContextAsyncMock,
   promptFixture,
 } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:
@@ -28,6 +29,9 @@ const {
     vi.fn<
       typeof import("openclaw/plugin-sdk/agent-harness-runtime").buildWatchedSessionsHarnessContext
     >(),
+  openModelContextAsyncMock: vi.fn(async () => ({
+    buildSessionContext: () => ({ messages: [{ role: "user", content: "Earlier request" }] }),
+  })),
   promptFixture: {
     declarations: [] as AgentsApiToolSurface["declarations"],
     turnInputs: [] as string[],
@@ -65,7 +69,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
   SessionManager: {
     open: () => ({ buildSessionContext: () => ({ messages: [] }) }),
-    openModelContextAsync: async () => ({ buildSessionContext: () => ({ messages: [] }) }),
+    openModelContextAsync: openModelContextAsyncMock,
   },
 }));
 
@@ -122,6 +126,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => fetchWithSsrFGuardMock.mockReset());
 afterEach(() => prepareAgentWorkspaceContextMock.mockClear());
 afterEach(() => watchedSessionsContextMock.mockClear());
+afterEach(() => openModelContextAsyncMock.mockReset());
 afterEach(() => resetGlobalHookRunner());
 afterEach(() => {
   promptFixture.declarations = [];
@@ -134,6 +139,7 @@ describe("Agents API agent workspace instructions", () => {
     const fixture = await createFixture({
       trigger: "user",
       toolAuthorityFingerprint: "fixture-prompt-authority",
+      contextTokenBudget: 32_000,
     });
     promptFixture.declarations = toolDeclarations("memory_search", "memory_get");
     const hook = vi.fn().mockReturnValue({
@@ -150,6 +156,16 @@ describe("Agents API agent workspace instructions", () => {
     );
 
     const binding = await fixture.run();
+    expect(openModelContextAsyncMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        limits: { maxBytes: 256_000, maxEvents: 10_000, toolResultOverflow: "omit" },
+      }),
+    );
+    expect(hook).toHaveBeenCalledWith(
+      expect.objectContaining({ messages: [{ role: "user", content: "Earlier request" }] }),
+      expect.anything(),
+    );
     expect(fixture.requests[0]?.agent.instructions).toContain("Plugin system guidance one.");
     expect(promptFixture.turnInputs[0]).toContain(
       "Reminder one.\n\nAuthorized recall context.\n\nFixture prompt\n\nPlugin trailing context.",
@@ -166,6 +182,13 @@ describe("Agents API agent workspace instructions", () => {
 
     await fixture.run();
     expect(fixture.requests[2]?.agent.instructions).toContain("Plugin system guidance two.");
+  });
+
+  it("continues without transcript access when no prompt hook needs history", async () => {
+    const fixture = await createFixture();
+    openModelContextAsyncMock.mockRejectedValue(new Error("History is unavailable"));
+    await fixture.run();
+    expect(promptFixture.turnInputs[0]).toContain("Fixture prompt");
   });
 
   it.each([
