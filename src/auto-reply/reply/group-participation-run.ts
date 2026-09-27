@@ -1,5 +1,12 @@
+import { isDecisionAssistanceEligible } from "../../agents/decision-assistance.js";
+import { resolveDecisionModelSetting } from "../../agents/decision-model-setting.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import {
+  createRuntimeConfigReader,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import type { DecisionRuntimeV1 } from "../../decisions/types.js";
@@ -32,12 +39,6 @@ export type GroupParticipationSnapshot = {
 
 export type GroupParticipationRun = ReturnType<typeof createGroupParticipationRun>;
 const runs = new WeakMap<ReplyOperation, GroupParticipationRun>();
-const runtime: DecisionRuntimeV1 = {
-  evaluate: async (batch, options) => {
-    const { evaluateDecision } = await import("../../decisions/runtime.js");
-    return evaluateDecision(batch, options);
-  },
-};
 
 function createGroupParticipationRun(params: {
   run: () => InternalFollowupRun;
@@ -54,6 +55,30 @@ function createGroupParticipationRun(params: {
   let snapshot: GroupParticipationSnapshot | undefined;
   let live = true;
   let ordinaryRestoration: Promise<void> | undefined;
+  const readConfig = createRuntimeConfigReader(run.run.config);
+  const currentSelection = () => {
+    const config = readConfig();
+    if (!isDecisionAssistanceEligible(config, run.run.agentId)) {
+      return undefined;
+    }
+    const model = resolveDecisionModelSetting(config, run.run.agentId);
+    const revision =
+      config === getRuntimeConfigSnapshot()
+        ? getRuntimeConfigSnapshotMetadata()?.revision
+        : "scoped";
+    return model ? `${revision}:${model.provider}/${model.model}` : undefined;
+  };
+  let selection = currentSelection();
+  const runtime: DecisionRuntimeV1 = {
+    evaluate: async (batch, options) => {
+      const { evaluateDecision } = await import("../../decisions/runtime.js");
+      assertCurrent();
+      if (!selection || selection !== currentSelection()) {
+        return { status: "unavailable", reason: "disabled" };
+      }
+      return evaluateDecision(batch, options);
+    },
+  };
   void operation.ownerSettlement?.then(() => {
     live = false;
   });
@@ -98,6 +123,11 @@ function createGroupParticipationRun(params: {
     const deadline = performance.now() + timeoutMs;
     for (;;) {
       assertCurrent();
+      selection = currentSelection();
+      if (!selection || performance.now() >= deadline) {
+        await useOrdinaryBehavior();
+        return undefined;
+      }
       const inputs = readGroupParticipationInputs(operation);
       const evidence = await readGroupParticipationEvidence({
         agentId: target.agentId,
@@ -111,6 +141,9 @@ function createGroupParticipationRun(params: {
         signal: operation.abortSignal,
       });
       assertCurrent();
+      if (selection !== currentSelection()) {
+        continue;
+      }
       const remaining = deadline - performance.now();
       if (remaining <= 0) {
         await useOrdinaryBehavior();
@@ -121,6 +154,9 @@ function createGroupParticipationRun(params: {
         timeoutMs: remaining,
       });
       assertCurrent();
+      if (selection !== currentSelection()) {
+        continue;
+      }
       if (attention.status === "unavailable") {
         await useOrdinaryBehavior();
         return undefined;
@@ -148,6 +184,10 @@ function createGroupParticipationRun(params: {
       return snapshot;
     }
   };
+  const isCurrent = (revision: number) =>
+    selection !== undefined &&
+    selection === currentSelection() &&
+    readGroupParticipationInputs(operation).revision === revision;
   return {
     get mode() {
       return mode;
@@ -165,18 +205,19 @@ function createGroupParticipationRun(params: {
     timeoutMs,
     refresh,
     useOrdinaryBehavior,
-    isCurrent: (revision: number) => readGroupParticipationInputs(operation).revision === revision,
+    isCurrent,
     publicationAuthority: (revision: number) => {
       assertCurrent();
-      if (readGroupParticipationInputs(operation).revision !== revision) {
+      if (!isCurrent(revision)) {
         return undefined;
       }
+      const approvedSelection = selection;
       return {
         recoveryMode: "reconcile-only" as const,
         assertCurrent: () => {
           assertCurrent();
-          if (readGroupParticipationInputs(operation).revision !== revision) {
-            throw new Error("The group conversation changed after this draft was approved");
+          if (approvedSelection !== selection || !isCurrent(revision)) {
+            throw new Error("The group participation approval is no longer current");
           }
         },
       };
@@ -213,6 +254,9 @@ export async function prepareGroupParticipationRun(params: {
     sessionKey: params.sessionKey,
   });
   const config = resolveQueuedReplyRuntimeConfig(executionRun.config);
+  if (!isDecisionAssistanceEligible(config, run.run.agentId)) {
+    return undefined;
+  }
   if (
     resolveReplyCandidateRuntime({
       run: executionRun,

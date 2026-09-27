@@ -1,12 +1,16 @@
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
-import type { InternalFollowupRun } from "./agent-runner-execution.types.js";
-import type { FollowupRun } from "./queue.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import type { ReplyOperation } from "./reply-run-registry.contracts.js";
 
 export type GroupParticipationInput = {
   recorder: UserTurnTranscriptRecorder;
   sourceMessageId?: string;
   replyToText?: string;
+};
+
+export type GroupParticipationContext = {
+  agentName?: string;
+  replyToText?: string;
+  sources?: readonly GroupParticipationInput[];
 };
 
 type AcceptedGroupInputs = {
@@ -22,26 +26,31 @@ const acceptedInputs = new WeakMap<ReplyOperation, AcceptedGroupInputs>();
 /** Call only after the existing admission or queue owner accepts this source. */
 export function recordGroupParticipationInput(
   operation: ReplyOperation | undefined,
-  run: FollowupRun,
+  run: {
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+    messageId?: string;
+    originatingChannel?: string;
+    run: { messageProvider?: string };
+    groupParticipation?: GroupParticipationContext;
+  },
   admission: "initial" | "steer" | "queued" = "queued",
 ): void {
-  const input: InternalFollowupRun = run;
   if (!operation || !run.userTurnTranscriptRecorder) {
     return;
   }
   let accepted = acceptedInputs.get(operation);
   if (!accepted) {
-    if (!input.groupParticipation) {
+    if (!run.groupParticipation) {
       return;
     }
     accepted = { revision: 0, identities: new Set(), adoptedRecorders: new Set(), sources: [] };
     acceptedInputs.set(operation, accepted);
   }
-  const sources = input.groupParticipation?.sources ?? [
+  const sources = run.groupParticipation?.sources ?? [
     {
       recorder: run.userTurnTranscriptRecorder,
       sourceMessageId: run.messageId,
-      replyToText: input.groupParticipation?.replyToText,
+      replyToText: run.groupParticipation?.replyToText,
     },
   ];
   let adopted = false;

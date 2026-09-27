@@ -137,9 +137,10 @@ If the message tool is unavailable under the active tool policy, OpenClaw falls 
 
 For direct chats and any other source event, `messages.visibleReplies: "message_tool"` applies the same tool-only behavior globally; `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract.
 
-Accepted group/channel requests require a reply by default. With a configured
-[Decision Model](/concepts/decision-models#group-participation) and mention gating
-disabled, embedded harnesses distinguish invited requests from opportunities to
+Accepted group/channel requests require a reply by default. With
+[Decision assistance](/concepts/experimental-features#decision-assistance) enabled,
+a configured [Decision Model](/concepts/decision-models#group-participation), and
+mention gating disabled, embedded harnesses distinguish invited requests from opportunities to
 contribute. Invited replies keep the existing behavior. Unsolicited contributions
 use read tools privately and send a reviewed, useful final answer automatically.
 Chatter and contributions that provide no useful answer stay silent. Generic CLI

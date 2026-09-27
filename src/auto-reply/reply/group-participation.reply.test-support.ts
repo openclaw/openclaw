@@ -10,6 +10,7 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GetReplyOptions } from "../types.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "./dispatch-from-config.js";
+import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { getReplyFromConfig } from "./get-reply.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
@@ -66,6 +67,7 @@ export async function createGroupReplyFixture() {
         workspace: state.workspaceDir,
         model: { primary: "test-provider/test-model" },
         decisionModel: "fixture/synthetic-decision",
+        experimental: { decisionAssistance: true },
         thinkingDefault: "off",
       },
     },
@@ -95,6 +97,7 @@ export async function createGroupReplyFixture() {
     },
   };
   const lookupPath = path.join(state.workspaceDir, "port.txt");
+  withFullRuntimeReplyConfig(config);
   await fs.writeFile(lookupPath, "The published TLS port is 443.\n");
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);

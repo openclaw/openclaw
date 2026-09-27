@@ -11,7 +11,7 @@ import { combineGatewayLocalUserIngress } from "../../../gateway/local-user-ingr
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
-import type { InternalFollowupRun } from "../agent-runner-execution.types.js";
+import type { GroupParticipationContext } from "../group-participation-inputs.js";
 import {
   resolveReplyOperatorAuthorityKey,
   resolveReplyPersonalToolTargets,
@@ -24,6 +24,8 @@ import {
   type InternalFollowupRun,
   type QueuedFollowupReplyBatch,
 } from "./types.js";
+
+type GroupFollowupRun = FollowupRun & { groupParticipation?: GroupParticipationContext };
 
 export function hasPreparedCurrentTurnImages(run: InternalFollowupRun): boolean {
   return run.currentTurnImagesPrepared === true;
@@ -294,12 +296,12 @@ export function collectCurrentInboundContext(
 function collectReplyDisposition(
   items: FollowupRun[],
   abortSignal?: AbortSignal,
-): FollowupRuntimeMetadata & Pick<InternalFollowupRun, "groupParticipation"> {
+): FollowupRuntimeMetadata & Pick<GroupFollowupRun, "groupParticipation"> {
   const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
   // Delivery-key equality proves every source has the same turn authority.
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
-  const groupSources: InternalFollowupRun[] = items;
+  const groupSources: GroupFollowupRun[] = items;
   const groupParticipation =
     groupSources.length > 0 && groupSources.every((item) => item.groupParticipation)
       ? {
