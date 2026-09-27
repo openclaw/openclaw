@@ -1,50 +1,43 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
+import { combineQaSuiteErrors, isQaSuiteInfraRetryableError } from "./errors.js";
 
 export const QA_SUITE_INFRA_RETRY_LIMIT = 1;
-const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "EPIPE",
-  "ETIMEDOUT",
-  "UND_ERR_SOCKET",
-]);
-
-function hasQaSuiteRetryableNetworkCode(error: unknown) {
-  let current: unknown = error;
-  for (let depth = 0; depth < 4 && current; depth += 1) {
-    const record = asOptionalObjectRecord(current);
-    if (!record) {
-      return false;
-    }
-    if (
-      typeof record.code === "string" &&
-      QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES.has(record.code.toUpperCase())
-    ) {
-      return true;
-    }
-    current = record.cause;
-  }
-  return false;
-}
-
-export function isQaSuiteInfraRetryableError(error: unknown) {
-  if (error instanceof QaSuiteArtifactError || error instanceof QaSuiteInfraError) {
-    return true;
-  }
-  return hasQaSuiteRetryableNetworkCode(error);
-}
 
 export async function runQaSuiteWithInfraRetry<Result>(
   run: (attempt: number) => Promise<Result>,
   maxRetries = QA_SUITE_INFRA_RETRY_LIMIT,
+  signal?: AbortSignal,
+  options?: {
+    canRetry?: () => boolean;
+    onAttemptFailure?: (error: unknown, final: boolean) => void;
+  },
 ) {
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    // The first invocation must establish its evidence owner even after an
+    // accepted run is cancelled. Later attempts must not reopen admission.
+    if (attempt > 0) {
+      signal?.throwIfAborted();
+    }
     try {
       return await run(attempt);
     } catch (error) {
-      if (!isQaSuiteInfraRetryableError(error) || attempt >= maxRetries) {
+      const retry =
+        !signal?.aborted &&
+        isQaSuiteInfraRetryableError(error) &&
+        attempt < maxRetries &&
+        options?.canRetry?.() !== false;
+      // Retry admission and evidence selection share one synchronous decision;
+      // a sibling cleanup failure must not leave this attempt nonterminal.
+      try {
+        options?.onAttemptFailure?.(error, !retry);
+      } catch (recordError) {
+        throw combineQaSuiteErrors(
+          [error, recordError],
+          "QA attempt and failure recording failed",
+          { cause: error },
+        );
+      }
+      if (!retry) {
         throw error;
       }
       process.stderr.write(

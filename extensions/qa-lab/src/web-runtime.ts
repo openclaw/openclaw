@@ -13,6 +13,7 @@ type QaWebSession = {
   closing?: Promise<unknown[]>;
   owner?: Set<string>;
   signal?: AbortSignal;
+  removeAbortListener?: () => void;
 };
 
 type QaWebDiagnosticEntry = {
@@ -172,6 +173,7 @@ function closeSession(pageId: string, session: QaWebSession): Promise<unknown[]>
     await closeKnownHandles();
     await session.acquisition.catch(() => {});
     await closeKnownHandles();
+    session.removeAbortListener?.();
     // A passing retry must not hide an earlier browser's failed cleanup.
     if (errors.length === 0) {
       sessions.delete(pageId);
@@ -249,6 +251,9 @@ async function openPage(params: QaWebOpenPageParams, owner?: Set<string>, signal
     void closeSession(pageId, session);
   };
   signal?.addEventListener("abort", onAbort, { once: true });
+  // Ready pages can still hold untimed title/evaluation calls. Keep their
+  // cancellation owner until close, not just until acquisition returns.
+  session.removeAbortListener = () => signal?.removeEventListener("abort", onAbort);
   try {
     const opened = await session.acquisition;
     assertSessionOpening(session);
@@ -262,9 +267,6 @@ async function openPage(params: QaWebOpenPageParams, owner?: Set<string>, signal
       });
     }
     throw failure;
-  } finally {
-    // The signal owns only acquisition; ready pages remain owned by the suite.
-    signal?.removeEventListener("abort", onAbort);
   }
 }
 

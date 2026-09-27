@@ -1,5 +1,6 @@
 // Qa Lab tests cover suite plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QaSuiteCleanupError } from "./errors.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
@@ -15,13 +16,14 @@ import {
   buildQaSuiteRuntimeMetrics,
   createQaSuiteTransportAdapter,
   formatQaSuiteRunStartProgress,
+  publishQaSuiteTerminalResult,
   resolveQaSuiteTransportReadyTimeoutMs,
   runQaFlowSuite,
   runQaFlowSuiteCleanupPlan,
   shouldLogQaSuiteProgress,
   shouldRunQaSuiteWithIsolatedScenarioWorkers,
   throwQaSuiteCleanupErrors,
-  waitForQaLabReadyOrStopOwned,
+  waitForQaLabReady,
 } from "./suite.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -145,6 +147,31 @@ describe("qa suite", () => {
     expect((thrown as Error).cause).toBe(cleanupError);
   });
 
+  it.each([false, true])(
+    "preserves the original run and failed publication without cleanup failures (unconfirmed=%s)",
+    async (unconfirmed) => {
+      const original = new Error("first failure");
+      const runError = unconfirmed
+        ? new QaSuiteCleanupError([original], "worker did not settle")
+        : original;
+      const publicationError = new Error("terminal publication failed");
+      const publish = vi.fn<() => Promise<QaSuiteResult>>().mockRejectedValue(publicationError);
+      const thrown = await publishQaSuiteTerminalResult({
+        runFailed: true,
+        runError,
+        cleanupFailures: [],
+        publish,
+      }).catch((error: unknown) => error);
+
+      expect(publish).toHaveBeenCalledOnce();
+      expect(thrown).toMatchObject({
+        cause: runError,
+        errors: [runError, publicationError],
+      });
+      expect(thrown instanceof QaSuiteCleanupError).toBe(unconfirmed);
+    },
+  );
+
   it("reports completed counts, labeled failures, and only written artifact paths", () => {
     const result = {
       outputDir: "/qa-output\nretained",
@@ -189,23 +216,31 @@ describe("qa suite", () => {
     expect((thrown as Error).message).not.toContain("evidence=");
   });
 
-  it.each(["never-spawned", "confirmed-stopped", "unconfirmed"] as const)(
-    "gates after-stop cleanup on %s, independently of diagnostic errors",
-    async (process) => {
+  it.each(
+    (["never-spawned", "confirmed-stopped", "unconfirmed"] as const).flatMap((process) =>
+      [false, true].map((withErrors) => ({ process, withErrors })),
+    ),
+  )(
+    "gates after-stop cleanup on $process, independently of diagnostic errors ($withErrors)",
+    async ({ process, withErrors }) => {
       const diagnostic = new Error("cleanup diagnostic failed");
+      const errors = withErrors ? [diagnostic] : [];
       const release = vi.fn(async () => {});
       const finishLab = vi.fn(async () => {});
       const failures = await runQaFlowSuiteCleanupPlan({
         cleanupTransportBeforeGatewayStop: async () => {},
         cleanupTransportAfterGatewayStop: release,
-        stopGateway: async () => ({ process, errors: [diagnostic] }),
+        stopGateway: async () => ({ process, errors }),
         disposeAgentHarnesses: async () => {},
         finishLab,
       });
-      expect(release).toHaveBeenCalledTimes(process === "unconfirmed" ? 0 : 1);
-      expect(failures).toEqual([
-        { phase: "gateway stop", error: expect.objectContaining({ errors: [diagnostic] }) },
-      ]);
+      const unconfirmed = process === "unconfirmed";
+      expect(release).toHaveBeenCalledTimes(unconfirmed ? 0 : 1);
+      expect(failures).toHaveLength(unconfirmed || withErrors ? 1 : 0);
+      if (failures.length) {
+        expect(failures[0]).toMatchObject({ phase: "gateway stop", error: { errors } });
+        expect(failures[0]!.error instanceof QaSuiteCleanupError).toBe(unconfirmed);
+      }
       expect(finishLab).toHaveBeenCalledOnce();
     },
   );
@@ -286,29 +321,19 @@ describe("qa suite", () => {
     );
   });
 
-  it("stops an owned lab when readiness never becomes healthy", async () => {
-    const stop = vi.fn(async () => {});
+  it("rejects when lab readiness never becomes healthy", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: { ok: false },
       release: vi.fn(async () => {}),
     });
 
-    await expect(
-      waitForQaLabReadyOrStopOwned({
-        lab: {
-          listenUrl: "http://127.0.0.1:43123",
-          stop,
-        },
-        ownsLab: true,
-        timeoutMs: 1,
-      }),
-    ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
-    expect(stop).toHaveBeenCalledTimes(1);
+    await expect(waitForQaLabReady("http://127.0.0.1:43123", 1)).rejects.toThrow(
+      "timed out after 1ms waiting for qa-lab ready",
+    );
   });
 
   it("cancels a successful lab readiness body before releasing its guard", async () => {
     const events: string[] = [];
-    const stop = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(
         new ReadableStream<Uint8Array>({
@@ -323,23 +348,13 @@ describe("qa suite", () => {
       },
     });
 
-    await expect(
-      waitForQaLabReadyOrStopOwned({
-        lab: {
-          listenUrl: "http://127.0.0.1:43123",
-          stop,
-        },
-        ownsLab: false,
-      }),
-    ).resolves.toBeUndefined();
+    await expect(waitForQaLabReady("http://127.0.0.1:43123")).resolves.toBeUndefined();
 
     expect(events).toEqual(["cancel", "release"]);
-    expect(stop).not.toHaveBeenCalled();
   });
 
   it("bounds a hung lab readiness request by the remaining startup deadline", async () => {
     vi.useFakeTimers();
-    const stop = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockImplementation(
       async ({ timeoutMs }: { timeoutMs: number }) =>
         await new Promise((_, reject) => {
@@ -347,14 +362,7 @@ describe("qa suite", () => {
         }),
     );
 
-    const readiness = waitForQaLabReadyOrStopOwned({
-      lab: {
-        listenUrl: "http://127.0.0.1:43123",
-        stop,
-      },
-      ownsLab: true,
-      timeoutMs: 1_000,
-    });
+    const readiness = waitForQaLabReady("http://127.0.0.1:43123", 1_000);
     const rejection = expect(readiness).rejects.toThrow(
       "timed out after 1000ms waiting for qa-lab ready",
     );
@@ -364,27 +372,6 @@ describe("qa suite", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: 1_000 }),
     );
-    expect(stop).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves caller-owned labs running when readiness never becomes healthy", async () => {
-    const stop = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: false },
-      release: vi.fn(async () => {}),
-    });
-
-    await expect(
-      waitForQaLabReadyOrStopOwned({
-        lab: {
-          listenUrl: "http://127.0.0.1:43123",
-          stop,
-        },
-        ownsLab: false,
-        timeoutMs: 1,
-      }),
-    ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
-    expect(stop).not.toHaveBeenCalled();
   });
 
   it("defaults progress logging from CI when no override is set", () => {

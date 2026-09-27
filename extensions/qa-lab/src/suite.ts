@@ -4,17 +4,20 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { combineQaSuiteErrors, QaSuiteCleanupError } from "./errors.js";
 import type { QaGatewayChild, QaGatewayStopResult } from "./gateway-child.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import {
   createQaTransportAdapter,
+  prepareQaTransportAdapterFactories,
   selectQaTransportDriver,
   type QaTransportAdapterFactory,
   type QaTransportId,
 } from "./qa-transport-registry.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import { expandQaScenarioExecutionCells } from "./scenario-lane.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suite-artifacts.js";
 import { waitForQaHttpReady } from "./suite-http-readiness.js";
@@ -28,52 +31,68 @@ import {
   type QaSuiteRunParams as QaSuiteBaseRunParams,
   type QaSuiteScenarioResult,
   type QaSuiteStartLabFn,
+  type QaSuiteResolvedRunContext,
 } from "./suite-types.js";
 
 export type { QaSuiteScenarioResult, QaSuiteStartLabFn };
+
+export async function prepareQaSuiteAdapterFactories(
+  params:
+    | Pick<QaSuiteRunParams, "signal" | "adapterFactories" | "channelDriver" | "channelId">
+    | undefined,
+  context: Pick<QaSuiteResolvedRunContext, "selectedScenarios" | "transportId">,
+) {
+  params?.signal?.throwIfAborted();
+  const factories = await prepareQaTransportAdapterFactories({
+    factories: params?.adapterFactories,
+    driver: params?.channelDriver,
+    cells: expandQaScenarioExecutionCells({
+      scenarios: context.selectedScenarios,
+      channelDriver: params?.channelDriver ?? context.transportId,
+      channel: params?.channelId,
+      expandChannels: false,
+    }),
+  });
+  params?.signal?.throwIfAborted();
+  return factories;
+}
 
 export async function createQaSuiteTransportAdapter(params: {
   adapterOptions?: QaSuiteRunParams["adapterOptions"];
   adapterFactories?: readonly QaTransportAdapterFactory[];
   channelDriver?: QaScorecardChannelDriver | null;
   channelId?: string;
-  cleanupOnFailure?: () => Promise<void>;
   outputDir: string;
   transportPolicy?: NonNullable<QaSuiteRunParams["adapterOptions"]>["transportPolicy"];
   state: QaLabServerHandle["state"];
   transportId: QaTransportId;
 }) {
-  try {
-    const driver = selectQaTransportDriver({
-      channelDriver: params.channelDriver,
-      channelId: params.channelId,
-      transportId: params.transportId,
-    });
-    const result = await createQaTransportAdapter(
-      {
-        channelId: params.channelId ?? params.transportId,
-        driver,
-        outputDir: params.outputDir,
-        adapterOptions: {
-          ...params.adapterOptions,
-          ...(params.transportPolicy
-            ? {
-                transportPolicy: {
-                  ...params.adapterOptions?.transportPolicy,
-                  ...params.transportPolicy,
-                },
-              }
-            : {}),
-        },
-        state: params.state,
+  const driver = selectQaTransportDriver({
+    channelDriver: params.channelDriver,
+    channelId: params.channelId,
+    transportId: params.transportId,
+  });
+  const result = await createQaTransportAdapter(
+    {
+      channelId: params.channelId ?? params.transportId,
+      driver,
+      outputDir: params.outputDir,
+      adapterOptions: {
+        ...params.adapterOptions,
+        ...(params.transportPolicy
+          ? {
+              transportPolicy: {
+                ...params.adapterOptions?.transportPolicy,
+                ...params.transportPolicy,
+              },
+            }
+          : {}),
       },
-      driver === "live" ? params.adapterFactories : undefined,
-    );
-    return { ...result, driver };
-  } catch (error) {
-    await params.cleanupOnFailure?.().catch(() => undefined);
-    throw error;
-  }
+      state: params.state,
+    },
+    driver === "live" ? params.adapterFactories : undefined,
+  );
+  return { ...result, driver };
 }
 
 export type QaSuiteRunParams = QaSuiteBaseRunParams & {
@@ -143,7 +162,7 @@ export function formatQaSuiteRunStartProgress(params: {
   return parts.join(" ");
 }
 
-async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
+export async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
   const ready = await waitForQaHttpReady(
     `${baseUrl}/readyz`,
     timeoutMs,
@@ -152,21 +171,6 @@ async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
   );
   if (!ready) {
     throw new Error(`timed out after ${timeoutMs}ms waiting for qa-lab ready`);
-  }
-}
-
-export async function waitForQaLabReadyOrStopOwned(params: {
-  lab: Pick<QaLabServerHandle, "listenUrl" | "stop">;
-  ownsLab: boolean;
-  timeoutMs?: number;
-}) {
-  try {
-    await waitForQaLabReady(params.lab.listenUrl, params.timeoutMs);
-  } catch (error) {
-    if (params.ownsLab) {
-      await params.lab.stop();
-    }
-    throw error;
   }
 }
 
@@ -198,10 +202,14 @@ export async function runQaFlowSuiteCleanupPlan(params: {
   const stopGatewayAndMark = async () => {
     const result = await params.stopGateway();
     gatewayStopped = result.process !== "unconfirmed";
+    if (!gatewayStopped) {
+      throw new QaSuiteCleanupError(result.errors, "qa gateway child termination is unconfirmed");
+    }
     if (result.errors.length) {
       throw new AggregateError(
         result.errors,
         `qa gateway child cleanup failed: ${result.errors.map((error) => String(error)).join("; ")}`,
+        { cause: result.errors[0] },
       );
     }
   };
@@ -269,13 +277,50 @@ export function throwQaSuiteCleanupErrors(params: {
       : []),
   ].join("\n");
   const errors = params.cleanupFailures.map((failure) => failure.error);
-  if (params.runFailed) {
-    throw new AggregateError([params.runError, ...errors], message, { cause: params.runError });
+  throw combineQaSuiteErrors(
+    params.runFailed ? [params.runError, ...errors] : errors,
+    message,
+    params.runFailed
+      ? { cause: params.runError }
+      : errors.length === 1
+        ? { cause: errors[0] }
+        : undefined,
+  );
+}
+
+export async function publishQaSuiteTerminalResult(
+  params: Parameters<typeof throwQaSuiteCleanupErrors>[0] & {
+    finalize?: () => Promise<readonly unknown[]>;
+    publish?: () => Promise<QaSuiteResult>;
+  },
+) {
+  let result: QaSuiteResult | undefined;
+  let { runFailed, runError } = params;
+  const retainFailure = (error: unknown) => {
+    runError = runFailed
+      ? combineQaSuiteErrors([runError, error], "QA run and publication failed", {
+          cause: runError,
+        })
+      : error;
+    runFailed = true;
+  };
+  try {
+    // Only observer delivery failures may follow successful finalization into
+    // publication. A failed evidence commit must not produce a completed report.
+    for (const error of (await params.finalize?.()) ?? []) {
+      retainFailure(error);
+    }
+    result = await params.publish?.();
+  } catch (error) {
+    retainFailure(error);
   }
-  if (errors.length === 1) {
-    throw new AggregateError(errors, message, { cause: errors[0] });
+  // Publish completed observations even when cleanup failed, then preserve every
+  // failure without a throwing finally replacing the original run error.
+  throwQaSuiteCleanupErrors({ ...params, result, runFailed, runError });
+  if (runFailed) {
+    throw runError;
   }
-  throw new AggregateError(errors, message);
+  return result;
 }
 
 export function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {

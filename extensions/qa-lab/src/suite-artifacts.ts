@@ -22,6 +22,7 @@ import { createQaSuiteReportNotes } from "./suite-support.js";
 import {
   rejectRemovedQaChannelDriverSelection,
   type QaSuiteScenarioResult,
+  type QaSuitePublishedArtifacts,
 } from "./suite-types.js";
 
 /** Atomically replaces each file in order; summary-last is a completion signal, not a set transaction. */
@@ -135,12 +136,18 @@ export async function writeQaSuiteArtifacts(
     outputDir: string;
     scenarioDefinitions?: readonly QaSeedScenarioWithSource[];
     evidenceMode?: QaScorecardEvidenceMode;
-    recordedEvidence?: QaEvidenceSummaryJson;
-    transport: QaTransportAdapter;
     transportArtifacts?: QaRunnerTransportArtifacts;
     isolatedWorkers?: boolean;
     writeEvidenceFile?: boolean;
-  },
+    onArtifactsPublished?: (artifacts: QaSuitePublishedArtifacts) => void;
+  } & (
+      | { transport: QaTransportAdapter; recordedEvidence?: QaEvidenceSummaryJson }
+      | {
+          transport?: QaTransportAdapter;
+          recordedEvidence: QaEvidenceSummaryJson;
+          channel: string | null;
+        }
+    ),
 ) {
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
@@ -158,10 +165,15 @@ export async function writeQaSuiteArtifacts(
     startedAt: params.startedAt,
     finishedAt: params.finishedAt,
     scenarios: params.scenarios,
-    notes: createQaSuiteReportNotes({
-      ...params,
-      transportArtifactNotes: params.transportArtifacts?.reportNotes,
-    }),
+    // A cancelled declaration has evidence but never acquired a transport.
+    // Do not manufacture connected-channel notes for that diagnostic result.
+    notes: params.transport
+      ? createQaSuiteReportNotes({
+          ...params,
+          transport: params.transport,
+          transportArtifactNotes: params.transportArtifacts?.reportNotes,
+        })
+      : [],
   });
   const artifactPaths = [
     { kind: "summary", path: path.basename(summaryPath) },
@@ -170,7 +182,7 @@ export async function writeQaSuiteArtifacts(
   ];
   const evidence = params.recordedEvidence
     ? validateQaEvidenceSummaryJson(params.recordedEvidence)
-    : params.scenarioDefinitions && params.scenarioDefinitions.length > 0
+    : params.transport && params.scenarioDefinitions && params.scenarioDefinitions.length > 0
       ? buildQaSuiteEvidenceSummary({
           artifactPaths,
           evidenceMode: params.evidenceMode,
@@ -217,6 +229,13 @@ export async function writeQaSuiteArtifacts(
   await assertQaSuiteArtifactWritten("summary", summaryPath);
   if (evidence && writeEvidenceFile) {
     await assertQaSuiteArtifactWritten("evidence", evidencePath);
+    params.onArtifactsPublished?.({
+      outputDir: params.outputDir,
+      evidencePath,
+      reportPath,
+      summaryPath,
+      report,
+    });
   }
   return { evidence, evidencePath, report, reportPath, summaryPath };
 }

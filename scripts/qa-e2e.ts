@@ -121,7 +121,8 @@ if (isMainModule()) {
   try {
     process.exitCode = await main();
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    const { formatErrorMessage } = await import("../src/infra/errors.js");
+    process.stderr.write(`${formatErrorMessage(error)}\n`);
     process.exitCode = 1;
   }
 }

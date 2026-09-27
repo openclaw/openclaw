@@ -1,7 +1,9 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaScenarioFlow } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type { QaSuiteStepOutcome } from "./suite-types.js";
 
 type QaFlowAction = QaScenarioFlow["steps"][number]["actions"][number];
@@ -74,6 +76,42 @@ describe("scenario flow deadline", () => {
 
       await expect(pending).rejects.toBe(timeoutError);
       expect(sideEffect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["detailsExpr", "resultExpr"] as const)(
+    "preserves a failed %s when cancellation races its settlement",
+    async (expression) => {
+      const controller = new AbortController();
+      const entered = createDeferred<void>();
+      const held = createDeferred<never>();
+      const failure = new Error("result expression failed");
+      const pending = runScenarioFlow({
+        api: {
+          signal: controller.signal,
+          state: createQaBusState(),
+          scenario: makeQaSuiteTestScenario("failed-result-expression", { config: {} }),
+          config: {},
+          readResult: () => {
+            entered.resolve();
+            return held.promise;
+          },
+          runScenario: async (name, steps) => {
+            for (const step of steps) {
+              await step.run();
+            }
+            return { name, status: "pass", steps: [] };
+          },
+        },
+        scenarioTitle: "failed-result-expression",
+        flow: {
+          steps: [{ name: "Result", actions: [], [expression]: "await readResult()" }],
+        },
+      });
+      await entered.promise;
+      controller.abort(new Error("scenario cancelled"));
+      held.reject(failure);
+      await expect(pending).rejects.toBe(failure);
     },
   );
 

@@ -9,7 +9,7 @@ export function createQaSelfCheckScenario(options?: {
 }): QaScenarioDefinition {
   const waitTimeoutMs = options?.waitTimeoutMs ?? 5_000;
   let lifecycle: { target: string; threadId: string; message: QaBusMessage } | undefined;
-  const waitForReply = (state: QaTransportState, inbound: QaBusMessage) =>
+  const waitForReply = (state: QaTransportState, inbound: QaBusMessage, signal?: AbortSignal) =>
     waitForOutboundMessage(
       state,
       (message) =>
@@ -18,26 +18,26 @@ export function createQaSelfCheckScenario(options?: {
         message.threadId === inbound.threadId &&
         message.text.includes(`qa-echo: ${inbound.text}`),
       waitTimeoutMs,
-      { accountId: inbound.accountId },
+      { accountId: inbound.accountId, signal },
     );
   return {
     name: "Synthetic Slack-class roundtrip",
     steps: [
       {
         name: "DM echo roundtrip",
-        async run({ state }) {
+        async run({ state, signal }) {
           const inbound = await state.addInboundMessage({
             conversation: { id: "alice", kind: "direct" },
             senderId: "alice",
             senderName: "Alice",
             text: "hello from qa",
           });
-          await waitForReply(state, inbound);
+          await waitForReply(state, inbound, signal);
         },
       },
       {
         name: "Thread create and threaded echo",
-        async run({ state, performAction }) {
+        async run({ state, performAction, signal }) {
           if (!performAction) {
             throw new Error("self-check action dispatcher is not configured");
           }
@@ -45,6 +45,7 @@ export function createQaSelfCheckScenario(options?: {
             channelId: "qa-room",
             title: "QA thread",
           });
+          signal?.throwIfAborted();
           const threadPayload = extractQaToolPayload(
             threadResult as Parameters<typeof extractQaToolPayload>[0],
           ) as { target?: string; threadId?: string; thread?: { id?: string } } | undefined;
@@ -63,14 +64,14 @@ export function createQaSelfCheckScenario(options?: {
           lifecycle = {
             target: threadPayload.target,
             threadId,
-            message: await waitForReply(state, inbound),
+            message: await waitForReply(state, inbound, signal),
           };
           return threadId;
         },
       },
       {
         name: "Reaction, edit, delete lifecycle",
-        async run({ state, performAction }) {
+        async run({ state, performAction, signal }) {
           if (!performAction) {
             throw new Error("self-check action dispatcher is not configured");
           }
@@ -85,7 +86,9 @@ export function createQaSelfCheckScenario(options?: {
             messageId: outboundMessage.id,
             emoji: "white_check_mark",
           });
+          signal?.throwIfAborted();
           const reacted = await state.readMessage({ messageId: outboundMessage.id });
+          signal?.throwIfAborted();
           if (!reacted) {
             throw new Error("reacted message not found");
           }
@@ -99,7 +102,9 @@ export function createQaSelfCheckScenario(options?: {
             messageId: outboundMessage.id,
             text: "qa-echo: inside thread (edited)",
           });
+          signal?.throwIfAborted();
           const edited = await state.readMessage({ messageId: outboundMessage.id });
+          signal?.throwIfAborted();
           if (!edited) {
             throw new Error("edited message not found");
           }
@@ -112,7 +117,9 @@ export function createQaSelfCheckScenario(options?: {
             threadId,
             messageId: outboundMessage.id,
           });
+          signal?.throwIfAborted();
           const deleted = await state.readMessage({ messageId: outboundMessage.id });
+          signal?.throwIfAborted();
           if (!deleted) {
             throw new Error("deleted message not found");
           }

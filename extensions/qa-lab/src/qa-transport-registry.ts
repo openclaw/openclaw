@@ -1,6 +1,7 @@
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { createQaCrablineTransportAdapterFactory } from "./crabline-transport-factory.js";
+import { combineQaSuiteErrors } from "./errors.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -52,32 +53,48 @@ export async function prepareQaTransportAdapterFactories(params: {
   if (!factories || driver !== "live") {
     return factories;
   }
-  return await Promise.all(
-    factories.map(async (factory) => {
-      if (!factory.prepareSelectedScenarios) {
-        return factory;
-      }
-      const scenarioIds = [
-        ...new Set(
-          cells.flatMap(({ channel, scenarioId }) =>
-            channel &&
-            factories.find((candidate) => candidate.matches({ channelId: channel, driver })) ===
-              factory
-              ? [scenarioId]
-              : [],
+  const failures: unknown[] = [];
+  const prepared = await Promise.allSettled(
+    factories
+      .map(async (factory) => {
+        if (!factory.prepareSelectedScenarios) {
+          return factory;
+        }
+        const scenarioIds = [
+          ...new Set(
+            cells.flatMap(({ channel, scenarioId }) =>
+              channel &&
+              factories.find((candidate) => candidate.matches({ channelId: channel, driver })) ===
+                factory
+                ? [scenarioId]
+                : [],
+            ),
           ),
-        ),
-      ];
-      if (scenarioIds.length === 0) {
-        return factory;
-      }
-      await factory.prepareSelectedScenarios(scenarioIds);
-      // Child partitions carry ready factories, so cold preparation cannot reenter their timers.
-      const ready = Object.assign({}, factory);
-      delete ready.prepareSelectedScenarios;
-      return ready;
-    }),
+        ];
+        if (scenarioIds.length === 0) {
+          return factory;
+        }
+        await factory.prepareSelectedScenarios(scenarioIds);
+        // Child partitions carry ready factories, so cold preparation cannot reenter their timers.
+        const ready = Object.assign({}, factory);
+        delete ready.prepareSelectedScenarios;
+        return ready;
+      })
+      .map((preparing) =>
+        preparing.catch((error: unknown) => {
+          failures.push(error);
+          throw error;
+        }),
+      ),
   );
+  // A rejected hook cannot release the suite while another admitted hook still
+  // owns work. Preserve the first failure after every preparation has settled.
+  if (failures.length > 0) {
+    throw failures.length === 1
+      ? failures[0]
+      : combineQaSuiteErrors(failures, "QA transport preparation failed", { cause: failures[0] });
+  }
+  return prepared.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
 }
 
 const DEFAULT_QA_TRANSPORT_ID: QaTransportId = "qa-channel";

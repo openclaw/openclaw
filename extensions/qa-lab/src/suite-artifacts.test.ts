@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildQaEvidenceGalleryModel,
   resolveQaEvidenceArtifactFile,
@@ -24,7 +24,7 @@ afterEach(() => tempDirs.cleanup());
 
 function writeArtifacts(
   outputDir: string,
-  overrides: Partial<Parameters<typeof writeQaSuiteArtifacts>[0]> = {},
+  overrides: Partial<Omit<Parameters<typeof writeQaSuiteArtifacts>[0], "transport">> = {},
 ) {
   return writeQaSuiteArtifacts({
     outputDir,
@@ -48,7 +48,9 @@ function writeArtifacts(
 describe("suite artifacts", () => {
   it("writes standalone evidence while keeping suite summary evidence-free", async () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-");
+    const published = vi.fn();
     const artifacts = await writeArtifacts(outputDir, {
+      onArtifactsPublished: published,
       scenarioDefinitions: [
         {
           ...makeQaSuiteTestScenario("baseline", {
@@ -72,6 +74,13 @@ describe("suite artifacts", () => {
       evidence?: unknown;
     };
     expect(summary.evidence).toBeUndefined();
+    expect(published).toHaveBeenCalledExactlyOnceWith({
+      outputDir,
+      evidencePath: artifacts.evidencePath,
+      reportPath: artifacts.reportPath,
+      summaryPath: artifacts.summaryPath,
+      report: artifacts.report,
+    });
     if (process.platform !== "win32") {
       for (const artifactPath of [
         artifacts.reportPath,
@@ -85,20 +94,28 @@ describe("suite artifacts", () => {
 
   it("can return evidence without writing duplicate child evidence files", async () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-memory-evidence-");
+    const published = vi.fn();
     await fs.writeFile(path.join(outputDir, QA_EVIDENCE_FILENAME), "stale evidence\n", "utf8");
     const artifacts = await writeArtifacts(outputDir, {
       writeEvidenceFile: false,
+      onArtifactsPublished: published,
     });
 
     expect(artifacts.evidence?.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
     await expect(fs.access(artifacts.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
     await fs.access(artifacts.reportPath);
     await fs.access(artifacts.summaryPath);
+    expect(published).not.toHaveBeenCalled();
   });
 
   it("distinguishes partial Markdown from the terminal report shape", async () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-report-lifecycle-");
-    const partial = await writeArtifacts(outputDir, { status: "running" });
+    const published = vi.fn();
+    const partial = await writeArtifacts(outputDir, {
+      status: "running",
+      onArtifactsPublished: published,
+    });
+    expect(published).not.toHaveBeenCalled();
     expect(partial.report).toContain("# OpenClaw QA Scenario Suite (In Progress)");
     expect(partial.report).toContain("- Status: running");
     expect(partial.report).toContain("- Updated: 2026-04-11T00:01:00.000Z");
@@ -113,6 +130,14 @@ describe("suite artifacts", () => {
     expect(terminal.report).toContain("- Finished: 2026-04-11T00:01:00.000Z");
     expect(terminal.report).not.toContain("In Progress");
     expect(terminal.report).not.toContain("- Status: running");
+  });
+
+  it("does not notify publication when the terminal summary cannot be written", async () => {
+    const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-failed-publication-");
+    await fs.mkdir(path.join(outputDir, "qa-suite-summary.json"));
+    const published = vi.fn();
+    await expect(writeArtifacts(outputDir, { onArtifactsPublished: published })).rejects.toThrow();
+    expect(published).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

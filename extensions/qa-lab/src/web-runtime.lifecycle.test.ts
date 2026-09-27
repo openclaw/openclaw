@@ -215,34 +215,66 @@ describe("QA web acquisition ownership", () => {
     },
   );
 
-  it("detaches the signal without closing ready pages on later abort", async () => {
-    const fixture = makeBrowser();
-    const controller = new AbortController();
-    const added = vi.spyOn(controller.signal, "addEventListener");
-    const removed = vi.spyOn(controller.signal, "removeEventListener");
-    const owner = new Set<string>();
-    const open = webRuntime.createQaWebPageOpener(owner, controller.signal);
-    launch.mockResolvedValueOnce(fixture.browser);
-    try {
-      const opened = await open(pageParams);
-      controller.abort(new Error("later scenario timeout"));
-      await expect(webRuntime.qaWebSnapshot({ pageId: opened.pageId })).resolves.toMatchObject({
-        text: "page body",
-      });
-      expect(owner.has(opened.pageId)).toBe(true);
-      expect(fixture.closeOrder).toEqual([]);
-      expect(fixture.page.goto).toHaveBeenCalledWith(pageParams.url, {
-        waitUntil: "domcontentloaded",
-        timeout: 20_000,
-        signal: controller.signal,
-      });
-      expect(removed).toHaveBeenCalledOnce();
-      expect(removed).toHaveBeenCalledWith("abort", added.mock.calls[0]?.[1]);
-    } finally {
-      added.mockRestore();
-      removed.mockRestore();
-    }
-  });
+  it.each(["ready", "failure"] as const)(
+    "retains cancellation ownership through %s resource settlement",
+    async (settlement) => {
+      const fixture = makeBrowser();
+      const controller = new AbortController();
+      const added = vi.spyOn(controller.signal, "addEventListener");
+      const removed = vi.spyOn(controller.signal, "removeEventListener");
+      const owner = new Set<string>();
+      const open = webRuntime.createQaWebPageOpener(owner, controller.signal);
+      const error = new Error("navigation failed");
+      const closing = createDeferred<void>();
+      const releaseClose = createDeferred<void>();
+      launch.mockResolvedValueOnce(fixture.browser);
+      if (settlement === "failure") {
+        fixture.page.goto.mockRejectedValueOnce(error);
+      }
+      try {
+        if (settlement === "ready") {
+          const opened = await open(pageParams);
+          expect(removed).not.toHaveBeenCalled();
+          fixture.browser.close.mockImplementationOnce(async () => {
+            fixture.closeOrder.push("browser");
+            closing.resolve();
+            await releaseClose.promise;
+          });
+          controller.abort(new Error("later scenario timeout"));
+          await closing.promise;
+          let closed = false;
+          const close = webRuntime.closeQaWebSessions(owner).then(() => {
+            closed = true;
+          });
+          await Promise.resolve();
+          expect(closed).toBe(false);
+          expect(owner.has(opened.pageId)).toBe(true);
+          expect(removed).not.toHaveBeenCalled();
+          releaseClose.resolve();
+          await close;
+          expect(owner.size).toBe(0);
+          await expect(webRuntime.qaWebSnapshot({ pageId: opened.pageId })).rejects.toThrow();
+          expect(fixture.closeOrder).toEqual(["context", "browser"]);
+        } else {
+          await expect(open(pageParams)).rejects.toBe(error);
+          controller.abort(new Error("later scenario timeout"));
+          expect(fixture.closeOrder).toEqual(["context", "browser"]);
+          expect(owner.size).toBe(0);
+        }
+        expect(fixture.page.goto).toHaveBeenCalledWith(pageParams.url, {
+          waitUntil: "domcontentloaded",
+          timeout: 20_000,
+          signal: controller.signal,
+        });
+        expect(removed).toHaveBeenCalledOnce();
+        expect(removed).toHaveBeenCalledWith("abort", added.mock.calls[0]?.[1]);
+      } finally {
+        releaseClose.resolve();
+        added.mockRestore();
+        removed.mockRestore();
+      }
+    },
+  );
 
   it("retains genuine close failures after cancellation without retrying the handles", async () => {
     const fixture = makeBrowser();

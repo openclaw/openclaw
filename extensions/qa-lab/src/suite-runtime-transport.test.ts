@@ -1,5 +1,5 @@
 // Qa Lab tests cover suite runtime transport plugin behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import {
@@ -10,6 +10,17 @@ import {
 } from "./suite-runtime-transport.js";
 
 describe("qa suite transport helpers", () => {
+  it("does not accept a matching outbound reply after cancellation", async () => {
+    const state = createQaBusState();
+    state.addOutboundMessage({ to: "dm:qa-operator", text: "complete" });
+    const reason = new Error("Lab stopping");
+    const predicate = vi.fn(() => true);
+    await expect(
+      waitForOutboundMessage(state, predicate, 5_000, { signal: AbortSignal.abort(reason) }),
+    ).rejects.toBe(reason);
+    expect(predicate).not.toHaveBeenCalled();
+  });
+
   it("fails success-only waitForOutboundMessage calls when a classified failure reply arrives first", async () => {
     const state = createQaBusState();
     const pending = waitForOutboundMessage(

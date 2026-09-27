@@ -10,6 +10,7 @@ import {
   normalizeOptionalString,
   readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { QaLabRunUnavailableError } from "./lab-server-errors.js";
 
 export function createQaCaptureLifecycle() {
   const captureEnv = {
@@ -23,7 +24,7 @@ export function createQaCaptureLifecycle() {
   const captureOperations = new Set<Promise<unknown>>();
   const withCaptureStore = <T>(operation: (store: AsyncDebugProxyCaptureStore) => Promise<T>) => {
     if (captureClosing) {
-      return Promise.reject(new Error("Capture store is closing."));
+      return Promise.reject(new QaLabRunUnavailableError(503, "Capture store is closing."));
     }
     if (!captureStoreLease) {
       const { acquireDebugProxyCaptureStoreAsync } = proxyCapture;

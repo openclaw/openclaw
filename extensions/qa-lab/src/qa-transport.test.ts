@@ -1,11 +1,71 @@
 // Qa Lab tests cover shared transport behavior.
+import { syncBuiltinESMExports } from "node:module";
+import timersPromises from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
   createQaStateBackedTransportAdapter,
   waitForQaTransportAccountReady,
+  waitForQaTransportCondition,
   waitForQaTransportOutboundSequence,
 } from "./qa-transport.js";
+
+describe("waitForQaTransportCondition cancellation", () => {
+  it("rejects an already-cancelled poll without calling its predicate", async () => {
+    const reason = new Error("cancelled");
+    const check = vi.fn();
+    await expect(
+      waitForQaTransportCondition(check, 5_000, 100, undefined, AbortSignal.abort(reason)),
+    ).rejects.toBe(reason);
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it("joins a pending predicate without accepting its late matching result", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+    const held = createDeferred<string>();
+    const check = vi.fn(() => held.promise);
+    const pending = waitForQaTransportCondition(check, 5_000, 100, undefined, controller.signal);
+    const settled = vi.fn();
+    void pending.then(settled, settled);
+    controller.abort(reason);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    held.resolve("late success");
+    await expect(pending).rejects.toBe(reason);
+    expect(check).toHaveBeenCalledOnce();
+  });
+
+  it("aborts its owned sleep without another predicate call", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+    const entered = createDeferred<void>();
+    const sleep = timersPromises.setTimeout;
+    const sleepSpy = vi
+      .spyOn(timersPromises, "setTimeout")
+      .mockImplementation((delay, value, options) => {
+        expect(options?.signal).toBe(controller.signal);
+        entered.resolve();
+        return sleep(delay, value, options);
+      });
+    syncBuiltinESMExports();
+    const check = vi.fn(() => undefined);
+    const pending = waitForQaTransportCondition(check, 5_000, 100, undefined, controller.signal);
+    void pending.catch(() => undefined);
+    try {
+      await entered.promise;
+      controller.abort(reason);
+      await expect(pending).rejects.toMatchObject({ name: "AbortError", cause: reason });
+      expect(check).toHaveBeenCalledOnce();
+    } finally {
+      controller.abort(reason);
+      await Promise.allSettled([pending]);
+      sleepSpy.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+});
 
 describe("waitForQaTransportAccountReady", () => {
   it.each([

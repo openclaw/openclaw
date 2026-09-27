@@ -17,9 +17,11 @@ import type { QaSuiteRunParams, QaSuiteScenarioResult, QaSuiteStartLabFn } from 
 export async function runQaScenarioWithFlakeRetry(
   run: () => Promise<QaSuiteScenarioResult>,
   onRetry?: () => void,
+  signal?: AbortSignal,
 ): Promise<QaSuiteScenarioResult> {
+  signal?.throwIfAborted();
   const first = await run();
-  if (first.status !== "fail") {
+  if (first.status !== "fail" || signal?.aborted) {
     return first;
   }
   onRetry?.();
@@ -63,6 +65,8 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
   startLab: QaSuiteStartLabFn;
 }): QaSuiteRunParams {
   return {
+    signal: params.input?.signal,
+    forwardParentSignals: params.input?.forwardParentSignals,
     adapterFactories: params.input?.adapterFactories,
     adapterOptions: params.input?.adapterOptions,
     channelId: params.channelId ?? params.input?.channelId,
