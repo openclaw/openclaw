@@ -2754,6 +2754,7 @@ importers:
       '@openclaw/retry':
         specifier: workspace:*
         version: link:../retry
+    devDependencies:
       '@openclaw/session-url-contract':
         specifier: workspace:*
         version: link:../session-url-contract
