@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "../auth-rate-limit.js";
 import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
 import { ArtifactTransferBusyError } from "./artifact-transfer-service.js";
@@ -86,11 +87,10 @@ describe("artifact transfer response settlement", () => {
   }
 
   it("counts interrupted serves and keeps retries exclusive through descriptor settlement", async () => {
-    rateLimiter = createGatewayAuthRateLimiter({
-      maxAttempts: 1,
-      exemptLoopback: false,
-      pruneIntervalMs: 0,
-    });
+    rateLimiter = createGatewayAuthRateLimiter(
+      { maxAttempts: 1, exemptLoopback: false, pruneIntervalMs: 0 },
+      { scheduler: createTestGatewayScheduler() },
+    );
     const closing = createDeferredCore();
     const release = createDeferredCore();
     const open = service.openFile.bind(service);
