@@ -639,13 +639,14 @@ describe("reply tool authority", () => {
     { restriction: "runtime-intersection", themeAvailable: false },
     { restriction: "policy-deny", themeAvailable: true },
     { restriction: "policy-theme-deny", themeAvailable: false },
+    { restriction: "non-owner", themeAvailable: true },
   ])(
     "preserves steering within available theme authority when screen is unavailable: $restriction",
     async ({ restriction, themeAvailable }) => {
       const run = createQueueTestRun({ prompt: "cross-browser steering" });
       run.run.gatewayUiCommandTarget = { connId: "browser-a", profileId: "profile-a" };
       run.run.clientCaps = ["ui-commands"];
-      run.run.senderIsOwner = true;
+      run.run.senderIsOwner = restriction !== "non-owner";
       if (restriction === "disabled") {
         run.disableTools = true;
       }
