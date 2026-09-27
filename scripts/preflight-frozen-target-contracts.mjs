@@ -627,6 +627,7 @@ async function planWorkflowAdmission(input) {
   }
   // The recorded inventory stays optional: targets predating it keep the postbuild check.
   if (possibleLanes.some(isUpdateFirstHopCompatLane)) {
+    sourcePaths.add("scripts/lib/update-compat-inventory.json");
     sourcePaths.add("scripts/runtime-postbuild.mts");
   }
   if (possibleLanes.includes("update-corrupt-plugin")) {

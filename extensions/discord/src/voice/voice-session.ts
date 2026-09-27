@@ -2,7 +2,6 @@ import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/c
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { Client } from "../internal/discord.js";
-import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
 import { getDiscordRuntime } from "../runtime.js";
 import { DiscordAudioTransport } from "./audio-transport.js";
@@ -188,7 +187,7 @@ export class DiscordVoiceSessions {
     }
     const channelInfo = resolved.value;
 
-    const voicePlugin = this.params.client.getPlugin<VoicePlugin>("voice");
+    const voicePlugin = this.params.client.getPlugin("voice");
     if (!voicePlugin) {
       return { ok: false, message: "Discord voice plugin is not available." };
     }
