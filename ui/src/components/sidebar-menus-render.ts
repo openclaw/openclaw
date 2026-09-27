@@ -531,8 +531,6 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     onResetFilters: () => {
       host.setSessionOwnerFilter(null);
       host.sessionOrganizer.setSessionsStatusFilter("active");
-      host.sessionOrganizer.setSessionsShowCron(false);
-      host.sessionOrganizer.setSessionsShowSystem(false);
     },
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);

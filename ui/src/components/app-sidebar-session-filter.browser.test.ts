@@ -270,9 +270,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       const before = read();
       await page.getByRole("switch", { name, exact: true }).click();
       expect(read()).toBe(!before);
-      await expectFilterCount(
-        name === "Show message preview" ? 1 : name === "Show automation sessions" ? 2 : 3,
-      );
+      // Display and visibility choices never count as filters.
+      await expectFilterCount(1);
     }
     const owner = page.getByRole("button", { name: /^Owners:/ });
     await owner.click();
@@ -284,7 +283,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     );
     await page.getByRole("option", { name: "Involving me", exact: true }).click();
     expect(sessions.list).toHaveBeenCalledWith(expect.objectContaining({ involvingMe: true }));
-    await expectFilterCount(4);
+    await expectFilterCount(2);
     await owner.click();
     await page.getByRole("option", { name: "Bob", exact: true }).click();
     expect(sidebar.sessionOwnerFilterId).toBe("profile-bob");
@@ -293,15 +292,15 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         "#sidebar-sessions-owner .picker-select__leading openclaw-viewer-avatar",
       ),
     ).not.toBeNull();
-    await expectFilterCount(4);
+    await expectFilterCount(2);
     expect(sessions.list).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "profile-bob" }));
     await page.getByRole("button", { name: /^Hide empty groups:/ }).click();
     await page.getByRole("option", { name: "Never", exact: true }).click();
     await page.getByRole("button", { name: "Reset", exact: true }).click();
     expect(loadStoredSidebarSessionStatusFilter()).toBe("active");
     expect(sidebar.sessionOwnerFilterId).toBeNull();
-    expect(loadStoredSidebarSessionsShowCron()).toBe(false);
-    expect(loadStoredSidebarSessionsShowSystem()).toBe(false);
+    expect(loadStoredSidebarSessionsShowCron()).toBe(true);
+    expect(loadStoredSidebarSessionsShowSystem()).toBe(true);
     expect(loadStoredSidebarSessionsGrouping()).toBe("person");
     expect(loadStoredSidebarSessionSortMode()).toBe("people");
     expect(loadStoredSidebarSessionsShowPreview()).toBe(true);

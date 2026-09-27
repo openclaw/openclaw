@@ -69,19 +69,14 @@ function renderSessionFilterSummary(host: SessionListHost) {
 
 type SessionFilterHost = Pick<
   SessionListHost,
-  | "sessionOwnerFilterActive"
-  | "sessionInvolvingMeFilterActive"
-  | "sessionsStatusFilter"
-  | "sessionsShowCron"
-  | "sessionsShowSystem"
+  "sessionOwnerFilterActive" | "sessionInvolvingMeFilterActive" | "sessionsStatusFilter"
 >;
 
+/** Only Owners and Status filter sessions; the other panel rows are display choices. */
 export function countSidebarSessionFilters(host: SessionFilterHost) {
   return (
     Number(host.sessionOwnerFilterActive || host.sessionInvolvingMeFilterActive) +
-    Number(host.sessionsStatusFilter !== "active") +
-    Number(host.sessionsShowCron) +
-    Number(host.sessionsShowSystem)
+    Number(host.sessionsStatusFilter !== "active")
   );
 }
 
