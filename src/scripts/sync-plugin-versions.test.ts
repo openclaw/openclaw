@@ -52,24 +52,9 @@ describe("syncPluginVersions", () => {
     });
 
     const summary = syncPluginVersions(rootDir);
-    const updatedPackage = JSON.parse(
+    const updatedPackage: unknown = JSON.parse(
       fs.readFileSync(path.join(rootDir, "extensions/imessage/package.json"), "utf8"),
-    ) as {
-      version?: string;
-      devDependencies?: Record<string, string>;
-      peerDependencies?: Record<string, string>;
-      openclaw?: {
-        install?: {
-          minHostVersion?: string;
-        };
-        compat?: {
-          pluginApi?: string;
-        };
-        build?: {
-          openclawVersion?: string;
-        };
-      };
-    };
+    );
 
     expect(summary.updated).toContain("@openclaw/imessage");
     expect(summary.updated).toContain("@openclaw/ai");
@@ -80,12 +65,16 @@ describe("syncPluginVersions", () => {
     expect(
       JSON.parse(fs.readFileSync(path.join(rootDir, "packages/llm-core/package.json"), "utf8")),
     ).toMatchObject({ private: true, version: "0.0.0-private" });
-    expect(updatedPackage.version).toBe("2026.4.1");
-    expect(updatedPackage.devDependencies?.openclaw).toBe("workspace:*");
-    expect(updatedPackage.peerDependencies?.openclaw).toBe(">=2026.4.1");
-    expect(updatedPackage.openclaw?.install?.minHostVersion).toBe(">=2026.3.30");
-    expect(updatedPackage.openclaw?.compat?.pluginApi).toBe(">=2026.4.1");
-    expect(updatedPackage.openclaw?.build?.openclawVersion).toBe("2026.4.1");
+    expect(updatedPackage).toMatchObject({
+      version: "2026.4.1",
+      devDependencies: { openclaw: "workspace:*" },
+      peerDependencies: { openclaw: ">=2026.4.1" },
+      openclaw: {
+        install: { minHostVersion: ">=2026.3.30" },
+        compat: { pluginApi: ">=2026.4.1" },
+        build: { openclawVersion: "2026.4.1" },
+      },
+    });
   });
 
   it.each([
@@ -144,22 +133,16 @@ describe("syncPluginVersions", () => {
     });
 
     const summary = syncPluginVersions(rootDir, { write: false });
-    const unchangedPackage = JSON.parse(
+    const unchangedPackage: unknown = JSON.parse(
       fs.readFileSync(path.join(rootDir, "extensions/discord/package.json"), "utf8"),
-    ) as {
-      version?: string;
-      peerDependencies?: Record<string, string>;
-      openclaw?: {
-        compat?: {
-          pluginApi?: string;
-        };
-      };
-    };
+    );
 
     expect(summary.updated).toEqual(["@openclaw/discord"]);
-    expect(unchangedPackage.version).toBe("2026.4.1");
-    expect(unchangedPackage.peerDependencies?.openclaw).toBe(">=2026.4.1");
-    expect(unchangedPackage.openclaw?.compat?.pluginApi).toBe(">=2026.4.1");
+    expect(unchangedPackage).toMatchObject({
+      version: "2026.4.1",
+      peerDependencies: { openclaw: ">=2026.4.1" },
+      openclaw: { compat: { pluginApi: ">=2026.4.1" } },
+    });
   });
 
   it("uses the base release version for beta changelog entries", () => {

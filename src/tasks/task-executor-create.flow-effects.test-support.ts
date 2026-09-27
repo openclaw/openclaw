@@ -1,4 +1,6 @@
-import { vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { expect, vi } from "vitest";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   createInMemoryTaskFlowRegistryStore,
@@ -14,6 +16,13 @@ import { ensureTaskRegistryReadyAsync } from "./task-registry-state.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import { configureTaskFlowRegistryRuntime } from "./task-runtime.test-helpers.js";
+
+export async function drainTaskFlowRetry(delayMs = 1_000) {
+  await vi.advanceTimersByTimeAsync(delayMs);
+  await setImmediate();
+  // Observe root settlement without consuming the next fake retry deadline.
+  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { interval: 0 });
+}
 
 export const ownerKey = "agent:main:committed-flow";
 export const flow: TaskFlowRecord = {
@@ -60,6 +69,8 @@ export async function createTaskFlowEffectsFixture(
         | TaskInitialWorkerOperations[Key]["output"]
         | Promise<TaskInitialWorkerOperations[Key]["output"]>;
     } = {
+      "tasks.maintainCron": (input) =>
+        originalCreate(context, { type: "tasks.maintainCron", input }, assertCurrent, onGranted),
       "tasks.applyRetention": (input) =>
         originalCreate(context, { type: "tasks.applyRetention", input }, assertCurrent, onGranted),
       "tasks.transitionRunRow": (input) =>

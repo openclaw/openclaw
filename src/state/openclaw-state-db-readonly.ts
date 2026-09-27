@@ -77,7 +77,7 @@ import type {
   ReadResource,
   RetainedReadScope,
 } from "./openclaw-state-read.types.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 
 const artifactPreservingReads = resolveGlobalSingleton(
   Symbol.for("openclaw.artifactPreservingStateReads"),
@@ -416,7 +416,7 @@ function executeRetainedOpenClawStateRead(
     ),
   ];
   const env = snapshot?.env ?? options.env;
-  const context = capturedContext ?? captureOpenClawStateWorkerContext({ path: pathname, env });
+  const context = capturedContext ?? captureOpenClawStateReadWorkerContext({ path: pathname, env });
   if (capturedContext) {
     if (context.admission.databasePath !== pathname) {
       throw new Error("Shared-state read context does not match its selected source");

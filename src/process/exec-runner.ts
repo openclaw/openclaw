@@ -487,32 +487,25 @@ async function runCommandWithOutputEncoding(
   };
   child.stdout?.once("error", (error) => onOutputError(error, "stdout"));
   child.stderr?.once("error", (error) => onOutputError(error, "stderr"));
-  child.stdout?.on("data", (chunk) => {
-    const buffer = observeOutputChunk(chunk, "stdout");
-    appendPreservedOutputLines({
-      capture: stdoutCapture,
-      chunk: buffer,
-      stream: "stdout",
-      preserveOutputLine: options.preserveOutputLine,
-      maxPreservedOutputLines,
-      maxPendingLineBytes: maxPreservedPendingLineBytes,
+  const outputStreams = [
+    { stream: "stdout", capture: stdoutCapture, maxBytes: maxStdoutBytes, mode: stdoutCaptureMode },
+    { stream: "stderr", capture: stderrCapture, maxBytes: maxStderrBytes, mode: stderrCaptureMode },
+  ] as const;
+  for (const { stream, capture, maxBytes, mode } of outputStreams) {
+    child[stream]?.on("data", (chunk) => {
+      const buffer = observeOutputChunk(chunk, stream);
+      appendPreservedOutputLines({
+        capture,
+        chunk: buffer,
+        stream,
+        preserveOutputLine: options.preserveOutputLine,
+        maxPreservedOutputLines,
+        maxPendingLineBytes: maxPreservedPendingLineBytes,
+      });
+      captureOutput(capture, buffer, maxBytes, stream, mode);
+      armNoOutputTimer();
     });
-    captureOutput(stdoutCapture, buffer, maxStdoutBytes, "stdout", stdoutCaptureMode);
-    armNoOutputTimer();
-  });
-  child.stderr?.on("data", (chunk) => {
-    const buffer = observeOutputChunk(chunk, "stderr");
-    appendPreservedOutputLines({
-      capture: stderrCapture,
-      chunk: buffer,
-      stream: "stderr",
-      preserveOutputLine: options.preserveOutputLine,
-      maxPreservedOutputLines,
-      maxPendingLineBytes: maxPreservedPendingLineBytes,
-    });
-    captureOutput(stderrCapture, buffer, maxStderrBytes, "stderr", stderrCaptureMode);
-    armNoOutputTimer();
-  });
+  }
 
   let inputAdmissionError: Error | undefined;
   if (options.beforeInput) {
@@ -643,20 +636,15 @@ async function runCommandWithOutputEncoding(
         : resolvedCode
       : resolvedCode;
 
-  flushPreservedOutputLine({
-    capture: stdoutCapture,
-    stream: "stdout",
-    preserveOutputLine: options.preserveOutputLine,
-    maxPreservedOutputLines,
-    maxPendingLineBytes: maxPreservedPendingLineBytes,
-  });
-  flushPreservedOutputLine({
-    capture: stderrCapture,
-    stream: "stderr",
-    preserveOutputLine: options.preserveOutputLine,
-    maxPreservedOutputLines,
-    maxPendingLineBytes: maxPreservedPendingLineBytes,
-  });
+  for (const { stream, capture } of outputStreams) {
+    flushPreservedOutputLine({
+      capture,
+      stream,
+      preserveOutputLine: options.preserveOutputLine,
+      maxPreservedOutputLines,
+      maxPendingLineBytes: maxPreservedPendingLineBytes,
+    });
+  }
 
   if (usesCombinedTailCapture) {
     for (const entry of combinedTailChunks) {

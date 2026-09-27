@@ -254,12 +254,9 @@ export function reconcileAnthropicToolChoice(
     if (originalMatch) {
       return { ...choice, name: originalMatch.wireName };
     }
-    if (projection.unavailableOriginalNames.has(requestedName)) {
-      throw new Error(
-        `Anthropic tool_choice requested unavailable tool "${requestedName}" after schema conversion`,
-      );
-    }
-    const matchedTool = projection.tools.find((tool) => tool.wireName === requestedName);
+    const matchedTool = projection.unavailableOriginalNames.has(requestedName)
+      ? undefined
+      : projection.tools.find((tool) => tool.wireName === requestedName);
     if (!matchedTool) {
       throw new Error(
         `Anthropic tool_choice requested unavailable tool "${requestedName}" after schema conversion`,

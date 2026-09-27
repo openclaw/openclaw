@@ -84,7 +84,7 @@ const start: GatewayEvent = {
 };
 const marker: GatewayEvent = { event: "custom.debug", seq: 6, payload: { runId, ts: 6 } };
 
-describe.each([
+const terminalCases = [
   {
     label: "successful final",
     terminal: {
@@ -118,10 +118,15 @@ describe.each([
     terminalType: "run.timed_out",
     terminalData: { phase: "end", aborted: true, stopReason: "timeout" },
   },
-])("SDK $label after non-terminal observations", ({ terminal, terminalType, terminalData }) => {
-  it.each(["live", "replay"] as const)(
-    "preserves %s stream ordering and raw events",
-    async (mode) => {
+] as const;
+
+describe("SDK terminal observations", () => {
+  it.each([
+    ...terminalCases.map((entry) => ({ ...entry, mode: "live" as const })),
+    { ...terminalCases[0], mode: "replay" as const },
+  ])(
+    "preserves $mode $label ordering and raw events",
+    async ({ mode, terminal, terminalType, terminalData }) => {
       const frames = [
         start,
         {
@@ -174,13 +179,13 @@ describe.each([
   );
 });
 
-describe.each([
-  { stopReason: "rpc", terminalType: "run.cancelled" },
-  { stopReason: "timeout", terminalType: "run.timed_out" },
-])("SDK chat-first $stopReason abort", ({ stopReason, terminalType }) => {
-  it.each(["live", "replay"] as const)(
-    "emits one %s terminal across both carriers",
-    async (mode) => {
+describe("SDK chat-first abort", () => {
+  it.each([
+    { stopReason: "rpc", terminalType: "run.cancelled", mode: "live" },
+    { stopReason: "timeout", terminalType: "run.timed_out", mode: "replay" },
+  ] as const)(
+    "emits one $mode $stopReason terminal across both carriers",
+    async ({ mode, stopReason, terminalType }) => {
       const frames = [
         start,
         { event: "chat", seq: 2, payload: { runId, ts: 2, state: "aborted", stopReason } },

@@ -103,19 +103,13 @@ export async function createDiscordMonitorClient(params: {
   isDisallowedIntentsError: (err: unknown) => boolean;
 }) {
   let autoPresenceController: DiscordAutoPresenceController | null = null;
-  const clientPlugins: Plugin[] = [
+  const constructorPlugins: Plugin[] = [
     params.createGatewayPlugin({
       discordConfig: params.discordConfig,
       runtime: params.runtime,
     }),
   ];
-  if (params.voiceEnabled) {
-    clientPlugins.push(new VoicePlugin());
-  }
-  const voicePlugin = clientPlugins.find((plugin) => plugin.id === "voice");
-  const constructorPlugins = voicePlugin
-    ? clientPlugins.filter((plugin) => plugin !== voicePlugin)
-    : clientPlugins;
+  const voicePlugin = params.voiceEnabled ? new VoicePlugin() : undefined;
 
   const eventQueueOpts = {
     listenerTimeout: 120_000,

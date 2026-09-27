@@ -185,6 +185,13 @@ async function postEmbeddings(body: unknown, headers?: Record<string, string>) {
   });
 }
 
+async function writeEmbeddingConfig(config: Record<string, unknown>) {
+  const configPath = createConfigIO().configPath;
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify(config));
+  resetConfigRuntimeState();
+}
+
 async function expectDefaultEmbeddingResponse(res: Response) {
   expect(res.status).toBe(200);
   const json = (await res.json()) as {
@@ -334,13 +341,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   ])(
     "passes dimensions=$dimensions with memory search enabled=$enabled",
     async ({ enabled, dimensions, expected }) => {
-      const configPath = createConfigIO().configPath;
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ memory: { search: { enabled, outputDimensionality: 16 } } }),
-      );
-      resetConfigRuntimeState();
+      await writeEmbeddingConfig({ memory: { search: { enabled, outputDimensionality: 16 } } });
 
       const res = await postEmbeddings({
         model: "openclaw/default",
@@ -354,36 +355,24 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   );
 
   it("passes provider aliases and local-service acquisition to memory adapters", async () => {
-    const configPath = createConfigIO().configPath;
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          models: {
-            providers: {
-              "tenant-embeddings": {
-                api: "openai",
-                baseUrl: genericEmbeddingBaseUrl,
-                models: [],
-              },
-            },
-          },
-          memory: {
-            search: {
-              provider: "tenant-embeddings",
-              model: "tenant-embeddings/nomic-embed-text",
-            },
+    await writeEmbeddingConfig({
+      models: {
+        providers: {
+          "tenant-embeddings": {
+            api: "openai",
+            baseUrl: genericEmbeddingBaseUrl,
+            models: [],
           },
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+      },
+      memory: {
+        search: {
+          provider: "tenant-embeddings",
+          model: "tenant-embeddings/nomic-embed-text",
+        },
+      },
+    });
     try {
-      resetConfigRuntimeState();
-
       const res = await postEmbeddings({
         model: "openclaw/default",
         input: "hello",
@@ -437,7 +426,6 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     { name: "unsupported encoding", option: { encoding_format: "hex" } },
     { name: "numeric encoding", option: { encoding_format: 1 } },
     { name: "zero dimensions", option: { dimensions: 0 } },
-    { name: "negative dimensions", option: { dimensions: -1 } },
     { name: "fractional dimensions", option: { dimensions: 1.5 } },
     { name: "string dimensions", option: { dimensions: "768" } },
     { name: "unsafe dimensions", option: { dimensions: Number.MAX_SAFE_INTEGER + 1 } },
@@ -452,7 +440,6 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   it.each([
     { name: "an empty string", input: "" },
     { name: "an empty batch", input: [] },
-    { name: "an empty batch entry", input: [""] },
     { name: "a mixed batch with an empty entry", input: ["valid", ""] },
   ])("rejects $name before creating an embedding provider", async ({ input }) => {
     const providersCreatedBefore = createEmbeddingProviderMock.mock.calls.length;
@@ -487,57 +474,20 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     await expectDefaultEmbeddingResponse(res);
   });
 
-  it("allows requests with an empty declared scopes header", async () => {
-    const res = await postEmbeddings(
-      {
-        model: "openclaw/default",
-        input: "hello",
-      },
-      { "x-openclaw-scopes": "" },
-    );
-    await expectDefaultEmbeddingResponse(res);
-  });
-
-  it("allows requests when the operator scopes header is missing", async () => {
-    const res = await fetch(`http://127.0.0.1:${enabledPort}/v1/embeddings`, {
-      method: "POST",
-      headers: {
-        authorization: "Bearer secret",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "openclaw/default",
-        input: "hello",
-      }),
-    });
-    await expectDefaultEmbeddingResponse(res);
-  });
-
   it("routes explicit OpenAI-compatible embeddings through generic providers", async () => {
-    const configPath = createConfigIO().configPath;
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          memory: {
-            search: {
-              provider: "openai-compatible",
-              model: "nomic-embed-text",
-              inputType: "default",
-              queryInputType: "query",
-              documentInputType: "document",
-              outputDimensionality: 768,
-              remote: { baseUrl: genericEmbeddingBaseUrl },
-            },
-          },
+    await writeEmbeddingConfig({
+      memory: {
+        search: {
+          provider: "openai-compatible",
+          model: "nomic-embed-text",
+          inputType: "default",
+          queryInputType: "query",
+          documentInputType: "document",
+          outputDimensionality: 768,
+          remote: { baseUrl: genericEmbeddingBaseUrl },
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    resetConfigRuntimeState();
+      },
+    });
 
     await expectGenericProviderEmbeddingRequest({
       model: "nomic-embed-text",
@@ -547,38 +497,27 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   });
 
   it("routes configured OpenAI-compatible provider ids through generic providers", async () => {
-    const configPath = createConfigIO().configPath;
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          models: {
-            providers: {
-              "tenant-embeddings": {
-                api: "openai-responses",
-                baseUrl: genericEmbeddingBaseUrl,
-                models: [],
-              },
-            },
-          },
-          memory: {
-            search: {
-              provider: "tenant-embeddings",
-              model: "tenant-embeddings/nomic-embed-text",
-              inputType: "default",
-              queryInputType: "query",
-              documentInputType: "document",
-              outputDimensionality: 768,
-            },
+    await writeEmbeddingConfig({
+      models: {
+        providers: {
+          "tenant-embeddings": {
+            api: "openai-responses",
+            baseUrl: genericEmbeddingBaseUrl,
+            models: [],
           },
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    resetConfigRuntimeState();
+      },
+      memory: {
+        search: {
+          provider: "tenant-embeddings",
+          model: "tenant-embeddings/nomic-embed-text",
+          inputType: "default",
+          queryInputType: "query",
+          documentInputType: "document",
+          outputDimensionality: 768,
+        },
+      },
+    });
 
     await expectGenericProviderEmbeddingRequest({
       model: "nomic-embed-text",

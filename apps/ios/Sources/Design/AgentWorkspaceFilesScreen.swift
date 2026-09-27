@@ -20,7 +20,7 @@ struct AgentWorkspaceFilesScreen: View {
                         titleFont: OpenClawType.title3SemiBold,
                         subtitleFont: OpenClawType.subheadMedium)
                     {
-                        OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
+                        OpenClawSidebarControlButton(action: headerSidebarAction)
                     } accessory: {
                         EmptyView()
                     }

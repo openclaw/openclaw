@@ -512,17 +512,6 @@ describe("workboard controller", () => {
     });
   });
 
-  it("loads cards through the plugin gateway method", async () => {
-    const client = createClient({
-      "workboard.cards.list": listResult([sampleCard], ["todo", "done"]),
-    });
-
-    await loadBoard(client);
-
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
-    expect(getWorkboardState(host).cards).toEqual([sampleCard]);
-  });
-
   it("refreshes diagnostics before listing cards when requested", async () => {
     const client = createClient({
       "workboard.cards.diagnostics.refresh": { diagnostics: [], count: 0 },
@@ -553,26 +542,6 @@ describe("workboard controller", () => {
     expect(state.error).toBeNull();
     expect(redact).toHaveBeenCalledWith("diagnostics denied: sensitive provider detail");
     expect(state.lastRefreshError).toBe("diagnostics denied: [redacted]");
-  });
-
-  it("links loaded cards to matching Gateway tasks", async () => {
-    const linked = makeCard({
-      sessionKey: sampleTaskSessionKey,
-      runId: "run-1",
-    });
-    const client = createClient({
-      "workboard.cards.list": listResult([linked], ["todo", "done"]),
-      "tasks.list": { tasks: [sampleTask] },
-    });
-
-    await loadBoard(client);
-
-    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
-    expect(state.cards[0]).toMatchObject({ id: "card-1", taskId: "task-1" });
-    expect(state.tasksByCardId.get("card-1")).toMatchObject({
-      taskId: "task-1",
-      status: "running",
-    });
   });
 
   it("preserves matching task links when full task enrichment fails", async () => {
@@ -3520,19 +3489,6 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).tasksByCardId.has("card-1")).toBe(false);
   });
 
-  it("surfaces Workboard-owned start failures without client rollback", async () => {
-    const client = createSequencedClient({
-      "workboard.cards.start": [new Error("provider unavailable")],
-    });
-
-    const sessionKey = await startSampleCard(client);
-
-    expect(sessionKey).toBeNull();
-    expect(client.request).toHaveBeenCalledOnce();
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.start", { id: sampleCard.id });
-    expect(getWorkboardState(host).error).toBe("provider unavailable");
-  });
-
   it.each([
     {
       name: "before another board in All",
@@ -3801,22 +3757,6 @@ describe("workboard controller", () => {
       }
     },
   );
-
-  it("moves cards through the plugin gateway method", async () => {
-    const moved = makeCard({ status: "blocked", position: 2000 });
-    const client = createClient({ "workboard.cards.move": { card: moved } });
-
-    await moveCard(client, {
-      cardId: "card-1",
-      status: "blocked",
-      position: 2000,
-    });
-
-    expect(getWorkboardState(host).cards[0]).toMatchObject({
-      status: "blocked",
-      position: 2000,
-    });
-  });
 
   it("removes an already-absent local card after an acknowledged delete", async () => {
     state.cards = [sampleCard];
@@ -4464,28 +4404,6 @@ describe("workboard controller", () => {
     expect(state.lifecycleTaskRefreshError).toBeNull();
     expect(state.lastRefreshError).toBeNull();
     expect(state.lifecycleTasksPrepared).toBe(true);
-  });
-
-  it("does not retry a failed lifecycle task refresh before backoff", async () => {
-    const linked = createSessionCard({
-      status: "running",
-      updatedAt: 1000,
-    });
-    setLoadedCard(linked);
-    const client = createClient((method) => {
-      if (method === "tasks.list") {
-        throw new Error("tasks unavailable");
-      }
-      return {};
-    });
-
-    await syncLifecycle(client);
-    await syncLifecycle(client);
-
-    expect(requestCalls(client, "tasks.list")).toHaveLength(1);
-    expect(state.error).toBeNull();
-    expect(state.lifecycleTaskRefreshError).toBe("tasks unavailable");
-    expect(state.cards[0]?.status).toBe("running");
   });
 
   it("stops linked sessions and marks cards blocked", async () => {

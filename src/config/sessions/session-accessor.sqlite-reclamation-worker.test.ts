@@ -23,6 +23,7 @@ import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sql
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
@@ -31,6 +32,111 @@ import {
   runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
+
+test("retains one Worker across twenty admission refusals and interleaved reclamation operations", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { agentId: "main", env: state.env };
+    const databaseOptions = reclamation.resolveSessionReclamationDatabaseOptions(options);
+    const entries = Array.from({ length: 4 }, (_, index) => {
+      const scope = {
+        ...options,
+        sessionId: `interleaved-${index}`,
+        sessionKey: `agent:main:interleaved-${index}`,
+      };
+      ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const entry = loadSessionEntry(scope);
+      assert.ok(entry);
+      return {
+        scope,
+        plan: createSessionEntryReclamationPlan({
+          databaseOptions,
+          deleteParams: {
+            archiveTranscript: false,
+            storePath: databaseOptions.path,
+            target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+          },
+          preparedTargetSnapshot: [{ entry, sessionKey: scope.sessionKey }],
+          materializedPlans: [],
+        }),
+      };
+    });
+    let refusalPoint: "admission-request" | "commit-request" | undefined;
+    let superseded = false;
+    const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
+    const spawn = vi
+      .spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker")
+      .mockImplementation((data) => {
+        const worker = create(data);
+        worker.prependListener("message", (message: { type: string }) => {
+          if (message.type === refusalPoint) {
+            superseded = true;
+          }
+        });
+        return worker;
+      });
+    try {
+      for (const { scope, plan } of entries) {
+        const plans: SqliteSessionReclamationPlan[] = [
+          plan,
+          reclamation.createHistoryEvictionReclamationPlan({
+            databaseOptions,
+            diskBudget: {},
+            materializedPlans: [],
+            protectedSessionIds: new Set(),
+            sessionId: scope.sessionId,
+          }),
+          reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions),
+          {
+            kind: "archive-publish-prepare",
+            databaseOptions,
+            materializedPlans: [],
+            archiveDirectory: state.path("archives"),
+            requested: [],
+          },
+          {
+            kind: "archive-publish-record",
+            databaseOptions,
+            materializedPlans: [],
+            results: [],
+            nowMs: 1,
+          },
+        ];
+        for (const operation of plans) {
+          const refusals =
+            operation.kind === "maintenance-statistics"
+              ? (["admission-request", "commit-request"] as const)
+              : (["admission-request"] as const);
+          for (const point of refusals) {
+            refusalPoint = point;
+            await expect(
+              runSqliteSessionReclamation({
+                forceInProcess: false,
+                plan: operation,
+                assertCommitAllowed: () => {
+                  if (superseded) {
+                    throw new SqliteReclamationInputsChangedError(
+                      "synthetic inputs changed before commit",
+                    );
+                  }
+                },
+              }),
+            ).rejects.toThrow(SqliteReclamationInputsChangedError);
+            refusalPoint = undefined;
+            superseded = false;
+          }
+          await expect(
+            runSqliteSessionReclamation({ forceInProcess: false, plan: operation }),
+          ).resolves.toMatchObject({ kind: operation.kind });
+          expect(spawn).toHaveBeenCalledTimes(1);
+        }
+        expect(loadSessionEntry(scope)).toBeUndefined();
+      }
+      expect(spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
 
 test("binds first shared-state creation without host SQL and reuses reclamation until thirty idle minutes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -263,6 +369,16 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
               errorFrame: expect.stringContaining("at MessagePort.failReclamation"),
             }),
           }),
+          expect.objectContaining({
+            message: "reclamation worker retired reason=failure kind=entry ageMs=0 opsServed=1",
+            "1": expect.objectContaining({
+              reason: "failure",
+              kind: "entry",
+              ageMs: 0,
+              opsServed: 1,
+              workerThreadId,
+            }),
+          }),
         ]);
         expect(content).not.toContain(secret);
         expect(content).not.toContain(scope.sessionId);
@@ -276,7 +392,7 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
   );
 });
 
-test("reschedules maintenance superseded by a write during Worker planning without a Worker failure warning", async () => {
+test("commits maintenance despite an unrelated write during Worker planning", async () => {
   await withOpenClawTestState(
     { scenario: "minimal", env: { OPENCLAW_TEST_FILE_LOG: "1" } },
     async (state) => {
@@ -294,6 +410,7 @@ test("reschedules maintenance superseded by a write during Worker planning witho
       const file = state.path("maintenance-race.log");
       await fs.writeFile(file, "");
       setLoggerOverride({ level: "debug", consoleLevel: "silent", file });
+      vi.spyOn(performance, "now").mockReturnValue(0);
       const plans = vi.spyOn(reclamation, "createSessionMaintenancePlanningOperation");
       const runs: Promise<unknown>[] = [];
       const firstRun = createDeferredCore();
@@ -306,48 +423,48 @@ test("reschedules maintenance superseded by a write during Worker planning witho
       });
       const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
       let raced = false;
-      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-        const worker = spawn(data);
-        worker.prependListener("message", (message: { type: string }) => {
-          if (message.type !== "admission-request" || raced) {
-            return;
-          }
-          // The Worker planned from older inputs; an ordinary write lands before its commit.
-          raced = true;
-          runOpenClawAgentWriteTransaction((owner) => {
-            writeSessionEntry(owner, sessionKey, {
-              sessionId: scope.sessionId,
-              updatedAt: Date.now(),
-              label: "concurrent-write",
-            });
-          }, scope);
-          kickSessionEntryMaintenanceAfterWrite(request);
+      const constructions = vi
+        .spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker")
+        .mockImplementation((data) => {
+          const worker = spawn(data);
+          worker.prependListener("message", (message: { type: string }) => {
+            if (message.type !== "admission-request" || raced) {
+              return;
+            }
+            // The protected active row is outside the plan's destructive candidates.
+            raced = true;
+            runOpenClawAgentWriteTransaction((owner) => {
+              writeSessionEntry(owner, sessionKey, {
+                sessionId: scope.sessionId,
+                updatedAt: Date.now(),
+                label: "concurrent-write",
+              });
+            }, scope);
+            kickSessionEntryMaintenanceAfterWrite(request);
+          });
+          return worker;
         });
-        return worker;
-      });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         kickSessionEntryMaintenanceAfterWrite(request);
         await firstRun.promise;
-        await expect(runs[0]).rejects.toThrow(SqliteReclamationInputsChangedError);
+        await expect(runs[0]).resolves.toMatchObject({ kind: "maintenance-plan" });
         expect(raced).toBe(true);
+        expect(loadSessionEntry(scope)?.label).toBe("concurrent-write");
+        expect(constructions).toHaveBeenCalledTimes(1);
         await flushLogger();
         const records: unknown[] = (await fs.readFile(file, "utf8"))
           .split("\n")
           .filter(Boolean)
           .map((line) => JSON.parse(line));
         const logged = (message: string) => expect.objectContaining({ message });
-        expect(records).toContainEqual(
+        expect(records).not.toContainEqual(
           logged("SQLite reclamation Worker superseded by newer inputs"),
         );
         expect(records).not.toContainEqual(logged("SQLite reclamation Worker failed"));
         expect(records).not.toContainEqual(logged("SQLite automatic session maintenance failed"));
 
-        // The maintenance owner retries once writes stay quiet.
         expect(plans).toHaveBeenCalledTimes(1);
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(plans).toHaveBeenCalledTimes(2);
-        await expect(runs[1]).resolves.toMatchObject({ kind: "maintenance-plan" });
       } finally {
         vi.useRealTimers();
         vi.restoreAllMocks();

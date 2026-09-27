@@ -1,5 +1,5 @@
 import { spawnSync, type ChildProcess } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -18,12 +18,14 @@ import {
   type TrialDependencies,
 } from "../../scripts/ios-release-e2e.js";
 import { createNativeDependencies } from "../../scripts/lib/ios-release-e2e-native.js";
+import { GatewayTransportError } from "../../src/gateway/transport-error.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
 const nativeMocks = vi.hoisted(() => ({
   command: vi.fn(),
   gateway: vi.fn(),
+  rpc: vi.fn(),
 }));
 vi.mock("../../scripts/lib/managed-child-process.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/managed-child-process.mjs")>()),
@@ -32,6 +34,7 @@ vi.mock("../../scripts/lib/managed-child-process.mjs", async (importOriginal) =>
 vi.mock("../helpers/openclaw-test-instance.js", () => ({
   createOpenClawTestInstance: nativeMocks.gateway,
 }));
+vi.mock("../../src/gateway/call.js", () => ({ callGateway: nativeMocks.rpc }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -40,6 +43,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   nativeMocks.command.mockReset();
   nativeMocks.gateway.mockReset();
+  nativeMocks.rpc.mockReset();
 });
 
 function result(
@@ -364,29 +368,13 @@ describe("fresh trial ownership", () => {
 
 describe("release qualification workflow authority", () => {
   const workflow = parse(readFileSync(".github/workflows/ios-release-e2e.yml", "utf8"));
-  const beta = parse(readFileSync(".github/workflows/ios-beta-release.yml", "utf8"));
+  const release = parse(readFileSync(".github/workflows/ios-release.yml", "utf8"));
   const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
   it.each([
     ["manual current revision", {}, true],
     ["CI current revision", { caller: "ci" }, true],
     ["manual arbitrary target", { target: "b".repeat(40) }, false],
     ["CI arbitrary target", { caller: "ci", target: "b".repeat(40) }, false],
-    ["approved beta target", { caller: "ios-beta-release", target: "b".repeat(40) }, true],
-    [
-      "beta branch caller",
-      { caller: "ios-beta-release", target: "b".repeat(40), ref: "refs/heads/feature" },
-      false,
-    ],
-    [
-      "beta fork caller",
-      { caller: "ios-beta-release", target: "b".repeat(40), repository: "example/fork" },
-      false,
-    ],
-    [
-      "beta non-dispatch caller",
-      { caller: "ios-beta-release", target: "b".repeat(40), event: "schedule" },
-      false,
-    ],
     ["invalid SHA", { target: "main" }, false],
     ["invalid mode", { mode: "unknown" }, false],
   ])("checks %s before checkout", (_name, options, admitted) => {
@@ -394,8 +382,8 @@ describe("release qualification workflow authority", () => {
     const output = path.join(root, "outputs");
     const sha = "a".repeat(40);
     const target = "target" in options ? options.target : sha;
-    const repository = "repository" in options ? options.repository : "openclaw/openclaw";
-    const ref = "ref" in options ? options.ref : "refs/heads/main";
+    const repository = "openclaw/openclaw";
+    const ref = "refs/heads/main";
     const caller = "caller" in options ? options.caller : "ios-release-e2e";
     const first = workflow.jobs.qualify.steps[0];
     expect(first.id).toBe("start");
@@ -410,40 +398,63 @@ describe("release qualification workflow authority", () => {
         GITHUB_REPOSITORY: repository,
         GITHUB_REF: ref,
         GITHUB_WORKFLOW_REF: `${repository}/.github/workflows/${caller}.yml@${ref}`,
-        GITHUB_EVENT_NAME: "event" in options ? options.event : "workflow_dispatch",
+        GITHUB_EVENT_NAME: "workflow_dispatch",
         TARGET_SHA: target,
         E2E_MODE: "mode" in options ? options.mode : "stock",
       },
     });
     expect(execution.status === 0).toBe(admitted);
-    expect(readFileSync(output, "utf8").includes(`target_sha=${target}\n`)).toBe(admitted);
     const proof = JSON.parse(readFileSync(path.join(root, "ios-release-e2e-proof.json"), "utf8"));
     expect(proof).toMatchObject({
       status: "failed",
       trials: [],
     });
   });
-  it("requires exact approved SHA qualification before beta release, without signing authority", () => {
-    expect(beta.jobs.qualify.with).toEqual({
-      target_sha: "${{ needs.authorize.outputs.target_sha }}",
-      mode: "stock",
-    });
-    expect(beta.jobs.qualify.needs).toBe("authorize");
-    expect(beta.jobs.release.needs).toEqual(["authorize", "qualify"]);
-    expect(beta.jobs.qualify.permissions).toEqual({ contents: "read" });
-    expect(beta.jobs.qualify.secrets).toBeUndefined();
+  it("qualifies the checked-out release source before accessing signing assets", () => {
+    const steps = release.jobs.release.steps;
+    const qualify = steps.findIndex(
+      (step: { name: string }) => step.name === "Qualify native iOS pairing and chat",
+    );
+    const signing = steps.findIndex(
+      (step: { name: string }) => step.name === "Create apps-signing read token",
+    );
+    const upload = steps.findIndex(
+      (step: { name: string }) => step.name === "Prepare and upload iOS release",
+    );
+    expect(qualify).toBeGreaterThan(-1);
+    expect(signing).toBeGreaterThan(qualify);
+    expect(upload).toBeGreaterThan(signing);
+    expect(steps[qualify].run).toContain('--mode stock --target-sha "$(git rev-parse HEAD)"');
+    for (const step of [steps[qualify], steps[signing], steps[upload]]) {
+      expect(step.if).toBeUndefined();
+      expect(step["continue-on-error"]).toBeUndefined();
+    }
+    const recovery = steps.find(
+      (step: { name: string }) => step.name === "Retain release plan and notes",
+    );
+    for (const outcome of ["skipped", "success", "failure", "cancelled"] as const) {
+      expect(
+        evaluateWorkflowExpression(`\${{ ${recovery.if} }}`, {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          failed: true,
+          steps: { [steps[upload].id]: { outputs: {}, outcome } },
+        }),
+      ).toBe(outcome !== "skipped");
+    }
+    expect(recovery.with["if-no-files-found"]).toBe("error");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.qualify.environment).toBeUndefined();
     expect(workflow.on.workflow_dispatch.inputs.target_sha).toBeUndefined();
     expect(workflow.jobs.qualify.env.TARGET_SHA).toBe("${{ inputs.target_sha || github.sha }}");
-    expect(beta.jobs.qualify.if).toContain("needs.authorize.outputs.approved == 'true'");
   });
   it("fails missing target harnesses and uses a step-scoped compare binary", () => {
     const steps = workflow.jobs.qualify.steps;
     const checkout = steps.find((step: { uses?: string }) =>
       step.uses?.startsWith("actions/checkout@"),
     );
-    expect(checkout.with.ref).toBe("${{ steps.start.outputs.target_sha }}");
+    expect(checkout.with.ref).toBe("${{ github.sha }}");
     expect(checkout.with["persist-credentials"]).toBe(false);
     const verify = steps.find((step: { name: string }) => step.name.startsWith("Verify target"));
     expect(verify.run).toContain('[[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]');
@@ -507,14 +518,28 @@ describe("native command adapter", () => {
     "success",
     "dirty-tracked",
     "dirty-untracked",
-    "wrong-xcode",
-    "wrong-xcode-build",
-    "wrong-runtime",
+    "different-xcode",
+    "different-xcode-build",
+    "invalid-xcode-output",
+    "different-runtime",
+    "newest-compatible-runtime",
+    "unavailable-runtime",
+    "unsupported-runtime-device",
+    "unsupported-runtime-architecture",
+    "non-ios-runtime",
     "cleanup-failure",
     "build-unjoined",
     "build-exit",
+    "setup-code-timeout",
+    "setup-code-rpc-timeout",
     "test-unjoined",
     "test-exit",
+    "test-timeout-output",
+    "reply-failure-evidence",
+    "reply-failure-history-error",
+    "reply-failure-submission",
+    "reply-failure-source-only",
+    "reply-failure-app-log-error",
   ])("owns admission, build, test and cleanup for %s", async (scenario) => {
     const temp = tempDirs.make("ios-release-e2e-adapter-");
     vi.spyOn(os, "tmpdir").mockReturnValue(temp);
@@ -526,13 +551,45 @@ describe("native command adapter", () => {
       }),
     );
     vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", "");
-    const instances: { cli: ReturnType<typeof vi.fn>; cleanup: ReturnType<typeof vi.fn> }[] = [];
+    const instances: { cleanup: ReturnType<typeof vi.fn> }[] = [];
+    let nativeCommandActive = false;
+    let historyReadBeforeCommandExit = false;
+    nativeMocks.rpc.mockImplementation(async (options) => {
+      if (options.method === "chat.history") {
+        historyReadBeforeCommandExit = nativeCommandActive;
+        if (scenario === "reply-failure-history-error") {
+          throw new Error("private history failure");
+        }
+        return {
+          messages: [
+            { role: "user", content: [{ type: "text", text: "OPENCLAW_E2E_OK_200" }] },
+            { role: "assistant", content: [{ type: "text", text: "OPENCLAW_E2E_SEED_0_100" }] },
+          ],
+        };
+      }
+      if (scenario === "setup-code-timeout") {
+        throw new Error("private fixture command failed", {
+          cause: Object.assign(new Error("private setup code and path"), { code: "ETIMEDOUT" }),
+        });
+      }
+      if (scenario === "setup-code-rpc-timeout") {
+        throw new GatewayTransportError({
+          kind: "timeout",
+          message: "private RPC timeout",
+          connectionDetails: { url: "ws://private", urlSource: "private", message: "private" },
+          timeoutMs: 30_000,
+        });
+      }
+      return { setupCode: `synthetic-code-${instances.length}` };
+    });
     nativeMocks.gateway.mockImplementation(async () => {
       const index = instances.length + 1;
       const instance = {
         url: `ws://127.0.0.1:${20000 + index}`,
-        cli: vi.fn(async () => ({ code: 0, signal: null, stdout: `synthetic-code-${index}` })),
+        gatewayToken: `synthetic-token-${index}`,
+        configPath: `/private/fixture-${index}/config.json`,
         startGateway: vi.fn(async () => {}),
+        logs: () => "private log\n[responses] start private\n[responses] completed private\n",
         cleanup: vi.fn(async () => {
           if (scenario === "cleanup-failure") {
             throw new Error("private cleanup failure");
@@ -543,6 +600,7 @@ describe("native command adapter", () => {
       return instance;
     });
     let created = 0;
+    let appContainer = "";
     let selectedTest: string = IOS_RELEASE_TESTS[0];
     let joinedMocks = 0;
     nativeMocks.command.mockImplementation(async (options) => {
@@ -551,9 +609,29 @@ describe("native command adapter", () => {
       options.onReady?.({ stdout, stderr } as unknown as ChildProcess);
       const args = options.args as string[];
       if (args.includes("scripts/e2e/mock-openai-server.mjs")) {
+        const body = scenario.startsWith("reply-failure-")
+          ? {
+              model: "ios-e2e",
+              input: [
+                {
+                  role: "user",
+                  content: "Reply exactly with OPENCLAW_E2E_OK_200 and no other text.",
+                },
+              ],
+              metadata: { title: "OPENCLAW_E2E_SEED_0_100" },
+            }
+          : { model: "ios-e2e" };
+        const requests = [body];
+        if (scenario.startsWith("reply-failure-")) {
+          requests.push({ model: "ios-e2e" });
+        }
         writeFileSync(
           options.env.MOCK_REQUEST_LOG,
-          `${JSON.stringify({ path: "/v1/responses", body: JSON.stringify({ model: "ios-e2e" }) })}\n`,
+          requests
+            .map((requestBody) =>
+              JSON.stringify({ path: "/v1/responses", body: JSON.stringify(requestBody) }),
+            )
+            .join("\n") + "\n",
         );
         stdout.write("mock-openai listening on 20001\n");
         await new Promise<void>((_resolve, reject) => {
@@ -577,27 +655,77 @@ describe("native command adapter", () => {
         stdout.write("1".repeat(40));
       } else if (args.includes("-version")) {
         stdout.write(
-          scenario === "wrong-xcode"
+          scenario === "different-xcode"
             ? "Xcode 26.6\nBuild version 17F113\n"
-            : scenario === "wrong-xcode-build"
+            : scenario === "different-xcode-build"
               ? "Xcode 27.0\nBuild version 27A000\n"
-              : "Xcode 27.0\nBuild version 27A266a\n",
+              : scenario === "invalid-xcode-output"
+                ? "unrecognized toolchain\n"
+                : "Xcode 27.0\nBuild version 27A266a\n",
         );
       } else if (args.includes("runtimes")) {
+        const runtime = {
+          isAvailable: scenario !== "unavailable-runtime",
+          version: scenario === "different-runtime" ? "27.0" : "26.5",
+          identifier:
+            scenario === "different-runtime"
+              ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+              : scenario === "non-ios-runtime"
+                ? "com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
+                : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+          supportedArchitectures:
+            scenario === "unsupported-runtime-architecture" ? ["x86_64"] : ["arm64"],
+          supportedDeviceTypes: [
+            {
+              identifier:
+                scenario === "unsupported-runtime-device"
+                  ? "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro"
+                  : "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+            },
+          ],
+        };
         stdout.write(
           JSON.stringify({
-            runtimes: [
-              {
-                isAvailable: true,
-                version: scenario === "wrong-runtime" ? "26.6" : "26.5",
-                identifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
-              },
-            ],
+            runtimes:
+              scenario === "newest-compatible-runtime"
+                ? [
+                    {
+                      ...runtime,
+                      version: "26.9",
+                      identifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-9",
+                    },
+                    { ...runtime, version: "28.0", isAvailable: false },
+                    {
+                      ...runtime,
+                      version: "29.0",
+                      identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-29-0",
+                    },
+                    { ...runtime, version: "30.0", supportedDeviceTypes: [] },
+                    { ...runtime, version: "31.0", supportedArchitectures: ["x86_64"] },
+                    runtime,
+                    {
+                      ...runtime,
+                      version: "26.10",
+                      identifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-10",
+                    },
+                  ]
+                : [runtime],
           }),
         );
       } else if (args.includes("create")) {
+        expect(args.at(-1)).toBe(
+          scenario === "different-runtime"
+            ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+            : scenario === "newest-compatible-runtime"
+              ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
+              : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+        );
         stdout.write(`11111111-2222-3333-4444-${String(++created).padStart(12, "0")}`);
       } else if (args.includes("build-for-testing")) {
+        appContainer = path.join(
+          path.dirname(args[args.indexOf("-derivedDataPath") + 1]!),
+          "app-container",
+        );
         if (scenario === "build-unjoined") {
           throw Object.assign(new Error("private build termination failure"), {
             code: "ETIMEDOUT",
@@ -609,6 +737,34 @@ describe("native command adapter", () => {
           return 65;
         }
       } else if (args.includes("test-without-building")) {
+        if (
+          scenario.startsWith("reply-failure-") &&
+          args.includes(`-only-testing:${IOS_RELEASE_TESTS[1]}`)
+        ) {
+          nativeCommandActive = true;
+          const failureMessage =
+            scenario === "reply-failure-source-only"
+              ? ""
+              : `IOS_RELEASE_CHAT_FAILURE final ${scenario === "reply-failure-submission" ? "submission" : "reply"} draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false`;
+          stdout.write(
+            "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' started.\n" +
+              `/private/checkout/OpenClawSnapshotUITests.swift:1913: error: private ${failureMessage}\n` +
+              "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' failed (99 seconds).\n",
+          );
+          await Promise.resolve();
+          nativeCommandActive = false;
+          throw Object.assign(new Error("private timeout diagnostics"), { code: "ETIMEDOUT" });
+        }
+        if (scenario === "test-timeout-output") {
+          stdout.write(
+            "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' started.\n" +
+              "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: private assertion details\n" +
+              "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: repeated private details\n" +
+              "/private/Other.swift:42: error: private details\n" +
+              "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' failed (39.615 seconds).\n",
+          );
+          throw Object.assign(new Error("private timeout diagnostics"), { code: "ETIMEDOUT" });
+        }
         if (scenario === "test-unjoined") {
           throw Object.assign(new Error("private test termination failure"), {
             code: "ETIMEDOUT",
@@ -616,12 +772,41 @@ describe("native command adapter", () => {
           });
         }
         if (scenario === "test-exit") {
+          stdout.write(
+            "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: private assertion details\n" +
+              "private teardown details\n".repeat(256),
+          );
           stderr.write("TEST FAILED: private setup code and private path\n");
           return 65;
         }
         selectedTest = args
           .find((arg) => arg.startsWith("-only-testing:"))!
           .slice("-only-testing:".length);
+      } else if (options.bin === "/usr/bin/plutil") {
+        stdout.write("ai.synthetic.private\n");
+      } else if (args.includes("get_app_container")) {
+        expect(args).toEqual([
+          "simctl",
+          "get_app_container",
+          "11111111-2222-3333-4444-000000000002",
+          "ai.synthetic.private",
+          "data",
+        ]);
+        expect(options.timeoutMs).toBe(5_000);
+        if (scenario === "reply-failure-app-log-error") {
+          throw new Error("private app container failure");
+        }
+        mkdirSync(path.join(appContainer, "Library/Caches"), { recursive: true });
+        writeFileSync(
+          path.join(appContainer, "Library/Caches/openclaw-gateway.log"),
+          "[2026-09-26T00:00:00Z] chat.ui send invoked sessionKey=private inputLen=100\n" +
+            "[2026-09-26T00:00:00Z] chat.ui send queued sessionKey=private localRunId=private\n" +
+            "[2026-09-26T00:00:00Z] chat.ui transport send start sessionKey=private\n" +
+            "[2026-09-26T00:00:00Z] chat.ui send failed sessionKey=private error=private\n" +
+            "[2026-09-26T00:00:00Z] chat.send skipped before dispatch: route changed\n" +
+            "[2026-09-26T00:00:00Z] unknown event private credential\n",
+        );
+        stdout.write(appContainer);
       } else if (args.includes("xcresulttool")) {
         stdout.write(JSON.stringify(result(selectedTest)));
       }
@@ -642,12 +827,20 @@ describe("native command adapter", () => {
       expect(readdirSync(temp)).toEqual([]);
       return;
     }
-    if (scenario.startsWith("wrong-")) {
+    if (
+      [
+        "unavailable-runtime",
+        "unsupported-runtime-device",
+        "unsupported-runtime-architecture",
+        "non-ios-runtime",
+        "invalid-xcode-output",
+      ].includes(scenario)
+    ) {
       await expect(admission).rejects.toMatchObject({
         diagnostic:
-          scenario === "wrong-runtime"
-            ? { operation: "simulator-runtime", code: "not-found" }
-            : { operation: "xcode-version", code: "unsupported" },
+          scenario === "invalid-xcode-output"
+            ? { operation: "xcode-version", code: "failed" }
+            : { operation: "simulator-runtime", code: "not-found" },
       });
       expect(
         nativeMocks.command.mock.calls.some(([{ args }]) => args.includes("build-for-testing")),
@@ -668,13 +861,130 @@ describe("native command adapter", () => {
     }
     const native = await admission;
     expect(proof).toMatchObject({
-      xcode: "27.0",
-      xcodeBuild: "27A266a",
-      runtime: "26.5",
-      runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      xcode: scenario === "different-xcode" ? "26.6" : "27.0",
+      xcodeBuild:
+        scenario === "different-xcode"
+          ? "17F113"
+          : scenario === "different-xcode-build"
+            ? "27A000"
+            : "27A266a",
+      runtime:
+        scenario === "different-runtime"
+          ? "27.0"
+          : scenario === "newest-compatible-runtime"
+            ? "26.10"
+            : "26.5",
+      runtimeIdentifier:
+        scenario === "different-runtime"
+          ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+          : scenario === "newest-compatible-runtime"
+            ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
+            : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
     });
     try {
       const report = await runTrials("stock", native.dependencies);
+      if (scenario.startsWith("reply-failure-")) {
+        expect(report.complete).toBe(true);
+        expect(report.trials.map((trial) => trial.status)).toEqual(["passed", "failed"]);
+        expect(report.trials[1]).toMatchObject({
+          errors: ["test-timeout"],
+          diagnostics: [{ operation: "native-test", code: "timeout", errorCode: "ETIMEDOUT" }],
+        });
+        const context = report.trials[1]?.diagnostics[0]?.context;
+        expect(context).toEqual(
+          expect.arrayContaining([
+            ...(scenario === "reply-failure-source-only"
+              ? []
+              : [
+                  "chat-stage:final",
+                  `chat-checkpoint:${scenario === "reply-failure-submission" ? "submission" : "reply"}`,
+                  "chat-draft-retained:false",
+                  "chat-keyboard:true",
+                  "chat-reply-present:false",
+                  "chat-writing:false",
+                  "chat-jump:true",
+                  "chat-app-foreground:true",
+                  "chat-input-present:true",
+                  "chat-transcript-present:true",
+                  "chat-send-present:false",
+                ]),
+            "provider-latest-user:final",
+            "provider-body-tail:seed-0",
+            "provider-marker-match:false",
+            "model-any-request-stage:start",
+            "model-any-request-stage:completed",
+            expect.stringMatching(/^failure-evidence-at-ms:\d+$/),
+            ...(scenario === "reply-failure-app-log-error"
+              ? ["app-evidence-unavailable"]
+              : [
+                  "app-evidence-read",
+                  "app-send-stage:invoked",
+                  "app-send-stage:optimistic-message",
+                  "app-send-stage:transport-start",
+                  "app-send-stage:failed",
+                  "app-send-stage:dispatch-route-changed",
+                ]),
+            ...(scenario === "reply-failure-history-error"
+              ? ["history-evidence-unavailable"]
+              : ["history-user:final", "history-assistant:seed-0"]),
+          ]),
+        );
+        expect(context).not.toContain("provider-marker-match:true");
+        expect(context).not.toContain("app-send-stage:transport-accepted");
+        expect(historyReadBeforeCommandExit).toBe(true);
+        expect(instances.every((instance) => instance.cleanup.mock.calls.length === 1)).toBe(true);
+        expect(JSON.stringify(report)).not.toMatch(/private|OPENCLAW_E2E_|metadata/);
+        return;
+      }
+      if (scenario === "test-timeout-output") {
+        expect(report.complete).toBe(true);
+        for (const trial of report.trials) {
+          expect(trial).toMatchObject({
+            status: "failed",
+            errors: ["test-timeout"],
+            diagnostics: [
+              {
+                operation: "native-test",
+                code: "timeout",
+                errorCode: "ETIMEDOUT",
+                context: expect.arrayContaining([
+                  "xctest-started",
+                  "xctest-failed",
+                  "xctest-line:1904",
+                ]),
+              },
+            ],
+          });
+        }
+        expect(instances.every((instance) => instance.cleanup.mock.calls.length === 1)).toBe(true);
+        expect(JSON.stringify(report)).not.toContain("private");
+        return;
+      }
+      if (scenario === "setup-code-timeout" || scenario === "setup-code-rpc-timeout") {
+        expect(report.complete).toBe(true);
+        for (const trial of report.trials) {
+          expect(trial).toMatchObject({
+            status: "failed",
+            errors: ["test-timeout"],
+            diagnostics: [
+              {
+                operation: "setup-code",
+                code: "timeout",
+                ...(scenario === "setup-code-timeout" ? { errorCode: "ETIMEDOUT" } : {}),
+                context: [],
+              },
+            ],
+          });
+        }
+        expect(
+          nativeMocks.command.mock.calls.some(([{ args }]) =>
+            args.includes("test-without-building"),
+          ),
+        ).toBe(false);
+        expect(instances.every((instance) => instance.cleanup.mock.calls.length === 1)).toBe(true);
+        expect(JSON.stringify(report)).not.toContain("private");
+        return;
+      }
       if (scenario === "cleanup-failure" || scenario === "test-unjoined") {
         expect(report.complete).toBe(false);
         expect(report.trials).toHaveLength(1);
@@ -689,7 +999,7 @@ describe("native command adapter", () => {
             operation: "native-test",
             code: "exit",
             exitCode: 65,
-            context: ["test-failed"],
+            context: ["test-failed", "xctest-line:1904"],
           },
         ]);
         expect(JSON.stringify(report)).not.toContain("private");
@@ -699,12 +1009,19 @@ describe("native command adapter", () => {
       expect(created).toBe(2);
       expect(joinedMocks).toBe(2);
       for (const [index, instance] of instances.entries()) {
-        expect(instance.cli).toHaveBeenCalledWith([
-          "qr",
-          "--url",
-          `ws://127.0.0.1:${20001 + index}`,
-          "--setup-code-only",
-        ]);
+        expect(nativeMocks.rpc).toHaveBeenNthCalledWith(index + 1, {
+          config: {},
+          configPath: `/private/fixture-${index + 1}/config.json`,
+          url: `ws://127.0.0.1:${20001 + index}`,
+          token: `synthetic-token-${index + 1}`,
+          ignoreEnvUrlOverride: true,
+          deviceIdentity: null,
+          sharedStateMode: "read-only",
+          method: "device.pair.setupCode",
+          params: { publicUrl: `ws://127.0.0.1:${20001 + index}`, includeQr: false },
+          timeoutMs: 30_000,
+          signal: native.dependencies.signal,
+        });
         expect(instance.cleanup).toHaveBeenCalledOnce();
       }
       const commands = nativeMocks.command.mock.calls.map(([options]) => options);
@@ -731,6 +1048,11 @@ describe("native command adapter", () => {
       for (const { args: testArgs } of commands.filter(({ args }) =>
         args.includes("test-without-building"),
       )) {
+        const diagnosticsIndex = testArgs.indexOf("-collect-test-diagnostics");
+        expect(testArgs.slice(diagnosticsIndex, diagnosticsIndex + 2)).toEqual([
+          "-collect-test-diagnostics",
+          "never",
+        ]);
         expect(testArgs).not.toContain("-test-iterations");
         expect(testArgs).not.toContain("-retry-tests-on-failure");
         expect(testArgs).not.toContain("-run-tests-until-failure");

@@ -176,7 +176,10 @@ describe("worker environment runtime refresh", () => {
     const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     const placement =
       state === "attached"
-        ? seedActivePlacement(placements, { environmentId, ownerEpoch: environment.ownerEpoch })
+        ? await seedActivePlacement(placements, {
+            environmentId,
+            ownerEpoch: environment.ownerEpoch,
+          })
         : undefined;
     environment = store.get(environmentId)!;
     await store.revokeEnvironmentCredential(environmentId);

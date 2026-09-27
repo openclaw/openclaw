@@ -14,7 +14,13 @@ import {
   createSpeechProviderRegistry,
   normalizeSpeechProviderId,
 } from "./provider-registry-core.js";
-import type { SpeechProviderConfig, SpeechProviderOverrides } from "./provider-types.js";
+import type {
+  SpeechProviderConfig,
+  SpeechProviderOverrides,
+  SpeechProviderPrepareSynthesisContext,
+  SpeechSynthesisRequest,
+  SpeechSynthesisTarget,
+} from "./provider-types.js";
 import {
   getResolvedSpeechProviderConfigForVoiceModel,
   mergeProviderConfigWithPersona,
@@ -71,27 +77,6 @@ export async function throwTtsProjectionError(
     throw new AggregateError([error, result.reason], formatErrorMessage(error), { cause: error });
   }
   throw error;
-}
-
-function buildTtsFailureResult(
-  errors: string[],
-  attemptedProviders?: string[],
-  attempts?: TtsProviderAttempt[],
-  persona?: string,
-): {
-  success: false;
-  error: string;
-  attemptedProviders?: string[];
-  attempts?: TtsProviderAttempt[];
-  persona?: string;
-} {
-  return {
-    success: false,
-    error: `TTS conversion failed: ${errors.join("; ") || "no providers available"}`,
-    attemptedProviders,
-    attempts,
-    persona,
-  };
 }
 
 type TtsProviderReadyResolution =
@@ -183,46 +168,28 @@ function resolveReadySpeechProvider(params: {
   };
 }
 
-async function prepareSpeechSynthesis(params: {
-  provider: SpeechProviderPlugin;
-  text: string;
-  cfg: OpenClawConfig;
-  providerConfig: SpeechProviderConfig;
-  providerOverrides?: SpeechProviderOverrides;
-  persona?: ResolvedTtsPersona;
-  personaProviderConfig?: SpeechProviderConfig;
-  target: "audio-file" | "voice-note" | "telephony";
-  timeoutMs: number;
-}): Promise<{
-  text: string;
-  providerConfig: SpeechProviderConfig;
-  providerOverrides?: SpeechProviderOverrides;
-}> {
-  if (!params.provider.prepareSynthesis) {
+async function prepareSpeechSynthesis({
+  provider,
+  ...request
+}: SpeechProviderPrepareSynthesisContext & { provider: SpeechProviderPlugin }): Promise<
+  Pick<SpeechSynthesisRequest, "text" | "providerConfig" | "providerOverrides">
+> {
+  if (!provider.prepareSynthesis) {
     return {
-      text: params.text,
-      providerConfig: params.providerConfig,
-      providerOverrides: params.providerOverrides,
+      text: request.text,
+      providerConfig: request.providerConfig,
+      providerOverrides: request.providerOverrides,
     };
   }
-  const prepared = await params.provider.prepareSynthesis({
-    text: params.text,
-    cfg: params.cfg,
-    providerConfig: params.providerConfig,
-    providerOverrides: params.providerOverrides,
-    persona: params.persona,
-    personaProviderConfig: params.personaProviderConfig,
-    target: params.target,
-    timeoutMs: params.timeoutMs,
-  });
+  const prepared = await provider.prepareSynthesis({ ...request });
   return {
-    text: prepared?.text ?? params.text,
+    text: prepared?.text ?? request.text,
     providerConfig: prepared?.providerConfig
-      ? { ...params.providerConfig, ...prepared.providerConfig }
-      : params.providerConfig,
+      ? { ...request.providerConfig, ...prepared.providerConfig }
+      : request.providerConfig,
     providerOverrides: prepared?.providerOverrides
-      ? { ...params.providerOverrides, ...prepared.providerOverrides }
-      : params.providerOverrides,
+      ? { ...request.providerOverrides, ...prepared.providerOverrides }
+      : request.providerOverrides,
   };
 }
 
@@ -237,9 +204,25 @@ type TtsRequestSetupParams = {
   accountId?: string;
 };
 
-function resolveTtsRequestConfig(
+type TtsRequestSetup = {
+  cfg: OpenClawConfig;
+  config: ResolvedTtsConfig;
+  persona?: ResolvedTtsPersona;
+  providers: VoiceProviderCandidate[];
+  prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
+};
+
+type AcquiredTtsRequest =
+  | { error: string }
+  | ({ setup: TtsRequestSetup } & Pick<
+      Awaited<ReturnType<typeof acquirePluginCapabilityProviders<"speechProviders">>>,
+      "run" | "release"
+    >);
+
+/** Keeps catalog and direct lookup selections in one explicit speech request owner. */
+export async function acquireTtsRequest(
   params: TtsRequestSetupParams,
-): { cfg: OpenClawConfig; config: ResolvedTtsConfig; prefsPath: string } | { error: string } {
+): Promise<AcquiredTtsRequest> {
   const cfg = resolveTtsRuntimeConfig(params.cfg);
   const config = resolveTtsConfig(cfg, {
     agentId: params.agentId,
@@ -252,27 +235,6 @@ function resolveTtsRequestConfig(
       error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
     };
   }
-
-  return { cfg, config, prefsPath };
-}
-
-type OwnedTtsRequestSetup =
-  | { error: string }
-  | {
-      cfg: OpenClawConfig;
-      config: ResolvedTtsConfig;
-      persona?: ResolvedTtsPersona;
-      providers: VoiceProviderCandidate[];
-      prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
-    };
-
-/** Keeps catalog and direct lookup selections in one explicit speech request owner. */
-export async function acquireTtsRequest(params: TtsRequestSetupParams) {
-  const facts = resolveTtsRequestConfig(params);
-  if ("error" in facts) {
-    return facts;
-  }
-  const { cfg, config, prefsPath } = facts;
   // Bind before provider work can reload the snapshot; fallback follows a known runtime
   // owner without letting an unrelated global snapshot replace explicit scoped config.
   const readRuntimeConfig = createRuntimeConfigReader(cfg);
@@ -379,7 +341,7 @@ export async function acquireTtsRequest(params: TtsRequestSetupParams) {
 /** Finite speech calls finish their work before returning a materialized result. */
 export async function withOwnedTtsRequest<T>(
   params: TtsRequestSetupParams,
-  run: (setup: OwnedTtsRequestSetup) => T | Promise<T>,
+  run: (setup: TtsRequestSetup | { error: string }) => T | Promise<T>,
 ): Promise<T> {
   const acquired = await acquireTtsRequest(params);
   if ("error" in acquired) {
@@ -395,16 +357,10 @@ export async function withOwnedTtsRequest<T>(
 }
 
 type ReadySpeechProvider = Extract<TtsProviderReadyResolution, { kind: "ready" }>;
-type PreparedSpeechSynthesis = Awaited<ReturnType<typeof prepareSpeechSynthesis>>;
 type TtsProviderOperation<TSynthesis> =
   | {
       kind: "ready";
-      synthesize: (params: {
-        prepared: PreparedSpeechSynthesis;
-        cfg: OpenClawConfig;
-        target: "audio-file" | "voice-note" | "telephony";
-        timeoutMs: number;
-      }) => Promise<TSynthesis>;
+      synthesize: (request: SpeechSynthesisRequest) => Promise<TSynthesis>;
       cleanupFailedProjection?: (synthesis: TSynthesis) => Promise<void>;
     }
   | {
@@ -432,7 +388,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   synthesisText: string;
   providerOverrides?: Record<string, SpeechProviderOverrides>;
   timeoutMs?: number;
-  target: "audio-file" | "voice-note" | "telephony";
+  target: SpeechSynthesisTarget;
   logLabel: string;
   requireTelephony?: boolean;
   prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
@@ -441,7 +397,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
     resolvedProvider: ReadySpeechProvider;
   }) => TtsProviderOperation<TSynthesis>;
   buildSuccess: (params: TtsProviderSuccess<TSynthesis>) => TResult;
-}): Promise<TResult | ReturnType<typeof buildTtsFailureResult>> {
+}) {
   const { cfg, config, persona, providers } = params;
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
@@ -520,9 +476,11 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         timeoutMs,
       });
       const synthesis = await operation.synthesize({
-        prepared,
+        text: prepared.text,
         cfg,
+        providerConfig: prepared.providerConfig,
         target: params.target,
+        providerOverrides: prepared.providerOverrides,
         timeoutMs,
       });
       try {
@@ -576,7 +534,13 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
     }
   }
 
-  return buildTtsFailureResult(errors, attemptedProviders, attempts, persona?.id);
+  return {
+    success: false as const,
+    error: `TTS conversion failed: ${errors.join("; ") || "no providers available"}`,
+    attemptedProviders,
+    attempts,
+    persona: persona?.id,
+  };
 }
 
 function resolveTtsResultModel(

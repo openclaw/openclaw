@@ -308,7 +308,7 @@ function resourceLimitsSummary(resourceLimits: Record<string, number>) {
     .join(" ");
 }
 
-export function describeDockerSchedulerLimits(parallelism: number, options: SchedulerLimits) {
+function describeDockerSchedulerLimits(parallelism: number, options: SchedulerLimits) {
   return `parallelism=${parallelism} weightLimit=${options.weightLimit} resources=${resourceLimitsSummary(
     options.resourceLimits,
   )}`;

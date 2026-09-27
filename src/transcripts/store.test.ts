@@ -98,7 +98,7 @@ describe("TranscriptsStore", () => {
   });
 
   it.each(["next_utterance_seq", "created_at_ms", "updated_at_ms"] as const)(
-    "preserves native integer errors for summary snapshot %s",
+    "preserves native integer errors for summary and match reads of %s",
     async (column) => {
       const { store, stateDir } = createStore();
       const target = session();
@@ -111,6 +111,9 @@ describe("TranscriptsStore", () => {
         target.sessionId,
       );
       await expect(store.readSummarySnapshot(target, 20)).rejects.toMatchObject({
+        code: "ERR_OUT_OF_RANGE",
+      });
+      await expect(store.matchSessionEntries(target.sessionId)).rejects.toMatchObject({
         code: "ERR_OUT_OF_RANGE",
       });
     },

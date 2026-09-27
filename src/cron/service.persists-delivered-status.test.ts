@@ -12,6 +12,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 }));
 
 import { sendGatewayCronWebhook } from "../gateway/server-cron-notifications.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { runCronCommandJob } from "./command-runner.js";
 import { CronService } from "./service.js";
 import type { CronEvent } from "./service.js";
@@ -134,6 +138,7 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
 }
 
 function createIsolatedCronWithFinishedBarrier(params: {
+  scheduler: CronServiceDeps["scheduler"];
   storePath: string;
   status?: "ok" | "error";
   delivered?: boolean;
@@ -145,6 +150,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
 }) {
   const finished = createFinishedBarrier();
   const cron = new CronService({
+    scheduler: params.scheduler,
     storePath: params.storePath,
     cronEnabled: true,
     log: noopLogger,
@@ -170,6 +176,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
 }
 
 async function runSingleJobAndReadState(params: {
+  schedulerClock: ReturnType<typeof createGatewaySchedulerClock>;
   cron: CronService;
   finished: ReturnType<typeof createFinishedBarrier>;
   job: CronAddInput;
@@ -177,7 +184,7 @@ async function runSingleJobAndReadState(params: {
 }) {
   const job = await params.cron.add(params.job);
   const finishedPromise = params.waitForFinished?.(job.id) ?? params.finished.waitForOk(job.id);
-  await vi.advanceTimersByTimeAsync(job.state.nextRunAtMs! + 5 - Date.now());
+  await params.schedulerClock.advanceTo(job.state.nextRunAtMs! + 5);
   await finishedPromise;
 
   const jobs = await params.cron.list({ includeDisabled: true });
@@ -233,8 +240,10 @@ async function runIsolatedJobAndReadState(params: {
   onFinished?: (evt: CronEvent) => void;
 }) {
   const store = await makeStorePath();
+  const schedulerClock = createGatewaySchedulerClock(Date.now());
   const finishedEvents = new Map<string, (evt: unknown) => void>();
   const { cron, finished } = createIsolatedCronWithFinishedBarrier({
+    scheduler: createTestGatewayScheduler(schedulerClock.clock),
     storePath: store.storePath,
     ...(params.status !== undefined ? { status: params.status } : {}),
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
@@ -251,6 +260,7 @@ async function runIsolatedJobAndReadState(params: {
   await cron.start();
   try {
     const { updated } = await runSingleJobAndReadState({
+      schedulerClock,
       cron,
       finished,
       job: params.job,
@@ -331,6 +341,8 @@ describe("CronService persists delivered status", () => {
       const finish = createDeferred();
       let finishedEvent: CronEvent | undefined;
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath: store.storePath,
         cronEnabled: true,
         log: noopLogger,
@@ -431,6 +443,8 @@ describe("CronService persists delivered status", () => {
       resolveFinished = resolve;
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -514,6 +528,8 @@ describe("CronService persists delivered status", () => {
       resolveFinished = resolve;
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -638,6 +654,8 @@ describe("CronService persists delivered status", () => {
     });
     const store = await makeStorePath();
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -887,13 +905,17 @@ describe("CronService persists delivered status", () => {
 
   it("does not set lastDelivered for main session jobs", async () => {
     const store = await makeStorePath();
+    const schedulerClock = createGatewaySchedulerClock(Date.now());
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(schedulerClock.clock),
+      nowMs: schedulerClock.clock.now,
       storePath: store.storePath,
       logger: noopLogger,
     });
 
     await cron.start();
     const { updated } = await runSingleJobAndReadState({
+      schedulerClock,
       cron,
       finished,
       job: buildMainSessionSystemEventJob("main-session"),
@@ -993,6 +1015,8 @@ describe("CronService persists delivered status", () => {
       }>();
       let finishedEvent: CronEvent | undefined;
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath: store.storePath,
         cronEnabled: true,
         log: noopLogger,

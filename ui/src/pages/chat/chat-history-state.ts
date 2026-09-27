@@ -328,10 +328,17 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
 }
 
-export function setChatError(state: ChatState, error: string | null) {
+export function setChatError(
+  state: { lastError?: string | null; chatError?: string | null; requestUpdate?: () => void },
+  error: string | null,
+  requestUpdate = false,
+) {
   const message = error === null ? null : formatUiError(error);
   state.lastError = message;
   state.chatError = message;
+  if (requestUpdate) {
+    state.requestUpdate?.();
+  }
 }
 
 export function chatScopedEventSessionMatches(

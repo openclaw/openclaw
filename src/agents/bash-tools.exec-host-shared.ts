@@ -17,7 +17,6 @@ import {
   maxAsk,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalsLocked,
-  resolveExecApprovalsTranscriptPath,
   type ExecAsk,
   type ExecApprovalDecision,
   type ExecApprovalsResolved,
@@ -66,20 +65,6 @@ type ExecHostApprovalContext = {
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 };
 
-/** Pending approval state shared by gateway/node exec hosts. */
-type ExecApprovalPendingState = {
-  warningText: string;
-  expiresAtMs: number;
-  preResolvedDecision: string | null | undefined;
-};
-
-/** Pending approval state plus human-readable notice timing. */
-type ExecApprovalRequestState = ExecApprovalPendingState & {
-  noticeSeconds: number;
-};
-
-const EXPIRED_EXEC_APPROVAL_EXPIRES_AT_MS = 0;
-
 /** Why an approval request cannot be delivered interactively. */
 type ExecApprovalUnavailableReason =
   | "no-approval-route"
@@ -122,75 +107,6 @@ type ExecApprovalFollowupResultDeps = {
   sendExecApprovalFollowup?: typeof sendExecApprovalFollowup;
   logWarn?: typeof logWarn;
 };
-
-/** Builds pending approval state with warnings and a bounded expiry. */
-function createExecApprovalPendingState(params: {
-  warnings: string[];
-  timeoutMs: number;
-}): ExecApprovalPendingState {
-  const expiresAtMs =
-    resolveExpiresAtMsFromDurationMs(params.timeoutMs) ?? EXPIRED_EXEC_APPROVAL_EXPIRES_AT_MS;
-  return {
-    warningText: params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "",
-    expiresAtMs,
-    preResolvedDecision: undefined,
-  };
-}
-
-/** Builds pending approval state plus rounded notice duration. */
-function createExecApprovalRequestState(params: {
-  warnings: string[];
-  timeoutMs: number;
-  approvalRunningNoticeMs: number;
-}): ExecApprovalRequestState {
-  const pendingState = createExecApprovalPendingState({
-    warnings: params.warnings,
-    timeoutMs: params.timeoutMs,
-  });
-  return {
-    ...pendingState,
-    noticeSeconds: Math.max(1, Math.round(params.approvalRunningNoticeMs / 1000)),
-  };
-}
-
-/** Creates a fresh approval id/slug/context key for a pending request. */
-function createExecApprovalRequestContext(params: {
-  warnings: string[];
-  timeoutMs: number;
-  approvalRunningNoticeMs: number;
-  createApprovalSlug: (approvalId: string) => string;
-}): ExecApprovalRequestState & {
-  approvalId: string;
-  approvalSlug: string;
-  contextKey: string;
-} {
-  const approvalId = crypto.randomUUID();
-  const pendingState = createExecApprovalRequestState({
-    warnings: params.warnings,
-    timeoutMs: params.timeoutMs,
-    approvalRunningNoticeMs: params.approvalRunningNoticeMs,
-  });
-  return {
-    ...pendingState,
-    approvalId,
-    approvalSlug: params.createApprovalSlug(approvalId),
-    contextKey: `exec:${approvalId}`,
-  };
-}
-
-/** Creates a pending approval context using the default approval timeout. */
-function createDefaultExecApprovalRequestContext(params: {
-  warnings: string[];
-  approvalRunningNoticeMs: number;
-  createApprovalSlug: (approvalId: string) => string;
-}) {
-  return createExecApprovalRequestContext({
-    warnings: params.warnings,
-    timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-    approvalRunningNoticeMs: params.approvalRunningNoticeMs,
-    createApprovalSlug: params.createApprovalSlug,
-  });
-}
 
 /** Converts a raw approval decision plus fallback policy into execution state. */
 function resolveBaseExecApprovalDecision(params: {
@@ -290,17 +206,10 @@ type DefaultExecApprovalRequestParams = {
 async function createAndRegisterDefaultExecApprovalRequest(
   params: DefaultExecApprovalRequestParams,
 ): Promise<RegisteredExecApprovalRequestContext> {
-  const {
-    approvalId,
-    approvalSlug,
-    warningText,
-    expiresAtMs: defaultExpiresAtMs,
-    preResolvedDecision: defaultPreResolvedDecision,
-  } = createDefaultExecApprovalRequestContext({
-    warnings: params.warnings,
-    approvalRunningNoticeMs: params.approvalRunningNoticeMs,
-    createApprovalSlug: params.createApprovalSlug,
-  });
+  const approvalId = crypto.randomUUID();
+  const defaultExpiresAtMs = resolveExpiresAtMsFromDurationMs(DEFAULT_APPROVAL_TIMEOUT_MS) ?? 0;
+  const warningText = params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "";
+  const approvalSlug = params.createApprovalSlug(approvalId);
   const registration = await params.register(approvalId);
   const preResolvedDecision = registration.finalDecision;
   const { initiatingSurface, sentApproverDms, unavailableReason } =
@@ -315,10 +224,7 @@ async function createAndRegisterDefaultExecApprovalRequest(
     approvalSlug,
     warningText,
     expiresAtMs: registration.expiresAtMs ?? defaultExpiresAtMs,
-    preResolvedDecision:
-      registration.finalDecision === undefined
-        ? defaultPreResolvedDecision
-        : registration.finalDecision,
+    preResolvedDecision,
     initiatingSurface,
     sentApproverDms,
     unavailableReason,
@@ -515,22 +421,23 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }): string {
   const runLabel = params.trigger === "cron" ? "Automation runs" : "Headless runs";
+  const approvalTarget = params.host === "node" ? "--node <id|name|ip>" : "--gateway";
   // The TUI and chat channels never receive automation approval cards
   // (server-request-context canDeliverApprovals), so only name surfaces that
   // can actually answer this run's approval.
   const approvalSurfaceFix =
     params.trigger === "cron" && params.host === "gateway"
       ? "- keep the Control UI or a macOS/iOS/Android app connected and answer the next run's approval card; Allow Always mints a standing grant"
-      : "- rerun interactively and approve when prompted (Control UI, TUI, or a chat channel with exec approvals)";
+      : "- rerun interactively and approve when prompted (Control UI or a chat channel with exec approvals)";
   return [
     `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
     `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
-    `Stricter values from tools.exec and ${resolveExecApprovalsTranscriptPath()} both apply.`,
+    "Stricter values from tools.exec and the execution host's approvals policy both apply.",
     "Fix one of these:",
-    '- align both files to security="full" and ask="off" for trusted local automation',
+    '- set tools.exec.mode="full" and align host approvals to security="full" and ask="off" for trusted local automation',
     "- keep allowlist mode and add an explicit allowlist entry for this command",
     approvalSurfaceFix,
-    'Tip: run "openclaw doctor" and "openclaw approvals get --gateway" to inspect the effective policy.',
+    `Tip: run "openclaw doctor" and "openclaw approvals get ${approvalTarget}" to inspect the effective policy.`,
   ].join("\n");
 }
 

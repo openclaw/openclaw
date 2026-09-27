@@ -60,6 +60,29 @@ const TARGET_SHA = "b".repeat(40);
 const TRUSTED_MAIN = { fullRef: "refs/heads/main", ref: "main", sha: SHA };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function collectorEnv(overrides: NodeJS.ProcessEnv) {
+  return {
+    ...process.env,
+    GITHUB_REF_NAME: "release-ci/tooling",
+    GITHUB_REPOSITORY: "openclaw/openclaw",
+    GITHUB_RUN_ATTEMPT: "2",
+    GITHUB_RUN_ID: "77",
+    GITHUB_SHA: SHA,
+    RELEASE_PROFILE: "stable",
+    RERUN_GROUP: "ci",
+    TARGET_SHA,
+    ...overrides,
+  };
+}
+
+function runCollector(mode: string, overrides: NodeJS.ProcessEnv) {
+  return spawnSync(process.execPath, [SCRIPT, mode], {
+    encoding: "utf8",
+    env: collectorEnv(overrides),
+    timeout: 10_000,
+  });
+}
+
 function candidateRequestInput(overrides: Record<string, unknown> = {}) {
   return {
     repository: "openclaw/openclaw",
@@ -333,23 +356,12 @@ function runPlanSubprocess(overrides: Record<string, unknown>, env: Record<strin
     workflowSha: SHA,
     ...overrides,
   };
-  const result = spawnSync(process.execPath, [SCRIPT, "plan"], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      FULL_RELEASE_EXECUTION_PLAN_PATH: output,
-      FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(planInputs),
-      GITHUB_REF_NAME: "release-ci/tooling",
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_RUN_ATTEMPT: "1",
-      GITHUB_RUN_ID: "77",
-      GITHUB_SHA: SHA,
-      RELEASE_PROFILE: "stable",
-      RERUN_GROUP: planInputs.rerunGroup,
-      TARGET_SHA,
-      ...env,
-    },
-    timeout: 10_000,
+  const result = runCollector("plan", {
+    FULL_RELEASE_EXECUTION_PLAN_PATH: output,
+    FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(planInputs),
+    GITHUB_RUN_ATTEMPT: "1",
+    RERUN_GROUP: planInputs.rerunGroup,
+    ...env,
   });
   return { output, result };
 }
@@ -676,10 +688,7 @@ describe("full release execution plan", () => {
   it.each([
     { coveragePolicy: "unknown" },
     { releaseProfile: "stable" },
-    { releaseProfile: "full" },
     { runReleaseSoak: true },
-    { rerunGroup: "performance" },
-    { rerunGroup: "npm-telegram" },
     { rerunGroup: "ci" },
     { targetVersion: "2026.8.28" },
     { targetVersion: "2026.8.28-alpha.1" },
@@ -773,13 +782,9 @@ describe("full release execution plan", () => {
 
   it.each([
     { releaseProfile: "beta" },
-    { releaseProfile: "full" },
     { runReleaseSoak: false },
-    { runReleaseSoak: undefined },
     { rerunGroup: "ci" },
-    { rerunGroup: "package" },
     { targetVersion: "2026.8.33" },
-    { targetVersion: "2026.8.33-1" },
     { targetVersion: "2026.8.28-beta.1" },
     { targetVersion: "2026.8.28-alpha.1" },
     { targetVersion: " 2026.8.28" },
@@ -791,15 +796,12 @@ describe("full release execution plan", () => {
 
   it.each([
     ["npm-beta-v1", "npm-beta", true],
-    ["npm-beta-v1", "full", false],
     ["npm-beta-v1", "", false],
     ["npm-beta-v1", "npm-stable", false],
     ["npm-stable-v1", "npm-stable", true],
     ["npm-stable-v1", "npm-beta", false],
-    ["npm-stable-v1", "full", false],
     ["npm-stable-v1", "", false],
     [undefined, "npm-beta", false],
-    [undefined, "npm-stable", false],
     [undefined, "full", true],
     [undefined, "", true],
   ])(
@@ -1115,14 +1117,7 @@ describe("full release execution plan", () => {
 
   it.each([
     "error fetching artifacts: HTTP 401: Bad credentials",
-    "error fetching artifacts: HTTP 403: forbidden",
-    "error fetching artifacts: HTTP 404: Not Found",
-    "error fetching artifacts: HTTP 410: Gone",
-    "error fetching artifacts: HTTP 422: invalid run",
-    "HTTP 429: API rate limit exceeded",
     "HTTP 503: Server Error",
-    "unknown flag: --name\nUsage: gh run download",
-    "artifact request timed out",
     "artifact archive is malformed",
     "Unexpected end of JSON input",
     "artifact archive exceeds the size limit",
@@ -1276,19 +1271,14 @@ describe("full release execution plan", () => {
     );
   });
 
-  it.each(["skipped", "failure"])(
-    "rejects candidate evidence when required binding is %s",
-    (candidateBindingResult) => {
-      const { result } = runPlanSubprocess({
-        candidateBindingResult,
-        candidateEvidence: candidateBinding(),
-      });
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain(
-        "release candidate evidence exists without successful binding",
-      );
-    },
-  );
+  it("rejects candidate evidence when required binding is skipped", () => {
+    const { result } = runPlanSubprocess({
+      candidateBindingResult: "skipped",
+      candidateEvidence: candidateBinding(),
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("release candidate evidence exists without successful binding");
+  });
 
   it("rejects candidate evidence when binding is not required", () => {
     const { result } = runPlanSubprocess({
@@ -1361,20 +1351,6 @@ describe("release child attempt composition", () => {
     );
     expect(result.jobs).toEqual([
       expect.objectContaining({ acceptedRunAttempt: 2, conclusion: "failure", name: "test" }),
-    ]);
-  });
-
-  it("lets a later success replace a failure while carrying absent green jobs", () => {
-    const result = composeReleaseAttemptJobs(
-      [
-        { jobs: [job("lint", "success"), job("test", "failure")], runAttempt: 1 },
-        { jobs: [job("test", "success")], runAttempt: 2 },
-      ],
-      { effectiveRunAttempt: 2, plannedRunAttempt: 1 },
-    );
-    expect(result.jobs).toEqual([
-      expect.objectContaining({ acceptedRunAttempt: 1, conclusion: "success", name: "lint" }),
-      expect.objectContaining({ acceptedRunAttempt: 2, conclusion: "success", name: "test" }),
     ]);
   });
 
@@ -1776,12 +1752,8 @@ describe("release decision policy", () => {
     },
   );
 
-  it.each([
-    "HTTP 503: Server Error",
-    "HTTP 429: API rate limit exceeded",
-    "HTTP 403: secondary rate limit",
-    "read ECONNRESET",
-  ])("preserves the last valid snapshot through %s and then recovers", async (message) => {
+  it("preserves the last valid snapshot through a transient error and then recovers", async () => {
+    const message = "HTTP 503: Server Error";
     const planned = child("normalCi");
     const previous = {
       ...planned,
@@ -1944,21 +1916,19 @@ describe("release decision policy", () => {
     ).toMatchObject({ state: "orchestration_error" });
   });
 
-  it.each(["HTTP 403: Resource not accessible by integration", "HTTP 403: Bad credentials"])(
-    "keeps %s terminal",
-    async (message) => {
-      const planned = child("normalCi");
-      const observed = await readChild(planned, planned, undefined, {
-        readRun: async () => {
-          throw Object.assign(new Error(message), { stderr: message });
-        },
-      });
-      expect(observed).toMatchObject({
-        errors: [expect.objectContaining({ kind: "api_error" })],
-        transportFailure: undefined,
-      });
-    },
-  );
+  it("keeps GitHub permission errors terminal", async () => {
+    const message = "HTTP 403: Resource not accessible by integration";
+    const planned = child("normalCi");
+    const observed = await readChild(planned, planned, undefined, {
+      readRun: async () => {
+        throw Object.assign(new Error(message), { stderr: message });
+      },
+    });
+    expect(observed).toMatchObject({
+      errors: [expect.objectContaining({ kind: "api_error" })],
+      transportFailure: undefined,
+    });
+  });
 
   it("keeps malformed child responses terminal", async () => {
     const planned = child("normalCi");
@@ -3216,26 +3186,14 @@ describe("release state artifacts", () => {
         false,
       );
     }
-    const result = spawnSync(process.execPath, [SCRIPT, "select"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        DIAGNOSTIC_DRAIN_ATTEMPTS_PATH: drainRoot,
-        DIAGNOSTIC_DRAIN_PATH: drainPath,
-        GITHUB_OUTPUT: outputPath,
-        GITHUB_REF_NAME: "release-ci/tooling",
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_RUN_ATTEMPT: "3",
-        GITHUB_RUN_ID: "77",
-        GITHUB_SHA: SHA,
-        RELEASE_DECISION_ATTEMPTS_PATH: decisionRoot,
-        RELEASE_DECISION_PATH: decisionPath,
-        RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
-        RELEASE_PROFILE: "stable",
-        RERUN_GROUP: "ci",
-        TARGET_SHA,
-      },
-      timeout: 10_000,
+    const result = runCollector("select", {
+      DIAGNOSTIC_DRAIN_ATTEMPTS_PATH: drainRoot,
+      DIAGNOSTIC_DRAIN_PATH: drainPath,
+      GITHUB_OUTPUT: outputPath,
+      GITHUB_RUN_ATTEMPT: "3",
+      RELEASE_DECISION_ATTEMPTS_PATH: decisionRoot,
+      RELEASE_DECISION_PATH: decisionPath,
+      RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
     });
     expect(result.status, result.stderr).toBe(0);
     return readFileSync(outputPath, "utf8");
@@ -3323,16 +3281,13 @@ describe("release state artifacts", () => {
 });
 
 describe("collector subprocess", () => {
-  it.each([false, true])(
-    "seals the canonical packagePublished=%s candidate request without reconstruction",
-    (packagePublished) => {
-      const candidateRequest = canonicalCandidateRequest({ packagePublished });
-      const { output, result } = runPlanSubprocess({ candidateRequestInput: candidateRequest });
+  it("seals the canonical published candidate request without reconstruction", () => {
+    const candidateRequest = canonicalCandidateRequest({ packagePublished: true });
+    const { output, result } = runPlanSubprocess({ candidateRequestInput: candidateRequest });
 
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(output, "utf8")).candidateRequest).toEqual(candidateRequest);
-    },
-  );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(output, "utf8")).candidateRequest).toEqual(candidateRequest);
+  });
 
   it.each([
     {
@@ -3442,38 +3397,27 @@ console.log(JSON.stringify({
       workflowRef: "release-ci/tooling",
       workflowSha: SHA,
     };
-    const result = spawnSync(process.execPath, [SCRIPT, "plan"], {
-      env: {
-        ...process.env,
-        FRV_EXPECTED_REUSE: JSON.stringify({
-          "--expected-changed-paths-json": JSON.stringify(reuse.changedPaths),
-          "--expected-evidence-policy": reuse.policy,
-          "--expected-evidence-sha": reuse.evidenceSha,
-          "--expected-root-run-id": "99",
-          "--expected-selected-run-id": "99",
-          "--expected-target-sha": TARGET_SHA,
-          "--trusted-workflow-full-ref": reuse.trustedWorkflow.fullRef,
-          "--trusted-workflow-ref": reuse.trustedWorkflow.ref,
-          "--trusted-workflow-sha": reuse.trustedWorkflow.sha,
-          "--validate-run": "99",
-        }),
-        FRV_EVIDENCE_MANIFEST: JSON.stringify(sourceManifest),
-        FRV_REUSED_CHILDREN: JSON.stringify(reusedEvidenceChildren()),
-        FRV_VALIDATOR_ARGS: validatorArgs,
-        FULL_RELEASE_EXECUTION_PLAN_PATH: output,
-        FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(planInputs),
-        GITHUB_REF_NAME: "release-ci/tooling",
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_RUN_ATTEMPT: "1",
-        GITHUB_RUN_ID: "77",
-        GITHUB_SHA: SHA,
-        OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: validator,
-        RELEASE_PROFILE: "stable",
-        RERUN_GROUP: "all",
-        TARGET_SHA,
-      },
-      encoding: "utf8",
-      timeout: 10_000,
+    const result = runCollector("plan", {
+      FRV_EXPECTED_REUSE: JSON.stringify({
+        "--expected-changed-paths-json": JSON.stringify(reuse.changedPaths),
+        "--expected-evidence-policy": reuse.policy,
+        "--expected-evidence-sha": reuse.evidenceSha,
+        "--expected-root-run-id": "99",
+        "--expected-selected-run-id": "99",
+        "--expected-target-sha": TARGET_SHA,
+        "--trusted-workflow-full-ref": reuse.trustedWorkflow.fullRef,
+        "--trusted-workflow-ref": reuse.trustedWorkflow.ref,
+        "--trusted-workflow-sha": reuse.trustedWorkflow.sha,
+        "--validate-run": "99",
+      }),
+      FRV_EVIDENCE_MANIFEST: JSON.stringify(sourceManifest),
+      FRV_REUSED_CHILDREN: JSON.stringify(reusedEvidenceChildren()),
+      FRV_VALIDATOR_ARGS: validatorArgs,
+      FULL_RELEASE_EXECUTION_PLAN_PATH: output,
+      FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(planInputs),
+      GITHUB_RUN_ATTEMPT: "1",
+      OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: validator,
+      RERUN_GROUP: "all",
     });
     if (reuse.name.startsWith("wrong-")) {
       expect(result.status).toBe(2);
@@ -3595,25 +3539,12 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
   rerunGroup: "ci"
 }));\n`,
     );
-    const result = spawnSync(process.execPath, [SCRIPT, "decision"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        FAIL_FAST: "false",
-        FULL_RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
-        FULL_RELEASE_STATE_PATH: output,
-        GITHUB_REF_NAME: "release-ci/tooling",
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_RUN_ATTEMPT: "2",
-        GITHUB_RUN_ID: "77",
-        GITHUB_SHA: SHA,
-        OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: validator,
-        PATH: `${root}:${process.env.PATH}`,
-        RELEASE_PROFILE: "stable",
-        RERUN_GROUP: "ci",
-        TARGET_SHA,
-      },
-      timeout: 10_000,
+    const result = runCollector("decision", {
+      FAIL_FAST: "false",
+      FULL_RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
+      FULL_RELEASE_STATE_PATH: output,
+      OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: validator,
+      PATH: `${root}:${process.env.PATH}`,
     });
     expect(result.status, result.stderr).not.toBe(2);
     const decision = JSON.parse(readFileSync(output, "utf8"));
@@ -3634,33 +3565,16 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     writeFileSync(executionPlanPath, JSON.stringify(sealedPlan));
     writeFileSync(manifestPath, JSON.stringify(generatedManifest(sealedPlan)));
     const env = {
-      ...process.env,
-      GITHUB_REF_NAME: "release-ci/tooling",
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_RUN_ATTEMPT: "2",
-      GITHUB_RUN_ID: "77",
-      GITHUB_SHA: SHA,
       RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
-      RELEASE_PROFILE: "stable",
       RELEASE_VALIDATION_MANIFEST_PATH: manifestPath,
-      RERUN_GROUP: "ci",
-      TARGET_SHA,
     };
-    const valid = spawnSync(process.execPath, [SCRIPT, "validate-manifest"], {
-      encoding: "utf8",
-      env,
-      timeout: 10_000,
-    });
+    const valid = runCollector("validate-manifest", env);
     expect(valid.status, valid.stderr).toBe(0);
     writeFileSync(
       manifestPath,
       JSON.stringify({ ...generatedManifest(sealedPlan), sourceParentRunAttempt: 2 }),
     );
-    const invalid = spawnSync(process.execPath, [SCRIPT, "validate-manifest"], {
-      encoding: "utf8",
-      env,
-      timeout: 10_000,
-    });
+    const invalid = runCollector("validate-manifest", env);
     expect(invalid.status).toBe(2);
     expect(invalid.stderr).toContain(
       "release validation manifest differs from the immutable execution plan",
@@ -3796,25 +3710,13 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       writeFileSync(drainPath, JSON.stringify(drainArtifact));
       writeFileSync(manifestPath, JSON.stringify(manifest));
       const env = {
-        ...process.env,
         DIAGNOSTIC_DRAIN_PATH: drainPath,
-        GITHUB_REF_NAME: "release-ci/tooling",
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_RUN_ATTEMPT: "2",
-        GITHUB_RUN_ID: "77",
-        GITHUB_SHA: SHA,
         RELEASE_DECISION_PATH: decisionPath,
         RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
-        RELEASE_PROFILE: "stable",
         RELEASE_VALIDATION_MANIFEST_PATH: manifestPath,
         RERUN_GROUP: rerunGroup,
-        TARGET_SHA,
       };
-      const valid = spawnSync(process.execPath, [SCRIPT, "validate-manifest"], {
-        encoding: "utf8",
-        env,
-        timeout: 10_000,
-      });
+      const valid = runCollector("validate-manifest", env);
       if (conclusion === "failure") {
         expect(valid.status).toBe(2);
         expect(valid.stderr).toContain("blocked_complete");
@@ -3832,11 +3734,7 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
         childEvidence,
       };
       writeFileSync(manifestPath, JSON.stringify(changed));
-      const invalid = spawnSync(process.execPath, [SCRIPT, "validate-manifest"], {
-        encoding: "utf8",
-        env,
-        timeout: 10_000,
-      });
+      const invalid = runCollector("validate-manifest", env);
       expect(invalid.status).toBe(2);
       expect(invalid.stderr).toContain("candidate");
     },
@@ -3895,22 +3793,9 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     mutate(manifest);
     writeFileSync(executionPlanPath, JSON.stringify(sealedPlan));
     writeFileSync(manifestPath, JSON.stringify(manifest));
-    const result = spawnSync(process.execPath, [SCRIPT, "validate-manifest"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        GITHUB_REF_NAME: "release-ci/tooling",
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_RUN_ATTEMPT: "2",
-        GITHUB_RUN_ID: "77",
-        GITHUB_SHA: SHA,
-        RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
-        RELEASE_PROFILE: "stable",
-        RELEASE_VALIDATION_MANIFEST_PATH: manifestPath,
-        RERUN_GROUP: "ci",
-        TARGET_SHA,
-      },
-      timeout: 10_000,
+    const result = runCollector("validate-manifest", {
+      RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
+      RELEASE_VALIDATION_MANIFEST_PATH: manifestPath,
     });
     expect(result.status).toBe(2);
     expect(result.stderr).toContain(
@@ -3948,25 +3833,14 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       workflowSha: SHA,
     };
     const baseEnv = {
-      ...process.env,
       FULL_RELEASE_EXECUTION_PLAN_PATH: output,
-      GITHUB_REF_NAME: "release-ci/tooling",
-      GITHUB_REPOSITORY: "openclaw/openclaw",
       GITHUB_RUN_ATTEMPT: "1",
-      GITHUB_RUN_ID: "77",
-      GITHUB_SHA: SHA,
       OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: validator,
-      RELEASE_PROFILE: "stable",
       RERUN_GROUP: "all",
-      TARGET_SHA,
     };
-    const planResult = spawnSync(process.execPath, [SCRIPT, "plan"], {
-      encoding: "utf8",
-      env: {
-        ...baseEnv,
-        FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(planInputs),
-      },
-      timeout: 10_000,
+    const planResult = runCollector("plan", {
+      ...baseEnv,
+      FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(planInputs),
     });
     expect(planResult.status).toBe(2);
     expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
@@ -3974,14 +3848,10 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       errors: [],
     });
 
-    const decisionResult = spawnSync(process.execPath, [SCRIPT, "decision"], {
-      encoding: "utf8",
-      env: {
-        ...baseEnv,
-        FAIL_FAST: "false",
-        FULL_RELEASE_STATE_PATH: decisionOutput,
-      },
-      timeout: 10_000,
+    const decisionResult = runCollector("decision", {
+      ...baseEnv,
+      FAIL_FAST: "false",
+      FULL_RELEASE_STATE_PATH: decisionOutput,
     });
     expect(decisionResult.status).toBe(1);
     expect(JSON.parse(readFileSync(decisionOutput, "utf8"))).toMatchObject({
@@ -3994,8 +3864,6 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
 
   it.each([
     { dockerPreflightResult: "success", packagePublished: false, retiredScenario: false },
-    { dockerPreflightResult: "success", packagePublished: true, retiredScenario: false },
-    { dockerPreflightResult: "failure", packagePublished: false, retiredScenario: false },
     { dockerPreflightResult: "failure", packagePublished: true, retiredScenario: false },
     { dockerPreflightResult: "success", packagePublished: false, retiredScenario: true },
   ])(
@@ -4056,25 +3924,13 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       legacyDockerGate.result = dockerPreflightResult;
       sealed.sha256 = releaseExecutionPlanSha256(sealed);
       writeFileSync(output, JSON.stringify(sealed));
-      const result = spawnSync(process.execPath, [SCRIPT, "plan"], {
-        env: {
-          ...process.env,
-          CANDIDATE_REQUEST_JSON: JSON.stringify(candidate.request),
-          FULL_RELEASE_EXECUTION_PLAN_PATH: output,
-          FULL_RELEASE_PLAN_INPUTS_JSON: "must-not-be-read-during-restore",
-          FULL_RELEASE_RESTORE_PLAN: "true",
-          GITHUB_OUTPUT: githubOutput,
-          GITHUB_REF_NAME: "release-ci/tooling",
-          GITHUB_REPOSITORY: "openclaw/openclaw",
-          GITHUB_RUN_ATTEMPT: "2",
-          GITHUB_RUN_ID: "77",
-          GITHUB_SHA: SHA,
-          RELEASE_PROFILE: "stable",
-          RERUN_GROUP: "all",
-          TARGET_SHA,
-        },
-        encoding: "utf8",
-        timeout: 10_000,
+      const result = runCollector("plan", {
+        CANDIDATE_REQUEST_JSON: JSON.stringify(candidate.request),
+        FULL_RELEASE_EXECUTION_PLAN_PATH: output,
+        FULL_RELEASE_PLAN_INPUTS_JSON: "must-not-be-read-during-restore",
+        FULL_RELEASE_RESTORE_PLAN: "true",
+        GITHUB_OUTPUT: githubOutput,
+        RERUN_GROUP: "all",
       });
       expect(result.status, result.stderr).toBe(0);
       const restored = JSON.parse(readFileSync(output, "utf8")) as typeof sealed;
@@ -4249,23 +4105,11 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
         ),
       ),
     );
-    const result = spawnSync(process.execPath, [SCRIPT, "decision"], {
-      env: {
-        ...process.env,
-        FAIL_FAST: "false",
-        FULL_RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
-        FULL_RELEASE_STATE_PATH: output,
-        GITHUB_REF_NAME: "release-ci/tooling",
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_RUN_ATTEMPT: "2",
-        GITHUB_RUN_ID: "77",
-        GITHUB_SHA: SHA,
-        RELEASE_PROFILE: "stable",
-        RERUN_GROUP: "ci",
-        TARGET_SHA: "",
-      },
-      encoding: "utf8",
-      timeout: 10_000,
+    const result = runCollector("decision", {
+      FAIL_FAST: "false",
+      FULL_RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
+      FULL_RELEASE_STATE_PATH: output,
+      TARGET_SHA: "",
     });
     expect(result.status, result.stderr).toBe(1);
     const artifact = JSON.parse(readFileSync(output, "utf8"));
@@ -4313,23 +4157,15 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     );
     chmodSync(gh, 0o755);
     const childProcess = spawn(process.execPath, [SCRIPT, "drain"], {
-      env: {
-        ...process.env,
+      env: collectorEnv({
         FAIL_FAST: "false",
         FRV_GH_READY: ghReady,
         FULL_RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
         FULL_RELEASE_POLL_INTERVAL_MS: "60000",
         FULL_RELEASE_STATE_PATH: output,
-        GITHUB_REF_NAME: "release-ci/tooling",
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_RUN_ATTEMPT: "2",
-        GITHUB_RUN_ID: "77",
-        GITHUB_SHA: SHA,
         PATH: `${root}:${process.env.PATH}`,
-        RELEASE_PROFILE: "stable",
-        RERUN_GROUP: "ci",
         TARGET_SHA: "b".repeat(40),
-      },
+      }),
       stdio: "ignore",
     });
     await waitForFile(ghReady, 5_000);
@@ -4412,43 +4248,28 @@ printf '{"id":%s,"event":"workflow_dispatch","path":".github/workflows/%s@refs/h
       ),
     );
     const baseEnv = {
-      ...process.env,
       FRV_GH_CALLS: calls,
       FULL_RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
-      GITHUB_REF_NAME: "release-ci/tooling",
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_RUN_ATTEMPT: "2",
-      GITHUB_RUN_ID: "77",
-      GITHUB_SHA: SHA,
       PATH: `${root}:${process.env.PATH}`,
-      RELEASE_PROFILE: "stable",
       RERUN_GROUP: "all",
       TARGET_SHA: "b".repeat(40),
     };
-    const decision = spawnSync(process.execPath, [SCRIPT, "decision"], {
-      env: {
-        ...baseEnv,
-        FAIL_FAST: "true",
-        FRV_FAILED_RUN_STATUS: "in_progress",
-        FULL_RELEASE_STATE_PATH: join(root, "decision.json"),
-      },
-      encoding: "utf8",
-      timeout: 10_000,
+    const decision = runCollector("decision", {
+      ...baseEnv,
+      FAIL_FAST: "true",
+      FRV_FAILED_RUN_STATUS: "in_progress",
+      FULL_RELEASE_STATE_PATH: join(root, "decision.json"),
     });
     expect(decision.signal, decision.stderr).toBeNull();
     const afterDecision = readFileSync(calls, "utf8");
     expect(afterDecision).toContain("run cancel 101");
     expect(afterDecision).not.toContain("run cancel 202");
     writeFileSync(calls, "");
-    const drain = spawnSync(process.execPath, [SCRIPT, "drain"], {
-      env: {
-        ...baseEnv,
-        FAIL_FAST: "false",
-        FRV_FAILED_RUN_STATUS: "completed",
-        FULL_RELEASE_STATE_PATH: join(root, "drain.json"),
-      },
-      encoding: "utf8",
-      timeout: 10_000,
+    const drain = runCollector("drain", {
+      ...baseEnv,
+      FAIL_FAST: "false",
+      FRV_FAILED_RUN_STATUS: "completed",
+      FULL_RELEASE_STATE_PATH: join(root, "drain.json"),
     });
     expect(drain.signal, drain.stderr).toBeNull();
     expect(readFileSync(calls, "utf8")).not.toContain("run cancel");

@@ -9,7 +9,12 @@ import type { MusicGenerationOutputFormat } from "../../music-generation/types.j
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
-import { ToolInputError, readNumberParam, readToolStringParam } from "./common.js";
+import {
+  ToolInputError,
+  readNumberParam,
+  readToolStringParam,
+  type AnyAgentTool,
+} from "./common.js";
 import { createDefaultMediaGenerateBackgroundScheduler } from "./media-generate-background-shared.js";
 import {
   musicGenerationTaskLifecycle,
@@ -35,7 +40,6 @@ import {
   executeMusicGenerationJob,
   normalizeMusicGenerationTimeoutMs,
 } from "./music-generate-tool.execution.js";
-import type { AnyAgentTool } from "./tool-runtime.helpers.js";
 
 const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;

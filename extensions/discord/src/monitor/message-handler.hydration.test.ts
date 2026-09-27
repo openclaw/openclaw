@@ -64,6 +64,16 @@ function createReferencedMessagePayload(content: string, bot = false) {
   });
 }
 
+async function buildHydratedContext(message: Message) {
+  const ctx = await createBaseDiscordMessageContext({
+    message,
+    author: message.author,
+    baseText: message.content,
+    messageText: message.content,
+  });
+  return buildDiscordMessageProcessContext({ ctx, text: message.content, mediaList: [] });
+}
+
 describe("hydrateDiscordMessageIfNeeded", () => {
   it("hydrates partial internal messages without assigning over getters", async () => {
     const client = createInternalTestClient();
@@ -267,17 +277,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     expect(hydrated.referencedMessage?.id).toBe("1000");
     expect(hydrated.referencedMessage?.content).toBe("the canonical reply target");
 
-    const ctx = await createBaseDiscordMessageContext({
-      message: hydrated,
-      author: hydrated.author,
-      baseText: hydrated.content,
-      messageText: hydrated.content,
-    });
-    const result = await buildDiscordMessageProcessContext({
-      ctx,
-      text: hydrated.content,
-      mediaList: [],
-    });
+    const result = await buildHydratedContext(hydrated);
     if (!result) {
       throw new Error("expected a built Discord message context");
     }
@@ -312,17 +312,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
 
     expect(hydrated.referencedMessage).toBeNull();
 
-    const ctx = await createBaseDiscordMessageContext({
-      message: hydrated,
-      author: hydrated.author,
-      baseText: hydrated.content,
-      messageText: hydrated.content,
-    });
-    const result = await buildDiscordMessageProcessContext({
-      ctx,
-      text: hydrated.content,
-      mediaList: [],
-    });
+    const result = await buildHydratedContext(hydrated);
     if (!result) {
       throw new Error("expected a built Discord message context");
     }

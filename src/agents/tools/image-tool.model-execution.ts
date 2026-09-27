@@ -336,9 +336,7 @@ export async function runImagePrompt(
   });
 
   return {
-    text: result.result.text,
-    provider: result.result.provider,
-    model: result.result.model,
+    ...result.result,
     attempts: result.attempts.map((attempt) => ({
       provider: attempt.provider,
       model: attempt.model,

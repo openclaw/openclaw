@@ -1,7 +1,3 @@
-/**
- * Browser CLI management commands for lifecycle, profiles, tabs, and doctor
- * checks.
- */
 import type { Command } from "commander";
 import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -15,7 +11,6 @@ import type {
   BrowserResetProfileResult,
   BrowserStatus,
   BrowserTab,
-  BrowserTransport,
   ProfileStatus,
   SystemProfileInfo,
 } from "../browser/client.js";
@@ -280,23 +275,15 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
   return { ok: checks.every((check) => check.ok), checks, status };
 }
 
-type BrowserProfileDriver = "openclaw" | "existing-session" | "extension";
-
-function usesChromeMcpTransport(params: {
-  transport?: BrowserTransport;
-  driver?: BrowserProfileDriver;
-}): boolean {
+function usesChromeMcpTransport(params: Pick<BrowserStatus, "transport" | "driver">): boolean {
   return params.transport === "chrome-mcp" || params.driver === "existing-session";
 }
 
-function formatBrowserConnectionSummary(params: {
-  transport?: BrowserTransport;
-  driver?: BrowserProfileDriver;
-  isRemote?: boolean;
-  cdpPort?: number | null;
-  cdpUrl?: string | null;
-  userDataDir?: string | null;
-}): string {
+function formatBrowserConnectionSummary(
+  params: Partial<
+    Pick<BrowserStatus, "transport" | "driver" | "cdpPort" | "cdpUrl" | "userDataDir">
+  > & { isRemote?: boolean },
+): string {
   if (usesChromeMcpTransport(params)) {
     if (params.cdpUrl) {
       return `transport: chrome-mcp, cdpUrl: ${redactCdpUrl(params.cdpUrl)}`;
@@ -315,7 +302,6 @@ function formatBrowserConnectionSummary(params: {
   return `port: ${params.cdpPort ?? "(unset)"}`;
 }
 
-/** Registers Browser lifecycle, profile, tab, and doctor commands. */
 export function registerBrowserManageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -579,7 +565,6 @@ export function registerBrowserManageCommands(
       });
     });
 
-  // Profile management commands
   browser
     .command("profiles")
     .description("List all browser profiles")
@@ -752,4 +737,3 @@ export function registerBrowserManageCommands(
       });
     });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

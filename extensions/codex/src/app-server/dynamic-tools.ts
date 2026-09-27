@@ -1,7 +1,3 @@
-/**
- * Bridges OpenClaw runtime tools into Codex app-server dynamic tool specs and
- * tool-call responses.
- */
 import { createHash } from "node:crypto";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -171,7 +167,6 @@ function applyCurrentMessageProvider(
   return { ...args, provider };
 }
 
-/** Runtime bridge returned to Codex app-server attempt code. */
 export type CodexDynamicToolBridge = {
   /** Final executable tools after schema projection and hook-wrapper quarantine. */
   availableTools: AnyAgentTool[];
@@ -228,10 +223,6 @@ function invalidateComputerFrame(contextEpoch: {
   delete contextEpoch.frameImageIdentity;
 }
 
-/**
- * Creates dynamic tool specs and a call handler that executes OpenClaw tools,
- * applies hooks/middleware, and records delivery/media telemetry.
- */
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   registeredTools?: readonly CodexToolDescriptor[];
@@ -377,21 +368,27 @@ export function createCodexDynamicToolBridge(params: {
     },
     consumeToolExecutionSnapshot: executionBoundaries.consume,
     handleToolCall: async (call, options) => {
+      const presentTerminal = (
+        toolName: string,
+        result: AgentToolResult<unknown>,
+        isError: boolean,
+      ) =>
+        finalizeToolTerminalPresentation({
+          toolCallId: call.callId,
+          runId: toolResultHookContext.runId,
+          result,
+          isError,
+          observer: params.hookContext?.onToolOutcome,
+          toolName,
+          toolCallOrdinal: options?.toolCallOrdinal,
+        });
       const toolEntry = toolMap.get(call.tool);
       if (!toolEntry) {
         const executedArguments = asNonArrayRecord(call.arguments);
         const message = registeredToolNames.has(call.tool)
           ? `OpenClaw tool is not available for this turn: ${call.tool}`
           : `Unknown OpenClaw tool: ${call.tool}`;
-        finalizeToolTerminalPresentation({
-          toolCallId: call.callId,
-          runId: toolResultHookContext.runId,
-          result: failedToolResult(message),
-          isError: true,
-          observer: params.hookContext?.onToolOutcome,
-          toolName: call.tool,
-          toolCallOrdinal: options?.toolCallOrdinal,
-        });
+        presentTerminal(call.tool, failedToolResult(message), true);
         notifyAgentToolResult(
           options?.onAgentToolResult,
           call.tool,
@@ -615,15 +612,7 @@ export function createCodexDynamicToolBridge(params: {
             result,
             startedAt,
           });
-          finalizeToolTerminalPresentation({
-            toolCallId: call.callId,
-            runId: toolResultHookContext.runId,
-            result,
-            isError: resultIsError,
-            observer: params.hookContext?.onToolOutcome,
-            toolName,
-            toolCallOrdinal: options?.toolCallOrdinal,
-          });
+          presentTerminal(toolName, result, resultIsError);
           const terminalType =
             resultFailureKind === "blocked"
               ? "blocked"
@@ -739,15 +728,7 @@ export function createCodexDynamicToolBridge(params: {
           }
           executionBoundary.consumeBlocked();
           const failedResult = failedToolResult(errorMessage, executionDisposition);
-          finalizeToolTerminalPresentation({
-            toolCallId: call.callId,
-            runId: toolResultHookContext.runId,
-            result: failedResult,
-            isError: true,
-            observer: params.hookContext?.onToolOutcome,
-            toolName,
-            toolCallOrdinal: options?.toolCallOrdinal,
-          });
+          presentTerminal(toolName, failedResult, true);
           notifyAgentToolResult(options?.onAgentToolResult, toolName, failedResult, true);
           void runAgentHarnessAfterToolCallHook({
             toolName,

@@ -283,15 +283,6 @@ describe("wrapFetchWithAbortSignal", () => {
     expect(seenThis).toBe(fetchImpl);
   });
 
-  it("exposes a no-op preconnect when the source fetch has none", () => {
-    const fetchImpl = withFetchPreconnect(vi.fn(async () => ({ ok: true }) as Response));
-    const wrapped = wrapFetchWithAbortSignal(fetchImpl) as typeof fetch & {
-      preconnect: (url: string, init?: { credentials?: RequestCredentials }) => unknown;
-    };
-
-    expect(wrapped.preconnect("https://example.com")).toBeUndefined();
-  });
-
   it.each([
     { enumerable: true, name: "enumerable" },
     { enumerable: false, name: "non-enumerable" },

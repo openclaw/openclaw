@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import {
   readDeferredPluginMigrations,
+  readDeferredPluginMigrationsAsync,
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
@@ -112,11 +113,7 @@ export function loadConfig(options?: {
   return options?.pin === false ? loadFresh() : loadPinnedRuntimeConfig(loadFresh);
 }
 
-export function getRuntimeConfig(options?: {
-  skipPluginValidation?: boolean;
-  pin?: boolean;
-  skipShellEnvFallback?: boolean;
-}): OpenClawConfig {
+export function getRuntimeConfig(options?: Parameters<typeof loadConfig>[0]): OpenClawConfig {
   return loadConfig(options);
 }
 
@@ -265,6 +262,21 @@ export function readCurrentConfigForPolicyCheck(params: {
     ...params,
     deferredPluginMigrations: readDeferredPluginMigrations({ env: params.env }),
   }).loadConfig({ skipSuspiciousRecovery: true });
+}
+
+/** Await fresh migration facts for this read; retained synchronous guards use their own boundary. */
+export async function readCurrentConfigForPolicyCheckAsync(params: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<OpenClawConfig> {
+  const configPath = params.configPath;
+  const env = cloneEnvWithPlatformSemantics(params.env);
+  const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({ env });
+  return await createCurrentConfigReader({
+    configPath,
+    env,
+    deferredPluginMigrations,
+  }).loadConfigAsync({ skipSuspiciousRecovery: true });
 }
 
 export async function readBestEffortConfig(options?: {

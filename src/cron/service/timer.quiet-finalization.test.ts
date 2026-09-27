@@ -3,6 +3,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecords } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { advanceCronActiveJobGeneration } from "../active-jobs.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
@@ -90,6 +91,7 @@ describe("cron quiet task finalization", () => {
           return finalize(params);
         });
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         defaultAgentId: "main",
         storePath,
         cronEnabled: true,

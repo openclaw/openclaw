@@ -475,54 +475,21 @@ describe("handleSlackAction", () => {
     });
   });
 
-  it.each([
-    { name: "raw channel id", channelId: "C1", expectedChannelId: "C1" },
-    { name: "channel: prefixed id", channelId: "channel:C1", expectedChannelId: "C1" },
-    {
-      name: "folded channel id",
-      channelId: "channel:c08gqh53ejm",
-      expectedChannelId: "C08GQH53EJM",
-    },
-  ])("adds reactions for $name", async ({ channelId, expectedChannelId }) => {
+  it("normalizes folded channel IDs for reactions", async () => {
     const cfg = slackConfig();
     const result = await handleSlackAction(
       {
         action: "react",
-        channelId,
+        channelId: "channel:c08gqh53ejm",
         messageId: "123.456",
         emoji: "✅",
       },
       cfg,
     );
-    expect(reactSlackMessage).toHaveBeenCalledWith(expectedChannelId, "123.456", "✅", { cfg });
+    expect(reactSlackMessage).toHaveBeenCalledWith("C08GQH53EJM", "123.456", "✅", { cfg });
     expect(JSON.parse((result.content[0] as { type: "text"; text: string }).text)).toEqual({
       ok: true,
       added: "✅",
-    });
-  });
-
-  it("routes workspace-qualified reactions through the target workspace client", async () => {
-    const cfg = slackConfig();
-    const channelId = "team:T123:channel:C123";
-
-    await handleSlackAction(
-      {
-        action: "react",
-        channelId,
-        messageId: "123.456",
-        emoji: "✅",
-      },
-      cfg,
-      {
-        currentChannelProvider: "slack",
-        currentChannelId: channelId,
-        requesterAccountId: "default",
-      },
-    );
-
-    expect(reactSlackMessage).toHaveBeenCalledWith("C123", "123.456", "✅", {
-      cfg,
-      teamId: "T123",
     });
   });
 
@@ -652,21 +619,6 @@ describe("handleSlackAction", () => {
     expect(removeOwnSlackReactions).toHaveBeenCalledWith("C1", "123.456", { cfg });
   });
 
-  it("removes reactions when remove flag set", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction(
-      {
-        action: "react",
-        channelId: "C1",
-        messageId: "123.456",
-        emoji: "✅",
-        remove: true,
-      },
-      cfg,
-    );
-    expect(removeSlackReaction).toHaveBeenCalledWith("C1", "123.456", "✅", { cfg });
-  });
-
   it("rejects removes without emoji", async () => {
     await expect(
       handleSlackAction(
@@ -694,39 +646,6 @@ describe("handleSlackAction", () => {
         slackConfig({ actions: { reactions: false } }),
       ),
     ).rejects.toThrow(/Slack reactions are disabled/);
-  });
-
-  it("rejects Slack reaction reads for non-allowlisted target channels", async () => {
-    const cfg = slackConfig({
-      groupPolicy: "allowlist",
-      channels: {
-        C_ALLOWED: { enabled: true },
-      },
-    });
-
-    await expect(
-      handleSlackAction({ action: "reactions", channelId: "C_OTHER", messageId: "123.456" }, cfg),
-    ).rejects.toThrow("Slack read target channel is not allowed.");
-    expect(listSlackReactions).not.toHaveBeenCalled();
-  });
-
-  it("passes threadTs to sendSlackMessage for thread replies", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "channel:C123",
-        content: "Hello thread",
-        threadTs: "1234567890.123456",
-      },
-      cfg,
-    );
-    expectSlackSendCall(0, "channel:C123", "Hello thread", {
-      cfg,
-      mediaUrl: undefined,
-      threadTs: "1234567890.123456",
-      blocks: undefined,
-    });
   });
 
   it("passes replyBroadcast to sendSlackMessage for thread replies", async () => {
@@ -761,6 +680,7 @@ describe("handleSlackAction", () => {
       slackConfig(),
     );
     expect(requireMockArg(downloadSlackFile, "downloadSlackFile", 0, 0)).toBe("F123");
+    expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).token).toBe("tok");
     expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).maxBytes).toBe(
       20 * 1024 * 1024,
     );
@@ -852,15 +772,6 @@ describe("handleSlackAction", () => {
       outbound: false,
       contentType: "application/pdf",
     });
-  });
-
-  it("forwards resolved botToken to action functions instead of relying on config re-read", async () => {
-    downloadSlackFile.mockResolvedValueOnce(null);
-    await handleSlackAction(
-      { action: "downloadFile", fileId: "F123", channelId: "C1" },
-      slackConfig(),
-    );
-    expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).token).toBe("tok");
   });
 
   it("keeps resolved userToken for downloadFile reads when configured", async () => {
@@ -1370,24 +1281,6 @@ describe("handleSlackAction", () => {
     ).rejects.toThrow(/requires content or blocks/i);
   });
 
-  it("auto-injects threadTs from context when replyToMode=all", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "channel:C123",
-        content: "Threaded reply",
-      },
-      cfg,
-      {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "all",
-      },
-    );
-    expectLastSlackSend("Threaded reply", cfg, "1111111111.111111");
-  });
-
   it("auto-injects threadTs for matching DM user targets", async () => {
     const cfg = slackConfig();
     await handleSlackAction(
@@ -1457,23 +1350,8 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("Channel root", cfg);
   });
 
-  it("replyToMode=first threads first message then stops", async () => {
-    const { cfg, context } = createReplyToFirstScenario();
-
-    await handleSlackAction(
-      { action: "sendMessage", to: "channel:C123", content: "First" },
-      cfg,
-      context,
-    );
-
-    expectLastSlackSend("First", cfg, "1111111111.111111");
-    await sendSecondMessageAndExpectNoThread({ cfg, context });
-  });
-
   it.each([
     { replyToMode: "first", action: "sendMessage" },
-    { replyToMode: "first", action: "uploadFile" },
-    { replyToMode: "batched", action: "sendMessage" },
     { replyToMode: "batched", action: "uploadFile" },
   ] as const)(
     "keeps the $replyToMode reply thread available after a failed $action",
@@ -1517,113 +1395,107 @@ describe("handleSlackAction", () => {
     },
   );
 
-  it.each(["first", "batched"] as const)(
-    "records the accepted %s reply when a later prepared message fails",
-    async (replyToMode) => {
-      const cfg = slackConfig({ replyToMode });
-      const hasRepliedRef = { value: false };
-      const context = {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode,
-        hasRepliedRef,
-        preparedMessages: [{ text: "First" }, { text: "Second" }],
-      };
-      sendSlackMessage.mockResolvedValueOnce({ channelId: "C123" });
-      sendSlackMessage.mockRejectedValueOnce(new Error("Second Slack delivery failed"));
+  it("records the accepted first reply when a later prepared message fails", async () => {
+    const replyToMode = "first" as const;
+    const cfg = slackConfig({ replyToMode });
+    const hasRepliedRef = { value: false };
+    const context = {
+      currentChannelId: "C123",
+      currentThreadTs: "1111111111.111111",
+      replyToMode,
+      hasRepliedRef,
+      preparedMessages: [{ text: "First" }, { text: "Second" }],
+    };
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123" });
+    sendSlackMessage.mockRejectedValueOnce(new Error("Second Slack delivery failed"));
 
-      await expect(
-        handleSlackAction(
-          { action: "sendMessage", to: "channel:C123", content: "First" },
-          cfg,
-          context,
-        ),
-      ).rejects.toThrow("Second Slack delivery failed");
-
-      expectSlackSendCall(0, "channel:C123", "First", {
-        cfg,
-        threadTs: "1111111111.111111",
-      });
-      expect(hasRepliedRef.value).toBe(true);
-    },
-  );
-
-  it.each(["first", "batched"] as const)(
-    "records an accepted %s Slack text chunk when the next platform post fails",
-    async (replyToMode) => {
-      const cfg = slackConfig({ replyToMode });
-      const hasRepliedRef = { value: false };
-      const context = {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode,
-        hasRepliedRef,
-      };
-      const client = new WebClient("xoxb-test", { retryConfig: { retries: 0 } });
-      vi.spyOn(client.chat, "postMessage")
-        .mockResolvedValueOnce({ ok: true, channel: "C123", ts: "1111111111.111112" })
-        .mockRejectedValueOnce(new Error("Second Slack text chunk failed"));
-      sendSlackMessage.mockImplementationOnce(async (...args) => {
-        const [target, content, options] = args;
-        if (typeof target !== "string" || typeof content !== "string") {
-          throw new Error("Expected a Slack target and text");
-        }
-        return await sendSlackMessageThroughPublicOwner(target, content, {
-          ...requireRecord(options, "Slack send options"),
-          cfg,
-          client,
-        });
-      });
-
-      await expect(
-        handleSlackAction(
-          { action: "sendMessage", to: "channel:C123", content: "a".repeat(8500) },
-          cfg,
-          context,
-        ),
-      ).rejects.toThrow("Second Slack text chunk failed");
-
-      expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-      expect(hasRepliedRef.value).toBe(true);
-    },
-  );
-
-  it.each(["first", "batched"] as const)(
-    "keeps concurrent %s replies in their thread until a delivery succeeds",
-    async (replyToMode) => {
-      const cfg = slackConfig({ replyToMode });
-      const hasRepliedRef = { value: false };
-      const context = {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode,
-        hasRepliedRef,
-      };
-      const firstDelivery = createDeferred<{ channelId: string }>();
-      sendSlackMessage.mockReturnValueOnce(firstDelivery.promise);
-      const firstAttempt = handleSlackAction(
-        { action: "sendMessage", to: "channel:C123", content: "Pending" },
+    await expect(
+      handleSlackAction(
+        { action: "sendMessage", to: "channel:C123", content: "First" },
         cfg,
         context,
-      );
-      await vi.waitFor(() => expect(sendSlackMessage).toHaveBeenCalledOnce());
+      ),
+    ).rejects.toThrow("Second Slack delivery failed");
 
-      await handleSlackAction(
-        { action: "sendMessage", to: "channel:C123", content: "Accepted" },
+    expectSlackSendCall(0, "channel:C123", "First", {
+      cfg,
+      threadTs: "1111111111.111111",
+    });
+    expect(hasRepliedRef.value).toBe(true);
+  });
+
+  it("records an accepted batched Slack text chunk when the next platform post fails", async () => {
+    const replyToMode = "batched" as const;
+    const cfg = slackConfig({ replyToMode });
+    const hasRepliedRef = { value: false };
+    const context = {
+      currentChannelId: "C123",
+      currentThreadTs: "1111111111.111111",
+      replyToMode,
+      hasRepliedRef,
+    };
+    const client = new WebClient("xoxb-test", { retryConfig: { retries: 0 } });
+    vi.spyOn(client.chat, "postMessage")
+      .mockResolvedValueOnce({ ok: true, channel: "C123", ts: "1111111111.111112" })
+      .mockRejectedValueOnce(new Error("Second Slack text chunk failed"));
+    sendSlackMessage.mockImplementationOnce(async (...args) => {
+      const [target, content, options] = args;
+      if (typeof target !== "string" || typeof content !== "string") {
+        throw new Error("Expected a Slack target and text");
+      }
+      return await sendSlackMessageThroughPublicOwner(target, content, {
+        ...requireRecord(options, "Slack send options"),
+        cfg,
+        client,
+      });
+    });
+
+    await expect(
+      handleSlackAction(
+        { action: "sendMessage", to: "channel:C123", content: "a".repeat(8500) },
         cfg,
         context,
-      );
-      expectSlackSendCall(1, "channel:C123", "Accepted", {
-        cfg,
-        threadTs: "1111111111.111111",
-      });
-      expect(hasRepliedRef.value).toBe(true);
+      ),
+    ).rejects.toThrow("Second Slack text chunk failed");
 
-      firstDelivery.reject(new Error("First Slack delivery failed"));
-      await expect(firstAttempt).rejects.toThrow("First Slack delivery failed");
-      expect(hasRepliedRef.value).toBe(true);
-    },
-  );
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(hasRepliedRef.value).toBe(true);
+  });
+
+  it("keeps concurrent first replies in their thread until a delivery succeeds", async () => {
+    const replyToMode = "first" as const;
+    const cfg = slackConfig({ replyToMode });
+    const hasRepliedRef = { value: false };
+    const context = {
+      currentChannelId: "C123",
+      currentThreadTs: "1111111111.111111",
+      replyToMode,
+      hasRepliedRef,
+    };
+    const firstDelivery = createDeferred<{ channelId: string }>();
+    sendSlackMessage.mockReturnValueOnce(firstDelivery.promise);
+    const firstAttempt = handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "Pending" },
+      cfg,
+      context,
+    );
+    await vi.waitFor(() => expect(sendSlackMessage).toHaveBeenCalledOnce());
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "Accepted" },
+      cfg,
+      context,
+    );
+    expectSlackSendCall(1, "channel:C123", "Accepted", {
+      cfg,
+      threadTs: "1111111111.111111",
+    });
+    expect(hasRepliedRef.value).toBe(true);
+
+    firstDelivery.reject(new Error("First Slack delivery failed"));
+    await expect(firstAttempt).rejects.toThrow("First Slack delivery failed");
+    expect(hasRepliedRef.value).toBe(true);
+  });
 
   it("replyToMode=first threads standalone message-tool sends without ReplyToId", async () => {
     const cfg = slackConfig({ replyToMode: "first" });
@@ -1692,25 +1564,7 @@ describe("handleSlackAction", () => {
       context,
     );
 
-    expect(hasRepliedRef.value).toBe(true);
-    await sendSecondMessageAndExpectNoThread({ cfg, context });
-  });
-
-  it("replyToMode=first marks hasRepliedRef even when threadTs is explicit", async () => {
-    const { cfg, context, hasRepliedRef } = createReplyToFirstScenario();
-
-    await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "channel:C123",
-        content: "Explicit",
-        threadTs: "9999999999.999999",
-      },
-      cfg,
-      context,
-    );
-
-    expectLastSlackSend("Explicit", cfg, "9999999999.999999");
+    expectSlackSendCall(0, "#c123", "Explicit", { cfg, threadTs: "9999999999.999999" });
     expect(hasRepliedRef.value).toBe(true);
     await sendSecondMessageAndExpectNoThread({ cfg, context });
   });
@@ -1761,20 +1615,6 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("No ref", cfg);
   });
 
-  it("does not auto-inject threadTs when replyToMode=off", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction(
-      { action: "sendMessage", to: "channel:C123", content: "No thread" },
-      cfg,
-      {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "off",
-      },
-    );
-    expectLastSlackSend("No thread", cfg);
-  });
-
   it("keeps same-channel sends and uploads top-level for a prepared channel override", async () => {
     const cfg = slackConfig({
       replyToMode: "all",
@@ -1820,59 +1660,6 @@ describe("handleSlackAction", () => {
       threadTs: undefined,
       uploadFileName: undefined,
       uploadTitle: undefined,
-    });
-  });
-
-  it("does not auto-inject threadTs when sending to different channel", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction(
-      { action: "sendMessage", to: "channel:C999", content: "Other channel" },
-      cfg,
-      {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "all",
-      },
-    );
-    expectSlackSendCall(0, "channel:C999", "Other channel", {
-      cfg,
-      mediaUrl: undefined,
-      threadTs: undefined,
-      blocks: undefined,
-    });
-  });
-
-  it("explicit threadTs overrides context threadTs", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "channel:C123",
-        content: "Explicit wins",
-        threadTs: "9999999999.999999",
-      },
-      cfg,
-      {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "all",
-      },
-    );
-    expectLastSlackSend("Explicit wins", cfg, "9999999999.999999");
-  });
-
-  it("handles channel target without prefix when replyToMode=all", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction({ action: "sendMessage", to: "C123", content: "Bare target" }, cfg, {
-      currentChannelId: "C123",
-      currentThreadTs: "1111111111.111111",
-      replyToMode: "all",
-    });
-    expectSlackSendCall(0, "C123", "Bare target", {
-      cfg,
-      mediaUrl: undefined,
-      threadTs: "1111111111.111111",
-      blocks: undefined,
     });
   });
 

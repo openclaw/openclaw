@@ -145,7 +145,7 @@ export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof
 type DefaultedWorkerTurnLauncherOption =
   | "reconcileActivePlacement"
   | "waitForAdmissionNode"
-  | "redispatchReclaimed"
+  | "redispatchPlacement"
   | "resolveWorkspace"
   | "workspaceOperations";
 
@@ -158,7 +158,7 @@ export function createWorkerSessionTurnPlacementProvider(
     reconcileActivePlacement: async () => {
       throw new Error("unexpected active placement reconciliation");
     },
-    redispatchReclaimed: async () => {
+    redispatchPlacement: async () => {
       throw new Error("unexpected reclaimed placement redispatch");
     },
     resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
@@ -185,7 +185,7 @@ export async function dispatchInitialWorkerPlacement(params: {
   workspace: string;
   onTransition: (placement: WorkerSessionPlacementRecord) => Promise<void>;
 }) {
-  let placement = params.placements.startDispatch(params.identity);
+  let placement = await params.placements.startDispatch(params.identity);
   await params.onTransition(placement);
   seedAttachedPlacementEnvironment(params.database, {
     environmentId: ENVIRONMENT_ID,
@@ -218,12 +218,12 @@ export async function dispatchInitialWorkerPlacement(params: {
   return placement;
 }
 
-export function seedActivePlacement(
+export async function seedActivePlacement(
   executionMode: "worker-turn" | "remote-exec" = "worker-turn",
   remoteWorkspaceDir = "/worker/workspace",
   workspaceBaseManifestRef = MANIFEST_REF,
-): void {
-  let placement = placements.startDispatch({
+): Promise<void> {
+  let placement = await placements.startDispatch({
     sessionId: SESSION_ID,
     sessionKey: sessionTarget.sessionKey,
     agentId: sessionTarget.agentId,
@@ -267,8 +267,8 @@ export function seedActivePlacement(
   });
 }
 
-export function seedReclaimedPlacement() {
-  seedActivePlacement();
+export async function seedReclaimedPlacement() {
+  await seedActivePlacement();
   const active = placements.get(SESSION_ID);
   if (active?.state !== "active") {
     throw new Error("expected active placement to reclaim");

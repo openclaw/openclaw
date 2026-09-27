@@ -26,7 +26,8 @@ const effects = vi.hoisted(() => {
   return { events, warnings, state, forbidden, releaseLifecycle };
 });
 
-vi.mock("node:worker_threads", () => ({
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
   Worker: effects.forbidden,
   MessageChannel: effects.forbidden,
 }));

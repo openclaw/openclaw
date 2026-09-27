@@ -37,6 +37,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   getActiveCronJobCount,
   resetCronActiveJobs,
@@ -59,6 +60,7 @@ const noopLogger = { debug() {}, info() {}, warn() {}, error() {} };
 type PollFixture = Awaited<ReturnType<typeof createPollFixture>>;
 
 async function createPollFixture(options: { scratch?: string; isolated?: boolean } = {}) {
+  const scheduler = createTestGatewayScheduler("fake-timers");
   let runner: ReturnType<typeof startHeartbeatRunner> | undefined;
   let cron: CronService | undefined;
   const releases: Array<() => void> = [];
@@ -79,6 +81,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
         await vi.advanceTimersByTimeAsync(1_000);
       }
       await vi.waitFor(() => expect(getActiveCronJobCount()).toBe(0));
+      await scheduler.stop();
     } finally {
       dispose();
       await closeOpenClawAgentDatabasesAsync();
@@ -168,6 +171,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
       }
     }
     cron = new CronService({
+      scheduler,
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",

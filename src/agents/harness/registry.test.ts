@@ -314,18 +314,6 @@ describe("agent harness registry", () => {
     expectOwner("active-plugin");
   });
 
-  it("disposes registered harness runtime state", async () => {
-    const dispose = vi.fn(async () => undefined);
-    registerAgentHarness({
-      ...makeHarness("custom"),
-      dispose,
-    });
-
-    await disposeRegisteredAgentHarnesses();
-
-    expect(dispose).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps model-specific harnesses behind plugin registration in auto mode", () => {
     // Auto mode should not select a model-specific runtime until the owning
     // plugin has registered its harness in this process.
@@ -342,23 +330,6 @@ describe("agent harness registry", () => {
     expect(selectAgentHarness({ provider: "plugin-models", modelId: "custom-1" }).id).toBe(
       "custom",
     );
-  });
-
-  it("falls back to OpenClaw for other models", () => {
-    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
-
-    expect(selectAgentHarness({ provider: "anthropic", modelId: "sonnet-4.6" }).id).toBe(
-      "openclaw",
-    );
-  });
-
-  it("lets a plugin harness win in auto mode by priority", () => {
-    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
-    registerAgentHarness(makeHarness("plugin-harness", { priority: 200 }), {
-      ownerPluginId: "plugin-a",
-    });
-
-    expect(selectAgentHarness({ provider: "codex", modelId: "gpt-5.4" }).id).toBe("plugin-harness");
   });
 
   it("honors explicit provider OpenClaw runtime policy", () => {

@@ -3,10 +3,10 @@
  *
  * Prefers plugin manifest login commands, then falls back to configure/env-var guidance.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
-import { normalizeProviderId } from "./model-selection.js";
 import { resolveProviderAuthAliasMap } from "./provider-auth-aliases.js";
 
 // Builds short auth recovery hints for provider errors. Manifest auth choices
@@ -19,18 +19,6 @@ function normalizeProviderIdForAuth(
   return normalized ? (aliases[normalized] ?? normalized) : normalized;
 }
 
-function matchesProviderAuthChoice(
-  choice: { providerId: string },
-  providerId: string,
-  aliases: Readonly<Record<string, string>>,
-): boolean {
-  const normalized = normalizeProviderIdForAuth(providerId, aliases);
-  if (!normalized) {
-    return false;
-  }
-  return normalizeProviderIdForAuth(choice.providerId, aliases) === normalized;
-}
-
 function resolveProviderAuthLoginCommand(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -38,8 +26,10 @@ function resolveProviderAuthLoginCommand(params: {
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
   const aliases = resolveProviderAuthAliasMap(params);
-  const choice = resolveManifestProviderAuthChoices(params).find((candidate) =>
-    matchesProviderAuthChoice(candidate, params.provider, aliases),
+  const normalized = normalizeProviderIdForAuth(params.provider, aliases);
+  const choice = resolveManifestProviderAuthChoices(params).find(
+    (candidate) =>
+      normalized && normalizeProviderIdForAuth(candidate.providerId, aliases) === normalized,
   );
   if (!choice) {
     return undefined;

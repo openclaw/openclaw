@@ -34,10 +34,7 @@ import {
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
-import {
-  prepareScopedReadOnlyLiveModelCatalog,
-  prepareScopedReadOnlyModelCatalog,
-} from "./prepared-model-runtime.scoped-catalog.js";
+import { prepareScopedReadOnlyModelCatalog } from "./prepared-model-runtime.scoped-catalog.js";
 import { normalizeThinkingCatalogProviders } from "./thinking-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
@@ -380,11 +377,11 @@ async function loadScopedReadOnlyModelCatalog(
   if (prepared) {
     return prepared.snapshot.modelCatalog;
   }
-  const prepareScoped =
-    params.scopedLiveProviderDiscovery === true
-      ? prepareScopedReadOnlyLiveModelCatalog
-      : prepareScopedReadOnlyModelCatalog;
-  return prepareScoped(activationExact, params.providerDiscoveryProviderIds ?? []);
+  return prepareScopedReadOnlyModelCatalog(
+    activationExact,
+    params.providerDiscoveryProviderIds ?? [],
+    params.scopedLiveProviderDiscovery === true ? "live" : "static",
+  );
 }
 
 /**

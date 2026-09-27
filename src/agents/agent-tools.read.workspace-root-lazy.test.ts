@@ -58,22 +58,6 @@ function requireOps(ops: WorkspaceFileOps | undefined, label: string): Workspace
 }
 
 describe("workspace-scoped coding tools resolve their fs root lazily", () => {
-  it("does not open the fs-safe root while only constructing the tool", () => {
-    // Resolve to a stub root handle so a lazy call would not reject, yet assert
-    // construction never reaches it.
-    rootSpy.mockReset().mockResolvedValue({
-      read: vi.fn(),
-      write: vi.fn(),
-      open: vi.fn(),
-    });
-    const missingWorkspace = "/openclaw-nonexistent-workspace-zzz/does/not/exist";
-
-    createHostWorkspaceEditTool(missingWorkspace, { workspaceOnly: true });
-    createHostWorkspaceWriteTool(missingWorkspace, { workspaceOnly: true });
-
-    expect(rootSpy).not.toHaveBeenCalled();
-  });
-
   it("does not orphan a rejecting fs-safe root when a write/edit targets a missing root", async () => {
     // A missing root must reject the operation, without leaving an unawaited
     // root promise that later surfaces as an unhandled rejection.

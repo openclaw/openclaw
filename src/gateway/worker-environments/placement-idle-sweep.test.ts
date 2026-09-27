@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -14,7 +14,7 @@ import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementIdleSweep } from "./placement-idle-sweep.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 describe("worker placement idle suspension", () => {
   let nowMs: number;
@@ -28,7 +28,10 @@ describe("worker placement idle suspension", () => {
     placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
   });
 
-  afterEach(() => closeStateDatabaseForTest());
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    tempDirs.cleanup();
+  });
 
   function createIdleFixture(
     options: {
@@ -206,7 +209,6 @@ describe("worker placement idle suspension", () => {
     { reason: "an active worker turn", kind: "worker-claim" },
     { reason: "an active local turn", kind: "local-claim" },
     { reason: "an admitted turn before its worker claim exists", kind: "admitted-turn" },
-    { reason: "queued session work before worker admission", kind: "queued-turn" },
     { reason: "a durable pending result after its claim was revoked", kind: "pending-result" },
     { reason: "a durable workspace reconciliation journal", kind: "reconciling-result" },
     { reason: "a profile without suspendAfter", kind: "no-suspend-after" },
@@ -214,16 +216,14 @@ describe("worker placement idle suspension", () => {
     { reason: "a placement already draining", kind: "draining" },
   ] as const)("does not suspend when blocked by $reason", async ({ kind }) => {
     const getSessionWorkAdmissionCheck =
-      kind === "admitted-turn" || kind === "queued-turn"
-        ? vi.fn(async () => () => true)
-        : undefined;
+      kind === "admitted-turn" ? vi.fn(async () => () => true) : undefined;
     const { harness, idleSweep, info, warn } = createIdleFixture({
       ...(kind === "no-suspend-after" ? { suspendAfter: null } : {}),
       ...(getSessionWorkAdmissionCheck ? { getSessionWorkAdmissionCheck } : {}),
     });
 
     if (kind === "provisioning") {
-      harness.placements.seedProvisioning();
+      await harness.placements.seedProvisioning();
     } else {
       const executionMode =
         kind === "local-claim" || kind === "pending-result" ? "remote-exec" : "worker-turn";

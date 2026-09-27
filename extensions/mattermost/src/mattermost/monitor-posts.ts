@@ -1,5 +1,6 @@
 import {
   formatInboundEnvelope,
+  formatInboundFromLabel,
   implicitMentionKindWhen,
   resolveInboundSessionEnvelopeContext,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -7,7 +8,6 @@ import {
   resolveChannelGroups,
   resolveChannelGroupsConfigPath,
 } from "openclaw/plugin-sdk/channel-policy";
-// Mattermost plugin module normalizes accepted posts into inbound turns.
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -26,7 +26,6 @@ import {
 import { resolveMattermostPendingHistoryKey } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import {
-  formatInboundFromLabel,
   matchesMattermostBotMention,
   normalizeMention,
   shouldDropEmptyMattermostBody,

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -9,7 +9,7 @@ import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 describe("failed placement Gateway recovery", () => {
   let database: OpenClawStateDatabase;
@@ -21,7 +21,10 @@ describe("failed placement Gateway recovery", () => {
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
-  afterEach(() => closeStateDatabaseForTest());
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    tempDirs.cleanup();
+  });
 
   it.each([false, true])(
     "prepares the Gateway workspace before local admission only for explicit recovery (recover=%s)",
@@ -39,7 +42,7 @@ describe("failed placement Gateway recovery", () => {
         ).rejects.toThrow();
       });
       const harness = createHarness(database, placementStore, { prepareGatewayMove });
-      const requested = placementStore.startDispatch(REQUEST);
+      const requested = await placementStore.startDispatch(REQUEST);
       const failed = placementStore.fail({
         sessionId: REQUEST.sessionId,
         expectedGeneration: requested.generation,
@@ -96,7 +99,7 @@ describe("failed placement Gateway recovery", () => {
         authorized = false;
       }
       if (failure === "replaced placement") {
-        const replacement = placementStore.startDispatch(REQUEST);
+        const replacement = await placementStore.startDispatch(REQUEST);
         placementStore.fail({
           sessionId: REQUEST.sessionId,
           expectedGeneration: replacement.generation,
@@ -107,8 +110,8 @@ describe("failed placement Gateway recovery", () => {
     const harness = createHarness(database, placementStore, { prepareGatewayMove });
     const requested =
       failure === "pending cleanup"
-        ? harness.placements.seedStarting()
-        : placementStore.startDispatch(REQUEST);
+        ? await harness.placements.seedStarting()
+        : await placementStore.startDispatch(REQUEST);
     const failed = placementStore.fail({
       sessionId: REQUEST.sessionId,
       expectedGeneration: requested.generation,

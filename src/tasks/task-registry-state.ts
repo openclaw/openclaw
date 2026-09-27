@@ -53,6 +53,7 @@ import {
   recordTaskRegistryProjectionWrite,
   selectLiveTaskFlowForSync,
   clearTaskProgressBatches,
+  clearTaskActivityOverlays,
 } from "./task-registry.process-state.js";
 import {
   deliverTaskRegistryObserverEvent,
@@ -128,12 +129,7 @@ function clearTaskRegistryEphemeralState(): void {
   // Committed restore obligations outlive replacement of their in-memory projection.
   clearTaskFlowSyncRetries("live");
   clearTaskProgressBatches();
-  for (const activity of taskActivityByTaskId.values()) {
-    if (activity.flushTimer) {
-      clearTimeout(activity.flushTimer);
-    }
-  }
-  taskActivityByTaskId.clear();
+  clearTaskActivityOverlays();
   tasksWithPendingDelivery.clear();
 }
 

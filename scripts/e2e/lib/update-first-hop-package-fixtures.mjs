@@ -19,7 +19,7 @@ export const LEGACY_UPDATE_COMPAT_CHUNKS = [
   "shared-Y6bNiw2w.js",
   "shared-DFJEouXv.js",
 ];
-export const FUTURE_FIXTURE_VERSION = "2026.9.99-first-hop.0";
+const FUTURE_FIXTURE_VERSION = "2026.9.99-first-hop.0";
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));

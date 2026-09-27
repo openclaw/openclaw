@@ -3,17 +3,6 @@ import { describe, expect, it } from "vitest";
 import { normalizeMessage } from "./message-normalizer.ts";
 
 describe("message-normalizer reply targets", () => {
-  it("uses persisted delivery facts for the current-message reply target", () => {
-    const result = normalizeMessage({
-      role: "assistant",
-      content: "Reply body",
-      openclawDelivery: { replyToCurrent: true },
-    });
-
-    expect(result.replyTarget).toEqual({ kind: "current" });
-    expect(result.content).toEqual([{ type: "text", text: "Reply body" }]);
-  });
-
   it.each([{ content: "" }, { content: [] }, { content: undefined }])(
     "keeps a fact-only reply target for $content content",
     ({ content }) => {

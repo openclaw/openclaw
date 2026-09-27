@@ -11,7 +11,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
-import { renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarMenuAction, renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
 import { icons, type IconName } from "./icons.ts";
 import {
   consumeDropdownKeyboardDismissal,
@@ -386,31 +386,18 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       ${
         !params.rosterMode
           ? html`
-              <wa-dropdown-item class="sidebar-customize-menu__item" value="command:all-agents">
-                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
-                <span class="sidebar-customize-menu__text">${t("agentChip.allAgents")}</span>
-              </wa-dropdown-item>
-              <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
-                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
-                <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>
-              </wa-dropdown-item>
-              <wa-dropdown-item
-                class="sidebar-customize-menu__item"
-                value="command:capabilities"
-                ?disabled=${!params.connected}
-              >
-                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
-                <span class="sidebar-customize-menu__text">
-                  ${t("agentChip.whatCanAgentDo", { name: activeName })}
-                </span>
-              </wa-dropdown-item>
+              ${renderSidebarMenuAction("command:all-agents", t("agentChip.allAgents"), "bot")}
+              ${renderSidebarMenuAction("command:new-agent", t("custodian.newAgent"), "users")}
+              ${renderSidebarMenuAction(
+                "command:capabilities",
+                t("agentChip.whatCanAgentDo", { name: activeName }),
+                "bot",
+                { disabled: !params.connected },
+              )}
             `
           : nothing
       }
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:agent-settings">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
-        <span class="sidebar-customize-menu__text">${t("agentChip.agentSettings")}</span>
-      </wa-dropdown-item>
+      ${renderSidebarMenuAction("command:agent-settings", t("agentChip.agentSettings"), "settings")}
       ${params.rosterMode ? renderSidebarHelpMenu() : nothing}
     </wa-dropdown>
   `;

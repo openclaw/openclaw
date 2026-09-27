@@ -81,6 +81,9 @@ async function withHistoryDatabase<T>(
 let closeReadOnlyCandidates:
   | typeof import("../../state/openclaw-agent-db-readonly-scope.js").closeOpenClawAgentDatabaseReadOnlyCandidates
   | undefined;
+let releaseReadValidation:
+  | typeof import("../../state/openclaw-agent-db-validation-cache.js").releaseOpenClawAgentDatabaseReadValidation
+  | undefined;
 
 serveOwnedWorkerTasks(
   async (
@@ -91,8 +94,14 @@ serveOwnedWorkerTasks(
     SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues> | UsageCostWorkerReply
   > => {
     // Install cleanup before this worker can acquire either a cached or explicit reader.
-    closeReadOnlyCandidates ??= (await import("../../state/openclaw-agent-db-readonly-scope.js"))
-      .closeOpenClawAgentDatabaseReadOnlyCandidates;
+    if (!closeReadOnlyCandidates) {
+      const closeCandidates = (await import("../../state/openclaw-agent-db-readonly-scope.js"))
+        .closeOpenClawAgentDatabaseReadOnlyCandidates;
+      const releaseValidation = (await import("../../state/openclaw-agent-db-validation-cache.js"))
+        .releaseOpenClawAgentDatabaseReadValidation;
+      closeReadOnlyCandidates = closeCandidates;
+      releaseReadValidation = releaseValidation;
+    }
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
     const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
     if (request.kind === "sqlite-target") {
@@ -600,6 +609,23 @@ serveOwnedWorkerTasks(
     }
   },
   {
+    transferList(reply) {
+      if (!reply.ok) {
+        return [];
+      }
+      const value = reply.value;
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        !("kind" in value) ||
+        value.kind !== "artifacts" ||
+        value.result.kind !== "download-response"
+      ) {
+        return [];
+      }
+      const body = value.result.response?.body;
+      return body ? [body.buffer] : [];
+    },
     closeResource: (key) => {
       const parsed: unknown = key === undefined ? undefined : JSON.parse(key);
       if (
@@ -619,6 +645,7 @@ serveOwnedWorkerTasks(
           : { path: candidate.path },
       );
       closeReadOnlyCandidates?.(candidates);
+      releaseReadValidation?.(candidates);
       for (const [identity, retained] of historyDatabaseScopes) {
         if (!retained.scope.hasRetainedConnection) {
           historyDatabaseScopes.delete(identity);

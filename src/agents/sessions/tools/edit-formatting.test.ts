@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { applyPatch } from "diff";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { computeEditsDiff } from "./edit-diff.js";
 import { createEditTool } from "./edit.js";
+import { computeEditsDiff } from "./file-tool-planning.js";
 import type { EditToolDetails } from "./tool-contracts.js";
 
 let tmpDir = "";

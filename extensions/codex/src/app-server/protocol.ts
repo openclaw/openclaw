@@ -30,7 +30,6 @@ import type {
   CodexPluginReadParams,
   CodexPluginReadResponse,
   CodexPluginSummary,
-  CodexSkillsListParams,
   CodexSkillsListResponse,
 } from "./protocol-control-plane.js";
 import type { JsonObject, JsonValue } from "./protocol-json.js";
@@ -648,8 +647,6 @@ export declare namespace v2 {
   export type PluginReadParams = CodexPluginReadParams;
   export type PluginReadResponse = CodexPluginReadResponse;
   export type PluginSummary = CodexPluginSummary;
-  export type SkillsListParams = CodexSkillsListParams;
-  export type SkillsListResponse = CodexSkillsListResponse;
 }
 
 type CodexAppServerRequestParamsOverride = {

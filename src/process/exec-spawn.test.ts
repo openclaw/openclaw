@@ -16,13 +16,17 @@ type ScopeCase = {
   identity?: "initially-missing" | "reused-after-exit" | "reused-after-extinction";
 };
 
-const endings: ScopeCase[] = [false, true].flatMap((exitParent) =>
-  (["explicit", "resolve", "reject"] as const).map((completion) => ({
-    name: `stops owned descendants on ${completion} without stopping another command (parent exited: ${exitParent})`,
-    exitParent,
-    completion,
-  })),
-);
+const endings: ScopeCase[] = (
+  [
+    ["explicit", false],
+    ["resolve", true],
+    ["reject", false],
+  ] as const
+).map(([completion, exitParent]) => ({
+  name: `stops owned descendants on ${completion} without stopping another command (parent exited: ${exitParent})`,
+  exitParent,
+  completion,
+}));
 endings.push(
   {
     name: "stops a live child when its initial start-time probe failed",

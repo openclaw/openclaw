@@ -259,7 +259,7 @@ vi.mock("../logging/subsystem.js", () => ({
 const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
   await import("./prepared-model-runtime.js");
 const { getPreparedModelCatalogSnapshot } = await import("./prepared-model-catalog.js");
-const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog } =
+const { prepareScopedReadOnlyModelCatalog } =
   await import("./prepared-model-runtime.scoped-catalog.js");
 const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
@@ -416,11 +416,8 @@ describe("prepared model runtime Gateway catalog mode", () => {
         contextWindow: 128_000,
         maxTokens: 8_192,
       });
-      const prepare = live
-        ? prepareScopedReadOnlyLiveModelCatalog
-        : prepareScopedReadOnlyModelCatalog;
       const catalog = await withScopedCatalogCache(() =>
-        prepare(
+        prepareScopedReadOnlyModelCatalog(
           {
             config: {
               agents: { defaults: { model: "openai/gpt-5.5" } },
@@ -431,6 +428,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
             readOnly: true,
           },
           ["openai"],
+          live ? "live" : "static",
         ),
       );
       expect(catalog.staticEntries).toEqual(
@@ -452,12 +450,9 @@ describe("prepared model runtime Gateway catalog mode", () => {
   it.each([false, true])("releases a failed scoped catalog generation (live=%s)", async (live) => {
     const failure = new Error("catalog materialization failed");
     mocks.buildPreparedModelCatalogSnapshot.mockRejectedValueOnce(failure);
-    const prepare = live
-      ? prepareScopedReadOnlyLiveModelCatalog
-      : prepareScopedReadOnlyModelCatalog;
     await withScopedCatalogCache(async () => {
       await expect(
-        prepare(
+        prepareScopedReadOnlyModelCatalog(
           {
             config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
             agentDir: "/tmp/prepared-scoped-failure",
@@ -465,6 +460,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
             readOnly: true,
           },
           ["openai"],
+          live ? "live" : "static",
         ),
       ).rejects.toBe(failure);
     });
@@ -525,7 +521,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     };
 
-    await prepareScopedReadOnlyLiveModelCatalog(
+    await prepareScopedReadOnlyModelCatalog(
       {
         agentId: "default",
         agentDir: "/tmp/prepared-live-agent",
@@ -536,6 +532,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
         readOnly: true,
       },
       ["anthropic"],
+      "live",
     );
 
     expect(mocks.planOpenClawModelsJsonSource).toHaveBeenCalledWith(

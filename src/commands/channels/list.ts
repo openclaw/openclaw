@@ -16,8 +16,8 @@ import { callGateway } from "../../gateway/call.js";
 import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { listManifestInstalledChannelIds } from "../channel-setup/discovery.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
 import {
   formatChannelAccountLabel,
@@ -194,10 +194,10 @@ export async function channelsListCommand(
   // Installed ids are one prepared manifest fact set for the invocation. Rebuilding
   // discovery for each catalog row turns this read into a full filesystem walk per row.
   const manifestInstalledChannelIds = new Set<string>(
-    listManifestInstalledChannelIds({
-      cfg,
-      ...(workspaceDir ? { workspaceDir } : {}),
-      index: metadataSnapshot.index,
+    listPluginContributionIds({
+      contribution: "channels",
+      includeDisabled: true,
+      lookUpTable: metadataSnapshot,
     }),
   );
   const installedByChannelId = new Map(

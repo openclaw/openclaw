@@ -5,8 +5,8 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
-import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@openclaw/media-core/constants";
-import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
+import { maxBytesForKind, mediaKindFromMime } from "@openclaw/media-core/constants";
+import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
@@ -34,11 +34,11 @@ import { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
-import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
 import { createImageProcessor, getImageMetadata } from "../media/media-services.js";
 import {
+  PlaybackInspectionBusyError,
   replacePlaybackFileExtension,
-  resolvePlaybackModeForSource,
+  resolvePlaybackMetadataForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
@@ -51,7 +51,7 @@ import {
   withChannelReadAuthority,
 } from "../shared/channel-read-authority.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
+import { buildManagedMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
   createGatewayByteStream,
   createImmutableFileValidators,
@@ -65,6 +65,10 @@ import {
   resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
+import {
+  resolveManagedMediaKind,
+  type ManagedMediaKind,
+} from "./managed-image-attachments.media-kind.js";
 import {
   attachManagedImageRecordToMessage,
   claimManagedImageRecordCleanupIfCurrent,
@@ -119,38 +123,6 @@ export type ManagedImageAttachmentLimits = {
 };
 
 type ManagedImageAttachmentLimitsConfig = Partial<ManagedImageAttachmentLimits>;
-
-type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video" | "document">;
-
-const MANAGED_DOCUMENT_MIME_TYPES = new Set([
-  "application/json",
-  "application/msword",
-  "application/pdf",
-  "application/vnd.ms-excel",
-  "application/vnd.ms-powerpoint",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/x-cfb",
-  "application/yaml",
-  "application/zip",
-  "text/csv",
-  "text/html",
-  "text/markdown",
-  "text/plain",
-]);
-
-function resolveManagedMediaKind(contentType: string | undefined): ManagedMediaKind | null {
-  const normalized = normalizeMimeType(contentType);
-  if (normalized === "image/svg+xml") {
-    return null;
-  }
-  const kind = mediaKindFromMime(normalized);
-  if (kind === "image" || kind === "audio" || kind === "video") {
-    return kind;
-  }
-  return normalized && MANAGED_DOCUMENT_MIME_TYPES.has(normalized) ? "document" : null;
-}
 
 type ParsedMediaDataUrl =
   | { kind: "not-data-url" }
@@ -1479,15 +1451,24 @@ export async function createManagedOutgoingMediaBlocks(params: {
         };
         let playback: "native" | "transcode" | undefined;
         if (mediaKind === "audio" || mediaKind === "video") {
-          await using opened = await openLocalFileSafely({ filePath: savedOriginal.path });
-          const probe = await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind);
-          playback = await resolvePlaybackModeForSource({
-            sourcePath: opened.realPath,
-            sourceStat: opened.stat,
-            mimeType: savedOriginalContentType,
-            kind: mediaKind,
-            probe,
-          });
+          const opened = await openLocalFileSafely({ filePath: savedOriginal.path });
+          await opened[Symbol.asyncDispose]();
+          try {
+            const metadata = await resolvePlaybackMetadataForSource({
+              sourcePath: opened.realPath,
+              sourceStat: opened.stat,
+              mimeType: savedOriginalContentType,
+              kind: mediaKind,
+              signal: params.abortSignal,
+              assertCurrent: params.assertCurrent,
+              admission: "immediate",
+            });
+            playback = metadata.playback;
+          } catch (error) {
+            if (!(error instanceof PlaybackInspectionBusyError)) {
+              throw error;
+            }
+          }
         }
         const block = buildManagedMediaBlock(record, playback);
         const readScope = captureChannelReadScope();
@@ -1570,11 +1551,6 @@ function sendStatus(res: ServerResponse, statusCode: number, body: string) {
   res.statusCode = statusCode;
   res.setHeader("content-type", "text/plain; charset=utf-8");
   res.end(body);
-}
-
-function buildManagedMediaContentDisposition(value: string | null, contentType: string): string {
-  const fallback = contentType.startsWith("image/") ? "generated-image" : "generated-media";
-  return buildAssistantMediaContentDisposition(value?.trim() || fallback, contentType);
 }
 
 export async function handleManagedOutgoingMediaHttpRequest(
@@ -1731,6 +1707,8 @@ export async function handleManagedOutgoingMediaHttpRequest(
         sourceStat: opened.stat,
         mimeType: responseContentType,
         kind: mediaKind,
+        signal: byteStream.signal,
+        assertCurrent,
       });
       if (playback.kind === "preparing") {
         await byteStream.close();

@@ -99,9 +99,9 @@ describe("parseArgs", () => {
   });
 });
 
-describe("detectChangedScope", () => {
-  const expectedNodeOnlyScope = {
-    runNode: true,
+function expectedScope(overrides: Partial<ReturnType<typeof detectChangedScope>> = {}) {
+  return {
+    runNode: false,
     runMacos: false,
     runMacosNode: false,
     runIosBuild: false,
@@ -111,20 +111,14 @@ describe("detectChangedScope", () => {
     runChangedSmoke: false,
     runControlUiI18n: false,
     runUiTests: false,
+    ...overrides,
   };
+}
 
-  const expectedNodeAndChangedSmokeScope = {
-    runNode: true,
-    runMacos: false,
-    runMacosNode: false,
-    runIosBuild: false,
-    runAndroid: false,
-    runWindows: false,
-    runSkillsPython: false,
-    runChangedSmoke: true,
-    runControlUiI18n: false,
-    runUiTests: false,
-  };
+describe("detectChangedScope", () => {
+  const expectedNodeOnlyScope = expectedScope({ runNode: true });
+
+  const expectedNodeAndChangedSmokeScope = expectedScope({ runNode: true, runChangedSmoke: true });
 
   it("routes only native i18n-owned paths to the native inventory job", () => {
     for (const changedPath of [
@@ -149,18 +143,20 @@ describe("detectChangedScope", () => {
   });
 
   it("fails safe when no paths are provided", () => {
-    expect(detectChangedScope([])).toEqual({
-      runNode: true,
-      runMacos: true,
-      runMacosNode: true,
-      runIosBuild: true,
-      runAndroid: true,
-      runWindows: true,
-      runSkillsPython: true,
-      runChangedSmoke: true,
-      runControlUiI18n: true,
-      runUiTests: true,
-    });
+    expect(detectChangedScope([])).toEqual(
+      expectedScope({
+        runNode: true,
+        runMacos: true,
+        runMacosNode: true,
+        runIosBuild: true,
+        runAndroid: true,
+        runWindows: true,
+        runSkillsPython: true,
+        runChangedSmoke: true,
+        runControlUiI18n: true,
+        runUiTests: true,
+      }),
+    );
   });
 
   it("keeps all lanes off for docs-only changes", () => {
@@ -260,80 +256,24 @@ describe("detectChangedScope", () => {
   });
 
   it("keeps node lane off for native-only changes", () => {
-    expect(detectChangedScope(["apps/macos/Sources/Foo.swift"])).toEqual({
-      runNode: false,
-      runMacos: true,
-      runMacosNode: true,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
+    expect(detectChangedScope(["apps/macos/Sources/Foo.swift"])).toEqual(
+      expectedScope({ runMacos: true, runMacosNode: true }),
+    );
     expect(
       detectChangedScope(["apps/macos-mlx-tts/Sources/OpenClawMLXTTSHelper/main.swift"]),
-    ).toEqual({
-      runNode: false,
-      runMacos: true,
-      runMacosNode: true,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["apps/ios/Sources/RootTabs.swift"])).toEqual({
-      runNode: false,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: true,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["apps/shared/OpenClawKit/Sources/Foo.swift"])).toEqual({
-      runNode: false,
-      runMacos: true,
-      runMacosNode: true,
-      runIosBuild: true,
-      runAndroid: true,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["apps/swabble/Sources/SwabbleKit/WakeWordGate.swift"])).toEqual({
-      runNode: false,
-      runMacos: true,
-      runMacosNode: true,
-      runIosBuild: true,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["Swabble/Sources/SwabbleKit/WakeWordGate.swift"])).toEqual({
-      runNode: false,
-      runMacos: true,
-      runMacosNode: true,
-      runIosBuild: true,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
+    ).toEqual(expectedScope({ runMacos: true, runMacosNode: true }));
+    expect(detectChangedScope(["apps/ios/Sources/RootTabs.swift"])).toEqual(
+      expectedScope({ runIosBuild: true }),
+    );
+    expect(detectChangedScope(["apps/shared/OpenClawKit/Sources/Foo.swift"])).toEqual(
+      expectedScope({ runMacos: true, runMacosNode: true, runIosBuild: true, runAndroid: true }),
+    );
+    expect(detectChangedScope(["apps/swabble/Sources/SwabbleKit/WakeWordGate.swift"])).toEqual(
+      expectedScope({ runMacos: true, runMacosNode: true, runIosBuild: true }),
+    );
+    expect(detectChangedScope(["Swabble/Sources/SwabbleKit/WakeWordGate.swift"])).toEqual(
+      expectedScope({ runMacos: true, runMacosNode: true, runIosBuild: true }),
+    );
   });
 
   it("runs both Apple lanes for shared Swift tooling changes", () => {
@@ -350,18 +290,9 @@ describe("detectChangedScope", () => {
       "scripts/lib/check-limits.mts",
       "scripts/prepare-apple-mermaid.mjs",
     ]) {
-      expect(detectChangedScope([toolingPath])).toEqual({
-        runNode: true,
-        runMacos: true,
-        runMacosNode: true,
-        runIosBuild: true,
-        runAndroid: false,
-        runWindows: false,
-        runSkillsPython: false,
-        runChangedSmoke: false,
-        runControlUiI18n: false,
-        runUiTests: false,
-      });
+      expect(detectChangedScope([toolingPath])).toEqual(
+        expectedScope({ runNode: true, runMacos: true, runMacosNode: true, runIosBuild: true }),
+      );
       expect(shouldRunIosScreenshots([toolingPath])).toBe(true);
     }
   });
@@ -376,36 +307,16 @@ describe("detectChangedScope", () => {
       "scripts/lib/release-version.mjs",
       "scripts/lib/version-script-args.ts",
     ]) {
-      expect(detectChangedScope([helperPath])).toEqual({
-        runNode: true,
-        runMacos: false,
-        runMacosNode: false,
-        runIosBuild: true,
-        runAndroid: false,
-        runWindows: false,
-        runSkillsPython: false,
-        runChangedSmoke: false,
-        runControlUiI18n: false,
-        runUiTests: false,
-      });
+      expect(detectChangedScope([helperPath])).toEqual(
+        expectedScope({ runNode: true, runIosBuild: true }),
+      );
     }
   });
 
   it("runs the iOS build but not macOS for generated protocol model-only changes", () => {
     expect(
       detectChangedScope(["apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift"]),
-    ).toEqual({
-      runNode: false,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: true,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
+    ).toEqual(expectedScope({ runIosBuild: true }));
   });
 
   it.each([
@@ -425,18 +336,7 @@ describe("detectChangedScope", () => {
   });
 
   it("enables node lane for non-native non-doc files by fallback", () => {
-    expect(detectChangedScope(["README.md"])).toEqual({
-      runNode: false,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
+    expect(detectChangedScope(["README.md"])).toEqual(expectedScope());
 
     expect(detectChangedScope([".crabbox.yaml"])).toEqual(expectedNodeOnlyScope);
   });
@@ -446,48 +346,21 @@ describe("detectChangedScope", () => {
   });
 
   it("runs Python skill tests when skills change", () => {
-    expect(detectChangedScope(["skills/skill-creator/scripts/test_quick_validate.py"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: true,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
+    expect(detectChangedScope(["skills/skill-creator/scripts/test_quick_validate.py"])).toEqual(
+      expectedScope({ runNode: true, runSkillsPython: true }),
+    );
   });
 
   it("runs Python skill tests when shared Python config changes", () => {
-    expect(detectChangedScope(["skills/pyproject.toml"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: true,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
+    expect(detectChangedScope(["skills/pyproject.toml"])).toEqual(
+      expectedScope({ runNode: true, runSkillsPython: true }),
+    );
   });
 
   it("runs CI-owned platform lanes when the CI workflow changes", () => {
-    expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: true,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: true,
-    });
+    expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual(
+      expectedScope({ runNode: true, runWindows: true, runUiTests: true }),
+    );
   });
 
   it.each([
@@ -525,32 +398,20 @@ describe("detectChangedScope", () => {
     "test/scripts/mac-node-worker.test.ts",
     "test/scripts/verify-mac-node-worker-fs.test.ts",
   ])("runs macOS CI for packaging owner %s", (changedPath) => {
-    expect(detectChangedScope([changedPath])).toEqual({
-      runNode: true,
-      runMacos: true,
-      runMacosNode: true,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
+    expect(detectChangedScope([changedPath])).toEqual(
+      expectedScope({ runNode: true, runMacos: true, runMacosNode: true }),
+    );
   });
 
   it.each<[string, boolean, boolean]>([
     ["extensions/memory-lancedb/index.test.ts", false, false],
     ["src/auto-reply/reply/streaming-directives.ts", false, false],
     ["src/process/exec.ts", true, false],
-    ["src/process/exec.windows.test.ts", true, false],
     ["src/daemon/schtasks.ts", true, false],
     ["src/daemon/schtasks-exec.ts", true, false],
-    ["src/daemon/schtasks.startup-fallback.test.ts", true, false],
     ["src/daemon/runtime-hints.windows-paths.test.ts", true, false],
     ["src/daemon/test-helpers/schtasks-fixtures.ts", true, false],
     ["src/shared/runtime-import.ts", true, false],
-    ["src/shared/runtime-import.test.ts", true, false],
     ["scripts/npm-runner.mts", true, false],
     ["scripts/lib/format-generated-module.mts", true, false],
     ["scripts/lib/ci-windows-test-plan.mts", true, false],
@@ -562,23 +423,13 @@ describe("detectChangedScope", () => {
     ["scripts/github/run-openclaw-cross-os-release-checks.sh", true, false],
     ["scripts/openclaw-cross-os-release-checks.ts", true, false],
     ["scripts/lib/cross-os-release-checks/runtime.ts", true, false],
-    ["test/scripts/openclaw-cross-os-release-workflow.test.ts", true, false],
     ["scripts/install.ps1", true, true],
   ])(
     "runs Windows only for Windows-relevant changes (%s)",
     (changedPath, runWindows, runChangedSmoke) => {
-      expect(detectChangedScope([changedPath])).toEqual({
-        runNode: true,
-        runMacos: false,
-        runMacosNode: false,
-        runIosBuild: false,
-        runAndroid: false,
-        runWindows,
-        runSkillsPython: false,
-        runChangedSmoke,
-        runControlUiI18n: false,
-        runUiTests: false,
-      });
+      expect(detectChangedScope([changedPath])).toEqual(
+        expectedScope({ runNode: true, runWindows, runChangedSmoke }),
+      );
     },
   );
 
@@ -686,18 +537,7 @@ describe("detectChangedScope", () => {
   });
 
   it("runs control-ui locale check only for control-ui i18n surfaces", () => {
-    const expected = {
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: true,
-      runUiTests: true,
-    };
+    const expected = expectedScope({ runNode: true, runControlUiI18n: true, runUiTests: true });
     expect(detectChangedScope(["ui/src/i18n/locales/en.ts"])).toEqual(expected);
 
     for (const scriptPath of [

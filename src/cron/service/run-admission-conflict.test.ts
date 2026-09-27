@@ -9,6 +9,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { findTaskByRunId } from "../../tasks/task-executor.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { loadCronStore, saveCronJobsStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
@@ -18,7 +19,6 @@ import {
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
 import {
@@ -125,7 +125,8 @@ it("recovers a dead running owner on timer refresh without an admission conflict
     error: "cron: job interrupted by gateway restart",
   });
   const readHistory = () =>
-    readCronTaskRunHistoryPage({ storeKey: cronStoreKey(store.storePath), jobId: job.id }).entries;
+    readCronRunHistoryPageForTests({ storeKey: cronStoreKey(store.storePath), jobId: job.id })
+      .entries;
   expect(readHistory()).toMatchObject([
     {
       jobId: job.id,

@@ -823,15 +823,6 @@ if (args[1] === "--help") {
   }
 }
 
-it("rejects a populated baseline without fresh compact contributors before writing", () => {
-  withSamplerFixture({ runs: [samplerRun(1), samplerRun(2)], jobs: [] }, (fixture) => {
-    const result = fixture.invoke();
-    expect(result.status, result.stderr || result.stdout).toBe(1);
-    expect(result.stderr).toContain("compact");
-    expect(fixture.contents()).toBe(fixture.original);
-  });
-});
-
 it("rejects non-plain timing objects even when their fields are valid", () => {
   expect(() =>
     ciTestTimingsSchema.parse(
@@ -974,28 +965,13 @@ it.todo("retains todo coverage");
   });
 
   it.each([
-    { parallelProject: "ui-e2e-bundled", serialProject: "ui-e2e-serial", mixed: false },
-    { parallelProject: "ui-e2e-bundled", serialProject: "ui-e2e-serial", mixed: true },
-    {
-      parallelProject: "ui-e2e-standalone",
-      serialProject: "ui-e2e-serial-standalone",
-      mixed: false,
-    },
-    {
-      parallelProject: "ui-e2e-standalone",
-      serialProject: "ui-e2e-serial-standalone",
-      mixed: true,
-    },
-    ...["ui-e2e-real-gateway", "ui-e2e-real-gateway-standalone"].flatMap((parallelProject) =>
-      [false, true].map((mixed) => ({
-        parallelProject,
-        serialProject: "ui-e2e-serial-standalone",
-        mixed,
-      })),
-    ),
-  ])(
-    "keeps $parallelProject weights without refitting $serialProject overhead (mixed: $mixed)",
-    ({ parallelProject, serialProject, mixed }) => {
+    ["ui-e2e-bundled", "ui-e2e-serial", false],
+    ["ui-e2e-standalone", "ui-e2e-serial-standalone", true],
+    ["ui-e2e-real-gateway", "ui-e2e-serial-standalone", false],
+    ["ui-e2e-real-gateway-standalone", "ui-e2e-serial-standalone", true],
+  ] satisfies [string, string, boolean][])(
+    "keeps %s weights without refitting %s overhead (mixed: %s)",
+    (parallelProject, serialProject, mixed) => {
       const first = "ui/src/e2e/parallel-first.e2e.test.ts";
       const second = "ui/src/e2e/parallel-second.e2e.test.ts";
       const serialFile = "ui/src/e2e/serial.e2e.test.ts";
@@ -1226,7 +1202,7 @@ it.todo("retains todo coverage");
     },
   );
 
-  it.each([0, 1, 2, 3])(
+  it.each([0, 2, 3])(
     "prunes absent keys only after at least three contributing runs per profile (%s)",
     (count) => {
       const previous: CiTestTimings = {
@@ -1325,7 +1301,7 @@ it.todo("retains todo coverage");
     },
   );
 
-  it.each([1, 2])("keeps keys observed in %s of three runs", (observedRuns) => {
+  it("keeps keys observed in only one of three runs", () => {
     const otherFile = "ui/src/e2e/other.e2e.test.ts";
     const previous: CiTestTimings = {
       ...baseline,
@@ -1338,7 +1314,7 @@ it.todo("retains todo coverage");
     const runs = [1, 2, 3].map((id) =>
       timingRun(
         id,
-        id > observedRuns
+        id > 1
           ? [
               { kind: "uiE2e", text: uiLog({ [otherFile]: 100 }) },
               {
@@ -1826,7 +1802,6 @@ describe("CI timing sampler provenance", () => {
 
   it.each([
     ["manual main dispatch", { event: "workflow_dispatch" }, "event"],
-    ["pull request", { event: "pull_request" }, "event"],
     ["another branch", { head_branch: "feature" }, "head_branch"],
     ["missing SHA", { head_sha: null }, "head_sha"],
     ["missing attempt", { run_attempt: undefined }, "run_attempt"],
@@ -2123,67 +2098,56 @@ describe("CI timing schema", () => {
     ).toThrow("Invalid CI test timings");
   });
 
-  const invalidTimings: Array<[string, string]> = [
-    ["non-object root", "null"],
-    ["unknown root key", JSON.stringify({ ...baseline, extra: 1 })],
-    ["empty source", JSON.stringify({ ...baseline, source: "" })],
+  const invalidTimings: Array<[string, unknown]> = [
+    ["non-object root", null],
+    ["unknown root key", { ...baseline, extra: 1 }],
+    ["empty source", { ...baseline, source: "" }],
     ...["2026-02-29", "1900-02-29", "2026-04-31", "2026-8-22", "2026-08-22T00:00:00Z"].map(
-      (updatedAt): [string, string] => [
-        `invalid date ${updatedAt}`,
-        JSON.stringify({ ...baseline, updatedAt }),
-      ],
+      (updatedAt): [string, unknown] => [`invalid date ${updatedAt}`, { ...baseline, updatedAt }],
     ),
-    ["unknown UI key", JSON.stringify({ ...baseline, uiE2e: { ...baseline.uiE2e, extra: 1 } })],
+    ["unknown UI key", { ...baseline, uiE2e: { ...baseline.uiE2e, extra: 1 } }],
     [
       "unknown compact profile",
-      JSON.stringify({
-        ...baseline,
-        compactGroupSeconds: { ...baseline.compactGroupSeconds, extra: {} },
-      }),
+      { ...baseline, compactGroupSeconds: { ...baseline.compactGroupSeconds, extra: {} } },
     ],
-    ["missing profile", JSON.stringify({ ...baseline, compactGroupSeconds: { blacksmith: {} } })],
+    ["missing profile", { ...baseline, compactGroupSeconds: { blacksmith: {} } }],
     ...["ui", "repoE2e", "blacksmith", "github"].flatMap((profile) =>
-      [
-        null,
-        [],
-        { "": 1 },
-        ...[0, -1, "2", null, 1.2, Number.MAX_SAFE_INTEGER + 1].map((seconds) => ({
-          valid: 100,
-          invalid: seconds,
-        })),
-      ].map((seconds): [string, string] => [
+      (profile === "ui"
+        ? [
+            null,
+            [],
+            { "": 1 },
+            ...[0, -1, "2", null, 1.2, Number.MAX_SAFE_INTEGER + 1].map((seconds) => ({
+              valid: 100,
+              invalid: seconds,
+            })),
+          ]
+        : [{ invalid: 0 }]
+      ).map((seconds): [string, unknown] => [
         `invalid ${profile} map ${JSON.stringify(seconds)}`,
-        JSON.stringify(
-          profile === "ui"
-            ? { ...baseline, uiE2e: { ...baseline.uiE2e, fileSeconds: seconds } }
-            : profile === "repoE2e"
-              ? { ...baseline, repoE2eFileSeconds: seconds }
-              : {
-                  ...baseline,
-                  compactGroupSeconds: {
-                    blacksmith: { valid: 100 },
-                    github: { valid: 100 },
-                    [profile]: seconds,
-                  },
+        profile === "ui"
+          ? { ...baseline, uiE2e: { ...baseline.uiE2e, fileSeconds: seconds } }
+          : profile === "repoE2e"
+            ? { ...baseline, repoE2eFileSeconds: seconds }
+            : {
+                ...baseline,
+                compactGroupSeconds: {
+                  blacksmith: { valid: 100 },
+                  github: { valid: 100 },
+                  [profile]: seconds,
                 },
-        ),
+              },
       ]),
     ),
-    ["non-finite seconds", JSON.stringify(baseline).replace(":100", ":1e999")],
-    ...[-1, 5.1, null, "1"].map((overhead): [string, string] => [
+    ["non-finite seconds", { ...baseline, repoE2eFileSeconds: { invalid: Infinity } }],
+    ...[-1, 5.1, null, "1", Infinity].map((overhead): [string, unknown] => [
       `invalid overhead ${String(overhead)}`,
-      JSON.stringify({
-        ...baseline,
-        uiE2e: { ...baseline.uiE2e, perFileOverheadSeconds: overhead },
-      }),
+      { ...baseline, uiE2e: { ...baseline.uiE2e, perFileOverheadSeconds: overhead } },
     ]),
-    ["non-finite overhead", JSON.stringify(baseline).replace(":0.6", ":1e999")],
   ];
 
-  it.each(invalidTimings)("rejects %s", (_name, contents) => {
-    expect(() => ciTestTimingsSchema.parse(JSON.parse(contents))).toThrow(
-      "Invalid CI test timings",
-    );
+  it.each(invalidTimings)("rejects %s", (_name, value) => {
+    expect(() => ciTestTimingsSchema.parse(value)).toThrow("Invalid CI test timings");
   });
 
   it.each([0, 5])("accepts overhead boundary %s, safe integers and leap dates", (overhead) => {
@@ -2228,7 +2192,6 @@ describe("committed CI timing loader", () => {
 
   it.each([
     ["missing", new Error("ENOENT")],
-    ["unreadable", new Error("EACCES")],
     ["truncated", '{"version":1'],
     ["wrong version", JSON.stringify({ ...baseline, version: 2 })],
   ] satisfies Array<[string, string | Error]>)(

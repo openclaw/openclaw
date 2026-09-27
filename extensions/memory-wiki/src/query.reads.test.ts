@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as wikiWalk from "./bounded-walk.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import * as wikiLinks from "./markdown-links.js";
 import { renderWikiMarkdown } from "./markdown.js";
@@ -172,43 +171,10 @@ describe("wiki query page reads", () => {
     },
   );
 
-  it.each([
-    { owners: ["main"], visible: true },
-    { owners: ["secondary"], visible: false },
-    { owners: [], visible: false },
-  ])("keeps exact bridge-page visibility for $owners", async ({ owners, visible }) => {
-    const { config, targetPath, relativePath } = await createReadVault();
-    await fs.writeFile(
-      targetPath,
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.alpha",
-          title: "Alpha",
-          sourceType: "memory-bridge",
-          bridgeAgentIds: owners,
-        },
-        body: "# Alpha\n",
-      }),
-    );
-    const result = await getMemoryWikiPage({
-      config,
-      lookup: relativePath,
-      appConfig: { agents: { list: [{ id: "main", default: true }, { id: "secondary" }] } },
-      agentId: "main",
-      sandboxed: true,
-    });
-    if (visible) {
-      expect(result?.path).toBe(relativePath);
-    } else {
-      expect(result).toBeNull();
-    }
-  });
-
   it.each(["exact", "basename", "search"] as const)(
     "rejects a page swapped outside the vault during %s reads",
     async (route) => {
-      const { rootDir, config, targetPath, relativePath } = await createReadVault();
+      const { config, targetPath, relativePath } = await createReadVault();
       const outside = await createReadVault();
       const canonicalTarget = await fs.realpath(targetPath);
       await fs.writeFile(
@@ -227,24 +193,13 @@ describe("wiki query page reads", () => {
         await fs.unlink(targetPath);
         await fs.symlink(outside.targetPath, targetPath);
       };
-      if (route === "exact") {
-        __setFsSafeTestHooksForTest({
-          beforeOpen: async (filePath) => {
-            if (path.resolve(filePath) === canonicalTarget) {
-              await swap();
-            }
-          },
-        });
-      } else {
-        const walk = wikiWalk.walkMemoryWikiDirectory;
-        vi.spyOn(wikiWalk, "walkMemoryWikiDirectory").mockImplementation(async (...args) => {
-          const entries = await walk(...args);
-          if (args[0] === rootDir && entries.some((entry) => entry.relativePath === relativePath)) {
+      __setFsSafeTestHooksForTest({
+        beforeOpen: async (filePath) => {
+          if (path.resolve(filePath) === canonicalTarget) {
             await swap();
           }
-          return entries;
-        });
-      }
+        },
+      });
       const readdir = vi.spyOn(fs, "readdir");
       const read =
         route === "search"

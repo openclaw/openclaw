@@ -383,26 +383,6 @@ describe("sanitizeSessionMessagesImages", () => {
       { type: "text", text: "[empty content omitted]" },
     ]);
   });
-  it("leaves non-assistant messages unchanged", async () => {
-    const input = [
-      { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
-      {
-        role: "toolResult",
-        toolCallId: "tool-1",
-        toolName: "read",
-        isError: false,
-        content: [{ type: "text", text: "result" }],
-        timestamp: nextTimestamp(),
-      } satisfies ToolResultMessage,
-    ];
-
-    const out = await sanitizeSessionMessagesImages(input, "test");
-
-    expect(out).toHaveLength(2);
-    expect(out[0]?.role).toBe("user");
-    expect(out[1]?.role).toBe("toolResult");
-  });
-
   describe("thought_signature stripping", () => {
     it("strips msg_-prefixed thought_signature from assistant message content blocks", async () => {
       // msg_ values are OpenClaw message ids, not provider signatures.

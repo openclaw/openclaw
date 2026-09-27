@@ -1,4 +1,3 @@
-// OpenClaw operation grammar, approval descriptions, and public types.
 import { listAgentRoles } from "../agents/agent-roles.js";
 import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
@@ -19,12 +18,8 @@ import { INVALID_CONFIG_SET_MESSAGE } from "./operations-internal.js";
 import type { loadSystemAgentOverview, SystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
 
-type SystemAgentOverviewLoader = typeof loadSystemAgentOverview;
-type SystemAgentOverviewFormatter = (overview: SystemAgentOverview) => string;
-
 export type { SystemAgentOperation };
 
-/** Result returned by the operation executor. */
 export type SystemAgentOperationResult = {
   applied: boolean;
   /** Creation created or preserved BOOTSTRAP.md for the agent's first turn. */
@@ -38,14 +33,13 @@ export type SystemAgentOperationResult = {
   returnToShell?: boolean;
 };
 
-/** Injectable command dependencies used by tests and alternate runners. */
 export type SystemAgentCommandDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
   loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntime;
   resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
-  formatOverview?: SystemAgentOverviewFormatter;
-  loadOverview?: SystemAgentOverviewLoader;
+  formatOverview?: (overview: SystemAgentOverview) => string;
+  loadOverview?: typeof loadSystemAgentOverview;
   createAgent?: typeof import("../agents/agent-create.js").createAgent;
   runConfigSet?: (opts: {
     path?: string;
@@ -53,6 +47,7 @@ export type SystemAgentCommandDeps = {
     cliOptions: ConfigSetOptions;
     beforePersistentApply?: () => void;
   }) => Promise<void>;
+  runConfigUnset?: typeof import("../cli/config-cli.js").runConfigUnset;
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
@@ -89,6 +84,7 @@ const ARG_WORD = String.raw`(?:"[^"]+"|'[^']+'|\S+)`;
 // fixed order (workspace before model) so filler words never become values.
 const CONFIG_SET_PREFIX_RE = /^(?:config\s+set|set\s+config)\s+/i;
 const CONFIG_SET_REF_PREFIX_RE = /^(?:config\s+set-ref|set\s+secretref|set\s+secret\s+ref)\s+/i;
+const CONFIG_UNSET_PREFIX_RE = /^config\s+unset(?=\s|$)/i;
 const CONFIG_GET_PREFIX_RE = /^config\s+get(?=\s|$)/i;
 const CONFIG_SCHEMA_PREFIX_RE = /^config\s+schema(?=\s|$)/i;
 const CONFIG_SET_REF_ARGS_RE = new RegExp(
@@ -121,32 +117,61 @@ const SET_MODEL_RE =
   /^(?:set|configure|use)\s+(?:the\s+)?(?:default\s+)?models?\s+(?<model>\S+)(?:\s+for\s+agent\s+(?<agent>\S+))?$/i;
 const GATEWAY_RE =
   /^(?:gateway\s+(?<sub>status|start|stop|restart)|(?<verb>start|stop|restart)\s+(?:the\s+)?gateway)$/i;
-const PLUGIN_LIST_RE = /^(?:(?:plugins?|clawhub)\s+list|list\s+plugins?)$/i;
 const PLUGIN_SEARCH_RE =
   /^(?:(?:plugins?|clawhub)\s+search|search\s+plugins?(?:\s+for)?)\s+(?<query>.+)$/i;
 const PLUGIN_INSTALL_RE =
   /^(?:plugins?\s+install|install\s+(?:(?<source>npm|clawhub)\s+)?plugins?)\s+(?<spec>\S+)$/i;
 const PLUGIN_UNINSTALL_RE =
   /^(?:plugins?\s+(?:uninstall|remove)|(?:uninstall|remove)\s+plugins?)\s+(?<pluginId>[A-Za-z0-9_.@/-]+)$/i;
-const CHANNEL_LIST_RE = /^(?:channels|list\s+channels|show\s+channels)$/i;
 const CHANNEL_CONNECT_RE =
   /^(?:connect|link)\s+(?:channel\s+)?(?:to\s+)?(?<channel>[a-z0-9_-]+)(?:\s+channel)?$/i;
 const CHANNEL_INFO_RE =
   /^(?:channel\s+info\s+(?<channel>[a-z0-9_-]+)|about\s+(?<aboutChannel>[a-z0-9_-]+)\s+channel)$/i;
-const SKILLS_SETUP_RE = /^(?:configure|set\s*up|setup)\s+skills$/i;
-const SEARCH_SETUP_RE =
-  /^(?:(?:configure|set\s*up|setup)\s+(?:web\s+)?search|(?:web\s+)?search\s+provider\s+setup)$/i;
-const GATEWAY_CONFIG_SETUP_RE = /^(?:configure\s+gateway|set\s*up\s+gateway|gateway\s+settings)$/i;
-const MEMORY_IMPORT_RE = /^(?:import\s+memor(?:y|ies)|memory\s+import)$/i;
-const OPEN_GUIDED_SETUP_RE =
-  /^(?:open\s+setup\s+wizard|setup\s+wizard|menu\s+setup|use\s+the\s+(?:setup\s+)?wizard)$/i;
-const OPEN_CLASSIC_SETUP_RE = /^(?:open\s+classic(?:\s+setup)?\s+wizard|classic\s+setup)$/i;
 const OPEN_CHANNEL_SETUP_RE = /^open\s+channel\s+wizard(?:\s+for\s+(?<channel>[a-z0-9_-]+))?$/i;
-const OPEN_SEARCH_SETUP_RE = /^open\s+(?:web\s+)?search\s+wizard$/i;
-const OPEN_GATEWAY_SETUP_RE = /^open\s+gateway\s+wizard$/i;
 
 const NO_MATCH_MESSAGE =
   "I can run doctor/status/health, check or restart Gateway, configure gateway settings, list agents/models, configure skills or web search, import memory, set default model, connect channels (`connect telegram`), show `channel info <channel>`, open the setup wizard, show audit, or switch to your agent TUI.";
+
+const SIMPLE_COMMANDS: ReadonlyArray<readonly [readonly string[] | RegExp, SystemAgentOperation]> =
+  [
+    [["help", "?", "overview", "system"], { kind: "overview" }],
+    [["audit", "audit log", "show audit"], { kind: "audit" }],
+    [["status"], { kind: "status" }],
+    [["health"], { kind: "health" }],
+    [["doctor"], { kind: "doctor" }],
+    [["doctor fix", "doctor repair"], { kind: "doctor-fix" }],
+    [["config validate", "validate config"], { kind: "config-validate" }],
+    [["agents", "list agents"], { kind: "agents" }],
+    [["models", "list models"], { kind: "models" }],
+    [
+      ["model accounts", "personal model accounts", "manage model accounts"],
+      { kind: "model-accounts" },
+    ],
+    [["tui", "open tui", "chat"], { kind: "open-tui" }],
+    [["quit", "exit"], { kind: "none", message: "OpenClaw retracts into shell. Bye." }],
+    [/^(?:(?:plugins?|clawhub)\s+list|list\s+plugins?)$/i, { kind: "plugin-list" }],
+    [/^(?:channels|list\s+channels|show\s+channels)$/i, { kind: "channel-list" }],
+    [/^(?:configure|set\s*up|setup)\s+skills$/i, { kind: "skills-setup" }],
+    [
+      /^(?:(?:configure|set\s*up|setup)\s+(?:web\s+)?search|(?:web\s+)?search\s+provider\s+setup)$/i,
+      { kind: "search-setup" },
+    ],
+    [
+      /^(?:configure\s+gateway|set\s*up\s+gateway|gateway\s+settings)$/i,
+      { kind: "gateway-config-setup" },
+    ],
+    [/^(?:import\s+memor(?:y|ies)|memory\s+import)$/i, { kind: "memory-import" }],
+    [
+      /^(?:open\s+setup\s+wizard|setup\s+wizard|menu\s+setup|use\s+the\s+(?:setup\s+)?wizard)$/i,
+      { kind: "open-setup", target: "guided" },
+    ],
+    [
+      /^(?:open\s+classic(?:\s+setup)?\s+wizard|classic\s+setup)$/i,
+      { kind: "open-setup", target: "classic" },
+    ],
+    [/^open\s+(?:web\s+)?search\s+wizard$/i, { kind: "open-setup", target: "search" }],
+    [/^open\s+gateway\s+wizard$/i, { kind: "open-setup", target: "gateway" }],
+  ];
 
 function normalizeExplicitSystemAgentId(agentId: string): string {
   const normalized = normalizeAgentIdStrict(agentId);
@@ -261,6 +286,17 @@ function parseConfigSetRefCommand(input: string):
   return body.trim() ? { valid: false } : undefined;
 }
 
+/** Stable name prefix; the secret-store writer allocates a fresh entry for every save. */
+export function secretStoreNameForConfigPath(path: string): string {
+  const name = parseConfigSetPath(path)
+    .join("_")
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]+/gu, "_")
+    .replace(/^[^A-Z]+/u, "");
+  return (name || "OPENCLAW_SECRET").slice(0, 128);
+}
+
 /**
  * Parse one user command into OpenClaw's closed operation union. Anything
  * that does not match the anchored grammar exactly returns kind "none" so the
@@ -275,45 +311,10 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       message: "Tiny claw tap: say status, doctor, models, agents, or talk to agent.",
     };
   }
-  if (["help", "?", "overview", "system"].includes(lower)) {
-    return { kind: "overview" };
-  }
-  switch (lower) {
-    case "audit":
-    case "audit log":
-    case "show audit":
-      return { kind: "audit" };
-    case "status":
-      return { kind: "status" };
-    case "health":
-      return { kind: "health" };
-    case "doctor":
-      return { kind: "doctor" };
-    case "doctor fix":
-    case "doctor repair":
-      return { kind: "doctor-fix" };
-    case "config validate":
-    case "validate config":
-      return { kind: "config-validate" };
-    case "agents":
-    case "list agents":
-      return { kind: "agents" };
-    case "models":
-    case "list models":
-      return { kind: "models" };
-    case "model accounts":
-    case "personal model accounts":
-    case "manage model accounts":
-      return { kind: "model-accounts" };
-    case "tui":
-    case "open tui":
-    case "chat":
-      return { kind: "open-tui" };
-    case "quit":
-    case "exit":
-      return { kind: "none", message: "OpenClaw retracts into shell. Bye." };
-    default:
-      break;
+  for (const [commands, operation] of SIMPLE_COMMANDS) {
+    if (commands instanceof RegExp ? commands.test(trimmed) : commands.includes(lower)) {
+      return { ...operation };
+    }
   }
   const configSetRef = parseConfigSetRefCommand(trimmed);
   if (configSetRef?.valid) {
@@ -339,6 +340,13 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       value: configSet.value,
     };
   }
+  const configUnset = parseConfigReadPath(trimmed, CONFIG_UNSET_PREFIX_RE, { allowEmpty: false });
+  if (configUnset?.valid && configUnset.path) {
+    return { kind: "config-unset", path: configUnset.path };
+  }
+  if (configUnset && !configUnset.valid) {
+    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
+  }
   const configGet = parseConfigReadPath(trimmed, CONFIG_GET_PREFIX_RE, { allowEmpty: false });
   if (configGet?.valid && configGet.path) {
     return { kind: "config-get", path: configGet.path };
@@ -355,9 +363,6 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   }
   if (configSchema && !configSchema.valid) {
     return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
-  }
-  if (PLUGIN_LIST_RE.test(trimmed)) {
-    return { kind: "plugin-list" };
   }
   const pluginSearchMatch = trimmed.match(PLUGIN_SEARCH_RE);
   if (pluginSearchMatch?.groups?.query?.trim()) {
@@ -379,9 +384,6 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   if (pluginUninstallMatch?.groups?.pluginId?.trim()) {
     return { kind: "plugin-uninstall", pluginId: pluginUninstallMatch.groups.pluginId.trim() };
   }
-  if (CHANNEL_LIST_RE.test(trimmed)) {
-    return { kind: "channel-list" };
-  }
   const channelInfoMatch = trimmed.match(CHANNEL_INFO_RE);
   const channelInfo = channelInfoMatch?.groups?.channel ?? channelInfoMatch?.groups?.aboutChannel;
   if (channelInfo) {
@@ -391,18 +393,6 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   if (channelConnectMatch?.groups?.channel) {
     return { kind: "channel-setup", channel: channelConnectMatch.groups.channel.toLowerCase() };
   }
-  if (SKILLS_SETUP_RE.test(trimmed)) {
-    return { kind: "skills-setup" };
-  }
-  if (SEARCH_SETUP_RE.test(trimmed)) {
-    return { kind: "search-setup" };
-  }
-  if (GATEWAY_CONFIG_SETUP_RE.test(trimmed)) {
-    return { kind: "gateway-config-setup" };
-  }
-  if (MEMORY_IMPORT_RE.test(trimmed)) {
-    return { kind: "memory-import" };
-  }
   const modelSetupMatch = trimmed.match(MODEL_SETUP_RE);
   if (modelSetupMatch) {
     const workspace = trimShellishToken(modelSetupMatch.groups?.workspace);
@@ -410,12 +400,6 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       kind: "model-setup",
       ...(workspace ? { workspace } : {}),
     };
-  }
-  if (OPEN_GUIDED_SETUP_RE.test(trimmed)) {
-    return { kind: "open-setup", target: "guided" };
-  }
-  if (OPEN_CLASSIC_SETUP_RE.test(trimmed)) {
-    return { kind: "open-setup", target: "classic" };
   }
   const openChannelSetupMatch = trimmed.match(OPEN_CHANNEL_SETUP_RE);
   if (openChannelSetupMatch) {
@@ -425,12 +409,6 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       target: "channels",
       ...(channel ? { channel } : {}),
     };
-  }
-  if (OPEN_SEARCH_SETUP_RE.test(trimmed)) {
-    return { kind: "open-setup", target: "search" };
-  }
-  if (OPEN_GATEWAY_SETUP_RE.test(trimmed)) {
-    return { kind: "open-setup", target: "gateway" };
   }
   const setupMatch = trimmed.match(SETUP_RE);
   if (setupMatch) {
@@ -547,6 +525,7 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
   return (
     operation.kind === "set-default-model" ||
     operation.kind === "config-set" ||
+    operation.kind === "config-unset" ||
     operation.kind === "config-set-ref" ||
     operation.kind === "setup" ||
     operation.kind === "plugin-install" ||
@@ -562,17 +541,20 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
   );
 }
 
-/** Format a user-facing description for an operation requiring approval. */
 export function describeSystemAgentPersistentOperation(operation: SystemAgentOperation): string {
   switch (operation.kind) {
     case "set-default-model":
       return operation.agentId
         ? `set agent ${operation.agentId}'s model to ${operation.model}`
         : `set agents.defaults.model.primary to ${operation.model}`;
+    case "config-unset":
+      return `remove config ${redactSystemAgentConfigPath(operation.path)}`;
     case "config-set":
       return `set config ${redactSystemAgentConfigPath(operation.path)} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
     case "config-set-ref":
-      return `set config ${redactSystemAgentConfigPath(operation.path)} to ${operation.source} SecretRef <redacted>`;
+      return operation.secret === undefined
+        ? `set config ${redactSystemAgentConfigPath(operation.path)} to ${operation.source} SecretRef <redacted>`
+        : `save the provided secret in the secret store and point config ${redactSystemAgentConfigPath(operation.path)} at it`;
     case "setup":
       return formatSetupPlanDescription(operation);
     case "model-setup":
@@ -625,7 +607,6 @@ export const SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF =
 export const SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF =
   "Channel, model, and setup flows need a human operator in the OpenClaw app; they cannot run from a delegated agent request. Open `openclaw dashboard` or run `openclaw setup` on the Gateway host.";
 
-/** Format the standard approval plan text for a persistent operation. */
 export function formatSystemAgentPersistentPlan(
   operation: SystemAgentOperation,
   operatorApprovalOnly = false,

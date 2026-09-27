@@ -413,9 +413,7 @@ export const livePreviewFinalizerCapabilities = [
 export type LivePreviewFinalizerCapability = (typeof livePreviewFinalizerCapabilities)[number];
 
 /** Capability map for preview finalization behavior. */
-export type LivePreviewFinalizerCapabilityMap = Partial<
-  Record<LivePreviewFinalizerCapability, boolean>
->;
+type LivePreviewFinalizerCapabilityMap = Partial<Record<LivePreviewFinalizerCapability, boolean>>;
 
 /** Adapter shape for finalizing live previews. */
 type ChannelMessageLiveFinalizerAdapterShape = {

@@ -27,12 +27,12 @@ const roots = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function activePlacement(database: OpenClawStateDatabase, sessionId: string) {
+async function activePlacement(database: OpenClawStateDatabase, sessionId: string) {
   const store = createWorkerSessionPlacementStore({ database, now: () => 1000 });
   const identity = { sessionId, agentId: "main", sessionKey: `agent:main:${sessionId}` };
   const environmentId = `environment-${sessionId}`;
   seedAttachedPlacementEnvironment(database, { environmentId, sessionId, ownerEpoch: 7 });
-  let placement = store.startDispatch(identity);
+  let placement = await store.startDispatch(identity);
   for (const step of [
     { to: "provisioning", patch: { environmentId } },
     { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
@@ -62,7 +62,7 @@ describe("worker placement read projection", () => {
     const otherStateDir = roots.make("placement-projection-other-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const database = openOpenClawStateDatabase();
-    const { store, placement, identity } = activePlacement(database, "pending");
+    const { store, placement, identity } = await activePlacement(database, "pending");
     const claim = await store.claimTurn({
       ...identity,
       owner: {
@@ -78,7 +78,7 @@ describe("worker placement read projection", () => {
     store.recordStagedWorkspaceResult(claim, stagedResultRef);
     store.recordWorkspaceResultConflict(claim, { paths: ["changed.txt"], stagedResultRef });
     const draining = store.startWorkspaceResultDrain(claim);
-    const moving = activePlacement(database, "moving");
+    const moving = await activePlacement(database, "moving");
     const move = moving.store.beginPlacementMove({
       sessionId: moving.placement.sessionId,
       source: {
@@ -90,7 +90,7 @@ describe("worker placement read projection", () => {
     });
     vi.stubEnv("OPENCLAW_STATE_DIR", otherStateDir);
     const other = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
-    other.startDispatch(identity);
+    await other.startDispatch(identity);
     await closeOpenClawStateDatabaseAsync();
     requireNodeSqlite();
     const counters = observeMainThreadSql({ includeClose: true });
@@ -114,6 +114,9 @@ describe("worker placement read projection", () => {
       expect(snapshot.moves.get("moving")).toEqual(move.intent);
       expect(snapshot.moves.get(" moving ")).toEqual(move.intent);
       expect(snapshot.workspaceResultReconcilingSessionIds).toEqual(
+        new Set(["pending", " pending "]),
+      );
+      expect(snapshot.workspaceRecoveryPendingSessionIds).toEqual(
         new Set(["pending", " pending "]),
       );
       expect(snapshot.environments.get(placement.environmentId)).toEqual({

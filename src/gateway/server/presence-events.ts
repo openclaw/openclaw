@@ -5,20 +5,20 @@ import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
 
 const log = createSubsystemLogger("gateway/presence");
 
-/** One Gateway owns queued publications; authoritative reads never wait for this turn boundary. */
+/** One Gateway owns fixed publication windows; authoritative reads never wait for them. */
 export function createPresencePublisher(params: {
   broadcast: GatewayBroadcastFn;
   incrementPresenceVersion: () => number;
   getHealthVersion: () => number;
   prepare: () => Promise<void> | undefined;
 }) {
-  let pending: ReturnType<typeof setImmediate> | undefined;
+  let pending: ReturnType<typeof setTimeout> | undefined;
   let flushing = false;
   let version = 0;
   let stopped = false;
   const schedule = () => {
     if (!stopped && !pending && !flushing) {
-      pending = setImmediate(() => void flush());
+      pending = setTimeout(() => void flush(), 50);
       pending.unref();
     }
   };
@@ -60,7 +60,7 @@ export function createPresencePublisher(params: {
     },
     stop: () => {
       stopped = true;
-      clearImmediate(pending);
+      clearTimeout(pending);
       pending = undefined;
     },
   };

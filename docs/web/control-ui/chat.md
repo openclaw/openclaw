@@ -11,9 +11,15 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
+Saved split panes keep their conversation and arrangement. If an older saved pane
+does not identify its agent, it shows **Choose a conversation** instead of opening
+another agent's history. Select that pane, then choose **Home** or a conversation
+in the sidebar. Home works even when you are already on its route; the other
+panes stay unchanged.
+
 ## Collaborator drafts
 
-In a shared session, another person’s in-progress message stays visible when they pause typing. Draft previews update up to four times per second, keeping the latest text when input arrives faster. After a short pause, its label changes to **Paused · not sent** without removing the bubble or shifting the transcript. Typing again updates the same bubble. Sending, clearing the draft, leaving the composer, or leaving the session removes it. A preview also expires after two minutes without typing so an abandoned tab cannot leave it visible indefinitely. Draft previews are temporary browser state, not saved messages; changing sessions or reconnecting clears them.
+In a shared session, another person’s in-progress message stays visible when they pause typing. Draft previews update up to four times per second, keeping the latest text when input arrives faster. After 10 seconds without typing, its label changes from **is typing...** to **Draft** without removing the bubble or shifting the transcript. Typing again updates the same bubble. Sending, clearing the draft, leaving the composer, or leaving the session removes it. An idle preview fades out and smoothly closes its space during the final 300 milliseconds before its 30-second expiry, so an abandoned tab cannot leave it visible indefinitely. Typing again cancels the exit. With reduced motion enabled, the preview stays still and disappears at the same deadline without animation. Draft previews are temporary browser state, not saved messages; changing sessions or reconnecting clears them.
 
 ## Session rail and side chat
 
@@ -86,7 +92,7 @@ filenames in authored links, such as `[Read inventory](inventory.csv)`, and code
 spans also open the file preview. Plain-text and inline-code file detection stays
 conservative to avoid turning prose into links.
 
-While composing text with an input method in model search, Enter, Escape, and arrow keys stay with the input method. They do not select a model, clear the search, or move the highlighted model until composition finishes.
+While composing text with an input method in model search, Enter, Escape, and arrow keys stay with the input method. They do not select a model, clear the search, or move the highlighted model until composition finishes. Open tooltips also leave Escape to the input method.
 
 When authentication status is available, each provider heading in the chat model picker says how that provider is signed in: **API** for an API key (or an explicitly selected API-key account), the plan name for a provider with one subscription, and **Subscription** for a provider with several. With several subscriptions, the heading adds the email of an explicitly selected account when the Gateway supplies it, and the **Account** rows show each account's email; automatic selection shows no account identity. Hover a truncated heading to read the full text.
 
@@ -400,6 +406,7 @@ pasted-text attachments. Older history without origin metadata recognizes
 `text/plain` attachments named `pasted-text-<digits>.txt` as pasted text.
 
 Uploaded attachments keep their original filenames on download, including spaces and Unicode characters.
+Uploaded images also retain their names in accessible transcript image and image-viewer labels after sending and reloading; descriptive alt text takes precedence when provided.
 Select **Open** on an uploaded text attachment to read it directly in the **Files** side
 panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation. Markdown attachments render as documents
 with interactive code blocks. When an open attachment refreshes with unchanged
@@ -448,6 +455,8 @@ Code blocks keep your expansion and wrapping choices when their closing fence
 arrives and later paragraphs stream into the same assistant reply. Replacing the
 message, correcting earlier content, or changing rendering options starts a fresh
 view. References that change earlier Markdown can also reset the view.
+Completed lists also stay cached as later blocks arrive; loose or nested list
+continuations remain together until the list ends.
 
 **Copy URL** in browser tab cards also works on plain HTTP connections where the
 browser does not provide its Clipboard API.
@@ -463,6 +472,7 @@ Markdown tables wrap headings and cell text to fit the conversation. On wide des
 panes, top-level assistant tables stay at the reading width when their content fits
 and use extra space only as needed, without widening the surrounding prose. Long
 cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
+Short values such as byte counts stay intact beside long filenames or hashes, including on mobile.
 Wide desktop tables use compact icon-only controls above the header. Mobile and
 phone-landscape views retain larger touch controls and a visible **Expand table** label.
 Ordinary inline tables grow vertically instead of adding a vertical scrollbar.
@@ -693,7 +703,9 @@ Automation task transcripts stay tied to the recorded run, including after its
 temporary continuation session is removed or the automation runs again. If that
 recorded transcript is unavailable, the viewer reports an error instead of
 showing a newer run. Select **View transcript** under **Automations → Run history**
-to read that exact run without opening its temporary session.
+to read that exact run without opening its temporary session. Selecting **All
+automations**, opening another automation, or starting a new automation closes the
+run viewer; refreshing the same panel keeps it open.
 
 The automation run viewer displays the supplied transcript. Core session transcripts
 are currently capped at 8,000 characters per text block. The Chat panel's full-text recovery may be unavailable

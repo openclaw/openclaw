@@ -28,7 +28,7 @@ describe("worker placement restart continuity", () => {
     "recovers a previous-instance pending result on its surviving node only after the old runtime is stopped: %s",
     async (outcome) => {
       const originalHarness = createTestHarness();
-      const active = originalHarness.placements.seedActive(2);
+      const active = await originalHarness.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }
@@ -89,7 +89,7 @@ describe("worker placement restart continuity", () => {
     "fences an interrupted worker turn after restart while preserving its surviving node: %s",
     async (scenario) => {
       const original = createTestHarness();
-      const active = original.placements.seedActive(original.attached.ownerEpoch);
+      const active = await original.placements.seedActive(original.attached.ownerEpoch);
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }

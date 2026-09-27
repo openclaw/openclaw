@@ -150,47 +150,16 @@ describe("base config schema", () => {
   });
 
   it("omits legacy compatibility paths from the public schema payload", () => {
-    const rootProperties = (
-      BASE_CONFIG_SCHEMA.schema as {
-        properties?: Record<string, unknown>;
-      }
-    ).properties;
-    const hooksInternalProperties = (
-      BASE_CONFIG_SCHEMA.schema as {
-        properties?: {
-          hooks?: {
-            properties?: {
-              internal?: {
-                properties?: Record<string, unknown>;
-              };
-            };
-          };
-        };
-      }
-    ).properties?.hooks?.properties?.internal?.properties;
-    const uiHints = BASE_CONFIG_SCHEMA.uiHints as Record<string, unknown>;
-
-    expect(rootProperties?.canvasHost).toBeUndefined();
-    expect(hooksInternalProperties?.handlers).toBeUndefined();
+    const uiHints = BASE_CONFIG_SCHEMA.uiHints;
+    expect(schemaAt(BASE_SCHEMA, ["canvasHost"])).toBeUndefined();
+    expect(schemaAt(BASE_SCHEMA, ["hooks", "internal", "handlers"])).toBeUndefined();
     expect(uiHints.canvasHost).toBeUndefined();
     expect(uiHints["hooks.internal.handlers"]).toBeUndefined();
   });
 
   it("includes generation and voice models in the public schema payload", () => {
-    const agentDefaultsProperties = (
-      BASE_CONFIG_SCHEMA.schema as {
-        properties?: {
-          agents?: {
-            properties?: {
-              defaults?: {
-                properties?: Record<string, unknown>;
-              };
-            };
-          };
-        };
-      }
-    ).properties?.agents?.properties?.defaults?.properties;
-    const uiHints = BASE_CONFIG_SCHEMA.uiHints as Record<string, unknown>;
+    const agentDefaultsProperties = schemaAt(BASE_SCHEMA, ["agents", "defaults"])?.properties;
+    const uiHints = BASE_CONFIG_SCHEMA.uiHints;
 
     expect(agentDefaultsProperties).toHaveProperty("mediaModels");
     expect(agentDefaultsProperties).toHaveProperty("voiceModel");

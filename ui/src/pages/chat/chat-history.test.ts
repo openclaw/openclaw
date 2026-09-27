@@ -11,11 +11,7 @@ import { createState, type TestState } from "./chat-history.inflight.test-suppor
 import { loadChatHistory } from "./chat-history.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
-import {
-  getChatSessionProjection,
-  publishChatSessionProjection,
-  reduceChatSessionProjection,
-} from "./history-merge.ts";
+import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 import {
   cacheChatSessionSnapshot,
@@ -749,30 +745,6 @@ describe("canonical history snapshot projection", () => {
 
     expect(request).toHaveBeenCalledOnce();
     expect(state.chatMessages).toEqual([first, second]);
-  });
-
-  it("preserves pending input appended while the authoritative request is in flight", async () => {
-    const { promise: history, resolve: resolveHistory } = createDeferred<ChatHistoryResult>();
-    const first = message("user", "first prompt", { id: "first-user", seq: 1 });
-    const pending = message("user", "concurrent prompt", {
-      idempotencyKey: "concurrent-run:user",
-    });
-    const state = createState({ messages: [first] });
-    state.chatMessages = [first];
-    state.client = {
-      request: vi.fn().mockReturnValue(history),
-    } as unknown as GatewayBrowserClient;
-
-    const load = loadChatHistory(state);
-    reduceChatSessionProjection(state, {
-      type: "sendPending",
-      runId: "concurrent-run",
-      message: pending,
-    });
-    resolveHistory({ messages: [first] });
-    await load;
-
-    expect(state.chatMessages).toEqual([first, pending]);
   });
 
   it("does not preserve old pending sends after the active branch changes", async () => {

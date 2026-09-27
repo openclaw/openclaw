@@ -4,8 +4,9 @@ import { readFileSync } from "node:fs";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
+import { resolveAgentPluginBundleResponse } from "./lib/agent-plugin-bundle-response.mjs";
 import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
-import { summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
+import { readMockUserText, summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -706,16 +707,31 @@ function writeImageGeneration(res) {
   });
 }
 
-function resolveResponseText(bodyText) {
+function resolveResponseText(bodyText, body) {
+  let markerBody;
+  for (const key of ["input", "messages"]) {
+    if (!Array.isArray(body?.[key])) {
+      continue;
+    }
+    const messages = body[key].filter(
+      (message) => message?.role !== "user" || readMockUserText(message) !== undefined,
+    );
+    if (messages.length !== body[key].length) {
+      markerBody ??= { ...body };
+      markerBody[key] = messages;
+    }
+  }
+  // Runtime carriers can quote older markers after the user's current request.
+  const markerText = markerBody ? JSON.stringify(markerBody) : bodyText;
   const servingChecks = Array.from(
-    bodyText.matchAll(
+    markerText.matchAll(
       /This is an OpenClaw update serving check\. Do not use tools\. Reply with exactly: (update-verified-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/gu,
     ),
   );
   if (servingChecks.length > 0) {
     return servingChecks.at(-1)[1];
   }
-  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
+  const matches = Array.from(markerText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
   return matches.at(-1)?.[0] ?? successMarker;
 }
 
@@ -845,22 +861,19 @@ function mcpAppConformanceEvents(body, bodyText) {
     : responseEvents("MCP_APP_CONFORMANCE_FAIL");
 }
 
-function agentPluginBundleEvents(body, bodyText) {
-  const allText = collectText(body).join("\n");
-  if (!/agent plugin bundle qa check/i.test(allText)) {
+function agentPluginBundleEvents(body, inferenceFacts) {
+  if (inferenceFacts?.purpose === "activity-recap") {
     return null;
   }
-  const toolOutput = collectFunctionCallOutputText(body);
-  if (!toolOutput) {
-    return hasDeclaredTool(bodyText, "weather-probe__weather_probe")
-      ? toolCallEvents("weather-probe__weather_probe", {})
-      : responseEvents("AGENT_BUNDLE_MCP_FAIL tool-not-declared");
+  const input = Array.isArray(body?.input) ? body.input : [];
+  const userText = input.map(readMockUserText).findLast((text) => text !== undefined) ?? "";
+  if (!/agent plugin bundle qa check/i.test(userText)) {
+    return null;
   }
-  return toolOutput.includes("probe ok") &&
-    toolOutput.includes("PLUGIN_ROOT=") &&
-    toolOutput.includes("PLUGIN_DATA=")
-    ? responseEvents("AGENT_BUNDLE_MCP_OK")
-    : responseEvents("AGENT_BUNDLE_MCP_FAIL unexpected-tool-output");
+  const response = resolveAgentPluginBundleResponse(body);
+  return response.tool
+    ? toolCallEvents(response.tool.name, response.tool.args)
+    : responseEvents(response.text);
 }
 
 function telegramBindingEvents(body) {
@@ -937,6 +950,7 @@ const server = http.createServer((req, res) => {
         ? { response: controlSelection.models[body.model] }
         : undefined
       : controlSelection;
+    const inferenceFacts = scriptedRoute ? summarizeMockInferenceRequest(body) : undefined;
     if (
       writeRequestLogEntryOrFail(res, {
         requestLog,
@@ -947,7 +961,7 @@ const server = http.createServer((req, res) => {
           requestBytes: Buffer.byteLength(bodyText),
           body: boundedRequestLogBody(requestLogBody, requestLogBody),
           ...summarizeRequestContent(body),
-          ...(scriptedRoute ? { inferenceFacts: summarizeMockInferenceRequest(body) } : {}),
+          ...(inferenceFacts ? { inferenceFacts } : {}),
           ...(selectedResponse?.scriptEntry ? { scriptEntry: selectedResponse.scriptEntry } : {}),
         },
       })
@@ -966,7 +980,7 @@ const server = http.createServer((req, res) => {
     if (route === "responses") {
       if (!selectedResponse) {
         const events =
-          agentPluginBundleEvents(body, bodyText) ??
+          agentPluginBundleEvents(body, inferenceFacts) ??
           mcpAppConformanceEvents(body, bodyText) ??
           mcpCodeModeApiFileEvents(body, bodyText) ??
           progressDraftEvents(body, bodyText) ??
@@ -985,7 +999,7 @@ const server = http.createServer((req, res) => {
         writeResponsesEvents(res, body.stream, response.events);
         return;
       }
-      const responseText = selectedResponse ? response.text : resolveResponseText(bodyText);
+      const responseText = selectedResponse ? response.text : resolveResponseText(bodyText, body);
       if (body.stream === false) {
         writeJson(res, 200, {
           id: "resp_e2e",
@@ -1039,7 +1053,7 @@ const server = http.createServer((req, res) => {
       }
       const responseText = selectedResponse
         ? selectedResponse.response.text
-        : resolveResponseText(bodyText);
+        : resolveResponseText(bodyText, body);
       writeChatCompletion(res, body.stream !== false, responseText);
       return;
     }

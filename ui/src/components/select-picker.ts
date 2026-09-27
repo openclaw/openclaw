@@ -6,6 +6,7 @@ import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { configureAnchoredPopup } from "./anchored-overlay.ts";
 import { icons } from "./icons.ts";
+import { revealInScrollRegion } from "./scroll-state.ts";
 import "../styles/select-picker.css";
 
 export type PickerOption = {
@@ -171,13 +172,7 @@ export class SelectPicker<
     const menu = this.querySelector<HTMLElement>(".picker-select__options");
     const active = menu?.querySelector<HTMLElement>("[data-active]");
     if (menu && active) {
-      const bounds = menu.getBoundingClientRect();
-      const row = active.getBoundingClientRect();
-      if (row.top < bounds.top) {
-        menu.scrollTop -= bounds.top - row.top;
-      } else if (row.bottom > bounds.bottom) {
-        menu.scrollTop += row.bottom - bounds.bottom;
-      }
+      revealInScrollRegion(menu, active);
     }
   }
 

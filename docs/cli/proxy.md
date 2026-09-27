@@ -62,6 +62,16 @@ See [Network Proxy](/security/network-proxy) for deployment guidance and denial 
 
 `run` starts a local debug proxy, then runs `<cmd...>` (after `--`) with the proxy env applied, under its own capture session.
 
+Capture persistence uses asynchronous worker operations. On orderly shutdown,
+`start` and `run` wait for admitted capture writes and session cleanup. Capture
+failures remain reportable during cleanup even when the original HTTP response
+was already delivered to its caller.
+
+Integrations using the [proxy capture SDK](/plugins/sdk-subpaths#asynchronous-proxy-capture)
+must await capture finalization and release their async store leases. Direct
+database maintenance close invalidates capture admission and is not a substitute
+for that cleanup; the synchronous finalizer cannot drain async capture work.
+
 The debug proxy's direct upstream forwarding opens upstream sockets for diagnostics. When OpenClaw managed proxy mode is active, direct forwarding for proxy requests and CONNECT tunnels is disabled by default. Set `OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY=1` only for approved local diagnostics.
 
 `coverage` prints a JSON report (`summary` + per-transport `entries`) of which transports are captured, proxy-only, or uncovered.

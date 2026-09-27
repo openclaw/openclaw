@@ -388,60 +388,52 @@ function renderCloudConfiguration(params: {
   const operatingSystems = params.operatingSystems.filter((os) => !os.disabledReason);
   const fixedOs = operatingSystems.length === 1 ? operatingSystems[0] : undefined;
   const fixedMachine = params.machines.length === 1 ? params.machines[0] : undefined;
+  const groups = [
+    [
+      operatingSystems.length,
+      t("newSession.operatingSystem"),
+      () =>
+        fixedOs
+          ? html`<span class="new-session-page__fixed-os" data-value=${`os:${fixedOs.id}`}
+              >${fixedOs.label}</span
+            >`
+          : renderCloudOsMenuItems({
+              operatingSystems,
+              selectedId: params.selectedOs,
+              suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
+              submitting: params.submitting,
+              onSelect: params.onSelectOs,
+            }),
+    ],
+    [
+      params.machines.length,
+      t("newSession.machine"),
+      () =>
+        fixedMachine
+          ? renderFixedMachine(fixedMachine)
+          : renderCloudMachineMenuItems({
+              machines: params.machines,
+              selectedId: params.selectedMachine,
+              suggestedId: params.suggested
+                ? defaultCloudMachine(params.profile, params.selectedOs)?.id
+                : undefined,
+              submitting: params.submitting,
+              onSelect: params.onSelectMachine,
+            }),
+    ],
+  ] as const;
   return html`<section
     class="new-session-page__cloud-configuration"
     aria-label=${params.profile.id}
   >
-    ${
-      operatingSystems.length
-        ? html`<div class="new-session-page__environment-heading">
-              ${t("newSession.operatingSystem")}
-            </div>
-            <div
-              class="new-session-page__cloud-choice-list"
-              role="group"
-              aria-label=${t("newSession.operatingSystem")}
-            >
-              ${
-                fixedOs
-                  ? html`<span class="new-session-page__fixed-os" data-value=${`os:${fixedOs.id}`}
-                      >${fixedOs.label}</span
-                    >`
-                  : renderCloudOsMenuItems({
-                      operatingSystems,
-                      selectedId: params.selectedOs,
-                      suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
-                      submitting: params.submitting,
-                      onSelect: params.onSelectOs,
-                    })
-              }
+    ${groups.map(([count, label, renderChoices]) =>
+      count
+        ? html`<div class="new-session-page__environment-heading">${label}</div>
+            <div class="new-session-page__cloud-choice-list" role="group" aria-label=${label}>
+              ${renderChoices()}
             </div>`
-        : nothing
-    }
-    ${
-      params.machines.length
-        ? html`<div class="new-session-page__environment-heading">${t("newSession.machine")}</div>
-            <div
-              class="new-session-page__cloud-choice-list"
-              role="group"
-              aria-label=${t("newSession.machine")}
-            >
-              ${
-                fixedMachine
-                  ? renderFixedMachine(fixedMachine)
-                  : renderCloudMachineMenuItems({
-                      machines: params.machines,
-                      selectedId: params.selectedMachine,
-                      suggestedId: params.suggested
-                        ? defaultCloudMachine(params.profile, params.selectedOs)?.id
-                        : undefined,
-                      submitting: params.submitting,
-                      onSelect: params.onSelectMachine,
-                    })
-              }
-            </div>`
-        : nothing
-    }
+        : nothing,
+    )}
   </section>`;
 }
 

@@ -25,7 +25,7 @@ type ReplyRunKey = string;
 
 type ReplyBackendKind = "embedded" | "cli";
 
-type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
+export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
 export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 
@@ -60,6 +60,8 @@ export type ReplyBackendQueueMessageOptions = {
 };
 
 export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
+  /** Host-observed audio fact; an owner must preserve its dynamic tool context before accepting. */
+  inboundAudio?: boolean;
   /** User-authorized controls retain sender authority but are not answers to pending questions. */
   allowPendingUserInputAnswer?: false;
   /** Consumed by reply ownership and never forwarded to the active backend. */
@@ -107,6 +109,8 @@ export type ReplyToolAuthorityOverlay = Readonly<{
 }>;
 
 export type ReplyToolAuthoritySnapshot = Readonly<{
+  /** Selection admitted before runtime fallback or hooks choose a concrete model. */
+  requestedRoute?: ReplyToolAuthorityRoute;
   fingerprint(route?: ReplyToolAuthorityRoute): string;
   project: (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => string;
 }>;
@@ -184,11 +188,33 @@ export type ReplyBackendHandle = {
   isCompacting?: () => boolean;
 };
 
-export const replyMessageInjectionTargetOperation = Symbol("replyMessageInjectionTargetOperation");
+export type ReplyMessageInjectionResolution =
+  | {
+      reason: ReplyMessageInjectionRejectionReason;
+      errorMessage?: string;
+      backend?: ReplyBackendHandle;
+      cancelPendingUserInput?: ReplyBackendHandle["cancelPendingUserInput"];
+    }
+  | { backend: ReplyBackendHandle; injection: ReplyBackendMessageInjection };
+
+/** An adapter over one existing execution owner; it never acquires another run slot. */
+type ReplyMessageInjectionOwner = {
+  projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
+  resolve(params: {
+    options?: ReplyBackendQueueMessageOptions;
+    inboundAudio?: boolean;
+    allowPendingUserInputAnswer?: false;
+    assertCurrent?: () => void;
+  }): ReplyMessageInjectionResolution;
+  recordAccepted(options?: { inboundAudio?: boolean }): void;
+  abort(): boolean;
+};
+
+export const replyMessageInjectionTargetOwner = Symbol("replyMessageInjectionTargetOwner");
 export type ReplyMessageInjectionTarget = {
-  readonly [replyMessageInjectionTargetOperation]: ReplyOperation;
+  readonly [replyMessageInjectionTargetOwner]: ReplyMessageInjectionOwner;
   readonly runId?: string;
-  /** Channel source-turn identity of the owning run (see the registry's `sourceTurnByKey`). */
+  /** Original source input retained by the captured execution owner. */
   readonly sourceTurnId?: string;
 };
 
@@ -202,6 +228,7 @@ export type ReplyMessageInjectionRejectionReason =
   | "not_running"
   | "stale_run"
   | "injection_unavailable"
+  | "audio_input_unsupported"
   | ReplyBackendQueueMessageMismatch
   | "runtime_rejected";
 
@@ -213,7 +240,7 @@ export type ReplyMessageInjectionOutcome =
   | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
 
 export type ReplyMessageInjectionAttempt = {
-  /** Native run identity captured with the opaque operation target. */
+  /** Native run identity captured with the opaque execution owner. */
   targetRunId: string | undefined;
   /** Settles once the runtime accepts or rejects ownership of this exact message. */
   acceptance: Promise<boolean>;
@@ -228,8 +255,6 @@ export type ReplyBackendQueueMessageMismatch =
   | "source_reply_delivery_mode_mismatch"
   | "reply_expectation_mismatch"
   | "task_suggestion_delivery_mode_mismatch";
-
-/** Prevents steering a turn into a run that cannot preserve its model-facing input. */
 
 export type ReplyOperationPhase =
   | "queued"
@@ -287,6 +312,10 @@ export type ReplyOperation = {
   readonly acceptedSteeredInboundAudio: boolean;
   /** Immutable tool authority accepted by the active backend for steered user turns. */
   readonly toolAuthorityFingerprint?: string;
+  /** Initial selected model; a concrete attempt must not replace user intent. */
+  readonly requestedToolAuthorityRoute?: ReplyToolAuthorityRoute;
+  /** Current candidate proven automatic by the fallback owner; identity marks its attempt. */
+  readonly automaticFallbackRoute?: ReplyToolAuthorityRoute;
   /** Concrete provider/model route currently selected for this operation. */
   readonly toolAuthorityRoute?: ReplyToolAuthorityRoute;
   readonly phase: ReplyOperationPhase;
@@ -322,6 +351,7 @@ export type ReplyOperation = {
   markAcceptedSteeredInboundAudio(): void;
   /** Freeze the complete caller policy before a concrete backend attempt attaches. */
   bindToolAuthoritySnapshot(snapshot: ReplyToolAuthoritySnapshot): void;
+  setAutomaticFallbackRoute(route: ReplyToolAuthorityRoute | undefined): void;
   /** Project an inbound turn through the current concrete route; settled owners fail closed. */
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
   /** Prepare fingerprint and projection together for the final concrete attempt route. */

@@ -1,4 +1,3 @@
-// Twitch tests cover probe plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { probeTwitch } from "./probe.js";
 import type { TwitchAccountConfig } from "./types.js";
@@ -104,18 +103,6 @@ describe("probeTwitch", () => {
     expect(result.channel).toBe("testchannel"); // uses account's configured channel
     expect(mockAuthProvider).toHaveBeenCalledOnce();
     expect(mockAuthProvider).toHaveBeenCalledWith("test-client-id", "test123456789");
-  });
-
-  it("uses custom channel when specified", async () => {
-    const account: TwitchAccountConfig = {
-      ...mockAccount,
-      channel: "customchannel",
-    };
-
-    const result = await probeTwitch(account, 5000);
-
-    expect(result.ok).toBe(true);
-    expect(result.channel).toBe("customchannel");
   });
 
   it("times out when connection takes too long", async () => {

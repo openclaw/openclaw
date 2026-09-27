@@ -482,12 +482,13 @@ describe("personal publication authority and recovery", () => {
         });
       }
       if (state === "remote" || state === "reconciliation") {
-        seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+        const worker = {
           environmentId: "remote",
           sessionId: REQUEST.sessionId,
           ownerEpoch: 1,
-        });
-        const active = seedActivePlacement(placements, { environmentId: "remote", ownerEpoch: 1 });
+        };
+        seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), worker);
+        const active = await seedActivePlacement(placements, worker);
         selectedAction = { ...action, sessionId: active.sessionId, sessionKey: REQUEST.sessionKey };
         if (state === "reconciliation") {
           const claim = await placements.claimTurn({

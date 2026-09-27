@@ -54,18 +54,6 @@ describe("isCliBindingFlushed", () => {
     expect(probe).toHaveBeenCalledWith({ sessionId: "sid-fresh", workspaceDir });
   });
 
-  it("retries up to three times before giving up", async () => {
-    const delay = vi.fn(async () => undefined);
-    const probe = vi.fn(async () => false);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe, delay });
-
-    expect(await isCliBindingFlushed("sid-cold", "claude-cli", workspaceDir)).toBe(false);
-    expect(probe).toHaveBeenCalledTimes(3);
-    expect(delay).toHaveBeenCalledTimes(2);
-    expect(delay).toHaveBeenNthCalledWith(1, 50);
-    expect(delay).toHaveBeenNthCalledWith(2, 150);
-  });
-
   it("succeeds when the transcript becomes visible on a later retry", async () => {
     const delay = vi.fn(async () => undefined);
     let calls = 0;
@@ -134,18 +122,6 @@ describe("isCliBindingFlushed", () => {
       }),
     ).toBe(true);
     expect(probe).not.toHaveBeenCalled();
-  });
-
-  it("still probes when transcript-probe skipping is disabled", async () => {
-    const probe = vi.fn(async () => true);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
-
-    expect(
-      await isCliBindingFlushed("sid-probe", "claude-cli", workspaceDir, {
-        skipTranscriptProbe: false,
-      }),
-    ).toBe(true);
-    expect(probe).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -140,7 +140,7 @@ export async function createBoundWorker(
   const database = openOpenClawStateDatabase();
   const store = createWorkerSessionPlacementStore({ database });
   const session = { sessionId: "parent-session", agentId: "main", sessionKey: parentSessionKey };
-  let placement = store.startDispatch({ ...session, executionMode: "worker-turn" });
+  let placement = await store.startDispatch({ ...session, executionMode: "worker-turn" });
   placement = store.transition({
     sessionId: session.sessionId,
     from: "requested",

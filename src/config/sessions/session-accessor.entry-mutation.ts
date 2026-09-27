@@ -21,7 +21,10 @@ import {
   patchSessionEntryCore,
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
-import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
+import {
+  assertSessionCreationLabelAvailable,
+  readSessionCreationSnapshotInDatabase,
+} from "./session-accessor.sqlite-creation-read.js";
 import { createSessionEntryWithTranscriptInWorker } from "./session-accessor.sqlite-creation-worker.js";
 import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import {
@@ -30,7 +33,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import "./session-accessor.sqlite-entry.js";
-import { forkSessionTranscriptFromParent } from "./session-accessor.sqlite-parent-session.js";
+import "./session-accessor.sqlite-parent-session.js";
 import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   captureLifecycleDatabaseScope,
@@ -41,6 +44,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,
@@ -48,8 +52,6 @@ import type {
   SessionAbortTargetContext,
   SessionAbortTargetIdentity,
   SessionAbortTargetResult,
-  ForkSessionFromParentTranscriptResult,
-  ForkSessionFromParentTranscriptParams,
   SessionEntryCreateWithTranscriptContext,
   SessionEntryCreateWithTranscriptResult,
   SessionEntryCreateWithTranscriptPrepareResult,
@@ -66,14 +68,9 @@ export {
 } from "./session-accessor.sqlite-entry.js";
 export {
   forkSessionEntryFromParentTarget,
+  forkSessionTranscriptFromParent as forkSessionFromParentTranscript,
   resolveSessionParentForkDecision,
 } from "./session-accessor.sqlite-parent-session.js";
-
-export async function forkSessionFromParentTranscript(
-  params: ForkSessionFromParentTranscriptParams,
-): Promise<ForkSessionFromParentTranscriptResult> {
-  return await forkSessionTranscriptFromParent(params);
-}
 
 /** Capture source custody before authority or physical-owner discovery yields. */
 function captureSessionEntryDatabasePreparation(
@@ -414,15 +411,16 @@ export async function createSessionEntryWithTranscript<TError = string>(
   // The resolved path is a physical locator, not the original logical store selector.
   // Re-resolving a missing custom-agent suffix as a shared store would assign it to main.
   const creationDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const { normalizedKey, legacyKeys, labels, ...context } = readSessionCreationSnapshotInDatabase(
+  const { normalizedKey, legacyKeys, ...context } = readSessionCreationSnapshotInDatabase(
     creationDatabase,
     captured.sessionKey,
+    options.label,
   );
   return await withSessionEntryCreationPublication<SessionEntryCreateWithTranscriptResult<TError>>(
     { database: creationDatabase, agentId, sessionKey: normalizedKey, bind: options.bindCreation },
     async (operation) => {
       options.onPhase?.("entry");
-      const created = await createEntry({ ...context, isLabelInUse: (label) => labels.has(label) });
+      const created = await createEntry(context);
       if (!created.ok) {
         return { ok: false, error: created.error, phase: "entry" };
       }
@@ -463,9 +461,11 @@ export async function createSessionEntryWithTranscript<TError = string>(
         }
       };
       options.onPhase?.("transcript");
-      const transcriptError = withCommit
-        ? await withCommit(initializeTranscript)
-        : await initializeTranscript();
+      const transcriptError = created.transcriptEvents
+        ? undefined
+        : withCommit
+          ? await withCommit(initializeTranscript)
+          : await initializeTranscript();
       if (transcriptError !== undefined) {
         return {
           ok: false,
@@ -481,17 +481,26 @@ export async function createSessionEntryWithTranscript<TError = string>(
         removals: legacyKeys.map((sessionKey) => ({ sessionKey })),
         upserts: [{ sessionKey: normalizedKey, entry }],
         skipMaintenance: true,
-        ...(commitGuard ? { beforeCommitInTransaction: commitGuard } : {}),
+        beforeCommitInTransaction: () => {
+          commitGuard?.();
+          assertSessionCreationLabelAvailable(creationDatabase, normalizedKey, options.label);
+        },
         ...(withCommit ? { withCommit } : {}),
-        ...(ownerAssignment
-          ? {
-              afterFreshUpsertsInTransaction: (database) => {
-                if (!replaceSessionOwnerInTransaction(database, normalizedKey, ownerAssignment)) {
-                  throw new Error(`Session owner assignment lost its target: ${normalizedKey}`);
-                }
-              },
-            }
-          : {}),
+        afterFreshUpsertsInTransaction: (database) => {
+          if (created.transcriptEvents) {
+            appendTranscriptEventsInTransaction(
+              database,
+              { ...resolved, sessionKey: normalizedKey, sessionId: entry.sessionId },
+              created.transcriptEvents,
+            );
+          }
+          if (
+            ownerAssignment &&
+            !replaceSessionOwnerInTransaction(database, normalizedKey, ownerAssignment)
+          ) {
+            throw new Error(`Session owner assignment lost its target: ${normalizedKey}`);
+          }
+        },
         ...(onLifecycleCommitted
           ? { onLifecycleCommitted: () => onLifecycleCommitted(entry) }
           : {}),
@@ -560,13 +569,10 @@ export function mergeConcurrentReplySessionMetadata(params: {
 }
 
 export function createReplySessionInitializationRevision(entry: SessionEntry | undefined): string {
-  if (!entry) {
-    return JSON.stringify(null);
-  }
   // The guard only rejects a true session-identity rebind. Same-session
   // activity/context writes are merged below; comparing them here would reject
   // before the merge can preserve the concurrent metadata.
-  return JSON.stringify({ sessionId: entry.sessionId });
+  return JSON.stringify(entry ? { sessionId: entry.sessionId } : null);
 }
 
 /** Updates an existing entry only; returns null when the session is absent. */
@@ -625,13 +631,9 @@ export async function markSessionAbortTarget(params: {
           abortedLastRun: true,
           updatedAt: params.now?.() ?? Date.now(),
         };
-        applySessionAbortCutoff(
-          entry,
-          params.resolveAbortCutoff?.({
-            entry: { ...currentEntry },
-            sessionKey,
-          }),
-        );
+        const cutoff = params.resolveAbortCutoff?.({ entry: { ...currentEntry }, sessionKey });
+        entry.abortCutoffMessageSid = cutoff?.messageSid;
+        entry.abortCutoffTimestamp = cutoff?.timestamp;
         return entry;
       },
       {
@@ -658,21 +660,10 @@ export async function markSessionAbortTarget(params: {
     const fallbackTarget = resolution.target;
     if (fallbackTarget) {
       return {
-        entry: fallbackTarget.entry,
-        persisted: fallbackTarget.persisted,
-        sessionId: fallbackTarget.sessionId,
-        sessionKey: fallbackTarget.sessionKey,
+        ...fallbackTarget,
         persistenceError: formatErrorMessage(error),
       };
     }
     throw error;
   }
-}
-
-function applySessionAbortCutoff(
-  entry: Pick<SessionEntry, "abortCutoffMessageSid" | "abortCutoffTimestamp">,
-  cutoff: SessionAbortTargetCutoff | undefined,
-): void {
-  entry.abortCutoffMessageSid = cutoff?.messageSid;
-  entry.abortCutoffTimestamp = cutoff?.timestamp;
 }

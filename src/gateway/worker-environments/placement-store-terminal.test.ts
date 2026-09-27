@@ -44,52 +44,46 @@ describe("worker placement terminal persistence", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  function advanceToActive(
+  async function advanceToActive(
     identity: WorkerSessionPlacementIdentity = SESSION,
     environmentId = `environment-${identity.sessionId}`,
     executionMode: "worker-turn" | "remote-exec" = "worker-turn",
   ) {
-    let placement = store.startDispatch({ ...identity, executionMode });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId },
-    });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-        remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+    let placement = await store.startDispatch({ ...identity, executionMode });
+    for (const step of [
+      { to: "provisioning", patch: { environmentId } },
+      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+      {
+        to: "starting",
+        patch: {
+          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+          remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+        },
       },
-    });
+    ] as const) {
+      placement = store.transition({
+        sessionId: identity.sessionId,
+        from: placement.state,
+        expectedGeneration: placement.generation,
+        ...step,
+      });
+    }
     seedAttachedPlacementEnvironment(database, {
       environmentId,
       sessionId: identity.sessionId,
       ownerEpoch: 7,
     });
-    const active = store.transition({
+    placement = store.transition({
       sessionId: identity.sessionId,
       from: "starting",
       to: "active",
       expectedGeneration: placement.generation,
       patch: { activeOwnerEpoch: 7 },
     });
-    if (active.state !== "active") {
+    if (placement.state !== "active") {
       throw new Error("expected active worker placement");
     }
-    return active;
+    return placement;
   }
 
   async function pendingResult(identity = SESSION) {
@@ -114,7 +108,7 @@ describe("worker placement terminal persistence", () => {
   }
 
   it("records a clean terminal timestamp when reclaiming an accepted result", async () => {
-    const active = advanceToActive();
+    const active = await advanceToActive();
     const { claim } = await pendingResult();
     store.startWorkspaceResultDrain(claim);
     expect(() => store.completeWorkspaceResultAndReleaseTurn(claim)).toThrow(
@@ -139,8 +133,8 @@ describe("worker placement terminal persistence", () => {
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
 
-  it("records a clean terminal timestamp for an idle destroyed-worker reclaim", () => {
-    const active = advanceToActive();
+  it("records a clean terminal timestamp for an idle destroyed-worker reclaim", async () => {
+    const active = await advanceToActive();
     const draining = store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
@@ -171,7 +165,7 @@ describe("worker placement terminal persistence", () => {
   });
 
   it("atomically fails a pending result and preserves its bounded reason across restart", async () => {
-    advanceToActive();
+    await advanceToActive();
     const { claim, pending } = await pendingResult();
     const closedClaims: WorkerSessionTurnClaim[] = [];
     const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
@@ -203,7 +197,7 @@ describe("worker placement terminal persistence", () => {
   });
 
   it("atomically abandons an offline remote-exec result while preserving its exact active owner", async () => {
-    advanceToActive(SESSION, "paired-device-environment", "remote-exec");
+    await advanceToActive(SESSION, "paired-device-environment", "remote-exec");
     const { active, claim } = await pendingResult();
     const closedClaims: WorkerSessionTurnClaim[] = [];
     const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
@@ -252,7 +246,7 @@ describe("worker placement terminal persistence", () => {
     "does not abandon a %s workspace result after node transport loss",
     async (resultState) => {
       const executionMode = resultState === "worker-owned" ? "worker-turn" : "remote-exec";
-      advanceToActive(SESSION, "paired-device-environment", executionMode);
+      await advanceToActive(SESSION, "paired-device-environment", executionMode);
       const { active, claim } = await pendingResult();
       if (resultState === "accepted") {
         store.acceptWorkspaceResult(claim);
@@ -304,7 +298,7 @@ describe("worker placement terminal persistence", () => {
   );
 
   it("does not fail a pending result while its session operation is running", async () => {
-    advanceToActive();
+    await advanceToActive();
     const { claim, pending } = await pendingResult();
     const binding = claim;
     store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
@@ -345,13 +339,13 @@ describe("worker placement terminal persistence", () => {
 
   it("does not leak terminal diagnostics between sessions sharing an environment", async () => {
     const sharedEnvironmentId = "environment-shared";
-    advanceToActive(SESSION, sharedEnvironmentId);
+    await advanceToActive(SESSION, sharedEnvironmentId);
     const otherIdentity = {
       sessionId: "session-placement-terminal-other",
       agentId: "main",
       sessionKey: "agent:main:placement-terminal-other",
     };
-    const second = advanceToActive(otherIdentity, sharedEnvironmentId);
+    const second = await advanceToActive(otherIdentity, sharedEnvironmentId);
     const { pending } = await pendingResult();
 
     const failed = store.failWorkspaceResultAndReleaseTurn(
@@ -372,7 +366,7 @@ describe("worker placement terminal persistence", () => {
   });
 
   it("rolls back placement failure when pending-result removal aborts", async () => {
-    advanceToActive();
+    await advanceToActive();
     const { active, claim, pending } = await pendingResult();
     database.db.exec(`
       CREATE TRIGGER reject_pending_result_delete

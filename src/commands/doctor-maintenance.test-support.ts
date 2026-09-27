@@ -31,6 +31,7 @@ export function stoppedSystemdBinding(onPassiveRead: () => void): SystemdService
     KillMode: "control-group",
     TasksCurrent: Number("18446744073709551615"),
     MemoryCurrent: 0,
+    ControlGroup: "",
   };
   return {
     unit,

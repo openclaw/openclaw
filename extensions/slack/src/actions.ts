@@ -327,8 +327,7 @@ export async function listSlackReactions(
     timestamp: messageId,
     full: true,
   });
-  const message = result.message as SlackMessageSummary | undefined;
-  return message?.reactions ?? [];
+  return result.message?.reactions ?? [];
 }
 
 export async function sendSlackMessage(
@@ -431,7 +430,7 @@ export async function editSlackRenderedMessage(
   try {
     await client.chat.update(update);
   } catch (error) {
-    if (!hasSlackNativeDataBlock(blocks) || !isSlackInvalidBlocksError(error)) {
+    if (!hasNativeData || !isSlackInvalidBlocksError(error)) {
       throw error;
     }
     logVerbose("slack edit: native data block rejected, retrying with text fallback");

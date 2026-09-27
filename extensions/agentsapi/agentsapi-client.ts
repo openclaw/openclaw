@@ -4,10 +4,14 @@ import OpenAI from "openai";
 import type {
   AgentReasoningParam,
   AgentSessionEvent,
+  AgentToolParam,
   HostedEnvironmentFileParam,
 } from "openai/resources/beta/agents/agents";
+import type { EventCreateParams } from "openai/resources/beta/agents/sessions/events";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 
@@ -128,13 +132,6 @@ const eventSchema = z.looseObject({
 export type AgentsApiEvent = z.infer<typeof eventSchema>;
 export type AgentsApiItem = z.infer<typeof itemSchema>;
 export type AgentsApiFunctionCall = z.infer<typeof functionCallSchema>;
-export type AgentsApiFunctionDeclaration = {
-  type: "function";
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  defer_loading?: boolean;
-};
 export type AgentsApiInputFile = HostedEnvironmentFileParam.HostedEnvironmentFileParamInline;
 export type AgentsApiArtifact = z.infer<typeof artifactSchema>;
 export type AgentsApiFunctionResult =
@@ -188,7 +185,7 @@ export class AgentsApiClient {
     instructions: string,
     model: string,
     options?: {
-      functions?: AgentsApiFunctionDeclaration[];
+      functions?: AgentToolParam.AgentToolConfigParamFunction[];
       files?: AgentsApiInputFile[];
       reasoning?: AgentReasoningParam;
     },
@@ -279,24 +276,20 @@ export class AgentsApiClient {
     result: AgentsApiFunctionResult,
     signal: AbortSignal,
   ): Promise<void> {
-    await this.sessions.events.create(
+    await this.submitEvents(
       sessionId,
-      {
-        events: [
-          {
-            type: "agent.session.input.tool_result",
-            turn_id: call.turn_id,
-            call_id: call.call_id,
-            ...(result.success
-              ? { success: true, output: result.output }
-              : { success: false, error: result.error }),
-          },
-        ],
-        "Idempotency-Key": randomUUID(),
-      },
-      { signal },
+      [
+        {
+          type: "agent.session.input.tool_result",
+          turn_id: call.turn_id,
+          call_id: call.call_id,
+          ...(result.success
+            ? { success: true, output: result.output }
+            : { success: false, error: result.error }),
+        },
+      ],
+      signal,
     );
-    this.assertCurrent();
   }
 
   async turn(sessionId: string, turnId: string, signal: AbortSignal): Promise<Turn> {
@@ -459,32 +452,20 @@ export class AgentsApiClient {
   }
 
   async message(sessionId: string, text: string, signal: AbortSignal): Promise<void> {
-    await this.sessions.events.create(
+    await this.submitEvents(
       sessionId,
-      {
-        events: [
-          {
-            type: "agent.session.input.message",
-            input: [{ role: "user", content: [{ type: "input_text", text }] }],
-          },
-        ],
-        "Idempotency-Key": randomUUID(),
-      },
-      { signal },
+      [
+        {
+          type: "agent.session.input.message",
+          input: [{ role: "user", content: [{ type: "input_text", text }] }],
+        },
+      ],
+      signal,
     );
-    this.assertCurrent();
   }
 
   async cancel(sessionId: string, signal: AbortSignal): Promise<void> {
-    await this.sessions.events.create(
-      sessionId,
-      {
-        events: [{ type: "agent.session.input.cancel" }],
-        "Idempotency-Key": randomUUID(),
-      },
-      { signal },
-    );
-    this.assertCurrent();
+    await this.submitEvents(sessionId, [{ type: "agent.session.input.cancel" }], signal);
     // The input acknowledgement is not a settlement barrier for hosted work.
     while (true) {
       const session = await this.session(sessionId, signal);
@@ -514,6 +495,37 @@ export class AgentsApiClient {
       }
     }
     return items;
+  }
+
+  private async submitEvents(
+    sessionId: string,
+    events: EventCreateParams["events"],
+    signal: AbortSignal,
+  ): Promise<void> {
+    // Retry this submission, not a new turn: its payload and key must stay together.
+    const params: EventCreateParams = { events, "Idempotency-Key": randomUUID() };
+    await retryAsync(
+      async () => {
+        signal.throwIfAborted();
+        this.assertCurrent();
+        await this.sessions.events.create(sessionId, params, { signal });
+      },
+      {
+        attempts: 3,
+        minDelayMs: 500,
+        maxDelayMs: 5_000,
+        jitter: 0.25,
+        shouldRetry: (error) =>
+          !signal.aborted &&
+          error instanceof OpenAI.APIError &&
+          error.status !== undefined &&
+          error.status >= 500 &&
+          error.status < 600 &&
+          error.headers?.get("x-should-retry") !== "false",
+        sleep: (ms) => sleepWithAbort(ms, signal),
+      },
+    );
+    this.assertCurrent();
   }
 }
 

@@ -19,6 +19,10 @@ const native = vi.hoisted(() => ({
   systemctl: vi.fn<typeof import("../daemon/systemd-exec.js").execSystemctl>(),
   open: vi.fn<typeof import("../daemon/systemd-peer-native.js").openSystemdBroker>(),
 }));
+// The manager identity fixture runs Doctor outside its synthetic Gateway's service.
+vi.mock("../daemon/service-process-membership.js", () => ({
+  inspectServiceProcessMembershipSync: () => "outside",
+}));
 vi.mock("../gateway/call.js", async (original) => {
   const { gatewayMaintenanceResponse } = await import("../gateway/health-response.test-support.js");
   return {
@@ -190,6 +194,7 @@ async function repair(scenario: Scenario) {
         KillMode: { type: "s", data: "control-group" },
         TasksCurrent: { type: "t", data: running ? 1 : 0 },
         MemoryCurrent: { type: "t", data: 0 },
+        ControlGroup: { type: "s", data: "/system.slice/openclaw-gateway.service" },
         ExecStart: {
           type: "a(sasbttttuii)",
           data: [[command[0], command, false, 0, 0, 0, 0, 0, 0, 0]],

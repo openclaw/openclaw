@@ -33,9 +33,25 @@ describe("legacy node-host Doctor migration", () => {
     });
   });
 
-  function useStateDir(): { env: NodeJS.ProcessEnv; stateDir: string } {
+  function useStateDir() {
     const stateDir = tempDirs.make("openclaw-node-host-migration-");
-    return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, stateDir };
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    return {
+      env,
+      stateDir,
+      migrate: (
+        hooks: Pick<
+          Parameters<typeof migrateLegacyNodeHostConfig>[0],
+          "beforeClaim" | "beforeVerify" | "removeSource"
+        > = {},
+      ) =>
+        migrateLegacyNodeHostConfig({
+          detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
+          env,
+          stateDir,
+          ...hooks,
+        }),
+    };
   }
 
   function legacyConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -115,13 +131,9 @@ describe("legacy node-host Doctor migration", () => {
   });
 
   it("imports the complete snapshot, discards token, and removes node.json", async () => {
-    const { env, stateDir } = useStateDir();
+    const { env, stateDir, migrate } = useStateDir();
     const { sourcePath } = await writeLegacy(stateDir);
-    const result = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
-      env,
-      stateDir,
-    });
+    const result = await migrate();
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain("Migrated node-host config to shared SQLite state.");
@@ -143,7 +155,7 @@ describe("legacy node-host Doctor migration", () => {
   });
 
   it("normalizes a legacy empty gateway context path to unset", async () => {
-    const { env, stateDir } = useStateDir();
+    const { env, stateDir, migrate } = useStateDir();
     await writeLegacy(
       stateDir,
       legacyConfig({
@@ -157,18 +169,14 @@ describe("legacy node-host Doctor migration", () => {
       }),
     );
 
-    const result = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
-      env,
-      stateDir,
-    });
+    const result = await migrate();
 
     expect(result.warnings).toEqual([]);
     expect((await loadNodeHostConfig(env))?.gateway?.contextPath).toBeUndefined();
   });
 
   it("requires exclusive state ownership", async () => {
-    const { env, stateDir } = useStateDir();
+    const { env, stateDir, migrate } = useStateDir();
     const { sourcePath } = await writeLegacy(stateDir);
     const gatewayLock = await acquireGatewayLock({
       allowInTests: true,
@@ -182,16 +190,12 @@ describe("legacy node-host Doctor migration", () => {
     }
     let blocked: Awaited<ReturnType<typeof migrateLegacyNodeHostConfig>>;
     try {
-      blocked = await migrateLegacyNodeHostConfig({
-        detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
-        env,
-        stateDir,
-      });
+      blocked = await migrate();
     } finally {
       await gatewayLock.release();
     }
 
-    expect(blocked.warnings[0]).toContain("Gateway or another SQLite maintenance command");
+    expect(blocked.warnings[0]).toContain("gateway already running");
     expect(readCanonicalRow(env)).toBeUndefined();
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
@@ -229,13 +233,9 @@ describe("legacy node-host Doctor migration", () => {
       "legacy node-host token must be a string when present",
     ],
   ])("rejects strict legacy shape: %s", async (_label, value, message) => {
-    const { env, stateDir } = useStateDir();
+    const { env, stateDir, migrate } = useStateDir();
     const { sourcePath } = await writeLegacy(stateDir, value);
-    const result = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
-      env,
-      stateDir,
-    });
+    const result = await migrate();
 
     expect(result.warnings[0]).toBe(`Failed reading legacy node-host state: Error: ${message}`);
     expect(readCanonicalRow(env)).toBeUndefined();
@@ -244,7 +244,7 @@ describe("legacy node-host Doctor migration", () => {
   });
 
   it("keeps a newer canonical snapshot with the same node id", async () => {
-    const { env, stateDir } = useStateDir();
+    const { env, stateDir, migrate } = useStateDir();
     const { mtimeMs, sourcePath } = await writeLegacy(stateDir);
     seedCanonical({
       env,
@@ -252,11 +252,7 @@ describe("legacy node-host Doctor migration", () => {
       gatewayHost: "newer.example",
       updatedAtMs: mtimeMs + 1_000,
     });
-    const result = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
-      env,
-      stateDir,
-    });
+    const result = await migrate();
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain("Kept newer canonical node-host SQLite state.");
@@ -271,7 +267,7 @@ describe("legacy node-host Doctor migration", () => {
   });
 
   it("replaces an older canonical snapshot from the newer file", async () => {
-    const { env, stateDir } = useStateDir();
+    const { env, stateDir, migrate } = useStateDir();
     const { mtimeMs } = await writeLegacy(stateDir);
     seedCanonical({
       env,
@@ -279,11 +275,7 @@ describe("legacy node-host Doctor migration", () => {
       gatewayHost: "older.example",
       updatedAtMs: mtimeMs - 1,
     });
-    const result = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
-      env,
-      stateDir,
-    });
+    const result = await migrate();
 
     expect(result.warnings).toEqual([]);
     expect(readCanonicalRow(env)).toMatchObject({
@@ -303,7 +295,7 @@ describe("legacy node-host Doctor migration", () => {
       "diverges at the same timestamp",
     ],
   ])("restores source on conflict: %s", async (_label, setup, message) => {
-    const { env, stateDir } = useStateDir();
+    const { env, stateDir, migrate } = useStateDir();
     const { mtimeMs, sourcePath } = await writeLegacy(stateDir);
     seedCanonical({
       env,
@@ -311,11 +303,7 @@ describe("legacy node-host Doctor migration", () => {
       displayName: "Divergent",
       updatedAtMs: setup.equalTimestamp ? mtimeMs : mtimeMs + 1,
     });
-    const result = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
-      env,
-      stateDir,
-    });
+    const result = await migrate();
 
     expect(result.warnings[0]).toContain(message);
     expect(fs.existsSync(sourcePath)).toBe(true);
@@ -325,13 +313,7 @@ describe("legacy node-host Doctor migration", () => {
   it("fails before mutation when the source changes after parsing or before claim", async () => {
     const first = useStateDir();
     const firstLegacy = await writeLegacy(first.stateDir);
-    const afterParse = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({
-        stateDir: first.stateDir,
-        doctorOnlyStateMigrations: true,
-      }),
-      env: first.env,
-      stateDir: first.stateDir,
+    const afterParse = await first.migrate({
       beforeVerify: () => fs.appendFileSync(firstLegacy.sourcePath, "\n"),
     });
     expect(afterParse.warnings[0]).toContain("source changed after Doctor loaded it");
@@ -339,13 +321,7 @@ describe("legacy node-host Doctor migration", () => {
 
     const second = useStateDir();
     const secondLegacy = await writeLegacy(second.stateDir);
-    const beforeClaim = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({
-        stateDir: second.stateDir,
-        doctorOnlyStateMigrations: true,
-      }),
-      env: second.env,
-      stateDir: second.stateDir,
+    const beforeClaim = await second.migrate({
       beforeClaim: () => fs.appendFileSync(secondLegacy.sourcePath, "\n"),
     });
     expect(beforeClaim.warnings[0]).toContain("source changed before Doctor could claim it");
@@ -354,12 +330,9 @@ describe("legacy node-host Doctor migration", () => {
   });
 
   it("retains a fixed claim on cleanup failure and retries idempotently", async () => {
-    const { env, stateDir } = useStateDir();
+    const { env, stateDir, migrate } = useStateDir();
     const { sourcePath } = await writeLegacy(stateDir);
-    const first = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
-      env,
-      stateDir,
+    const first = await migrate({
       removeSource: () => {
         throw new Error("simulated unlink failure");
       },
@@ -368,11 +341,7 @@ describe("legacy node-host Doctor migration", () => {
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(true);
     expect(readCanonicalRow(env)?.value.nodeId).toBe("legacy-node-id");
 
-    const retry = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
-      env,
-      stateDir,
-    });
+    const retry = await migrate();
     expect(retry.warnings).toEqual([]);
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
     expect(readCanonicalRow(env)?.value.nodeId).toBe("legacy-node-id");
@@ -384,14 +353,7 @@ describe("legacy node-host Doctor migration", () => {
     await fsp.writeFile(outside, JSON.stringify(legacyConfig()), "utf8");
     const symlinkPath = path.join(symlinkCase.stateDir, "node.json");
     await fsp.symlink(outside, symlinkPath);
-    const symlinkResult = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({
-        stateDir: symlinkCase.stateDir,
-        doctorOnlyStateMigrations: true,
-      }),
-      env: symlinkCase.env,
-      stateDir: symlinkCase.stateDir,
-    });
+    const symlinkResult = await symlinkCase.migrate();
     expect(symlinkResult.warnings[0]).toContain("Failed reading legacy node-host state");
 
     const hardlinkCase = useStateDir();
@@ -399,36 +361,19 @@ describe("legacy node-host Doctor migration", () => {
     await fsp.writeFile(hardlinkOutside, JSON.stringify(legacyConfig()), "utf8");
     const hardlinkPath = path.join(hardlinkCase.stateDir, "node.json");
     await fsp.link(hardlinkOutside, hardlinkPath);
-    const hardlinkResult = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({
-        stateDir: hardlinkCase.stateDir,
-        doctorOnlyStateMigrations: true,
-      }),
-      env: hardlinkCase.env,
-      stateDir: hardlinkCase.stateDir,
-    });
+    const hardlinkResult = await hardlinkCase.migrate();
     expect(hardlinkResult.warnings[0]).toContain("Failed reading legacy node-host state");
 
     const oversizedCase = useStateDir();
     await fsp.writeFile(path.join(oversizedCase.stateDir, "node.json"), "x".repeat(65 * 1024));
-    const oversizedResult = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({
-        stateDir: oversizedCase.stateDir,
-        doctorOnlyStateMigrations: true,
-      }),
-      env: oversizedCase.env,
-      stateDir: oversizedCase.stateDir,
-    });
+    const oversizedResult = await oversizedCase.migrate();
     expect(oversizedResult.warnings[0]).toContain("Failed reading legacy node-host state");
   });
 
   it("fails cleanup when an old writer recreates node.json", async () => {
-    const { env, stateDir } = useStateDir();
+    const { env, stateDir, migrate } = useStateDir();
     const { sourcePath } = await writeLegacy(stateDir);
-    const result = await migrateLegacyNodeHostConfig({
-      detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
-      env,
-      stateDir,
+    const result = await migrate({
       removeSource: async (claimPath) => {
         await fsp.rm(claimPath);
         await fsp.writeFile(sourcePath, JSON.stringify(legacyConfig()), "utf8");

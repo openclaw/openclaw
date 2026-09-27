@@ -202,19 +202,6 @@ describe("browser action input batch command", () => {
     expect(getLastActionBody()).toMatchObject({ kind: "batch", actions: SAMPLE_ACTIONS });
   });
 
-  it("reads actions from stdin when --actions-file is -", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
-    const program = createActionInputProgram();
-
-    await program.parseAsync(["browser", "batch", "--actions-file", "-"], { from: "user" });
-
-    expect(mocks.readActionsPayload).toHaveBeenCalledWith({
-      actions: undefined,
-      actionsFile: "-",
-    });
-    expect(getLastActionBody()).toMatchObject({ kind: "batch", actions: SAMPLE_ACTIONS });
-  });
-
   it("rejects conflicting inline and file actions before reading either source", async () => {
     const program = createActionInputProgram();
 

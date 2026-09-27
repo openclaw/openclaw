@@ -619,6 +619,7 @@ export function createSessionRosterObservations(
     },
     observeReadRows,
     observeFields: provenance.observeFields,
+    fieldNames: provenance.fieldNames,
     fieldObservation: provenance.fieldObservation,
     stageRunTerminal: createSessionRunTerminalStaging({
       readState: host.readState,

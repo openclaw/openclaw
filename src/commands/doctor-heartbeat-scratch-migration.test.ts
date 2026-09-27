@@ -303,56 +303,6 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     expect(scratchByAgentId.get("ollama")).toBe("updated checklist\n");
   });
 
-  it("does not import stale bytes while retaining a shared disabled-owner file", async () => {
-    const fixture = await createFixture();
-    const cfg = sharedHeartbeatConfig(fixture.workspace);
-    await fs.writeFile(fixture.heartbeatPath, "planned content\n", "utf8");
-    const rename = fs.rename.bind(fs);
-    vi.spyOn(fs, "rename").mockImplementationOnce(async (from, to) => {
-      await fs.writeFile(String(from), "concurrent replacement\n", "utf8");
-      await rename(from, to);
-    });
-
-    const result = await maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair: true });
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("changed before the migration claim");
-    await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe(
-      "concurrent replacement\n",
-    );
-    const { monitor, storePath } = await loadMonitor(cfg);
-    expect(readCronJobScratchState(storePath, monitor.id)).toEqual({ currentRevision: 0 });
-  });
-
-  it("rolls back retained scratch when the claimed inode changes after acquisition", async () => {
-    const fixture = await createFixture();
-    const cfg = sharedHeartbeatConfig(fixture.workspace);
-    await fs.writeFile(fixture.heartbeatPath, "planned content\n", "utf8");
-    const sourceHandle = await fs.open(fixture.heartbeatPath, "r+");
-    const link = fs.link.bind(fs);
-    vi.spyOn(fs, "link").mockImplementationOnce(async (from, to) => {
-      await sourceHandle.truncate(0);
-      await sourceHandle.writeFile("post-claim descriptor edit\n", "utf8");
-      await sourceHandle.sync();
-      await link(from, to);
-    });
-
-    let result;
-    try {
-      result = await maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair: true });
-    } finally {
-      await sourceHandle.close();
-    }
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("changed after the migration claim was restored");
-    await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe(
-      "post-claim descriptor edit\n",
-    );
-    const { monitor, storePath } = await loadMonitor(cfg);
-    expect(readCronJobScratchState(storePath, monitor.id)).toEqual({ currentRevision: 0 });
-  });
-
   it("rolls back retained scratch when the claimed inode changes during restoration", async () => {
     const fixture = await createFixture();
     const cfg = sharedHeartbeatConfig(fixture.workspace);

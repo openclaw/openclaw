@@ -2,6 +2,7 @@ import type {
   CreatedDetachedTaskRun,
   DetachedTaskTerminalState,
 } from "./detached-task-runtime-contract.js";
+import type { CronTaskMaintenanceInput } from "./task-cron-maintenance-policy.js";
 import type {
   InitialTaskFlowCreateInput,
   InitialTaskFlowCreateResult,
@@ -29,6 +30,10 @@ import type {
 } from "./task-registry.types.js";
 
 export type TaskInitialWorkerOperations = {
+  "tasks.maintainCron": {
+    input: CronTaskMaintenanceInput;
+    output: TaskRecordTransitionReceipt | null;
+  };
   "tasks.applyRetention": { input: TaskRetentionInput; output: TaskRetentionWriteResult };
   "tasks.transitionRunRow": {
     input: Extract<TaskWorkerTransitionInput, { kind: "state" | "delivery" }>;

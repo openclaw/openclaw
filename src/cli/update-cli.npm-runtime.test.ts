@@ -5,6 +5,7 @@ import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
+import { quoteCliArg } from "./quote-cli-arg.js";
 import {
   commandCalls,
   doctorCommandCall,
@@ -462,7 +463,18 @@ describe("update-cli", () => {
       const serviceNode = currentRunner ? process.execPath : fixture.serviceNode;
       const replacementNode = path.join(tempDirs.make("replacement-runtime-"), "bin", "node");
       await fs.mkdir(path.dirname(replacementNode), { recursive: true });
-      await fs.copyFile(process.execPath, replacementNode);
+      // Preserve the host runtime's dynamic-library paths when metadata probes execute it.
+      if (process.platform === "win32") {
+        await fs.copyFile(process.execPath, replacementNode);
+      } else {
+        await fs.writeFile(
+          replacementNode,
+          `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`,
+          {
+            mode: 0o755,
+          },
+        );
+      }
       mockPackageInstallStatus(fixture.root);
       primeServiceCommand([serviceNode, fixture.entrypoint, "gateway"]);
       serviceLoaded.mockResolvedValue(true);

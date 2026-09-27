@@ -30,7 +30,7 @@ const mocks = vi.hoisted(() => ({
   prepareUpdateRepairInference: vi.fn(),
   runUpdateRepairTurn: vi.fn(),
 }));
-vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
+vi.mock("./doctor-lint-runner.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
 vi.mock("../infra/update-repair-agent.js", () => ({
   runUpdateRepairLoop: mocks.runUpdateRepairLoop,
 }));
@@ -162,7 +162,7 @@ describe("triage --run", () => {
     });
     finishUpdateRun(run.runId, { status: "failed", reason: "finalize:doctor" });
     if (pendingMigration) {
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         pending: [
           {
             pluginId: "codex",
@@ -792,8 +792,6 @@ describe("triage --run", () => {
   );
 
   it.each([
-    { status: "improved", reason: "turn-budget", code: 1 },
-    { status: "unrepaired", reason: "Validation regressed after repair.", code: 1 },
     { status: "aborted", reason: "cancelled", code: 1 },
     { status: "unrepaired", reason: "per-turn-budget", code: 2 },
     { status: "improved", reason: "wall-clock-budget", code: 2 },

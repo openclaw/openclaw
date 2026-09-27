@@ -93,16 +93,15 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       ownerAgentId,
       config: cfg,
       path: opts.webhookPath,
-      port: opts.webhookPort,
+      legacyWebhook: opts.legacyWebhook ?? account.config.legacyWebhook,
       secret: opts.webhookSecret ?? account.config.webhookSecret,
-      host: opts.webhookHost ?? account.config.webhookHost,
       runtime: opts.runtime as RuntimeEnv,
       buildContext: pluginChannelRuntime?.inbound.buildContext,
       // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
       dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
       fetch: proxyFetch,
       abortSignal: opts.abortSignal,
-      publicUrl: opts.webhookUrl,
+      publicUrl: opts.webhookUrl ?? account.config.webhookUrl,
       webhookCertPath: opts.webhookCertPath,
       setStatus: opts.setStatus,
     });
@@ -165,7 +164,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
               );
             }
             opts.abortSignal?.throwIfAborted();
-            await queue.purge();
+            await queue.purge({ signal: opts.abortSignal });
           }
           // An abort keeps the old identity so the next start re-detects and repeats the purge.
           opts.abortSignal?.throwIfAborted();

@@ -1,5 +1,5 @@
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Qa Channel plugin module implements channel base behavior.
 import {
   listQaChannelAccountIds,
   resolveDefaultQaChannelAccountId,
@@ -7,7 +7,6 @@ import {
   type ResolvedQaChannelAccount,
 } from "./accounts.js";
 import { qaChannelPluginConfigSchema } from "./config-schema.js";
-import type { ChannelPlugin } from "./runtime-api.js";
 import { applyQaSetup, type QaChannelSetupInput } from "./setup.js";
 import type { CoreConfig } from "./types.js";
 

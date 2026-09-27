@@ -59,7 +59,6 @@ export type TelegramIngressWorkerOptions = {
   token: string;
   accountId: string;
   initialUpdateId: number | null;
-  spoolDir: string;
   apiRoot?: string;
   timeoutSeconds?: number;
   network?: TelegramNetworkConfig;

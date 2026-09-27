@@ -1994,14 +1994,6 @@ const READ_ONLY_RPC_PROBES = [
 
 const AUTHORIZATION_RPC_PROBES = [{ method: "skills.bins", params: {} }];
 
-export function listKitchenSinkToolInvokeNames() {
-  return KITCHEN_SINK_TOOL_INVOKES.map((entry) => entry.name);
-}
-
-export function listKitchenSinkReadOnlyRpcProbeNames() {
-  return READ_ONLY_RPC_PROBES.map((entry) => entry.method);
-}
-
 export function listKitchenSinkAuthorizationRpcProbeNames() {
   return AUTHORIZATION_RPC_PROBES.map((entry) => entry.method);
 }

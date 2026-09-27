@@ -17,11 +17,7 @@ vi.mock("./cli-output.js", () => ({
   runIMessageCliJsonCommand: runIMessageCliJsonCommandMock,
 }));
 
-// A dead imsg helper can emit an async `error` on any of its stdio streams. On
-// a raw EventEmitter an unhandled `error` throws synchronously, which in the
-// real gateway surfaces as an uncaughtException and crashes the process (#75438
-// covered stdin only). The mock child mirrors that stdio shape so we can assert
-// each stream's `error` is caught and routed to failAll.
+// Raw EventEmitters expose unhandled stdio errors that would crash the Gateway.
 type MockStream = EventEmitter & { errored: Error | null };
 type MockChild = EventEmitter & {
   stdout: MockStream;
@@ -39,8 +35,6 @@ function createMockChild(): MockChild {
   child.stdout = Object.assign(new EventEmitter(), { errored: null });
   child.stderr = Object.assign(new EventEmitter(), { errored: null });
   const stdin = Object.assign(new EventEmitter(), { errored: null }) as MockChild["stdin"];
-  // Resolve every write cleanly so the pending request only settles via the
-  // stream error path under test.
   stdin.write = (_line, cb) => {
     cb?.(null);
     return true;
@@ -53,6 +47,10 @@ function createMockChild(): MockChild {
     return true;
   });
   return child;
+}
+
+function emitRpcError(child: MockChild, error: { code: number; message: string; data?: unknown }) {
+  child.stdout.emit("data", Buffer.from(`${JSON.stringify({ jsonrpc: "2.0", id: 1, error })}\n`));
 }
 
 let IMessageRpcClient: typeof import("./client.js").IMessageRpcClient;
@@ -109,7 +107,6 @@ describe("IMessageRpcClient LF framing", () => {
 
   it.each([
     ["U+2028", "\u2028"],
-    ["U+2029", "\u2029"],
     ["four-byte UTF-8", "\u{1f680}"],
   ])("preserves split %s inside an LF-delimited response", async (_, separator) => {
     const pending = client.request("chats.list");
@@ -297,8 +294,15 @@ describe("IMessageRpcClient child stream error handling", () => {
     await client.stop();
   });
 
-  it("preserves structured JSON-RPC error data for send callers", async () => {
-    const client = new IMessageRpcClient({ cliPath: "imsg" });
+  it("preserves structured send errors without invalidating a healthy bridge", async () => {
+    const cliPath = "/tmp/imsg-stall-preserved";
+    privateApiStatus.setCachedIMessagePrivateApiStatus(cliPath, {
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      rpcMethods: [],
+    });
+    const client = new IMessageRpcClient({ cliPath });
     await client.start();
     const data = {
       retry_safe: true,
@@ -309,20 +313,7 @@ describe("IMessageRpcClient child stream error handling", () => {
 
     const pending = client.request("send", {}, { timeoutMs: 0 });
     pending.catch(() => {});
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          error: {
-            code: -32603,
-            message: "Delivery failed before dispatch",
-            data,
-          },
-        })}\n`,
-      ),
-    );
+    emitRpcError(child, { code: -32603, message: "Delivery failed before dispatch", data });
 
     const error = await pending.catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(IMessageRpcRequestError);
@@ -333,9 +324,11 @@ describe("IMessageRpcClient child stream error handling", () => {
       message:
         'Delivery failed before dispatch: code=-32603 {\n  "retry_safe": true,\n  "disposition": "not_started",\n  "transport": "bridge_v2",\n  "operation": "send-message"\n}',
     });
+    expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)?.available).toBe(true);
 
     child.emit("close", 0, null);
     await client.stop();
+    privateApiStatus.invalidateCachedIMessagePrivateApiStatus(cliPath);
   });
 
   it("finishes graceful shutdown without scheduling escalation after synchronous close", async () => {
@@ -401,26 +394,6 @@ describe("IMessageRpcClient child stream error handling", () => {
       }
       await client.stop();
     }
-  });
-
-  it("promotes a complete Full Disk Access diagnostic", async () => {
-    const runtimeError = vi.fn();
-    const client = new IMessageRpcClient({
-      cliPath: "imsg",
-      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
-    });
-    await client.start();
-
-    const pending = client.request("ping", {}, { timeoutMs: 0 });
-    pending.catch(() => {});
-    child.stderr.emit("data", Buffer.from("notice Full Disk Access denied for chat.db\n"));
-    child.emit("close", 1, null);
-
-    await expect(pending).rejects.toThrow(
-      "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
-    );
-    expect(runtimeError).toHaveBeenCalledOnce();
-    expect(runtimeError.mock.calls[0]?.[0]).not.toContain("�");
   });
 
   it("preserves a split UTF-8 Full Disk Access diagnostic from a real child", async () => {
@@ -571,8 +544,6 @@ describe("IMessageRpcClient child stream error handling", () => {
 describe("IMessageRpcClient bridge-stall cache invalidation", () => {
   let child: MockChild;
 
-  // Not `as const`: rpcMethods would widen to `readonly []`, which is not
-  // assignable to the mutable string[] on IMessagePrivateApiStatus.
   const seeded: IMessagePrivateApiStatus = {
     available: true,
     v2Ready: true,
@@ -593,49 +564,6 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     vi.unstubAllEnvs();
   });
 
-  // A successful probe is cached with expiresAt=0 and therefore never expires.
-  // Before this path existed, a bridge that wedged after that probe was never
-  // re-evaluated: Messages.app stayed alive with the dylib mapped, so nothing
-  // else could notice, and every later send was dispatched into a dead bridge
-  // and failed with an opaque -32603 instead of the actionable
-  // "run imsg launch" guidance. Dropping the entry here makes the next action
-  // re-probe. This test fails without the invalidation in request().
-  it("discards the cached verdict when imsg reports its own wait timeout", async () => {
-    const cliPath = "/tmp/imsg-stall-invalidation";
-    privateApiStatus.setCachedIMessagePrivateApiStatus(cliPath, { ...seeded });
-    expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)?.available).toBe(true);
-
-    const client = new IMessageRpcClient({ cliPath });
-    await client.start();
-    const pending = client.request("send", {}, { timeoutMs: 0 });
-    pending.catch(() => {});
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          error: {
-            code: -32603,
-            message: "Timed out waiting for response to 'send-message'",
-          },
-        })}\n`,
-      ),
-    );
-
-    const error = await pending.catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(IMessageRpcRequestError);
-    expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)).toBeUndefined();
-    expect(runIMessageCliJsonCommandMock).toHaveBeenCalledWith({
-      cliPath,
-      args: ["launch"],
-      timeoutMs: 30_000,
-    });
-
-    child.emit("close", 0, null);
-    await client.stop();
-  });
-
   it("logs recovery failure while preserving the original structured error", async () => {
     const recoveryError = new Error("launch stderr stream failed");
     const runtimeError = vi.fn();
@@ -647,20 +575,11 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     await client.start();
     const pending = client.request("send", {}, { timeoutMs: 0 });
     pending.catch(() => {});
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          error: {
-            code: -32603,
-            message: "Timed out waiting for response to 'send-message'",
-            data: { disposition: "may_have_completed", retry_safe: false },
-          },
-        })}\n`,
-      ),
-    );
+    emitRpcError(child, {
+      code: -32603,
+      message: "Timed out waiting for response to 'send-message'",
+      data: { disposition: "may_have_completed", retry_safe: false },
+    });
 
     const error = await pending.catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(IMessageRpcRequestError);
@@ -680,84 +599,47 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     await client.stop();
   });
 
-  // actions.ts caches the probe under the raw `account.config.cliPath` and
-  // hands that same unexpanded string to this client, which then expands it for
-  // spawning. Invalidating under the expanded path would miss the entry for any
-  // `~`-relative cliPath and silently do nothing, which is the exact failure
-  // mode this change exists to remove.
-  it("invalidates under the configured cli path, not the expanded one", async () => {
+  // The cache uses the configured path, while spawning expands it. Recovery
+  // must evict that same key and preserve send reconciliation's structured data.
+  it.each([
+    { name: "legacy errors without metadata", data: undefined },
+    { name: "structured errors", data: { disposition: "not_started", retry_safe: true } },
+  ])("invalidates the configured bridge cache and preserves $name", async ({ data }) => {
     const cliPath = "~/imsg-stall-tilde/imsg";
     privateApiStatus.setCachedIMessagePrivateApiStatus(cliPath, { ...seeded });
+    expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)?.available).toBe(true);
 
     const client = new IMessageRpcClient({ cliPath });
     await client.start();
     const pending = client.request("send", {}, { timeoutMs: 0 });
     pending.catch(() => {});
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          error: {
-            code: -32603,
-            message: "Timed out waiting for response to 'send-message'",
-          },
-        })}\n`,
-      ),
-    );
-
-    await pending.catch((cause: unknown) => cause);
-    expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)).toBeUndefined();
-
-    child.emit("close", 0, null);
-    await client.stop();
-  });
-
-  // Normal outbound sends never read the private-API cache (send.ts builds a
-  // client and dispatches directly), so eviction alone would leave them
-  // repeating an opaque -32603. The decorated message is what reaches the
-  // operator on the very first failed send.
-  it("appends actionable guidance to a stalled send", async () => {
-    const client = new IMessageRpcClient({ cliPath: "/tmp/imsg-stall-guidance" });
-    await client.start();
-    const pending = client.request("send", {}, { timeoutMs: 0 });
-    pending.catch(() => {});
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          error: {
-            code: -32603,
-            message: "Timed out waiting for response to 'send-message'",
-            data: { disposition: "not_started", retry_safe: true },
-          },
-        })}\n`,
-      ),
-    );
+    emitRpcError(child, {
+      code: -32603,
+      message: "Timed out waiting for response to 'send-message'",
+      data,
+    });
 
     const error = (await pending.catch((cause: unknown) => cause)) as Error;
+    expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)).toBeUndefined();
+    expect(runIMessageCliJsonCommandMock).toHaveBeenCalledWith({
+      cliPath,
+      args: ["launch"],
+      timeoutMs: 30_000,
+    });
     expect(error.message).toContain("Timed out waiting for response to 'send-message'");
     expect(error.message).toContain("imsg launch");
     expect(error.message).toContain("channels status --probe");
-    // send.ts reconciles delayed sends off these, so decorating must not drop
-    // the class, code, or data.
     expect(error).toBeInstanceOf(IMessageRpcRequestError);
     expect(error).toMatchObject({
       code: -32603,
-      data: { disposition: "not_started", retry_safe: true },
+      data,
     });
 
     child.emit("close", 0, null);
     await client.stop();
   });
 
-  // A client-side timeout means our wrapper gave up, not that the bridge is
-  // dead, so it is left completely alone: no eviction, no `imsg launch`
-  // guidance, and the exact wording send.ts matches with
-  // /imsg rpc timeout \(send\)/i preserved.
+  // send.ts matches this timeout wording; a wrapper deadline is not a bridge stall.
   it("leaves a client-side timeout undecorated", async () => {
     vi.useFakeTimers();
     const client = new IMessageRpcClient({ cliPath: "/tmp/imsg-stall-clienttimeout" });
@@ -773,37 +655,5 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
 
     child.emit("close", 0, null);
     await client.stop();
-  });
-
-  // The cache is what keeps the bridge off the hot path, so an ordinary
-  // rejection must not cost every later send a re-probe.
-  it("keeps the cached verdict when the request is merely rejected", async () => {
-    const cliPath = "/tmp/imsg-stall-preserved";
-    privateApiStatus.setCachedIMessagePrivateApiStatus(cliPath, { ...seeded });
-
-    const client = new IMessageRpcClient({ cliPath });
-    await client.start();
-    const pending = client.request("send", {}, { timeoutMs: 0 });
-    pending.catch(() => {});
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          error: {
-            code: -32602,
-            message: 'Unknown target "nobody" for iMessage',
-          },
-        })}\n`,
-      ),
-    );
-
-    await pending.catch((cause: unknown) => cause);
-    expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)?.available).toBe(true);
-
-    child.emit("close", 0, null);
-    await client.stop();
-    privateApiStatus.invalidateCachedIMessagePrivateApiStatus(cliPath);
   });
 });

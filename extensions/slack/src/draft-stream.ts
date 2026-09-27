@@ -78,6 +78,11 @@ export function createSlackDraftStream(params: {
 
   const normalizeUpdate = (update: SlackDraftStreamUpdate) =>
     typeof update === "string" ? { text: update } : update;
+  const clearMessageId = () => {
+    streamMessage = undefined;
+    lastVisibleUpdate = undefined;
+    lastSentKey = "";
+  };
 
   const sendOrEditStreamMessage = async (pending: SlackDraftStreamUpdate) => {
     if (streamState.stopped) {
@@ -184,11 +189,7 @@ export function createSlackDraftStream(params: {
     emptyValue: "",
     isEmpty: (value) => !normalizeUpdate(value).text.trim(),
     readMessageId: () => streamMessage,
-    clearMessageId: () => {
-      streamMessage = undefined;
-      lastVisibleUpdate = undefined;
-      lastSentKey = "";
-    },
+    clearMessageId,
     isValidMessageId: (value): value is SlackDraftMessage =>
       typeof value === "object" && value !== null,
     deleteMessage: async (message) => {
@@ -243,9 +244,7 @@ export function createSlackDraftStream(params: {
           await discardPendingAndStopTracking();
           if (generation === streamGeneration) {
             clearingMessage = streamMessage;
-            streamMessage = undefined;
-            lastVisibleUpdate = undefined;
-            lastSentKey = "";
+            clearMessageId();
           }
         }
         cleanupGeneration = generation;
@@ -275,9 +274,7 @@ export function createSlackDraftStream(params: {
       streamMessage.detachedByHuman = reason === "human";
       void lifecycle.retire(streamMessage, { defer: true });
     }
-    streamMessage = undefined;
-    lastVisibleUpdate = undefined;
-    lastSentKey = "";
+    clearMessageId();
     loop.resetPending();
   };
 

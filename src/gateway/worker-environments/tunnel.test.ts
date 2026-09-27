@@ -15,40 +15,103 @@ import {
 } from "./tunnel.test-support.js";
 
 describe("worker tunnel manager", () => {
-  it("does not materialize a legacy resolver's late identity after the initializing tunnel stops", async () => {
-    const entered = deferred<void>();
-    const release = deferred<void>();
-    const fake = fakeRunner();
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const writeFile = vi.spyOn(fs, "writeFile");
-    const starting = manager.start({
-      environmentId: "worker:late-identity",
-      ownerEpoch: 1,
-      bundleHash: "a".repeat(64),
-      ssh: SSH,
-      resolveIdentity: async () => {
-        entered.resolve();
-        await release.promise;
-        return { kind: "material", contents: "synthetic-worker-key" };
-      },
-    });
-    const rejected = expect(starting).rejects.toThrow("no longer connected");
-    try {
+  it.each(["connected", "initializing"] as const)(
+    "rejects a revoked caller reusing a %s tunnel without stopping its owner",
+    async (phase) => {
+      const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();
+      const entered = deferred<void>();
+      const fake = fakeRunner();
+      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const request = {
+        environmentId: "worker:shared-authority",
+        ownerEpoch: 1,
+        bundleHash: "a".repeat(64),
+        ssh: SSH,
+        resolveIdentity: () => {
+          entered.resolve();
+          return identity.promise;
+        },
+      };
+      const first = manager.start(request);
       await entered.promise;
-      const stopping = manager.stop("worker:late-identity", 1);
-      release.resolve();
-      await Promise.all([rejected, stopping]);
-      expect(writeFile).not.toHaveBeenCalled();
-      expect(fake.runs).toEqual([]);
-      expect(fake.starts).toEqual([]);
-      expect(manager.status("worker:late-identity")).toBe("stopped");
-    } finally {
-      release.resolve();
-      await starting.catch(() => undefined);
-      await manager.stopAll();
-      writeFile.mockRestore();
-    }
-  });
+      if (phase === "connected") {
+        identity.resolve(await resolveIdentity());
+        await first;
+      }
+      let authorized = phase === "initializing";
+      const closed = new Error("joining source closed");
+      const joining = manager.start({
+        ...request,
+        authorize: () => {
+          if (!authorized) {
+            throw closed;
+          }
+        },
+      });
+      const rejected = expect(joining).rejects.toBe(closed);
+      authorized = false;
+      identity.resolve(await resolveIdentity());
+      try {
+        const handle = await first;
+        await rejected;
+        expect(manager.status(request.environmentId)).toBe("connected");
+        await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
+      } finally {
+        await Promise.allSettled([first, joining]);
+        await manager.stopAll();
+      }
+    },
+  );
+
+  it.each(["tunnel", "initiating turn"] as const)(
+    "does not materialize a late identity after the %s stops",
+    async (boundary) => {
+      const entered = deferred<void>();
+      const release = deferred<void>();
+      const fake = fakeRunner();
+      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const writeFile = vi.spyOn(fs, "writeFile");
+      let authorized = true;
+      const starting = manager.start({
+        authorize: () => {
+          if (!authorized) {
+            throw new Error("initiating turn closed");
+          }
+        },
+        environmentId: "worker:late-identity",
+        ownerEpoch: 1,
+        bundleHash: "a".repeat(64),
+        ssh: SSH,
+        resolveIdentity: async () => {
+          entered.resolve();
+          await release.promise;
+          return { kind: "material", contents: "synthetic-worker-key" };
+        },
+      });
+      const rejected = expect(starting).rejects.toThrow(
+        boundary === "tunnel" ? "no longer connected" : "initiating turn closed",
+      );
+      try {
+        await entered.promise;
+        const stopping =
+          boundary === "tunnel" ? manager.stop("worker:late-identity", 1) : undefined;
+        if (boundary === "initiating turn") {
+          authorized = false;
+        }
+        release.resolve();
+        await Promise.all([rejected, stopping]);
+        expect(writeFile).not.toHaveBeenCalled();
+        expect(fake.runs).toEqual([]);
+        expect(fake.starts).toEqual([]);
+        expect(manager.status("worker:late-identity")).toBe("stopped");
+      } finally {
+        release.resolve();
+        await starting.catch(() => undefined);
+        await manager.stopAll();
+        writeFile.mockRestore();
+      }
+    },
+  );
 
   it("joins workspace cleanup before reporting a desktop stopAll failure", async () => {
     const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();

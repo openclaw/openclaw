@@ -399,9 +399,137 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
   }
 }
 
+async function verifyExplicitDrainWait(
+  createFixture: RecoveryFixtureFactory,
+  kind: "retained work" | "retained consumer" | "active call",
+  outcome: "complete" | "cancel",
+) {
+  const controller = new AbortController();
+  const fixture = await createFixture({
+    abortOnCandidateStart: false,
+    waitForDrain: true,
+    drainSignal: controller.signal,
+  });
+  const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
+  assert(instance);
+  const released = createDeferredCore();
+  const consumer = kind === "retained consumer" ? instance.retainConsumer() : undefined;
+  const release =
+    kind === "retained work"
+      ? instance.retainWork()
+      : consumer
+        ? () => consumer.release()
+        : () => released.resolve();
+  const call = kind === "active call" ? instance.run(() => released.promise) : undefined;
+  const drainEntered = createDeferredCore();
+  const drain = instance.drain.bind(instance);
+  const waitForWork = instance.waitForRetainedWork.bind(instance);
+  const observation =
+    kind === "active call"
+      ? vi.spyOn(instance, "drain").mockImplementation((...args) => {
+          const pending = drain(...args);
+          drainEntered.resolve();
+          return pending;
+        })
+      : vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
+          const pending = waitForWork(...args);
+          drainEntered.resolve();
+          return pending;
+        });
+  let settled = false;
+  vi.useFakeTimers();
+  const reloading = fixture
+    .reload()
+    .catch((error: unknown) => error)
+    .then((result) => {
+      settled = true;
+      return result;
+    });
+  try {
+    await Promise.race([drainEntered.promise, reloading]);
+    expect(fixture.owner.getReloadStatus()?.reason).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(settled).toBe(false);
+    expect(fixture.candidates).toHaveLength(0);
+    expect(fixture.firstStop).not.toHaveBeenCalled();
+    expect(instance.disposing).toBe(false);
+    expect(() => instance.retainWork()).toThrow("replacement is in progress");
+    if (outcome === "cancel") {
+      controller.abort(new Error("operator cancelled reload"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+      expect(await reloading).toMatchObject({ details: { phase: "drain", committed: false } });
+      expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+      expect(instance.run(() => "still serving")).toBe("still serving");
+      expect(instance.disposing).toBe(false);
+      instance.retainWork()();
+      expect(fixture.firstStop).not.toHaveBeenCalled();
+      expect(fixture.rollbackConfigEffects).toHaveBeenCalledOnce();
+    } else {
+      release();
+      await call;
+      expect(await reloading).toMatchObject({ runtime: { pluginIds: ["first"] } });
+      expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
+      expect(fixture.candidates).toHaveLength(1);
+      expect(instance.disposing).toBe(true);
+    }
+    expect(fixture.owner.getReloadStatus()).toBeUndefined();
+    expect(fixture.siblingStart).toHaveBeenCalledOnce();
+    expect(fixture.siblingStop).not.toHaveBeenCalled();
+  } finally {
+    release();
+    released.resolve();
+    await call;
+    await reloading;
+    observation.mockRestore();
+    vi.useRealTimers();
+  }
+}
+
 export function registerPluginRetainedWorkReloadTests(
   createRecoveryFixture: RecoveryFixtureFactory,
 ) {
+  it.each([
+    ["retained work", "complete"],
+    ["retained work", "cancel"],
+    ["retained consumer", "complete"],
+    ["retained consumer", "cancel"],
+    ["active call", "complete"],
+    ["active call", "cancel"],
+  ] as const)("explicit drain wait preserves %s beyond 60s and can %s", (kind, outcome) =>
+    verifyExplicitDrainWait(createRecoveryFixture, kind, outcome),
+  );
+  it.each(["before publication", "after publication"] as const)(
+    "explicit drain cancellation preserves recovery ownership %s",
+    async (boundary) => {
+      const controller = new AbortController();
+      const cancel = () => controller.abort(new Error("operator cancelled reload"));
+      const fixture = await createRecoveryFixture({
+        abortOnCandidateStart: false,
+        waitForDrain: true,
+        drainSignal: controller.signal,
+        ...(boundary === "before publication"
+          ? { candidateStart: cancel }
+          : { afterPublish: async () => cancel() }),
+      });
+      if (boundary === "before publication") {
+        await expect(fixture.reload()).rejects.toMatchObject({ details: { committed: false } });
+        expect(fixture.firstStart).toHaveBeenCalledTimes(2);
+        expect(fixture.rollbackConfigEffects).toHaveBeenCalledOnce();
+      } else {
+        await expect(fixture.reload()).resolves.toMatchObject({
+          runtime: { pluginIds: ["first"] },
+        });
+        expect(fixture.firstStart).toHaveBeenCalledOnce();
+        expect(fixture.rollbackConfigEffects).not.toHaveBeenCalled();
+      }
+      const current = getPluginInstance(fixture.registryOwner.registry.plugins[0]!);
+      assert(current);
+      expect(current.run(() => "serving")).toBe("serving");
+      expect(fixture.owner.getReloadStatus()).toBeUndefined();
+      expect(fixture.siblingStop).not.toHaveBeenCalled();
+    },
+  );
   it("admits replacement while overlapping agent work drains on its original generation", () =>
     verifyOverlappingRetainedWork(createRecoveryFixture));
   it.each([

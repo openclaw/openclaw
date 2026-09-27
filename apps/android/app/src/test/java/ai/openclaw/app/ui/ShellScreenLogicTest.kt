@@ -509,7 +509,7 @@ class ShellScreenLogicTest {
         ChatSessionEntry(key = "session-$index", updatedAtMs = index.toLong())
       }
 
-    assertEquals(50, overviewRecentSessionCount(sessions))
+    assertEquals(50, overviewRecentSessions(sessions).size)
     assertEquals((51 downTo 2).map { "session-$it" }, overviewRecentSessions(sessions).map { it.key })
   }
 

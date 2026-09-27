@@ -1,3 +1,7 @@
+import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import {
@@ -19,6 +23,7 @@ import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prep
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import {
+  resolveReplySourceTurnId,
   setChannelSourceTurnId,
   setChannelSourceTurnSameThreadRequired,
 } from "../../auto-reply/reply/source-turn-id.js";
@@ -35,15 +40,18 @@ import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
+import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
+import { resolveChatSendCallerContext } from "../server-methods/gateway-client-identity.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
+import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
 import {
   buildAbortedAgentPayload,
   setAbortedAgentDedupeEntries,
@@ -399,7 +407,15 @@ export async function startAgentRunExecution(params: {
             restartRecoveryChannelContext?.currentThreadTs ??
             (prepared.resolvedThreadId != null ? String(prepared.resolvedThreadId) : undefined),
         };
-        setChannelSourceTurnId(runContext, restartRecoveryChannelContext?.sourceTurnId);
+        setChannelSourceTurnId(
+          runContext,
+          resolveReplySourceTurnId({
+            sourceTurnId: restartRecoveryChannelContext?.sourceTurnId,
+            admissionRunId: params.runId,
+            ingressProvider: runContext.messageChannel,
+            entry: params.sessionEntry,
+          }),
+        );
         setChannelSourceTurnSameThreadRequired(
           runContext,
           restartRecoveryChannelContext?.sameChannelThreadRequired,
@@ -413,6 +429,13 @@ export async function startAgentRunExecution(params: {
         }
         // Awaited routing can retire this owner before final dispatch.
         params.assertContextCurrent?.();
+        const callerContext = resolveChatSendCallerContext(params.client);
+        const clientCaps = [...callerContext.GatewayClientCaps];
+        const gatewayUiCommandTarget = captureGatewayUiCommandTarget(params.client);
+        const supportsTaskSuggestions =
+          isOperatorUiClient(params.client?.connect.client) &&
+          params.client?.connect.scopes?.includes("operator.admin") === true &&
+          hasGatewayClientCap(clientCaps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
         const gatewayContext = params.context.resolveGatewayContext?.();
         const skillLibraryAuthoring =
           gatewayContext && params.resolvedSessionKey
@@ -471,6 +494,10 @@ export async function startAgentRunExecution(params: {
                 accountId: params.delivery.resolvedAccountId,
                 threadId: prepared.resolvedThreadId,
                 runContext,
+                clientCaps,
+                gatewayUiCommandTarget,
+                approvalReviewerDeviceId: callerContext.ApprovalReviewerDeviceId,
+                taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
                 ...(prepared.userTurn.bashElevated
                   ? { bashElevated: prepared.userTurn.bashElevated }
                   : {}),

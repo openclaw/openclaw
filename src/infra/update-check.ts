@@ -22,7 +22,7 @@ import {
   readGitBranchFetchTarget,
   resolveGitRepositoryMetadata,
 } from "./update-git-metadata.js";
-import { readBuiltRuntimeCommit } from "./update-git-runtime.js";
+import { readBuiltRuntimeCommit, readGitRuntimeArtifactStatus } from "./update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
@@ -54,6 +54,7 @@ type GitUpdateStatus = {
   behind: number | null;
   fetchOk: boolean | null;
   builtSha?: string | null;
+  artifacts?: Awaited<ReturnType<typeof readGitRuntimeArtifactStatus>>;
   countsCached?: true;
   stale?: UpdateFetchFailure;
   error?: string;
@@ -459,6 +460,7 @@ async function checkGitUpdateStatus(params: {
     behind: parsed ? Number(parsed[2]) : null,
     fetchOk,
     builtSha: await readBuiltRuntimeCommit(root),
+    artifacts: await readGitRuntimeArtifactStatus({ root, sha }),
   };
 }
 

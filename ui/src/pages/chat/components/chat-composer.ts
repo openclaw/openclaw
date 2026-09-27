@@ -1,4 +1,3 @@
-// Chat-owned composer orchestration.
 import { nothing } from "lit";
 import {
   normalizeChatSendShortcut,
@@ -181,10 +180,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     refreshCommands: props.onSlashIntent,
   };
   const slashMenuHost: SlashMenuHost = {
-    paneId: props.paneId,
-    getDraft: skillMenuHost.getDraft,
-    commitDraft: skillMenuHost.commitDraft,
-    getTextarea: () => state.composerTextarea,
+    ...skillMenuHost,
     resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
     runCommand: goalComposer.submitCommand,
     canRun: (inline, command, args = "") =>
@@ -198,8 +194,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       (!props.submitDisabledReason ||
         isChatControlCommand(command ? `/${command.name} ${args}` : skillMenuHost.getDraft())),
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
-    refreshCommands: props.onSlashIntent,
-    activateComposerMode: (command) => goalComposer.activateCommand(command),
+    activateComposerMode: goalComposer.activateCommand,
   };
   const mentionMenuHost: HumanMentionMenuHost = {
     paneId: props.paneId,
@@ -673,7 +668,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     slashMenuVisible,
     skillMenuVisible,
     mentionMenuVisible,
-    emojiMenuVisible,
+    menuVisible,
     activeMenuOptionId: activeSlashMenuOptionId,
     activeMenuOptionLabel: activeSlashMenuOptionLabel,
     menuListboxId: slashMenuListboxId,
@@ -717,7 +712,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     slashMenuVisible,
     skillMenuVisible,
     mentionMenuVisible,
-    emojiMenuVisible,
+    menuVisible,
     mentionMenuHost,
     mentionError,
     skillMenuHost,

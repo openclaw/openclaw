@@ -6,6 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import {
   GATEWAY_RESTART_UNAVAILABLE_REASON,
+  GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
   GATEWAY_SUSPEND_UNAVAILABLE_REASON,
 } from "../../packages/gateway-protocol/src/restart-unavailable.js";
 import {
@@ -487,7 +488,10 @@ export async function runWithGatewayRequestEnvelope<T>(
         `${method} unavailable during gateway ${restartDraining ? "restart" : "suspension"}`,
         {
           retryable: true,
-          retryAfterMs: 1_000,
+          retryAfterMs:
+            !restartDraining && method === "agent.identity.get"
+              ? GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS
+              : 1_000,
           details: {
             method,
             reason: restartDraining

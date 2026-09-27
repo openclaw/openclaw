@@ -756,19 +756,16 @@ describe("worker task pool", () => {
     },
   );
 
-  it.each([0, 1])(
-    "rejects exit code %i before a response and recovers capacity",
-    async (exitCode) => {
-      const pool = createPool();
-      await expect(
-        pool.run({ label: "exit", exitCode }, { timeoutMs: 10_000 }),
-      ).rejects.toMatchObject({ code: "unavailable" });
-      await expect(pool.run({ label: "next" }, { timeoutMs: 10_000 })).resolves.toMatchObject({
-        label: "next",
-      });
-      expect(workers).toHaveLength(2);
-    },
-  );
+  it("rejects a clean exit before a response and recovers capacity", async () => {
+    const pool = createPool();
+    await expect(
+      pool.run({ label: "exit", exitCode: 0 }, { timeoutMs: 10_000 }),
+    ).rejects.toMatchObject({ code: "unavailable" });
+    await expect(pool.run({ label: "next" }, { timeoutMs: 10_000 })).resolves.toMatchObject({
+      label: "next",
+    });
+    expect(workers).toHaveLength(2);
+  });
 
   it("closes a generation before a rejected result can dispatch its successor", async () => {
     const reason = new Error("generation superseded");

@@ -22,6 +22,7 @@ import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-roo
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import {
+  parseInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
 } from "./installed-plugin-index-store.js";
@@ -36,6 +37,7 @@ import {
 } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import * as metadataWorker from "./plugin-metadata-state-worker.js";
+import { publishPluginSourceAdmission } from "./plugin-source-admission-store.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -107,6 +109,100 @@ it("returns a persisted index row without main-thread SQL", async () => {
   } finally {
     sql.restore();
   }
+});
+
+it("merges source admissions into the current install without main-thread SQL or stale-owner writes", async () => {
+  const env = environment();
+  const plugin = {
+    pluginId: "native-demo",
+    rootDir: "/plugins/native-demo",
+    installRecordHash: "current-install",
+    manifestPath: "/plugins/native-demo/openclaw.plugin.json",
+    manifestHash: "manifest",
+    origin: "global",
+    enabled: true,
+    startup: { sidecar: false, memory: false, agentHarnesses: [] },
+    compat: [],
+  } satisfies InstalledPluginIndex["plugins"][number];
+  const current = { ...index("current inventory"), plugins: [plugin] };
+  await seed(env, current);
+  const publication = {
+    env,
+    pluginId: plugin.pluginId,
+    rootDir: plugin.rootDir,
+    installRecordHash: plugin.installRecordHash,
+    key: plugin.rootDir + "\0",
+    receipt: {
+      signature: "source-identity",
+      sourceDigest: "a".repeat(64),
+      nativeArtifacts: {
+        "native-tool": {
+          sourceIdentity: "1:2:3:4:5:6",
+          contentHash: "b".repeat(64),
+          sizeBytes: 4,
+          capturedPath: "/captures/namespace/content/native-tool",
+          namespace: "/captures/namespace",
+          capturedIdentity: "1:7:3:4:5:6",
+        },
+      },
+      nativeNamespaces: {
+        "/captures/namespace": {
+          sourceDirectory: plugin.rootDir,
+          capturedRoot: "/captures/namespace",
+          managed: false,
+          members: {
+            "native-tool": {
+              source: plugin.rootDir + "/native-tool",
+              sourceIdentity: "1:2:3:4:5:6",
+              capturedIdentity: "1:7:3:4:5:6",
+              boundaryChecked: false,
+              contentHash: "b".repeat(64),
+              sizeBytes: 4,
+            },
+          },
+        },
+      },
+    },
+  };
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
+  try {
+    const before = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
+    expect(
+      await withArtifactPreservingStateReads(() => publishPluginSourceAdmission(publication)),
+    ).toBe(false);
+    expect(await metadataWorker.readPluginMetadataStateRow("installed-index", { env })).toEqual(
+      before,
+    );
+    expect(await publishPluginSourceAdmission(publication)).toBe(true);
+    const committed = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
+    await withPluginCache(createPluginCache(), async () => {
+      const loaded = await readPersistedInstalledPluginIndex({ env });
+      expect(loaded?.diagnostics).toEqual(current.diagnostics);
+      expect(loaded?.plugins[0]?.sourceAdmissions).toEqual({
+        [publication.key]: publication.receipt,
+      });
+    });
+    expect(await publishPluginSourceAdmission(publication)).toBe(true);
+    expect(
+      await publishPluginSourceAdmission({ ...publication, rootDir: "/replaced/plugin" }),
+    ).toBe(false);
+    expect(
+      await publishPluginSourceAdmission({ ...publication, installRecordHash: "old-install" }),
+    ).toBe(false);
+    expect(await metadataWorker.readPluginMetadataStateRow("installed-index", { env })).toEqual(
+      committed,
+    );
+    sql.expectIdle();
+  } finally {
+    sql.restore();
+  }
+  expect(
+    parseInstalledPluginIndex({
+      ...current,
+      plugins: [{ ...plugin, sourceAdmissions: { invalid: { signature: 42 } } }],
+    })?.plugins[0],
+  ).toEqual(plugin);
 });
 
 it.each(["explicit", "ambient"] as const)(

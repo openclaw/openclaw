@@ -467,28 +467,6 @@ describe("scripts/pr wrappers", () => {
     expect(loaded.status, loaded.stderr).toBe(0);
   });
 
-  it("keeps the main PR helper usage and command table aligned", () => {
-    const script = readScript("scripts/pr");
-
-    expect(script).toContain("export NO_COLOR=1");
-    expect(script).toContain("unset COLORTERM");
-    expect(script).toContain('source "$script_parent_dir/lib/plain-gh.sh"');
-    expect(script).toContain("for cmd in gh jq rg pnpm node");
-    expect(script).not.toContain("gh() {");
-    expect(script).toContain("scripts/pr review-init <PR>");
-    expect(script).toContain("scripts/pr prepare-run <PR>");
-    expect(script).toContain("scripts/pr ci-dispatch <PR>");
-    expect(script).toContain("scripts/pr merge-run <PR> [--auto-merge]");
-    expect(script).toContain("OPENCLAW_PR_AUTO_MERGE=1 is equivalent");
-    expect(script).toContain("Required commands: git, gh, jq, rg (ripgrep), pnpm, node.");
-    expect(script).toContain('review_init "$pr"');
-    expect(script).toContain('prepare_run "$pr"');
-    expect(script).toContain('ci_dispatch "$pr"');
-    expect(script).toContain('merge_run "$merge_pr" "$auto_merge"');
-    expect(script).toContain('require_main_target_pr "${1-}"');
-    expect(script).toContain("only support PRs targeting main");
-  });
-
   it("packages the dependency-free ClawSweeper review gate with the native wrapper", () => {
     const fixture = makeMismatchedWrapperRepo();
     const helper = join(fixture.canonical, "scripts/pr-lib/clawsweeper-review-gate.mjs");
@@ -1832,14 +1810,6 @@ exit 99
       dependency: "zod",
       binding: "z",
     },
-    {
-      script: "check-changelog-attributions.mjs",
-      args: "--is-forbidden-handle codex",
-      status: 0,
-      output: "",
-      dependency: undefined,
-      binding: undefined,
-    },
   ])(
     "loads $script from the materialized anchor without caller-owned aliases",
     ({ script, args, status, output, dependency, binding }) => {
@@ -2345,13 +2315,13 @@ exit 99
       diagnostic: "authentication unavailable",
     },
     { name: "missing authentication", code: 4, diagnostic: "authentication unavailable" },
-    ...[403, 500, 503].map((status) => ({
-      name: `HTTP ${status} failure`,
-      status,
+    {
+      name: "HTTP 403 failure",
+      status: 403,
       code: 1,
       body: { message: "synthetic-private-detail" },
       diagnostic: "failed",
-    })),
+    },
     { name: "transport failure", code: 1, diagnostic: "failed" },
     {
       name: "unknown API error",

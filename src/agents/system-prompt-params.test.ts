@@ -9,6 +9,7 @@ import { buildActiveNodeContextText, setActiveNodeContext } from "../infra/activ
 import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const runtime = { host: "host", os: "os", arch: "arch", node: "node", model: "model" };
 
 async function makeRepoRoot(root: string): Promise<void> {
   await fs.mkdir(path.join(root, ".git"), { recursive: true });
@@ -21,13 +22,7 @@ function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; c
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     preparedRepoRoot,
-    runtime: {
-      host: "host",
-      os: "os",
-      arch: "arch",
-      node: "node",
-      model: "model",
-    },
+    runtime,
   });
 }
 
@@ -169,13 +164,7 @@ describe("buildSystemPromptParams", () => {
       preparedRepoRoot,
       workspaceDir,
       cwd: repoRoot,
-      runtime: {
-        host: "host",
-        os: "os",
-        arch: "arch",
-        node: "node",
-        model: "model",
-      },
+      runtime,
     });
 
     expect(runtimeInfo.repoRoot).toBeUndefined();
@@ -194,11 +183,7 @@ describe("buildSystemPromptParams", () => {
       runtime: {
         sessionKey: "agent:team-ops:main",
         sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
-        host: "host",
-        os: "os",
-        arch: "arch",
-        node: "node",
-        model: "model",
+        ...runtime,
       },
     });
 
@@ -223,13 +208,7 @@ describe("buildSystemPromptParams", () => {
         },
       },
       agentId: "main",
-      runtime: {
-        host: "host",
-        os: "os",
-        arch: "arch",
-        node: "node",
-        model: "model",
-      },
+      runtime,
     });
 
     expect(runtimeInfo.agentName).toBe(expected);
@@ -273,11 +252,7 @@ describe("buildSystemPromptParams", () => {
       agentId: "main",
       runtime: {
         sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
-        host: "host",
-        os: "os",
-        arch: "arch",
-        node: "node",
-        model: "model",
+        ...runtime,
       },
     });
 
@@ -290,11 +265,7 @@ describe("buildSystemPromptParams", () => {
       agentId: "main",
       runtime: {
         sessionKey: `agent:main:dashboard:${"a".repeat(512)}`,
-        host: "host",
-        os: "os",
-        arch: "arch",
-        node: "node",
-        model: "model",
+        ...runtime,
       },
     });
 

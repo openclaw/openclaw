@@ -10,6 +10,7 @@ import type {
   ProviderCommandsSchema,
   QueueSchema,
 } from "./zod-schema.messages.js";
+import type { CommandsSchema } from "./zod-schema.session.js";
 
 type DefinedSchemaInput<T extends z.ZodType> = NonNullable<z.input<T>>;
 
@@ -61,23 +62,11 @@ export type NativeCommandsSetting = boolean | "auto";
 
 export type CommandAllowFrom = Record<string, Array<string | number>>;
 
-export type CommandsConfig = {
+export type CommandsConfig = DefinedSchemaInput<typeof CommandsSchema> & {
   /** @deprecated Doctor-only legacy input. */
   ownerDisplay?: "raw" | "hash";
   /** @deprecated Doctor-only legacy input. */
   ownerDisplaySecret?: string;
-  native?: NativeCommandsSetting;
-  nativeSkills?: NativeCommandsSetting;
-  text?: boolean;
-  bash?: boolean;
-  bashForegroundMs?: number;
-  config?: boolean;
-  mcp?: boolean;
-  plugins?: boolean;
-  debug?: boolean;
-  restart?: boolean;
-  ownerAllowFrom?: Array<string | number>;
-  allowFrom?: CommandAllowFrom;
 };
 
 export type ProviderCommandsConfig = DefinedSchemaInput<typeof ProviderCommandsSchema>;

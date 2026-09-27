@@ -19,6 +19,7 @@ type GatewayServiceSystemdRuntime = {
   unit?: string;
   /** Native D-Bus credential of the observed manager, not the service account or CLI UID. */
   managerUid?: number;
+  controlGroup?: string;
   killMode?: string;
   tasksCurrent?: number;
   memoryCurrent?: number;

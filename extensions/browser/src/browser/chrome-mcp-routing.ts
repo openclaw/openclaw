@@ -123,20 +123,13 @@ async function withChromeMcpOperationLock<T>(
   }
 }
 
-export function clearChromeMcpSnapshotRefsForTarget(
-  routing: ChromeMcpRoutingState,
-  targetId: string,
-): void {
-  routing.snapshotsByTarget.delete(targetId);
-}
-
 function updateChromeMcpTargetMappings(
   routing: ChromeMcpRoutingState,
   targetIdByPageId: Map<number, string>,
 ): void {
   for (const [pageId, targetId] of routing.targetIdByPageId) {
     if (!targetIdByPageId.has(pageId)) {
-      clearChromeMcpSnapshotRefsForTarget(routing, targetId);
+      routing.snapshotsByTarget.delete(targetId);
     }
   }
   routing.targetIdByPageId = targetIdByPageId;
