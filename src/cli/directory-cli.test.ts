@@ -246,6 +246,47 @@ describe("registerDirectoryCli", () => {
     );
   });
 
+  it("shows member roles in text output and preserves them in JSON", async () => {
+    const members = [
+      { kind: "user" as const, id: "admin@example", raw: { admin: "admin" } },
+      { kind: "user" as const, id: "member@example", raw: { admin: "member" } },
+    ];
+    const listGroupMembers = vi.fn().mockResolvedValue(members);
+    const enabledConfig = {
+      channels: { slack: {} },
+      plugins: { entries: { slack: { enabled: true } } },
+    };
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: enabledConfig,
+      channelId: "slack",
+      plugin: { id: "slack", directory: { listGroupMembers } },
+      configChanged: true,
+    });
+    mocks.replaceConfigFile.mockImplementation(async ({ sourceConfig }) => {
+      mocks.loadConfig.mockReturnValue(sourceConfig);
+    });
+    const args = [
+      "groups",
+      "members",
+      "--channel",
+      "slack",
+      "--group-id",
+      "group-1",
+    ];
+
+    await runDirectory(args);
+
+    const textOutput = runtimeState.runtimeLogs.join("\n");
+    expect(textOutput).toContain("Role");
+    expect(textOutput).toContain("admin");
+    expect(textOutput).toContain("member");
+
+    runtimeState.defaultRuntime.writeJson.mockClear();
+    await runDirectory([...args, "--json"]);
+
+    expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith(members);
+  });
+
   it.each([
     ["self", ["self", "--channel", "slack", "--json"]],
     ["peers", ["peers", "list", "--channel", "slack", "--json"]],
