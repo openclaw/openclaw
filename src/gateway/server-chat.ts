@@ -24,7 +24,9 @@ import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { projectedAgentRunInputKey } from "../infra/agent-run-projection.js";
 import { getAgentRunContext, getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
+import type { AgentRunContext } from "../infra/agent-run-registry.types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { logError, logWarn } from "../logger.js";
@@ -415,6 +417,7 @@ export function createAgentEventHandler({
   };
 
   const pendingTerminalLifecycleErrors = new Map<string, PendingTerminalLifecycleError>();
+  const publishedModelInputs = new WeakMap<AgentRunContext, string>();
 
   const liveTextDelivery = (
     runId: string,
@@ -1792,7 +1795,19 @@ export function createAgentEventHandler({
       }
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (hasSessionChangeReceivers(sessionEventConnIds)) {
-        const publish = () =>
+        const readModelInput = () =>
+          lifecyclePhase === "model" && runContext
+            ? JSON.stringify([sessionKey, sessionAgentId, projectedAgentRunInputKey(runContext)])
+            : undefined;
+        const modelInput = readModelInput();
+        if (runContext && modelInput && publishedModelInputs.get(runContext) === modelInput) {
+          return;
+        }
+        const publish = () => {
+          const modelInput = readModelInput();
+          if (runContext && modelInput && publishedModelInputs.get(runContext) === modelInput) {
+            return;
+          }
           broadcastToConnIds(
             "sessions.changed",
             {
@@ -1813,6 +1828,11 @@ export function createAgentEventHandler({
             sessionEventConnIds,
             { dropIfSlow: true },
           );
+          // Failed preparation/publication must leave the next observation publishable.
+          if (runContext && modelInput) {
+            publishedModelInputs.set(runContext, modelInput);
+          }
+        };
         const projection = getSessionRowProjection?.();
         void withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, publish).catch(
           (error: unknown) =>
