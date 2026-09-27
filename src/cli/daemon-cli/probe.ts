@@ -115,6 +115,11 @@ export async function probeGatewayStatus(opts: {
         const { probeGateway } = await probeGatewayModuleLoader.load();
         return await probeGateway({
           url: opts.url,
+          configuredRemote:
+            !opts.urlOverride &&
+            opts.localPortOverride === undefined &&
+            opts.url !== process.env.OPENCLAW_GATEWAY_URL?.trim() &&
+            resolveGatewayProbeTarget(opts.config ?? {}).mode === "remote",
           ...(opts.urlOverride ||
           (opts.localPortOverride === undefined &&
             (resolveGatewayProbeTarget(opts.config ?? {}).mode === "remote" ||

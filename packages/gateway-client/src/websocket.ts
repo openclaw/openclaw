@@ -1,10 +1,39 @@
+import type { ClientRequestArgs } from "node:http";
 import { createRequire } from "node:module";
 import path from "node:path";
+import type { ConnectionOptions } from "node:tls";
+import type { URL } from "node:url";
+import type { ClientOptions as WsClientOptions } from "ws";
+
+export type GatewayWebSocketTargetOptions = {
+  url?: string;
+  tlsFingerprint?: string;
+  /** Original TLS peer hostname or IP when the transport endpoint is translated. */
+  tlsServerName?: string;
+};
+
+// ws forwards TLS options to tls.connect; @types/ws omits servername and
+// incorrectly declares checkServerIdentity as a boolean callback over CertMeta.
+export type ClientOptions = Omit<WsClientOptions, "checkServerIdentity"> &
+  Pick<ConnectionOptions, "checkServerIdentity" | "servername">;
+
+type WebSocketConstructor = Pick<
+  typeof import("ws").WebSocket,
+  keyof typeof import("ws").WebSocket
+> & {
+  new (address: null): WebSocket;
+  new (address: string | URL, options?: ClientOptions | ClientRequestArgs): WebSocket;
+  new (
+    address: string | URL,
+    protocols?: string | string[],
+    options?: ClientOptions | ClientRequestArgs,
+  ): WebSocket;
+};
 
 // Load ws below its package entry so Bun cannot substitute its smaller built-in adapter.
 const require = createRequire(import.meta.url);
 const wsPackageRoot = path.dirname(require.resolve("ws/package.json"));
-export const WebSocket: typeof import("ws").WebSocket = require(
+export const WebSocket: WebSocketConstructor = require(
   path.join(wsPackageRoot, "lib/websocket.js"),
 );
 export const WebSocketServer: typeof import("ws").WebSocketServer = require(
@@ -16,4 +45,4 @@ export const createWebSocketStream: typeof import("ws").createWebSocketStream = 
 
 export type WebSocket = import("ws").WebSocket;
 export type WebSocketServer = import("ws").WebSocketServer;
-export type { ClientOptions, Data, RawData } from "ws";
+export type { Data, RawData } from "ws";

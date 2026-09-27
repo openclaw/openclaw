@@ -30,6 +30,7 @@ export async function probeSecurityAuditGateway(params: {
     url,
     config: params.cfg,
     env: params.env,
+    configuredRemote: connection.urlSource === "config gateway.remote.url",
     originScopedDeviceAuth:
       probeTarget.mode === "remote" || Boolean(process.env.OPENCLAW_GATEWAY_URL?.trim()),
     auth: authResolution.auth,

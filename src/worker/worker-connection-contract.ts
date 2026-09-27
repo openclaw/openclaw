@@ -1,7 +1,7 @@
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { ClientOptions, WebSocket } from "ws";
 import { z } from "zod";
+import type { ClientOptions, WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import type {
   WorkerConnectParams,
   WorkerHeartbeatParams,

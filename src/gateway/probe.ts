@@ -29,6 +29,7 @@ import {
   GatewayClientRequestError,
   isGatewayProtocolResponseError,
 } from "./client.js";
+import { resolveGatewayDeviceAuthRoute } from "./connection-details.js";
 import {
   gatewayEdgeAuthValueForTarget,
   normalizeEdgeAuthHeadersConfig,
@@ -266,8 +267,12 @@ function resolveGatewayProbeCapability(params: {
 
 export async function probeGateway(opts: {
   url: string;
-  /** Remote targets may use origin tokens only on non-loopback transports. */
+  /** Keep remote credentials separate from the local Gateway's pairing state. */
   originScopedDeviceAuth?: boolean;
+  /** The selected target came from configuration, not a CLI/environment URL override. */
+  configuredRemote?: boolean;
+  sshTunnel?: GatewayClientOptions["sshTunnel"];
+  preparedSshTunnel?: GatewayClientOptions["preparedSshTunnel"];
   /** Disable persisted device auth when the transport does not identify a stable Gateway origin. */
   suppressStoredDeviceAuth?: boolean;
   auth?: GatewayProbeAuth;
@@ -292,18 +297,36 @@ export async function probeGateway(opts: {
   let authMetadataPresent = false;
 
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
-  let deviceAuthScope = opts.suppressStoredDeviceAuth ? undefined : gatewayOriginScope(opts.url);
+  // Saved pins belong to the exact configured endpoint, not an overridden probe URL.
+  const tlsFingerprint =
+    opts.tlsFingerprint ||
+    (opts.url.trim() === opts.config?.gateway?.remote?.url?.trim()
+      ? opts.config?.gateway?.remote?.tlsFingerprint
+      : undefined);
+  const remote = Boolean(opts.originScopedDeviceAuth || opts.sshTunnel);
+  const route = resolveGatewayDeviceAuthRoute({
+    config: opts.config ?? {},
+    url: opts.url,
+    remote,
+    configuredRemote: opts.configuredRemote,
+    tlsFingerprint,
+    sshRoute: opts.sshTunnel,
+  });
+  let deviceAuthScope =
+    opts.suppressStoredDeviceAuth && !route.sshTunnel
+      ? undefined
+      : (route.deviceAuthScope ?? gatewayOriginScope(opts.url));
   let preparedDeviceAuth: GatewayClientOptions["preparedDeviceAuth"];
 
   const deviceIdentity = await (async () => {
     try {
-      if (!deviceAuthScope || !URL.canParse(opts.url)) {
+      if (opts.suppressStoredDeviceAuth || !deviceAuthScope || !URL.canParse(opts.url)) {
         return null;
       }
       const loopback = isLoopbackHost(new URL(opts.url).hostname);
-      // Forwarded ports do not bind cached tokens to a Gateway. Explicit auth
-      // can retain a paired identity; the scoped client suppresses cached tokens.
-      if (opts.originScopedDeviceAuth && loopback && !hasProbeAuth(opts.auth)) {
+      // Only the selected, owned SSH route or a pinned TLS endpoint can bind a
+      // forwarded address. Old URL-only tokens cannot establish that binding.
+      if (remote && loopback && !route.bound && !hasProbeAuth(opts.auth)) {
         return null;
       }
       const identityModule = await import("../infra/device-identity.js");
@@ -317,7 +340,7 @@ export async function probeGateway(opts: {
       const lookup = { deviceId: identity.deviceId, role: "operator", env: opts.env };
       // A retired tunnel's origin token must not displace the local client's token.
       let cachedOperatorToken =
-        !opts.originScopedDeviceAuth && loopback ? await loadDeviceAuthTokenReadOnly(lookup) : null;
+        !remote && loopback ? await loadDeviceAuthTokenReadOnly(lookup) : null;
       if (cachedOperatorToken) {
         deviceAuthScope = undefined;
       } else {
@@ -325,12 +348,7 @@ export async function probeGateway(opts: {
           ...lookup,
           gatewayScope: deviceAuthScope,
         });
-        if (
-          cachedOperatorToken &&
-          !opts.originScopedDeviceAuth &&
-          loopback &&
-          !hasProbeAuth(opts.auth)
-        ) {
+        if (cachedOperatorToken && !remote && loopback && !hasProbeAuth(opts.auth)) {
           const { loadPairedDevicePairingStoreRecordReadOnly } =
             await import("../infra/device-pairing-store-readonly.js");
           const { verifyPairingToken } = await import("../infra/pairing-token.js");
@@ -359,7 +377,9 @@ export async function probeGateway(opts: {
       return null;
     }
   })();
-  const cacheKey = resolveDeviceRequiredProbeCacheKey(opts.url);
+  const cacheKey = resolveDeviceRequiredProbeCacheKey(
+    remote && route.bound && deviceAuthScope ? deviceAuthScope : opts.url,
+  );
   const cacheEligible = deviceIdentity == null && !hasProbeAuth(opts.auth);
   if (cacheEligible && shouldShortCircuitDeviceRequiredProbe(cacheKey, Date.now())) {
     return makeDeviceRequiredShortCircuitResult(opts.url);
@@ -472,17 +492,14 @@ export async function probeGateway(opts: {
 
     const client = new GatewayClient({
       url: opts.url,
+      sshTunnel: route.sshTunnel,
+      preparedSshTunnel: opts.preparedSshTunnel,
       ...(deviceAuthScope ? { deviceAuthScope } : {}),
       ...(preparedDeviceAuth ? { preparedDeviceAuth } : {}),
       token: opts.auth?.token,
       password: opts.auth?.password,
       edgeAuthHeaders,
-      // Saved pins belong to the exact configured endpoint, not an overridden probe URL.
-      tlsFingerprint:
-        opts.tlsFingerprint ||
-        (opts.url.trim() === opts.config?.gateway?.remote?.url?.trim()
-          ? opts.config?.gateway?.remote?.tlsFingerprint
-          : undefined),
+      tlsFingerprint,
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       env: opts.env,
       scopes: [READ_SCOPE],

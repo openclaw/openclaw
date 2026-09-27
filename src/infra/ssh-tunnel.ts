@@ -18,6 +18,8 @@ export type SshParsedTarget = {
 export type SshTunnel = {
   localPort: number;
   pid: number | null;
+  closed: Promise<void>;
+  isActive: () => boolean;
   stop: () => Promise<void>;
 };
 
@@ -96,10 +98,28 @@ async function waitForLocalListener(
   port: number,
   timeoutMs: number,
   signal: AbortSignal,
+  childPid: number | undefined,
+  isChildActive: () => boolean,
 ): Promise<void> {
   const startedAt = performance.now(); // Clock adjustments must not change the polling budget.
   while (performance.now() - startedAt < timeoutMs) {
     if ((await probeTcpListener(port, "127.0.0.1", signal)) === "busy") {
+      const { inspectPortUsage } = await import("./ports-inspect.js");
+      const usage = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"], signal });
+      // Port availability is only a hint: another process can claim it between
+      // preflight and SSH binding. Admit only this still-live child's listener.
+      if (!isChildActive()) {
+        throw new Error("ssh exited before tunnel listener ownership was verified");
+      }
+      if (
+        childPid === undefined ||
+        usage.listeners.length === 0 ||
+        usage.listeners.some((listener) => listener.pid !== childPid)
+      ) {
+        throw new Error(
+          `cannot verify SSH tunnel listener ownership on 127.0.0.1:${port} for SSH process ${childPid ?? "unknown"}; stop any conflicting listener or enable process inspection, then retry`,
+        );
+      }
       return;
     }
     await sleepWithAbort(50, signal);
@@ -110,6 +130,7 @@ async function waitForLocalListener(
 export async function startSshPortForward(opts: {
   target: string;
   identity?: string;
+  hostKeyPolicy?: "strict" | "openssh";
   localPortPreferred: number;
   remotePort: number;
   timeoutMs: number;
@@ -141,14 +162,23 @@ export async function startSshPortForward(opts: {
     "-N",
     "-L",
     `127.0.0.1:${localPort}:127.0.0.1:${opts.remotePort}`,
-    "-p",
-    String(parsed.port),
+    // An omitted port belongs to the selected OpenSSH alias, not an implicit
+    // command-line -p 22 that would override its configured destination.
+    ...(/:\d+$/.test(opts.target.trim()) ? ["-p", String(parsed.port)] : []),
     "-o",
     "ExitOnForwardFailure=yes",
     "-o",
     "BatchMode=yes",
+    // This exact child owns the route; aliases must not delegate to a shared master.
     "-o",
-    "StrictHostKeyChecking=yes",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
+    "-o",
+    "ControlPersist=no",
+    "-o",
+    "ForkAfterAuthentication=no",
+    ...(opts.hostKeyPolicy === "openssh" ? [] : ["-o", "StrictHostKeyChecking=yes"]),
     "-o",
     "UpdateHostKeys=yes",
     "-o",
@@ -179,9 +209,14 @@ export async function startSshPortForward(opts: {
   stderrStream?.setEncoding("utf8");
   stderrStream?.on("data", (chunk: string) => stderr.push(chunk));
 
+  let active = true;
   const exited = new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
-    child.once("close", () => resolve());
+    const onExit = () => {
+      active = false;
+      resolve();
+    };
+    child.once("exit", onExit);
+    child.once("close", onExit);
   });
   let onAbort: (() => void) | undefined;
   const detachAbort = () => {
@@ -209,6 +244,8 @@ export async function startSshPortForward(opts: {
     localPort,
     Math.max(250, opts.timeoutMs),
     readinessController.signal,
+    child.pid,
+    () => active && !stopping,
   );
   try {
     try {
@@ -257,6 +294,8 @@ export async function startSshPortForward(opts: {
   return {
     localPort,
     pid: typeof child.pid === "number" ? child.pid : null,
+    closed: exited,
+    isActive: () => active && !stopping,
     stop,
   };
 }

@@ -7,6 +7,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({
   ensurePortAvailable: vi.fn<(port: number, host?: string) => Promise<void>>(),
+  inspectPortUsage: vi.fn<typeof import("./ports-inspect.js").inspectPortUsage>(),
   resolveSshClient: vi.fn<() => string | null>(() => "/usr/bin/ssh"),
   spawn: vi.fn(),
 }));
@@ -25,7 +26,12 @@ vi.mock("./ssh-client.js", () => ({
   resolveSshClient: mocks.resolveSshClient,
 }));
 
+vi.mock("./ports-inspect.js", () => ({
+  inspectPortUsage: mocks.inspectPortUsage,
+}));
+
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import type { PortUsage } from "./ports-types.js";
 import { PortInUseError } from "./ports.js";
 import { parseSshTarget, startSshPortForward } from "./ssh-tunnel.js";
 
@@ -102,6 +108,19 @@ describe("startSshPortForward", () => {
     return claim.port;
   }
 
+  async function listenOnPort(port = 0): Promise<net.Server> {
+    const server = net.createServer();
+    openServers.push(server);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    return server;
+  }
+
   function startTunnel(
     options: Partial<Parameters<typeof startSshPortForward>[0]> & { localPortPreferred: number },
   ) {
@@ -123,6 +142,7 @@ describe("startSshPortForward", () => {
     }
     await Promise.all(portClaims.splice(0).map((claim) => claim.release()));
     mocks.ensurePortAvailable.mockReset();
+    mocks.inspectPortUsage.mockReset();
     mocks.resolveSshClient.mockReset();
     mocks.resolveSshClient.mockReturnValue("/usr/bin/ssh");
     mocks.spawn.mockReset();
@@ -130,6 +150,12 @@ describe("startSshPortForward", () => {
 
   // A synthetic child can open a real loopback listener or stall until cancellation.
   function spawnFakeSsh({ listen = true } = {}) {
+    mocks.inspectPortUsage.mockImplementation(async (port) => ({
+      port,
+      status: "busy",
+      listeners: [{ pid: 4242 }],
+      hints: [],
+    }));
     mocks.spawn.mockImplementation((_cmd: string, args: string[]) => {
       const forwardSpec = args[args.indexOf("-L") + 1] ?? "";
       const localPort = Number(forwardSpec.split(":")[1]);
@@ -175,6 +201,38 @@ describe("startSshPortForward", () => {
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { target: "gateway-alias", port: undefined, hostKeyPolicy: "strict" as const },
+    { target: "gateway-alias:22", port: "22", hostKeyPolicy: "strict" as const },
+    { target: "gateway-alias", port: undefined, hostKeyPolicy: "openssh" as const },
+  ])(
+    "preserves OpenSSH routing for $target ($hostKeyPolicy)",
+    async ({ target, port, hostKeyPolicy }) => {
+      const stop = new Error("captured SSH process boundary");
+      mocks.spawn.mockImplementationOnce(() => {
+        throw stop;
+      });
+      await expect(startTunnel({ target, hostKeyPolicy, localPortPreferred: 43210 })).rejects.toBe(
+        stop,
+      );
+      const args = mocks.spawn.mock.calls[0]?.[1] as string[];
+      if (port) {
+        expect(args.slice(args.indexOf("-p"), args.indexOf("-p") + 2)).toEqual(["-p", port]);
+      } else {
+        expect(args).not.toContain("-p");
+      }
+      expect(args.includes("StrictHostKeyChecking=yes")).toBe(hostKeyPolicy === "strict");
+      expect(args).toEqual(
+        expect.arrayContaining([
+          "ControlMaster=no",
+          "ControlPath=none",
+          "ControlPersist=no",
+          "ForkAfterAuthentication=no",
+        ]),
+      );
+    },
+  );
+
   it("scopes the preferred-port preflight to the IPv4 loopback interface", async () => {
     const sentinel = new Error("stop before spawning ssh");
     mocks.ensurePortAvailable.mockRejectedValueOnce(sentinel);
@@ -194,15 +252,7 @@ describe("startSshPortForward", () => {
     // which the catch must treat as "busy" and allocate another port.
     // Reserve a real port so the ephemeral listener cannot hand the same
     // number back and make the assertion flaky.
-    const occupied = net.createServer();
-    await new Promise<void>((resolve, reject) => {
-      occupied.once("error", reject);
-      occupied.listen(0, "127.0.0.1", () => {
-        occupied.off("error", reject);
-        resolve();
-      });
-    });
-    openServers.push(occupied);
+    const occupied = await listenOnPort();
     const addr = occupied.address();
     if (!addr || typeof addr === "string") {
       throw new Error("failed to reserve preferred port");
@@ -225,6 +275,74 @@ describe("startSshPortForward", () => {
     );
 
     await tunnel.stop();
+  });
+
+  it.each([
+    { ownership: "foreign", listeners: [{ pid: 4343 }] },
+    { ownership: "mixed", listeners: [{ pid: 4242 }, { pid: 4343 }] },
+    { ownership: "unknown", listeners: [{}] },
+    { ownership: "unavailable", listeners: [] },
+  ])(
+    "rejects a busy port with $ownership ownership while SSH is still alive",
+    async ({ listeners }) => {
+      const localPort = await getClaimedPort();
+      await listenOnPort(localPort);
+      // The competing listener wins after preflight, before SSH reports binding
+      // failure. This child stays alive until the owner explicitly stops it.
+      spawnFakeSsh({ listen: false });
+      mocks.inspectPortUsage.mockResolvedValueOnce({
+        port: localPort,
+        status: "busy",
+        listeners,
+        hints: [],
+      });
+
+      await expect(startTunnel({ localPortPreferred: localPort })).rejects.toThrow(
+        "cannot verify SSH tunnel listener ownership",
+      );
+
+      const child = mocks.spawn.mock.results[0]?.value as EventEmitter & { killed: boolean };
+      expect(child.killed).toBe(true);
+      expect(mocks.inspectPortUsage).toHaveBeenCalledWith(localPort, {
+        probeHosts: ["127.0.0.1"],
+        signal: expect.any(AbortSignal),
+      });
+    },
+  );
+
+  it("rejects verified listener ownership when the SSH child closes during inspection", async () => {
+    const localPort = await getClaimedPort();
+    await listenOnPort(localPort);
+    spawnFakeSsh({ listen: false });
+    const inspecting = createDeferred();
+    const inspection = createDeferred<PortUsage>();
+    mocks.inspectPortUsage.mockImplementationOnce(() => {
+      inspecting.resolve();
+      return inspection.promise;
+    });
+    const forwarding = startTunnel({ localPortPreferred: localPort });
+    const inspected = await Promise.race([
+      inspecting.promise.then(() => true),
+      forwarding.then(async (tunnel) => {
+        await tunnel.stop();
+        return false;
+      }),
+    ]);
+    expect(inspected).toBe(true);
+    const rejection = expect(forwarding).rejects.toThrow(
+      "ssh exited before tunnel listener ownership was verified",
+    );
+    const child = mocks.spawn.mock.results[0]?.value as EventEmitter & { killed: boolean };
+    child.emit("close", 0, null);
+    inspection.resolve({
+      port: localPort,
+      status: "busy",
+      listeners: [{ pid: 4242 }],
+      hints: [],
+    });
+
+    await rejection;
+    expect(child.killed).toBe(true);
   });
 
   it.each(["term", "kill"] as const)(

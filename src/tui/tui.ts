@@ -85,6 +85,7 @@ import {
 import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
 import type {
   SessionScope,
+  TuiBoundGateway,
   TuiHistoryRunOutcome,
   TuiOptions,
   TuiResult,
@@ -107,12 +108,7 @@ type RunTuiOptions = TuiOptions & {
   ctrlCExitWindowMs?: number;
   onSubmitBurstCaptured?: (value: string) => void;
   /** Exact pre-probed remote target for an in-process setup handoff. */
-  boundGateway?: {
-    url: string;
-    token?: string;
-    password?: string;
-    tlsFingerprint?: string;
-  };
+  boundGateway?: TuiBoundGateway;
   config?: OpenClawConfig;
   title?: string;
 };

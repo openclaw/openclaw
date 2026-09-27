@@ -1,12 +1,13 @@
-import { TLSSocket } from "node:tls";
+import { isIP } from "node:net";
+import { checkServerIdentity, TLSSocket } from "node:tls";
 import { isLoopbackIpAddress, type ParsedIpAddress } from "@openclaw/net-policy/ip";
 import { isWssUrl } from "@openclaw/net-policy/url-protocol";
-import type { ClientOptions } from "ws";
 import {
   normalizeTlsFingerprint,
   parseGatewayIpAddress,
   parseHostForAddressChecks,
 } from "./client-address-utils.js";
+import type { ClientOptions, GatewayWebSocketTargetOptions } from "./websocket.js";
 
 const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<string>([
   "loopback",
@@ -84,13 +85,14 @@ function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boole
 export class GatewayWebSocketTransportConfigurationError extends Error {}
 export class GatewayWebSocketTlsPinError extends Error {}
 
-export function resolveGatewayWebSocketTransport(params: {
-  url: string;
-  tlsFingerprint?: string;
-  env?: NodeJS.ProcessEnv;
-  options: Omit<ClientOptions, "checkServerIdentity" | "rejectUnauthorized" | "finishRequest">;
-  normalizeTlsFingerprint?: (fingerprint: string | undefined) => string;
-}): { options: ClientOptions } {
+export function resolveGatewayWebSocketTransport(
+  params: GatewayWebSocketTargetOptions & {
+    url: string;
+    env?: NodeJS.ProcessEnv;
+    options: Omit<ClientOptions, "checkServerIdentity" | "rejectUnauthorized" | "finishRequest">;
+    normalizeTlsFingerprint?: (fingerprint: string | undefined) => string;
+  },
+): { options: ClientOptions } {
   const usesTls = isWssUrl(params.url);
   if (params.tlsFingerprint && !usesTls) {
     throw new GatewayWebSocketTransportConfigurationError(
@@ -127,6 +129,13 @@ export function resolveGatewayWebSocketTransport(params: {
     );
   }
   const options: ClientOptions = { ...params.options };
+  if (usesTls && params.tlsServerName) {
+    const peerName = params.tlsServerName;
+    // SNI accepts DNS names, while certificate identity also permits IP SANs.
+    options.servername = isIP(peerName) ? "" : peerName;
+    options.checkServerIdentity = (_hostname, certificate) =>
+      checkServerIdentity(peerName, certificate);
+  }
   if (usesTls && expectedFingerprint) {
     applyGatewayWebSocketTlsPin(options, expectedFingerprint, normalize);
   }
@@ -135,7 +144,7 @@ export function resolveGatewayWebSocketTransport(params: {
 
 // The enrolled auxiliary streams share pin enforcement without inheriting URL policy.
 export function applyGatewayWebSocketTlsPin(
-  options: ClientOptions,
+  options: Pick<ClientOptions, "headers" | "rejectUnauthorized" | "finishRequest">,
   expectedFingerprint: string,
   normalize = normalizeTlsFingerprint,
 ): void {

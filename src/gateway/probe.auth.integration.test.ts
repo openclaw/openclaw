@@ -3,12 +3,39 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createStatusGatewayProbeBudget } from "../commands/status.gateway-probe-budget.js";
 import { resolveGatewayProbeSnapshot } from "../commands/status.scan.shared.js";
 import * as deviceAuthStore from "../infra/device-auth-store.js";
-import { listDevicePairing } from "../infra/device-pairing.js";
+import { listDevicePairing, removePairedDevice } from "../infra/device-pairing.js";
+import { resolveGatewayDeviceAuthRoute } from "./connection-details.js";
 import { createGatewaySuiteHarness, installGatewayTestHooks, testState } from "./test-helpers.js";
+
+const ssh = vi.hoisted(() => ({ port: 0 }));
+vi.mock("../infra/ssh-tunnel.js", async (original) => ({
+  ...(await original<typeof import("../infra/ssh-tunnel.js")>()),
+  // Only process/forwarding setup is substituted; pairing, storage and all
+  // connect/auth/read RPCs still cross the suite's real Gateway socket.
+  startSshPortForward: async () => {
+    const closed = createDeferred();
+    let active = true;
+    return {
+      localPort: ssh.port,
+      pid: null,
+      isActive: () => active,
+      closed: closed.promise,
+      stop: async () => {
+        active = false;
+        closed.resolve();
+      },
+    };
+  },
+}));
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -26,6 +53,7 @@ let gatewayHarness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 
 beforeAll(async () => {
   gatewayHarness = await createGatewaySuiteHarness();
+  ssh.port = gatewayHarness.port;
 });
 
 afterAll(async () => {
@@ -94,6 +122,79 @@ async function seedCachedOperatorToken(scopes: string[]) {
 }
 
 describe("probeGateway auth integration", () => {
+  it("reuses enrolled SSH route auth across local ports without sending it to another route", async () => {
+    const token = requireGatewayToken();
+    const localAuth = await seedCachedOperatorToken(["operator.read"]);
+    const url = `ws://127.0.0.1:${gatewayHarness.port}`;
+    const remote = {
+      url,
+      transport: "ssh" as const,
+      sshTarget: "fixture@gateway-a",
+      remotePort: 18789,
+    };
+    const config = { gateway: { mode: "remote" as const, remote } };
+    try {
+      const enrolled = await callGateway({
+        config,
+        token,
+        clientName: GATEWAY_CLIENT_NAMES.TUI,
+        mode: GATEWAY_CLIENT_MODES.UI,
+        method: "status",
+        scopes: ["operator.read"],
+        timeoutMs: 10_000,
+      });
+      expectRecord(enrolled, "SSH enrollment status");
+
+      // The owner chooses the real allocated port. This configured local port is
+      // intentionally different; neither lookup nor persistence may key on it.
+      const movedUrl = "ws://127.0.0.1:18999";
+      const moved = { gateway: { ...config.gateway, remote: { ...remote, url: movedUrl } } };
+      const { gatewayProbe: result } = await resolveGatewayProbeSnapshot({
+        cfg: moved,
+        configPath: statePath("openclaw.json"),
+        env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
+        opts: { ...createStatusGatewayProbeBudget(10_000), detailLevel: "full" },
+      });
+      expect(result?.error).toBeNull();
+      expect(result?.ok).toBe(true);
+      expect(result?.auth.capability).toBe("read_only");
+      expectRecord(result?.status, "SSH route paired read without shared credentials");
+
+      // The fixture server would accept A's token even on this second route;
+      // rejecting anonymously proves B did not inherit A's valid bearer.
+      const { gatewayProbe: foreign } = await resolveGatewayProbeSnapshot({
+        cfg: {
+          gateway: { ...config.gateway, remote: { ...remote, sshTarget: "fixture@gateway-b" } },
+        },
+        configPath: statePath("openclaw.json"),
+        env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
+        opts: { ...createStatusGatewayProbeBudget(10_000), detailLevel: "full" },
+      });
+      expect(foreign?.ok).toBe(false);
+      expect(foreign?.connectErrorDetails).toMatchObject({
+        code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
+      });
+    } finally {
+      // The suite shares its Gateway. Return this case's pairing and caches to
+      // their empty baseline before the first-time diagnostic case runs.
+      await removePairedDevice(localAuth.deviceId);
+      await deviceAuthStore.clearDeviceAuthToken(localAuth);
+      await deviceAuthStore.clearOriginDeviceToken({ ...localAuth, gatewayScope: url });
+      const route = resolveGatewayDeviceAuthRoute({
+        config,
+        url,
+        remote: true,
+        configuredRemote: true,
+      });
+      if (route.deviceAuthScope) {
+        await deviceAuthStore.clearOriginDeviceToken({
+          ...localAuth,
+          gatewayScope: route.deviceAuthScope,
+        });
+      }
+    }
+  });
+
   it("keeps direct local authenticated status RPCs device-bound", async () => {
     const token = requireGatewayToken();
 

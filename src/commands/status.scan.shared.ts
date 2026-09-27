@@ -273,6 +273,7 @@ export async function resolveGatewayProbeSnapshot(params: {
                     url: gatewayConnection.url,
                     config: params.cfg,
                     originScopedDeviceAuth,
+                    configuredRemote: gatewayConnection.urlSource === "config gateway.remote.url",
                     auth: gatewayProbeAuthResolution.auth,
                     env: params.env,
                     timeoutMs,

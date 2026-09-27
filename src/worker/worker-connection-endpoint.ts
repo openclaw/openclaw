@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { ClientOptions } from "ws";
 import { z } from "zod";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import { buildCloudflareAccessHeaders } from "../../packages/gateway-client/src/cloudflare-access.js";
@@ -7,6 +6,7 @@ import {
   GatewayWebSocketTransportConfigurationError,
   resolveGatewayWebSocketTransport,
 } from "../../packages/gateway-client/src/websocket-transport.js";
+import type { ClientOptions } from "../../packages/gateway-client/src/websocket.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { workerProtocolObject } from "./protocol-record.js";
