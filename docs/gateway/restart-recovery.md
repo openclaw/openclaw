@@ -139,6 +139,15 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+Read-only RPC waits (`agent.wait`, approval decision waits, `question.waitAnswer`,
+and `device.scopes.waitUpgrade`) stop observing when their client disconnects.
+When shutdown drain begins, connected waiters receive retryable `UNAVAILABLE`
+errors with reason `gateway-restarting`, so clients can reconnect and wait again.
+These waits do not consume the stop drain budget. The underlying runs, decisions,
+and admitted writes keep their normal drain and recovery behavior. This also
+applies to update restarts once the running Gateway contains this fix; installing
+new files cannot change a wait already held by an older Gateway process.
+
 Cron shutdown gives execution cleanup and durable result writes the same cleanup
 window. Finishing the job's execution does not by itself complete the drain:
 result persistence must also settle, or the Gateway reports the remaining work
