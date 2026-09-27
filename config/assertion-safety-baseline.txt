@@ -252,7 +252,7 @@ extensions/discord/src/account-inspect.ts	1
 extensions/discord/src/accounts.ts	2
 extensions/discord/src/actions/handle-action.ts	2
 extensions/discord/src/actions/runtime.guild.ts	1
-extensions/discord/src/actions/runtime.messaging.send.ts	3
+extensions/discord/src/actions/runtime.messaging.send.ts	2
 extensions/discord/src/actions/runtime.messaging.shared.ts	6
 extensions/discord/src/actions/runtime.presence.ts	1
 extensions/discord/src/actions/runtime.shared.ts	1
@@ -271,7 +271,6 @@ extensions/discord/src/components-registry.ts	3
 extensions/discord/src/components.builders.ts	1
 extensions/discord/src/components.parse.ts	12
 extensions/discord/src/doctor-contract.ts	4
-extensions/discord/src/internal/api.commands.ts	1
 extensions/discord/src/internal/api.guild.ts	9
 extensions/discord/src/internal/api.messages.ts	9
 extensions/discord/src/internal/api.reactions.ts	1
@@ -287,7 +286,7 @@ extensions/discord/src/internal/entity-cache.ts	3
 extensions/discord/src/internal/gateway-dispatch.ts	7
 extensions/discord/src/internal/gateway-payload.ts	1
 extensions/discord/src/internal/gateway-voice-state-cache.ts	4
-extensions/discord/src/internal/gateway.ts	8
+extensions/discord/src/internal/gateway.ts	7
 extensions/discord/src/internal/interaction-dispatch.ts	6
 extensions/discord/src/internal/interaction-options.ts	2
 extensions/discord/src/internal/interaction-response.ts	2
@@ -959,7 +958,6 @@ extensions/slack/src/group-policy.ts	1
 extensions/slack/src/http/plugin-routes.ts	1
 extensions/slack/src/http/registry.ts	2
 extensions/slack/src/modal-metadata.ts	1
-extensions/slack/src/monitor/block-text.ts	1
 extensions/slack/src/monitor/context.ts	2
 extensions/slack/src/monitor/event-scope.ts	1
 extensions/slack/src/monitor/events/agent.ts	1
@@ -992,7 +990,7 @@ extensions/slack/src/reply-action-ids.ts	1
 extensions/slack/src/reply-blocks.ts	7
 extensions/slack/src/secret-contract.ts	1
 extensions/slack/src/security-audit.ts	6
-extensions/slack/src/send.ts	4
+extensions/slack/src/send.ts	3
 extensions/slack/src/setup-core.ts	5
 extensions/slack/src/setup-surface.ts	1
 extensions/slack/src/streaming.ts	3
