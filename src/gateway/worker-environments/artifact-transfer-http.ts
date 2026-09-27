@@ -6,7 +6,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER, type AuthRateLimiter } from "../auth-rate-limit.js";
 import { sendJson, watchClientDisconnect } from "../http-common.js";
 import { withSerializedRateLimitAttempt } from "../rate-limit-attempt-serialization.js";
-import type { ArtifactTransferService } from "./artifact-transfer-service.js";
+import {
+  ArtifactTransferBusyError,
+  type ArtifactTransferService,
+} from "./artifact-transfer-service.js";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
@@ -113,7 +116,18 @@ export function createArtifactTransferHttpCallback(
   service: Omit<ArtifactTransferService, "prepare">,
 ): ArtifactTransferHttpCallback {
   return async ({ req, res, artifactKey, bearer }) => {
-    const authorization = service.authorize({ token: bearer, artifactKey });
+    let authorization: ReturnType<ArtifactTransferService["authorize"]>;
+    try {
+      authorization = service.authorize({ token: bearer, artifactKey });
+    } catch (error) {
+      if (!(error instanceof ArtifactTransferBusyError)) {
+        throw error;
+      }
+      return {
+        kind: "authorized",
+        handle: () => sendJson(res, 503, { error: "transfer_in_progress" }),
+      };
+    }
     if (!authorization) {
       return { kind: "unauthorized" };
     }
@@ -127,6 +141,7 @@ export function createArtifactTransferHttpCallback(
           clientAbort.signal,
         ]);
         let fileHandle: FileHandle | undefined;
+        let completed = false;
         try {
           const file = await service.openFile(authorization);
           fileHandle = file?.handle;
@@ -134,8 +149,10 @@ export function createArtifactTransferHttpCallback(
             sendOpaqueNotFound(res);
             return;
           }
+          let bytesWritten = 0;
           const checkAuthority = new Transform({
             transform(chunk: Buffer, _encoding, next) {
+              bytesWritten += chunk.byteLength;
               next(
                 service.isAuthorizationCurrent(authorization)
                   ? null
@@ -157,6 +174,7 @@ export function createArtifactTransferHttpCallback(
             autoClose: false,
           });
           await pipeline(stream, checkAuthority, res, { signal });
+          completed = bytesWritten === file.bytes && res.writableFinished;
         } catch {
           if (!res.headersSent && !res.destroyed) {
             sendOpaqueNotFound(res);
@@ -165,8 +183,11 @@ export function createArtifactTransferHttpCallback(
           }
         } finally {
           stopWatchingDisconnect();
-          service.revoke(authorization);
-          await fileHandle?.close();
+          try {
+            await fileHandle?.close();
+          } finally {
+            service.finish(authorization, completed);
+          }
         }
       },
     };

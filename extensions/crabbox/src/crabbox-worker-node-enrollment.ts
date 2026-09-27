@@ -72,6 +72,7 @@ const http = require("node:http");
 const https = require("node:https");
 const { spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
+const { setTimeout: delay } = require("node:timers/promises");
 const bootstrap = ${JSON.stringify(nodeBootstrap)};
 const workerBundle = ${JSON.stringify(workerBundle)};
 const leaseId = ${JSON.stringify(leaseId)};
@@ -162,7 +163,7 @@ setPhase("preparation");
     }
     if (bytes !== artifact.bytes || hash.digest("hex") !== artifact.sha256) throw new Error("Cloud worker bootstrap archive failed integrity verification");
   };
-  const downloadArchive = async (artifact, token, archive, reportPhase = setPhase) => {
+  const downloadAttempt = async (artifact, token, archive, reportPhase) => {
     reportPhase("download connection");
     if (!token) throw new Error("Cloud worker bootstrap download authority is unavailable");
     const url = new URL(artifact.url);
@@ -175,6 +176,10 @@ setPhase("preparation");
       agent: false, headers: { authorization: "Bearer " + token }, signal: AbortSignal.timeout(600000),
       ...(pin ? { rejectUnauthorized: false, session: Buffer.alloc(0) } : {}),
     });
+    request.setTimeout(60000, () => request.destroy(Object.assign(new Error("Cloud worker bootstrap download idle timeout"), { code: "ETIMEDOUT" })));
+    // The response/body readers still reject; keep errors observed between their awaits.
+    request.on("error", () => {});
+    request.once("response", (response) => response.on("error", () => {}));
     // Observe transport progress without changing when the pinned request may send credentials.
     request.once("socket", (socket) => {
       socket.once("connect", () => { reportPhase(url.protocol === "https:" ? "download TLS" : "download HTTP response"); });
@@ -193,13 +198,33 @@ setPhase("preparation");
     })().catch((error) => request.destroy(error));
     const response = await pendingResponse;
     try {
-      if (response.statusCode !== 200) throw new Error("Cloud worker bootstrap download failed with HTTP " + response.statusCode);
+      if (response.statusCode !== 200) throw Object.assign(new Error("Cloud worker bootstrap download failed with HTTP " + response.statusCode), { statusCode: response.statusCode });
       if (response.headers["content-length"] !== undefined && Number(response.headers["content-length"]) !== artifact.bytes) throw new Error("Cloud worker bootstrap archive length does not match the Gateway");
       reportPhase("download body");
       const output = await fsp.open(archive, "wx", 0o600);
       try { await verifyArchive(response, artifact, output); }
       finally { await output.close(); }
     } finally { response.destroy(); }
+  };
+  const downloadArchive = async (artifact, token, archive, reportPhase = setPhase) => {
+    let downloadPhase;
+    const progress = (next) => { downloadPhase = next; reportPhase(next); };
+    for (let attempt = 1; ; attempt++) {
+      const partial = archive + ".attempt-" + attempt;
+      try {
+        await downloadAttempt(artifact, token, partial, progress);
+        fs.renameSync(partial, archive);
+        return;
+      } catch (error) {
+        const transient = ["ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EPIPE", "ERR_STREAM_PREMATURE_CLOSE", "ABORT_ERR", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EAI_AGAIN"].includes(error.code) || [502, 503, 504].includes(error.statusCode);
+        if (!transient || attempt === 3) {
+          error.message += " (download attempt " + attempt + "/3)";
+          throw error;
+        }
+        console.error("Cloud worker bootstrap " + downloadPhase + " failed (" + (error.code || "HTTP_" + error.statusCode) + "); retrying download attempt " + (attempt + 1) + "/3");
+      } finally { fs.rmSync(partial, { force: true }); }
+      await delay(Math.round(250 * 2 ** (attempt - 1) * (0.5 + Math.random())));
+    }
   };
   const workerArchivePath = (root) => {
     const relative = workerBundle.packageRelativePath;

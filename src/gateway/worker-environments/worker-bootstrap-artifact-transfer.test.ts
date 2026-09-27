@@ -183,7 +183,7 @@ describe("worker bootstrap artifact transfer", () => {
       const { receipt, url, headers } = await prepare(Buffer.alloc(8 * 1024 * 1024), owner.signal);
       const response = await fetch(url, { headers });
       expect(response.status).toBe(200);
-      expect((await fetch(url, { headers })).status).toBe(404);
+      expect((await fetch(url, { headers })).status).toBe(503);
       if (closure === "owner") {
         authorized = false;
       }

@@ -12,15 +12,20 @@ export type TransferArtifact = {
   tarballBytes: number;
 };
 
-type ArtifactTransferAuthorization = {
+export type ArtifactTransferCapability = {
   token: string;
   artifactKey: string;
   artifact: TransferArtifact;
   expiresAtMs: number;
-  state: "ready" | "serving";
+  active?: ArtifactTransferAuthorization;
   abortController: AbortController;
   stopWatching?: () => void;
   isAuthorized: () => boolean;
+};
+
+type ArtifactTransferAuthorization = {
+  capability: ArtifactTransferCapability;
+  abortController: AbortController;
 };
 
 export type ArtifactTransferOptions = {
@@ -28,12 +33,19 @@ export type ArtifactTransferOptions = {
   generateToken?: (bytes: number) => string;
 };
 
+export class ArtifactTransferBusyError extends Error {
+  constructor() {
+    super("Worker artifact transfer is already active");
+    this.name = "ArtifactTransferBusyError";
+  }
+}
+
 export function createArtifactTransferService(options: ArtifactTransferOptions = {}) {
   const now = options.now ?? Date.now;
   const generateToken = options.generateToken ?? generateSecureToken;
-  const capabilities = new Map<string, ArtifactTransferAuthorization>();
+  const capabilities = new Map<string, ArtifactTransferCapability>();
 
-  const revokeCapability = (capability: ArtifactTransferAuthorization): void => {
+  const revokeCapability = (capability: ArtifactTransferCapability): void => {
     if (capabilities.get(capability.token) === capability) {
       capabilities.delete(capability.token);
     }
@@ -41,7 +53,7 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
     capability.abortController.abort(new Error("Worker artifact transfer authority closed"));
   };
 
-  const hasAuthority = (capability: ArtifactTransferAuthorization): boolean => {
+  const hasAuthority = (capability: ArtifactTransferCapability): boolean => {
     try {
       if (
         capabilities.get(capability.token) === capability &&
@@ -58,8 +70,8 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
     return false;
   };
 
-  const isCurrent = (capability: ArtifactTransferAuthorization): boolean =>
-    hasAuthority(capability) && capability.state === "serving";
+  const isCurrent = (authorization: ArtifactTransferAuthorization): boolean =>
+    authorization.capability.active === authorization && hasAuthority(authorization.capability);
 
   return {
     prepare(params: {
@@ -83,12 +95,11 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
         throw new Error("Worker artifact transfer token generator returned an invalid bearer");
       }
       registerSecretValueForRedaction(token);
-      const capability: ArtifactTransferAuthorization = {
+      const capability: ArtifactTransferCapability = {
         token,
         artifactKey: params.artifactKey,
         artifact: { ...params.artifact },
         expiresAtMs: now() + params.ttlMs,
-        state: "ready",
         abortController: new AbortController(),
         isAuthorized: params.isAuthorized,
       };
@@ -115,32 +126,39 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
       if (
         !capability ||
         !hasAuthority(capability) ||
-        capability.state !== "ready" ||
         capability.artifactKey !== params.artifactKey
       ) {
         return undefined;
       }
-      capability.state = "serving";
-      return capability;
+      if (capability.active) {
+        throw new ArtifactTransferBusyError();
+      }
+      const authorization = { capability, abortController: new AbortController() };
+      capability.active = authorization;
+      return authorization;
     },
 
     isAuthorizationCurrent: isCurrent,
 
-    authorizationSignal(capability: ArtifactTransferAuthorization): AbortSignal {
-      return capability.abortController.signal;
+    authorizationSignal(authorization: ArtifactTransferAuthorization): AbortSignal {
+      return AbortSignal.any([
+        authorization.capability.abortController.signal,
+        authorization.abortController.signal,
+      ]);
     },
 
-    async openFile(capability: ArtifactTransferAuthorization) {
-      if (!isCurrent(capability)) {
+    async openFile(authorization: ArtifactTransferAuthorization) {
+      if (!isCurrent(authorization)) {
         return null;
       }
+      const { capability } = authorization;
       // Keep the descriptor from validation through streaming; never reopen a swapped path.
       const { handle, stat } = await openLocalFileSafely({
         filePath: capability.artifact.tarballPath,
       });
       let accepted = false;
       try {
-        if (stat.size !== capability.artifact.tarballBytes || !isCurrent(capability)) {
+        if (stat.size !== capability.artifact.tarballBytes || !isCurrent(authorization)) {
           return null;
         }
         accepted = true;
@@ -156,11 +174,28 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
       }
     },
 
-    revoke(capabilityOrToken: ArtifactTransferAuthorization | string): void {
+    finish(authorization: ArtifactTransferAuthorization, completed: boolean): void {
+      if (!isCurrent(authorization)) {
+        return;
+      }
+      const { capability } = authorization;
+      // OpenClaw runtime/worker bundles stay artifact-bound with the original TTL (bootstrap: <=10m).
+      // Only interrupted transfers may retry; one complete download consumes the token.
+      if (completed) {
+        revokeCapability(capability);
+      } else {
+        capability.active = undefined;
+        authorization.abortController.abort(new Error("Worker artifact transfer attempt closed"));
+      }
+    },
+
+    revoke(authorizationOrToken: ArtifactTransferAuthorization | string): void {
       const capability =
-        typeof capabilityOrToken === "string"
-          ? capabilities.get(capabilityOrToken)
-          : capabilityOrToken;
+        typeof authorizationOrToken === "string"
+          ? capabilities.get(authorizationOrToken)
+          : authorizationOrToken.capability.active === authorizationOrToken
+            ? authorizationOrToken.capability
+            : undefined;
       if (capability) {
         revokeCapability(capability);
       }

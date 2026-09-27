@@ -16,7 +16,10 @@ import {
   createCrabboxNodeRuntimeSetup,
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
-import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
+import {
+  createNodeBootstrapFixture,
+  readLaunch,
+} from "./crabbox-worker-node-enrollment.test-support.js";
 import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import { openCrabboxWarmImageStore } from "./crabbox-worker-warm-image-store.js";
@@ -278,9 +281,12 @@ echo 123
       });
   expect(setup.command).not.toContain(nodeBootstrap.token);
   expect(setup.command).not.toContain(setupCode);
+  const timers = path.join(home, "bootstrap-test-timers.cjs");
+  fs.writeFileSync(timers, 'require("node:timers/promises").setTimeout = async () => {};\n');
   const child = spawn("/bin/sh", [], {
     env: {
       HOME: home,
+      NODE_OPTIONS: `--require ${JSON.stringify(timers)}`,
       PATH: desktop ? `${bin}:${process.env.PATH}` : process.env.PATH,
       ...(desktop
         ? {
@@ -325,21 +331,6 @@ async function expectSetupPhases(result: ReturnType<typeof enroll>) {
   // Crabbox consumes these stream markers; successful bootstrap emits no other data.
   expect(lines.every((line) => /^CRABBOX_PHASE:[a-z.-]{1,80}$/.test(line))).toBe(true);
   return lines.map((line) => line.slice("CRABBOX_PHASE:".length));
-}
-
-async function readLaunch(stateDir: string) {
-  const target = path.join(stateDir, "launch.json");
-  // File watchers can miss a fast atomic rename before their subscription is ready.
-  await expect.poll(() => fs.existsSync(target), { timeout: 30_000 }).toBe(true);
-  return JSON.parse(fs.readFileSync(target, "utf8")) as {
-    build: string;
-    cli: string;
-    args: string[];
-    token?: string;
-    setupCode?: string;
-    environment: Record<string, string>;
-    enabledPlugins: string[];
-  };
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
@@ -890,7 +881,11 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       expect(result.output).not.toContain(nodeBootstrap.token);
       expect(result.output).not.toContain(setupCode);
       expect(authorizations).toEqual(
-        failure === "tls-reset" ? [] : [`Bearer ${nodeBootstrap.token}`],
+        failure === "tls-reset"
+          ? []
+          : Array(failure === "http-reset" || failure === "truncated" ? 3 : 1).fill(
+              `Bearer ${nodeBootstrap.token}`,
+            ),
       );
       expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
       expect(fs.readdirSync(stateDir)).toEqual([]);
