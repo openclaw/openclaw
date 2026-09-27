@@ -232,6 +232,16 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
   });
 
   it("uses generic approval availability for plugin initiating surfaces", () => {
+    const request = {
+      id: "plugin:calendar",
+      request: {
+        title: "Review",
+        description: "Calendar tool",
+        policySubject: { pluginKey: "calendar" },
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1,
+    };
     const getExecInitiatingSurfaceState = vi.fn(() => ({ kind: "enabled" as const }));
     const getActionAvailabilityState = vi.fn(
       ({ approvalKind }: { approvalKind?: ChannelApprovalKind }) =>
@@ -252,6 +262,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
         accountId: "default",
         cfg: {} as never,
         approvalKind: "plugin",
+        request,
       }),
     ).toEqual({
       kind: "disabled",
@@ -265,6 +276,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       accountId: "default",
       action: "approve",
       approvalKind: "plugin",
+      request,
     });
   });
 

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -198,7 +199,6 @@ describe("handlePendingApprovalRequest", () => {
       route: "plugin",
       id: "plugin-turn-source-kind",
       request: {
-        command: "plugin approval",
         title: "Plugin approval",
         description: "Review the plugin action",
         turnSourceChannel: "whatsapp",
@@ -262,6 +262,7 @@ describe("handlePendingApprovalRequest", () => {
           turnSourceChannel: "whatsapp",
           turnSourceAccountId: "default",
           approvalKind: "plugin",
+          request: requestedEvent(record),
         });
       } else {
         expect((await manager.getSnapshot(record.id))?.resolvedAtMs).toBeUndefined();
@@ -292,6 +293,59 @@ describe("handlePendingApprovalRequest", () => {
       await manager.resolve(record.id, "deny");
       await Promise.allSettled([requestPromise, manager.drain()]);
     }
+  });
+
+  it("closes a plugin approval immediately when its exact Slack request has no route", async (testContext) => {
+    hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
+    const record = manager.create(
+      {
+        title: "Review diffs",
+        description: "Render a diff",
+        turnSourceChannel: "slack",
+        turnSourceAccountId: "default",
+        policySubject: { pluginKey: "diffs", tool: "diffs" },
+      },
+      60_000,
+      "plugin-slack-no-route",
+    );
+    await manager.register(record, 60_000);
+    const respond = vi.fn();
+    const event = requestedEvent(record);
+
+    await handlePendingApprovalRequest({
+      manager,
+      record,
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+        getApprovalClientConnIds: () => new Set(),
+      } as unknown as GatewayRequestContext,
+      requestEventName: "plugin.approval.requested",
+      requestEvent: event,
+      twoPhase: true,
+      approvalKind: "plugin",
+      deliverRequest: () => false,
+    });
+
+    expect(hasApprovalTurnSourceRouteMock).toHaveBeenCalledWith({
+      turnSourceChannel: "slack",
+      turnSourceAccountId: "default",
+      approvalKind: "plugin",
+      request: event,
+    });
+    expect(await manager.getSnapshot(record.id)).toMatchObject({
+      resolvedBy: "no-approval-route",
+      terminalReason: "no-route",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: record.id, decision: null }),
+      undefined,
+    );
   });
 
   it("targets requested approval events to visible approval clients when available", async (testContext) => {

@@ -207,6 +207,9 @@ async function requestPluginToolApproval(params: {
   overrideParams?: unknown;
 }): Promise<HookOutcome> {
   const approval = params.approval;
+  const policySubject = params.ctx?.toolOwnerPluginId
+    ? { pluginKey: params.ctx.toolOwnerPluginId, tool: params.toolName }
+    : undefined;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
   const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
@@ -241,6 +244,7 @@ async function requestPluginToolApproval(params: {
           allowedDecisions: approval.allowedDecisions,
           toolName: params.toolName,
           toolCallId: params.toolCallId,
+          ...(policySubject ? { policySubject } : {}),
           agentId: params.ctx?.agentId,
           sessionKey: params.ctx?.sessionKey,
           turnSourceChannel: params.ctx?.turnSourceChannel,
@@ -310,6 +314,7 @@ async function requestPluginToolApproval(params: {
             allowedDecisions: approval.allowedDecisions,
             toolName: params.toolName,
             toolCallId: params.toolCallId,
+            ...(policySubject ? { policySubject } : {}),
             agentId: params.ctx?.agentId,
             sessionKey: params.ctx?.sessionKey,
             ...(params.ctx?.approvalReviewerDeviceId

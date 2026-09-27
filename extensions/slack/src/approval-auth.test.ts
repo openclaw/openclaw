@@ -1,6 +1,23 @@
+import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Slack tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
-import { getSlackApprovalApprovers, isSlackApprovalAuthorizedSender } from "./approval-auth.js";
+import {
+  getSlackApprovalApprovers,
+  isSlackApprovalAuthorizedSender,
+  isSlackPluginApprovalAuthorizedSender,
+} from "./approval-auth.js";
+
+function pluginRequest(
+  policySubject?: PluginApprovalRequest["request"]["policySubject"],
+): PluginApprovalRequest {
+  return {
+    id: "plugin:req-1",
+    request: { title: "Plugin approval", description: "Allow access", policySubject },
+    createdAtMs: 0,
+    expiresAtMs: 1000,
+  };
+}
 
 describe("isSlackApprovalAuthorizedSender", () => {
   it("authorizes general Slack approvers from allowFrom and defaultTo", () => {
@@ -90,5 +107,93 @@ describe("isSlackApprovalAuthorizedSender", () => {
       }),
     ).toBe(true);
     expect(isSlackApprovalAuthorizedSender({ cfg })).toBe(false);
+  });
+});
+
+describe("isSlackPluginApprovalAuthorizedSender", () => {
+  const defaultReviewer = "team:T11111111:user:U11111111";
+  const pluginReviewer = "team:T11111111:user:U22222222";
+  const toolReviewer = "team:T11111111:user:U33333333";
+  const legacyReviewer = "team:T11111111:user:U44444444";
+
+  it("applies exact tool, plugin, then Agent reviewer lists within the bot workspace", () => {
+    const cfg: OpenClawConfig = {
+      approvals: {
+        plugin: {
+          slack: {
+            approvers: [defaultReviewer],
+            plugins: {
+              calendar: {
+                approvers: [pluginReviewer],
+                tools: {
+                  "app%2Fone/create%20event": { approvers: [toolReviewer] },
+                },
+              },
+            },
+          },
+        },
+      },
+      channels: { slack: { allowFrom: [legacyReviewer] } },
+    };
+    const tool = pluginRequest({ pluginKey: "calendar", appId: "app/one", tool: "create event" });
+    const siblingTool = pluginRequest({
+      pluginKey: "calendar",
+      appId: "app/two",
+      tool: "create event",
+    });
+    const otherPlugin = pluginRequest({ pluginKey: "other" });
+    const authorized = (senderId: string, request: PluginApprovalRequest) =>
+      isSlackPluginApprovalAuthorizedSender({ cfg, senderId, request });
+
+    expect(authorized(toolReviewer, tool)).toBe(true);
+    expect(authorized(pluginReviewer, tool)).toBe(false);
+    expect(authorized("team:T22222222:user:U33333333", tool)).toBe(false);
+    expect(authorized("U33333333", tool)).toBe(false);
+    expect(authorized(pluginReviewer, siblingTool)).toBe(true);
+    expect(authorized(defaultReviewer, siblingTool)).toBe(false);
+    expect(authorized(defaultReviewer, otherPlugin)).toBe(true);
+    expect(authorized(legacyReviewer, otherPlugin)).toBe(false);
+    expect(authorized(pluginReviewer, pluginRequest({ pluginKey: "calendar" }))).toBe(false);
+  });
+
+  it("distinguishes an omitted default from an explicit empty default", () => {
+    const cfg: OpenClawConfig = {
+      approvals: { plugin: { slack: { plugins: { calendar: { approvers: [pluginReviewer] } } } } },
+      channels: { slack: { allowFrom: [legacyReviewer] } },
+    };
+    const request = pluginRequest({ pluginKey: "other" });
+    expect(isSlackPluginApprovalAuthorizedSender({ cfg, senderId: legacyReviewer, request })).toBe(
+      true,
+    );
+    cfg.approvals!.plugin!.slack!.approvers = [];
+    expect(isSlackPluginApprovalAuthorizedSender({ cfg, senderId: legacyReviewer, request })).toBe(
+      false,
+    );
+  });
+
+  it("uses the registered native tool owner and raw name without trusting the approval hook owner", () => {
+    const cfg: OpenClawConfig = {
+      approvals: {
+        plugin: {
+          slack: {
+            approvers: [defaultReviewer],
+            plugins: {
+              diffs: {
+                approvers: [pluginReviewer],
+                tools: { diffs: { approvers: [toolReviewer] } },
+              },
+            },
+          },
+        },
+      },
+    };
+    const check = (request: PluginApprovalRequest, senderId: string) =>
+      isSlackPluginApprovalAuthorizedSender({ cfg, request, senderId });
+
+    expect(check(pluginRequest({ pluginKey: "diffs", tool: "diffs" }), toolReviewer)).toBe(true);
+    expect(check(pluginRequest({ pluginKey: "diffs", tool: "diffs" }), pluginReviewer)).toBe(false);
+    expect(check(pluginRequest({ pluginKey: "diffs" }), pluginReviewer)).toBe(false);
+    expect(check(pluginRequest(), defaultReviewer)).toBe(false);
+    expect(check(pluginRequest({ pluginKey: "other" }), defaultReviewer)).toBe(true);
   });
 });

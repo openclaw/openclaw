@@ -204,6 +204,51 @@ targets, configure `approvals.plugin`:
 forwarding does not route plugin approval prompts, and enabling plugin approval
 forwarding does not change host exec policy.
 
+For Slack decisions, `approvals.plugin.slack` can restrict reviewers without
+changing the bot's message access list. The default `approvers` list applies to
+all plugin approvals. A `plugins` entry overrides it for one selected native
+tool plugin. A tool entry overrides that plugin's
+list for one exact tool:
+
+```json5
+{
+  approvals: {
+    plugin: {
+      slack: {
+        approvers: ["team:T12345678:user:U12345678"],
+        plugins: {
+          "catalog-tools": {
+            approvers: ["team:T12345678:user:U23456789"],
+            tools: {
+              "create%20issue": {
+                approvers: ["team:T12345678:user:U34567890"],
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+For native OpenClaw tools, use the tool registration's plugin ID and a tool key
+of `encodeURIComponent(rawToolName)`. Only the exact matching list applies:
+tool, then plugin, then default. Slack user IDs must
+include the bot's authenticated workspace ID as shown above; reviewers from a
+different workspace do not receive approval DMs. An explicit empty list denies
+Slack decisions at that level. If the default `approvers` field is omitted,
+requests with a known selected owner and no matching override retain the existing
+Slack account `allowFrom` or `defaultTo` authorization. A missing selected owner
+denies Slack decisions when plugin overrides exist. These lists control Slack
+buttons and `/approve`, while authenticated Gateway approval clients still use
+their own scopes. A tool override requires an exact selected tool match; the
+request cannot inherit a broader reviewer list when that identity is unavailable.
+An effective nonempty reviewer list enables native Slack delivery for that
+request, independently of native exec approvals and plugin forwarding. Native
+tool lists apply only when a policy or hook requests approval for that tool;
+setting reviewers does not itself prompt for approval.
+
 When a prompt includes manual approval text, resolve it with one of the offered
 decisions:
 

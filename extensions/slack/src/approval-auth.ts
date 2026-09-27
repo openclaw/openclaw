@@ -2,8 +2,10 @@ import {
   createChannelApprovalAuth,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-auth-runtime";
+import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolveSlackAccount, resolveSlackAccountAllowFrom } from "./accounts.js";
+import { resolvePluginApprovalSlackApprovers } from "./approval-plugin-policy.js";
 import { normalizeSlackApproverTarget } from "./exec-approvals.js";
 import {
   resolveSlackAllowListMatch,
@@ -52,14 +54,49 @@ const slackApproval = createChannelApprovalAuth({
 export const getSlackApprovalApprovers = slackApproval.resolveApprovers;
 export const isSlackApprovalAuthorizedSender = slackApproval.isAuthorizedSender;
 
+export function hasConfiguredSlackPluginApprovalApprovers(params: SlackApprovalContext): boolean {
+  const policy = params.cfg.approvals?.plugin?.slack;
+  return (
+    (policy?.approvers?.length ?? 0) > 0 ||
+    Object.values(policy?.plugins ?? {}).some(
+      (plugin) =>
+        (plugin.approvers?.length ?? 0) > 0 ||
+        Object.values(plugin.tools ?? {}).some((tool) => tool.approvers.length > 0),
+    )
+  );
+}
+
+export function isSlackPluginApprovalAuthorizedSender(
+  params: SlackApprovalContext & {
+    senderId?: string | null;
+    request?: PluginApprovalRequest;
+  },
+): boolean {
+  if (!params.request) {
+    // /approve and callbacks cannot inspect the pending request locally. Let
+    // a validated sender reach Gateway custody, which checks the exact request.
+    return params.cfg.approvals?.plugin?.slack
+      ? Boolean(params.senderId && normalizeSlackApproverTarget(params.senderId))
+      : isSlackApprovalAuthorizedSender(params);
+  }
+  const configured = resolvePluginApprovalSlackApprovers(params.cfg, params.request);
+  return configured === undefined
+    ? isSlackApprovalAuthorizedSender(params)
+    : Boolean(params.senderId && slackApprovalTargetMatches(params.senderId, configured));
+}
+
 export function getSlackApprovalApproversForTeam(
-  params: SlackApprovalContext & { teamId: string | undefined },
+  params: SlackApprovalContext & { teamId: string | undefined; request?: PluginApprovalRequest },
 ): string[] {
   // Potential routing retains qualified selectors, but concrete delivery must
   // bind them to the validated request workspace before it creates any DM.
+  const approvers = params.request
+    ? (resolvePluginApprovalSlackApprovers(params.cfg, params.request) ??
+      getSlackApprovalApprovers(params))
+    : getSlackApprovalApprovers(params);
   return resolveApprovalApprovers({
     allowFrom: resolveSlackUserAllowListForTeam({
-      allowList: getSlackApprovalApprovers(params),
+      allowList: [...approvers],
       teamId: params.teamId,
     }),
     normalizeApprover: normalizeSlackApproverTarget,

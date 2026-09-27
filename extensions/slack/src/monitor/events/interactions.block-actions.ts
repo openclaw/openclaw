@@ -24,7 +24,7 @@ import {
   SLACK_APPROVAL_HEADER_BLOCK_ID,
   type SlackApprovalAction,
 } from "../../approval-actions.js";
-import { isSlackApprovalAuthorizedSender } from "../../approval-auth.js";
+import { isSlackPluginApprovalAuthorizedSender } from "../../approval-auth.js";
 import {
   hasSlackApprovalControl,
   runSlackApprovalMessageUpdate,
@@ -524,17 +524,20 @@ async function handleSlackPluginBindingApproval(
   return true;
 }
 
-function formatSlackPluginApprovalSenderId(userId: string, eventScope?: SlackEventScope): string {
+function formatSlackPluginApprovalSenderId(userId: string, teamId: string | undefined): string {
   // Carry the listener-validated team into Gateway custody. A bare Enterprise
   // user ID would lose the configured workspace boundary after this callback.
-  return formatSlackTarget({ kind: "user", id: userId, teamId: eventScope?.teamId });
+  return formatSlackTarget({ kind: "user", id: userId, teamId });
 }
 
 async function handleSlackApprovalInteraction(
   params: SlackBlockActionContext & { approval: SlackApprovalAction },
 ): Promise<boolean> {
-  const pluginSenderId = formatSlackPluginApprovalSenderId(params.parsed.userId, params.eventScope);
-  const pluginApprovalAuthorizedSender = isSlackApprovalAuthorizedSender({
+  const pluginSenderId = formatSlackPluginApprovalSenderId(
+    params.parsed.userId,
+    params.eventScope?.teamId ?? params.ctx.teamId,
+  );
+  const pluginApprovalAuthorizedSender = isSlackPluginApprovalAuthorizedSender({
     cfg: params.ctx.cfg,
     accountId: params.ctx.accountId,
     senderId: pluginSenderId,
@@ -638,8 +641,11 @@ async function handleSlackLegacyApprovalInteraction(
   if (!parsedApproval) {
     return false;
   }
-  const pluginSenderId = formatSlackPluginApprovalSenderId(params.parsed.userId, params.eventScope);
-  const pluginAuthorized = isSlackApprovalAuthorizedSender({
+  const pluginSenderId = formatSlackPluginApprovalSenderId(
+    params.parsed.userId,
+    params.eventScope?.teamId ?? params.ctx.teamId,
+  );
+  const pluginAuthorized = isSlackPluginApprovalAuthorizedSender({
     cfg: params.ctx.cfg,
     accountId: params.ctx.accountId,
     senderId: pluginSenderId,

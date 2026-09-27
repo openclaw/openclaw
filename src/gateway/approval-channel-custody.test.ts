@@ -123,6 +123,35 @@ describe("prepareApprovalChannelCustody", () => {
     ).toBe(false);
   });
 
+  it("checks plugin reviewer custody against the pending request", () => {
+    mocks.authorize.mockImplementation(({ request: pending }) => ({
+      authorized: pending?.request.policySubject?.pluginKey === "calendar",
+    }));
+    const custody = prepareApprovalChannelCustody({
+      cfg: {},
+      approvalKind: "plugin",
+      reviewer: reviewer("ops"),
+    });
+    const pending = (pluginKey: string) => ({
+      id: `plugin:${pluginKey}`,
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+        policySubject: { pluginKey },
+        turnSourceChannel: "telegram",
+        turnSourceAccountId: "ops",
+      },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    });
+
+    expect(custody?.authorizes(pending("calendar"))).toBe(true);
+    expect(custody?.authorizes(pending("other"))).toBe(false);
+    expect(mocks.authorize).toHaveBeenCalledWith(
+      expect.objectContaining({ request: pending("calendar") }),
+    );
+  });
+
   describe("channels without approver settings", () => {
     const ircSender = { channel: "irc", accountId: "default", senderId: "alice" };
     const ownerCfg = { commands: { ownerAllowFrom: ["irc:alice"] } } as OpenClawConfig;

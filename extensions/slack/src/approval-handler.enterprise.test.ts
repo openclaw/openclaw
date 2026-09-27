@@ -163,4 +163,47 @@ describe("Slack Enterprise Grid approval delivery", () => {
       }),
     );
   });
+
+  it("delivers a qualified reviewer DM through its authenticated workspace client", async () => {
+    const open = vi.fn().mockResolvedValue({ channel: { id: "D123" } });
+    const appClient = {
+      conversations: { open },
+    };
+    const context = {
+      app: { client: appClient },
+      config: {},
+      workspaceTeamId: "T123",
+    };
+
+    const entry = await slackApprovalNativeRuntime.transport.deliverPending({
+      cfg: {} as never,
+      accountId: "default",
+      context,
+      preparedTarget: { to: "user:U123", teamId: "T123" },
+      pendingPayload: { text: "approve", blocks: [] },
+    } as never);
+
+    expect(open).toHaveBeenCalledWith({ users: "U123", return_im: true });
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "channel:D123",
+      "approve",
+      expect.objectContaining({ client: appClient, eventScope: undefined }),
+    );
+    expect(entry).toEqual({
+      channelId: "C123",
+      messageTs: "1712345678.123456",
+      teamId: "T123",
+    });
+
+    await expect(
+      slackApprovalNativeRuntime.transport.deliverPending({
+        cfg: {} as never,
+        accountId: "default",
+        context,
+        preparedTarget: { to: "user:U123", teamId: "TOTHER" },
+        pendingPayload: { text: "approve", blocks: [] },
+      } as never),
+    ).rejects.toThrow("Slack approval workspace does not match the authenticated installation");
+    expect(sendMessageSlackMock).toHaveBeenCalledTimes(1);
+  });
 });

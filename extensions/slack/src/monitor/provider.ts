@@ -333,7 +333,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           botId: identity.botId,
         });
       if (adopted && contextInstallationIdentity) {
-        installationState.update(contextInstallationIdentity.kind);
+        installationState.update(
+          contextInstallationIdentity.kind,
+          contextInstallationIdentity.teamId,
+        );
         await installSlackRuntimeForIdentity(contextInstallationIdentity);
       }
       if (
@@ -649,7 +652,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         if (!adopted) {
           return false;
         }
-        installationState.update(recoveredInstallationIdentity.kind);
+        installationState.update(
+          recoveredInstallationIdentity.kind,
+          recoveredInstallationIdentity.kind === "workspace"
+            ? recoveredInstallationIdentity.teamId
+            : undefined,
+        );
         await installSlackRuntimeForIdentity(recoveredInstallationIdentity);
         return true;
       } catch (err) {
@@ -679,6 +687,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const installationState = registerSlackInstallationState(
     account.accountId,
     installationIdentity.kind,
+    installationIdentity.kind === "workspace" ? installationIdentity.teamId : undefined,
   );
 
   try {

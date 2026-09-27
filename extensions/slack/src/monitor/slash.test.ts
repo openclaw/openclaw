@@ -2094,6 +2094,7 @@ describe("slack slash command session metadata", () => {
     expect(firstDispatchArg().ctx).toMatchObject({
       From: "slack:channel:team:TGRID1:channel:CGRID1",
       To: "slash:team:TGRID1:user:U1",
+      GroupSpace: "TGRID1",
       OriginatingTo: "team:TGRID1:channel:CGRID1",
       SessionKey: expect.stringContaining("team:tgrid1:user:u1"),
     });

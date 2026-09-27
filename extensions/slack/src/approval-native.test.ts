@@ -308,6 +308,46 @@ describe("slack native approval adapter", () => {
     ).toEqual([]);
   });
 
+  it("uses the authenticated bot workspace for reviewers on a workspace install", async () => {
+    const installation = registerSlackInstallationState("default", "workspace", "T11111111");
+    installationStates.push(installation);
+    const cfg = {
+      ...buildConfig({ allowFrom: ["U999LEGACY"] }),
+      approvals: {
+        plugin: {
+          slack: { approvers: ["team:T11111111:user:U111REVIEWER"] },
+        },
+      },
+    } as OpenClawConfig;
+    const request = buildPluginRequest({
+      turnSourceChannel: "slack",
+      turnSourceTo: "channel:C11111111",
+      turnSourceAccountId: "default",
+    });
+    const dmTargets = () =>
+      slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      });
+
+    expect(await dmTargets()).toEqual([{ to: "team:T11111111:user:U111REVIEWER" }]);
+    installation.update("workspace", "T22222222");
+    expect(await dmTargets()).toEqual([]);
+    expect(
+      await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request: {
+          ...request,
+          request: { ...request.request, turnSourceTo: "team:T11111111:channel:C11111111" },
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("does not enable Grid approval delivery without a trusted team-qualified origin", () => {
     installationStates.push(registerSlackInstallationState("default", "enterprise"));
     const capabilities = slackApprovalCapability.native?.describeDeliveryCapabilities({
@@ -359,6 +399,118 @@ describe("slack native approval adapter", () => {
     });
 
     expect(targets).toEqual([{ to: "user:U123OWNER" }]);
+  });
+
+  it("delivers only to the request's configured workspace-qualified tool reviewers", async () => {
+    const cfg: OpenClawConfig = {
+      ...buildConfig({ allowFrom: ["U999LEGACY"] }),
+      approvals: {
+        plugin: {
+          slack: {
+            approvers: [],
+            plugins: {
+              calendar: {
+                approvers: ["team:T11111111:user:U22222222"],
+                tools: {
+                  create_event: {
+                    approvers: ["team:T11111111:user:U33333333"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const request = buildPluginRequest({
+      turnSourceChannel: "slack",
+      turnSourceAccountId: "default",
+      turnSourceTo: "team:T11111111:channel:C11111111",
+      policySubject: {
+        pluginKey: "calendar",
+        tool: "create_event",
+      },
+    });
+    const dmTargets = (pending: PluginApprovalRequest) =>
+      slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request: pending,
+      });
+
+    expect(dmTargets(request)).toEqual([{ to: "team:T11111111:user:U33333333" }]);
+    expect(
+      dmTargets({
+        ...request,
+        request: { ...request.request, policySubject: { pluginKey: "calendar" } },
+      }),
+    ).toEqual([]);
+    expect(
+      dmTargets({
+        ...request,
+        request: { ...request.request, turnSourceTo: "team:T22222222:channel:C22222222" },
+      }),
+    ).toEqual([]);
+  });
+
+  it("checks the selected plugin tool policy before advertising a turn-source route", () => {
+    installationStates.push(registerSlackInstallationState("default", "workspace", "T11111111"));
+    const cfg = {
+      ...buildConfig({ allowFrom: ["U11111111"] }),
+      approvals: {
+        plugin: {
+          slack: {
+            approvers: [],
+            plugins: {
+              diffs: {
+                tools: { diffs: { approvers: ["team:T11111111:user:U11111111"] } },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const availability = (request?: PluginApprovalRequest, config = cfg) =>
+      slackApprovalCapability.getActionAvailabilityState?.({
+        cfg: config,
+        accountId: "default",
+        action: "approve",
+        approvalKind: "plugin",
+        ...(request ? { request } : {}),
+      });
+
+    expect(
+      availability(buildPluginRequest({ policySubject: { pluginKey: "diffs", tool: "diffs" } })),
+    ).toEqual({
+      kind: "enabled",
+    });
+    expect(
+      availability(buildPluginRequest({ policySubject: { pluginKey: "diffs", tool: "other" } })),
+    ).toEqual({
+      kind: "disabled",
+    });
+    expect(
+      availability(
+        buildPluginRequest({
+          policySubject: { pluginKey: "diffs", tool: "diffs" },
+          turnSourceChannel: "slack",
+          turnSourceTo: "team:T22222222:channel:C22222222",
+        }),
+      ),
+    ).toEqual({ kind: "disabled" });
+    expect(
+      availability(buildPluginRequest({ policySubject: { pluginKey: "diffs", tool: "diffs" } }), {
+        ...cfg,
+        channels: { slack: { ...cfg.channels?.slack, botToken: "" } },
+      }),
+    ).toEqual({ kind: "disabled" });
+    expect(
+      availability(buildPluginRequest(), {
+        ...cfg,
+        approvals: { plugin: { slack: { approvers: [] } } },
+      }),
+    ).toEqual({ kind: "disabled" });
   });
 
   it("enables native plugin delivery from plugin approvers without exec approvers", async () => {
@@ -429,6 +581,52 @@ describe("slack native approval adapter", () => {
         request,
       }),
     ).toBe(true);
+  });
+
+  it("activates plugin delivery from an explicit reviewer list without exec or forwarding config", async () => {
+    installationStates.push(registerSlackInstallationState("default", "workspace", "T11111111"));
+    const cfg = {
+      channels: { slack: { botToken: "xoxb-test", appToken: "xapp-test" } },
+      approvals: {
+        plugin: { slack: { approvers: ["team:T11111111:user:U111REVIEWER"] } },
+      },
+    } as OpenClawConfig;
+    const request = buildPluginRequest({
+      turnSourceChannel: "slack",
+      turnSourceTo: "channel:C11111111",
+      turnSourceAccountId: "default",
+    });
+
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.isConfigured({
+        cfg,
+        accountId: "default",
+      }),
+    ).toBe(true);
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toEqual([{ to: "team:T11111111:user:U111REVIEWER" }]);
+    expect(
+      slackApprovalCapability.native?.describeDeliveryCapabilities({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request: createExecApprovalRequest(),
+      }).enabled,
+    ).toBe(false);
   });
 
   it("enables native plugin delivery from plugin forwarding when exec native delivery is disabled", async () => {
@@ -971,6 +1169,70 @@ describe("slack native approval adapter", () => {
         ),
       }),
     ).toBe(false);
+  });
+
+  it("suppresses Slack forwarding when the request has no authorized Slack reviewers", () => {
+    const shouldSuppress = slackApprovalCapability.delivery?.shouldSuppressForwardingFallback;
+    if (!shouldSuppress) {
+      throw new Error("slack native delivery suppression unavailable");
+    }
+    const request = buildPluginRequest({ turnSourceChannel: "slack" });
+    const input = {
+      approvalKind: "plugin" as const,
+      target: { channel: "slack", to: "channel:C123ROOM", accountId: "default" },
+      request,
+    };
+
+    expect(
+      shouldSuppress({
+        ...input,
+        cfg: {
+          ...buildConfig({ allowFrom: ["U123OWNER"] }),
+          approvals: { plugin: { slack: { approvers: [] } } },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppress({
+        ...input,
+        cfg: {
+          ...buildConfig({ allowFrom: ["U123OWNER"] }),
+          approvals: {
+            plugin: {
+              slack: {
+                plugins: {
+                  diffs: { tools: { diffs: { approvers: ["team:T123:user:U123OWNER"] } } },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppress({
+        ...input,
+        request: buildPluginRequest({
+          turnSourceChannel: "slack",
+          turnSourceTo: "team:T22222222:channel:C22222222",
+          policySubject: { pluginKey: "diffs", tool: "diffs" },
+        }),
+        cfg: {
+          ...buildConfig({ allowFrom: ["U123OWNER"] }),
+          approvals: {
+            plugin: {
+              slack: {
+                plugins: {
+                  diffs: {
+                    tools: { diffs: { approvers: ["team:T11111111:user:U123OWNER"] } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 
   it("keeps plugin forwarding fallback for Slack targets not handled by native delivery", () => {

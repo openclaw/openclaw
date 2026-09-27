@@ -24,10 +24,39 @@ const ExecApprovalForwardingSchema = z
   .strict()
   .optional();
 
+// Bind every selected Slack reviewer to the workspace used by the bot account.
+const SlackPluginApproverSchema = z.string().regex(/^team:T[A-Z0-9]+:user:[UW][A-Z0-9]+$/i);
+
+const PluginSlackApproversSchema = z
+  .object({
+    approvers: z.array(SlackPluginApproverSchema).optional(),
+    plugins: z
+      .record(
+        z.string(),
+        z
+          .object({
+            approvers: z.array(SlackPluginApproverSchema).optional(),
+            tools: z
+              .record(
+                z.string(),
+                z.object({ approvers: z.array(SlackPluginApproverSchema) }).strict(),
+              )
+              .optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+  })
+  .strict();
+
+const PluginApprovalConfigSchema = ExecApprovalForwardingSchema.unwrap()
+  .extend({ slack: PluginSlackApproversSchema.optional() })
+  .optional();
+
 export const ApprovalsSchema = z
   .object({
     exec: ExecApprovalForwardingSchema,
-    plugin: ExecApprovalForwardingSchema,
+    plugin: PluginApprovalConfigSchema,
   })
   .strict()
   .optional();

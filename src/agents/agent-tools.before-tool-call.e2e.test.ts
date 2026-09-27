@@ -45,6 +45,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import {
   getBeforeToolCallFailureDisposition,
   getBeforeToolCallPolicyDiagnosticState,
@@ -53,7 +54,7 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
-import { createWriteTool } from "./sessions/index.js";
+import { createWriteTool, type ExtensionContext } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -2722,6 +2723,65 @@ describe("before_tool_call requireApproval handling", () => {
     expect(waitCall[0]).toBe("plugin.approval.waitDecision");
     requireRecord(waitCall[1], "approval wait gateway client");
     expect(waitCall[2]).toEqual({ id: "server-id-1" });
+  });
+
+  it("binds a native approval to the selected tool owner instead of the approval hook owner", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Review diff",
+        description: "Review selected tool call",
+        pluginId: "review-hook",
+      },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-diffs", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-diffs", decision: "allow-once" });
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const selectedTool = { name: "diffs", execute } as unknown as AnyAgentTool;
+    setPluginToolMeta(selectedTool, { pluginId: "diffs", optional: false });
+    const wrappedTool = wrapToolWithBeforeToolCallHook(selectedTool, {
+      agentId: "main",
+      sessionKey: "main",
+      loopDetection: { enabled: false },
+    });
+
+    await wrappedTool.execute("call-diffs", {}, undefined, undefined);
+
+    expect(
+      requireRecord(requireGatewayCall(0)[2], "approval request params").policySubject,
+    ).toEqual({
+      pluginKey: "diffs",
+      tool: "diffs",
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("binds unwrapped adapted plugin tools to their registered owner", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Review diff",
+        description: "Review selected tool call",
+        pluginId: "review-hook",
+      },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-adapted", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-adapted", decision: "allow-once" });
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const selectedTool = { name: "diffs", execute } as unknown as AnyAgentTool;
+    setPluginToolMeta(selectedTool, { pluginId: "diffs", optional: false });
+    const [definition] = toToolDefinitions([selectedTool], {
+      agentId: "main",
+      sessionKey: "main",
+    });
+
+    await definition?.execute("call-adapted", {}, undefined, undefined, {} as ExtensionContext);
+
+    expect(
+      requireRecord(requireGatewayCall(0)[2], "approval request params").policySubject,
+    ).toEqual({
+      pluginKey: "diffs",
+      tool: "diffs",
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("caps oversized plugin approval timeouts before calling gateway", async () => {
