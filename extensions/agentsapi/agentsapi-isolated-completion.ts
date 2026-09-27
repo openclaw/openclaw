@@ -111,7 +111,11 @@ export async function runAgentsApiIsolatedCompletion(
     );
     const assistant = createAgentHarnessAssistantMessage(
       { api: "openai-agents", provider: params.provider, modelId: model.id },
-      readAgentsApiFinalText(items),
+      readAgentsApiFinalText(
+        params.outputTextPolicy === "strict-visible"
+          ? items.filter((item) => item.phase === "final_answer")
+          : items,
+      ),
       { tokenUsage: usage, aborted: false },
     );
     assistant.usage = assistantUsage;
