@@ -60,10 +60,17 @@ suite.define(() => {
                   label: "Anthropic setup-token",
                 },
                 {
-                  id: "api-key",
+                  id: "apiKey",
                   brandId: "anthropic",
                   groupLabel: "Anthropic",
                   label: "Anthropic API key",
+                },
+                {
+                  id: "github-copilot",
+                  brandId: "github-copilot",
+                  groupLabel: "Copilot",
+                  label: "GitHub Copilot",
+                  hint: "Device login with your GitHub account",
                 },
               ],
               workspace: "/tmp/openclaw-e2e",
@@ -85,6 +92,22 @@ suite.define(() => {
                       label: "Sign in with ChatGPT",
                       kind: "oauth",
                       featured: true,
+                    },
+                  ],
+                },
+                {
+                  provider: "github-copilot",
+                  apiKeySupported: false,
+                  quickApiKeySetup: false,
+                  loginOptions: [
+                    {
+                      id: "github-copilot/github-copilot",
+                      brandId: "github-copilot",
+                      groupLabel: "Copilot",
+                      label: "GitHub Copilot",
+                      hint: "Device login with your GitHub account",
+                      kind: "device-code",
+                      featured: false,
                     },
                   ],
                 },
@@ -120,6 +143,14 @@ suite.define(() => {
             .locator('[data-models-login-provider="anthropic"] .provider-brand-icon')
             .evaluate((element) => element.getBoundingClientRect().width),
         ).toBeGreaterThan(0);
+        await dialog.locator('[data-models-login-provider="github-copilot"]').click();
+        const copilotMethods = dialog.locator("[data-models-login-choice] button");
+        expect(await copilotMethods.locator("strong").allTextContents()).toEqual([
+          "GitHub Copilot",
+          "GitHub Copilot API key or token",
+        ]);
+        expect(await copilotMethods.nth(1).textContent()).toContain("Paste an API key or token");
+        await dialog.locator("[data-models-login-back]").click();
         await dialog.locator('[data-models-login-provider="anthropic"]').click();
         expect(
           await dialog
@@ -143,7 +174,7 @@ suite.define(() => {
           sessionId: expect.any(String),
           agentId: "main",
           kind: "api-key",
-          authChoice: "api-key",
+          authChoice: "apiKey",
           apiKey: "synthetic-anthropic-api-key",
         });
         expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);

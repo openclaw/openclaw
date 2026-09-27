@@ -4,6 +4,7 @@ import type {
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import { t } from "../../i18n/index.ts";
 
 type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
   kind: ProviderLoginOption["kind"] | "setup-secret";
@@ -75,7 +76,19 @@ export function buildLoginProviders({
       if (!group.authProviders.includes(id)) {
         group.authProviders.push(id);
       }
-      group.choices.push({ ...option, brandId: id, kind: "setup-secret", featured: false });
+      const duplicateLabel = group.choices.some((choice) => choice.label === option.label);
+      group.choices.push({
+        ...option,
+        brandId: id,
+        kind: "setup-secret",
+        featured: false,
+        ...(duplicateLabel
+          ? {
+              label: t("modelSetup.manual.accessValueFor", { provider: option.label }),
+              hint: t("modelSetup.manual.accessValuePlaceholder"),
+            }
+          : {}),
+      });
       choices.add(option.id);
       groups.set(id, group);
     }
