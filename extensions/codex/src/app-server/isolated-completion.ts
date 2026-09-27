@@ -1,7 +1,7 @@
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
-import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
 import { resolveCodexBoundedTurnIsolation } from "./bounded-turn-isolation.js";
+import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
 import { readCodexPluginConfig, resolveCodexAppServerHomeScope } from "./config.js";
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
 import { assertCodexPassiveTurnItems } from "./protocol-validators.js";
