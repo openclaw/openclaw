@@ -63,7 +63,7 @@ import { startGatewayPresenceActivity } from "./gateway-presence-activity.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { startLinkReaderRouting } from "./link-reader-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
-import type { NativeConversationBridge } from "./native-conversation-bridge.ts";
+import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";

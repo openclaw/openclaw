@@ -1,5 +1,5 @@
 import type { ApplicationContext } from "./context.ts";
-import type { NativeConversationBridge } from "./native-conversation-bridge.ts";
+import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import type { NativeDeviceSettingsCapability } from "./native-device-settings.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import { nativeEmbedHost } from "./native-web-chrome.ts";

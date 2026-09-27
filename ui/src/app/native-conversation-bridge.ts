@@ -30,6 +30,7 @@ import {
 import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import type { ApplicationContext } from "./context.ts";
+import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import { nativeEmbedHost } from "./native-web-chrome.ts";
 
 const COMMAND_EVENT = "openclaw:native-conversation-command";
@@ -70,12 +71,6 @@ type NativeConversationMessage = Binding &
     | { type: "command-result"; requestId: string; ok: boolean; error?: string }
   );
 
-export type NativeConversationBridge = {
-  readonly presentation: { visible: boolean; active: boolean };
-  subscribe(listener: () => void): () => void;
-  interceptNavigation(location: RouteLocation): boolean;
-  dispose(): void;
-};
 type NativeConversationWindow = Window & {
   __OPENCLAW_NATIVE_CONVERSATION__?: unknown;
   __OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__?: Binding;
