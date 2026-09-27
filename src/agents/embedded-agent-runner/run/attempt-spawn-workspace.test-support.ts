@@ -754,17 +754,21 @@ vi.mock("../compaction-safety-timeout.js", () => ({
   resolveCompactionTimeoutMs: () => undefined,
 }));
 
-vi.mock("../history.js", () => ({
-  // Forward the account id too: dropping it here would hide whether the prompt
-  // path actually scopes the limit to the routed account.
-  getHistoryLimitFromSessionKey: (
-    sessionKey: string | undefined,
-    config: unknown,
-    route?: unknown,
-  ) => hoisted.getHistoryLimitFromSessionKeyMock(sessionKey, config, route),
-  limitHistoryTurns: (messages: unknown, limit: number | undefined) =>
-    hoisted.limitHistoryTurnsMock(messages, limit),
-}));
+vi.mock("../history.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../history.js")>();
+  return {
+    ...actual,
+    // Forward the account id too: dropping it here would hide whether the prompt
+    // path actually scopes the limit to the routed account.
+    getHistoryLimitFromSessionKey: (
+      sessionKey: string | undefined,
+      config: unknown,
+      route?: unknown,
+    ) => hoisted.getHistoryLimitFromSessionKeyMock(sessionKey, config, route),
+    limitHistoryTurns: (messages: unknown, limit: number | undefined) =>
+      hoisted.limitHistoryTurnsMock(messages, limit),
+  };
+});
 
 vi.mock("../logger.js", () => ({
   log: {

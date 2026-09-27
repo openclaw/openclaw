@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
+import {
+  getHistoryLimitFromSessionKey,
+  limitHistoryTurns,
+  resolveHistoryLimitForAttempt,
+  type SettleHistoryLimit,
+} from "./history.js";
 
 describe("getHistoryLimitFromSessionKey", () => {
   it("does not match channel history limits across provider id variants", () => {
@@ -527,5 +532,79 @@ describe("account-scoped limits change the retained transcript", () => {
     );
     expect(countUserTurns(rootLimited)).toBeGreaterThan(countUserTurns(accountLimited));
     expect(countUserTurns(rootLimited)).toBeLessThanOrEqual(30);
+  });
+});
+
+describe("resolveHistoryLimitForAttempt", () => {
+  const config = {
+    channels: { telegram: { dmHistoryLimit: 40 } },
+  } as OpenClawConfig;
+
+  it("leaves non-settle attempts on the configured session limit", () => {
+    expect(
+      resolveHistoryLimitForAttempt({
+        sessionKey: "agent:main:telegram:dm:123",
+        config,
+        inputProvenance: { sourceTool: "subagent_announce" },
+      }),
+    ).toBe(40);
+    expect(
+      resolveHistoryLimitForAttempt({
+        sessionKey: "agent:main:telegram:dm:123",
+        config,
+      }),
+    ).toBe(40);
+  });
+
+  it("caps requester-settle wakes even when dmHistoryLimit is unset", () => {
+    expect(
+      resolveHistoryLimitForAttempt({
+        sessionKey: "agent:main:telegram:dm:123",
+        config: {},
+        inputProvenance: { sourceTool: "subagent_settle" },
+      }),
+    ).toEqual({ limit: 4, keepFirstUser: true });
+  });
+
+  it("takes the min of configured DM limit and the settle cap", () => {
+    expect(
+      resolveHistoryLimitForAttempt({
+        sessionKey: "agent:main:telegram:dm:123",
+        config,
+        inputProvenance: { sourceTool: "subagent_settle" },
+      }),
+    ).toEqual({ limit: 4, keepFirstUser: true });
+
+    const tight = {
+      channels: { telegram: { dmHistoryLimit: 2 } },
+    } as OpenClawConfig;
+    expect(
+      resolveHistoryLimitForAttempt({
+        sessionKey: "agent:main:telegram:dm:123",
+        config: tight,
+        inputProvenance: { sourceTool: "subagent_settle" },
+      }),
+    ).toBe(2);
+  });
+
+  it("trims a fat transcript on settle provenance while keeping the first user turn", () => {
+    const messages = Array.from(
+      { length: 40 },
+      (_, i) =>
+        (i % 2 === 0
+          ? { role: "user", content: `q${i / 2}` }
+          : { role: "assistant", content: `a${(i - 1) / 2}` }) as AgentMessage,
+    );
+    const limited = limitHistoryTurns(
+      messages,
+      resolveHistoryLimitForAttempt({
+        sessionKey: "agent:main:telegram:dm:123",
+        config: {},
+        inputProvenance: { sourceTool: "subagent_settle" },
+      }) as SettleHistoryLimit,
+    );
+    const users = limited.filter((m) => m.role === "user");
+    expect(users.length).toBeLessThanOrEqual(Math.ceil(4 * 1.5));
+    expect(users[0]?.content).toBe("q0");
   });
 });

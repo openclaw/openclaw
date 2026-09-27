@@ -38,7 +38,12 @@ export function buildRequesterSettleWakeMessage(params: {
     "[Subagent Context] Every subagent in this batch has now settled, including its descendants.",
     "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
     // Private completion guidance already includes the shared outcome policy.
-    ...(params.parentOnly ? [] : [`[Subagent Context] ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`]),
+    ...(params.parentOnly
+      ? []
+      : [
+          `[Subagent Context] ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`,
+          "[Subagent Context] Do not start new filesystem migrations, bulk edits, or long sync jobs in this settle turn — verify child evidence and reply, or spawn a follow-up child for remaining work.",
+        ]),
     params.parentOnly
       ? `[Subagent Context] ${SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION}`
       : params.requireVisibleReply
