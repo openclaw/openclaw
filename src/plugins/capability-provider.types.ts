@@ -443,7 +443,7 @@ export type WorkerProvider<Version extends 0 | 1 = 0> = Version extends 1
   : LegacyWorkerProvider;
 
 /** Required authority for provider-owned identity effects in one host invocation. */
-export type WorkerSshIdentityRequestV1 = WorkerSshIdentityRequest & { assertCurrent: () => void };
+type WorkerSshIdentityRequestV1 = WorkerSshIdentityRequest & { assertCurrent: () => void };
 
 /** Opt-in to required closure-bound guards without withdrawing legacy lifecycle support. */
 export type WorkerProviderV1 = Omit<
