@@ -10,6 +10,7 @@ import { normalizeWebPushDevicePreferences } from "../infra/push-web-preferences
 import {
   hashWebPushEndpoint,
   upsertWebPushSubscription,
+  withBoundWebPushSubscriptionByEndpoint,
   withBoundWebPushSubscriptions,
   type BoundWebPushSubscription,
 } from "../infra/push-web-store.js";
@@ -24,6 +25,7 @@ import {
 } from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { createEventWebPushDelivery } from "./event-web-push.js";
+import { withCurrentWebPushAuthority } from "./web-push-authority.js";
 
 type PreparedSender = Awaited<ReturnType<typeof prepareWebPushNotificationSender>>;
 type WebPushCommand = SqliteWorkerCommand<WebPushWorkerOperations>;
@@ -36,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   preparedSend: vi.fn<PreparedSender>(),
   listPairedDevices: vi.fn<() => PairedDevice[] | Promise<PairedDevice[]>>(),
   nativeDatabaseOpen: vi.fn(),
+  prepareSessionFacts: vi.fn(),
 }));
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -90,6 +93,9 @@ vi.mock("./operator-role-policy.js", () => ({
   resolveOperatorRolePolicyForAssignment: () => undefined,
 }));
 vi.mock("./session-sharing.js", () => ({ canReceiveSessionEvent: () => true }));
+vi.mock("./session-sharing-preparation.js", () => ({
+  prepareSessionMutationFacts: mocks.prepareSessionFacts,
+}));
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -98,7 +104,6 @@ function mockCapturedContext() {
   const databasePath = `${stateDir}/openclaw.sqlite`;
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: stateDir },
-    coordinatorRuntime: { directory: "/synthetic/webpush-coordinator", keepAlive: false },
     admission: {
       coordinationKey: `path:${databasePath}`,
       databasePath,
@@ -300,6 +305,86 @@ function prepareQueuedRead(readError?: Error) {
   return { stateDir, selected, releaseReply };
 }
 
+it("keeps browser storage responsive while notification session facts load", async () => {
+  const stateDir = mockCapturedContext();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const provider = createDeferred();
+  const factsReleased = vi.fn();
+  mocks.prepareSessionFacts.mockImplementation(async () => {
+    entered.resolve();
+    await release.promise;
+    return {
+      readCurrent: () => ({ target: null, membership: new Set<string>() }),
+      release: factsReleased,
+    };
+  });
+  let current: BoundWebPushSubscription;
+  mocks.nativeUpsert.mockImplementation(
+    (params: Parameters<typeof upsertNativeWebPushSubscription>[0]) => {
+      current = {
+        subscriptionId: "scope-subscription",
+        endpoint: params.endpoint,
+        keys: params.keys,
+        createdAtMs: 1,
+        updatedAtMs: params.nowMs,
+        ...expectDefined(params.binding, "browser binding"),
+        devicePreferences: normalizeWebPushDevicePreferences(undefined),
+      };
+      return current;
+    },
+  );
+  mocks.executeWorker.mockImplementation(
+    async (_context: OpenClawStateWorkerContext, command: WebPushCommand) => {
+      if (command.type === "webPush.listBoundWebPushSubscriptions") {
+        return [current];
+      }
+      if (command.type === "webPush.findBoundWebPushSubscriptionByEndpoint") {
+        return current;
+      }
+      throw new Error(`unexpected synthetic worker command: ${command.type}`);
+    },
+  );
+  mocks.listPairedDevices.mockReturnValue([]);
+  await upsertBinding(stateDir, "profile-a", 1);
+  const start = vi.fn(() => provider.promise);
+  const delivery = withCurrentWebPushAuthority(
+    { stateDir, getRuntimeConfig: () => ({}), sessionKeys: ["agent:main:scope"] },
+    (authority) => {
+      expect(authority.subscriptions[0]?.userProfileId).toBe("profile-b");
+      return { start };
+    },
+  );
+  await entered.promise;
+  let browserFinished = false;
+  const browser = (async () => {
+    await upsertBinding(stateDir, "profile-b", 2);
+    await withBoundWebPushSubscriptionByEndpoint(
+      { stateDir, endpoint: "https://push.example.test/scope" },
+      (subscription) => ({
+        start: () => expect(subscription?.userProfileId).toBe("profile-b"),
+      }),
+    );
+    browserFinished = true;
+  })();
+  try {
+    await nextTurn();
+    expect(browserFinished, "session reads must not retain the subscription lease").toBe(true);
+    expect(start).not.toHaveBeenCalled();
+    release.resolve();
+    await nextTurn();
+    expect(start).toHaveBeenCalledOnce();
+    expect(
+      factsReleased,
+      "provider completion must not retain session facts",
+    ).toHaveBeenCalledOnce();
+  } finally {
+    release.resolve();
+    provider.resolve();
+    await Promise.allSettled([browser, delivery]);
+  }
+});
+
 it("rejects excess waiting work before entering storage and admits new work after settlement", async () => {
   const { stateDir, selected, releaseReply } = prepareQueuedRead();
   await upsertBinding(stateDir, "profile-a", 1);
@@ -395,7 +480,6 @@ it("canonical close seals retained and new admissions and joins the held binding
   const databasePath = path.join(stateDir, "state.sqlite");
   mocks.captureContext.mockImplementation((): OpenClawStateWorkerContext => ({
     environment: { OPENCLAW_STATE_DIR: stateDir },
-    coordinatorRuntime: { directory: stateDir, keepAlive: false },
     admission: captureOpenClawStateDatabaseReadAdmission(databasePath),
   }));
   const start = vi.fn();

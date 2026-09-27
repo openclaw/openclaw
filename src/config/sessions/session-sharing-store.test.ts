@@ -22,8 +22,6 @@ import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import { isSessionMember, listSessionMembers } from "./session-sharing-store.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 
-const stateOptions = { layout: "state-only" as const, applyEnv: false };
-
 afterEach(() => vi.restoreAllMocks());
 
 describe("session sharing store", () => {
@@ -62,11 +60,11 @@ describe("session sharing store", () => {
       }
       return raw;
     });
-    await withOpenClawTestState(stateOptions, async ({ stateDir: dir }) => {
+    await withOpenClawTestState({ layout: "state-only" }, async ({ stateDir: dir, env }) => {
       fixtureRoot = dir;
       const scope = {
         agentId: "main",
-        env: { ...process.env, OPENCLAW_STATE_DIR: dir },
+        env,
         sessionKey: "agent:main:main",
       };
       await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
@@ -86,8 +84,7 @@ describe("session sharing store", () => {
   });
 
   it("publishes membership changes only after their containing transaction commits", async () => {
-    await withOpenClawTestState(stateOptions, async ({ stateDir: dir }) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
       const changes: SessionRowChange[] = [];
@@ -158,8 +155,7 @@ describe("session sharing store", () => {
   });
 
   it("reads existing and missing memberships without opening or creating writable databases", async () => {
-    await withOpenClawTestState(stateOptions, async ({ stateDir: dir }) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       const missingScope = { agentId: "missing", env, sessionKey: "agent:missing:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
@@ -180,8 +176,7 @@ describe("session sharing store", () => {
   });
 
   it("keeps deterministic membership rows", async () => {
-    await withOpenClawTestState(stateOptions, async ({ stateDir: dir }) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, {
         sessionId: "session-main",
@@ -213,8 +208,7 @@ describe("session sharing store", () => {
   });
 
   it("does not recreate a missing canonical membership table", async () => {
-    await withOpenClawTestState(stateOptions, async ({ stateDir: dir }) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
       const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -239,8 +233,7 @@ describe("session sharing store", () => {
   });
 
   it("refuses member writes whose expected session instance no longer matches", async () => {
-    await withOpenClawTestState(stateOptions, async ({ stateDir: dir }) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 1 });
 
@@ -283,8 +276,7 @@ describe("session sharing store", () => {
   ] as const)(
     "preserves membership identity checks for %s",
     async (_, sessionId, entryJson, valid) => {
-      await withOpenClawTestState(stateOptions, async ({ stateDir: dir }) => {
-        const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
         const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
         await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
         addSessionMember(scope, { identityId: "existing", addedBy: "owner", addedAt: 2 });
@@ -313,8 +305,7 @@ describe("session sharing store", () => {
   );
 
   it("drops members when the session instance is replaced under the same key", async () => {
-    await withOpenClawTestState(stateOptions, async ({ stateDir: dir }) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, {
         sessionId: "session-a",
@@ -350,8 +341,7 @@ describe("session sharing store", () => {
   });
 
   it("rejects stale member writes after entry-only deletion leaves a placeholder", async () => {
-    await withOpenClawTestState(stateOptions, async ({ stateDir: dir }) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
       expect(

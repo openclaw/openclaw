@@ -195,6 +195,10 @@ this boundary. Forced parent or supervisor death (such as `SIGKILL`) can prevent
 cleanup; unregistered descendants that intentionally escape the owned group remain
 outside this contract. The wrappers do
 not sweep old directories or infer ownership from names, ages, or PIDs.
+The CI shard runner also removes its default include-file and transform-cache
+scratch directory after every admitted group has joined. Caller-supplied scratch
+and persistent cache roots remain caller-owned. Unverified descendant completion
+retains the shard scratch directory and reports its exact path.
 This is home isolation, not a filesystem sandbox: explicit absolute paths,
 `os.userInfo()` account lookup, children with stripped or replaced home variables,
 and intentionally real-home live execution remain outside its protection.

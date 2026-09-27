@@ -19,6 +19,8 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
+import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
+import { isInvalidConfigError } from "./io.invalid-config.js";
 import { observeConfigSnapshot, observeConfigSnapshotSync } from "./io.observe.js";
 import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import {
@@ -392,8 +394,14 @@ export function createConfigIoContext(
         },
       };
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      return { ok: false, reason: `candidate preparation failed: ${detail}` };
+      // Unavailable dependencies cannot establish that the backup is invalid.
+      if (
+        error instanceof ConfigIncludeReadError ||
+        !(error instanceof ConfigIncludeError || isInvalidConfigError(error))
+      ) {
+        throw error;
+      }
+      return { ok: false, reason: `candidate preparation failed: ${error.message}` };
     }
   }
 

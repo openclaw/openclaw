@@ -320,7 +320,6 @@ it.each(["cjs", "ts"])(
             "sandbox",
             "worktrees",
             "webSearch",
-            "tasks",
           ] as const) {
             const replacement = { ...runtime[key] };
             expect.soft(Reflect.set(runtime, key, replacement), key).toBe(true);

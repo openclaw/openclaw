@@ -11,11 +11,13 @@ import {
   createNodeTestShardBundles,
   createUiTestShardGroups,
   resolveCanonicalNodeTestConfig,
+  type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
   isReleaseOnlyRuntimeTestFile,
   listPrExemptRuntimeTestFiles,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 
@@ -268,12 +270,19 @@ it("keeps UI fallback with its complete canonical owners beside precise core cha
   expect(new Set(preciseFiles).size).toBe(preciseFiles.length);
   expect(preciseFiles.some(isReleaseOnlyRuntimeTestFile)).toBe(false);
   expect(precise!.length).toBeLessThan(shards!.length);
-  // Precise targets already passed deferral, so their canonical template retains runtime rows.
-  const preciseOwners = createNodeTestShardBundles({
-    compactMode: "pull-request",
-    runnerBackend: "hybrid",
-    includeReleaseOnlyRuntimeTests: true,
-  });
+  // Precise plans retain full runtime templates before whole-plan runtime relocation.
+  const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+  let preciseOwners: CompactNodeTestShard[];
+  try {
+    preciseOwners = createNodeTestShardBundles({
+      compactMode: "pull-request",
+      runnerBackend: "hybrid",
+      includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyRuntimeTests: true,
+    });
+  } finally {
+    placement.mockRestore();
+  }
   for (const job of precise ?? []) {
     for (const group of job.groups ?? []) {
       const ownerJob = expectDefined(

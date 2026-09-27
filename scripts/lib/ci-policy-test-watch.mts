@@ -362,18 +362,6 @@ const policyTestWatches = [
     ],
   },
   {
-    testFile: "src/tasks/task-registry-terminal-notification.test.ts",
-    watchGlobs: [
-      "src/tasks/task-notification.kernel.ts",
-      "src/tasks/task-initial.worker.ts",
-      "src/tasks/task-registry.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
-      "src/state/openclaw-state-read.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-    ],
-  },
-  {
     testFile: "src/transcripts/store.test.ts",
     watchGlobs: [
       "src/transcripts/store-worker-read.ts",
@@ -662,10 +650,6 @@ const policyTestWatches = [
       "src/agents/sandbox/ssh.ts",
       "src/agents/sandbox/ssh-backend.ts",
     ],
-  },
-  {
-    testFile: "src/tasks/task-boundaries.test.ts",
-    watchGlobs: ["src/**/!(*.test|*.test-harness|*.test-utils|*.e2e-harness).ts"],
   },
 ] satisfies readonly PolicyTestWatch[];
 

@@ -323,6 +323,7 @@ export function createGatewayConnectionState(params: {
       };
     },
     clients,
+    forgetConnectionAncestors,
     connectionWork: new GatewayConnectionWork(),
     mentionInbox,
     isConnectionActive,

@@ -23,7 +23,7 @@ describe("prepared model runtime automatic selections", () => {
         ownership: "explicit",
         defaults: { model: "xai/grok-4.6", systemAgent: { agentId: "default" } },
         entries: {
-          default: { models: { "xai/grok-4.6": { agentRuntime: { id: "openclaw" } } } },
+          default: { models: { "xai/grok-4.6": { agentRuntime: { id: "other-harness" } } } },
           worker: {},
         },
       },
@@ -41,6 +41,11 @@ describe("prepared model runtime automatic selections", () => {
     };
     const options = { pluginGeneration: dispatch!.pluginGeneration };
     await using outer = await acquireAgentRunPreparedModelRuntime(input, options);
+    expect(fixture.mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.at(-1)?.[0]).toMatchObject(
+      {
+        selections: [{ provider: "xai", modelId: "grok-4.6", runtime: "openclaw" }],
+      },
+    );
     const resolveConfiguredOwner = owners.resolveConfiguredOwner;
     let iterations = 0;
     // Bound the pre-fix microtask livelock; a timer cannot interrupt it.
@@ -63,28 +68,6 @@ describe("prepared model runtime automatic selections", () => {
     } finally {
       guard.mockRestore();
     }
-  });
-
-  it.each([undefined, "worker"])("keeps auto policy scoped before keying (%s)", (agentId) => {
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "default" } },
-        entries: {
-          default: { models: { "xai/grok-4.6": { agentRuntime: { id: "other-harness" } } } },
-          worker: {},
-        },
-      },
-    };
-    fixture.mocks.configuredAgentIds = ["default", "worker"];
-    const input = owners.normalizePreparedModelRuntimeInput({
-      ...fixture.agentInput("worker", config),
-      runtimePluginSelections: [{ provider: "xai", modelId: "grok-4.6", runtime: "auto", agentId }],
-    });
-    expect(input.runtimePluginSelections).toEqual([
-      { provider: "xai", modelId: "grok-4.6", runtime: "openclaw" },
-    ]);
-    expect(owners.normalizePreparedModelRuntimeInput(input)).toEqual(input);
   });
 
   it("rejects a settled replacement that never publishes instead of spinning", async () => {

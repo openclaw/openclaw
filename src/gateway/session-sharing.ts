@@ -139,7 +139,6 @@ export {
   prepareSessionSharingTargets,
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
-  resolveSessionSharingTargets,
   resolveSessionVisibility,
 } from "./session-sharing-policy.js";
 

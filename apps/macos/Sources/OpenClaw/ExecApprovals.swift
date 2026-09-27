@@ -99,12 +99,6 @@ enum ExecApprovalHelpers {
         return .valid(trimmed)
     }
 
-    static func parseDecision(_ raw: String?) -> ExecApprovalDecision? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
-        return ExecApprovalDecision(rawValue: trimmed)
-    }
-
     static func requiresAsk(
         ask: ExecAsk,
         security: ExecSecurity,

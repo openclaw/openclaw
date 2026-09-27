@@ -1,4 +1,3 @@
-import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createBedrockAwsSdkConfig } from "./auth-profiles/config-fixtures.test-support.js";
@@ -37,44 +36,21 @@ const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig 
 describe("captured catalog auth labels", () => {
   beforeEach(() => envKey.mockReset().mockReturnValue(null));
 
-  it.each([
-    {
-      name: "API key reference",
-      profile: {
-        type: "api_key",
-        provider: "openai",
-        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+  it("labels an unresolved API key reference", () => {
+    const captured = capture("openai", {
+      version: 1,
+      profiles: {
+        default: {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
       },
-      label: "default=ref",
-    },
-    {
-      name: "token reference",
-      profile: {
-        type: "token",
-        provider: "openai",
-        tokenRef: { source: "env", provider: "default", id: "OPENAI_TOKEN" },
-      },
-      label: "default=token:ref",
-    },
-    {
-      name: "invalid token expiry",
-      profile: {
-        type: "token",
-        provider: "openai",
-        token: "gho-test",
-        expires: MAX_DATE_TIMESTAMP_MS + 1,
-      },
-      label: "default=token:gh...st",
-    },
-  ] satisfies { name: string; profile: AuthProfileStore["profiles"][string]; label: string }[])(
-    "retains the $name label after the source changes",
-    ({ profile, label }) => {
-      const store: AuthProfileStore = { version: 1, profiles: { default: profile } };
-      const captured = capture("openai", store);
-      store.profiles = {};
-      expect(captured.labels.get("openai")?.all).toMatchObject({ profiles: { default: label } });
-    },
-  );
+    });
+    expect(captured.labels.get("openai")?.all).toMatchObject({
+      profiles: { default: "default=ref" },
+    });
+  });
 
   it("preserves provider-specific placeholders and independently owned profile labels", () => {
     const config = createBedrockAwsSdkConfig();

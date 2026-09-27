@@ -108,6 +108,7 @@ import {
 } from "../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { registerHarnessCompletionRecoveryCases } from "./main-session-harness-completion.test-harness.js";
+import { registerParentRestartRecoveryCases } from "./main-session-parent-recovery.test-harness.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 import {
@@ -1534,107 +1535,13 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams().idempotencyKey).not.toBe(runId);
   });
 
-  it.each([
-    {
-      label: "an announcement interrupted during lifecycle rotation",
-      lifecycleRunId: undefined,
-      sessionKey: "agent:main:telegram:group:-100:topic:2",
-      sessionId: "topic-2-session",
-      restartRecoveryRuns: [
-        {
-          runId: "announce:v1:agent:main:subagent:child:run-1",
-          lifecycleGeneration: "generation-old",
-        },
-      ],
-      userMessage: { role: "user", content: "earlier human request" },
-    },
-    {
-      label: "an announcement interrupted during a full restart",
-      lifecycleRunId: undefined,
-      sessionKey: "agent:main:telegram:group:-100:topic:8893",
-      sessionId: "topic-8893-session",
-      restartRecoveryRuns: undefined,
-      userMessage: {
-        role: "user",
-        content: "A background task finished.",
-        provenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceChannel: "internal",
-          sourceTool: "subagent_announce",
-        },
-      },
-    },
-    {
-      label: "a parent continuation after children settled",
-      lifecycleRunId: undefined,
-      sessionKey: "agent:main:dashboard:parent",
-      sessionId: "parent-session",
-      restartRecoveryRuns: [
-        {
-          runId: "announce:requester-settle:main:parent:child:yield-1",
-          lifecycleGeneration: "generation-old",
-        },
-      ],
-      userMessage: {
-        role: "user",
-        content: "The child finished; continue the original task.",
-        provenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceChannel: "internal",
-          sourceTool: "subagent_settle",
-        },
-      },
-    },
-    {
-      label: "a hard-killed parent continuation",
-      sessionKey: "agent:main:dashboard:hard-killed-parent",
-      sessionId: "hard-killed-parent-session",
-      lifecycleRunId: "announce:requester-settle:main:parent:child:cold",
-      restartRecoveryRuns: undefined,
-      userMessage: {
-        role: "user",
-        content: "The child finished; continue the original task.",
-        provenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceChannel: "internal",
-          sourceTool: "subagent_settle",
-        },
-      },
-    },
-  ])("resumes unfinished work after $label", async (fixture) => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, {
-      [fixture.sessionKey]: {
-        sessionId: fixture.sessionId,
-        updatedAt: Date.now() - 10_000,
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryRuns: fixture.restartRecoveryRuns,
-        lifecycleRunId: fixture.lifecycleRunId,
-      },
-    });
-    await writeTranscript(sessionsDir, fixture.sessionId, [
-      fixture.userMessage,
-      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
-      { role: "toolResult", content: "done" },
-    ]);
-
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(gatewayParams()).toMatchObject({
-      sessionKey: fixture.sessionKey,
-      expectedExistingSessionId: fixture.sessionId,
-      message: expect.stringContaining("The restart did not cancel the user's task"),
-    });
-    const recovered = loadSessionEntry({ sessionKey: fixture.sessionKey, storePath });
-    expect(recovered).toMatchObject({ status: "running" });
-    expect(recovered?.restartRecoveryDeliverySourceRunId).toBe(
-      fixture.restartRecoveryRuns?.[0]?.runId ?? fixture.lifecycleRunId,
-    );
+  registerParentRestartRecoveryCases({
+    makeSessionsDir,
+    writeStore,
+    writeTranscript,
+    writePreparedMainSessionTranscript,
+    expectRecovery,
+    gatewayParams,
   });
 
   registerHarnessCompletionRecoveryCases(getHarnessRecoveryFixture);

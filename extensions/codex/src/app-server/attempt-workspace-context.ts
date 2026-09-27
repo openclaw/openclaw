@@ -1,5 +1,9 @@
 import path from "node:path";
 import {
+  resolveAgentWorkspaceMemoryRouting,
+  shouldIncludeAgentHarnessRuntimeContext,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import {
   buildAgentWorkspaceInstructionSnapshot,
   buildBootstrapContextForFiles,
   prepareAgentWorkspaceContext,
@@ -7,7 +11,6 @@ import {
   type EmbeddedContextFile,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
@@ -82,12 +85,9 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       normalizeCodexDynamicToolName(tool.name),
     ),
   );
-  const memoryToolNames = Array.from(CODEX_MEMORY_TOOL_NAMES).filter((name) =>
-    availableToolNames.has(name),
-  );
   const executionWorkspace = params.executionWorkspace ?? params.resolvedWorkspace;
   const inheritsAgentWorkspace = executionWorkspace !== params.resolvedWorkspace;
-  const injectOpenClawContext = shouldInjectCodexOpenClawPromptContext(params.params);
+  const injectOpenClawContext = shouldIncludeAgentHarnessRuntimeContext(params.params);
   const restrictedProjectDocNeedsOpenClawCarrier =
     params.params.pluginHarnessToolPolicyRestricted === true &&
     !params.params.disableTools &&
@@ -101,13 +101,12 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     const promptWorkspace = inheritsAgentWorkspace
       ? params.resolvedWorkspace
       : params.effectiveWorkspace;
-    const memoryToolsAvailable =
-      memoryToolNames.length > 0 &&
-      canRouteCodexWorkspaceMemoryThroughTools({
-        config: params.params.config,
-        agentId: params.params.agentId ?? params.sessionAgentId,
-        workspaceDir: inheritsAgentWorkspace ? params.resolvedWorkspace : params.effectiveWorkspace,
-      });
+    const { memoryToolNames, memoryToolRouted } = resolveAgentWorkspaceMemoryRouting({
+      config: params.params.config,
+      agentId: params.params.agentId ?? params.sessionAgentId,
+      workspaceDir: promptWorkspace,
+      toolNames: availableToolNames,
+    });
     const prepared = await prepareAgentWorkspaceContext({
       scope: "full",
       workspaceDir: params.resolvedWorkspace,
@@ -120,7 +119,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       warn: (message) => embeddedAgentLog.warn(message),
       contextMode: params.params.bootstrapContextMode,
       runKind: params.params.bootstrapContextRunKind,
-      memoryToolRouted: memoryToolsAvailable,
+      memoryToolRouted,
       onMemoryPreparationError: (error) =>
         embeddedAgentLog.warn("failed to prepare codex memory recall instructions", { error }),
       memoryTools: injectOpenClawContext
@@ -161,7 +160,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryReferenceFiles,
       memoryToolRoutedBootstrapFiles,
       memoryToolNames,
-      memoryToolRouted: memoryToolsAvailable,
+      memoryToolRouted,
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
       // Empty is a captured snapshot too; a missing value still permits first capture.
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
@@ -189,14 +188,6 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         : undefined,
     };
   }
-}
-
-export function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams): boolean {
-  // Lightweight cron runs are commonly exact commands. Keep the user input byte-for-byte
-  // to avoid changing command intent while Codex keeps its native project-doc loader.
-  return !(
-    params.bootstrapContextMode === "lightweight" && params.bootstrapContextRunKind === "cron"
-  );
 }
 
 function renderCodexWorkspaceBootstrapPromptContext(
@@ -266,20 +257,6 @@ function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string
     return undefined;
   }
   return `Codex may expose ${memoryToolNames.join(" and ")} as deferred tools. When the memory guidance above calls for memory recall, use an already-loaded memory tool directly. If the needed memory tool is deferred and not currently callable, use \`tool_search\` to load it, then call that memory tool.`;
-}
-
-function canRouteCodexWorkspaceMemoryThroughTools(params: {
-  config: EmbeddedRunAttemptParams["config"] | undefined;
-  agentId: string;
-  workspaceDir: string;
-}): boolean {
-  if (!params.config) {
-    return false;
-  }
-  return isSameCodexWorkspacePath(
-    resolveAgentWorkspaceDir(params.config, params.agentId),
-    params.workspaceDir,
-  );
 }
 
 function isSameCodexWorkspacePath(left: string, right: string): boolean {

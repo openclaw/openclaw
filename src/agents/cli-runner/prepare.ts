@@ -49,7 +49,10 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import {
+  readRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
@@ -79,11 +82,7 @@ import {
   resolveCliAuthEpoch,
 } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
-import {
-  buildCliSessionDriftNote,
-  hashCliSessionText,
-  resolveCliSessionReuse,
-} from "../cli-session.js";
+import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
@@ -153,6 +152,7 @@ import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./p
 import {
   buildCliTurnAppendContext,
   composeCliPromptContext,
+  prependCliSessionDriftUserContext,
   prepareCliSystemPrompt,
 } from "./prompt-context.js";
 import { admitCliRunParams, prepareCliRunModelAuthority } from "./run-admission.js";
@@ -223,24 +223,6 @@ const defaultPrepareDeps = {
   loadManifestModelCatalog,
 };
 const prepareDeps = { ...defaultPrepareDeps };
-
-function prependCliSessionDriftUserContext(
-  context: RunCliAgentParams["currentInboundContext"],
-  reusableCliSession: CliReusableSession,
-): RunCliAgentParams["currentInboundContext"] {
-  if (reusableCliSession.mode !== "reuse-with-drift") {
-    return context;
-  }
-  const note = buildCliSessionDriftNote(reusableCliSession.drift.reasons);
-  if (!context) {
-    return { text: note };
-  }
-  return {
-    ...context,
-    text: [note, context.text].join("\n\n"),
-    ...(context.resumableText ? { resumableText: [note, context.resumableText].join("\n\n") } : {}),
-  };
-}
 
 function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
@@ -1756,11 +1738,13 @@ async function prepareCliRunContextWithinReadFence(
           channel: runtimeChannel,
           accountId: params.agentAccountId,
         });
+    const requesterProfileId = readRunOperatorAuthority(params)?.profileId;
     const builtSystemPrompt = isControlOperation
       ? ""
       : isSideQuestion
         ? extraSystemPrompt
         : await prepareCliSystemPrompt({
+            requesterProfileId,
             workspaceDir,
             cwd,
             config: params.config,
@@ -1847,6 +1831,7 @@ async function prepareCliRunContextWithinReadFence(
           .filter((value): value is string => Boolean(value?.trim()))
           .join("\n\n");
         const appendContext = await buildCliTurnAppendContext({
+          requesterProfileId,
           capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
           sessionKey: params.sessionKey,
           agentId: sessionAgentId,

@@ -1,6 +1,3 @@
-/**
- * Gemini CLI bundle MCP adapter that writes temporary system settings files.
- */
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { tryReadJson } from "../../infra/json-files.js";
@@ -109,7 +106,6 @@ function normalizeGeminiServerConfig(
   return next;
 }
 
-/** Writes merged Gemini system settings and returns env plus cleanup hook. */
 export async function writeGeminiSystemSettings(
   mergedConfig: BundleMcpConfig,
   inheritedEnv: Record<string, string> | undefined,
@@ -117,25 +113,23 @@ export async function writeGeminiSystemSettings(
   webSearchEnabled?: boolean,
 ): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> }> {
   const base = await readGeminiBaseSettings(inheritedEnv);
-  const normalizedConfig: BundleMcpConfig = {
-    mcpServers: Object.fromEntries(
-      Object.entries(mergedConfig.mcpServers).flatMap(([name, server]) => {
-        const normalized = normalizeGeminiServerConfig(
-          server,
-          inheritedEnv,
-          mcpToolsDeny && Object.hasOwn(mcpToolsDeny, name) ? mcpToolsDeny[name] : undefined,
-        );
-        return normalized ? [[name, normalized]] : [];
-      }),
-    ) as BundleMcpConfig["mcpServers"],
-  };
+  const mcpServers = Object.fromEntries(
+    Object.entries(mergedConfig.mcpServers).flatMap(([name, server]) => {
+      const normalized = normalizeGeminiServerConfig(
+        server,
+        inheritedEnv,
+        mcpToolsDeny && Object.hasOwn(mcpToolsDeny, name) ? mcpToolsDeny[name] : undefined,
+      );
+      return normalized ? [[name, normalized]] : [];
+    }),
+  );
   const settings = applyMergePatch(
     webSearchEnabled === false ? mergeGeminiWebSearchDisabled(base) : base,
     {
       mcp: {
-        allowed: Object.keys(normalizedConfig.mcpServers),
+        allowed: Object.keys(mcpServers),
       },
-      mcpServers: normalizedConfig.mcpServers,
+      mcpServers,
     },
   ) as Record<string, unknown>;
   if (!isRecord(settings.mcp) || !isRecord(settings.mcpServers)) {

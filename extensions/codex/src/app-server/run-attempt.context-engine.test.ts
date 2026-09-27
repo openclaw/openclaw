@@ -411,26 +411,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const params = createParams(sessionFile, workspaceDir);
       params.prompt = "Transport context and media wrapping, or continue after runtime refresh.";
       const admittedMessage = {
-        ...userMessage("", 10),
-        content: [
-          { type: "text" as const, text: "What do you remember" },
-          {
-            type: "image" as const,
-            mimeType: "image/png",
-            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvXkAAAAASUVORK5CYII=",
-          },
-          { type: "text" as const, text: "about my preferences?" },
-        ],
+        ...userMessage("What do you remember about my preferences?", 10),
         idempotencyKey: "refresh-original:user",
-      };
-      params.hostCapabilities = {
-        ...params.hostCapabilities,
-        prepareContextMedia: async ({ message }) => ({
-          images:
-            message.role === "user"
-              ? admittedMessage.content.filter((part) => part.type === "image")
-              : [],
-        }),
       };
       if (withRecorder) {
         params.userTurnTranscriptRecorder = {
@@ -453,7 +435,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       expect(beforePromptBuild).toHaveBeenCalled();
       for (const [event] of beforePromptBuild.mock.calls) {
         expect(event).toMatchObject({
-          currentUserMessage: withRecorder ? "What do you remember\nabout my preferences?" : "",
+          currentUserMessage: withRecorder ? "What do you remember about my preferences?" : "",
         });
         if (withRecorder) {
           expect(event).toHaveProperty("currentUserMessageId", "refresh-original:user");

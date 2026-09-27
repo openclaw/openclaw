@@ -22,6 +22,7 @@ import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -281,12 +282,9 @@ export const migrationsHandlers: GatewayRequestHandlers = {
         respondMemoryApply(await inFlight.completion, respond, true);
         return;
       }
-      let settle!: (outcome: MemoryApplyOutcome) => void;
-      const completion = new Promise<MemoryApplyOutcome>((resolve) => {
-        settle = resolve;
-      });
+      const completion = createDeferredCore<MemoryApplyOutcome>();
       // Reserve before acquisition. Once apply completes, even an unreadable result is terminal.
-      inFlightMap.set(dedupeKey, { requestFingerprint, completion });
+      inFlightMap.set(dedupeKey, { requestFingerprint, completion: completion.promise });
       let applyCompleted = false;
       let producedOutcome: MemoryApplyOutcome | undefined;
       let outcome: MemoryApplyOutcome;
@@ -422,7 +420,7 @@ export const migrationsHandlers: GatewayRequestHandlers = {
       } finally {
         inFlightMap.delete(dedupeKey);
       }
-      settle(outcome);
+      completion.resolve(outcome);
       respondMemoryApply(outcome, respond);
     },
   ),

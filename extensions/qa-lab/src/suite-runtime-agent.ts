@@ -18,7 +18,10 @@ export {
   waitForAgentRun,
 } from "./suite-runtime-agent-process.js";
 export { runQaCli } from "./qa-cli-process.js";
-export { inspectQaExecutionIdentityStorage } from "./execution-identity-storage-inspection.js";
+export {
+  inspectQaExecutionIdentityStorage,
+  readNativeQaSubagentRuns,
+} from "./execution-identity-storage-inspection.js";
 export {
   ensureImageGenerationConfigured,
   extractMediaPathFromText,

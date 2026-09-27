@@ -41,7 +41,7 @@ async function execute<Key extends keyof PluginBlobWorkerOperations>(
           ? preparation.handoff(() => scope.execute<Key>(command))
           : scope.execute<Key>(command));
       },
-      { requireStateLifecycle: true, assertCurrent: preparation?.assertCurrent },
+      { assertCurrent: preparation?.assertCurrent },
     );
   } catch (error) {
     throw wrapPluginBlobError(

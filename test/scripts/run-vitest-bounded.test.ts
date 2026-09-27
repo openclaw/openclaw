@@ -190,6 +190,71 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
 posixDescribe("bounded Vitest process ownership", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+  it.each(["mjs", "mts"])(
+    "loads the native UI asset inspector before direct %s readers",
+    (extension) => {
+      const root = tempDirs.make("oc-vt-ui-admission-");
+      const preload = path.join(root, "preload.mjs");
+      const metadataPath = path.join(repoRoot, "dist/build-info.json");
+      fs.writeFileSync(
+        preload,
+        `import cp from "node:child_process";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const spawn = cp.spawn;
+cp.spawn = (bin, args, options) => {
+  if (args.includes("scripts/run-node.mjs")) {
+    return spawn(process.execPath, ["-e", ""], {
+      ...options, env: { ...options.env, NODE_OPTIONS: "" },
+    });
+  }
+  if (args.includes("scripts/ui.js") ||
+      args.some(arg => arg === "vitest" || arg.endsWith("/vitest.mjs"))) {
+    throw new Error("fixture reader or UI build admitted before runtime identity");
+  }
+  return spawn(bin, args, options);
+};
+const readFileSync = fs.readFileSync;
+fs.readFileSync = (file, ...args) => {
+  if (file === ${JSON.stringify(metadataPath)}) {
+    throw new Error("fixture runtime identity inspected");
+  }
+  return readFileSync(file, ...args);
+};
+syncBuiltinESMExports();
+`,
+      );
+      const env = { ...process.env };
+      for (const key of Object.keys(env)) {
+        if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
+          delete env[key];
+        }
+      }
+      const result = spawnSync(
+        testNodeExecPath,
+        [
+          path.join(repoRoot, `scripts/run-vitest.${extension}`),
+          "run",
+          "--config",
+          "test/vitest/vitest.ui-e2e.config.ts",
+          "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
+        ],
+        {
+          cwd: repoRoot,
+          // This preload replaces only I/O; it does not install a TypeScript loader.
+          env: { ...env, CI: "1", NODE_OPTIONS: `--import=${preload}` },
+          encoding: "utf8",
+          timeout: 15_000,
+        },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.signal, result.stderr).toBeNull();
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("fixture runtime identity inspected");
+      expect(result.stderr).not.toContain("fixture reader or UI build admitted");
+    },
+  );
+
   it.each(["success", "runtime-failure", "ai-failure", "prebuilt", "skip", "custom", "cancel"])(
     "prepares the direct E2E reader generation once: %s",
     { timeout: 60_000 },

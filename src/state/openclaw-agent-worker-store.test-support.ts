@@ -10,6 +10,7 @@ import {
   SQLITE_WORKER_PREPARE_COMMAND,
   type SqliteWorkerPreparedBackend,
 } from "../infra/sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 
 export type AgentWorkerFixtureOperations = {
   inspect: { input: undefined; output: number };
@@ -29,6 +30,7 @@ export function bindSqliteWorkerBackend(
   connectionInput:
     | {
         openMarker?: string;
+        cleanupAdmission?: boolean;
         closeFailure?: string;
         closeWriteValue?: string;
         preparation?: {
@@ -126,6 +128,12 @@ export function bindSqliteWorkerBackend(
       }
     },
     close() {
+      if (connectionInput?.cleanupAdmission) {
+        requestSqliteWorkerOperationAdmission({
+          stage: "prepare",
+          facts: { kind: "fixture-cleanup" },
+        });
+      }
       const closeWriteValue = connectionInput?.closeWriteValue;
       if (closeWriteValue) {
         runSqliteImmediateTransactionSync(db, () => {

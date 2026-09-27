@@ -281,10 +281,6 @@ export function buildBuiltinChatCommands(
         acceptsArgs: true,
       },
     ),
-    defineBuiltinCommand("tasks", "List background tasks for this session.", "status", "standard", {
-      activeRunSafe: true,
-      modelIndependent: "always",
-    }),
     defineBuiltinCommand("allowlist", "List/add/remove allowlist entries.", "management", "power", {
       modelIndependent: "always",
       nativeName: false,

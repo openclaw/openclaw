@@ -429,10 +429,13 @@ export async function runTestProjects(
     process.cwd(),
   );
   const termination: { signal: NodeJS.Signals | null } = { signal: null };
+  const preparationAbort = new AbortController();
   let preparingWorkers = false;
   let workers: VitestWorkerRun | undefined;
   const onSignal = (signal: NodeJS.Signals) => {
     termination.signal ??= signal;
+    // Retain cancellation between managed build children and async source imports.
+    preparationAbort.abort();
     if (preparingWorkers) {
       // An upstream preparation request must also settle before this group exits.
       void workers?.dispose().catch(() => {});
@@ -461,23 +464,23 @@ export async function runTestProjects(
       for (const spec of e2eSpecs) {
         spec.env = { ...spec.env, ...preparedEnv };
       }
-    } else {
-      const code = await prepareVitestRuntime(
-        runnable.flatMap(({ spec, cliArgs }) => {
-          const selections = resolveVitestRuntimeCliSelections(spec.config, cliArgs, spec.env);
-          // These selections are invocation-owned; their include files are not written yet.
-          for (const selection of selections) {
-            selection.includePatterns = spec.includePatterns;
-          }
-          return selections;
-        }),
-        baseEnv,
-      );
-      if (code !== 0) {
-        printTestSummary("failed", 0, performance.now() - suiteStartedAt);
-        process.exitCode = code;
-        return;
-      }
+    }
+    const code = await prepareVitestRuntime(
+      runnable.flatMap(({ spec, cliArgs }) => {
+        const selections = resolveVitestRuntimeCliSelections(spec.config, cliArgs, spec.env);
+        // These selections are invocation-owned; their include files are not written yet.
+        for (const selection of selections) {
+          selection.includePatterns = spec.includePatterns;
+        }
+        return selections;
+      }),
+      baseEnv,
+      { runtimePrepared: e2eSpecs.length > 0, signal: preparationAbort.signal },
+    );
+    if (code !== 0) {
+      printTestSummary("failed", 0, performance.now() - suiteStartedAt);
+      process.exitCode = code;
+      return;
     }
 
     if (termination.signal) {

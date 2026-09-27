@@ -1,28 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { Value } from "typebox/value";
-import {
-  WorkerPortalParamsSchema,
-  WorkerSessionsSendParamsSchema,
-  WorkerSessionsSpawnParamsSchema,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerConnectParams,
   WorkerLiveEventParams,
-  WorkerPortalParams,
   WorkerProtocolCloseReason,
-  WorkerSessionsSendParams,
-  WorkerSessionsSpawnParams,
-  WorkerSessionToolResult,
   WorkerTranscriptCommitParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceCancelParams,
   WorkerInferenceStartParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import {
-  WorkerSkillWorkshopParamsSchema,
-  type WorkerSkillWorkshopParams,
-} from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import type { WorkerSessionToolName } from "../../worker/tool-authority.js";
@@ -48,15 +34,12 @@ import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 import type { WorkerTranscriptCommitOutcome } from "./transcript-commit-store.js";
 import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
-import {
-  serializeWorkerSessionToolResult,
-  workerSessionToolErrorResult,
-  type WorkerSessionToolExecutor,
-} from "./worker-session-tool-result.js";
+import type { WorkerSessionToolExecutor } from "./worker-session-tool-result.js";
 import {
   createWorkerComputerRpc,
   type WorkerComputerExecutor,
 } from "./worker-turn-computer-rpc.js";
+import { createWorkerSessionToolRpc } from "./worker-turn-session-tool-rpc.js";
 
 type WorkerProcessTurnBinding = {
   turnClaim: WorkerSessionTurnClaim;
@@ -101,11 +84,6 @@ type WorkerInferenceStartServiceResult =
 type WorkerInferenceCancelServiceResult =
   | WorkerInferenceCancelApplicationResult
   | { ok: false; closeReason: WorkerProtocolCloseReason };
-
-type WorkerSessionToolServiceResult =
-  | { ok: true; result: WorkerSessionToolResult }
-  | { ok: false; closeReason: WorkerProtocolCloseReason }
-  | { ok: false; reason: WorkerProtocolCloseReason };
 
 type WorkerTurnRpcOptions = {
   store: WorkerEnvironmentStore;
@@ -427,54 +405,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     validate: (identity) => validateTool(identity, "computer"),
   });
 
-  const executeSessionTool = async (
-    identity: WorkerConnectionIdentity,
-    toolName: WorkerSessionToolName,
-    request:
-      | WorkerSkillWorkshopParams
-      | WorkerSessionsSpawnParams
-      | WorkerSessionsSendParams
-      | WorkerPortalParams,
-    signal?: AbortSignal,
-  ): Promise<WorkerSessionToolServiceResult> => {
-    const validate = () => validateTool(identity, toolName);
-    const admitted = validate();
-    if (!admitted.ok) {
-      return admitted;
-    }
-    if (!options.executeSessionTool) {
-      return { ok: false, reason: "gateway-unavailable" };
-    }
-    const operation =
-      toolName === "skill_workshop" && Value.Check(WorkerSkillWorkshopParamsSchema, request)
-        ? { toolName, request }
-        : toolName === "sessions_spawn" && Value.Check(WorkerSessionsSpawnParamsSchema, request)
-          ? { toolName, request }
-          : toolName === "sessions_send" && Value.Check(WorkerSessionsSendParamsSchema, request)
-            ? { toolName, request }
-            : toolName === "portal" && Value.Check(WorkerPortalParamsSchema, request)
-              ? { toolName, request }
-              : undefined;
-    if (!operation) {
-      return { ok: false, closeReason: "invalid-frame" };
-    }
-    let result: WorkerSessionToolResult;
-    try {
-      result = await options.executeSessionTool({
-        identity,
-        ...operation,
-        ...(signal ? { signal } : {}),
-      });
-    } catch (error) {
-      result = {
-        resultJson: serializeWorkerSessionToolResult(workerSessionToolErrorResult(error)),
-      };
-    }
-    // The tool may have awaited provider provisioning or another session turn.
-    // Neither success nor failure may return after the source turn or placement was revoked.
-    const current = validate();
-    return current.ok ? { ok: true, result } : current;
-  };
+  const executeSessionTool = createWorkerSessionToolRpc({
+    execute: options.executeSessionTool,
+    validate: validateTool,
+  });
 
   const validateLiveEvent = (
     identity: WorkerConnectionIdentity,

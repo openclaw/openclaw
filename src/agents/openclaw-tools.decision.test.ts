@@ -101,7 +101,6 @@ function fixture(
     prepareDecisionProviderReload(builder.registry, new Set([record.id]));
     await getPluginInstance(record)?.dispose();
   });
-  return builder;
 }
 
 // Disable unrelated plugin tool discovery; the core factory and wrappers remain real.
@@ -164,18 +163,7 @@ describe("core decision_evaluate registered flow", () => {
     }
   });
 
-  it("requires effective selection without provider-health churn", () => {
-    expect(assembled()).toBeDefined();
-    expect(assembled("alternate")).toBeDefined();
-    expect(assembled("disabled")).toBeUndefined();
-    expect(
-      assembled("main", {
-        agents: {
-          defaults: { decisionModel: "fixture/default" },
-          entries: { main: {} },
-        },
-      }),
-    ).toBeDefined();
+  it("omits the tool when no decision model is selected", () => {
     expect(
       assembled("main", {
         agents: {
@@ -184,21 +172,6 @@ describe("core decision_evaluate registered flow", () => {
         },
       }),
     ).toBeUndefined();
-    expect(
-      assembled("main", {
-        agents: {
-          defaults: {
-            decisionModel: "fixture/default",
-          },
-          entries: { main: { decisionModel: "" } },
-        },
-      }),
-    ).toBeUndefined();
-    fixture(
-      async () => answer,
-      () => false,
-    );
-    expect(assembled()).toBeDefined();
   });
 
   it("preserves all answer values, structured evidence, trusted binding and provenance", async () => {
@@ -390,7 +363,6 @@ describe("core decision_evaluate registered flow", () => {
 
   it.each([
     { ...batch, agentId: "disabled" },
-    { ...batch, model: "another/provider" },
     {
       state: "private evidence",
       questions: { q: { type: "boolean", criteria: { maybe: "unknown" } } },
@@ -402,22 +374,19 @@ describe("core decision_evaluate registered flow", () => {
     expect(evaluate).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "rate-limited",
-    "transport",
-    "unsupported-input",
-    "invalid-response",
-    "authentication",
-  ] as const)("keeps the tool stable and returns actionable %s", async (reason) => {
-    fixture(async () => ({ status: "unavailable", reason }));
-    const tool = requiredTool();
-    expect((await tool.execute("call", batch)).details).toMatchObject({
-      status: "unavailable",
-      reason,
-      guidance: expect.any(String),
-    });
-    expect(assembled()?.description).toBe(tool.description);
-  });
+  it.each(["transport", "authentication"] as const)(
+    "keeps the tool stable and returns actionable %s",
+    async (reason) => {
+      fixture(async () => ({ status: "unavailable", reason }));
+      const tool = requiredTool();
+      expect((await tool.execute("call", batch)).details).toMatchObject({
+        status: "unavailable",
+        reason,
+        guidance: expect.any(String),
+      });
+      expect(assembled()?.description).toBe(tool.description);
+    },
+  );
 
   it("reports missing provider configuration without changing eligibility", async () => {
     setRuntimeConfigSnapshot(config);
