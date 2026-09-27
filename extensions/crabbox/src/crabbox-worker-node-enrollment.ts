@@ -3,7 +3,10 @@ import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-se
 import { createCrabboxNodeProcessRuntime } from "./crabbox-worker-node-process.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
-import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
+import {
+  CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
+  CRABBOX_SETUP_TIMEOUT_MS,
+} from "./crabbox-worker-timeouts.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
 const CLOUD_BOOTSTRAP_TOKEN_ENV = "CRABBOX_WORKER_BOOTSTRAP_TOKEN";
@@ -141,6 +144,7 @@ setPhase("preparation");
     setPhase("complete");
     return;
   }
+  const downloadPhaseSignal = AbortSignal.timeout(${CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS});
   const verifyRuntime = (root) => {
     setPhase("runtime verification");
     if (!fs.lstatSync(root).isDirectory() || fs.realpathSync(root) !== root) throw new Error("Cloud worker bootstrap runtime path is unsafe");
@@ -173,7 +177,7 @@ setPhase("preparation");
     if (pin && !/^[a-f0-9]{64}$/.test(pin)) throw new Error("Cloud worker bootstrap TLS fingerprint is invalid");
     const transport = url.protocol === "https:" ? https : http;
     const request = transport.request(url, {
-      agent: false, headers: { authorization: "Bearer " + token }, signal: AbortSignal.timeout(600000),
+      agent: false, headers: { authorization: "Bearer " + token }, signal: AbortSignal.any([downloadPhaseSignal, AbortSignal.timeout(600000)]),
       ...(pin ? { rejectUnauthorized: false, session: Buffer.alloc(0) } : {}),
     });
     // The response/body readers still reject; keep errors observed between their awaits.
@@ -197,7 +201,19 @@ setPhase("preparation");
     })().catch((error) => request.destroy(error));
     const response = await pendingResponse;
     try {
-      if (response.statusCode !== 200) throw Object.assign(new Error("Cloud worker bootstrap download failed with HTTP " + response.statusCode), { statusCode: response.statusCode });
+      if (response.statusCode !== 200) {
+        const error = Object.assign(new Error("Cloud worker bootstrap download failed with HTTP " + response.statusCode), { statusCode: response.statusCode });
+        if (response.statusCode === 503) {
+          let body = "";
+          for await (const chunk of response) {
+            if (Buffer.byteLength(body) + chunk.byteLength > 1024) { body = ""; break; }
+            body += chunk.toString("utf8");
+          }
+          try { if (JSON.parse(body)?.error === "transfer_in_progress") error.code = "TRANSFER_IN_PROGRESS"; }
+          catch { /* Other proxy responses remain ordinary HTTP failures. */ }
+        }
+        throw error;
+      }
       if (response.headers["content-length"] !== undefined && Number(response.headers["content-length"]) !== artifact.bytes) throw new Error("Cloud worker bootstrap archive length does not match the Gateway");
       reportPhase("download body");
       const output = await fsp.open(archive, "wx", 0o600);
@@ -208,21 +224,27 @@ setPhase("preparation");
   const downloadArchive = async (artifact, token, archive, reportPhase = setPhase) => {
     let downloadPhase;
     const progress = (next) => { downloadPhase = next; reportPhase(next); };
-    for (let attempt = 1; ; attempt++) {
+    let attempt = 1;
+    let retries = 0;
+    for (;;) {
       const partial = archive + ".attempt-" + attempt;
       try {
+        if (retries > 0) await delay(Math.round(250 * 2 ** Math.min(retries - 1, 3) * (0.5 + Math.random())), undefined, { signal: downloadPhaseSignal });
+        downloadPhaseSignal.throwIfAborted();
         await downloadAttempt(artifact, token, partial, progress);
         fs.renameSync(partial, archive);
         return;
       } catch (error) {
-        const transient = ["ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EPIPE", "ERR_STREAM_PREMATURE_CLOSE", "ABORT_ERR", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EAI_AGAIN"].includes(error.code) || [502, 503, 504].includes(error.statusCode);
-        if (!transient || attempt === 3) {
+        const busy = error.code === "TRANSFER_IN_PROGRESS";
+        const transient = busy || ["ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EPIPE", "ERR_STREAM_PREMATURE_CLOSE", "ABORT_ERR", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EAI_AGAIN"].includes(error.code) || [502, 503, 504].includes(error.statusCode);
+        if (downloadPhaseSignal.aborted || !transient || (!busy && attempt === 3)) {
           error.message += " (download attempt " + attempt + "/3)";
           throw error;
         }
-        console.error("Cloud worker bootstrap " + downloadPhase + " failed (" + (error.code || "HTTP_" + error.statusCode) + "); retrying download attempt " + (attempt + 1) + "/3");
+        if (!busy) attempt++;
+        retries++;
+        console.error("Cloud worker bootstrap " + downloadPhase + " failed (" + (error.code || "HTTP_" + error.statusCode) + "); retrying download attempt " + attempt + "/3");
       } finally { fs.rmSync(partial, { force: true }); }
-      await delay(Math.round(250 * 2 ** (attempt - 1) * (0.5 + Math.random())));
     }
   };
   const workerArchivePath = (root) => {

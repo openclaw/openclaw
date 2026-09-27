@@ -15,14 +15,16 @@ import {
 const require = createRequire(import.meta.url);
 const archive = Buffer.from("verified worker archive");
 
-async function download(outcomes: Array<string | number>) {
+type DownloadOutcome = string | number;
+
+async function download(outcomes: DownloadOutcome[] | ((elapsedMs: number) => DownloadOutcome)) {
   const sha256 = createHash("sha256").update(archive).digest("hex");
   const workerBundle = {
     ...createWorkerArchiveFixture(),
     sha256,
     bytes: archive.length,
     packageRelativePath: `worker-artifacts/${sha256}.tgz`,
-    ...(outcomes[0] === "pin" ? { tlsFingerprint: "a".repeat(64) } : {}),
+    ...(Array.isArray(outcomes) && outcomes[0] === "pin" ? { tlsFingerprint: "a".repeat(64) } : {}),
   };
   const setup = createCrabboxNodeRuntimeSetup({
     leaseId: "cbx_download_fixture",
@@ -35,9 +37,14 @@ async function download(outcomes: Array<string | number>) {
   const removed: Array<{ file: string; bytes: number }> = [];
   const delays: number[] = [];
   const output: string[] = [];
+  let elapsedMs = 0;
+  const deadlines: Array<{ atMs: number; controller: AbortController }> = [];
   const transport = {
     request: (_url: URL, options: { headers: { authorization: string } }) => {
-      const outcome = outcomes[Math.min(requests.length, outcomes.length - 1)];
+      const outcome =
+        typeof outcomes === "function"
+          ? outcomes(elapsedMs)
+          : outcomes[Math.min(requests.length, outcomes.length - 1)];
       requests.push(options.headers.authorization);
       const request = Object.assign(new EventEmitter(), {
         destroy: (error: Error) => request.emit("error", error),
@@ -45,6 +52,10 @@ async function download(outcomes: Array<string | number>) {
           const response = Object.assign(
             Readable.from(
               (async function* () {
+                if (outcome === "busy") {
+                  yield Buffer.from('{"error":"transfer_in_progress"}');
+                  return;
+                }
                 yield archive.subarray(0, 4);
                 if (outcome === "short") {
                   return;
@@ -61,7 +72,10 @@ async function download(outcomes: Array<string | number>) {
                 }
               })(),
             ),
-            { statusCode: typeof outcome === "number" ? outcome : 200, headers: {} },
+            {
+              statusCode: outcome === "busy" ? 503 : typeof outcome === "number" ? outcome : 200,
+              headers: {},
+            },
           );
           request.emit("response", response);
         },
@@ -136,7 +150,14 @@ async function download(outcomes: Array<string | number>) {
     Buffer,
     URL,
     Math: Object.assign(Object.create(Math), { random: () => 0.5 }),
-    AbortSignal: { timeout: () => new AbortController().signal },
+    AbortSignal: {
+      any: (signals: AbortSignal[]) => AbortSignal.any(signals),
+      timeout: (ms: number) => {
+        const controller = new AbortController();
+        deadlines.push({ atMs: elapsedMs + ms, controller });
+        return controller.signal;
+      },
+    },
     process: processFixture,
     console: { error: (line: string) => output.push(line) },
     require: (name: string) => {
@@ -154,8 +175,17 @@ async function download(outcomes: Array<string | number>) {
       }
       if (name === "node:timers/promises") {
         return {
-          setTimeout: async (ms: number) => {
+          setTimeout: async (ms: number, _value: unknown, options?: { signal: AbortSignal }) => {
             delays.push(ms);
+            const untilMs = elapsedMs + ms;
+            for (const { atMs, controller } of deadlines.toSorted((a, b) => a.atMs - b.atMs)) {
+              if (!controller.signal.aborted && atMs <= untilMs) {
+                elapsedMs = atMs;
+                controller.abort(new Error("synthetic deadline exceeded"));
+                options?.signal.throwIfAborted();
+              }
+            }
+            elapsedMs = untilMs;
           },
         };
       }
@@ -171,12 +201,43 @@ async function download(outcomes: Array<string | number>) {
     created,
     removed,
     delays,
+    elapsedMs,
     output: output.join("\n"),
     published: [...files.values()],
   };
 }
 
 describe("bootstrap artifact download retries", () => {
+  it("waits for delayed serve settlement without spending content-transfer attempts", async () => {
+    let transfers = 0;
+    const result = await download((elapsedMs) => {
+      if (transfers === 1 && elapsedMs < 5_000) {
+        return "busy";
+      }
+      return ++transfers < 3 ? "ECONNRESET" : "success";
+    });
+    expect(result.code).toBe(0);
+    expect(transfers).toBe(3);
+    expect(result.requests.length).toBeGreaterThan(5);
+    expect(new Set(result.requests)).toEqual(new Set(["Bearer synthetic-worker-archive-token"]));
+    expect(result.published).toEqual([archive]);
+    expect(result.created).toHaveLength(3);
+  });
+
+  it("bounds persistent busy replies by the phase deadline even on the third transfer attempt", async () => {
+    let transfers = 0;
+    const result = await download((elapsedMs) => {
+      if (elapsedMs >= 15 * 60_000) {
+        throw new Error("A request started after the phase deadline");
+      }
+      return transfers++ < 2 ? "ECONNRESET" : "busy";
+    });
+    expect(result.code).toBe(1);
+    expect(result.elapsedMs).toBe(15 * 60_000);
+    expect(result.output).toContain("synthetic deadline exceeded (download attempt 3/3)");
+    expect(result.published).toEqual([]);
+  });
+
   it.each([
     "ECONNRESET",
     "ECONNREFUSED",
@@ -215,12 +276,17 @@ describe("bootstrap artifact download retries", () => {
       expect(result.output).toContain("download attempt 1/3");
     },
   );
-  it("reports the transport failure and total attempts after exhaustion", async () => {
-    const result = await download(["ECONNRESET"]);
-    expect(result.code).toBe(1);
-    expect(result.requests).toEqual(Array(3).fill("Bearer synthetic-worker-archive-token"));
-    expect(result.delays).toEqual([250, 500]);
-    expect(result.published).toEqual([]);
-    expect(result.output).toContain("transport interrupted (download attempt 3/3)");
-  });
+  it.each(["ECONNRESET", 503])(
+    "reports %s and total attempts after exhaustion",
+    async (failure) => {
+      const result = await download([failure]);
+      expect(result.code).toBe(1);
+      expect(result.requests).toEqual(Array(3).fill("Bearer synthetic-worker-archive-token"));
+      expect(result.delays).toEqual([250, 500]);
+      expect(result.published).toEqual([]);
+      expect(result.output).toContain(
+        (failure === 503 ? "HTTP 503" : "transport interrupted") + " (download attempt 3/3)",
+      );
+    },
+  );
 });
