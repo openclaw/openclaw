@@ -6,6 +6,7 @@ import type {
   ResponseInputItem,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import { getAiTransportHost } from "../host.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
@@ -14,8 +15,6 @@ import {
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { createAssistantOutput } from "./assistant-output.js";
-import { transformTransportMessages } from "./host-policy.js";
 import {
   buildOpenAIResponsesReplayContext,
   buildOpenAIResponsesCompactionReplayPlan,
@@ -235,12 +234,7 @@ export function buildResponsesInputMessage(
   return { type: "message", role, content };
 }
 
-export function createOpenAIResponsesAssistantOutput(
-  model: Model,
-  api: Api = model.api,
-): AssistantMessage {
-  return createAssistantOutput(model, api);
-}
+export { createAssistantOutput as createOpenAIResponsesAssistantOutput } from "./assistant-output.js";
 
 type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
@@ -321,7 +315,7 @@ function convertResponsesMessagesWithStyle(
   const transformMessages = (source: Context["messages"]) =>
     providerStyle
       ? transformProviderMessages(source, model, normalizeToolCallId)
-      : transformTransportMessages(source, model, normalizeToolCallId, {
+      : getAiTransportHost().transformTransportMessages(source, model, normalizeToolCallId, {
           normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds,
           preserveUnframedToolResults: replayPlan.preserveUnframedToolResults,
         });

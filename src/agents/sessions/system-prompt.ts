@@ -1,7 +1,3 @@
-/**
- * System prompt construction and project context loading
- */
-
 import { formatSkillsForPrompt, type Skill } from "../../skills/loading/session.js";
 import { getDocsPath, getExamplesPath, getReadmePath } from "../package-metadata.js";
 import { buildPromisedWorkPromptSection } from "../promised-work-prompt.js";
@@ -57,7 +53,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
     const docsPath = getDocsPath();
     const examplesPath = getExamplesPath();
 
-    // Build tools list based on selected tools.
     // A tool appears in Available tools only when the caller provides a one-line snippet.
     const tools = selectedTools || ["read", "bash", "edit", "write"];
     const visibleTools = tools.filter((name) => Boolean(toolSnippets?.[name]));
@@ -118,7 +113,6 @@ Embedded agent documentation (read only when the user asks about the embedded ag
     prompt += appendSection;
   }
 
-  // Append project context files
   if (contextFiles.length > 0) {
     prompt += "\n\n<project_context>\n\n";
     prompt += "Project-specific instructions and guidelines:\n\n";

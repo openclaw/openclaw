@@ -545,7 +545,7 @@ class SidebarGatewayPickerTest {
         composeRule.runOnIdle { model.gatewayConnectionHandoff.value.pending }
       }
       capture("queued-handoff")
-      composeRule.onNodeWithText("Message OpenClaw").assertIsNotEnabled()
+      composeRule.onNodeWithText("Message").assertIsNotEnabled()
     } finally {
       // Retire queued work before releasing the barrier: no real endpoint is contacted.
       composeRule.runOnIdle { runtime.disconnect() }
@@ -567,7 +567,7 @@ class SidebarGatewayPickerTest {
     gatewayItem(alpha).assertIsSelected().performClick()
     composeRule.runOnIdle { assertFalse(runtime.gatewayConnectionHandoff.value.pending) }
     choose(beta)
-    composeRule.onNodeWithText("Message OpenClaw").assertIsEnabled()
+    composeRule.onNodeWithText("Message main").assertIsEnabled()
     composeRule.onNode(hasSetTextAction()).performTextReplacement("Beta draft")
     choose(alpha)
     composeRule.runOnIdle { assertEquals("Restored composer owner", alphaOwner, model.captureChatShareOwner()) }
@@ -820,12 +820,12 @@ class SidebarGatewayPickerTest {
         // Settings/notification-style consumers still supersede through the existing owner.
         model.switchToGateway(gamma.stableId)
       }
-      composeRule.onNodeWithText("Message OpenClaw").assertIsNotEnabled()
+      composeRule.onNodeWithText("Message").assertIsNotEnabled()
     } finally {
       barrier.unlock()
     }
     awaitFocus(gamma)
-    composeRule.onNodeWithText("Message OpenClaw").assertIsEnabled()
+    composeRule.onNodeWithText("Message main").assertIsEnabled()
     composeRule.runOnIdle { assertFalse(runtime.gatewayConnectionDisplay.value.isConnected) }
   }
 
@@ -899,7 +899,7 @@ class SidebarGatewayPickerTest {
     capture("folded-picker", popup = true)
     gatewayItem(beta).performClick()
     awaitFocus(beta)
-    composeRule.onNodeWithText("Message OpenClaw").assertIsEnabled()
+    composeRule.onNodeWithText("Message main").assertIsEnabled()
   }
 
   @Test

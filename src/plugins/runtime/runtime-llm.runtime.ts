@@ -1,11 +1,10 @@
-// Runtime LLM helpers adapt plugin provider hooks into the core model runtime.
 import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { normalizeModelRef, type ModelRef } from "../../agents/model-ref-shared.js";
 import type { UsageLike } from "../../agents/usage.js";
-import { hasRecordedUsageCost, normalizeUsage } from "../../agents/usage.js";
+import { hasRecordedUsageCost, makeZeroUsageSnapshot, normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { markHostPluginUsageDiagnosticEvent } from "../../infra/diagnostic-plugin-usage-provenance.js";
@@ -186,14 +185,7 @@ function buildMessages(params: {
             api: params.api,
             provider: params.provider,
             model: params.model,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: makeZeroUsageSnapshot(),
             stopReason: "stop" as const,
             timestamp: now,
           },

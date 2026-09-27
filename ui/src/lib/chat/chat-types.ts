@@ -116,14 +116,7 @@ export type ChatGuardianNotice = {
   message?: string;
 };
 
-export type ToolApprovalReview = {
-  id: string;
-  label: string;
-  status: "in_progress" | "approved" | "denied" | "timed_out" | "aborted";
-  riskLevel?: string;
-  userAuthorization?: string;
-  rationale?: string;
-};
+export type { ToolApprovalReview } from "../../../../src/shared/tool-approval-reviews.js";
 
 export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true };
 

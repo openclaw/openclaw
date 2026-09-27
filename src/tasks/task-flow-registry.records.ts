@@ -24,32 +24,8 @@ export type TaskFlowSyncInput = Pick<
   | "progressSummary"
 >;
 
-export type FlowRecordPatch = Omit<
-  Partial<
-    Pick<
-      TaskFlowRecord,
-      | "status"
-      | "notifyPolicy"
-      | "goal"
-      | "currentStep"
-      | "blockedTaskId"
-      | "blockedSummary"
-      | "controllerId"
-      | "stateJson"
-      | "waitJson"
-      | "cancelRequestedAt"
-      | "updatedAt"
-      | "endedAt"
-    >
-  >,
-  | "currentStep"
-  | "blockedTaskId"
-  | "blockedSummary"
-  | "controllerId"
-  | "stateJson"
-  | "waitJson"
-  | "cancelRequestedAt"
-  | "endedAt"
+export type FlowRecordPatch = Partial<
+  Pick<TaskFlowRecord, "status" | "notifyPolicy" | "goal" | "updatedAt">
 > & {
   currentStep?: string | null;
   blockedTaskId?: string | null;
