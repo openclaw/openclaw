@@ -858,7 +858,12 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
         await expect(restartScheduledTask({ env, stdout, onMutation })).resolves.toEqual({
           outcome: "completed",
-          taskSettlement: { taskName: "OpenClaw Gateway", lastRunResult: "0", ended: false },
+          taskSettlement: {
+            status: "settled",
+            taskName: "OpenClaw Gateway",
+            lastRunResult: "0",
+            ended: false,
+          },
         });
 
         expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();

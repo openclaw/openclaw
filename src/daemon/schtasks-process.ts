@@ -525,9 +525,10 @@ export async function terminateScheduledTaskGatewayListeners(
   assertCurrent?: () => void,
   stop?: {
     end: () => Promise<void>;
+    restart?: boolean;
     onStopped?: () => void;
     warn: (message: string) => void;
-    onSettled?: (fact: ScheduledTaskSettlement) => void;
+    onSettlement?: (fact: ScheduledTaskSettlement) => void;
     onRecovery?: () => void;
   },
 ): Promise<number[] | null> {
@@ -609,10 +610,16 @@ export async function terminateScheduledTaskGatewayListeners(
         assertGatewayServiceUpdateCurrent();
         assertCurrent?.();
       }, stop.end);
-      if (!fact) {
+      stop.onSettlement?.(fact);
+      if (fact.status === "replaced") {
         throw ownership.changed;
       }
-      stop.onSettled?.(fact);
+      if (fact.status === "unavailable") {
+        if (!stop.restart || !ownership.pids.length) {
+          throw new Error("Task settlement unavailable; stop unverified.", { cause: fact });
+        }
+        stop.warn("Task settlement unavailable after Gateway exit; attempting /Run.");
+      }
     }
     return ownership.pids;
   } catch (error) {
@@ -656,13 +663,8 @@ function probeWindowsTasklistProcessState(pid: number): "alive" | "missing" | "u
     : "missing";
 }
 
-async function waitForProcessExit(
-  pid: number,
-  timeoutMs: number,
-  probe: (pid: number) => "alive" | "missing" | "unknown" = process.platform === "win32"
-    ? probeWindowsTasklistProcessState
-    : probeProcessState,
-): Promise<boolean> {
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const probe = process.platform === "win32" ? probeWindowsTasklistProcessState : probeProcessState;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (probe(pid) === "missing") {
@@ -693,13 +695,7 @@ export async function terminateGatewayProcessTree(
     windowsHide: true,
   });
   // Direct PID probes avoid signaling an exited owner despite a lagging CIM snapshot.
-  if (
-    await waitForProcessExit(
-      pid,
-      graceful.status === 0 && !graceful.error ? graceMs : 0,
-      probeWindowsTasklistProcessState,
-    )
-  ) {
+  if (await waitForProcessExit(pid, graceful.status === 0 && !graceful.error ? graceMs : 0)) {
     return;
   }
   assertGatewayServiceUpdateCurrent();

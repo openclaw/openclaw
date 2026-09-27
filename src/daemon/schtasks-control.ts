@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import { sleep } from "../utils.js";
@@ -412,13 +413,13 @@ async function stopRegisteredScheduledTask({
   warn,
   onEndMutation,
   restart = false,
-  onSettled,
+  onSettlement,
   onRecovery,
 }: GatewayServiceControlArgs & {
   env: GatewayServiceEnv;
   onEndMutation?: () => void;
   restart?: boolean;
-  onSettled?: (fact: ScheduledTaskSettlement) => void;
+  onSettlement?: (fact: ScheduledTaskSettlement) => void;
   onRecovery?: () => void;
 }): Promise<boolean> {
   const taskName = resolveTaskName(env);
@@ -432,7 +433,8 @@ async function stopRegisteredScheduledTask({
     {
       warn: warn ?? ((message) => stdout.write(`Warning: ${message}\n`)),
       onStopped: onEndMutation,
-      onSettled,
+      restart,
+      onSettlement,
       onRecovery,
       end: async () => {
         assertCurrent?.();
@@ -514,11 +516,11 @@ export async function restartRegisteredScheduledTask(params: {
       await stopRegisteredScheduledTask({
         ...params,
         restart: true,
-        onSettled: (fact) => (facts.taskSettlement = fact),
+        onSettlement: (fact) => (facts.taskSettlement = fact),
         onRecovery: () => (facts.restartRecovery = "sqlite-owner-read"),
       })
     ) {
-      return { outcome: "completed", ...facts };
+      throw Object.assign(new Error("Gateway ownership changed; restart unverified."), facts);
     }
   } else {
     const { port, probeHosts } = shouldManageGatewayListenerPort(params.env)
@@ -549,7 +551,15 @@ export async function restartRegisteredScheduledTask(params: {
     env: params.env,
     scriptPath: resolveTaskScriptPath(params.env),
     ...(params.onRunMutation ? { onMutation: params.onRunMutation } : {}),
+  }).catch((error: unknown) => {
+    throw Object.assign(toErrorObject(error, "Scheduled Task restart failed."), facts);
   });
+  if (facts.taskSettlement?.status === "unavailable") {
+    throw Object.assign(
+      new Error("/Run accepted; restart unverified: task settlement unavailable."),
+      facts,
+    );
+  }
   // A direct launch is the replacement fallback; keep it available at the next login.
   const shouldRemoveStartup =
     activation === "scheduled-task" &&

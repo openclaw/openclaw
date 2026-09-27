@@ -281,14 +281,17 @@ export function probeScheduledTaskExists(taskName: string, timeoutMs?: number): 
   return probe.status === "found" ? true : probe.status === "missing" ? false : null;
 }
 
-/** Freeze the task run before stop; activation requires an inactive task and a recorded result. */
+/** Freeze the task run before stop so failed inspection cannot imply replacement. */
 export function prepareScheduledTaskSettlement(taskName: string) {
   const initial = probeScheduledTaskState(taskName);
   const runTime = initial.status === "found" ? initial.lastRunTime : undefined;
   if (!runTime) {
     throw new Error(`Task ${taskName} identity unavailable; Gateway preserved.`);
   }
-  return async (assertCurrent: () => void, end: () => Promise<void>) => {
+  return async (
+    assertCurrent: () => void,
+    end: () => Promise<void>,
+  ): Promise<ScheduledTaskSettlement> => {
     let ended = false;
     const deadline = Date.now() + GATEWAY_SERVICE_STOP_TIMEOUT_MS;
     for (;;) {
@@ -298,25 +301,33 @@ export function prepareScheduledTaskSettlement(taskName: string) {
         Math.min(WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS, remaining),
       );
       assertCurrent();
-      if (task.status !== "found" || task.lastRunTime !== runTime) {
-        return null;
-      }
-      const { state, lastRunResult } = task;
-      if ((state === 1 || state === 3) && lastRunResult !== undefined) {
-        return { taskName, lastRunResult, ended };
-      }
-      // Reserve 60s for the cold query, 15s for /End, and 60s to confirm settlement.
-      if (Date.now() >= deadline - (ended ? 0 : 135_000)) {
-        if (ended) {
-          throw new Error(`Task ${taskName} did not settle after /End; /Run refused.`);
+      if (task.status === "found" && task.lastRunTime) {
+        if (task.lastRunTime !== runTime) {
+          return { status: "replaced", taskName, ended, lastRunTime: task.lastRunTime };
         }
-        await end();
-        ended = true;
-      } else {
-        await sleep(Math.min(100, deadline - Date.now()));
+        const { state, lastRunResult } = task;
+        if ((state === 1 || state === 3) && lastRunResult !== undefined) {
+          return { status: "settled", taskName, lastRunResult, ended };
+        }
+        // Reserve 60s for query, 15s for /End, and 60s to confirm the observed task run.
+        if ((state === 2 || state === 4) && Date.now() >= deadline - (ended ? 0 : 135_000)) {
+          if (ended || Date.now() >= deadline) {
+            throw new Error(`Task ${taskName} did not settle; /Run refused.`);
+          }
+          await end();
+          ended = true;
+        }
       }
+      if (Date.now() >= deadline) {
+        return { status: "unavailable", taskName, ended };
+      }
+      await sleep(Math.min(100, deadline - Date.now()));
     }
   };
 }
 
-export type ScheduledTaskSettlement = { taskName: string; lastRunResult: string; ended: boolean };
+export type ScheduledTaskSettlement = { taskName: string; ended: boolean } & (
+  | { status: "settled"; lastRunResult: string }
+  | { status: "replaced"; lastRunTime: string }
+  | { status: "unavailable" }
+);
