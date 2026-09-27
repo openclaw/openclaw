@@ -8,12 +8,14 @@ import path from "node:path";
 import {
   disposeAllSessionMcpRuntimes,
   acquireSessionMcpRuntime,
+  setSessionMcpRuntimeScheduler,
 } from "../../../../dist/agents/agent-bundle-mcp-manager-api.js";
 import { materializeBundleMcpToolsForRun } from "../../../../dist/agents/agent-bundle-mcp-materialize.js";
 import { resolveConversationCapabilityProfile } from "../../../../dist/agents/conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "../../../../dist/agents/embedded-agent-runner/effective-tool-policy.js";
 import { splitSdkTools } from "../../../../dist/agents/embedded-agent-runner/tool-split.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
+import { GatewayScheduler } from "../../../../dist/infra/gateway-scheduler.js";
 import { getPluginToolMeta } from "../../../../dist/plugins/tool-metadata.js";
 import { createE2eStateDir } from "../../../../scripts/e2e/lib/temp-state-dir.ts";
 
@@ -113,7 +115,9 @@ async function main() {
   };
 
   let materialized: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+  const scheduler = new GatewayScheduler();
   try {
+    await setSessionMcpRuntimeScheduler(scheduler);
     const acquisition = await acquireSessionMcpRuntime({
       sessionId: `docker-agent-bundle-mcp-${randomUUID()}`,
       sessionKey: "agent:main:docker-agent-bundle-mcp",
@@ -232,7 +236,11 @@ async function main() {
     try {
       await materialized?.dispose();
     } finally {
-      await disposeAllSessionMcpRuntimes();
+      try {
+        await disposeAllSessionMcpRuntimes();
+      } finally {
+        await scheduler.stop();
+      }
     }
   }
 }

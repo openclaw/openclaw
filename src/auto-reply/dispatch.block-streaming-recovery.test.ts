@@ -1,6 +1,10 @@
 import { createServer } from "node:http";
 import { expect, it } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  getSessionMcpRuntimeManagerForTesting,
+  setSessionMcpRuntimeScheduler,
+} from "../agents/agent-bundle-mcp-manager-api.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -12,6 +16,7 @@ import {
   PlatformMessageNotDispatchedError,
 } from "../infra/outbound/deliver-types.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { dispatchInboundMessageWithBufferedDispatcher } from "./dispatch.js";
 
@@ -73,6 +78,7 @@ it.each([
       label: "block-streaming-recovery",
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
     });
+    const scheduler = createTestGatewayScheduler();
     const requests: Array<{ method?: string; url?: string; model?: string }> = [];
     const toolRequestBodies: string[] = [];
     const attempted: Array<{ kind: string; text: string | undefined; mediaUrls?: string[] }> = [];
@@ -211,6 +217,7 @@ it.each([
       }
     });
     try {
+      await setSessionMcpRuntimeScheduler(scheduler);
       const toolPluginPath = state.statePath("media-plugin", "index.cjs");
       if (directMedia) {
         await state.writeJson("media-plugin/openclaw.plugin.json", {
@@ -630,6 +637,13 @@ it.each([
         }
       }
     } finally {
+      const mcpManager = getSessionMcpRuntimeManagerForTesting();
+      for (const sessionId of mcpManager.listSessionIds()) {
+        if (mcpManager.peekSession({ sessionId })?.workspaceDir === state.workspaceDir) {
+          await mcpManager.disposeSession(sessionId);
+        }
+      }
+      await scheduler.stop();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
