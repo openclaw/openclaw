@@ -518,6 +518,40 @@ defineDiscordVoiceTests(
       },
     );
 
+    it("retains speech completed while a replacement voice is connecting", async () => {
+      useNativeVoices();
+      const { entry, manager } = await createJoinedAgentProxyFixture();
+      const connection = createDeferred<void>();
+      let switching: Promise<void> | undefined;
+      try {
+        beginSpeakerTurn(entry).close();
+        const original = lastRealtimeBridge();
+        original.bridgeParams.onTranscript?.("user", "The budget review is first.", true);
+        const candidate = createRealtimeSessionMock();
+        candidate.connect.mockReturnValueOnce(connection.promise);
+        createRealtimeVoiceBridgeSessionMock.mockReturnValueOnce(candidate);
+        switching = selectionOwner().changeVoice("cedar", { assertCurrent: () => {} });
+        await vi.waitFor(() => expect(candidate.connect).toHaveBeenCalled());
+        expect(original.session.close).not.toHaveBeenCalled();
+        beginSpeakerTurn(entry).close();
+        original.bridgeParams.onTranscript?.("user", "Move the budget review to Thursday.", true);
+        original.bridgeParams.onTranscript?.("assistant", "The review is now on Thursday.", true);
+        connection.resolve();
+        await switching;
+        expect(selectionOwner().read()).toMatchObject({ voice: "cedar" });
+        expect(lastRealtimeBridge().bridgeParams.instructions).toContain(
+          "Move the budget review to Thursday.",
+        );
+        expect(lastRealtimeBridge().bridgeParams.instructions).toContain(
+          "The review is now on Thursday.",
+        );
+      } finally {
+        connection.resolve();
+        await switching;
+        await manager.destroy();
+      }
+    });
+
     it("keeps the idle sweep from retiring a guest during the room voice handoff", async () => {
       useNativeVoices();
       vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });

@@ -26,6 +26,8 @@ defineDiscordVoiceTests(
   }) => {
     it.each([
       { withSignal: true, revocation: "none" },
+      { withSignal: true, revocation: "policy" },
+      { withSignal: true, revocation: "role" },
       { withSignal: false, revocation: "policy" },
       { withSignal: false, revocation: "role" },
     ])(
