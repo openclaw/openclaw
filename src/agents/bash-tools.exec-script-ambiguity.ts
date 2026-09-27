@@ -17,8 +17,7 @@ function extractUnquotedShellText(raw: string): string | null {
   let inDouble = false;
   let escaped = false;
 
-  for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i];
+  for (const ch of raw) {
     if (escaped) {
       if (!inSingle && !inDouble) {
         // Preserve escapes outside quotes so downstream heuristics can distinguish

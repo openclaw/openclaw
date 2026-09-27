@@ -410,7 +410,7 @@ function renderWidgetContent(
         promptCapable,
       });
     }
-    case "mcp-app":
+    default:
       return preview.mcpApp
         ? renderMcpAppView({
             sessionKey: options?.sessionKey ?? "",

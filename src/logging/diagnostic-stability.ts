@@ -249,7 +249,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "gateway.event_loop.sample":
     case "diagnostic.gc":
     case "diagnostic.child_process.spawn":
-      // Runtime measurements are exporter-only and excluded by the subscription.
+    case "log.record":
+    case "telemetry.exporter":
+      // These events use separate exporters and are excluded by the subscription.
       break;
     case "model.usage":
       copy(event, "channel", "provider", "model");
