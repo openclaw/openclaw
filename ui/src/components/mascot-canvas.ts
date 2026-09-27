@@ -11,7 +11,6 @@ const ART_SIZE = 120;
 const TAU = Math.PI * 2;
 const EYE = "#050810";
 const EYE_GLOW = "#00e5cc";
-const BLUSH = "#ff9eae";
 const HAT_AMBER = "#f2a833";
 const HAT_LIGHT = "#ffd659";
 const HAT_OUTLINE = "rgba(184, 115, 31, 0.7)";
@@ -173,18 +172,6 @@ function drawMouth(ctx: CanvasRenderingContext2D, pose: MascotPose): void {
   curve.quadraticCurveTo(60, 49 + 8 * pose.mouthCurve, 67.5, 49);
   ctx.lineWidth = 2.2;
   ctx.stroke(curve);
-}
-
-function drawBlush(ctx: CanvasRenderingContext2D, pose: MascotPose): void {
-  if (pose.blush <= 0.02) {
-    return;
-  }
-  ctx.save();
-  ctx.globalAlpha *= pose.blush * 0.55;
-  ctx.fillStyle = BLUSH;
-  ctx.fill(ellipsePath({ x: 37, y: 45 }, 4.5, 2.5));
-  ctx.fill(ellipsePath({ x: 83, y: 45 }, 4.5, 2.5));
-  ctx.restore();
 }
 
 function drawHardHat(ctx: CanvasRenderingContext2D, amount: number): void {
@@ -389,7 +376,6 @@ export function drawMascot(
   });
 
   drawHardHat(ctx, pose.hardHat);
-  drawBlush(ctx, pose);
   drawEye(ctx, { x: 45, y: 35 }, pose.leftEyeOpenness, pose);
   drawEye(ctx, { x: 75, y: 35 }, pose.rightEyeOpenness, pose);
   drawMouth(ctx, pose);
