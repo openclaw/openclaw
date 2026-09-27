@@ -45,13 +45,16 @@ source permissions and shell approvals. Its `process` tool cannot control
 foreground jobs; the Workshop file root is not a shell sandbox.
 A failed review is recorded after one attempt; completed direct edits remain.
 
-Oversized background reviews never reach the provider by default. OpenClaw admits
-at most 32 MiB and 10,000 transcript events, then checks the assembled prompt
-against the effective context budget before submission. A review that still does
-not fit is recorded as `skipped` with an `oversized-request` reason and does not
-consume provider tokens. Set `skills.workshop.autonomous.maxReviewContextTokens`
-to cap the review below the model window, or set `overflowPolicy` to `fail` when
-an oversized review should surface as a failure instead of being skipped. This
+Oversized background reviews never reach the provider by default. A review admits
+at most 32 MiB and 10,000 transcript events, and a transcript that exceeds the
+bound is rejected whole instead of shortened: earlier requirements and tool
+evidence are never silently dropped. The assembled prompt is then checked against
+the effective context budget before submission. A review that does not fit is
+recorded as `skipped` with an `oversized-request` reason and does not consume
+provider tokens. A provider context overflow after dispatch is always recorded as
+a failed review. Set `skills.workshop.autonomous.maxReviewContextTokens` to cap
+the review below the model window, or set `overflowPolicy` to `fail` when an
+oversized review should surface as a failure instead of being skipped. This
 policy applies only to detached experience reviews; foreground sessions keep their
 normal compaction and recovery behavior.
 

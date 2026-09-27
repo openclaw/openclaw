@@ -244,6 +244,10 @@ export async function createExperienceReviewCandidate(
     baseUrl?: string;
     apiKey?: string;
     turnAborted?: boolean;
+    contextWindow?: number;
+    maxReviewContextTokens?: number;
+    maxReviewContextBytes?: number;
+    overflowPolicy?: "skip" | "fail";
   },
 ): Promise<ExperienceReviewCandidate> {
   const { workspaceDir, modelId } = options;
@@ -283,7 +287,7 @@ export async function createExperienceReviewCandidate(
                 agentRuntime: { id: "openclaw" },
                 input: ["text"],
                 reasoning: true,
-                contextWindow: 1_047_576,
+                contextWindow: options.contextWindow ?? 1_047_576,
                 maxTokens: 2_048,
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               },
@@ -303,7 +307,22 @@ export async function createExperienceReviewCandidate(
           },
         },
       },
-      skills: { workshop: { autonomous: { mode: "propose" } } },
+      skills: {
+        workshop: {
+          autonomous: {
+            mode: "propose",
+            ...(options.maxReviewContextTokens !== undefined
+              ? { maxReviewContextTokens: options.maxReviewContextTokens }
+              : {}),
+            ...(options.maxReviewContextBytes !== undefined
+              ? { maxReviewContextBytes: options.maxReviewContextBytes }
+              : {}),
+            ...(options.overflowPolicy !== undefined
+              ? { overflowPolicy: options.overflowPolicy }
+              : {}),
+          },
+        },
+      },
       // Only the OpenAI provider plugin is needed. A cold unrestricted load
       // compiles all bundled extensions and runs provider discovery inside the
       // review lane, which can exceed the lane's no-progress watchdog.
