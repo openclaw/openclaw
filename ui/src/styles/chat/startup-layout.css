@@ -129,7 +129,7 @@
 
 .chat-main__conversation {
   --chat-composer-top-margin: 8px;
-  --chat-transcript-fade-height: 24px;
+  --chat-transcript-fade-height: 32px;
   --chat-footer-max-height: calc(100cqh - clamp(60px, 20cqh, 160px));
 
   position: absolute;
@@ -157,7 +157,14 @@
   position: absolute;
   inset: calc(0px - var(--chat-transcript-fade-height)) var(--chat-thread-gutter) auto;
   height: var(--chat-transcript-fade-height);
-  background: linear-gradient(to bottom, transparent, var(--chat-surface));
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--chat-surface) 12%, transparent) 25%,
+    color-mix(in srgb, var(--chat-surface) 50%, transparent) 50%,
+    color-mix(in srgb, var(--chat-surface) 88%, transparent) 75%,
+    var(--chat-surface) calc(100% - 2px)
+  );
   content: "";
   pointer-events: none;
 }

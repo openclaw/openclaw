@@ -69,9 +69,16 @@
   position: absolute;
   z-index: 2;
   inset: 0 var(--chat-thread-gutter) auto;
-  height: 24px;
+  height: 32px;
   pointer-events: none;
-  background: linear-gradient(to bottom, var(--chat-surface), transparent);
+  background: linear-gradient(
+    to bottom,
+    var(--chat-surface) 2px,
+    color-mix(in srgb, var(--chat-surface) 88%, transparent) 25%,
+    color-mix(in srgb, var(--chat-surface) 50%, transparent) 50%,
+    color-mix(in srgb, var(--chat-surface) 12%, transparent) 75%,
+    transparent
+  );
 }
 
 @media (max-width: 560px) {
