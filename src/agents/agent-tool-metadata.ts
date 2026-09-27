@@ -26,11 +26,11 @@ class ToolActionMetadata extends PluginHostObject {
     this.#descriptor = descriptor;
   }
 
-  static get(tool: AnyAgentTool): AgentToolActionDescriptor | undefined {
+  static get(this: void, tool: AnyAgentTool): AgentToolActionDescriptor | undefined {
     return #descriptor in tool ? tool.#descriptor : undefined;
   }
 
-  static set(tool: AnyAgentTool, descriptor: AgentToolActionDescriptor): void {
+  static set(this: void, tool: AnyAgentTool, descriptor: AgentToolActionDescriptor): void {
     if (#descriptor in tool) {
       tool.#descriptor = descriptor;
     } else {
