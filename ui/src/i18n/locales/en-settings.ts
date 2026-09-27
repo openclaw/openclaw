@@ -639,6 +639,8 @@ const enSettings = {
       noProviders: "No providers are available to connect.",
       discover: "On this Gateway",
       description: "Save credentials for this agent. Choose the active model separately.",
+      setupDescription:
+        "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
       done: "Provider credentials saved.",
       missingSelection:
         "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",

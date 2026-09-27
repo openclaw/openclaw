@@ -122,6 +122,9 @@ suite.define(() => {
         await page.locator("[data-models-connect]").click();
         const dialog = page.locator(".model-provider-login");
         await dialog.locator('[data-models-login-provider="openai"]').waitFor();
+        expect((await dialog.locator(".model-setup-wizard__body > p").textContent())?.trim()).toBe(
+          "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
+        );
         if (recordVisuals) {
           await writeFile(
             path.join(suite.artifactDir, "first-run-provider-picker.png"),
@@ -315,6 +318,11 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         await page.locator("[data-models-connect]").click();
         await page.locator('[data-models-login-provider="example"]').click();
+        expect(
+          (
+            await page.locator(".model-provider-login .model-setup-wizard__body > p").textContent()
+          )?.trim(),
+        ).toBe("Save credentials for this agent. Choose the active model separately.");
         await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
         const login = await gateway.waitForRequest("models.authLogin");
         const loginParams = login.params;

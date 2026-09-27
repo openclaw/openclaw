@@ -365,7 +365,9 @@ export class ModelProviderLoginController implements ReactiveController {
                 ${
                   recovery
                     ? t("modelProviders.login.useAccountDescription", { model: recovery.model })
-                    : t("modelProviders.login.description")
+                    : this.options.onManualProvider
+                      ? t("modelProviders.login.setupDescription")
+                      : t("modelProviders.login.description")
                 }
               </p>
               ${
