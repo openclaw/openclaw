@@ -271,12 +271,30 @@ describe("ONNX artifact installation", () => {
       source: { kind: "local-export", repository: "example/model", revision: "a".repeat(40) },
     };
     await fs.mkdir(path.join(root, model.id));
-    for (const files of [[{ name: "../other", size: 1, sha256: "a".repeat(64) }], []]) {
+    const manifest = {
+      modelId: model.id,
+      sourceRevision: "a".repeat(40),
+      files: [
+        { name: "model.onnx", size: 1, sha256: "a".repeat(64) },
+        { name: "tokenizer.json", size: 1, sha256: "b".repeat(64) },
+      ],
+    };
+    for (const invalid of [
+      { files: [...manifest.files, { name: "../other", size: 1, sha256: "a".repeat(64) }] },
+      { files: [] },
+      { modelId: "different" },
+      { sourceRevision: "b".repeat(40) },
+    ]) {
       await fs.writeFile(
         path.join(root, model.id, "model.json"),
-        JSON.stringify({ modelId: "different", sourceRevision: "b".repeat(40), files }),
+        JSON.stringify({ ...manifest, ...invalid }),
       );
       await expect(resolveModelFiles(root, local)).rejects.toThrow("model-integrity");
     }
+    await fs.writeFile(path.join(root, model.id, "model.json"), JSON.stringify(manifest));
+    await expect(resolveModelFiles(root, local)).resolves.toEqual([
+      { name: "model.onnx", bytes: 1, sha256: "a".repeat(64) },
+      { name: "tokenizer.json", bytes: 1, sha256: "b".repeat(64) },
+    ]);
   });
 });

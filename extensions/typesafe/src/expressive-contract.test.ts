@@ -170,13 +170,11 @@ it.each([
 ])("rejects invalid structured values before dispatch without leaking content", async (q) => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
-  await expect(
-    evaluate({ state: "private state", questions: { "private ID": q } }, config),
-  ).rejects.toThrow();
-  try {
-    parseInput({ state: "private state", questions: { "private ID": q } });
-  } catch (error) {
-    expect(String(error)).not.toMatch(/private state|private ID/);
-  }
+  const error = await evaluate(
+    { model: "jev-test", state: "private state", questions: { "private ID": q } },
+    config,
+  ).catch((caught: unknown) => caught);
+  expect(error).toMatchObject({ name: "EvaluationError", reason: "unsupported-input" });
+  expect(String(error)).not.toMatch(/private state|private ID/);
   expect(fetch).not.toHaveBeenCalled();
 });
