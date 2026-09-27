@@ -202,7 +202,7 @@ export function trimChatHistoryActivity(params: {
   });
 }
 
-export function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
+function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   return {
     role: "assistant",
     timestamp: Date.now(),
@@ -238,6 +238,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
     __openclaw: {
       ...(metadata.toolOutput ? { toolOutput: metadata.toolOutput } : {}),
       ...(metadataId ? { id: metadataId } : {}),
+      ...(typeof metadata.runId === "string" ? { runId: metadata.runId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       ...(turnBoundary ? { turnBoundary: true } : {}),

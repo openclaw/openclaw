@@ -226,25 +226,23 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        let locs = locations
         Task { @MainActor in
             // Resolve all one-shot requests first so overlapping callers share this update.
-            if let latest = locs.last {
+            if let latest = locations.last {
                 self.completeLocationRequests(with: .success(latest))
             } else {
                 self.completeLocationRequests(with: .failure(Error.unavailable))
             }
             // Don't return — also forward to significant-change consumers below.
-            if let callback = self.significantLocationCallback, let latest = locs.last {
+            if let callback = self.significantLocationCallback, let latest = locations.last {
                 callback(latest)
             }
         }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
-        let err = error
         Task { @MainActor in
-            self.completeLocationRequests(with: .failure(err))
+            self.completeLocationRequests(with: .failure(error))
         }
     }
 }

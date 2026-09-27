@@ -136,11 +136,10 @@ export async function forkSessionTranscriptFromParent(
   if (!crossDatabase) {
     return await runExclusiveSqliteSessionWrite(
       resolved,
-      async () => {
-        let result: ForkSessionFromParentTranscriptResult = { status: "failed" };
+      async () =>
         runOpenClawAgentWriteTransaction((database) => {
           params.commitGuard?.();
-          result = forkSqliteParentTranscriptInTransaction(database, resolved, {
+          return forkSqliteParentTranscriptInTransaction(database, resolved, {
             enforceTokenLimit: params.enforceTokenLimit,
             maxTokens: params.maxTokens,
             parentEntry: params.parentEntry,
@@ -149,9 +148,7 @@ export async function forkSessionTranscriptFromParent(
             targetSessionId: params.targetSessionId,
             targetSessionKey: params.sessionKey,
           });
-        }, toDatabaseOptions(resolved));
-        return result;
-      },
+        }, toDatabaseOptions(resolved)),
       "session.parent.fork-transcript",
     );
   }

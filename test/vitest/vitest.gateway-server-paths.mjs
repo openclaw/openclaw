@@ -11,9 +11,6 @@ export const gatewayPluginTestFiles = [
 
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
-  "src/gateway/agent-turn/agent-run-dispatch.execution-binding.test.ts",
-  "src/gateway/agent-turn/agent-run-dispatch.sqlite.test.ts",
-  "src/gateway/agent-turn/agent-run-task-tracking.cleanup.test.ts",
   "src/gateway/approval-fixture.test.ts",
   "src/gateway/board-http.test.ts",
   "src/gateway/board-store.test.ts",
@@ -76,6 +73,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/managed-image-attachments.authority.test.ts",
   "src/gateway/managed-image-attachments.sqlite-visibility.test.ts",
   "src/gateway/managed-image-attachments.test.ts",
+  "src/gateway/managed-image-attachments.worker-custody.test.ts",
   "src/gateway/managed-image-record-store.test.ts",
   "src/gateway/managed-outgoing-gc-availability.test.ts",
   "src/gateway/mention-directory.test.ts",
@@ -103,6 +101,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/chat-send-synthetic-repair.integration.test.ts",
   "src/gateway/server-methods/chat.abort-live-proof.test.ts",
   "src/gateway/server-methods/chat.oauth-refresh-cancel.integration.test.ts",
+  "src/gateway/server-methods/cron-creator-transports.integration.test.ts",
   "src/gateway/server-methods/cron.list-scoped.test.ts",
   "src/gateway/server-methods/cron.runs.test.ts",
   "src/gateway/server-methods/cron.scheduled-policy-adoption.integration.test.ts",
@@ -193,6 +192,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils-store-lookup.test.ts",
   "src/gateway/session-utils.agent-models.test.ts",
   "src/gateway/session-utils.queued-collector-admission.test.ts",
+  "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
   "src/gateway/session-utils.queued-collector.test.ts",
   "src/gateway/session-utils.subagent-payloads.test.ts",
   "src/gateway/session-utils.subagent.test.ts",
@@ -218,6 +218,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/computer-transport.test.ts",
   "src/gateway/worker-environments/credential-broker.test.ts",
   "src/gateway/worker-environments/desktop-ssh-identity.test.ts",
+  "src/gateway/worker-environments/environment-access-authority.test.ts",
   "src/gateway/worker-environments/environment-access.test.ts",
   "src/gateway/worker-environments/inference-store.test.ts",
   "src/gateway/worker-environments/live-chat.test.ts",
@@ -240,6 +241,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/placement-dispatch-recovery.test.ts",
   "src/gateway/worker-environments/placement-dispatch-shutdown.test.ts",
   "src/gateway/worker-environments/placement-dispatch-staged-results.test.ts",
+  "src/gateway/worker-environments/placement-dispatch-transport-authority.test.ts",
   "src/gateway/worker-environments/placement-dispatch.test.ts",
   "src/gateway/worker-environments/placement-force-abandon.test.ts",
   "src/gateway/worker-environments/placement-force-destroy.test.ts",
@@ -399,9 +401,6 @@ export const gatewayServerBackedHttpTestFiles = [
 export const gatewayMethodsIsolatedTestFiles = [
   // Heap scans should not traverse objects from unrelated test files.
   "src/gateway/server-methods/chat-metadata-runtime.cache.test.ts",
-  "src/gateway/server-methods/tasks.access.test.ts",
-  "src/gateway/server-methods/tasks.test.ts",
-  "src/gateway/server-methods/agent.task-runtime.test.ts",
   "src/gateway/server-methods/agent.test.ts",
   "src/gateway/server-methods/agent.visitor-access.test.ts",
   "src/gateway/server-methods/board.runtime-boundaries.test.ts",

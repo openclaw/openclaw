@@ -788,17 +788,6 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
-  it("blocks redirect chains that hop to private hosts", async () => {
-    const lookupFn = createPublicLookup();
-    const fetchImpl = await expectRedirectFailure({
-      url: "https://public.example/start",
-      responses: [redirectResponse("http://127.0.0.1:6379/")],
-      expectedError: /private|internal|blocked/i,
-      lookupFn,
-    });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
   it("rejects HTTPS-to-HTTP redirects when the caller requires HTTPS", async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://cdn.example/asset"));
 

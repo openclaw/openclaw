@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -81,6 +82,7 @@ export type ReplyToolAuthorityInput = {
       | "traceAuthorized"
       | "approvalReviewerDeviceId"
       | "authProfileId"
+      | "authProfileIdSource"
       | "clientCaps"
       | "gatewayUiCommandTarget"
       | "toolBindings"
@@ -115,11 +117,7 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     groupChannel:
       normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
     groupSpace: normalizeOptionalString(ctx.GroupSpace),
-    memberRoleIds: Array.isArray(ctx.MemberRoleIds)
-      ? ctx.MemberRoleIds.map((roleId) => normalizeOptionalString(roleId)).filter(
-          (roleId): roleId is string => Boolean(roleId),
-        )
-      : undefined,
+    memberRoleIds: normalizeArrayBackedTrimmedStringList(ctx.MemberRoleIds),
     spawnedBy: normalizeOptionalString(params.sessionEntry?.spawnedBy),
     senderId: normalizeOptionalString(ctx.SenderId),
     senderName: normalizeOptionalString(ctx.SenderName),
@@ -381,7 +379,11 @@ function resolveReplyToolAuthorityInputFingerprint(
         elevatedLevel: execution.elevatedLevel,
         bashElevated: execution.bashElevated,
         traceAuthorized: execution.traceAuthorized === true,
-        authProfileId: execution.authProfileId,
+        // Automatic credential rotation retains the turn; explicit account pins stay exact.
+        authProfile:
+          execution.authProfileIdSource === "auto"
+            ? { source: "auto" }
+            : { id: execution.authProfileId },
         clientCaps: [...new Set(execution.clientCaps ?? [])].toSorted(),
         gatewayUiCommandTarget:
           authority && screenTarget?.profileId === authority.profileId
@@ -409,6 +411,7 @@ export function prepareReplyToolAuthority(
 ): ReplyToolAuthoritySnapshot {
   const snapshot = snapshotFollowupRunToolAuthority(run);
   return {
+    requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
     fingerprint: (route) => resolveReplyToolAuthorityInputFingerprint(snapshot, route),
     project: (overlay, route) => {
       // Steering retains the running turn's authority and browser bindings across reconnects.

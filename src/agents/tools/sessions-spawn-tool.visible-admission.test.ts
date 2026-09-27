@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { prepareModelChoice } from "../model-runtime-choice.js";
+import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 
 const hoisted = vi.hoisted(() => ({ prepareModelChoiceMock: vi.fn<typeof prepareModelChoice>() }));
@@ -49,73 +50,52 @@ it("rejects an unsupported visible model before creating a session or registerin
   });
 });
 
-it("reports the human owner returned by visible session creation", async () => {
+it.each([
+  {
+    name: "reports the human owner returned by visible session creation",
+    actor: { type: "human", id: "profile-vito" },
+    identity: undefined,
+    owner: { type: "human", id: "profile-vito" },
+  },
+  {
+    name: "preserves the configured agent label for an ID-only stored owner",
+    actor: { type: "agent", id: "main" },
+    identity: { name: "Roboclaw" },
+    owner: { type: "agent", id: "main", label: "Roboclaw" },
+  },
+])("$name", async ({ actor, identity, owner }) => {
   hoisted.prepareModelChoiceMock.mockResolvedValue({
     kind: "automatic",
     ref: { provider: "mock-provider", model: "primary" },
   });
-  const callGateway = vi.fn(async () => ({
-    key: "agent:main:dashboard:human-owned-child",
+  const gateway = { call: callInProcessGatewayTool };
+  vi.spyOn(gateway, "call").mockResolvedValue({
+    key: "agent:main:dashboard:owned-child",
     runStarted: true,
     runId: "run-visible",
-    entry: { owner: { actor: { type: "human", id: "profile-vito" } } },
-  }));
+    entry: { owner: { actor } },
+  });
   const tool = createSessionsSpawnTool({
     agentSessionKey: "agent:main:main",
     config: {
       agents: {
         defaults: { model: "mock-provider/primary" },
-        entries: { main: {} },
+        entries: { main: { identity } },
       },
     },
-    callGateway: callGateway as never,
+    callGateway: gateway.call,
     registerRun: vi.fn(),
     countActiveRuns: () => 0,
   });
 
-  const result = await tool.execute("human-owned-visible", {
+  const result = await tool.execute("owned-visible", {
     task: "inspect the repository",
     visible: true,
   });
 
   expect(result.details).toMatchObject({
     status: "accepted",
-    owner: { type: "human", id: "profile-vito" },
-  });
-});
-
-it("preserves the configured agent label for an ID-only stored owner", async () => {
-  hoisted.prepareModelChoiceMock.mockResolvedValue({
-    kind: "automatic",
-    ref: { provider: "mock-provider", model: "primary" },
-  });
-  const callGateway = vi.fn(async () => ({
-    key: "agent:main:dashboard:agent-owned-child",
-    runStarted: true,
-    runId: "run-visible-agent-owner",
-    entry: { owner: { actor: { type: "agent", id: "main" } } },
-  }));
-  const tool = createSessionsSpawnTool({
-    agentSessionKey: "agent:main:main",
-    config: {
-      agents: {
-        defaults: { model: "mock-provider/primary" },
-        entries: { main: { identity: { name: "Roboclaw" } } },
-      },
-    },
-    callGateway: callGateway as never,
-    registerRun: vi.fn(),
-    countActiveRuns: () => 0,
-  });
-
-  const result = await tool.execute("agent-owned-visible", {
-    task: "inspect the repository",
-    visible: true,
-  });
-
-  expect(result.details).toMatchObject({
-    status: "accepted",
-    owner: { type: "agent", id: "main", label: "Roboclaw" },
+    owner,
   });
 });
 

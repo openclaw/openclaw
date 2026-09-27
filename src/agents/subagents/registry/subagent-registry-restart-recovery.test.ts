@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -12,6 +12,7 @@ import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-req
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { restartRecoveryTestHarness } from "./subagent-registry-restart-recovery.test-support.js";
+import { createSubagentSweeperHarness } from "./subagent-registry-sweeper.test-support.js";
 import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
 
 const { mocks, childSessionKey, gatewayRuntime, dispatchAgent, run, recover } =
@@ -19,6 +20,128 @@ const { mocks, childSessionKey, gatewayRuntime, dispatchAgent, run, recover } =
 
 describe("subagent registry restart recovery", () => {
   beforeEach(() => restartRecoveryTestHarness.reset());
+
+  it("does not reread large sessions retained by unchanged live owners over five sweeps", async () => {
+    const { sweeper, runs } = createSubagentSweeperHarness({ current: gatewayRuntime });
+    runs.clear();
+    const serialized = JSON.stringify({
+      sessionId: "retained-session",
+      lifecycleRevision: "retained-revision",
+      status: "running",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt: "x".repeat(1024 * 1024), skills: [] },
+    });
+    let bytes = 0;
+    mocks.loadSessionEntry.mockImplementation(() => {
+      bytes += Buffer.byteLength(serialized);
+      return JSON.parse(serialized);
+    });
+    for (let index = 0; index < 30; index++) {
+      const entry = run({
+        runId: `retained-${index}`,
+        childSessionKey: `agent:main:subagent:retained-${index}`,
+      });
+      entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+      runs.set(entry.runId, entry);
+      registerAgentRunContext(`owner-${index}`, {
+        sessionKey: entry.childSessionKey,
+        sessionId: "retained-session",
+      });
+    }
+    const ticks: Array<{ reads: number; bytes: number }> = [];
+    const started = performance.now();
+    try {
+      for (let tick = 0; tick < 5; tick++) {
+        mocks.loadSessionEntry.mockClear();
+        bytes = 0;
+        await sweeper.sweepOnce();
+        ticks.push({ reads: mocks.loadSessionEntry.mock.calls.length, bytes });
+      }
+      console.info(
+        "retained recovery fixture",
+        JSON.stringify({
+          ticks,
+          elapsedMs: performance.now() - started,
+          rss: process.memoryUsage().rss,
+        }),
+      );
+      expect(ticks.slice(1)).toEqual(Array.from({ length: 4 }, () => ({ reads: 0, bytes: 0 })));
+    } finally {
+      for (let index = 0; index < 30; index++) {
+        clearAgentRunContext(`owner-${index}`);
+      }
+      sweeper.reset();
+    }
+  });
+
+  it.each(["run", "admission"] as const)(
+    "recovers as soon as a retained %s releases ownership",
+    async (owner) => {
+      vi.useFakeTimers();
+      const entry = run();
+      entry.execution.status = "interrupted";
+      const { sweeper, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
+        { current: gatewayRuntime },
+        entry,
+      );
+      const lease =
+        owner === "admission"
+          ? await beginSessionWorkAdmission({
+              scope: mocks.storePath,
+              identities: [childSessionKey, "session-id"],
+              assertAllowed: () => {},
+            })
+          : undefined;
+      if (owner === "run") {
+        registerAgentRunContext("retained-owner", {
+          sessionKey: childSessionKey,
+          sessionId: "session-id",
+        });
+      }
+      try {
+        await sweeper.sweepOnce();
+        mocks.loadSessionEntry.mockClear();
+        await sweeper.sweepOnce();
+        expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
+        expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+        lease?.release();
+        clearAgentRunContext("retained-owner");
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(mocks.loadSessionEntry).toHaveBeenCalled();
+        expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
+      } finally {
+        sweeper.reset();
+        lease?.release();
+        clearAgentRunContext("retained-owner");
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["yield", "steer", "kill", "queued"] as const)(
+    "abandons recovery when %s takes ownership during the session read",
+    async (owner) => {
+      const entry = run();
+      mocks.loadSessionEntry.mockImplementationOnce(() => {
+        if (owner === "yield") {
+          entry.pauseReason = "sessions_yield";
+        }
+        if (owner === "steer") {
+          entry.suppressAnnounceReason = "steer-restart";
+        }
+        if (owner === "kill") {
+          entry.killIntent = { requestedAt: Date.now(), reason: "killed" };
+        }
+        if (owner === "queued") {
+          entry.execution.status = "queued";
+        }
+        return mocks.entries[childSessionKey];
+      });
+      expect(await recover(entry)).toEqual({ status: "deferred" });
+      expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
+      expect(dispatchAgent).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves an abort marker owned by a newer visible execution", async () => {
     mocks.entries[childSessionKey]!.lifecycleRunId = "newer-visible-run";
@@ -119,7 +242,7 @@ describe("subagent registry restart recovery", () => {
           });
         }
         try {
-          expect(await recover(entry)).toEqual({ status: "deferred" });
+          expect(await recover(entry)).toMatchObject({ status: "handled" });
           expect(mocks.entries[childSessionKey]?.abortedLastRun).toBe(false);
           expect(dispatchAgent).not.toHaveBeenCalled();
         } finally {

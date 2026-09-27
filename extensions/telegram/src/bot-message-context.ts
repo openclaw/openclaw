@@ -5,16 +5,13 @@ import {
   shouldAckReaction as shouldAckReactionGate,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  deriveLastRoutePolicy,
-  normalizeAccountId,
-  resolveThreadSessionKeys,
-} from "openclaw/plugin-sdk/routing";
+import { deriveLastRoutePolicy, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   expandTelegramAllowFromWithAccessGroups,
@@ -38,14 +35,14 @@ import {
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramMessageThreadSpec,
   resolveTelegramThreadSpec,
-  shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import {
-  resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
+  resolveTelegramTargetSession,
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
+import { resolveTelegramForumTopicMetadata } from "./forum-topic-metadata.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import { resolveTelegramNativeCommandAdmission } from "./ingress.js";
 import {
@@ -56,7 +53,6 @@ import {
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
-import { getTopicName, updateTopicName } from "./topic-name-cache.js";
 
 export type {
   BuildTelegramMessageContextParams,
@@ -175,6 +171,7 @@ export const buildTelegramMessageContext = async ({
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   let topicName: string | undefined;
+  let isBotOwnedThread = false;
   if (isForum && resolvedThreadId != null) {
     const topicNameCacheScope = await resolveTelegramMessageContextStorePath({
       cfg,
@@ -183,49 +180,13 @@ export const buildTelegramMessageContext = async ({
         resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
       sessionRuntime,
     });
-    const ftCreated = msg.forum_topic_created;
-    const ftEdited = msg.forum_topic_edited;
-    const ftClosed = msg.forum_topic_closed;
-    const ftReopened = msg.forum_topic_reopened;
-    const topicPatch = ftCreated?.name
-      ? {
-          name: ftCreated.name,
-          iconColor: ftCreated.icon_color,
-          iconCustomEmojiId: ftCreated.icon_custom_emoji_id,
-          closed: false,
-        }
-      : ftEdited?.name
-        ? {
-            name: ftEdited.name,
-            iconCustomEmojiId: ftEdited.icon_custom_emoji_id,
-          }
-        : ftClosed
-          ? { closed: true }
-          : ftReopened
-            ? { closed: false }
-            : undefined;
-
-    if (topicPatch) {
-      await updateTopicName(chatId, resolvedThreadId, topicPatch, topicNameCacheScope);
-    }
-
-    topicName = await getTopicName(chatId, resolvedThreadId, topicNameCacheScope);
-    if (!topicName) {
-      const replyFtCreated = msg.reply_to_message?.forum_topic_created;
-      if (replyFtCreated?.name) {
-        await updateTopicName(
-          chatId,
-          resolvedThreadId,
-          {
-            name: replyFtCreated.name,
-            iconColor: replyFtCreated.icon_color,
-            iconCustomEmojiId: replyFtCreated.icon_custom_emoji_id,
-          },
-          topicNameCacheScope,
-        );
-        topicName = replyFtCreated.name;
-      }
-    }
+    const topic = await resolveTelegramForumTopicMetadata({
+      msg,
+      threadId: resolvedThreadId,
+      scope: topicNameCacheScope,
+    });
+    topicName = topic.topicName;
+    isBotOwnedThread = primaryCtx.me?.id !== undefined && topic.creatorUserId === primaryCtx.me.id;
   }
 
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
@@ -333,7 +294,7 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  const sendTyping = async () => {
+  const sendChatAction = async (action: "typing" | "record_voice") => {
     if (threadSpec.scope === "direct-messages") {
       return;
     }
@@ -342,26 +303,16 @@ export const buildTelegramMessageContext = async ({
       fn: () =>
         sendChatActionHandler.sendChatAction(
           chatId,
-          "typing",
+          action,
           buildTypingThreadParams(replyThreadId),
         ),
     });
   };
+  const sendTyping = () => sendChatAction("typing");
 
   const sendRecordVoice = async () => {
-    if (threadSpec.scope === "direct-messages") {
-      return;
-    }
     try {
-      await withTelegramApiErrorLogging({
-        operation: "sendChatAction",
-        fn: () =>
-          sendChatActionHandler.sendChatAction(
-            chatId,
-            "record_voice",
-            buildTypingThreadParams(replyThreadId),
-          ),
-      });
+      await sendChatAction("record_voice");
     } catch (err) {
       logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
     }
@@ -413,24 +364,17 @@ export const buildTelegramMessageContext = async ({
     return false;
   };
 
-  const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+  const sessionKey = resolveTelegramTargetSession({
     cfg,
     route,
     chatId,
     isGroup,
     senderId,
-  });
-  const useDmThreadSession = shouldUseTelegramDmThreadSession({
     dmThreadId,
     botHasTopicsEnabled:
       (threadSpec.scope === "dm" && msg.is_topic_message === true) ||
       resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
   });
-  const threadKeys =
-    useDmThreadSession && dmThreadId != null
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
-      : null;
-  const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   route = {
     ...route,
     sessionKey,
@@ -447,12 +391,21 @@ export const buildTelegramMessageContext = async ({
   const baseRequireMention = resolveGroupRequireMention(chatId, cfg);
   // Persisted session activation intentionally interleaves topic and group config.
   // ScopeTree resolves config only, so this precedence remains session-owned here.
-  const groupRequireMention = firstDefined(
+  const configuredGroupRequireMention = firstDefined(
     topicConfig?.requireMention,
     activationOverride,
     telegramGroupConfig?.requireMention,
     baseRequireMention,
   );
+  const requireMentionInBotThreads = firstDefined(
+    topicConfig?.requireMentionInBotThreads,
+    telegramGroupConfig?.requireMentionInBotThreads,
+  );
+  const { requireMention: groupRequireMention } = resolveBotThreadMentionPolicy({
+    isBotOwnedThread,
+    requireMentionInBotThreads,
+    requireMention: Boolean(configuredGroupRequireMention),
+  });
   const requireMention =
     isGroup && bindingMode.kind === "plugin-owned-runtime" ? false : groupRequireMention;
 
@@ -489,7 +442,9 @@ export const buildTelegramMessageContext = async ({
     groupConfig,
     topicConfig,
     providerMentionPatterns: cfg.channels?.telegram?.accounts?.[account.accountId]?.mentionPatterns,
-    requireMention: Boolean(requireMention),
+    requireMention,
+    isBotOwnedThread,
+    requireMentionInBotThreads,
     options,
     logger,
   });
@@ -536,7 +491,7 @@ export const buildTelegramMessageContext = async ({
     topicConfig,
     effectiveWasMentioned: bodyResult.effectiveWasMentioned,
     inboundEventKind: bodyResult.inboundEventKind,
-    groupRequireMention: Boolean(groupRequireMention),
+    groupRequireMention,
     mentionFacts: bodyResult.mentionFacts,
     groupThread: bodyResult.groupThread,
     commandSource: bodyResult.commandSource,

@@ -1,4 +1,13 @@
-import type { Period, PersonReport, ReportDocument, SummaryDocument } from "./types.js";
+import type { AggregateDayOptions } from "./aggregate.js";
+import type {
+  ActivityEntry,
+  DiscordMessage,
+  GithubItem,
+  Period,
+  PersonReport,
+  ReportDocument,
+  SummaryDocument,
+} from "./types.js";
 
 export type ReportPerson = Pick<
   PersonReport,
@@ -53,6 +62,21 @@ export type ReportRun = {
 };
 
 export type TeamReportsOperations = {
+  resetActivity: { input: undefined; output: void };
+  appendActivity: {
+    input:
+      | { source: "github"; entries: ActivityEntry<GithubItem>[] }
+      | { source: "discord"; entries: ActivityEntry<DiscordMessage>[] };
+    output: void;
+  };
+  aggregateActivity: {
+    input: Omit<AggregateDayOptions, "items" | "messages">;
+    output: ReportDocument;
+  };
+  aggregatePeriod: {
+    input: Omit<AggregateDayOptions, "items" | "messages" | "githubStatus">;
+    output: ReportDocument;
+  };
   upsertPeriod: {
     input: Omit<StoredPeriod, "summary"> & { summary?: SummaryDocument | null };
     output: void;

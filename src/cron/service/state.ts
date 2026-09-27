@@ -19,6 +19,7 @@ import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { QuarantinedCronConfigJob } from "../store/types.js";
 import type {
   CronCompletionStatus,
+  CronWebhookDeliveryOutcome,
   CronTriggerEvaluationResult,
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -239,8 +240,8 @@ export type CronServiceDeps = {
     job: CronJob;
     event: CronEvent;
     abortSignal: AbortSignal;
-    onDeliveryAccepted: () => void;
-  }) => Promise<void>;
+    onDeliveryState: (outcome: CronWebhookDeliveryOutcome) => void;
+  }) => Promise<CronWebhookDeliveryOutcome>;
   cleanupTimedOutAgentRun?: (params: {
     job: CronJob;
     timeoutMs: number;

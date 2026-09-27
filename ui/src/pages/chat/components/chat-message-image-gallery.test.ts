@@ -87,10 +87,15 @@ describe("message image gallery loading", () => {
     ).toBe(expectedSrc);
     const tile = container.querySelector<HTMLButtonElement>(".chat-message-image-button");
     expect(tile).not.toBeNull();
+    expect(tile?.getAttribute("aria-label")).toBe(`Open image ${filename}`);
+    expect(container.querySelector(".chat-message-image")?.getAttribute("alt")).toBe(filename);
     tile!.click();
     await opened.promise;
     expect(onOpenImage).toHaveBeenCalledWith(
-      expect.objectContaining({ src: new URL(expectedSrc, window.location.href).href }),
+      expect.objectContaining({
+        src: new URL(expectedSrc, window.location.href).href,
+        title: filename,
+      }),
     );
   });
 
@@ -257,7 +262,7 @@ describe("message image gallery loading", () => {
             renderMessageImages(
               [
                 { url: "data:image/png;base64,cG5n", alt: "First image" },
-                { url: source, alt: "Managed neighbor" },
+                { url: source, alt: "Managed neighbor", fileName: "neighbor.png" },
               ],
               { onOpenImage, onRequestUpdate },
             ),
@@ -323,7 +328,7 @@ describe("message image gallery loading", () => {
         renderMessageImages(
           [
             { url: "data:image/png;base64,cG5n", alt: "First image" },
-            { url: localSource, alt: "Local neighbor" },
+            { url: localSource, fileName: "Local neighbor.png" },
           ],
           { onOpenImage, onRequestUpdate, sessionKey: "main", resourceBasePath: "/openclaw" },
         ),
@@ -366,7 +371,7 @@ describe("message image gallery loading", () => {
       if (removeOwner) {
         expect(result).toBeNull();
       } else {
-        expect(result?.title).toBe("Local neighbor");
+        expect(result?.title).toBe("Local neighbor.png");
         const url = new URL(result!.src, window.location.href);
         expect(url.pathname).toBe("/openclaw/__openclaw__/assistant-media");
         expect(url.searchParams.get("source")).toBe(localSource);

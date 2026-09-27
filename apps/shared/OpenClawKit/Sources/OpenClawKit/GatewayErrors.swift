@@ -108,17 +108,17 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
     {
         let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
         self.message = trimmedMessage.isEmpty ? "gateway connect failed" : trimmedMessage
-        self.detailCodeRaw = Self.trimmedOrNil(detailCodeRaw)
+        self.detailCodeRaw = detailCodeRaw?.trimmedNonEmpty
         self.canRetryWithDeviceToken = canRetryWithDeviceToken
-        self.recommendedNextStepRaw = Self.trimmedOrNil(recommendedNextStepRaw)
-        self.requestId = Self.trimmedOrNil(requestId)
-        self.detailsReason = Self.trimmedOrNil(detailsReason)
-        self.ownerRaw = Self.trimmedOrNil(ownerRaw)
-        self.titleOverride = Self.trimmedOrNil(titleOverride)
-        self.userMessageOverride = Self.trimmedOrNil(userMessageOverride)
-        self.actionLabel = Self.trimmedOrNil(actionLabel)
-        self.actionCommand = Self.trimmedOrNil(actionCommand)
-        self.docsURLString = Self.trimmedOrNil(docsURLString)
+        self.recommendedNextStepRaw = recommendedNextStepRaw?.trimmedNonEmpty
+        self.requestId = requestId?.trimmedNonEmpty
+        self.detailsReason = detailsReason?.trimmedNonEmpty
+        self.ownerRaw = ownerRaw?.trimmedNonEmpty
+        self.titleOverride = titleOverride?.trimmedNonEmpty
+        self.userMessageOverride = userMessageOverride?.trimmedNonEmpty
+        self.actionLabel = actionLabel?.trimmedNonEmpty
+        self.actionCommand = actionCommand?.trimmedNonEmpty
+        self.docsURLString = docsURLString?.trimmedNonEmpty
         self.retryableOverride = retryableOverride
         self.pauseReconnectOverride = pauseReconnectOverride
         self.clientMinProtocol = clientMinProtocol
@@ -166,11 +166,6 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
             clientMaxProtocol: clientMaxProtocol,
             expectedProtocol: expectedProtocol,
             minimumProbeProtocol: minimumProbeProtocol)
-    }
-
-    private static func trimmedOrNil(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     public var detailCode: String? {
@@ -244,32 +239,23 @@ public struct GatewayResponseError: LocalizedError, @unchecked Sendable {
 
     public init(method: String, code: String?, message: String?, details: [String: AnyCodable]?) {
         self.method = method
-        self.code = (code?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-            ? code!.trimmingCharacters(in: .whitespacesAndNewlines)
-            : "GATEWAY_ERROR"
-        self.message = (message?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-            ? message!.trimmingCharacters(in: .whitespacesAndNewlines)
-            : "gateway error"
+        self.code = code?.trimmedNonEmpty ?? "GATEWAY_ERROR"
+        self.message = message?.trimmedNonEmpty ?? "gateway error"
         self.details = details ?? [:]
     }
 
     public var detailsReason: String? {
-        let raw = self.details["reason"]?.value as? String
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        self.details["reason"]?.stringValue?.trimmedNonEmpty
     }
 
     public var missingScopeDetails: GatewayMissingScopeErrorDetails? {
         guard self.details["code"]?.stringValue == "MISSING_SCOPE" else { return nil }
-        let missingScope = self.details["missingScope"]?.stringValue?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !missingScope.isEmpty, let values = self.details["requiredScopes"]?.arrayValue else {
+        guard let missingScope = self.details["missingScope"]?.stringValue?.trimmedNonEmpty,
+              let values = self.details["requiredScopes"]?.arrayValue
+        else {
             return nil
         }
-        let requiredScopes = values.compactMap { value -> String? in
-            let scope = value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return scope.isEmpty ? nil : scope
-        }
+        let requiredScopes = values.compactMap { $0.stringValue?.trimmedNonEmpty }
         guard !requiredScopes.isEmpty, requiredScopes.count == values.count else { return nil }
         return GatewayMissingScopeErrorDetails(
             missingScope: missingScope,

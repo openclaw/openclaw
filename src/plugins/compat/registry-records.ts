@@ -25,7 +25,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     warningStarts: "2026-09-26",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "Use legacyWebhook for canonical listener config. Doctor migrates stored webhookPort/webhookHost inputs; deprecated optional TypeScript properties preserve config producer source compatibility until an approved SDK major removal.",
+      "Use legacyWebhook for canonical listener config. Doctor migrates stored webhookPort/webhookHost and webhook.port inputs; deprecated optional TypeScript properties preserve config producer source compatibility until an approved SDK major removal.",
     docsPath: "/gateway/doctor/config-migrations#channel-webhook-listeners",
     surfaces: [
       "TelegramAccountConfig.webhookPort",
@@ -34,11 +34,16 @@ export const PLUGIN_COMPAT_RECORDS = [
       "FeishuConfig.webhookHost",
       "FeishuAccountConfig.webhookPort",
       "FeishuAccountConfig.webhookHost",
+      "MSTeamsWebhookConfig.port",
+      "NextcloudTalkAccountConfig.webhookPort",
+      "NextcloudTalkAccountConfig.webhookHost",
     ],
     diagnostics: ["TypeScript @deprecated annotations and plugin-owned Doctor migration"],
     tests: [
       "extensions/telegram/src/doctor.test.ts",
       "extensions/feishu/src/doctor-contract.test.ts",
+      "extensions/msteams/config-doctor-api.test.ts",
+      "extensions/nextcloud-talk/src/doctor-contract.test.ts",
     ],
   },
   {
@@ -100,33 +105,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     ],
     releaseNote:
       "Node-host plugins can await managed workspace acquisition while existing synchronous callers retain their immediate lease contract.",
-  },
-  {
-    code: "plugin-tasks-sync-reads",
-    status: "deprecated",
-    owner: "sdk",
-    introduced: "2026-09-12",
-    deprecated: "2026-09-12",
-    warningStarts: "2026-09-12",
-    removalGate: "next-plugin-sdk-major",
-    replacement:
-      "Await the 14 read methods on api.runtime.tasks.async.runs, flows, and managedFlows, plus createManaged, tryCreateManaged, setWaiting, resume, finish, fail, requestCancel, and runTask on api.runtime.tasks.async.managedFlows. Reconcile outcome-unknown errors before retrying creation or child linkage. Retain synchronous methods until supported external-plugin migration and explicit breaking-release approval; native cancellation remains on the existing surface.",
-    docsPath: "/plugins/sdk-runtime/background-work",
-    surfaces: [
-      "api.runtime.tasks.runs get/list/findLatest/resolve",
-      "api.runtime.tasks.flows get/list/findLatest/resolve/getTaskSummary",
-      "api.runtime.tasks.managedFlows get/list/findLatest/resolve/getTaskSummary",
-      "api.runtime.tasks.managedFlows createManaged/tryCreateManaged/setWaiting/resume/finish/fail/requestCancel/runTask",
-    ],
-    diagnostics: [
-      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
-    ],
-    tests: [
-      "src/infra/sqlite-worker-task-runtime.test.ts",
-      "src/infra/sqlite-worker-managed-task-link.test.ts",
-    ],
-    releaseNote:
-      "Plugins can opt into worker-backed task and flow reads plus managed-flow writes and child linkage through tasks.async while synchronous methods remain available for external compatibility. Cold registry and configuration preparation remains synchronous.",
   },
   {
     code: "plugin-state-sync-keyed-store",

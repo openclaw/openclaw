@@ -1,6 +1,10 @@
 import { createServer } from "node:http";
 import { expect, it } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  getSessionMcpRuntimeManagerForTesting,
+  setSessionMcpRuntimeScheduler,
+} from "../agents/agent-bundle-mcp-manager-api.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -12,6 +16,7 @@ import {
   PlatformMessageNotDispatchedError,
 } from "../infra/outbound/deliver-types.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { dispatchInboundMessageWithBufferedDispatcher } from "./dispatch.js";
 
@@ -73,6 +78,7 @@ it.each([
       label: "block-streaming-recovery",
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
     });
+    const scheduler = createTestGatewayScheduler();
     const requests: Array<{ method?: string; url?: string; model?: string }> = [];
     const toolRequestBodies: string[] = [];
     const attempted: Array<{ kind: string; text: string | undefined; mediaUrls?: string[] }> = [];
@@ -211,6 +217,7 @@ it.each([
       }
     });
     try {
+      await setSessionMcpRuntimeScheduler(scheduler);
       const toolPluginPath = state.statePath("media-plugin", "index.cjs");
       if (directMedia) {
         await state.writeJson("media-plugin/openclaw.plugin.json", {
@@ -332,7 +339,6 @@ it.each([
       let blocks = 0;
       const blockStarted = createDeferred();
       const releaseBlock = createDeferred();
-      let concurrentElapsedMs: number | undefined;
       const noSend = new PlatformMessageNotDispatchedError("channel rejected the continuation", {
         cause: new Error("transport unavailable before send"),
       });
@@ -452,7 +458,6 @@ it.each([
           | undefined;
         try {
           await withTestTimeout(blockStarted.promise, 10000, "first transport start");
-          const started = performance.now();
           otherDispatch = dispatchInboundMessageWithBufferedDispatcher({
             ...dispatchParams,
             ctx: {
@@ -468,7 +473,6 @@ it.each([
             10000,
             "other conversation during held transport",
           );
-          concurrentElapsedMs = performance.now() - started;
           expect(other.settledReceipt?.anyVisibleDelivered).toBe(true);
           expect(other.settledReceipt?.counts.block.delivered).toBe(3);
           expect(other.settledReceipt?.counts.final.delivered).toBe(0);
@@ -481,15 +485,6 @@ it.each([
       }
       if (scenario === "direct-no-delivery") {
         await expect(dispatch).rejects.toBe(noSend);
-        console.log(
-          JSON.stringify({
-            scenario,
-            requests: requests.length,
-            attempted,
-            delivered,
-            outcome: "retryable-no-send",
-          }),
-        );
         expect(toolRequestBodies[1]).toContain("Fixture generated image.");
         expect(attempted).toEqual([
           { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] },
@@ -504,18 +499,6 @@ it.each([
           providerFailure = error;
           return undefined;
         });
-        console.log(
-          JSON.stringify({
-            scenario,
-            requests,
-            fallbackEvents,
-            attempted,
-            delivered,
-            result,
-            providerFailure:
-              providerFailure instanceof Error ? providerFailure.message : providerFailure,
-          }),
-        );
         expect(fallbackEvents).toContain("primary-block");
         if (fallbackRejected) {
           expect(requests.map((entry) => entry.model)).toEqual(["answer", "backup"]);
@@ -533,17 +516,6 @@ it.each([
         return;
       }
       const result = await dispatch;
-      console.log(
-        JSON.stringify({
-          scenario,
-          requests: requests.length,
-          requestEndpoints: requests,
-          attempted,
-          delivered,
-          result,
-          concurrentElapsedMs,
-        }),
-      );
       expect(requests).toEqual(
         scenario === "concurrent" || directMedia
           ? [
@@ -630,6 +602,13 @@ it.each([
         }
       }
     } finally {
+      const mcpManager = getSessionMcpRuntimeManagerForTesting();
+      for (const sessionId of mcpManager.listSessionIds()) {
+        if (mcpManager.peekSession({ sessionId })?.workspaceDir === state.workspaceDir) {
+          await mcpManager.disposeSession(sessionId);
+        }
+      }
+      await scheduler.stop();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

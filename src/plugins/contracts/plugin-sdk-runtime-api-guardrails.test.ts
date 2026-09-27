@@ -124,7 +124,6 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";',
       'export { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";',
       'export { withFileLock } from "openclaw/plugin-sdk/file-lock";',
-      'export { keepHttpServerTaskAlive } from "openclaw/plugin-sdk/channel-outbound";',
       'export { detectMime, extensionForMime, extractOriginalFilename, getFileExtension } from "openclaw/plugin-sdk/media-runtime";',
       'export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";',
       'export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";',

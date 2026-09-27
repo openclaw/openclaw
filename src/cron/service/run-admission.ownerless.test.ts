@@ -16,19 +16,21 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../../tasks/task-registry.store.sqlite.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
+import {
+  readCronRunHistoryPageForTests,
+  readCronRunRecordsForTests,
+} from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
   findActiveCronRunReceiptInDatabase,
+  finishCronRunReceipt,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
@@ -49,7 +51,6 @@ afterEach(() => {
     stop(state);
   }
   states.clear();
-  resetTaskRegistryForTests({ persist: false });
 });
 
 function commandJob(id: string, nextRunAtMs = NOW): CronJob {
@@ -173,22 +174,13 @@ describe("ownerless reservation and manual completion", () => {
         expect.objectContaining(terminal),
       ]);
       expect(history(storePath, job.id, runId)).toEqual([expect.objectContaining(terminal)]);
-      const tasks = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-        runtime: "cron",
-        sourceId: job.id,
-      });
+      const tasks = readCronRunRecordsForTests(job.id);
       expect(tasks).toHaveLength(1);
       expect(tasks[0]).toMatchObject({
-        scopeKind: "system",
-        ownerKey: "",
-        requesterSessionKey: "",
         status: "failed",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
       });
       expect(tasks[0]?.agentId).toBeUndefined();
-      expect(tasks[0]?.requesterAgentId).toBeUndefined();
-      expect(tasks[0]?.childSessionKey).toBeUndefined();
+      expect(tasks[0]?.sessionKey).toBeUndefined();
       expect(receipts(storePath, job.id)).toEqual([]);
       expect(execute).not.toHaveBeenCalled();
       const persisted = (await loadCronStore(storePath)).jobs[0]!;
@@ -361,6 +353,7 @@ describe("ownerless skip transaction guards", () => {
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
       claimCronRunReceiptInDatabase({
         database: db,
+        receiptSchema: prepareCronRunReceiptWriteSchema(db),
         prepared,
         resolveAgentId: () => "ops",
       }),

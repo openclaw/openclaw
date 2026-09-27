@@ -63,7 +63,7 @@ export async function executeScreenshotAction({
   requestedTimeoutMs?: number;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity: (targetId: string | undefined) => void;
+  onTabActivity: (targetId: string | undefined) => void | Promise<void>;
   opts?: BrowserScreenshotOptions;
 }): Promise<AgentToolResult<unknown>> {
   const targetId = readStringParam(params, "targetId");
@@ -79,7 +79,7 @@ export async function executeScreenshotAction({
     profile,
     signal,
   });
-  onTabActivity(readStringValue(result.targetId) ?? targetId);
+  await onTabActivity(readStringValue(result.targetId) ?? targetId);
   if (opts?.screenshotResultMode === "path") {
     const artifactPath = opts.persistScreenshot
       ? await opts.persistScreenshot({

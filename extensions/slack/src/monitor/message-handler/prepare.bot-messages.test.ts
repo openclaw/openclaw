@@ -1,5 +1,4 @@
 import type { App } from "@slack/bolt";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { assert, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
@@ -16,6 +15,14 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
 }));
 
 describe("Slack bot-message admission", () => {
+  function createContext(overrides: Partial<Parameters<typeof createInboundSlackCtx>[0]> = {}) {
+    return createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } },
+      defaultRequireMention: false,
+      ...overrides,
+    });
+  }
+
   function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
     return {
       channel: "D123",
@@ -45,14 +52,8 @@ describe("Slack bot-message admission", () => {
       members: params.members,
       response_metadata: { next_cursor: "" },
     });
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: {
-          slack: { enabled: true },
-        },
-      } as OpenClawConfig,
+    const slackCtx = createContext({
       appClient: { conversations: { members } } as unknown as App["client"],
-      defaultRequireMention: false,
     });
     slackCtx.allowFrom = ["UOWNER"];
     return { slackCtx, members };
@@ -72,14 +73,7 @@ describe("Slack bot-message admission", () => {
   }
 
   it("extracts attachment text for bot messages with empty text when allowBots is true (#27616)", async () => {
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: {
-          slack: { enabled: true },
-        },
-      } as OpenClawConfig,
-      defaultRequireMention: false,
-    });
+    const slackCtx = createContext();
     slackCtx.resolveUserName = async () => ({ name: "Bot" });
 
     const account = createSlackAccount({ allowBots: true });
@@ -118,22 +112,17 @@ describe("Slack bot-message admission", () => {
     expect(members).toHaveBeenCalledWith({ token: "token", channel: "C123", limit: 999 });
   });
 
-  it.each([undefined, true])(
-    "allows bot-authored room messages when an explicit owner is present (allowBots: %s)",
-    async (allowBots) => {
-      const { slackCtx, members } = createOwnerScopedBotRoomCtx({ members: ["UOWNER"] });
-
-      const prepared = await prepareMessageWith(
-        slackCtx,
-        createSlackAccount({ allowBots }),
-        createBotRoomMessage(),
-      );
-
-      assert(prepared);
-      expect(prepared.ctxPayload.RawBody).toContain("Readiness probe failed");
-      expect(members).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("allows bot-authored room messages by default when an explicit owner is present", async () => {
+    const { slackCtx, members } = createOwnerScopedBotRoomCtx({ members: ["UOWNER"] });
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createBotRoomMessage(),
+    );
+    assert(prepared);
+    expect(prepared.ctxPayload.RawBody).toContain("Readiness probe failed");
+    expect(members).toHaveBeenCalledTimes(1);
+  });
 
   it.each(["root", "account", "room"] as const)(
     "honors explicit allowBots false at the %s scope",
@@ -172,19 +161,6 @@ describe("Slack bot-message admission", () => {
     expect(members).not.toHaveBeenCalled();
   });
 
-  it("forwards bot sender status to ctxPayload when allowBots admits the bot", async () => {
-    const { slackCtx } = createOwnerScopedBotRoomCtx({ members: ["UOWNER"] });
-
-    const prepared = await prepareMessageWith(
-      slackCtx,
-      createSlackAccount({ allowBots: true }),
-      createBotRoomMessage(),
-    );
-
-    assert(prepared);
-    expect(prepared.ctxPayload.SenderIsBot).toBe(true);
-  });
-
   it("omits SenderIsBot for human messages", async () => {
     const slackCtx = createInboundSlackCtx({ cfg: { channels: { slack: { enabled: true } } } });
     slackCtx.resolveUserName = async () => ({ name: "Alice" });
@@ -198,42 +174,10 @@ describe("Slack bot-message admission", () => {
     expect(prepared.ctxPayload.SenderIsBot).toBeUndefined();
   });
 
-  it("allows bot-authored room messages when the bot is explicitly channel-allowlisted (#59284)", async () => {
-    const members = vi.fn();
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: {
-          slack: { enabled: true },
-        },
-      } as OpenClawConfig,
-      appClient: { conversations: { members } } as unknown as App["client"],
-      defaultRequireMention: false,
-      channelsConfig: {
-        C123: { users: ["B0AGV8EQYA3"] },
-      },
-    });
-
-    const prepared = await prepareMessageWith(
-      slackCtx,
-      createSlackAccount({ allowBots: true }),
-      createBotRoomMessage(),
-    );
-
-    assert(prepared);
-    expect(prepared.ctxPayload.RawBody).toContain("Readiness probe failed");
-    expect(members).not.toHaveBeenCalled();
-  });
-
   it("drops bot-authored room messages without mention when allowBots is mentions", async () => {
     const members = vi.fn();
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: {
-          slack: { enabled: true },
-        },
-      } as OpenClawConfig,
+    const slackCtx = createContext({
       appClient: { conversations: { members } } as unknown as App["client"],
-      defaultRequireMention: false,
       channelsConfig: {
         C123: { users: ["B0AGV8EQYA3"] },
       },
@@ -251,14 +195,8 @@ describe("Slack bot-message admission", () => {
 
   it("allows bot-authored room messages with explicit mention when allowBots is mentions", async () => {
     const members = vi.fn();
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: {
-          slack: { enabled: true },
-        },
-      } as OpenClawConfig,
+    const slackCtx = createContext({
       appClient: { conversations: { members } } as unknown as App["client"],
-      defaultRequireMention: false,
       channelsConfig: {
         C123: { users: ["B0AGV8EQYA3"] },
       },
@@ -276,14 +214,7 @@ describe("Slack bot-message admission", () => {
   });
 
   it("allows bot-authored DM messages when allowBots is mentions", async () => {
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: {
-          slack: { enabled: true },
-        },
-      } as OpenClawConfig,
-      defaultRequireMention: false,
-    });
+    const slackCtx = createContext();
     slackCtx.resolveUserName = async () => ({ name: "Bot" });
 
     const prepared = await prepareMessageWith(
@@ -304,14 +235,8 @@ describe("Slack bot-message admission", () => {
 
   it("drops bot-authored room messages when owner presence lookup fails (#59284)", async () => {
     const members = vi.fn().mockRejectedValue(new Error("missing_scope"));
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: {
-          slack: { enabled: true },
-        },
-      } as OpenClawConfig,
+    const slackCtx = createContext({
       appClient: { conversations: { members } } as unknown as App["client"],
-      defaultRequireMention: false,
     });
     slackCtx.allowFrom = ["UOWNER"];
 

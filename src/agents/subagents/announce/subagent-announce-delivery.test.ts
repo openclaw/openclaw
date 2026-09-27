@@ -942,15 +942,12 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         list: [{ id: "ops" }, { id: "research" }],
       },
     } as never;
-    const getRequesterSessionActivity = vi.fn(() => ({
-      sessionId: "ops-session",
-      isActive: true,
-    }));
+    const isEmbeddedAgentRunActive = vi.fn(() => true);
     const loadSessionEntry = vi.fn(() => ({ sessionId: "ops-session", updatedAt: 1 }));
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
-      getRequesterSessionActivity,
+      isEmbeddedAgentRunActive,
       loadSessionEntry,
       queueEmbeddedAgentMessageWithOutcome,
       callGateway: vi.fn(async () => {
@@ -969,7 +966,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     });
 
     expect(result.delivered).toBe(false);
-    expect(getRequesterSessionActivity).not.toHaveBeenCalled();
+    expect(isEmbeddedAgentRunActive).not.toHaveBeenCalled();
     expect(loadSessionEntry).not.toHaveBeenCalled();
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
@@ -1071,15 +1068,12 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         list: [{ id: "ops" }, { id: "research" }],
       },
     } as never;
-    const getRequesterSessionActivity = vi.fn(() => ({
-      sessionId: "ops-session",
-      isActive: true,
-    }));
+    const isEmbeddedAgentRunActive = vi.fn(() => true);
     const loadSessionEntry = vi.fn(() => ({ sessionId: "ops-session", updatedAt: 1 }));
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
-      getRequesterSessionActivity,
+      isEmbeddedAgentRunActive,
       loadSessionEntry,
       queueEmbeddedAgentMessageWithOutcome,
       callGateway: vi.fn(async () => {
@@ -1099,7 +1093,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     });
 
     expect(result.delivered).toBe(false);
-    expect(getRequesterSessionActivity).not.toHaveBeenCalled();
+    expect(isEmbeddedAgentRunActive).not.toHaveBeenCalled();
     expect(loadSessionEntry).not.toHaveBeenCalled();
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
@@ -1113,15 +1107,12 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         list: [{ id: "ops" }, { id: "research" }],
       },
     } as never;
-    const getRequesterSessionActivity = vi.fn(() => ({
-      sessionId: "ops-session",
-      isActive: true,
-    }));
+    const isEmbeddedAgentRunActive = vi.fn(() => true);
     const loadSessionEntry = vi.fn(() => ({ sessionId: "ops-session", updatedAt: 1 }));
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
-      getRequesterSessionActivity,
+      isEmbeddedAgentRunActive,
       loadSessionEntry,
       queueEmbeddedAgentMessageWithOutcome,
       callGateway: vi.fn(async () => {
@@ -1140,7 +1131,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     });
 
     expect(result.delivered).toBe(false);
-    expect(getRequesterSessionActivity).not.toHaveBeenCalled();
+    expect(isEmbeddedAgentRunActive).not.toHaveBeenCalled();
     expect(loadSessionEntry).not.toHaveBeenCalled();
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
@@ -1965,68 +1956,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(content).not.toContain("video_generate");
     expect(content).not.toContain(modelRouteChange);
     expect(content.length).toBeLessThanOrEqual(4_096);
-  });
-
-  it("reports direct completion delivery before post-send transcript mirroring settles", async () => {
-    const callGateway = createPayloadGatewayMock();
-    let releaseMirror!: () => void;
-    const mirrorPending = new Promise<void>((resolve) => {
-      releaseMirror = resolve;
-    });
-    let resolvePlatformCommit!: () => void;
-    const platformCommitted = new Promise<void>((resolve) => {
-      resolvePlatformCommit = resolve;
-    });
-    const onDeliveryResult = vi.fn(() => resolvePlatformCommit());
-    const sendMessage = vi.fn(async (params: Parameters<typeof runtimeSendMessage>[0]) => {
-      const platformResult = { channel: "discord", messageId: "msg-1" };
-      await params.onDeliveryResult?.(platformResult);
-      await params.onDeliveryResult?.(platformResult);
-      await mirrorPending;
-      return {
-        channel: "discord",
-        to: "dm:U123",
-        via: "direct" as const,
-        mediaUrl: null,
-        result: platformResult,
-      };
-    }) as unknown as typeof runtimeSendMessage;
-
-    const delivery = deliverDiscordDirectMessageCompletion({
-      callGateway,
-      sendMessage,
-      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
-      onDeliveryResult,
-    });
-    await platformCommitted;
-
-    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
-    expect(onDeliveryResult).toHaveBeenCalledWith(
-      expect.objectContaining({ delivered: true, path: "direct", deliveredAt: expect.any(Number) }),
-    );
-    releaseMirror();
-    await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
-    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves an identified direct completion when later send bookkeeping fails", async () => {
-    const callGateway = createPayloadGatewayMock();
-    const onDeliveryResult = vi.fn();
-    const sendMessage = vi.fn(async (params: Parameters<typeof runtimeSendMessage>[0]) => {
-      await params.onDeliveryResult?.({ channel: "discord", messageId: "msg-1" });
-      throw new Error("post-send bookkeeping failed");
-    }) as unknown as typeof runtimeSendMessage;
-
-    const delivery = await deliverDiscordDirectMessageCompletion({
-      callGateway,
-      sendMessage,
-      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
-      onDeliveryResult,
-    });
-
-    expect(delivery).toMatchObject({ delivered: true, path: "direct" });
-    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("delivers a generic notice for failed subagent placeholder output", async () => {

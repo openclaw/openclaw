@@ -229,9 +229,8 @@ export function registerBrowserInspectCommands(
           return;
         }
 
-        const nodes = "nodes" in result ? result.nodes : [];
         defaultRuntime.log(
-          nodes
+          result.nodes
             .map((n) => {
               const indent = "  ".repeat(Math.min(20, n.depth));
               const name = n.name ? ` "${n.name}"` : "";

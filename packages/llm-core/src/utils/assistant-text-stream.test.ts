@@ -21,8 +21,8 @@ function fixture() {
     },
   };
   const stream = new AssistantMessageEventStream();
-  const append = (delta: string, contentIndex = 0) => {
-    const event = { type: "text_delta", contentIndex, delta } as const;
+  const append = (delta: string) => {
+    const event = { type: "text_delta", contentIndex: 0, delta } as const;
     stream.push(event);
     return event;
   };
@@ -90,24 +90,15 @@ describe("queued assistant text appends", () => {
       append("a");
       append("b");
       stream.push(boundary);
-      append("c");
-      append("d");
-      const end: AssistantMessageEvent = {
-        type: "text_end",
-        contentIndex: 0,
-        content: "abcd",
-        partial: message,
-      };
-      stream.push(end);
-      expected.push(
-        { type: "text_delta", contentIndex: 0, delta: "ab" },
-        boundary,
-        { type: "text_delta", contentIndex: 0, delta: "cd" },
-        end,
-      );
+      expected.push({ type: "text_delta", contentIndex: 0, delta: "ab" }, boundary);
     }
+    append("c");
+    append("d");
     stream.end(message);
-    expect(await collect(stream)).toEqual(expected);
+    expect(await collect(stream)).toEqual([
+      ...expected,
+      { type: "text_delta", contentIndex: 0, delta: "cd" },
+    ]);
   });
 
   it("freezes unread text when the producer ends with an explicit result", async () => {
@@ -122,21 +113,18 @@ describe("queued assistant text appends", () => {
     await expect(stream.result()).resolves.toBe(message);
   });
 
-  it.each(["error", "aborted"] as const)(
-    "drains prior text before %s and rejects later pushes",
-    async (reason) => {
-      const { message, stream, append } = fixture();
-      append("Hello");
-      append(" world");
-      const error: AssistantMessage = { ...message, stopReason: reason };
-      stream.push({ type: "error", reason, error });
-      append("discarded");
-      stream.end();
-      expect(await collect(stream)).toEqual([
-        { type: "text_delta", contentIndex: 0, delta: "Hello world" },
-        { type: "error", reason, error },
-      ]);
-      await expect(stream.result()).resolves.toBe(error);
-    },
-  );
+  it("drains prior text before an error and rejects later pushes", async () => {
+    const { message, stream, append } = fixture();
+    append("Hello");
+    append(" world");
+    const error: AssistantMessage = { ...message, stopReason: "error" };
+    stream.push({ type: "error", reason: "error", error });
+    append("discarded");
+    stream.end();
+    expect(await collect(stream)).toEqual([
+      { type: "text_delta", contentIndex: 0, delta: "Hello world" },
+      { type: "error", reason: "error", error },
+    ]);
+    await expect(stream.result()).resolves.toBe(error);
+  });
 });

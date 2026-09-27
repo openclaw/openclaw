@@ -1,5 +1,6 @@
 // Install the native service fixtures before loading the maintenance owner.
 import "./update-command-service-maintenance.test-support.js";
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -39,8 +40,13 @@ import {
   inspectManagedGatewayServiceBeforeUpdate,
 } from "./update-command-service-plan.js";
 
-const { mocks, nativeOfflineCases, withServiceHome, fixtureGatewayPid } =
-  await import("./update-command-service-maintenance.test-support.js");
+const {
+  mocks,
+  nativeOfflineCases,
+  withServiceHome,
+  mockRegisteredWindowsLauncher,
+  fixtureGatewayPid,
+} = await import("./update-command-service-maintenance.test-support.js");
 
 it.each(["direct", "authority-lost", "ordinary"] as const)(
   "preserves Doctor stop guidance through native preparation failure: %s",
@@ -50,10 +56,10 @@ it.each(["direct", "authority-lost", "ordinary"] as const)(
       vi.spyOn(doctorServicePolicy, "shouldManageGatewayService").mockResolvedValue(true);
       let current = true;
       const lost = new Error("Doctor update admission changed during drain cleanup");
-      vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockReturnValue(() => {
-        if (!current) {
-          throw lost;
-        }
+      const assertAdmission = () => assert.ok(current, lost);
+      vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockReturnValue({
+        assertCurrent: assertAdmission,
+        recordContinuation: assertAdmission,
       });
       const service = createMockGatewayService({
         readCommand: async () => ({
@@ -90,8 +96,7 @@ it.each(["direct", "authority-lost", "ordinary"] as const)(
         expect(collectNestedErrorCandidates(error)).toContain(lost);
         expect(
           collectNestedErrorCandidates(error).some(
-            (candidate) =>
-              candidate instanceof AggregateError && candidate.errors.includes(refusal),
+            (cause) => cause instanceof AggregateError && cause.errors.includes(refusal),
           ),
         ).toBe(true);
       }
@@ -376,11 +381,9 @@ it.each(nativeOfflineCases)(
         }
         return scenario.enabled;
       });
+      const command = mockRegisteredWindowsLauncher(home);
       const service = createMockGatewayService({
-        readCommand: async () => ({
-          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
-          environment: { HOME: home },
-        }),
+        readCommand: async () => command,
         readRuntime:
           scenario.platform === "win32"
             ? readScheduledTaskRuntime
@@ -439,11 +442,9 @@ it.each([
         }),
       });
     }
+    const command = mockRegisteredWindowsLauncher(home);
     const service = createMockGatewayService({
-      readCommand: vi.fn(async () => ({
-        programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
-        environment: { HOME: home },
-      })),
+      readCommand: vi.fn(async () => command),
       readRuntime: readScheduledTaskRuntime,
       isLoaded: async () => true,
     });
@@ -490,7 +491,7 @@ it.each([
       }
     }
     const attempts = scenario.code === "ETIMEDOUT" ? 2 : 1;
-    expect(spawnSync).toHaveBeenCalledTimes(attempts);
+    expect(spawnSync).toHaveBeenCalledTimes(attempts + (scenario.recovered ? 2 : 0));
     expect(service.readCommand).toHaveBeenCalledTimes(attempts);
     for (const call of vi.mocked(spawnSync).mock.calls) {
       expect(call[2]?.timeout).toBe(30_000);
@@ -802,6 +803,7 @@ it.each(["disable", "restore", "compensation", "never"] as const)(
               "gateway",
             ],
             environment: { HOME: home },
+            sourcePath: path.join(home, "gateway.cmd"),
           }),
           readRuntime: async () => {
             if (revokeDuringInspection) {

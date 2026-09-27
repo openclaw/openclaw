@@ -186,9 +186,6 @@ function prepareOxlintPackageScope(
   };
 }
 
-/**
- * Builds the platform-specific oxlint shard list.
- */
 export function createOxlintShards({
   cwd = process.cwd(),
   env = process.env,
@@ -235,9 +232,6 @@ export function createOxlintShards({
   return [...coreShards, ...extensionShards, SCRIPTS_SHARD];
 }
 
-/**
- * Splits core oxlint targets into smaller source/package/UI shards.
- */
 function createCoreOxlintShards({
   cwd = process.cwd(),
   readDir = fs.readdirSync,
@@ -268,7 +262,7 @@ export function createExtensionOxlintShards({
   readDir = fs.readdirSync,
   chunkSize: requestedChunkSize = DEFAULT_EXTENSION_CHUNK_SIZE,
 }: ShardOptions & PlatformOptions & { chunkSize?: number } = {}) {
-  const entries = listExtensionEntries({ cwd, readDir });
+  const entries = listOxlintRootEntries(EXTENSIONS_DIR, { cwd, readDir });
   if (entries.dirs.length === 0 && entries.rootFiles.length === 0) {
     return [EXTENSIONS_SHARD];
   }
@@ -295,20 +289,13 @@ export function createExtensionOxlintShards({
   return shards;
 }
 
-/**
- * Reads the Windows extension shard chunk size.
- */
 export function resolveWindowsExtensionChunkSize(env: NodeJS.ProcessEnv = process.env) {
-  return resolvePositiveEnvIntWithFallback(
-    env,
-    "OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE",
-    DEFAULT_EXTENSION_CHUNK_SIZE,
+  return (
+    resolvePositiveEnvInt(env, "OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE") ??
+    DEFAULT_EXTENSION_CHUNK_SIZE
   );
 }
 
-/**
- * Chooses serial shard execution for constrained hosts or Windows.
- */
 export function shouldRunOxlintShardsSerial({
   env = process.env,
   platform = process.platform,
@@ -357,16 +344,16 @@ function readDirectoryEntries(readDir: ReadDirectoryEntries, target: string) {
   }
 }
 
-function listExtensionEntries({ cwd, readDir }: DirectoryLookup) {
-  const entries = readDirectoryEntries(readDir, path.join(cwd, EXTENSIONS_DIR));
+function listOxlintRootEntries(root: string, { cwd, readDir }: DirectoryLookup) {
+  const entries = readDirectoryEntries(readDir, path.join(cwd, root));
 
   const dirs = entries
     .filter((entry) => entry.isDirectory())
-    .map((entry) => `${EXTENSIONS_DIR}/${entry.name}`)
+    .map((entry) => `${root}/${entry.name}`)
     .toSorted((left, right) => left.localeCompare(right));
   const rootFiles = entries
     .filter((entry) => entry.isFile() && OXLINT_SOURCE_FILE_PATTERN.test(entry.name))
-    .map((entry) => `${EXTENSIONS_DIR}/${entry.name}`)
+    .map((entry) => `${root}/${entry.name}`)
     .toSorted((left, right) => left.localeCompare(right));
 
   return {
@@ -375,24 +362,11 @@ function listExtensionEntries({ cwd, readDir }: DirectoryLookup) {
   };
 }
 
-function listSourceRootTargetGroups({ cwd, readDir }: DirectoryLookup) {
-  const entries = readDirectoryEntries(readDir, path.join(cwd, "src"));
-
-  const dirs = entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => `src/${entry.name}`)
-    .toSorted((left, right) => left.localeCompare(right));
-  const rootFiles = entries
-    .filter((entry) => entry.isFile() && OXLINT_SOURCE_FILE_PATTERN.test(entry.name))
-    .map((entry) => `src/${entry.name}`)
-    .toSorted((left, right) => left.localeCompare(right));
-
+function listSourceRootTargetGroups(options: DirectoryLookup) {
+  const { dirs, rootFiles } = listOxlintRootEntries("src", options);
   return [...dirs.map((target) => [target]), ...(rootFiles.length > 0 ? [rootFiles] : [])];
 }
 
-/**
- * Runs selected oxlint shards and returns process-style success/failure.
- */
 export async function main(
   extraArgs: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
@@ -484,9 +458,6 @@ function resolveHostResources(hostResources?: HostResources) {
   };
 }
 
-/**
- * Parses shard-runner flags separately from forwarded oxlint args.
- */
 export function parseShardRunnerArgs(args: string[]) {
   const only = new Set<string>();
   const oxlintArgs: string[] = [];
@@ -579,9 +550,6 @@ function parseShardStripe(value: string | undefined, flag: string): ShardStripe 
   return { index, total };
 }
 
-/**
- * Filters shards by optional shard names and rejects unknown selectors.
- */
 export function filterOxlintShards<T extends { name: string }>(shards: T[], only: Set<string>) {
   if (only.size === 0) {
     return shards;
@@ -676,9 +644,6 @@ function matchesShardSelector(shard: { name: string }, selector: string) {
   return selector === shard.name || selector === shard.name.split(":")[0];
 }
 
-/**
- * Resolves shard concurrency from env, platform, and host resources.
- */
 export function resolveOxlintShardConcurrency({
   env = process.env,
   platform = process.platform,
@@ -723,9 +688,6 @@ async function runShards({ concurrency, entries, env, extraArgs, runner }: Shard
   return results.filter((status) => status !== undefined);
 }
 
-/**
- * Runs one oxlint shard with bounded output, heartbeat, and forced cleanup.
- */
 export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOptions) {
   console.error(`[oxlint:${shard.name}] starting`);
   const startedAt = Date.now();
@@ -860,9 +822,6 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
   });
 }
 
-/**
- * Reads the shard heartbeat interval.
- */
 export function resolveShardHeartbeatMs(env: NodeJS.ProcessEnv) {
   return resolveNonNegativeEnvInt(
     env,
@@ -871,9 +830,6 @@ export function resolveShardHeartbeatMs(env: NodeJS.ProcessEnv) {
   );
 }
 
-/**
- * Reads the per-shard timeout.
- */
 export function resolveShardTimeoutMs(env: NodeJS.ProcessEnv) {
   return resolveNonNegativeEnvInt(
     env,
@@ -882,9 +838,6 @@ export function resolveShardTimeoutMs(env: NodeJS.ProcessEnv) {
   );
 }
 
-/**
- * Reads the graceful shutdown window before SIGKILL.
- */
 export function resolveShardKillGraceMs(env: NodeJS.ProcessEnv) {
   return resolveNonNegativeEnvInt(
     env,
@@ -914,19 +867,6 @@ function resolvePositiveEnvInt(env: NodeJS.ProcessEnv, key: string) {
   const rawValue = env[key];
   if (rawValue === undefined || rawValue === "") {
     return null;
-  }
-
-  return parsePositiveEnvInt(rawValue, key);
-}
-
-function resolvePositiveEnvIntWithFallback(
-  env: NodeJS.ProcessEnv,
-  key: string,
-  defaultValue: number,
-) {
-  const rawValue = env[key];
-  if (rawValue === undefined || rawValue === "") {
-    return defaultValue;
   }
 
   return parsePositiveEnvInt(rawValue, key);

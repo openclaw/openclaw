@@ -61,11 +61,7 @@ export async function supersedeActiveStatesIfNeeded<TPayload, TMetadata>(
     }
     pending.superseded = true;
     params.clearStallTimer(pending);
-    try {
-      pending.abortController.abort(new Error("ingress-superseded"));
-    } catch {
-      // ignore
-    }
+    pending.abortController.abort(new Error("ingress-superseded"));
     try {
       await pending.settleOnce(async () => {
         await params.completeClaim(pending.claim);

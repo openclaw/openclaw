@@ -61,8 +61,8 @@ suite.define(() => {
       };
       await gateway.setMethodResponse("chat.history", {
         ...history,
-        pendingInputs: { items: [pending], total: 1 },
-        inputReceipts: [{ runId, state: "pending" }],
+        pendingInputs: { items: [pending], total: 1, queuedCount: 1 },
+        inputReceipts: [{ runId, state: "pending", queued: true }],
       });
       await gateway.resolveDeferred("chat.send", { runId, status: "queued" });
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -137,9 +137,28 @@ suite.define(() => {
           total: 3,
         },
       };
-      const historyResponses = (latest: unknown) => ({
+      const historyResponses = <
+        T extends {
+          pendingInputs: { total: number; queuedCount: number };
+          inputReceipts: unknown[];
+        },
+      >(
+        latest: T,
+      ) => ({
         cases: [
-          { match: { pendingBefore: 21 }, response: olderHistory },
+          {
+            match: { pendingBefore: 21 },
+            response: {
+              ...olderHistory,
+              pendingInputs: {
+                ...olderHistory.pendingInputs,
+                total: latest.pendingInputs.total,
+                queuedCount: latest.pendingInputs.queuedCount,
+              },
+              // Exact custody receipts cover all requested inputs, independent of pagination.
+              inputReceipts: latest.inputReceipts,
+            },
+          },
           { match: {}, response: latest },
         ],
       });
@@ -147,8 +166,16 @@ suite.define(() => {
         "chat.history",
         historyResponses({
           ...history,
-          pendingInputs: { items: [pending, cancelInput], total: 3, nextBefore: 21 },
-          inputReceipts: [{ runId, state: "pending" }],
+          pendingInputs: {
+            items: [pending, cancelInput],
+            total: 3,
+            nextBefore: 21,
+            queuedCount: 2,
+          },
+          inputReceipts: [
+            { runId, state: "pending", queued: true },
+            { runId: cancelRunId, state: "pending", queued: true },
+          ],
         }),
       );
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -179,8 +206,9 @@ suite.define(() => {
         historyResponses({
           ...history,
           messages: [promoted],
-          pendingInputs: { items: [cancelInput], total: 1 },
-          inputReceipts: [{ runId, state: "consumed", consumedByEventId: "composer-queued-input" }],
+          pendingInputs: { items: [cancelInput], total: 2, nextBefore: 21, queuedCount: 1 },
+          // Ordinary consumption deletes the pending row rather than retaining a receipt.
+          inputReceipts: [{ runId: cancelRunId, state: "pending", queued: true }],
         }),
       );
       await gateway.emitGatewayEvent("session.message", {
@@ -195,6 +223,32 @@ suite.define(() => {
         .getByText(prompt, { exact: true })
         .waitFor();
       expect(await page.getByText(prompt, { exact: true }).count()).toBe(1);
+      expect(await queue.count()).toBe(1);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+
+      const recentReply = "The earlier installation review is complete. Continuing recent work.";
+      const recentHistory = {
+        ...history,
+        messages: [
+          {
+            role: "assistant",
+            content: recentReply,
+            __openclaw: { id: "recent-response", seq: 100 },
+          },
+        ],
+        totalMessages: 100,
+        hasMore: true,
+        nextOffset: 1,
+        pendingInputs: { items: [cancelInput], total: 2, nextBefore: 21, queuedCount: 1 },
+        inputReceipts: [{ runId: cancelRunId, state: "pending", queued: true }],
+      };
+      await gateway.setMethodResponse("chat.history", historyResponses(recentHistory));
+      // Case-based history responses are not copied into the mock's startup method.
+      await gateway.setMethodResponse("chat.startup", recentHistory);
+      await reconnectMockGateway(page, gateway);
+      await page.locator(".chat-group.assistant").getByText(recentReply, { exact: true }).waitFor();
+      await page.screenshot({ path: suite.artifactDir + "/queue-after-consumption-reconnect.png" });
+      expect(await queue.getByText(prompt, { exact: true }).count()).toBe(0);
       expect(await queue.count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
@@ -213,8 +267,11 @@ suite.define(() => {
           messages: [promoted],
           pendingInputs: {
             items: [{ ...cancelInput, queued: undefined, state: "cancelled" }],
-            total: 1,
+            total: 2,
+            nextBefore: 21,
+            queuedCount: 0,
           },
+          inputReceipts: [{ runId: cancelRunId, state: "pending" }],
         }),
       );
       await gateway.resolveDeferred("chat.abort", { aborted: true, runIds: [cancelRunId] });

@@ -1,12 +1,11 @@
 /** Existing-session action waits, navigation verification, and deadline ownership. */
 import { setTimeout as sleep } from "node:timers/promises";
 import { EXISTING_SESSION_NAVIGATION_RECHECK_DELAYS_MS } from "../act-policy.js";
+import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
   ChromeMcpDocumentUnavailableError,
   evaluateChromeMcpScript,
   withChromeMcpDocument,
-  type ChromeMcpOperationOptions,
-  type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import {
@@ -45,14 +44,7 @@ export function createExistingSessionDeadline(
   };
 }
 
-export type ExistingSessionOperation = ChromeMcpOperationOptions & {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-};
-
-async function readExistingSessionLocationHref(params: ExistingSessionOperation): Promise<string> {
+async function readExistingSessionLocationHref(params: ChromeMcpTargetOperation): Promise<string> {
   const currentUrl = await evaluateChromeMcpScript({
     ...params,
     fn: "() => window.location.href",
@@ -68,7 +60,7 @@ async function readExistingSessionLocationHref(params: ExistingSessionOperation)
 }
 
 export async function assertExistingSessionPostInteractionNavigationAllowed(
-  params: ExistingSessionOperation &
+  params: ChromeMcpTargetOperation &
     BrowserNavigationPolicyOptions & {
       listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
       initialTabTargetIds: ReadonlySet<string>;
@@ -196,7 +188,7 @@ function buildExistingSessionWaitPredicate(params: {
 }
 
 export async function waitForExistingSessionCondition(
-  params: ExistingSessionOperation & {
+  params: ChromeMcpTargetOperation & {
     timeMs?: number;
     text?: string;
     textGone?: string;

@@ -1,5 +1,7 @@
 import type { SessionEntryReadScope } from "../../../config/sessions/session-accessor.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { resolveSessionStoreIdentity } from "../../../gateway/session-store-key.js";
+import type { resolveGatewaySessionStoreTargetInWorker } from "../../../gateway/session-utils-store-worker.js";
 
 type StoreScope = { agentId?: string; env?: NodeJS.ProcessEnv; storePath?: string };
 type EntryScope = StoreScope & { sessionKey: string };
@@ -31,6 +33,26 @@ export function createAcpSpawnStoreMocks(mocks: {
       ([sessionKey, entry]) => ({ sessionKey, entry }),
     );
   return {
+    workerLookup: {
+      resolveGatewaySessionStoreTargetInWorker: async (
+        params: Parameters<typeof resolveGatewaySessionStoreTargetInWorker>[0],
+      ) => {
+        params.assertActive?.();
+        const { agentId, canonicalKey } = resolveSessionStoreIdentity({
+          cfg: params.cfg,
+          sessionKey: params.key,
+          agentId: params.agentId,
+        });
+        const storePath = resolveStorePath({ agentId, env: params.env });
+        return {
+          agentId,
+          canonicalKey,
+          storePath,
+          storeKeys: [canonicalKey],
+          store: mocks.loadSessionStoreMock(storePath),
+        };
+      },
+    },
     accessor: {
       listSessionEntriesCore: listEntries,
       listSessionEntriesReadOnly: listEntries,

@@ -18,7 +18,7 @@ import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test
 import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import * as installedPluginIndexPolicy from "./installed-plugin-index-policy.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -926,12 +926,12 @@ describe("current plugin metadata snapshot", () => {
     }
   });
 
-  it("clears the current snapshot when the persisted installed index changes", () => {
+  it("clears the current snapshot when the persisted installed index changes", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-metadata-"));
     try {
       setCurrentPluginMetadataSnapshot(createSnapshot());
 
-      writePersistedInstalledPluginIndexSync(createSnapshot().index, { stateDir: tempDir });
+      await writePersistedInstalledPluginIndex(createSnapshot().index, { stateDir: tempDir });
 
       expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
     } finally {

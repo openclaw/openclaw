@@ -6,7 +6,6 @@ import {
   getJson,
   makeUserInput,
   requireArray,
-  requireRecord,
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
@@ -55,16 +54,14 @@ describe("qa mock openai server", () => {
       "retained debug requests",
     );
     expect(retained).toHaveLength(debugRequestLimit);
-    expect(requireRecord(retained[0], "retained request 0").cursor).toBe(2);
-    expect(requireRecord(retained.at(-1), "last retained request").cursor).toBe(
-      debugRequestLimit + 1,
-    );
-    expect(String(requireRecord(retained[0], "retained request 0").allInputText)).toContain(
-      "cursor request 1",
-    );
-    expect(String(requireRecord(retained.at(-1), "last retained request").allInputText)).toContain(
-      "cursor request overflow",
-    );
+    expect(retained[0]).toMatchObject({
+      cursor: 2,
+      allInputText: expect.stringContaining("cursor request 1"),
+    });
+    expect(retained.at(-1)).toMatchObject({
+      cursor: debugRequestLimit + 1,
+      allInputText: expect.stringContaining("cursor request overflow"),
+    });
 
     const nextRequests = requireArray(
       await fetch(`${server.baseUrl}/debug/requests?after=${cursor}`).then((response) =>
@@ -72,8 +69,7 @@ describe("qa mock openai server", () => {
       ),
       "debug requests after cursor",
     );
-    expect(nextRequests).toHaveLength(1);
-    expect(String(requireRecord(nextRequests[0], "next request").prompt)).toContain("overflow");
+    expect(nextRequests).toMatchObject([{ prompt: expect.stringContaining("overflow") }]);
 
     const expired = await fetch(`${server.baseUrl}/debug/requests?after=0`);
     expect(expired.status).toBe(409);

@@ -132,7 +132,7 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
 export async function runUpdatedInstallGatewayCommand(
   params: {
     result: { root?: string; mode?: UpdateRunResult["mode"] };
-    opts: Pick<UpdateCommandOptions, "json" | "run">;
+    opts: Pick<UpdateCommandOptions, "run">;
     invocationEnv: NodeJS.ProcessEnv;
     serviceEnv?: NodeJS.ProcessEnv;
     serviceInstallEnv?: NodeJS.ProcessEnv | null;
@@ -195,7 +195,6 @@ export async function runUpdatedInstallGatewayCommand(
   if (executor) {
     commandEnv.OPENCLAW_NO_RESPAWN = "1";
   }
-  params.signal?.throwIfAborted();
   assertCurrent();
   const receiveInstallResult = (response: Record<string, unknown> | undefined) => {
     if (!installing || !response) {
@@ -314,14 +313,8 @@ export async function runUpdatedInstallGatewayCommand(
   const res = executor
     ? await withUpdateCommandExecutorChild(executor, params.result.root!, runChild)
     : await runChild();
-  params.signal?.throwIfAborted();
   assertCurrent();
-  const exited =
-    res.termination === "exit" &&
-    res.signal === null &&
-    !res.killed &&
-    res.cleanup !== "forced" &&
-    res.cleanup !== "uncertain";
+  const exited = res.termination === "exit" && res.signal === null && !res.killed;
   const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
   const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
   receiveInstallResult(response);

@@ -12,7 +12,6 @@ import {
   outputToolArgs,
   outputToolCall,
   outputToolCallId,
-  requireRecord,
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
@@ -38,14 +37,9 @@ describe("mock OpenAI A2A scenarios", () => {
     expect(String(args.message)).toContain("qa group visible reply tool check");
     expect(String(args.message)).toContain("QA-A2A-MIRROR-OK");
 
-    const debugPayload = requireRecord(
-      await getJson(server, "/debug/last-request"),
-      "debug request",
-    );
-    expect(debugPayload.plannedToolName).toBe("sessions_send");
-    expect(debugPayload.plannedToolArgs).toMatchObject({
-      sessionKey: "agent:qa:a2a-target",
-      timeoutSeconds: 0,
+    expect(await getJson(server, "/debug/last-request")).toMatchObject({
+      plannedToolName: "sessions_send",
+      plannedToolArgs: { sessionKey: "agent:qa:a2a-target", timeoutSeconds: 0 },
     });
 
     const final = await expectOpenAiNonStreamingResponsesJson(server, {
@@ -82,17 +76,7 @@ describe("mock OpenAI A2A scenarios", () => {
     });
   });
 
-  it.each([
-    {
-      policy: "disabled",
-      error:
-        "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
-    },
-    {
-      policy: "allowlist",
-      error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
-    },
-  ])("keeps the A2A $policy denial fixture empty during finalization", async ({ error }) => {
+  it("keeps the A2A denial fixture empty during finalization", async () => {
     const server = await startMockServer();
     const kickoff = makeUserInput(
       'qa a2a message-tool mirror check. sessionKey="agent:orion:main". exact marker: `QA-A2A-DENIED-OK`',
@@ -108,7 +92,11 @@ describe("mock OpenAI A2A scenarios", () => {
       toolCall,
       makeToolOutputWithCallId(
         outputToolCallId(toolCall, "call_a2a_denied"),
-        JSON.stringify({ status: "forbidden", error }),
+        JSON.stringify({
+          status: "forbidden",
+          error:
+            "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+        }),
       ),
     ];
     let response = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });

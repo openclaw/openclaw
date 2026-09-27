@@ -1151,6 +1151,53 @@ class TalkModeManagerTest {
       }
     }
 
+  @Test
+  fun incomingCallUsesOnlyItsRelayWithoutChangingOrdinaryTalkRouting() =
+    runBlocking {
+      installSpeechRecognitionService()
+      val incomingSessionKey = "agent:assistant:prepared-call"
+      for (fixture in realtimeRelayContractCases().filterNot { it.getValue("realtime").jsonPrimitive.boolean }) {
+        val id = fixture.getValue("id").jsonPrimitive.content
+        val requests = ConcurrentLinkedQueue<JsonObject>()
+        val payload = buildJsonObject { put("config", fixture.getValue("config")) }.toString()
+        withStartedTalk(
+          incomingCallSessionKey = incomingSessionKey,
+          responseForRequest = { request, _ ->
+            requests.add(request)
+            payload.takeIf { request.getValue("method").jsonPrimitive.content == "talk.config" }
+          },
+        ) { proof ->
+          val creates = requests.filter { it.getValue("method").jsonPrimitive.content == "talk.session.create" }
+          assertEquals("$id must not route an incoming call through native speech", 1, creates.size)
+          val params = creates.single().getValue("params").jsonObject
+          assertEquals(incomingSessionKey, params.getValue("sessionKey").jsonPrimitive.content)
+          assertEquals("gateway-relay", params.getValue("transport").jsonPrimitive.content)
+          assertTrue(
+            params
+              .getValue("greeting")
+              .jsonPrimitive.content
+              .isNotBlank(),
+          )
+          assertNull("An incoming call must not open device speech recognition", readPrivateField(proof.manager, "recognizer"))
+          assertFalse(requests.any { it.getValue("method").jsonPrimitive.content in setOf("chat.send", "talk.speak") })
+          assertFalse(proof.synthesizer.requested.isCompleted)
+
+          proof.manager.stopAllCapture()
+          proof.drainCancelledCapture()
+          proof.manager.prepareIncomingCall(null)
+          proof.manager.setEnabled(true)
+          awaitTalkWork(proof) { proof.manager.isListening.value }
+
+          assertNotNull("$id must retain ordinary native Talk after the call ends", readPrivateField(proof.manager, "recognizer"))
+          assertTrue(
+            proof.manager.statusText.value
+              .contains("Native Talk:"),
+          )
+          assertEquals(1, requests.count { it.getValue("method").jsonPrimitive.content == "talk.session.create" })
+        }
+      }
+    }
+
   private fun realtimeRelayContractCases(): List<JsonObject> {
     val fixture =
       generateSequence(java.io.File(checkNotNull(System.getProperty("user.dir"))).absoluteFile) { it.parentFile }
@@ -2989,6 +3036,7 @@ class TalkModeManagerTest {
 
   private suspend fun withStartedTalk(
     sessionKey: String = "main",
+    incomingCallSessionKey: String? = null,
     captureRelayStopNotification: () -> ((() -> Boolean) -> Unit) = { {} },
     responseForRequest: (JsonObject, WebSocket) -> String? = { _, _ -> null },
     interceptRequest: (JsonObject, WebSocket) -> Boolean = { _, _ -> false },
@@ -3099,6 +3147,7 @@ class TalkModeManagerTest {
         )
         withContext(Dispatchers.Default) { withTimeout(5_000) { connected.await() } }
         manager.setMainSessionKey(sessionKey)
+        incomingCallSessionKey?.let(manager::prepareIncomingCall)
         manager.setEnabled(true)
         val deadline = System.nanoTime() + 5_000_000_000L
         while (!manager.isListening.value) {

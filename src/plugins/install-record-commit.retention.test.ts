@@ -6,7 +6,6 @@ import * as leaseStore from "../state/openclaw-state-lease-store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import { listRecoveredManagedNpmInstallCandidates } from "./installed-plugin-index-record-reader.js";
-import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-record-state.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import {
@@ -17,7 +16,10 @@ import {
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { publishPluginSourceAdmission } from "./plugin-source-admission-store.js";
-import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
+import {
+  readPersistedInstalledPluginIndexRowSync,
+  seedInstalledPluginIndex,
+} from "./test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 function npmRecord(packageName: string, installPath: string): PluginInstallRecord {

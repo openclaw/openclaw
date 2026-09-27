@@ -38,6 +38,9 @@ const mocks = vi.hoisted(() => ({
   closeMcpManager: vi.fn(async () => undefined),
   loadNodeHostConfig: vi.fn<() => Promise<NodeHostConfig | null>>(async () => null),
   loadDeviceAuthTokenReadOnly: vi.fn<typeof loadDeviceAuthTokenReadOnly>(async () => null),
+  loadDeviceIdentityIfPresent: vi.fn(
+    () => null as { deviceId: string; publicKeyPem: string; privateKeyPem: string } | null,
+  ),
   configureNodeHost: vi.fn(async (params: Parameters<typeof configureNodeHost>[0]) => {
     mocks.capturedConfiguredGatewayConfigs.push(params.gateway);
     return {
@@ -111,6 +114,7 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => ({
 
 vi.mock("../infra/device-identity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
+  loadDeviceIdentityIfPresent: mocks.loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity: vi.fn(() => ({
     deviceId: "device-test",
     publicKeyPem: "public-key-test",
@@ -224,7 +228,7 @@ vi.mock("./runtime.js", async (importOriginal) => {
 });
 
 // Load after mock registration and retain local bindings for Vitest's export transform.
-const { runNodeHost } = await import("./runner.js");
+const { loadResumableNodeHostGateway, runNodeHost } = await import("./runner.js");
 const { startNodeHostMcpManager } = await import("./mcp.js");
 
 export function lastCapturedOptions(): GatewayClientOptions | undefined {
@@ -263,9 +267,10 @@ export function resetRunnerTestState() {
   vi.clearAllMocks();
   mocks.loadNodeHostConfig.mockReset().mockResolvedValue(null);
   mocks.loadDeviceAuthTokenReadOnly.mockReset().mockResolvedValue(null);
+  mocks.loadDeviceIdentityIfPresent.mockReset().mockReturnValue(null);
   mocks.getRuntimeConfig.mockReturnValue({
     gateway: { handshakeTimeoutMs: 1_000 },
   });
 }
 
-export { mocks, runNodeHost, startNodeHostMcpManager };
+export { loadResumableNodeHostGateway, mocks, runNodeHost, startNodeHostMcpManager };

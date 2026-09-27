@@ -270,34 +270,28 @@ describe("composer attachment origin", () => {
 
 describe("persistInboundImagesForTranscript", () => {
   it("preserves original mixed-media order in claim-only transcript facts", async () => {
+    const fileName = "bands café 雪 🦞.png";
+    saveMediaBufferMock.mockResolvedValueOnce({
+      id: "video",
+      path: "/media/inbound/video.mp4",
+      size: 100,
+      contentType: "video/mp4",
+    });
+    const parsed = await parseMessageWithAttachments("Compare these", [
+      { fileName: "video.mp4", mimeType: "video/mp4", content: GENERIC_MP4, durationMs: 2_000 },
+      pngAttachment({ fileName }),
+    ]);
     saveMediaBufferMock.mockResolvedValueOnce({
       id: "inline",
-      path: "/media/inbound/inline.jpg",
+      path: "/media/inbound/inline.png",
       size: 5,
-      contentType: "image/jpeg",
+      contentType: "image/png",
     });
 
     const result = await persistInboundImagesForTranscript({
-      images: [
-        {
-          type: "image",
-          data: "aGVsbG8=",
-          mimeType: "image/jpeg",
-          sourceIndex: 1,
-        },
-      ],
+      images: parsed.images,
       offloadedRefs: [
-        {
-          mediaRef: "https://signed.example/private-video",
-          id: "video",
-          path: "/media/inbound/video.mp4",
-          kind: "video",
-          mimeType: "video/mp4",
-          label: "video.mp4",
-          sizeBytes: 100,
-          durationMs: 2_000,
-          sourceIndex: 0,
-        },
+        { ...parsed.offloadedRefs[0]!, mediaRef: "https://signed.example/private-video" },
       ],
       log: { warn: vi.fn() },
       logContext: "test",
@@ -310,16 +304,32 @@ describe("persistInboundImagesForTranscript", () => {
         contentType: "video/mp4",
         kind: "video",
         fileName: "video.mp4",
-        sizeBytes: 100,
+        sizeBytes: Buffer.from(GENERIC_MP4, "base64").length,
         durationMs: 2_000,
         hydrationSuppressed: true,
       },
       {
         url: "media://inbound/inline",
-        contentType: "image/jpeg",
+        contentType: "image/png",
         kind: "image",
+        fileName,
         sizeBytes: 5,
       },
+    ]);
+    expect(saveMediaBufferMock).toHaveBeenLastCalledWith(
+      Buffer.from(PNG_1x1, "base64"),
+      "image/png",
+      "inbound",
+      undefined,
+      fileName,
+    );
+    const persisted = buildPersistedUserTurnMessage({
+      text: parsed.message,
+      media: result.entries.map((entry) => entry.fact),
+    });
+    expect(readPersistedMediaFacts(persisted)?.map((fact) => fact.fileName)).toEqual([
+      "video.mp4",
+      fileName,
     ]);
     expect(result.omission).toBe("none");
     const durable = JSON.stringify(result.entries.map((entry) => entry.fact));

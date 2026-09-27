@@ -1,4 +1,3 @@
-import os from "node:os";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { withInstallActivity } from "../infra/install-progress.js";
 import { resolveNpmSpecMetadata, type NpmSpecResolution } from "../infra/install-source-utils.js";
@@ -9,6 +8,7 @@ import {
   isPrereleaseResolutionAllowed,
   parseRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveManagedNpmInstallPlan } from "./install-managed-npm-state.js";
 import { installPluginFromManagedNpmRoot } from "./install-managed-npm.js";
@@ -180,7 +180,11 @@ export async function installPluginFromNpmSpec(
   });
 
   const preflightPolicyResult = await withTempWorkspace(
-    { rootDir: os.tmpdir(), prefix: "openclaw-npm-policy-", mode: 0o666 & ~process.umask() },
+    {
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-npm-policy-",
+      mode: 0o666 & ~process.umask(),
+    },
     async (workspace) => {
       const policyMetadataPath = await workspace.writeJson("npm-package-metadata.json", {
         packageName: parsedSpec.name,

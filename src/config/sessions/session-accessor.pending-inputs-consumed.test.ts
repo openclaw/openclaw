@@ -133,6 +133,9 @@ describe("committed pending input release", () => {
     "releases consumed custody without a writer lock (collected=$collected, observerFails=$observerFails)",
     async ({ collected, observerFails }) => {
       const { receipt, sources } = await prepare(collected);
+      expect([receipt.state, ...sources.map((source) => source.state)]).toEqual(
+        Array(sources.length + 1).fill("queued"),
+      );
       if (observerFails) {
         expect(() =>
           runOpenClawAgentWriteTransaction((current) => {
@@ -147,6 +150,9 @@ describe("committed pending input release", () => {
           await receipt.run(() => appendTranscriptMessage(scope(), { message: receipt.message })),
         ).toMatchObject({ appended: true });
       }
+      expect([receipt.state, ...sources.map((source) => source.state)]).toEqual(
+        Array(sources.length + 1).fill("consumed"),
+      );
       expect(receipt.run(() => true)).toBe(true);
       const primary = database();
       const foreign = new DatabaseSync(primary.path);
@@ -800,6 +806,9 @@ describe("committed pending input release", () => {
           );
         }, options());
       }
+      expect([receipt.state, ...sources.map((source) => source.state)]).toEqual(
+        Array(sources.length + 1).fill("queued"),
+      );
       receipt.finish("cancelled");
       expect(
         database()

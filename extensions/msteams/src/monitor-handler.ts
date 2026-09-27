@@ -207,7 +207,7 @@ export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
       for (const direction of ["added", "removed"] as const) {
         const reactions =
           direction === "added" ? activity.reactionsAdded : activity.reactionsRemoved;
-        if (!(reactions as unknown[] | undefined)?.length) {
+        if (!reactions?.length) {
           continue;
         }
         try {

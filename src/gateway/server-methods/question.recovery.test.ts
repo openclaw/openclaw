@@ -37,9 +37,10 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
-import { startDiagnosticHeartbeat } from "../../logging/diagnostic.js";
+import { startGatewayDiagnosticHeartbeat } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
@@ -199,7 +200,11 @@ it.each(["secrets", "ask_user"] as const)(
   async (tool) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const recovery = vi.fn(recoverStuckDiagnosticSession);
-      startDiagnosticHeartbeat({}, { recoverStuckSession: recovery });
+      startGatewayDiagnosticHeartbeat(
+        createTestGatewayScheduler("fake-timers"),
+        {},
+        { recoverStuckSession: recovery },
+      );
       emitTrustedDiagnosticEvent({
         type: "tool.execution.started",
         ...ref,
@@ -266,7 +271,8 @@ it.each(["resumed", "replacement"] as const)(
           }
         };
       }
-      startDiagnosticHeartbeat(
+      startGatewayDiagnosticHeartbeat(
+        createTestGatewayScheduler("fake-timers"),
         {},
         {
           recoverStuckSession: recovery,
@@ -310,7 +316,11 @@ it.each(["resumed", "replacement"] as const)(
 it("keeps resumed question work alive when attention reporting settles the question", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const recovery = vi.fn(recoverStuckDiagnosticSession);
-    startDiagnosticHeartbeat({}, { recoverStuckSession: recovery, sampleLiveness: () => null });
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
+      {},
+      { recoverStuckSession: recovery, sampleLiveness: () => null },
+    );
     emitTrustedDiagnosticEvent({
       type: "tool.execution.started",
       ...ref,
@@ -630,7 +640,11 @@ it.each(["pending", "answered", "cancelled", "expired", "requester-inactive"] as
       await gate;
       return recoverStuckDiagnosticSession(params);
     });
-    startDiagnosticHeartbeat({}, { recoverStuckSession: recovery });
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
+      {},
+      { recoverStuckSession: recovery },
+    );
     emitTrustedDiagnosticEvent({
       type: "tool.execution.started",
       ...ref,

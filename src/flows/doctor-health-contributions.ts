@@ -8,6 +8,7 @@ import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
 } from "../infra/state-migrations.messages.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import {
   runAuthProfileMigration,
   runAuthProfileDiagnostics as runAuthProfileHealth,
@@ -513,6 +514,14 @@ async function runDoctorHealthContributionList(
     preparedAgentCount: ctx.preparedAgentCount,
   });
   const updateDoctorRun = isUpdateDoctorRun(env);
+  const rehearsalInspections = new Set(
+    resolveUpdateRehearsalRoot(env)
+      ? contributions.filter(
+          (entry) =>
+            !entry.required && entry.updateWork?.kind === "inspection" && !entry.updateWork.repairs,
+        )
+      : [],
+  );
   const deferred = updateDoctorRun
     ? contributions.filter((contribution) => contribution.updateWork?.kind === "standalone")
     : [];
@@ -539,7 +548,10 @@ async function runDoctorHealthContributionList(
     for (const contribution of ordered) {
       // Skip before opening a plugin snapshot; these diagnostics cannot establish
       // required migration readiness and have their own standalone invocation.
-      if (updateDoctorRun && contribution.updateWork?.kind === "standalone") {
+      if (
+        rehearsalInspections.has(contribution) ||
+        (updateDoctorRun && contribution.updateWork?.kind === "standalone")
+      ) {
         continue;
       }
       if (
@@ -594,6 +606,12 @@ async function runDoctorHealthContributionList(
       }
     }
   } finally {
+    if (rehearsalInspections.size > 0) {
+      // Scope notices must not displace actionable warnings from the bounded result.
+      ctx.runtime.log(
+        `Deferred advisory inspections during copied-state rehearsal: ${[...rehearsalInspections].map((entry) => entry.id).join(", ")}. The live post-swap Doctor retains these checks.`,
+      );
+    }
     const findings = [...(ctx.updateBudget?.deferred.values() ?? [])];
     // Preserve the deferred set before the existing bounded advisory digest.
     recordDoctorHealthWarnings(ctx, findings, [], { prepend: true });

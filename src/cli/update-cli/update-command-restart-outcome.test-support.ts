@@ -357,7 +357,7 @@ export function registerRestartOutcomeTests(
         runUpdatedInstallGatewayCommand(
           {
             result: { root, mode: "npm" },
-            opts: { json: false },
+            opts: {},
             invocationEnv: process.env,
             nodeRunner: process.execPath,
           },

@@ -65,6 +65,8 @@ export type GuardedFetchOptions = {
   fetchImpl?: FetchLike;
   /** Final synchronous check after transport preparation and before each request or redirect. */
   beforeRequest?: () => void | undefined;
+  /** Observes response headers for each hop, including redirects, before cleanup. */
+  onResponse?: (status: number) => void;
   init?: RequestInit;
   capture?:
     | false
@@ -298,11 +300,11 @@ async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
     return { fetchImpl };
   }
-  const { prepareHttpCapture, resolveDebugProxyFetchTransport } =
+  const { prepareHttpCaptureForTransport, resolveDebugProxyFetchTransport } =
     await import("../../proxy-capture/runtime.js");
   return {
     fetchImpl: resolveDebugProxyFetchTransport(fetchImpl),
-    capture: prepareHttpCapture(),
+    capture: prepareHttpCaptureForTransport(),
   };
 }
 
@@ -684,10 +686,11 @@ async function fetchWithSsrFGuardInternal(
           ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
           : await captureAdmission.fetchImpl(parsedUrl.toString(), init);
       } catch (error) {
-        captureAdmission.capture?.({ ...captureParams, error });
+        void captureAdmission.capture?.({ ...captureParams, error });
         throw error;
       }
-      captureAdmission.capture?.({ ...captureParams, response });
+      params.onResponse?.(response.status);
+      void captureAdmission.capture?.({ ...captureParams, response });
 
       if (isRedirectStatus(response.status)) {
         redirectCount += 1;

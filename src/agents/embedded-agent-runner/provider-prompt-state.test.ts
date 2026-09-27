@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import { responsesPromptObserver } from "@openclaw/ai/internal/openai";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -147,6 +148,52 @@ describe("provider prompt state", () => {
     expect(sentPayloads).toEqual([finalPayload, changedPayload]);
     expect(JSON.stringify(state)).not.toContain("final");
     clearProviderPromptState(runId);
+  });
+
+  it.each([
+    {
+      name: "ordinary nested payload",
+      payload: { messages: [{ text: "earlier 🦞" }, { text: "tail" }], model: "model-1" },
+      canonical: '{"messages":[{"text":"earlier 🦞"},{"text":"tail"}],"model":"model-1"}',
+    },
+    {
+      name: "non-enumerable array element with metadata",
+      payload: Object.defineProperty(Object.assign(["earlier"], { metadata: "fixture" }), "0", {
+        enumerable: false,
+      }),
+      canonical: '["earlier"]',
+    },
+    {
+      name: "custom hook callback",
+      payload: { input: "hello", callback: () => undefined },
+      canonical: '{"callback":null,"input":"hello"}',
+    },
+    {
+      name: "custom error name",
+      payload: Object.assign(new Error("fixture"), {
+        name: "FixtureError",
+        stack: "fixture-stack",
+      }),
+      canonical: '{"message":"fixture","name":"FixtureError","stack":"fixture-stack"}',
+    },
+  ])("preserves canonical identity for $name", async ({ payload, canonical }) => {
+    const state = {};
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: async (_model, _context, options) => {
+        await options?.onPayload?.(payload, model);
+        return createResultStream("error");
+      },
+      state,
+      effectiveContextTokenBudget: 128_000,
+    });
+    await wrapped(model, { messages: [] });
+    expect(markLastProviderPromptContextRejected(state)).toMatchObject({
+      digest: hash("sha256", canonical),
+      byteWeight: Buffer.byteLength(canonical),
+    });
+    await expect(wrapped(model, { messages: [] })).rejects.toThrow(
+      "byte-identical provider payload",
+    );
   });
 
   it("does not compare rejected payloads across effective context scopes", async () => {

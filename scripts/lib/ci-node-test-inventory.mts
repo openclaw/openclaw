@@ -1,5 +1,8 @@
 import { matchesGlob } from "node:path";
-import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
+import {
+  agentVitestProjectOwners,
+  embeddedAgentVitestProjectOwners,
+} from "../../test/vitest/vitest.agents-paths.mjs";
 import { getCliVitestProjectOwner } from "../../test/vitest/vitest.cli-paths.mjs";
 import { cliProcessTestFiles } from "../../test/vitest/vitest.cli-process-paths.mjs";
 import {
@@ -18,7 +21,10 @@ import {
   gatewayMethodsTestExclude,
   gatewayMethodsIsolatedTestFiles,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
-import { filterFilesByPatterns } from "../../test/vitest/vitest.include-patterns.ts";
+import {
+  filterFilesByPatterns,
+  isPlainRepoRelativePath,
+} from "../../test/vitest/vitest.include-patterns.ts";
 import {
   autoReplyCoreTestInclude,
   autoReplyCoreTestExclude,
@@ -44,17 +50,51 @@ export function listScopedOwnerTestFiles(owner: {
   // Scoped configs drop unit-fast files, so a lister that keeps them prices
   // stripes on files the shard never runs and hands Vitest inert patterns.
   const unitFastFiles = new Set(getUnitFastTestFiles());
-  return filterFilesByPatterns(
-    listTrackedTestFiles(owner.root).filter((file) =>
-      isStripeEligibleTestFile(file, unitFastFiles),
-    ),
-    owner.include,
-    owner.exclude,
-    matchesGlob,
+  const files = listTrackedTestFiles(owner.root).filter((file) =>
+    isStripeEligibleTestFile(file, unitFastFiles),
+  );
+  const literalFiles = new Set(files.filter(isPlainRepoRelativePath));
+  const literalPatterns = new Set(
+    [...owner.include, ...owner.exclude].filter(isPlainRepoRelativePath),
+  );
+  return filterFilesByPatterns(files, owner.include, owner.exclude, (file, pattern) =>
+    literalFiles.has(file) && literalPatterns.has(pattern)
+      ? file === pattern
+      : matchesGlob(file, pattern),
   );
 }
 
+const runtimeSharedProjectOwners = [
+  {
+    config: "test/vitest/vitest.acp.config.ts",
+    root: "src/acp",
+    include: ["src/acp/**/*.test.ts"],
+    exclude: databaseWorkerCoreTestFiles,
+  },
+  {
+    config: "test/vitest/vitest.shared-core.config.ts",
+    root: "src/shared",
+    include: ["src/shared/**/*.test.ts"],
+    exclude: [],
+  },
+  {
+    config: "test/vitest/vitest.tasks.config.ts",
+    root: "src/tasks",
+    include: ["src/tasks/**/*.test.ts"],
+    exclude: databaseWorkerCoreTestFiles,
+  },
+  {
+    config: "test/vitest/vitest.utils.config.ts",
+    root: "src/utils",
+    include: ["src/utils/**/*.test.ts"],
+    exclude: [],
+  },
+];
+
 const CONFIG_FILE_OWNERS = new Map<string, Parameters<typeof listScopedOwnerTestFiles>[0]>([
+  ...[...runtimeSharedProjectOwners, ...embeddedAgentVitestProjectOwners].map(
+    (owner) => [owner.config, owner] as const,
+  ),
   [
     "test/vitest/vitest.gateway-methods.config.ts",
     {
@@ -133,6 +173,20 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
   string,
   { listFiles: () => string[]; splitByFile?: false }
 >([
+  [
+    "core-runtime-shared",
+    {
+      listFiles: () => runtimeSharedProjectOwners.flatMap(listScopedOwnerTestFiles),
+      splitByFile: false,
+    },
+  ],
+  [
+    "agentic-agents-embedded",
+    {
+      listFiles: () => embeddedAgentVitestProjectOwners.flatMap(listScopedOwnerTestFiles),
+      splitByFile: false,
+    },
+  ],
   [
     "core-unit-src-security-support",
     {

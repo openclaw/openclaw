@@ -1,8 +1,8 @@
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -111,14 +111,14 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
       owners: command.owners.map(({ agentId, sessionKey }) => ({ agentId, sessionKey })),
     };
   }
-  if (command.type === "acpSessions.metadata") {
-    return structuredClone(command);
-  }
   if (command.type === "userProfiles.channelIdentity.resolve") {
     return { type: command.type, identity: structuredClone(command.identity) };
   }
-  if (command.type === "userProfiles.githubAttribution.resolve") {
-    return { type: command.type, profileIds: [...command.profileIds] };
+  if (
+    command.type === "userProfiles.githubAttribution.resolve" ||
+    command.type === "userPreferences.values"
+  ) {
+    return { ...command, profileIds: [...command.profileIds] };
   }
   if (command.type === "subagents.runs") {
     return {
@@ -164,21 +164,11 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   if (command.type === "operatorApprovals.history") {
     return { ...command, input: { ...command.input } };
   }
-  if (command.type === "tasks.mutationSnapshot") {
-    const scope = command.input;
-    return {
-      type: command.type,
-      input:
-        scope === undefined
-          ? undefined
-          : "taskId" in scope
-            ? { ...scope }
-            : scope.map((entry) => Object.assign({}, entry)),
-    };
-  }
   if (
+    command.type === "acpSessions.metadata" ||
     command.type === "githubPublication.knownPullRequestUrls" ||
-    command.type === "githubRepository.knownPullRequestUrls"
+    command.type === "githubRepository.knownPullRequestUrls" ||
+    command.type === "workers.placementProjection"
   ) {
     return structuredClone(command);
   }
@@ -222,9 +212,6 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
             },
     };
   }
-  if (command.type === "workers.placementProjection") {
-    return structuredClone(command);
-  }
   if (command.type === "workerEnvironments.pruneCandidates") {
     return {
       type: command.type,
@@ -253,6 +240,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (isChannelIngressReadCommand(command)) {
     return bytes + Buffer.byteLength(JSON.stringify(command.input ?? null), "utf8");
+  }
+  if (command.type === "capture.readOnlyEvents") {
+    return bytes + Buffer.byteLength(command.sessionId, "utf8") + 8;
+  }
+  if (command.type === "capture.readOnlyBlob") {
+    return bytes + Buffer.byteLength(command.blobId, "utf8");
   }
   if (command.type === "cron.jobNames") {
     return command.jobIds.reduce(
@@ -348,22 +341,6 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "deliveryQueue.outbound") {
     return bytes + Buffer.byteLength(command.id ?? "", "utf8");
   }
-  if (command.type === "tasks.mutationSnapshot") {
-    const scope = command.input;
-    const scopes = scope === undefined ? [] : "taskId" in scope ? [scope] : scope;
-    return scopes.reduce(
-      (total, entry) =>
-        total +
-        Buffer.byteLength(entry.taskId, "utf8") +
-        Buffer.byteLength(entry.flowId ?? "", "utf8") +
-        Buffer.byteLength(entry.runId ?? "", "utf8") +
-        Buffer.byteLength(entry.childSessionKey ?? "", "utf8"),
-      bytes,
-    );
-  }
-  if (command.type === "tasks.retentionSource") {
-    return bytes + Buffer.byteLength(command.taskId, "utf8");
-  }
   if (
     command.type === "githubPublication.request" ||
     command.type === "githubRepository.request" ||
@@ -450,10 +427,13 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "userProfiles.githubIdentity.cached") {
     return bytes + Buffer.byteLength(command.email, "utf8") + 8;
   }
-  if (command.type === "userProfiles.githubAttribution.resolve") {
+  if (
+    command.type === "userProfiles.githubAttribution.resolve" ||
+    command.type === "userPreferences.values"
+  ) {
     return command.profileIds.reduce(
       (total, profileId) => total + Buffer.byteLength(profileId, "utf8"),
-      bytes,
+      bytes + (command.type === "userPreferences.values" ? Buffer.byteLength(command.key) : 0),
     );
   }
   if (command.type === "userProfiles.channelIdentity.resolve") {
@@ -504,7 +484,6 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
 function requestBytes(request: OpenClawStateReadRequest): number {
   return [
     ...Object.entries(request.context.environment).flatMap(([key, value]) => [key, value]),
-    request.context.coordinatorRuntime.directory,
     request.context.existingSchemaPath,
     request.databasePath,
     request.location,
@@ -569,7 +548,6 @@ export function createOpenClawStateReadTransport(command: OpenClawStateReadComma
     const request: OpenClawStateReadRequest = {
       context: {
         environment: { ...context.environment },
-        coordinatorRuntime: { ...context.coordinatorRuntime },
         existingSchemaPath: context.existingSchemaPath,
       },
       databasePath: context.admission.databasePath,

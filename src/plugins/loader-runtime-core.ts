@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import { createUnavailableRuntime } from "./api-builder.js";
 import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
+import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
@@ -94,7 +95,7 @@ function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntim
 }
 
 export type NativePluginLoadBindings = Pick<PluginRuntime, "modelAuth" | "modelConfig"> & {
-  capabilityCatalogContext: NonNullable<PluginLoadOptions["capabilityCatalogContext"]>;
+  capabilityCatalogContext: PluginCapabilityCatalogHostContext;
 };
 
 function createCapabilityCatalogContextResolver(

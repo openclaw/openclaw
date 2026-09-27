@@ -9,13 +9,13 @@ import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
-  sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
 import { deleteExpiredPluginStateEntries } from "./plugin-state-store.kernel.js";
 import {
   clearPluginStateStoreForTests,
   seedPluginStateEntriesForTests,
 } from "./plugin-state-store.test-helpers.js";
+import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 
 let testState: OpenClawTestState | undefined;
 
@@ -74,7 +74,7 @@ describe("plugin state expiry cleanup", () => {
       }
       expect(await store.count()).toBe(1);
       vi.useRealTimers();
-      expect(await sweepExpiredPluginStateEntries()).toBe(3);
+      expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(3);
     },
   );
 
@@ -133,7 +133,7 @@ describe("plugin state expiry cleanup", () => {
 
     await expect(store.registerIfAbsent("zz-target", { version: 2 })).resolves.toBe(true);
     await expect(store.lookup("zz-target")).resolves.toEqual({ version: 2 });
-    expect(await sweepExpiredPluginStateEntries()).toBe(1);
+    expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(1);
   });
 
   it("sweeps expired plugin state in bounded batches without touching live rows", async () => {
@@ -167,10 +167,10 @@ describe("plugin state expiry cleanup", () => {
       },
     ]);
 
-    expect(await sweepExpiredPluginStateEntries()).toBe(1_024);
-    expect(await sweepExpiredPluginStateEntries()).toBe(1_024);
-    expect(await sweepExpiredPluginStateEntries()).toBe(2);
-    expect(await sweepExpiredPluginStateEntries()).toBe(0);
+    expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(1_024);
+    expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(1_024);
+    expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(2);
+    expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(0);
 
     const store = createPluginStateSyncKeyedStore("discord", {
       namespace: "batched-expiry",
@@ -231,7 +231,7 @@ describe("plugin state expiry cleanup", () => {
 
       expect(store.lookup("fresh")).toEqual({ fresh: true });
       expect(store.lookup("permanent")).toEqual({ durable: true });
-      expect(await sweepExpiredPluginStateEntries()).toBe(9);
+      expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(9);
     },
   );
 
@@ -267,8 +267,8 @@ describe("plugin state expiry cleanup", () => {
     await expect(store.register("fresh", { fresh: true })).rejects.toMatchObject({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",
     });
-    expect(await sweepExpiredPluginStateEntries()).toBe(1_024);
-    expect(await sweepExpiredPluginStateEntries()).toBe(7);
+    expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(1_024);
+    expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(7);
     await expect(store.lookup("fresh")).resolves.toBeUndefined();
     expect(getPluginStateCapacity("discord").liveEntries).toBe(2);
   });

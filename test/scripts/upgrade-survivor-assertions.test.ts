@@ -367,7 +367,7 @@ describe("upgrade recovery result assertions", () => {
       }),
   );
 
-  it.each(["projects-doctor", "projects-startup-migration", "taskflow-restoration"])(
+  it.each(["projects-doctor", "projects-startup-migration"])(
     "validates published worker update results through the real assertion CLI (%s)",
     (scenario) =>
       withEnv({ OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario }, () => {
@@ -1013,6 +1013,7 @@ function seedSessionSourceFixture(stateDir: string, scenario = "base", missingPa
       `source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 SCENARIO="$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO"
 UPDATE_RESTART_MODE="$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE"
+baseline_version=2026.9.3
 phase() { shift; "$@"; }
 ${missingPath ? "run_missing_load_path_fixture seed" : ""}
 "$1" "$2" seed

@@ -43,6 +43,7 @@ openclaw reset --scope full --yes --non-interactive
 - Without `--scope`, `openclaw reset` prompts interactively for the scope to remove.
 - `--non-interactive` is only valid when both `--scope` and `--yes` are set.
 - `config+creds+sessions` and `full` print `Next: openclaw onboard --install-daemon` when done.
+- Failed removals or session-directory inspection exit nonzero. Resolve the reported errors, then retry the reset; incomplete resets do not print the onboarding completion hint.
 
 ## Related
 

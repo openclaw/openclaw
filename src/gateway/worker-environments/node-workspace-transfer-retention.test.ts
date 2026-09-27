@@ -106,13 +106,21 @@ it.each([
           { url: server.gatewayUrl },
         ),
     });
+    let initiatingTurnCurrent = true;
     try {
       const synced = await actions.syncWorkspace({
+        authorize: () => {
+          if (!initiatingTurnCurrent) {
+            throw new Error("initiating turn closed");
+          }
+        },
         source: { kind: "local", path: localPath },
         sessionId,
         generation: ownerEpoch,
       });
       expect(synced.mode).toBe(mode === "plain" ? "plain" : "git");
+      initiatingTurnCurrent = false;
+      expect(owner.signal.aborted).toBe(false);
       const remote = synced.remoteWorkspaceDir;
       for (const relative of ownership.ownedFiles) {
         await expect(fs.readFile(path.join(remote, relative))).resolves.toEqual(

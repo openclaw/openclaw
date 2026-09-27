@@ -48,7 +48,11 @@ import type {
   ProfileRuntimeState,
   ProfileContext,
 } from "./server-context.types.js";
-import { findRetainedBrowserDashboardTab, readBrowserDashboardTabs } from "./session-tab-store.js";
+import {
+  dispatchBrowserTabClose,
+  findRetainedBrowserDashboardTab,
+  readBrowserDashboardTabs,
+} from "./session-tab-store.js";
 import {
   assignTabAlias,
   assignTabAliases,
@@ -254,7 +258,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       return;
     }
 
-    const retained = readBrowserDashboardTabs();
+    const retained = await readBrowserDashboardTabs();
     const candidates = pageTabs.filter(
       (tab) =>
         tab.targetId !== keepTargetId &&
@@ -263,27 +267,23 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
     for (const tab of candidates.slice(0, excessCount)) {
       options?.signal?.throwIfAborted();
-      if (findRetainedBrowserDashboardTab(tab.targetId, profile.name)) {
-        continue;
-      }
-      await fetchOk(
-        appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
-        undefined,
-        undefined,
-        getCdpControlPolicy(),
+      await dispatchBrowserTabClose(
+        tab.targetId,
+        profile.name,
+        () => {
+          options?.signal?.throwIfAborted();
+          return fetchOk(
+            appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
+            undefined,
+            undefined,
+            getCdpControlPolicy(),
+          );
+        },
+        { skipRetained: true },
       ).catch(() => {
         // best-effort cleanup only
       });
     }
-  };
-
-  const triggerManagedTabLimit = (
-    keepTargetId: string,
-    options?: BrowserOperationOptions,
-  ): void => {
-    // This local-managed raw HTTP cleanup owns no browser process or adapter.
-    // Keep it best-effort so an unresponsive old target cannot block tab creation.
-    void enforceManagedTabLimit(keepTargetId, options).catch(() => {});
   };
 
   const adoptValidatedTab = (
@@ -295,7 +295,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     // Alias and sticky state therefore change only at this final validated adoption point.
     const adopted = assignTabAlias({ profileState: runtime, tab, label: options?.label });
     runtime.lastTargetId = tab.targetId;
-    triggerManagedTabLimit(tab.targetId, options);
+    // This local-managed raw HTTP cleanup owns no browser process or adapter.
+    // Keep it best-effort so an unresponsive old target cannot block tab creation.
+    void enforceManagedTabLimit(tab.targetId, options).catch(() => {});
     return adopted;
   };
 
@@ -389,19 +391,14 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
 
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
       const cdpActionTimeouts = getRemoteCdpActionTimeouts();
-      const createTargetOpts: Parameters<typeof createTargetViaCdp>[0] = {
+      const createdViaCdp = await createTargetViaCdp({
         cdpUrl: profile.cdpUrl,
         url,
         ssrfPolicy: cdpPolicy,
         waitForNavigationResult: true,
-      };
-      if (cdpActionTimeouts) {
-        createTargetOpts.timeouts = cdpActionTimeouts;
-      }
-      if (opts?.signal) {
-        createTargetOpts.signal = opts.signal;
-      }
-      const createdViaCdp = await createTargetViaCdp(createTargetOpts).catch(() => null);
+        ...(cdpActionTimeouts ? { timeouts: cdpActionTimeouts } : {}),
+        ...(opts?.signal ? { signal: opts.signal } : {}),
+      }).catch(() => null);
       createdTargetId = createdViaCdp?.targetId;
       opts?.signal?.throwIfAborted();
 

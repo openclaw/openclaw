@@ -6,30 +6,28 @@ import type { OperatorApprovalWorkerOperations } from "./operator-approval-store
 type Operation = keyof OperatorApprovalWorkerOperations;
 const operations: {
   [Key in Operation]: (
-    input: OperatorApprovalWorkerOperations[Key]["input"],
-    databaseOptions: OpenClawStateDatabaseOptions,
+    input: OperatorApprovalWorkerOperations[Key]["input"] & {
+      databaseOptions?: OpenClawStateDatabaseOptions;
+    },
   ) => OperatorApprovalWorkerOperations[Key]["output"];
 } = {
-  "operatorApprovals.insert": (input, databaseOptions) =>
-    store.insertOperatorApprovalInDatabase({ ...input, databaseOptions }),
-  "operatorApprovals.get": (input, databaseOptions) =>
-    store.getOperatorApprovalDetailedInDatabase({ ...input, databaseOptions }),
-  "operatorApprovals.pending": (input, databaseOptions) =>
-    store.listPendingOperatorApprovalsInDatabase({ ...input, databaseOptions }),
-  "operatorApprovals.resolve": (input, databaseOptions) =>
-    transitions.resolveOperatorApprovalInDatabase({ ...input, databaseOptions }),
-  "operatorApprovals.deny": (input, databaseOptions) =>
-    transitions.forceDenyOperatorApprovalInDatabase({ ...input, databaseOptions }),
-  "operatorApprovals.expire": (input, databaseOptions) =>
-    transitions.expireDueOperatorApprovalsInDatabase({ ...input, databaseOptions }),
-  "operatorApprovals.consume": (input, databaseOptions) =>
-    transitions.consumeOperatorApprovalAllowOnceInDatabase({ ...input, databaseOptions }),
+  "operatorApprovals.insert": store.insertOperatorApprovalInDatabase,
+  "operatorApprovals.get": store.getOperatorApprovalDetailedInDatabase,
+  "operatorApprovals.pending": store.listPendingOperatorApprovalsInDatabase,
+  "operatorApprovals.resolve": transitions.resolveOperatorApprovalInDatabase,
+  "operatorApprovals.deny": transitions.forceDenyOperatorApprovalInDatabase,
+  "operatorApprovals.expire": transitions.expireDueOperatorApprovalsInDatabase,
+  "operatorApprovals.consume": transitions.consumeOperatorApprovalAllowOnceInDatabase,
 };
+
+export function isOperatorApprovalOperation(type: string): type is Operation {
+  return Object.hasOwn(operations, type);
+}
 
 export function executeOperatorApprovalOperation<Key extends Operation>(
   type: Key,
   input: OperatorApprovalWorkerOperations[Key]["input"],
   databaseOptions: OpenClawStateDatabaseOptions,
 ): OperatorApprovalWorkerOperations[Key]["output"] {
-  return operations[type](input, databaseOptions);
+  return operations[type]({ ...input, databaseOptions });
 }

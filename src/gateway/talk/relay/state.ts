@@ -102,7 +102,6 @@ export type RelayAgentControlProviderSubmission = {
   providerResponseStarted: boolean;
 };
 
-type RelayProvider = RealtimeVoiceProviderPlugin;
 export class TalkRealtimeRelayOutputOwnership {
   private continuousOutput = false;
   mode: "turn-bound" | "exact-response" = "turn-bound";
@@ -221,7 +220,10 @@ export class TalkRealtimeRelayOutputOwnership {
     Object.assign(this, { phase: "unowned" as const, turnId: undefined, responseId: undefined });
   }
 
-  bind(provider: RelayProvider, runAgentConsult: RealtimeVoiceAgentConsultRunner): RelayProvider {
+  bind(
+    provider: RealtimeVoiceProviderPlugin,
+    runAgentConsult: RealtimeVoiceAgentConsultRunner,
+  ): RealtimeVoiceProviderPlugin {
     return {
       ...provider,
       createBridge: (request) => {

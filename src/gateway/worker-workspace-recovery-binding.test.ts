@@ -383,6 +383,7 @@ describe("registered worker workspace recovery target binding", () => {
         if (request.source.kind !== "local" || !request.source.assertCurrent) {
           throw new Error("Expected a guarded local recovery");
         }
+        const assertCurrent = request.source.assertCurrent;
         const retained = retainOpenClawAgentDatabaseReadOnly({
           agentId: a.agentId,
           path: a.storePath,
@@ -396,16 +397,22 @@ describe("registered worker workspace recovery target binding", () => {
         );
         try {
           for (let index = 0; index < 100; index += 1) {
-            request.source.assertCurrent();
+            assertCurrent();
           }
           const stableReads = reads.counts.session;
           const update = foreign.prepare(
             "UPDATE session_nodes SET display_name = ? WHERE session_key = ?",
           );
-          for (let index = 0; index < 20; index += 1) {
-            update.run(`unrelated-${index}`, unrelatedKey);
-            request.source.assertCurrent();
-          }
+          await runExclusiveSqliteSessionWrite(
+            { agentId: a.agentId, path: retained.database.path },
+            async () => {
+              for (let index = 0; index < 20; index += 1) {
+                update.run(`unrelated-${index}`, unrelatedKey);
+                assertCurrent();
+              }
+            },
+            "session-entry.patch",
+          );
           observed = { stableReads, returnedTextBytes: reads.textBytes.session };
         } finally {
           reads.restore();
@@ -417,6 +424,7 @@ describe("registered worker workspace recovery target binding", () => {
       await runtime.dispatchService.reconcile("startup");
 
       expect(onReconcile).toHaveBeenCalledOnce();
+      await expect(onReconcile.mock.results[0]?.value).resolves.toBeUndefined();
       expect(observed).toEqual({ stableReads: 0, returnedTextBytes: 0 });
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
     });

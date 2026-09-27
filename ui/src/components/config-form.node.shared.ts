@@ -10,6 +10,7 @@ import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
+import { setControlValidity } from "./config-form.scalar-edit.ts";
 import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   configFieldId,
@@ -91,8 +92,7 @@ type SensitiveRenderState = {
 };
 
 export function isAnySchema(schema: JsonSchema): boolean {
-  const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
-  return keys.length === 0;
+  return Object.keys(schema ?? {}).every((key) => META_KEYS.has(key));
 }
 
 export function jsonValue(value: unknown): string {
@@ -367,17 +367,8 @@ export function renderJsonTextareaControl(params: {
   const { path, fallback, sensitiveState, disabled, onPatch } = params;
   const errorId = configFieldId(path, "json-error");
   const describedBy = [params.descriptionId, errorId].filter(Boolean).join(" ");
-  const setValidity = (target: HTMLTextAreaElement, message: string) => {
-    const error = target
-      .closest(".cfg-json-editor")
-      ?.querySelector<HTMLElement>(".cfg-field__error");
-    target.setCustomValidity(message);
-    target.setAttribute("aria-invalid", String(Boolean(message)));
-    if (error) {
-      error.hidden = !message;
-      error.textContent = message;
-    }
-  };
+  const setValidity = (target: HTMLTextAreaElement, message: string) =>
+    setControlValidity(target, message, ".cfg-json-editor");
   const updateValidity = (target: HTMLTextAreaElement) => {
     let message = "";
     const raw = target.value.trim();

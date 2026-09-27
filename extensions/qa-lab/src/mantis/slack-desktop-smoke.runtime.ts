@@ -22,7 +22,11 @@ import {
   runCommand,
   shellQuote,
 } from "./crabbox-runtime.js";
-import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
+import {
+  renderMantisCrabboxReport,
+  type MantisCrabboxReportSummary,
+  type MantisCrabboxRunResult,
+} from "./report.js";
 import {
   createSlackDesktopArtifactOwner,
   type MantisApprovalCheckpointArtifacts,
@@ -55,14 +59,8 @@ export type MantisSlackDesktopSmokeOptions = MantisCrabboxLeaseOptions & {
 
 type MantisSlackDesktopHydrateMode = "prehydrated" | "source";
 
-type MantisSlackDesktopSmokeResult = {
+type MantisSlackDesktopSmokeResult = MantisCrabboxRunResult & {
   approvalCheckpointScreenshotPaths?: string[];
-  outputDir: string;
-  reportPath: string;
-  screenshotPath?: string;
-  status: "pass" | "fail";
-  summaryPath: string;
-  videoPath?: string;
 };
 
 type SlackGatewayCredentialPayload = {

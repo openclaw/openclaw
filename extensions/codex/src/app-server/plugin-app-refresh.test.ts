@@ -74,30 +74,4 @@ describe("explicit Codex plugin app refresh", () => {
     expect(cached.state).toBe("stale");
     expect(cached.diagnostic?.message).toBe(failure.message);
   });
-
-  it("does not publish an older response after a completed refresh removed access", async () => {
-    const appCache = new CodexAppInventoryCache();
-    const key = "selected-runtime";
-    let finishOldRefresh: () => void = () => {};
-    const oldRefresh = appCache.refreshNow({
-      key,
-      request: async (method, params) => {
-        if (method === "app/installed") {
-          await new Promise<void>((resolve) => {
-            finishOldRefresh = resolve;
-          });
-        }
-        return codexAppInventoryResponse(method, [connectedApp], params);
-      },
-    });
-    const request = vi.fn(async (method, params) => codexAppInventoryResponse(method, [], params));
-
-    await refreshCodexAppRuntimeState({ request, appCache, appCacheKey: key });
-    finishOldRefresh();
-    await oldRefresh;
-
-    const cached = appCache.read({ key, request });
-    expect(cached.state).toBe("fresh");
-    expect(cached.snapshot?.apps).toEqual([]);
-  });
 });

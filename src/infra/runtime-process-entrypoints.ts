@@ -47,6 +47,9 @@ export const runtimeProcessEntrypoints = {
   sqliteSourceRevision: runtimeProcessEntrypoint("infra/sqlite-source-revision.worker"),
   sqliteIntegrity: runtimeProcessEntrypoint("infra/sqlite-integrity.worker"),
   preparedModelCatalog: runtimeProcessEntrypoint("agents/prepared-model-catalog.worker"),
+  providerPromptState: runtimeProcessEntrypoint(
+    "agents/embedded-agent-runner/provider-prompt-state.worker",
+  ),
   updateRepair: runtimeProcessEntrypoint("infra/update-repair.worker"),
   updateMigratedFinalize: runtimeProcessEntrypoint("infra/update-migrated-finalize.worker"),
   updateCandidateState: runtimeProcessEntrypoint("infra/update-candidate-state.worker"),

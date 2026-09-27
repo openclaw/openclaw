@@ -75,7 +75,6 @@ describe("renderUsageInsights", () => {
           ],
         },
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -134,7 +133,6 @@ describe("renderUsageInsights", () => {
         totals,
         aggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -176,7 +174,6 @@ describe("renderUsageInsights", () => {
         costTotals,
         costAggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -215,7 +212,6 @@ describe("renderUsageInsights", () => {
         costTotals,
         costAggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,

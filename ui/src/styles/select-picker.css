@@ -185,6 +185,7 @@ openclaw-select-picker {
 }
 
 .picker-select__search {
+  text-align: start;
   flex: 0 0 auto;
   width: 100%;
   min-width: 0;
@@ -201,6 +202,11 @@ openclaw-select-picker {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Filtered flat options stay mounted so a keystroke does not invalidate siblings. */
+.picker-select__option[hidden] {
+  display: none;
 }
 
 .picker-select__empty {

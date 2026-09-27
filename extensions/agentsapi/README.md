@@ -6,6 +6,38 @@ environment. Select it through `agents.defaults.agentRuntime.id` or an agent's
 
 Multi-user Gateways are not supported by the Agents API MVP.
 
+Ordinary conversation attempts run OpenClaw's shared `before_prompt_build` hook,
+including tool-authorized recall and heartbeat prompt contributions. Per-turn
+`prependContext` and `appendContext` are applied on both new and resumed sessions.
+System-prompt additions and overrides are captured only when the native session
+is created. Updating system instructions on an existing native session is an MVP
+implementation gap; reset the OpenClaw session to adopt those changes. The harness
+does not move system instructions into user messages. Hook `toolsAllow` restrictions
+are ignored because the harness cannot enforce turn-scoped restrictions across
+Gateway and native tools. Turns continue with the hook's prompt context even for
+an empty tool list; other available tools remain usable. Existing configured Gateway
+tool policies still apply. Use a runtime that supports per-turn restrictions when a
+hook's tool list must be enforced. Steering messages and isolated completions do not
+run these conversation prompt hooks.
+
+Memory Core dreaming can generate its diary narrative in a fresh Agents API
+session without an executor, supplied functions, native web search, vaults, or
+subagents. These calls use the prepared model and API key, do not reuse the
+conversation or workspace, and delete the temporary session after settlement.
+Cancellation waits for native work to settle before deletion.
+
+Conversation-only API sessions require initial input during creation. If the
+service accepts creation but its response is lost, the Gateway may not receive
+the session ID needed to cancel or delete that work. Cleanup of known sessions
+does not guarantee cleanup in that case.
+
+Restricted sessions still have a tool-surface gap: the service may expose its
+own built-in helpers even with no supplied functions or executor. Removing those
+helpers is blocked by the Agents API, so a literal zero-tool surface is not
+guaranteed. Tool-bearing output is rejected and no required function is executed.
+Token and temperature limits are not forwarded because the Agents API session
+contract does not expose those settings.
+
 The Gateway must be the only writer to each hosted session bound to OpenClaw.
 Send messages, steering, and interrupts through OpenClaw. Do not also write to
 that hosted session from another API client or a Gateway with independent state.

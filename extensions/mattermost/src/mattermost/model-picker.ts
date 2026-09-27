@@ -60,10 +60,7 @@ function splitModelRef(modelRef?: string | null): { provider: string; model: str
 }
 
 function normalizePage(value: number | undefined): number {
-  if (!Number.isFinite(value)) {
-    return 1;
-  }
-  return Math.max(1, Math.floor(value as number));
+  return Math.max(1, Math.floor(asFiniteNumber(value) ?? 1));
 }
 
 function paginateItems<T>(items: T[], page?: number, pageSize = MODELS_PAGE_SIZE) {
@@ -222,19 +219,16 @@ export function resolveMattermostModelPickerCurrentModel(params: {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
-    const sessionEntry = getSessionEntry({
-      storePath,
-      sessionKey: params.route.sessionKey,
-      ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
-    });
+    const loadSessionEntry = (sessionKey: string) =>
+      getSessionEntry({
+        storePath,
+        sessionKey,
+        ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
+      });
+    const sessionEntry = loadSessionEntry(params.route.sessionKey);
     const override = resolveStoredModelOverride({
       sessionEntry,
-      loadSessionEntry: (sessionKey) =>
-        getSessionEntry({
-          storePath,
-          sessionKey,
-          ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
-        }),
+      loadSessionEntry,
       sessionKey: params.route.sessionKey,
       parentSessionKey: sessionEntry?.parentSessionKey,
       defaultProvider: params.data.resolvedDefault.provider,

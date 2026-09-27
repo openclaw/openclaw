@@ -28,7 +28,7 @@ import {
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
 import { checkTelemetryUpdate } from "./telemetry.js";
-import { gatewayUpdateCampaign, type UpdateCampaignController } from "./update-campaign.js";
+import { UpdateCampaignController } from "./update-campaign.js";
 import {
   channelToNpmTag,
   DEV_BRANCH,
@@ -262,7 +262,6 @@ export async function runGatewayUpdateCheck(
     onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
     onUpdateRunCreated?: () => void;
     activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
-    updateCampaign?: UpdateCampaignController;
     runAutoUpdate?: AutoUpdateRunner;
     signal?: AbortSignal;
   },
@@ -291,8 +290,7 @@ async function runGatewayUpdateCheckOwned(
   if (params.isNixMode) {
     return;
   }
-  const updateCampaign = params.updateCampaign ?? gatewayUpdateCampaign;
-  lifecycle.campaign = gatewayUpdateCampaign;
+  const updateCampaign = (lifecycle.campaign ??= new UpdateCampaignController(lifecycle.scheduler));
   // The admitted target belongs to the applying owner until it settles.
   if (updateCampaign.getState()?.state === "applying") {
     return;
@@ -746,7 +744,6 @@ export function createGatewayUpdateCheck(params: {
   stop: () => Promise<void>;
 } {
   const { lifecycle } = params;
-  lifecycle.campaign = gatewayUpdateCampaign;
   let started = false;
   let observedCatalog: { sourceUrl: string; generatedAt: number } | undefined;
   return {

@@ -1,8 +1,3 @@
-/**
- * Session resource loader.
- *
- * Loads extensions, skills, prompts, themes, AGENTS files, and system prompt fragments for a cwd.
- */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import chalk from "chalk";
@@ -108,13 +103,10 @@ function loadProjectContextFiles(options: {
   cwd: string;
   agentDir: string;
 }): Array<{ path: string; content: string }> {
-  const resolvedCwd = options.cwd;
-  const resolvedAgentDir = options.agentDir;
-
   const contextFiles: Array<{ path: string; content: string }> = [];
   const seenPaths = new Set<string>();
 
-  const globalContext = loadContextFileFromDir(resolvedAgentDir);
+  const globalContext = loadContextFileFromDir(options.agentDir);
   if (globalContext) {
     contextFiles.push(globalContext);
     seenPaths.add(globalContext.path);
@@ -122,7 +114,7 @@ function loadProjectContextFiles(options: {
 
   const ancestorContextFiles: Array<{ path: string; content: string }> = [];
 
-  let currentDir = resolvedCwd;
+  let currentDir = options.cwd;
   const root = resolve("/");
 
   while (true) {
@@ -201,21 +193,21 @@ export class DefaultResourceLoader implements ResourceLoader {
   private appendSystemPromptTransform?: (base: string[]) => string[];
 
   private extensionsResult: LoadExtensionsResult;
-  private skills: Skill[];
-  private skillDiagnostics: ResourceDiagnostic[];
-  private prompts: PromptTemplate[];
-  private promptDiagnostics: ResourceDiagnostic[];
-  private themes: Theme[];
-  private themeDiagnostics: ResourceDiagnostic[];
-  private agentsFiles: Array<{ path: string; content: string }>;
+  private skills: Skill[] = [];
+  private skillDiagnostics: ResourceDiagnostic[] = [];
+  private prompts: PromptTemplate[] = [];
+  private promptDiagnostics: ResourceDiagnostic[] = [];
+  private themes: Theme[] = [];
+  private themeDiagnostics: ResourceDiagnostic[] = [];
+  private agentsFiles: Array<{ path: string; content: string }> = [];
   private systemPrompt?: string;
-  private appendSystemPrompt: string[];
-  private lastSkillPaths: string[];
-  private extensionSkillSourceInfos: Map<string, SourceInfo>;
-  private extensionPromptSourceInfos: Map<string, SourceInfo>;
-  private extensionThemeSourceInfos: Map<string, SourceInfo>;
-  private lastPromptPaths: string[];
-  private lastThemePaths: string[];
+  private appendSystemPrompt: string[] = [];
+  private lastSkillPaths: string[] = [];
+  private extensionSkillSourceInfos = new Map<string, SourceInfo>();
+  private extensionPromptSourceInfos = new Map<string, SourceInfo>();
+  private extensionThemeSourceInfos = new Map<string, SourceInfo>();
+  private lastPromptPaths: string[] = [];
+  private lastThemePaths: string[] = [];
   private loaded = false;
 
   constructor(options: DefaultResourceLoaderOptions) {
@@ -250,20 +242,6 @@ export class DefaultResourceLoader implements ResourceLoader {
     this.appendSystemPromptTransform = options.appendSystemPromptTransform;
 
     this.extensionsResult = { extensions: [], errors: [], runtime: createExtensionRuntime() };
-    this.skills = [];
-    this.skillDiagnostics = [];
-    this.prompts = [];
-    this.promptDiagnostics = [];
-    this.themes = [];
-    this.themeDiagnostics = [];
-    this.agentsFiles = [];
-    this.appendSystemPrompt = [];
-    this.lastSkillPaths = [];
-    this.extensionSkillSourceInfos = new Map();
-    this.extensionPromptSourceInfos = new Map();
-    this.extensionThemeSourceInfos = new Map();
-    this.lastPromptPaths = [];
-    this.lastThemePaths = [];
   }
 
   getExtensions(): LoadExtensionsResult {
@@ -543,14 +521,12 @@ export class DefaultResourceLoader implements ResourceLoader {
     const resolvedSkills = this.skillsOverride ? this.skillsOverride(skillsResult) : skillsResult;
     this.skills = resolvedSkills.skills.map((skill) => ({
       ...skill,
-      sourceInfo:
-        this.findSourceInfoForPath(
-          skill.filePath,
-          this.extensionSkillSourceInfos,
-          metadataByPath,
-        ) ??
-        skill.sourceInfo ??
-        this.getDefaultSourceInfoForPath(skill.filePath),
+      sourceInfo: this.resolveSourceInfoForPath(
+        skill.filePath,
+        this.extensionSkillSourceInfos,
+        metadataByPath,
+        skill.sourceInfo,
+      ),
     }));
     this.skillDiagnostics = resolvedSkills.diagnostics;
   }
@@ -582,14 +558,12 @@ export class DefaultResourceLoader implements ResourceLoader {
       : promptsResult;
     this.prompts = resolvedPrompts.prompts.map((prompt) => ({
       ...prompt,
-      sourceInfo:
-        this.findSourceInfoForPath(
-          prompt.filePath,
-          this.extensionPromptSourceInfos,
-          metadataByPath,
-        ) ??
-        prompt.sourceInfo ??
-        this.getDefaultSourceInfoForPath(prompt.filePath),
+      sourceInfo: this.resolveSourceInfoForPath(
+        prompt.filePath,
+        this.extensionPromptSourceInfos,
+        metadataByPath,
+        prompt.sourceInfo,
+      ),
     }));
     this.promptDiagnostics = resolvedPrompts.diagnostics;
   }
@@ -618,9 +592,12 @@ export class DefaultResourceLoader implements ResourceLoader {
     this.themes = resolvedThemes.themes.map((theme) => {
       const sourcePath = theme.sourcePath;
       theme.sourceInfo = sourcePath
-        ? (this.findSourceInfoForPath(sourcePath, this.extensionThemeSourceInfos, metadataByPath) ??
-          theme.sourceInfo ??
-          this.getDefaultSourceInfoForPath(sourcePath))
+        ? this.resolveSourceInfoForPath(
+            sourcePath,
+            this.extensionThemeSourceInfos,
+            metadataByPath,
+            theme.sourceInfo,
+          )
         : theme.sourceInfo;
       return theme;
     });
@@ -632,9 +609,11 @@ export class DefaultResourceLoader implements ResourceLoader {
     metadataByPath: Map<string, PathMetadata>,
   ): void {
     for (const extension of extensions) {
-      extension.sourceInfo =
-        this.findSourceInfoForPath(extension.path, undefined, metadataByPath) ??
-        this.getDefaultSourceInfoForPath(extension.path);
+      extension.sourceInfo = this.resolveSourceInfoForPath(
+        extension.path,
+        undefined,
+        metadataByPath,
+      );
       for (const command of extension.commands.values()) {
         command.sourceInfo = extension.sourceInfo;
       }
@@ -644,13 +623,14 @@ export class DefaultResourceLoader implements ResourceLoader {
     }
   }
 
-  private findSourceInfoForPath(
+  private resolveSourceInfoForPath(
     resourcePath: string,
     extraSourceInfos?: Map<string, SourceInfo>,
     metadataByPath?: Map<string, PathMetadata>,
-  ): SourceInfo | undefined {
+    existing?: SourceInfo,
+  ): SourceInfo {
     if (!resourcePath) {
-      return undefined;
+      return existing ?? this.getDefaultSourceInfoForPath(resourcePath);
     }
 
     if (resourcePath.startsWith("<")) {
@@ -681,7 +661,7 @@ export class DefaultResourceLoader implements ResourceLoader {
       }
     }
 
-    return undefined;
+    return existing ?? this.getDefaultSourceInfoForPath(resourcePath);
   }
 
   private getDefaultSourceInfoForPath(filePath: string): SourceInfo {

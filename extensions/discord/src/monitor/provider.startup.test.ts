@@ -1,6 +1,6 @@
 // Discord tests cover provider.startup plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Client, Plugin } from "../internal/discord.js";
+import { Client, type Plugin, type RegisteredPlugin } from "../internal/client.js";
 
 const {
   registerVoiceClientSpy,
@@ -122,29 +122,11 @@ describe("createDiscordMonitorClient", () => {
   });
 
   function createClientWithPlugins(
-    _options: ConstructorParameters<typeof import("../internal/discord.js").Client>[0],
-    handlers: ConstructorParameters<typeof import("../internal/discord.js").Client>[1],
-    plugins: Plugin[] = [],
+    options: ConstructorParameters<typeof Client>[0],
+    handlers: ConstructorParameters<typeof Client>[1],
+    plugins: RegisteredPlugin[] = [],
   ) {
-    const pluginRegistry = plugins.map((plugin) => ({ id: plugin.id, plugin }));
-    const listeners = [...(handlers.listeners ?? [])];
-    return {
-      listeners,
-      plugins: pluginRegistry,
-      registerListener: (listener: never) => {
-        listeners.push(listener);
-        return listener;
-      },
-      unregisterListener: (listener: never) => {
-        const index = listeners.indexOf(listener);
-        if (index < 0) {
-          return false;
-        }
-        listeners.splice(index, 1);
-        return true;
-      },
-      getPlugin: (id: string) => pluginRegistry.find((entry) => entry.id === id)?.plugin,
-    } as unknown as Client;
+    return new Client(options, handlers, plugins);
   }
 
   function createAutoPresenceController() {

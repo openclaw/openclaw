@@ -7,10 +7,10 @@ import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/con
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-state-context.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import * as stateOwner from "../infra/gateway-state-owner.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
 import * as restartSentinel from "../infra/restart-sentinel.js";
 import { readRestartSentinel, writeRestartSentinel } from "../infra/restart-sentinel.js";
-import * as stateCoordinator from "../infra/state-database-coordinator.js";
 import {
   readLegacyMigrationReceipt,
   resolveLegacyMigrationSourceKey,
@@ -181,6 +181,50 @@ beforeEach(() => {
   );
 });
 
+it.each(["absent", "maintenance"] as const)(
+  "refuses legacy notice import with an %s Gateway owner",
+  async (ownerKind) => {
+    const stateDir = tempDirs.make("openclaw-restart-import-gateway-owner-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const retained = await writeRestartSentinel(
+      { kind: "restart", status: "ok", ts: 123, message: "Retained canonical notice" },
+      env,
+    );
+    const context = captureDeliveryQueueStateContext();
+    const sourcePath = path.join(stateDir, "restart-sentinel.json");
+    const source = JSON.stringify({
+      version: 1,
+      payload: { kind: "update", status: "ok", ts: 124, stats: { mode: "npm" } },
+    });
+    await fs.writeFile(sourcePath, source);
+    const owner =
+      ownerKind === "maintenance"
+        ? stateOwner.acquireGatewayStateOwner({
+            databasePath: context.workerContext.admission.databasePath,
+          })
+        : undefined;
+    try {
+      await expect(
+        importLegacyUpdateRestartSentinel({
+          context: context.workerContext,
+          shouldRun: () => true,
+        }),
+      ).rejects.toThrow("no longer owns this Gateway generation");
+    } finally {
+      owner?.release();
+    }
+    expect(await fs.readFile(sourcePath, "utf8")).toBe(source);
+    expect(await readRestartSentinel(env)).toEqual(retained);
+    expect(
+      readLegacyMigrationReceipt(
+        resolveLegacyMigrationSourceKey("restart-sentinel-json", sourcePath),
+        env,
+      ),
+    ).toBeNull();
+  },
+);
+
 it("joins a paused import without publishing after canonical database close revokes admission", async () => {
   const stateDir = tempDirs.make("openclaw-restart-import-close-");
   const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -212,14 +256,12 @@ it("joins a paused import without publishing after canonical database close revo
       return snapshot;
     },
   );
-  let custody: ReturnType<typeof stateCoordinator.acquireGatewayMaintenanceCoordinator> | undefined;
-  const acquire = stateCoordinator.acquireGatewayMaintenanceCoordinator;
-  vi.spyOn(stateCoordinator, "acquireGatewayMaintenanceCoordinator").mockImplementation(
-    (options) => {
-      custody = acquire(options);
-      return custody;
-    },
-  );
+  let custody: ReturnType<typeof stateOwner.tryBorrowGatewayStateOwner> | undefined;
+  const acquire = stateOwner.tryBorrowGatewayStateOwner;
+  vi.spyOn(stateOwner, "tryBorrowGatewayStateOwner").mockImplementation((options) => {
+    custody = acquire(options);
+    return custody;
+  });
   const importing = importLegacyUpdateRestartSentinel({
     context: context.workerContext,
     shouldRun: () => true,
@@ -235,7 +277,7 @@ it("joins a paused import without publishing after canonical database close revo
       await Promise.race([readStarted.promise.then(() => "held" as const), importSettled]),
     ).toBe("held");
     context.workerContext.admission.assertCurrent();
-    expect(custody?.closed).toBe(false);
+    expect(custody?.assertCurrent).not.toThrow();
     closing = closeOpenClawStateDatabaseAsync();
     void closing.then(
       () => {
@@ -250,14 +292,14 @@ it("joins a paused import without publishing after canonical database close revo
       setImmediate(resolve);
     });
     expect(closeSettled).toBe(false);
-    expect(custody?.closed).toBe(false);
+    expect(custody?.assertCurrent).not.toThrow();
     releaseRead.resolve();
     const result = await importing;
     await closing;
     expect(result.changes).toEqual([]);
     expect(result.importedRevision).toBeUndefined();
     expect(result.warnings).toEqual([expect.stringContaining("read admission is closed")]);
-    expect(custody?.closed).toBe(true);
+    expect(custody?.assertCurrent).toThrow(/ownership is no longer current/);
     expect(await fs.readFile(sourcePath, "utf8")).toBe(source);
     await expect(fs.stat(`${sourcePath}.doctor-importing`)).rejects.toMatchObject({
       code: "ENOENT",
@@ -298,14 +340,12 @@ it("retains failed import cleanup until canonical database close retries its own
     .mockRejectedValueOnce(failure)
     .mockResolvedValue(undefined);
   let scope: OpenClawDatabaseMaintenanceScope | undefined;
-  let custody: ReturnType<typeof stateCoordinator.acquireGatewayMaintenanceCoordinator> | undefined;
-  const acquire = stateCoordinator.acquireGatewayMaintenanceCoordinator;
-  vi.spyOn(stateCoordinator, "acquireGatewayMaintenanceCoordinator").mockImplementation(
-    (params) => {
-      custody = acquire(params);
-      return custody;
-    },
-  );
+  let custody: ReturnType<typeof stateOwner.tryBorrowGatewayStateOwner> | undefined;
+  const acquire = stateOwner.tryBorrowGatewayStateOwner;
+  vi.spyOn(stateOwner, "tryBorrowGatewayStateOwner").mockImplementation((params) => {
+    custody = acquire(params);
+    return custody;
+  });
   const readSource = legacySource.readLegacyMigrationSourceSnapshot;
   vi.spyOn(legacySource, "readLegacyMigrationSourceSnapshot").mockImplementationOnce(
     async (params) => {
@@ -323,10 +363,26 @@ it("retains failed import cleanup until canonical database close retries its own
       importLegacyUpdateRestartSentinel({ context: context.workerContext, shouldRun: () => true }),
     ).rejects.toBe(failure);
     expect(closeResource).toHaveBeenCalledOnce();
-    expect(custody?.closed).toBe(false);
+    expect(custody?.assertCurrent).not.toThrow();
+    await lock.release();
+    expect(
+      stateOwner.tryAcquireGatewayStateOwner(context.workerContext.admission.databasePath),
+    ).toBeNull();
+    expect(custody?.assertCurrent).not.toThrow();
     await closeOpenClawStateDatabaseAsync();
     expect(closeResource).toHaveBeenCalledTimes(2);
-    expect(custody?.closed).toBe(true);
+    expect(custody?.assertCurrent).toThrow(/ownership is no longer current/);
+    const successor = stateOwner.tryAcquireGatewayStateOwner(
+      context.workerContext.admission.databasePath,
+    );
+    if (!successor) {
+      throw new Error("Expected settled import custody to admit a successor");
+    }
+    try {
+      expect(custody?.assertCurrent).toThrow(/ownership is no longer current/);
+    } finally {
+      successor.release();
+    }
   } finally {
     await scope?.close();
     custody?.release();

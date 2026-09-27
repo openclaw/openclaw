@@ -197,9 +197,6 @@ export function registerMemoryWikiGatewayMethods(params: {
     return await listMemoryWikiImportInsights(config);
   });
 
-  // Renamed from wiki.palace without an alias by maintainer decision: the method was
-  // undocumented, its only known consumer is the version-locked Control UI, and stale
-  // callers get an explicit unknown-method error rather than a silent failure.
   registerResultMethod("wiki.overview", READ_SCOPE, async (requestParams) => {
     const { appConfig, config } = resolveRequestContext(requestParams);
     syncImportedSourcesInBackground(config, appConfig);
