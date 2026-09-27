@@ -51,14 +51,17 @@ describe("harness workspace memory routing", () => {
     },
     { name: "missing configuration", config: undefined, agentId: "main", workspaceDir },
     { name: "missing agent identity", config, agentId: undefined, workspaceDir },
-  ])("preserves inline memory for $name", ({ config, agentId, workspaceDir }) => {
-    expect(
-      resolveAgentWorkspaceMemoryRouting({
-        config,
-        agentId,
-        workspaceDir,
-        toolNames: new Set(["memory_search"]),
-      }),
-    ).toEqual({ memoryToolNames: ["memory_search"], memoryToolRouted: false });
-  });
+  ])(
+    "preserves inline memory for $name",
+    ({ config: caseConfig, agentId, workspaceDir: caseWorkspaceDir }) => {
+      expect(
+        resolveAgentWorkspaceMemoryRouting({
+          config: caseConfig,
+          agentId,
+          workspaceDir: caseWorkspaceDir,
+          toolNames: new Set(["memory_search"]),
+        }),
+      ).toEqual({ memoryToolNames: ["memory_search"], memoryToolRouted: false });
+    },
+  );
 });
