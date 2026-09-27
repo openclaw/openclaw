@@ -4,7 +4,10 @@ import { z } from "zod";
 
 export const agentsApiConfigSchema = z.strictObject({
   environment: z.enum(["openai_hosted", "self_hosted"]).default("openai_hosted"),
-  capabilityDirectories: z.array(z.string().startsWith("/")).max(32).optional(),
+  capabilityDirectories: z
+    .array(z.string().regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/))
+    .max(32)
+    .optional(),
 });
 
 export type AgentsApiEnvironment =
