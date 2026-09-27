@@ -318,7 +318,7 @@ type WorkerProvisionOptions = {
     }) => Promise<{
       seedKey: string;
       cacheHit: boolean;
-      /** New completed setup must enter the reusable image before enrollment. */
+      /** Request capture of newly completed setup, subject to provider refresh/ownership policy. */
       captureRequired?: true;
       preparedWorkspace?: {
         preparationKey: string;

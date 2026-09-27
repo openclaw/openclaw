@@ -12,6 +12,8 @@ import {
   WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
 import {
+  assertCrabboxCheckpointCurrent as assertCurrent,
+  captureCrabboxCheckpointAuthority,
   CrabboxCheckpointCreateError,
   parseCreatedCheckpoint,
   type CheckpointContext,
@@ -38,7 +40,6 @@ export function createCrabboxWarmImageCapture(dependencies: {
   policy: CrabboxWarmImagePolicy;
   openStore: () => WarmImageStore;
   lookupLease: WarmImageStore["lookupLease"];
-  assertCurrent: (context: LeaseContext) => void;
   warnOnce: (action: string, error: unknown, failed?: boolean) => void;
   collectProfileImages: (context: LeaseContext, key: string, phase: "teardown") => Promise<void>;
   verifyImage: (
@@ -53,7 +54,6 @@ export function createCrabboxWarmImageCapture(dependencies: {
   const {
     openStore,
     lookupLease,
-    assertCurrent,
     warnOnce,
     collectProfileImages,
     verifyImage,
@@ -82,11 +82,10 @@ export function createCrabboxWarmImageCapture(dependencies: {
     const captureId = randomUUID();
     const owner = await lookupLease(context.id);
     const key = owner?.key;
-    let claimed = false;
-    let creating = false;
+    let pendingCapture = false;
+    let createDispatched = false;
     let preparing = false;
     let captured = false;
-    let captureError: string | undefined;
     const attemptCapture = async () => {
       try {
         if (key) {
@@ -197,28 +196,35 @@ export function createCrabboxWarmImageCapture(dependencies: {
         }
         const now = Date.now();
         assertCurrent(context);
-        claimed = await openStore().update(key, (current) => {
-          assertCurrent(context);
-          if (
-            !current ||
-            JSON.stringify(current) !== JSON.stringify(existing) ||
-            current.allocations[context.id]?.phase !== owner.phase
-          ) {
-            return undefined;
-          }
-          return {
-            ...current,
-            operation: {
-              type: "capture",
-              id: captureId,
-              startedAtMs: now,
-              leaseId: context.id,
-              provider: context.provider,
-              phase: "scrubbing",
-            },
-          };
-        });
+        // A rejected comparison reply can still leave this fresh selector committed.
+        // Record attempted custody before awaiting; exact cleanup never adopts another selector.
+        pendingCapture = true;
+        const claimed = await openStore().update(
+          key,
+          (current) => {
+            if (
+              !current ||
+              JSON.stringify(current) !== JSON.stringify(existing) ||
+              current.allocations[context.id]?.phase !== owner.phase
+            ) {
+              return undefined;
+            }
+            return {
+              ...current,
+              operation: {
+                type: "capture",
+                id: captureId,
+                startedAtMs: now,
+                leaseId: context.id,
+                provider: context.provider,
+                phase: "scrubbing",
+              },
+            };
+          },
+          captureCrabboxCheckpointAuthority(context),
+        );
         if (!claimed) {
+          pendingCapture = false;
           return;
         }
         // Runtime preparation belongs only to a claimed capture. Scrub its forwarded
@@ -234,14 +240,15 @@ export function createCrabboxWarmImageCapture(dependencies: {
             "scrub",
             leaseRunArgs(context),
             WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
-            SCRUB_WORKER_STATE,
+            { input: SCRUB_WORKER_STATE },
           );
         }
         // A stopped allocation or manual recovery must not start another paid operation.
         assertCurrent(context);
-        creating = await openStore().update(key, (current) => {
-          assertCurrent(context);
-          return current?.operation?.type === "capture" &&
+        const creating = await openStore().update(
+          key,
+          (current) =>
+            current?.operation?.type === "capture" &&
             current.operation.id === captureId &&
             current.allocations[context.id]?.phase === owner.phase &&
             current.allocations[context.id]?.machineClass === owner.machineClass &&
@@ -249,11 +256,13 @@ export function createCrabboxWarmImageCapture(dependencies: {
             current.allocations[context.id]?.preparationKey === owner.preparationKey &&
             current.allocations[context.id]?.cacheKey === owner.cacheKey &&
             current.allocations[context.id]?.purpose === owner.purpose
-            ? { ...current, operation: { ...current.operation, phase: "creating" } }
-            : undefined;
-        });
+              ? { ...current, operation: { ...current.operation, phase: "creating" } }
+              : undefined,
+          captureCrabboxCheckpointAuthority(context),
+        );
         if (!creating) {
           await clearCrabboxWarmImageCapture(openStore(), key, captureId);
+          pendingCapture = false;
           return;
         }
         const created = parseCreatedCheckpoint(
@@ -281,6 +290,11 @@ export function createCrabboxWarmImageCapture(dependencies: {
               ...(context.provider === "machine0" ? ["--strategy", "image"] : []),
             ],
             resolveCrabboxCheckpointCaptureTimeoutMs(context.provider),
+            {
+              onDispatch: () => {
+                createDispatched = true;
+              },
+            },
           ),
           context.id,
         );
@@ -354,21 +368,23 @@ export function createCrabboxWarmImageCapture(dependencies: {
           );
           return;
         }
-        creating = false;
-        claimed = false;
+        pendingCapture = false;
         const replacement = await openStore().lookup(key);
         if (replacement) {
           await retireImage(context, key, replacement);
         }
       } catch (error) {
-        captureError = coerceErrorMessage(error);
-        const unsupported = creating
+        const unsupported = createDispatched
           ? CrabboxCheckpointCreateError.unsupportedCapture(error, context)
           : undefined;
         const notSubmitted =
-          creating && CrabboxCheckpointCreateError.wasNotSubmitted(error, context);
-        let recoveryRequired = creating;
-        if (claimed && key) {
+          createDispatched && CrabboxCheckpointCreateError.wasNotSubmitted(error, context);
+        const captureFailure = {
+          error,
+          failedProjectAttempt: pendingCapture && Boolean(owner?.projectKey),
+        };
+        let recoveryRequired = pendingCapture;
+        if (pendingCapture && key) {
           try {
             if (unsupported) {
               const recorded = await openStore().update(key, (current) =>
@@ -385,10 +401,10 @@ export function createCrabboxWarmImageCapture(dependencies: {
               );
               if (recorded) {
                 warnUnsupported(unsupported.message);
-                return;
+                return undefined;
               }
             }
-            if (creating && !notSubmitted) {
+            if (createDispatched && !notSubmitted) {
               await openStore().update(key, (current) =>
                 current?.operation?.type === "capture" && current.operation.id === captureId
                   ? { ...current, operation: { ...current.operation, phase: "uncertain" } }
@@ -396,6 +412,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
               );
             } else {
               await clearCrabboxWarmImageCapture(openStore(), key, captureId);
+              pendingCapture = false;
               recoveryRequired = false;
             }
           } catch {
@@ -404,26 +421,41 @@ export function createCrabboxWarmImageCapture(dependencies: {
         }
         // Required project captures must fail before enrollment. Optional teardown
         // captures can warn and let source deletion complete.
-        if (preparing || (notSubmitted && owner?.projectKey)) {
+        if (preparing) {
           throw error;
+        }
+        if (notSubmitted && owner?.projectKey) {
+          return captureFailure;
         }
         warnOnce(
           "capture",
-          recoveryRequired ? `${captureError}. ${crabboxWarmImageRecoveryHint(captureId)}` : error,
+          recoveryRequired
+            ? `${coerceErrorMessage(error)}. ${crabboxWarmImageRecoveryHint(captureId)}`
+            : error,
         );
+        return captureFailure;
       }
+      return undefined;
     };
-    await attemptCapture();
+    const captureFailure = await attemptCapture();
     const operation =
       key && owner?.projectKey ? (await openStore().lookup(key))?.operation : undefined;
     // Record capture custody before revalidating; cancellation takes precedence over
     // an unresolved-capture error without discarding its recovery record.
     assertCurrent(context);
+    // Exact cleanup or a successor selector cannot turn a failed project attempt into a skip.
+    // Keep recovery guidance while this attempt still owns a persisted capture claim.
+    if (
+      captureFailure?.failedProjectAttempt &&
+      (operation?.type !== "capture" || operation.id !== captureId)
+    ) {
+      throw captureFailure.error;
+    }
     // A native create may still be running after a lost response. Enrollment must
     // never introduce node credentials into that source until capture has settled.
     if (operation?.type === "capture" && operation.leaseId === context.id) {
       throw new Error(
-        `${captureError ? `${captureError}. ` : ""}Crabbox project image capture is unresolved. ${crabboxWarmImageRecoveryHint(operation.id)}`,
+        `${captureFailure ? `${coerceErrorMessage(captureFailure.error)}. ` : ""}Crabbox project image capture is unresolved. ${crabboxWarmImageRecoveryHint(operation.id)}`,
       );
     }
     return captured;

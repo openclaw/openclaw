@@ -107,6 +107,7 @@ export async function inspectWithContext(
     ],
     binary: params.binary,
     runCommand: params.runCommand,
+    onDispatch: params.assertCurrent,
     signal: params.signal,
     sleep: params.sleep,
     timeoutMs: params.timeoutMs ?? resolveCrabboxLifecycleTimeoutMs(params.provider),
@@ -152,6 +153,7 @@ export async function runProvisionWarmup(
     timeoutMs: () => number;
     signal?: AbortSignal;
     assertCurrent?: () => void;
+    onDispatch?: () => void;
   },
 ): Promise<void> {
   params.assertCurrent?.();
@@ -291,6 +293,7 @@ export async function runProvisionSetup(
           env: childEnv,
           input: params.setup,
           runCommand: params.runCommand,
+          onDispatch: params.assertCurrent,
           signal: params.signal,
           sleep: params.sleep,
           timeoutMs: remainingProvisionTimeout(

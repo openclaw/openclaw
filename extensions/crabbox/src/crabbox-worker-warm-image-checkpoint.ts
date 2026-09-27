@@ -162,19 +162,33 @@ export type MaintenanceContext = Omit<CheckpointContext, "binary"> & {
   binaries: readonly string[];
 };
 
+/** Commands and state admission share logical and physical cancellation checks. */
+export function assertCrabboxCheckpointCurrent(
+  context: Pick<CheckpointContext, "assertCurrent" | "signal">,
+): void {
+  context.assertCurrent?.();
+  context.signal?.throwIfAborted();
+}
+
+/** Guardless teardown must not acquire the plugin-lifetime fence of a bound state view. */
+export function captureCrabboxCheckpointAuthority({
+  assertCurrent,
+  signal,
+}: Pick<CheckpointContext, "assertCurrent" | "signal">): (() => void) | undefined {
+  return assertCurrent || signal
+    ? () => assertCrabboxCheckpointCurrent({ assertCurrent, signal })
+    : undefined;
+}
+
 export function createCheckpointCommands(runCommand: CrabboxCommandRunner) {
-  const assertCurrent = (context: CheckpointContext | MaintenanceContext) => {
-    context.assertCurrent?.();
-    context.signal?.throwIfAborted();
-  };
   const checkpointCommand = async (
     context: CheckpointContext,
     action: "create" | "delete" | "fork" | "inspect" | "scrub",
     args: string[],
     timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
-    input?: string,
+    options: { input?: string; onDispatch?: () => void } = {},
   ): Promise<string> => {
-    assertCurrent(context);
+    assertCrabboxCheckpointCurrent(context);
     const commandAction = action === "scrub" ? action : `checkpoint ${action}`;
     const result = await runCrabboxCommand({
       action: commandAction,
@@ -183,7 +197,8 @@ export function createCheckpointCommands(runCommand: CrabboxCommandRunner) {
       runCommand,
       timeoutMs,
       ...(context.signal ? { signal: context.signal } : {}),
-      ...(input === undefined ? {} : { input }),
+      ...(options.input === undefined ? {} : { input: options.input }),
+      onDispatch: options.onDispatch,
     });
     if (action === "create" && (result.termination !== "exit" || result.code !== 0)) {
       throw new CrabboxCheckpointCreateError(result);
@@ -197,7 +212,7 @@ export function createCheckpointCommands(runCommand: CrabboxCommandRunner) {
   ): Promise<boolean> => {
     const binaries = "binary" in context ? [context.binary] : context.binaries;
     for (const [index, binary] of binaries.entries()) {
-      assertCurrent(context);
+      assertCrabboxCheckpointCurrent(context);
       const timeoutMs = remainingMs();
       if (timeoutMs <= 0) {
         return false;

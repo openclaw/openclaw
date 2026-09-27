@@ -137,6 +137,41 @@ describe("Crabbox worker coordinator retries", () => {
     expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
   });
 
+  it.each(["inspect", "run"] as const)(
+    "closes %s backoff without resubmission when invocation authority expires",
+    async (command) => {
+      let current = true;
+      const closed = new Error("Invocation authority closed");
+      const { provider, calls } = createWarmProvider(
+        ({ argv }) =>
+          argv[1] === command ? commandResult({ code: 1, stderr: COORDINATOR_TIMEOUT }) : undefined,
+        undefined,
+        {
+          sleep: async () => {
+            current = false;
+          },
+        },
+      );
+      await expect(
+        provisionWarmProfile(
+          provider,
+          { ...COLD_PROFILE, setup: "install-node" },
+          undefined,
+          undefined,
+          {
+            assertCurrent() {
+              if (!current) {
+                throw closed;
+              }
+            },
+          },
+        ),
+      ).rejects.toMatchObject({ code: "cleanup_complete", provisionError: closed });
+      expect(calls.filter(({ argv }) => argv[1] === command)).toHaveLength(1);
+      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+    },
+  );
+
   it.each(["initial", "readiness", "lifecycle"])("recovers during %s inspection", async (phase) => {
     let inspections = 0;
     const sleep = vi.fn(async (_ms: number) => {});
