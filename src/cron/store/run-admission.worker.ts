@@ -5,7 +5,7 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
-import type { CronJobPolicyContext, Logger } from "../service/state.js";
+import type { CronJobPolicyContext } from "../service/state.js";
 import {
   deleteStaleCronJobFamilyRows,
   loadedCronStoreFromRows,
@@ -25,6 +25,7 @@ import {
 } from "./runtime-authority-store.js";
 import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
 import {
+  createCronMutationLogger,
   prepareCronRuntimeMutation,
   retainCronRuntimeMutationOutcome,
 } from "./runtime-mutation.worker.js";
@@ -113,18 +114,10 @@ export function releaseCronReservationsInWorker(
         notifications: [],
         logs: [],
       };
-      const record = (level: keyof Logger) => (fields: unknown, message?: string) => {
-        outcome.logs.push({ level, fields, message });
-      };
       const state: CronJobPolicyContext = {
         deps: {
           nowMs: () => preparation.nowMs,
-          log: {
-            debug: record("debug"),
-            info: record("info"),
-            warn: record("warn"),
-            error: record("error"),
-          },
+          log: createCronMutationLogger(outcome.logs),
         },
       };
       if (input.requireCurrentReceipt && input.terminal) {

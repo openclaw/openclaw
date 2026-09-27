@@ -250,7 +250,7 @@ extensions/diffs/src/viewer-client.ts	1
 extensions/diffs/src/viewer-payload.ts	1
 extensions/discord/src/account-inspect.ts	1
 extensions/discord/src/accounts.ts	2
-extensions/discord/src/actions/handle-action.ts	4
+extensions/discord/src/actions/handle-action.ts	2
 extensions/discord/src/actions/runtime.guild.ts	1
 extensions/discord/src/actions/runtime.messaging.send.ts	3
 extensions/discord/src/actions/runtime.messaging.shared.ts	6
@@ -1305,10 +1305,8 @@ packages/gateway-protocol/src/schema/audit-activity.ts	1
 packages/gateway-protocol/src/schema/devices.ts	1
 packages/gateway-protocol/src/schema/failover-reason.ts	1
 packages/gateway-protocol/src/schema/protocol-schema-composer.ts	1
-packages/gateway-protocol/src/schema/worker-inference.ts	1
 packages/gateway-protocol/src/startup-unavailable.ts	3
 packages/gateway-protocol/src/system-agent-error-details.ts	2
-packages/gateway-protocol/src/validator-registry.ts	1
 packages/llm-core/src/utils/diagnostics.ts	1
 packages/llm-core/src/utils/event-stream.ts	1
 packages/llm-core/src/validation.ts	1
@@ -1911,7 +1909,6 @@ src/channels/plugins/setup-contract.ts	3
 src/channels/plugins/setup-helpers.ts	3
 src/channels/plugins/setup-promotion-helpers.ts	1
 src/channels/plugins/setup-promotion-keys.ts	1
-src/channels/plugins/setup-registry.ts	2
 src/channels/plugins/setup-wizard-helpers.ts	12
 src/channels/plugins/setup-wizard-proxy.ts	1
 src/channels/plugins/setup-wizard.ts	3

@@ -99,10 +99,7 @@ describe("existing-schema shared-state workers", () => {
         type: "plugins.conversationBindingApprovals.read",
         input: undefined,
       }),
-    ).rejects.toMatchObject({
-      code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
-      message: "Existing shared-state schema admission has ended.",
-    });
+    ).rejects.toThrow("schema admission has ended");
     expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
   });
 });

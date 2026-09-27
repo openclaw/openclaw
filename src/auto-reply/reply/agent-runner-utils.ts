@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -276,7 +277,7 @@ function buildEmbeddedContextFromTemplate(params: {
     chatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
-    memberRoleIds: normalizeMemberRoleIds(sessionCtx.MemberRoleIds),
+    memberRoleIds: normalizeOptionalTrimmedStringList(sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx,
@@ -285,15 +286,6 @@ function buildEmbeddedContextFromTemplate(params: {
     }),
     currentInboundAudio: hasInboundAudio(sessionCtx),
   };
-}
-
-function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string[] | undefined {
-  const roles = Array.isArray(value)
-    ? value
-        .map((roleId) => normalizeOptionalString(roleId))
-        .filter((roleId): roleId is string => Boolean(roleId))
-    : [];
-  return roles.length > 0 ? roles : undefined;
 }
 
 function buildTemplateSenderContext(sessionCtx: TemplateContext) {

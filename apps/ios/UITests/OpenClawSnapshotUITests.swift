@@ -1876,6 +1876,7 @@ extension OpenClawSnapshotUITests {
     {
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
+        self.waitForEnabled(input)
         input.tap()
         input.typeText(text)
 

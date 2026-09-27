@@ -1044,6 +1044,7 @@ internal fun ChatScreen(
   ) { onJumpToLatest, compactHeight, tabletop ->
     ChatComposer(
       onInputPositioned = { composerAnchor = it },
+      agentName = viewModel.chatComposerAgentName(composerOwner),
       ownerReady = composerOwnerReady,
       compactHeight = compactHeight,
       detailsExpanded = detailsExpanded,
@@ -3108,6 +3109,7 @@ private fun minimumChatInputHeight(): Dp {
 @Composable
 private fun ChatComposer(
   onInputPositioned: (LayoutCoordinates) -> Unit,
+  agentName: String?,
   ownerReady: Boolean,
   compactHeight: Boolean,
   detailsExpanded: Boolean,
@@ -3285,6 +3287,7 @@ private fun ChatComposer(
         } else {
           ChatInputPill(
             inputEnabled = ownerReady && !detailsExpanded,
+            agentName = agentName,
             onOpenDetails = if (compactHeight) ({ onDetailsExpandedChange(true) }) else null,
             value = value,
             onValueChange = onValueChange,
@@ -3815,9 +3818,8 @@ private fun ChatModelPickerContent(
   var expandedProviders by remember { mutableStateOf(emptySet<String>()) }
   val defaultModel = models.firstOrNull { it.providerQualifiedRef() == defaultModelRef }
 
-  fun matches(model: GatewayModelSummary): Boolean = query.isBlank() || listOf(model.name, model.id, providerDisplayName(model.provider)).any { it.contains(query.trim(), ignoreCase = true) }
-
-  val matchingModels = models.filter(::matches)
+  val search = remember(models) { ChatModelSearch(models) }
+  val matchingModels = remember(search, query) { search.search(query) }
   LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = 8.dp)) {
     item {
       if (modelSelectionLocked) {
@@ -3854,7 +3856,7 @@ private fun ChatModelPickerContent(
     }
     if (modelSelectionLocked) return@LazyColumn
 
-    matchingModels.groupBy { it.provider }.entries.sortedBy { if (it.key == defaultModel?.provider) 0 else 1 }.forEach { (provider, entries) ->
+    matchingModels.groupBy { it.provider }.entries.sortedBy { if (query.isBlank() && it.key == defaultModel?.provider) 0 else 1 }.forEach { (provider, entries) ->
       val expanded = query.isNotBlank() || provider in expandedProviders
       item(key = "provider-$provider") {
         Surface(
@@ -3877,7 +3879,7 @@ private fun ChatModelPickerContent(
         }
       }
       if (expanded) {
-        itemsIndexed(entries.sortedBy { if (it.providerQualifiedRef() == defaultModelRef) 0 else 1 }, key = { _, model -> model.providerQualifiedRef() }) { _, model ->
+        itemsIndexed(entries.sortedBy { if (query.isBlank() && it.providerQualifiedRef() == defaultModelRef) 0 else 1 }, key = { _, model -> model.providerQualifiedRef() }) { _, model ->
           val ref = model.providerQualifiedRef()
           val isDefault = ref == defaultModelRef
           ChatModelPickerRow(
@@ -4130,6 +4132,7 @@ internal fun canSelectChatPermissionMode(
 @Composable
 private fun ChatInputPill(
   inputEnabled: Boolean,
+  agentName: String?,
   onOpenDetails: (() -> Unit)?,
   value: String,
   onValueChange: (String) -> Unit,
@@ -4249,7 +4252,13 @@ private fun ChatInputPill(
                 Box(modifier = Modifier.fillMaxWidth().verticalScroll(scroll, enabled = inputEnabled), contentAlignment = Alignment.CenterStart) {
                   if (value.isEmpty()) {
                     // BasicTextField's line limit does not constrain its decoration.
-                    Text(text = nativeString("Message OpenClaw"), style = draftStyle, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                      text = agentName?.let { nativeString("Message \$agentName", it) } ?: nativeString("Message"),
+                      style = draftStyle,
+                      color = ClawTheme.colors.textMuted,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                    )
                   }
                   innerTextField()
                 }

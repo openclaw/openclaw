@@ -13,12 +13,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { AgentEventPayload, AgentEventStream } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { compactProgressText } from "../../shared/text-truncate.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   generateNarrationWithUtilityModel,
   prepareNarrationModel,
   type ProgressNarrationInput,
-  truncateAtWordBoundary,
 } from "./progress-narrator-model.js";
 
 const narratorLog = createSubsystemLogger("auto-reply/progress-narrator");
@@ -43,7 +43,7 @@ function normalizeNarrationText(raw: string): string {
     .trim()
     .replace(/^["'`“”]+|["'`“”]+$/gu, "")
     .trim();
-  return truncateAtWordBoundary(collapsed, NARRATION_MAX_CHARS);
+  return compactProgressText(collapsed, NARRATION_MAX_CHARS);
 }
 
 function createProgressNarrator(params: {

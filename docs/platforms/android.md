@@ -434,8 +434,13 @@ context ring remains directly accessible on narrow screens and opens context
 usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
 permission to change session settings. A reported model-call total remains visible
 when no cost breakdown is available. Missing usage is shown as unknown.
-Tap the model name to open a compact menu above the composer, search by model or
-provider, and expand provider groups. The picker has no settings buttons. The Gateway's
+Tap the model name to open a compact menu above the composer, search by model name,
+ID, or provider, and expand provider groups. Search accepts multiple terms and small
+typos in words of at least four letters, including swapped adjacent letters. Every
+term must match; short terms and version numbers are not typo-corrected. Exact
+matches rank first within each provider, and provider groups follow their best
+match. Clearing the search restores the usual ordering without changing your selection.
+The picker has no settings buttons. The Gateway's
 configured default is labeled on its model row. Selecting a named model pins that
 model to the session; **Default model** separately resets the override to follow the
 Gateway's current default.

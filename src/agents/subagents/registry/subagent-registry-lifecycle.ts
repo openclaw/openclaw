@@ -8,6 +8,7 @@ import {
   runWithGatewayDetachedWorkContinuation,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import {
   ensureCompletionState,
@@ -92,10 +93,7 @@ export class SubagentLifecycleController {
 
   async acquireTerminalCompletionLock(runId: string): Promise<() => void> {
     const previous = this.terminalCompletionLocks.get(runId) ?? Promise.resolve();
-    let releaseLock = () => {};
-    const current = new Promise<void>((resolve) => {
-      releaseLock = resolve;
-    });
+    const { promise: current, resolve: releaseLock } = createDeferredCore();
     this.terminalCompletionLocks.set(runId, current);
     await previous;
     return () => {
