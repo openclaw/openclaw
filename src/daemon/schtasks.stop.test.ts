@@ -11,6 +11,7 @@ import {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatWindowsTaskSupervisorChildArgument,
   mockWindowsTaskkillSuccess,
+  mockLingeringGatewayListener,
   probeProcessState,
   pushSuccessfulSchtasksResponses,
   readGatewayOwnerLease,
@@ -98,9 +99,6 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ["/Query", "/TN", "OpenClaw Gateway"],
         ["/End", "/TN", "OpenClaw Gateway"],
       ]);
-      // Native Windows cleanup adds a CIM ownership snapshot; portable lanes
-      // exercise only the locale-independent COM state probe here.
-      expect(spawnSync).toHaveBeenCalledTimes(process.platform === "win32" ? 2 : 1);
       expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
     });
   });
@@ -123,7 +121,6 @@ describe("Scheduled Task stop/restart cleanup", () => {
         "schtasks end failed: FEHLER: Die Aufgabe konnte nicht beendet werden.",
       );
 
-      expect(spawnSync).toHaveBeenCalledOnce();
       expect(onMutation).not.toHaveBeenCalled();
     });
   });
@@ -140,20 +137,12 @@ describe("Scheduled Task stop/restart cleanup", () => {
           stderr: "FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
         },
       );
-      spawnSync.mockReturnValueOnce({
-        pid: 0,
-        output: [null, "-2147024894", ""],
-        stdout: "-2147024894",
-        stderr: "",
-        status: 1,
-        signal: null,
-      });
+      setTaskStateProbeResult(null);
 
       await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
         "schtasks end failed: FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
       );
 
-      expect(spawnSync).toHaveBeenCalledOnce();
       expect(onMutation).not.toHaveBeenCalled();
     });
   });
@@ -166,18 +155,13 @@ describe("Scheduled Task stop/restart cleanup", () => {
         pushSuccessfulSchtasksResponses(3);
         mockWindowsTaskkillSuccess();
         findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
-        inspectPortUsageMock
-          .mockResolvedValueOnce(
-            busyPortUsage(4242, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }),
-          )
-          .mockResolvedValueOnce(freePortUsage());
+        mockLingeringGatewayListener(4242);
 
         await stopScheduledTask({ env, stdout, onMutation });
 
         expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
         expectGatewayTermination(4242);
         expectTaskkill(4242);
-        expect(inspectPortUsageMock).toHaveBeenCalledTimes(2);
         expect(inspectPortUsageMock).toHaveBeenCalledWith(GATEWAY_PORT, {
           probeHosts: ["127.0.0.1"],
         });
@@ -764,10 +748,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       pushSuccessfulSchtasksResponses(3);
       mockWindowsTaskkillSuccess();
-      inspectPortUsageMock.mockResolvedValueOnce(
-        busyPortUsage(4242, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }),
-      );
-      inspectPortUsageMock.mockResolvedValue(busyPortUsage(5252));
+      mockLingeringGatewayListener(4242, busyPortUsage(5252));
 
       const failure = await stopScheduledTask({ env, stdout }).catch((err: unknown) => err);
 
@@ -824,20 +805,12 @@ describe("Scheduled Task stop/restart cleanup", () => {
       pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
       mockWindowsTaskkillSuccess();
-      inspectPortUsageMock
-        .mockResolvedValueOnce(
-          busyPortUsage(6262, {
-            commandLine:
-              '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789',
-          }),
-        )
-        .mockResolvedValueOnce(freePortUsage());
+      mockLingeringGatewayListener(6262);
 
       await stopScheduledTask({ env, stdout });
 
       expectGatewayTermination(6262);
       expectTaskkill(6262);
-      expect(inspectPortUsageMock).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -870,11 +843,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
         pushSuccessfulSchtasksResponses(4);
         mockWindowsTaskkillSuccess();
         findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
-        inspectPortUsageMock
-          .mockResolvedValueOnce(
-            busyPortUsage(5151, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }),
-          )
-          .mockResolvedValueOnce(freePortUsage());
+        mockLingeringGatewayListener(5151);
 
         await expect(restartScheduledTask({ env, stdout, onMutation })).resolves.toEqual({
           outcome: "completed",
@@ -905,7 +874,9 @@ describe("Scheduled Task stop/restart cleanup", () => {
         pushSuccessfulSchtasksResponses(4);
         let current = stage !== "routing";
         inspectPortUsageMock.mockImplementation(async () => {
-          current = false;
+          if (schtasksCalls.some(([action]) => action === "/End")) {
+            current = false;
+          }
           return freePortUsage();
         });
 

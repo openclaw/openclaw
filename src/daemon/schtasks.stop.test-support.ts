@@ -5,6 +5,7 @@ import { hostname } from "node:os";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.js";
+import type { PortUsage } from "../infra/ports-types.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsageMock,
@@ -194,15 +195,25 @@ function expectTaskkill(pid: number) {
   }
 }
 
-function setTaskStateProbeResult(state: number) {
-  const stdout = JSON.stringify({ state });
-  spawnSync.mockReturnValueOnce({
-    pid: 0,
-    output: [null, stdout, ""],
-    stdout,
-    stderr: "",
-    status: 0,
-    signal: null,
+function setTaskStateProbeResult(state: number | null) {
+  const previous = spawnSync.getMockImplementation();
+  spawnSync.mockImplementation((command, args, options) => {
+    if (command.toLowerCase().endsWith("powershell.exe") && args?.includes("-EncodedCommand")) {
+      return state === null
+        ? spawnSyncResult("-2147024894", 1)
+        : spawnSyncResult(JSON.stringify({ state }));
+    }
+    return previous?.(command, args, options) ?? spawnSyncResult("", 1);
+  });
+}
+
+function mockLingeringGatewayListener(pid: number, after: PortUsage = freePortUsage()) {
+  inspectPortUsageMock.mockImplementation(async () => {
+    const terminated =
+      process.platform === "win32"
+        ? taskkillPids().includes(pid)
+        : killProcessTreeMock.mock.calls.some(([candidate]) => candidate === pid);
+    return terminated ? after : busyPortUsage(pid, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE });
   });
 }
 
@@ -264,6 +275,7 @@ export {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatWindowsTaskSupervisorChildArgument,
   mockWindowsTaskkillSuccess,
+  mockLingeringGatewayListener,
   probeProcessState,
   pushSuccessfulSchtasksResponses,
   readGatewayOwnerLease,
