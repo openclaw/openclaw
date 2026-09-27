@@ -247,7 +247,6 @@ android {
 
   defaultConfig {
     applicationId = openClawAndroidApplicationId
-    resValue("string", "application_id", openClawAndroidApplicationId)
     minSdk = 31
     targetSdk = 36
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -289,7 +288,6 @@ android {
     debug {
       applicationIdSuffix = ".debug"
       versionNameSuffix = "-debug"
-      resValue("string", "application_id", "$openClawAndroidApplicationId.debug")
       isMinifyEnabled = false
     }
   }
@@ -305,7 +303,6 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
-    resValues = true
   }
 
   androidResources {

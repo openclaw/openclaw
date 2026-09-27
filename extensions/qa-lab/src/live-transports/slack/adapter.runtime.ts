@@ -1,12 +1,9 @@
-// Qa Lab plugin module implements Slack live transport adapter behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
-import {
-  createDebugProxyCaptureReaderAsync,
-  type AsyncDebugProxyCaptureReader,
-} from "openclaw/plugin-sdk/proxy-capture";
+import * as proxyCapture from "openclaw/plugin-sdk/proxy-capture";
+import type { AsyncDebugProxyCaptureReader } from "openclaw/plugin-sdk/proxy-capture";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   acquireQaCredentialLease,
@@ -124,6 +121,10 @@ async function recordSlackObservedMessage(params: {
 export async function createSlackQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
+  const { createDebugProxyCaptureReaderAsync } = proxyCapture;
+  if (typeof createDebugProxyCaptureReaderAsync !== "function") {
+    throw new Error("Slack QA requires async proxy capture support. Upgrade the OpenClaw host.");
+  }
   const { createSlackWebClient, createSlackWriteClient, resolveSlackWebClientOptions } =
     loadSlackQaRuntime();
   const options = context.adapterOptions ?? {};

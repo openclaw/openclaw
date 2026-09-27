@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolveDefaultAgentWorkspaceDir } from "../../src/agents/workspace-default.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { hasActiveStartupMigrationLease } from "../../src/infra/startup-migration-checkpoint.js";
-import { writePersistedInstalledPluginIndexSync } from "../../src/plugins/installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "../../src/plugins/installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "../../src/plugins/installed-plugin-index-store.js";
 import { clearPluginMetadataLifecycleCaches } from "../../src/plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../../src/plugins/plugin-metadata-snapshot.js";
@@ -115,7 +115,7 @@ describe("Doctor plugin index persistence built CLI proof", () => {
         return legacyPlugin;
       }),
     };
-    writePersistedInstalledPluginIndexSync(legacyIndex, { env: instance.env });
+    await writePersistedInstalledPluginIndex(legacyIndex, { env: instance.env });
     clearPluginMetadataLifecycleCaches();
     closeOpenClawStateDatabaseForTest();
 

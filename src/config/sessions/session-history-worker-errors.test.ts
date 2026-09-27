@@ -493,7 +493,63 @@ it.runIf(!process.versions.bun)(
     const retained = observed.resources.find((resource) => resource.agentId === "main");
     assert(retained);
     await retained.close();
-    expect(observed.rotate).toHaveBeenCalledTimes(1);
+    expect(observed.closeResources).toHaveBeenCalledTimes(2);
+    expect(observed.rotate).not.toHaveBeenCalled();
+  },
+);
+
+it.each([false, true])(
+  "joins idle database cleanup retirement and retains failed custody (retirement fails=%s)",
+  async (fails) => {
+    const request = input();
+    observed.run.mockResolvedValue({ ok: true, value: false });
+    await withSessionHistoryWorkerDatabase(request.database, (owner) =>
+      owner.readEntryPresence(request.scope),
+    );
+    const resource = observed.resources.find((entry) => entry.agentId === "main");
+    assert(resource);
+    const failure = new Error("idle database native close failed");
+    const retirementFailure = new Error("idle database worker retirement failed");
+    const retirementEntered = createDeferredCore();
+    const retirement = createDeferredCore();
+    observed.closeResources.mockRejectedValueOnce(failure);
+    observed.rotate.mockImplementationOnce(() => {
+      retirementEntered.resolve();
+      return retirement.promise;
+    });
+    resource.revoke();
+    const closing = resource.close().catch((error: unknown) => error);
+    await retirementEntered.promise;
+    expect(observed.unregister).not.toHaveBeenCalled();
+    if (process.versions.bun) {
+      if (fails) {
+        retirement.reject(retirementFailure);
+        expect(await closing).toBe(retirementFailure);
+        expect(observed.unregister).not.toHaveBeenCalled();
+        await resource.close();
+      } else {
+        retirement.resolve();
+        expect(await closing).toBeUndefined();
+      }
+      expect(observed.closeResources).not.toHaveBeenCalled();
+      expect(observed.unregister).toHaveBeenCalledOnce();
+      return;
+    }
+    if (fails) {
+      retirement.reject(retirementFailure);
+      const result = await closing;
+      assert(result instanceof AggregateError);
+      expect(result.errors).toEqual([failure, retirementFailure]);
+      expect(observed.unregister).not.toHaveBeenCalled();
+      await resource.close();
+    } else {
+      retirement.resolve();
+      expect(await closing).toBe(failure);
+    }
+    expect(observed.unregister).toHaveBeenCalledOnce();
+    expect(observed.closeResources).toHaveBeenCalledWith(
+      JSON.stringify([{ path: request.database.path }]),
+    );
   },
 );
 

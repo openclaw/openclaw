@@ -292,10 +292,10 @@ describe("plugin index install records store", () => {
     );
   });
 
-  it("invalidates cached records when the persisted index is rewritten", () => {
+  it("invalidates cached records when the persisted index is rewritten", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const first = createPluginCandidate(stateDir, "first");
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       stateDir,
       candidates: [first],
       reason: "source-changed",
@@ -314,7 +314,7 @@ describe("plugin index install records store", () => {
     });
 
     const second = createPluginCandidate(stateDir, "second");
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       stateDir,
       candidates: [second],
       reason: "source-changed",
@@ -334,10 +334,10 @@ describe("plugin index install records store", () => {
     });
   });
 
-  it("keeps cached records until cache clear after an external index write", () => {
+  it("keeps cached records until cache clear after an external index write", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const candidate = createPluginCandidate(stateDir, "external");
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       stateDir,
       candidates: [candidate],
       reason: "source-changed",
@@ -693,6 +693,8 @@ describe("plugin index install records store", () => {
       { stateDir, candidates: [] },
     );
 
+    // Platform spoofing changes the coordinator directory captured by the seeded worker.
+    await closeOpenClawStateDatabaseAsync();
     const loaded = await withMockedWindowsPlatform(() =>
       loadInstalledPluginIndexInstallRecords({ stateDir }),
     );
@@ -802,10 +804,10 @@ describe("plugin index install records store", () => {
     });
   });
 
-  it("does not probe install record files again on hot cache hits", () => {
+  it("does not probe install record files again on hot cache hits", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const candidate = createPluginCandidate(stateDir, "hot-cache");
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       stateDir,
       candidates: [candidate],
       reason: "source-changed",

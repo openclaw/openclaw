@@ -271,8 +271,6 @@ function createHandler(warn = vi.fn(), cfg: Record<string, unknown> = createCfg(
         debug: () => {},
         error: () => {},
       } as never,
-      baseMentionConfig: {} as never,
-      account: { authDir: "/tmp/whatsapp-auth", accountId: "work" },
     }),
   };
 }

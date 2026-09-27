@@ -6,6 +6,7 @@ export function createTasksVitestConfig(env?: Record<string, string | undefined>
   const config = createScopedVitestConfig(["src/tasks/**/*.test.ts"], {
     dir: "src",
     env,
+    intersectIncludeFile: true,
     exclude: databaseWorkerCoreTestFiles,
     name: "tasks",
     passWithNoTests: true,

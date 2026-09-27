@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalRpcOptions } from "./client-types.js";
+import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
 import { assertSignalSocketEndpoint } from "./socket-path.js";
 
 const MAX_FRAME_BYTES = 1_048_576;
@@ -102,28 +103,6 @@ async function* messages(socket: net.Socket, maxBytes = MAX_FRAME_BYTES) {
   }
 }
 
-// Keep aligned with isSignalQuoteMetadataRejection in send.ts: only a definitive
-// quote-metadata rejection makes the ordinary-message fallback safe.
-const QUOTE_REJECTION_WORDS = [
-  "reject",
-  "invalid",
-  "unrecognized",
-  "unsupported",
-  "not found",
-  "no such",
-  "unknown",
-] as const;
-
-function isQuoteMetadataRejection(code: number | "unknown", rawMessage: string): boolean {
-  if (code !== -32602) {
-    return false;
-  }
-  const normalized = rawMessage.toLowerCase();
-  return (
-    normalized.includes("quote") && QUOTE_REJECTION_WORDS.some((word) => normalized.includes(word))
-  );
-}
-
 function result(message: RpcMessage): unknown {
   if (message.jsonrpc !== "2.0" || (!Object.hasOwn(message, "result") && !message.error)) {
     throw new Error("Signal UNIX RPC returned invalid response envelope");
@@ -133,7 +112,10 @@ function result(message: RpcMessage): unknown {
     const code = typeof error.code === "number" ? error.code : "unknown";
     // Classify a definitive quote-metadata rejection without echoing raw remote text,
     // which can carry PII. The safe message keeps the send-path fallback classifier working.
-    if (typeof error.message === "string" && isQuoteMetadataRejection(code, error.message)) {
+    if (
+      typeof error.message === "string" &&
+      isSignalQuoteMetadataRejection(`Signal RPC ${code}: ${error.message}`)
+    ) {
       throw new Error(`Signal RPC ${code}: quote metadata rejected (redacted)`);
     }
     throw new Error(`Signal RPC ${code}: remote error`);

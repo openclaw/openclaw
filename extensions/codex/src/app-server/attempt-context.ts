@@ -1,7 +1,3 @@
-/**
- * Builds Codex app-server prompt context,
- * system-prompt reports, and context-engine projection decisions.
- */
 import { createHash } from "node:crypto";
 import {
   buildWatchedSessionsHarnessContext,
@@ -42,11 +38,9 @@ import {
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
 
-/** System prompt accounting report attached to Codex attempt results. */
 export type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
 
-/** Reads mirrored Codex session history for harness hooks. */
 export async function readMirroredSessionHistoryMessages(params: {
   agentId?: string;
   sessionFile: string;
@@ -72,7 +66,6 @@ export async function readMirroredSessionHistoryMessages(params: {
   return messages;
 }
 
-/** Reads a valid thread-bootstrap projection request from context-engine output. */
 export function readContextEngineThreadBootstrapProjection(
   projection: ContextEngineProjection | undefined,
 ): CodexContextEngineThreadBootstrapProjection | undefined {
@@ -94,10 +87,6 @@ export function readContextEngineThreadBootstrapProjection(
   };
 }
 
-/**
- * Decides whether an existing Codex thread can reuse its context-engine
- * bootstrap projection or must be reprojected.
- */
 export function resolveContextEngineBootstrapProjectionDecision(params: {
   startupBinding: CodexAppServerThreadBinding | undefined;
   expectedBinding: ReturnType<typeof buildContextEngineBinding>;
@@ -138,10 +127,6 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
     : { project: false, reason: "matching-thread-bootstrap-binding" };
 }
 
-/**
- * Builds the prompt-size, bootstrap-file, skill, and tool-schema accounting
- * report for a Codex run.
- */
 export function buildCodexSystemPromptReport(params: {
   attempt: EmbeddedRunAttemptParams;
   sessionKey: string;
@@ -208,32 +193,21 @@ function buildCodexSkillReportEntries(
   if (!skillsPrompt) {
     return [];
   }
-  return Array.from(skillsPrompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi))
-    .map((match) => match[0] ?? "")
-    .map((block) => ({
-      name: block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)",
-      blockChars: block.length,
-    }))
-    .filter((entry) => entry.blockChars > 0);
+  return Array.from(skillsPrompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi), ([block]) => ({
+    name: block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)",
+    blockChars: block.length,
+  }));
 }
 
 function buildCodexToolReportEntry(tool: CodexDynamicToolFunctionSpec): CodexToolReportEntry {
   const summary = tool.description.trim();
-  if (tool.deferLoading === true) {
-    return {
-      name: tool.name,
-      summaryChars: summary.length,
-      summaryHash: sha256Text(summary),
-      schemaChars: 0,
-      schemaHash: stableJsonHash(null),
-      propertiesCount: null,
-    };
-  }
   return {
     name: tool.name,
     summaryChars: summary.length,
     summaryHash: sha256Text(summary),
-    ...buildCodexToolSchemaStats(tool.inputSchema),
+    ...(tool.deferLoading === true
+      ? { schemaChars: 0, schemaHash: stableJsonHash(null), propertiesCount: null }
+      : buildCodexToolSchemaStats(tool.inputSchema)),
   };
 }
 
@@ -355,18 +329,12 @@ function readCodexIndexedContextFileContent(
   pathValue: string,
   fileName: string | undefined,
 ): string | undefined {
-  const pathContent = index.byPath.get(pathValue);
-  if (pathContent !== undefined) {
-    return pathContent;
-  }
-  if (fileName) {
-    const nameContent = index.byPath.get(fileName);
-    if (nameContent !== undefined) {
-      return nameContent;
-    }
-  }
   const baseName = getCodexContextFileBasename(fileName ?? pathValue);
-  return baseName ? index.byBaseName.get(baseName) : undefined;
+  return (
+    index.byPath.get(pathValue) ??
+    (fileName ? index.byPath.get(fileName) : undefined) ??
+    (baseName ? index.byBaseName.get(baseName) : undefined)
+  );
 }
 
 function readPositiveNumber(value: unknown): number | undefined {
@@ -375,9 +343,6 @@ function readPositiveNumber(value: unknown): number | undefined {
     : undefined;
 }
 
-/**
- * Builds OpenClaw-provided workspace prompt context for the current Codex turn.
- */
 export function buildCodexOpenClawPromptContext(params: {
   params: EmbeddedRunAttemptParams;
   workspacePromptContext?: string;
@@ -428,7 +393,6 @@ export function buildCodexWatchedSessionsContext(params: {
   });
 }
 
-/** Renders loaded OpenClaw skill prompts as Codex developer instructions. */
 export function renderCodexSkillsInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;

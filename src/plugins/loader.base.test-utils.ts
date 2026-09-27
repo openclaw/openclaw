@@ -456,14 +456,14 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.plugins.find((entry) => entry.id === sourcePlugin.id)?.status).toBe("loaded");
   });
 
-  it("loads installed plugin packages discovered from persisted install records", () => {
+  it("loads installed plugin packages discovered from persisted install records", async () => {
     useNoBundledPlugins();
     const stateDir = makePluginLoaderTempDir();
     const plugin = writePlugin({
       id: "installed-record-plugin",
       body: `module.exports = { id: "installed-record-plugin", register() {} };`,
     });
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       stateDir,
       reason: "source-changed",
       installRecords: {

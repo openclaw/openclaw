@@ -776,7 +776,7 @@ def threads(pid):
     for entry in entries:
         try:
             fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             if entry.name == str(pid):
                 raise
             continue

@@ -518,7 +518,7 @@ function renderMessageBody(
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
     return truncateText(message.summary.trim(), options.maxTextPartChars);
   }
-  if (!hasMessageContent(message)) {
+  if (!("content" in message)) {
     return "";
   }
   const toolResult = message.role === "toolResult";
@@ -699,10 +699,6 @@ function stableJson(value: unknown): string {
   } catch {
     return "[unserializable payload omitted]";
   }
-}
-
-function hasMessageContent(message: AgentMessage): message is AgentMessage & { content: unknown } {
-  return "content" in message;
 }
 
 function normalizeRenderedContextMaxChars(value: unknown): number {

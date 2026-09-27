@@ -73,11 +73,9 @@ import {
 } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
-import {
-  WorkerInferenceProxyClient,
-  WorkerLiveEventClient,
-  WorkerTranscriptCommitClient,
-} from "./worker-rpc-clients.js";
+import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
+import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
+import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 import {
   registerWorkerBackgroundExecLifecycleTests,
   registerWorkerExecEnvironmentFinalizationTests,

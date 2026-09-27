@@ -19,7 +19,7 @@ panes stay unchanged.
 
 ## Collaborator drafts
 
-In a shared session, another person’s in-progress message stays visible when they pause typing. Draft previews update up to four times per second, keeping the latest text when input arrives faster. After a short pause, its label changes to **Paused · not sent** without removing the bubble or shifting the transcript. Typing again updates the same bubble. Sending, clearing the draft, leaving the composer, or leaving the session removes it. A preview also expires after two minutes without typing so an abandoned tab cannot leave it visible indefinitely. Draft previews are temporary browser state, not saved messages; changing sessions or reconnecting clears them.
+In a shared session, another person’s in-progress message stays visible when they pause typing. Draft previews update up to four times per second, keeping the latest text when input arrives faster. After 10 seconds without typing, its label changes from **is typing...** to **Draft** without removing the bubble or shifting the transcript. Typing again updates the same bubble. Sending, clearing the draft, leaving the composer, or leaving the session removes it. An idle preview fades out and smoothly closes its space during the final 300 milliseconds before its 30-second expiry, so an abandoned tab cannot leave it visible indefinitely. Typing again cancels the exit. With reduced motion enabled, the preview stays still and disappears at the same deadline without animation. Draft previews are temporary browser state, not saved messages; changing sessions or reconnecting clears them.
 
 ## Session rail and side chat
 
@@ -406,6 +406,7 @@ pasted-text attachments. Older history without origin metadata recognizes
 `text/plain` attachments named `pasted-text-<digits>.txt` as pasted text.
 
 Uploaded attachments keep their original filenames on download, including spaces and Unicode characters.
+Uploaded images also retain their names in accessible transcript image and image-viewer labels after sending and reloading; descriptive alt text takes precedence when provided.
 Select **Open** on an uploaded text attachment to read it directly in the **Files** side
 panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation. Markdown attachments render as documents
 with interactive code blocks. When an open attachment refreshes with unchanged
@@ -471,6 +472,7 @@ Markdown tables wrap headings and cell text to fit the conversation. On wide des
 panes, top-level assistant tables stay at the reading width when their content fits
 and use extra space only as needed, without widening the surrounding prose. Long
 cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
+Short values such as byte counts stay intact beside long filenames or hashes, including on mobile.
 Wide desktop tables use compact icon-only controls above the header. Mobile and
 phone-landscape views retain larger touch controls and a visible **Expand table** label.
 Ordinary inline tables grow vertically instead of adding a vertical scrollbar.

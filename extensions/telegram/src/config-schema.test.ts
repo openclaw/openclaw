@@ -123,6 +123,28 @@ describe("telegram custom commands schema", () => {
 });
 
 describe("telegram topic agentId schema", () => {
+  it("allows bot-thread mention policy only in forum group and topic scopes", () => {
+    const topic = { requireMention: true, agentId: "main", disableAudioPreflight: true };
+    const policies = {
+      groups: {
+        "*": {
+          requireMentionInBotThreads: false,
+          topics: { "42": { ...topic, requireMentionInBotThreads: true } },
+        },
+      },
+      direct: { "123456789": { topics: { "42": topic } } },
+    };
+    expectTelegramConfigValid({ ...policies, accounts: { ops: policies } });
+    const invalid = {
+      direct: { "123456789": { topics: { "42": { requireMentionInBotThreads: false } } } },
+    };
+    expectTelegramConfigIssue(invalid, "direct.123456789.topics.42");
+    expectTelegramConfigIssue(
+      { accounts: { ops: invalid } },
+      "accounts.ops.direct.123456789.topics.42",
+    );
+  });
+
   it("rejects non-boolean ingest", () => {
     expectTelegramConfigIssue(
       {

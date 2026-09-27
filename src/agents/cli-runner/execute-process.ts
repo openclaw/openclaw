@@ -114,6 +114,14 @@ export async function executeCliProcess(params: {
         onNativeTools: context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
         onAssistantMessage: params.diagnostics?.observeAssistantMessage,
         onUsage: params.diagnostics?.observeUsage,
+        onAttributedSubagentProgress: (parentToolUseId) => {
+          if (!params.events.isActiveForegroundAgentTool(parentToolUseId)) {
+            return;
+          }
+          // Raw stdout stays transport-only while a tool is active. Only a
+          // semantic record for this Agent call may move the recovery clock.
+          backendActivity?.observeAttributedAgentProgress(parentToolUseId);
+        },
       })
     : null;
   let stdoutTail = "";

@@ -214,6 +214,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           eventTs: eventTs ?? undefined,
           senderId,
           roomHistoryTracker,
+          resolveThreadContext,
           commitInboundEventIfClaimed,
         });
       };

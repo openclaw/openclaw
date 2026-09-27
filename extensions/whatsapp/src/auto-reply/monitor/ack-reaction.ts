@@ -18,13 +18,7 @@ export async function maybeSendAckReaction(params: {
   info: (obj: object, msg: string) => void;
   warn: (obj: object, msg: string) => void;
 }): Promise<AckReactionHandle | null> {
-  const eligibility = await resolveWhatsAppReactionEligibility({
-    cfg: params.cfg,
-    msg: params.msg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    verbose: params.verbose,
-  });
+  const eligibility = await resolveWhatsAppReactionEligibility(params);
   if (eligibility.status === "disabled") {
     return null;
   }

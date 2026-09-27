@@ -37,9 +37,26 @@ Plugin requirement batches prepare their final installed index through the exist
 metadata worker after installation and compensation settle. Preparation seals
 collection, reads an uncached row from the captured database, and retains the
 original lifecycle lease until the read settles. It rechecks lease ownership and
-batch closure before publishing runtime targets. Synchronous lease primitives and
-repeated source-cleanup reads remain unchanged migration work; this one-shot
-preparation does not replace their fresh authority checks.
+batch closure before publishing runtime targets. After runtime handoff, source
+cleanup reacquires the plugin lease and prepares a fresh index through that worker.
+The index stays scoped to the cleanup lease, which excludes its canonical writers
+until deletion settles. Config policy, source identity, and durable lease checks
+remain fresh at each existing effect guard; the captured index is not a retained
+permission to delete. Stored formats and update behavior are unchanged.
+
+Registry refresh, Doctor repair, and legacy index import hold that same plugin
+lease before reading or deriving replacement rows. Startup acquires plugin
+ownership after startup ownership and rereads metadata after any waiting installer
+settles. A queued refresh therefore keeps the install records committed while it
+waited. Index formats, source cleanup guards, and update behavior are unchanged.
+
+Deferred plugin obligations are recorded through the shared-state writer while
+holding the plugin lifecycle lease. The worker rereads pending rows, checks the
+captured pending generation, and verifies the original lease at transaction and
+commit admission. Doctor awaits recording before rereading config or completing
+repair; post-session completion reacquires the plugin lease after repair hooks
+settle. This preserves migration warnings, input protection, stored rows, and
+update behavior without holding a SQL transaction across package or plugin work.
 
 Writers use the SQLite worker broker's `state.write` or `agent.write` operation
 through their existing domain adapter, such as
@@ -296,6 +313,11 @@ share pages also use the worker facade. Read-only image discovery does not
 restore cold history, while ordinary reads retain their existing restoration
 owner. Process-held incognito data and native callback visitors retain their
 current owners. Schemas, stored bytes, retention, and update behavior are unchanged.
+
+History source discovery retries registry metadata reads up to twice when a
+concurrent agent registration invalidates them. Retries retain the captured
+state admission and source paths; changed lifetimes, physical sources, or
+discovered topology still reject stale reads.
 
 Exact message membership reads for managed attachments also use the history
 worker. The worker validates the entire visible JSON range on every lookup,
