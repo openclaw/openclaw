@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import * as completionStore from "../agents/subagents/completion/subagent-completion-admission.store.js";
 import * as completion from "../agents/subagents/completion/subagent-completion-delivery.js";
+import { SUBAGENT_ENDED_REASON_COMPLETE } from "../agents/subagents/registry/subagent-lifecycle-events.js";
+import { createSubagentRegistryCompletionRuntime } from "../agents/subagents/registry/subagent-registry-completion-runtime.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { readFullSubagentRuns } from "../agents/subagents/registry/subagent-registry-read-cache.js";
 import {
@@ -27,6 +29,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -59,6 +62,7 @@ describe("registered correlated completion recovery custody", () => {
     { change: "file", outcome: "recovered" },
     { change: "successor", outcome: "recovered" },
     { change: "default after commit", outcome: "recovered" },
+    { change: "cleanup released at receipt", outcome: "recovered" },
     { change: "hydration pending", outcome: "recovered" },
     { change: "retired owner", outcome: "recovered" },
   ] as const)("settles $outcome with $change ownership change", async ({ change, outcome }) => {
@@ -82,6 +86,7 @@ describe("registered correlated completion recovery custody", () => {
         endedAt: now - 10,
         outcome: { status: "ok" },
         expectsCompletionMessage: true,
+        ...(change === "cleanup released at receipt" ? { cleanupHandled: true } : {}),
         completion: { required: true, resultText: "Retained result", capturedAt: now - 10 },
         delivery: {
           status: "in_progress",
@@ -147,6 +152,56 @@ describe("registered correlated completion recovery custody", () => {
       const replacement = replacingSource ? persist(replacementRoot) : undefined;
       const before = structuredClone(child);
       const replacementBefore = replacement && readSubagentRun(replacement, child.runId);
+      if (change === "cleanup released at receipt") {
+        const failedCompletion = vi
+          .fn()
+          .mockRejectedValue(new Error("terminal effects unavailable"));
+        const fallbackResume = vi.fn(() => {
+          expect(child.delivery?.status).toBe("in_progress");
+        });
+        const completionRuntime = createSubagentRegistryCompletionRuntime({
+          runs: subagentRuns,
+          resumed: new Set([child.runId]),
+          retryTimers: new Set(),
+          completeSubagentRun: failedCompletion,
+          scheduleSweep: vi.fn(),
+          resumeRun: fallbackResume,
+          warn: vi.fn(),
+        });
+        const operation = stateWorker.runOpenClawStateWorkerOperation;
+        let released = false;
+        vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+          (owner, run, options) =>
+            operation(
+              owner,
+              (scope) =>
+                run({
+                  execute: async (command, executeOptions) => {
+                    const receipt = await scope.execute(command, executeOptions);
+                    if (command.type === "sessionDelivery.mutateSubagentCompletion" && !released) {
+                      released = true;
+                      await completionRuntime.completeSubagentRunWithRecovery(
+                        {
+                          runId: child.runId,
+                          expectedEntry: child,
+                          endedAt: now - 10,
+                          outcome: { status: "ok" },
+                          reason: SUBAGENT_ENDED_REASON_COMPLETE,
+                          triggerCleanup: true,
+                        },
+                        "queued-completion-retry",
+                      );
+                      expect(failedCompletion).toHaveBeenCalledTimes(2);
+                      expect(fallbackResume).toHaveBeenCalledOnce();
+                      expect(child.cleanupHandled).toBe(false);
+                    }
+                    return receipt;
+                  },
+                }),
+              options,
+            ),
+        );
+      }
       const deliver = vi.spyOn(sentinel, "deliverQueuedSessionDelivery");
       const settle = completion.settleCorrelatedSubagentDelivery;
       const settled = vi
@@ -234,20 +289,29 @@ describe("registered correlated completion recovery custody", () => {
               getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir),
             ).toBe("completed");
             expect(resume).not.toHaveBeenCalled();
-          } else if (change === "default after commit") {
+          } else if (
+            change === "default after commit" ||
+            change === "cleanup released at receipt"
+          ) {
             const committed = readSubagentRun(database, child.runId);
             expect(committed?.delivery?.status).toBe("delivered");
             expect(resume).not.toHaveBeenCalled();
             expect(await loadPendingSessionDelivery(queueId, context)).toMatchObject({
               settlementOutcome: "recovered",
             });
-            expect(readSubagentRun(replacement!, child.runId)).toEqual(replacementBefore);
+            if (replacement) {
+              expect(readSubagentRun(replacement, child.runId)).toEqual(replacementBefore);
+            } else {
+              expect(child.delivery?.status).toBe("in_progress");
+            }
             database.db.exec(
               "CREATE TRIGGER reject_settlement_rewrite BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'must reconcile committed delivery without rewriting'); END",
             );
-            vi.unstubAllEnvs();
-            // Reconstitute the live owner through canonical restoration, without a receipt closure.
-            expect(restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
+            if (change === "default after commit") {
+              vi.unstubAllEnvs();
+              // Reconstitute the live owner through canonical restoration, without a receipt closure.
+              expect(restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
+            }
             services.heartbeatRunner.stop();
             services = startServices();
             await clock.advanceBy(1_250);
