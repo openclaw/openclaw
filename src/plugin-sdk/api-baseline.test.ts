@@ -587,15 +587,37 @@ describe("Plugin SDK API baseline", () => {
         .mockImplementation((options) => {
           if (Object.keys(options.files ?? {}).some((file) => file.endsWith("fixture.ts"))) {
             observedOverlay = true;
-            const processes = spawnSync("ps", ["-axo", "pid=,ppid=,command="], {
+            const executables = spawnSync("ps", ["-axo", "pid=,comm="], {
               encoding: "utf8",
             });
-            expect(processes.status).toBe(0);
-            expect(
-              processes.stdout
-                .split("\n")
-                .filter((line) => line.includes("--api --async") && line.includes(options.cwd)),
-            ).toEqual([]);
+            expect(executables.status).toBe(0);
+            const compilerName = path.basename(
+              nativeTypeScript.resolveInstalledNativeTypeScriptCompiler().executable,
+            );
+            const compilerPids = executables.stdout.split("\n").flatMap((line) => {
+              const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+              return match && path.basename(match[2]!) === compilerName ? [match[1]!] : [];
+            });
+            if (compilerPids.length > 0) {
+              const processes = spawnSync(
+                "ps",
+                ["-ww", "-p", compilerPids.join(","), "-o", "args="],
+                {
+                  encoding: "utf8",
+                },
+              );
+              expect(processes.error).toBeUndefined();
+              expect(processes.stderr).toBe("");
+              expect([0, 1]).toContain(processes.status);
+              if (processes.status === 1) {
+                expect(processes.stdout).toBe("");
+              }
+              expect(
+                processes.stdout
+                  .split("\n")
+                  .filter((line) => line.includes("--api --async") && line.includes(options.cwd)),
+              ).toEqual([]);
+            }
           }
           return createProject(options);
         });
