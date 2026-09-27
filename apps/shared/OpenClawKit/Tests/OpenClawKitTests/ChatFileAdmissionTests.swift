@@ -211,7 +211,7 @@ struct ChatFileAdmissionTests {
         }
     }
 
-    @Test(arguments: [Int?.none, 3, 4, 6, 12])
+    @Test(arguments: [Int?.none, 3, 4, 6, 12, 19_464_192])
     @MainActor
     func `stages files with gateway limits`(maximumBytes: Int?) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -220,7 +220,9 @@ struct ChatFileAdmissionTests {
         let defaultsName = "ChatFileAdmissionTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: defaultsName))
         defer { defaults.removePersistentDomain(forName: defaultsName) }
-        let limits = maximumBytes.map { GatewayAttachmentLimits(maxBytes: $0, maxImageBytes: 2) }
+        let limits = maximumBytes.map {
+            GatewayAttachmentLimits(maxBytes: $0, maxImageBytes: $0 <= 12 ? 2 : 5_000_000)
+        }
         let model = OpenClawChatViewModel(
             sessionKey: "main",
             transport: FileAdmissionTransport(limits: limits),
@@ -249,14 +251,16 @@ struct ChatFileAdmissionTests {
         try Data().write(to: empty)
         await model.loadAttachments(urls: [empty, directory])
         #expect(model.errorText == "Could not attach: empty.txt, \(directory.lastPathComponent)")
-        if limits != nil {
+        let pngData = try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////GQAJ+wP/2hN8NwAAAABJRU5ErkJggg=="))
+        if limits?.maxImageBytes == 2 {
             model.errorText = nil
             let image = directory.appendingPathComponent("image.png")
-            try Data(count: 3).write(to: image)
+            try pngData.write(to: image)
             await model.loadAttachments(urls: [image])
             #expect(model.errorText == "Too large to send: image.png")
         }
-        if limits == nil {
+        if limits == nil || maximumBytes == 19_464_192 {
             model.errorText = nil
             let attachmentCount = model.attachments.count
             let oversized = directory.appendingPathComponent("oversized.pdf")
@@ -270,19 +274,29 @@ struct ChatFileAdmissionTests {
 
             model.errorText = nil
             let image = directory.appendingPathComponent("resizable.png")
-            var imageData = try #require(Data(base64Encoded:
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////GQAJ+wP/2hN8NwAAAABJRU5ErkJggg=="))
+            var imageData = pngData
             // A valid image with trailing padding exceeds the final ceiling,
             // but must still pass through the existing resize step.
             imageData.append(Data(count: 5_000_001 - imageData.count))
             try imageData.write(to: image)
-            await model.loadAttachments(urls: [image])
-            #expect(model.errorText == nil)
-            #expect(model.attachments.count == attachmentCount + 1)
-            let resized = try #require(model.attachments.last)
-            #expect(resized.fileName == "resizable.jpg")
-            #expect(resized.mimeType == "image/jpeg")
-            #expect(resized.data.count <= 5_000_000)
+            for fromFile in [true, false] {
+                model.errorText = nil
+                if fromFile {
+                    await model.loadAttachments(urls: [image])
+                } else {
+                    await model.addImageAttachment(
+                        data: imageData,
+                        fileName: "resizable.png",
+                        mimeType: "image/png",
+                        for: model.currentSessionSnapshot())
+                }
+                #expect(model.errorText == nil)
+                #expect(model.attachments.count == attachmentCount + 1)
+                let resized = try #require(model.attachments.first { $0.fileName == "resizable.jpg" })
+                #expect(resized.mimeType == "image/jpeg")
+                #expect(resized.data.count <= 5_000_000)
+                model.removeAttachment(resized.id)
+            }
         }
     }
 }

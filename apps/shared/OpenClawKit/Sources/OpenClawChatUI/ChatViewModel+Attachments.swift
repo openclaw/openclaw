@@ -253,10 +253,9 @@ extension OpenClawChatViewModel {
             errorText = String(format: String(localized: "Could not attach: %@"), fileName)
             return .unreadable
         }
-        // Legacy images may exceed the final image ceiling before resizing;
-        // keep their source bounded by the general file ceiling instead.
-        let maximumSourceBytes = advertisedLimits?.maxImageBytes ?? limits.maxBytes
-        if data.count > maximumSourceBytes {
+        // Source photos can exceed the upload image ceiling before resizing;
+        // bound the read by the general file budget, then check processed bytes.
+        if data.count > limits.maxBytes {
             errorText = String(format: String(localized: "Too large to send: %@"), fileName)
             return .tooLarge
         }
@@ -350,10 +349,7 @@ extension OpenClawChatViewModel {
         defer {
             if hasSecurityScope { url.stopAccessingSecurityScopedResource() }
         }
-        let maximumBytes = mimeType.hasPrefix("image/")
-            ? advertisedLimits?.maxImageBytes ?? limits.maxBytes
-            : limits.maxBytes
-        let data = try await Self.readAttachmentData(from: url, maximumBytes: maximumBytes)
+        let data = try await Self.readAttachmentData(from: url, maximumBytes: limits.maxBytes)
         guard self.ownsAttachmentSession(expectedSession) else { return }
         if mimeType.hasPrefix("image/") {
             if let error = await self.stageImageAttachment(
