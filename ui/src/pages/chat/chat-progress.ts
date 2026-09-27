@@ -193,6 +193,7 @@ export function resolveWorkingProgress(
   queue: ChatQueueItem[],
   streamSegments: Array<{ ts: number; runId?: string }>,
   toolMessages: unknown[],
+  placementTurnId: string | null = null,
 ): WorkingProgress {
   const visibleSends = queue.filter(shouldRenderQueuedSendInThread);
   const pendingSends = visibleSends.filter((item) => !isQueuedSendInlineState(item));
@@ -225,10 +226,12 @@ export function resolveWorkingProgress(
     compatibleCached?.startedAt,
     streamStartedAt,
     // Recovery rows cannot identify work, but matching durable timing survives reconnects.
-    // A live attempt start (streamStartedAt) is authoritative for an in-flight
-    // submitted send; only durable inline states retain their message time.
+    // A retried placement keeps its original message time, so the live attempt start
+    // (streamStartedAt) is authoritative for its in-flight initial turn only; an
+    // ordinary send keeps counting the acknowledgment wait from its message time.
     ...visibleSends
       .filter((item) =>
+        item.id === placementTurnId &&
         streamStartedAt !== null &&
         (item.sendState === "sending" || item.sendState === "submitting")
           ? false

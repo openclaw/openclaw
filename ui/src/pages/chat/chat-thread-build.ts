@@ -683,6 +683,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       queuedSends,
       segments,
       tools,
+      props.initialTurnId ?? null,
     ));
   const activeTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
   const activeTurnBounds = activeTurnRunId ? createRunTurnLookup(items)(activeTurnRunId) : null;

@@ -6,6 +6,8 @@ import {
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
+import { resetWorkingProgress } from "../pages/chat/chat-progress.ts";
+import { buildChatItems } from "../pages/chat/chat-thread-build.ts";
 import {
   createPlacementStartupHarness,
   createStartupPlacement,
@@ -304,6 +306,79 @@ describe("initial turn Retry resets the elapsed timer", () => {
       expect(startup.get(input.recovery.sessionKey)?.startedAt).toBe(20_000);
       // ...while the queued message keeps its original creation time.
       expect(startup.get(input.recovery.sessionKey)?.initialTurn?.createdAt).toBe(10_000);
+    } finally {
+      startup.dispose();
+    }
+  });
+
+  it("scopes the attempt-start override to the placement turn through the thread build", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.describe") {
+        return { session: { placement: undefined } };
+      }
+      if (method === "sessions.reclaim") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected ${method}`);
+    });
+    const { startup, input } = await restorePausedStartup(request);
+    try {
+      vi.setSystemTime(20_000);
+      startup.retry(input.recovery.sessionKey);
+      await flushStartupMicrotasks();
+      const placement = startup.get(input.recovery.sessionKey);
+      const initialTurn = placement?.initialTurn;
+      expect(initialTurn?.createdAt).toBe(10_000);
+
+      const indicatorStartedAt = (props: {
+        sessionKey: string;
+        queue: NonNullable<Parameters<typeof buildChatItems>[0]["queue"]>;
+        initialTurnId?: string;
+      }): number | undefined => {
+        resetWorkingProgress();
+        return buildChatItems({
+          paneId: `retry-timer-${props.sessionKey}`,
+          sessionKey: props.sessionKey,
+          messages: [],
+          queue: props.queue,
+          ...(props.initialTurnId ? { initialTurnId: props.initialTurnId } : {}),
+          toolMessages: [],
+          streamSegments: [],
+          stream: null,
+          streamStartedAt: 20_000,
+          showToolCalls: true,
+        }).find((item) => item.kind === "reading-indicator")?.startedAt;
+      };
+
+      // The placement initial turn renders from the retried attempt start, not
+      // its retained original message time.
+      expect(
+        indicatorStartedAt({
+          sessionKey: input.recovery.sessionKey,
+          queue: initialTurn ? [initialTurn] : [],
+          initialTurnId: initialTurn?.id,
+        }),
+      ).toBe(20_000);
+      // An ordinary in-flight send still counts its acknowledgment wait from
+      // the message time even when the first render follows the stream start.
+      expect(
+        indicatorStartedAt({
+          sessionKey: "agent:cloud:ordinary-send",
+          queue: [
+            {
+              id: "ordinary-send",
+              text: "Ordinary send",
+              createdAt: 10_000,
+              sessionKey: "agent:cloud:ordinary-send",
+              sendRunId: "ordinary-run",
+              sendAttempts: 1,
+              sendState: "sending",
+            },
+          ],
+        }),
+      ).toBe(10_000);
     } finally {
       startup.dispose();
     }

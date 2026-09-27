@@ -143,7 +143,7 @@ describe("resolveWorkingProgress", () => {
     ).toMatchObject({ runId: "active-run", startedAt: 1_000 });
   });
 
-  it("uses the attempt start over an in-flight submitted send's message time", () => {
+  it("uses the attempt start over a retried placement turn's message time", () => {
     // A retried placement keeps the original message timestamp on the queued
     // initial turn, but the elapsed timer must start from the attempt time.
     expect(
@@ -163,8 +163,33 @@ describe("resolveWorkingProgress", () => {
         ],
         [],
         [],
+        "retried-initial",
       ),
     ).toMatchObject({ runId: "message-stable", startedAt: 20_000 });
+  });
+
+  it("keeps an ordinary send's queued wait when the first render follows the stream start", () => {
+    // The attempt-start override belongs to a retried placement turn only; an
+    // ordinary send still counts its acknowledgment wait from the message time.
+    expect(
+      resolveWorkingProgress(
+        SESSION,
+        null,
+        20_000,
+        [
+          {
+            id: "ordinary-send",
+            text: "Ordinary send",
+            createdAt: 10_000,
+            sendRunId: "ordinary-run",
+            sendAttempts: 1,
+            sendState: "sending",
+          },
+        ],
+        [],
+        [],
+      ),
+    ).toMatchObject({ runId: "ordinary-run", startedAt: 10_000 });
   });
 });
 
