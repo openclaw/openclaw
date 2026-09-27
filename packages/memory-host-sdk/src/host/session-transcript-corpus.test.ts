@@ -34,6 +34,7 @@ function pauseDirectoryDiscovery(sessionsDir: string) {
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
   it.each([
     { includeContentRevision: true, archiveTablePresent: true },
+    { includeContentRevision: false, archiveTablePresent: true },
     { includeContentRevision: false, archiveTablePresent: false },
   ])(
     "preserves corpus selection with content revisions $includeContentRevision and archive table $archiveTablePresent",

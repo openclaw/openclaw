@@ -21,7 +21,7 @@ async function createPeer(
   const sockets = new Set<Socket>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const server = http.createServer((_request, response) => response.end("ok"));
-  const wsServer = new WebSocketServer({ noServer: true });
+  const wsServer = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const paths: string[] = [];
   let attempts = 0;
   server.on("connection", (socket) => {

@@ -179,6 +179,10 @@ describe("memory storage migration", () => {
       /unknown index operator_chunk_text/,
     ],
     [
+      "CREATE INDEX operator_cache_age ON memory_embedding_cache(updated_at)",
+      /unknown index operator_cache_age/,
+    ],
+    [
       "CREATE TRIGGER operator_chunk_audit AFTER UPDATE ON memory_index_chunks BEGIN SELECT 1; END",
       /unexpected trigger operator_chunk_audit/,
     ],
@@ -193,6 +197,10 @@ describe("memory storage migration", () => {
     [
       "ALTER TABLE memory_index_chunks ADD COLUMN operator_note TEXT; UPDATE memory_index_chunks SET operator_note = 'preserve this note'",
       /column definitions differ for memory_index_chunks/,
+    ],
+    [
+      "ALTER TABLE memory_embedding_cache ADD COLUMN operator_note TEXT; UPDATE memory_embedding_cache SET operator_note = 'preserve this cache note'",
+      /column definitions differ for memory_embedding_cache/,
     ],
   ] as const)(
     "refuses unknown persisted data or dependencies without touching the original database: %s",
