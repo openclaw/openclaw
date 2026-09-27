@@ -153,6 +153,56 @@ describe("slack native approval adapter", () => {
     ).toBe(true);
   });
 
+  it("does not deliver an unbound plugin approval from ambiguous Slack accounts", async () => {
+    for (const accountId of ["default", "ops"]) {
+      installationStates.push(registerSlackInstallationState(accountId, "workspace", "T11111111"));
+    }
+    const cfg = {
+      channels: {
+        slack: {
+          accounts: {
+            default: { botToken: "xoxb-default", appToken: "xapp-default" },
+            ops: { botToken: "xoxb-ops", appToken: "xapp-ops" },
+          },
+        },
+      },
+      approvals: {
+        plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } },
+      },
+    } as OpenClawConfig;
+    const unbound = buildPluginRequest({
+      turnSourceChannel: "slack",
+      policySubject: { pluginKey: "diffs", tool: "diffs" },
+    });
+    const bound = {
+      ...unbound,
+      request: { ...unbound.request, turnSourceAccountId: "ops" },
+    };
+    const canHandle = (accountId: string, request: PluginApprovalRequest) =>
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId,
+        approvalKind: "plugin",
+        request,
+      });
+    const targets = (accountId: string, request: PluginApprovalRequest) =>
+      slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId,
+        approvalKind: "plugin",
+        request,
+      });
+
+    for (const accountId of ["default", "ops"]) {
+      expect(canHandle(accountId, unbound)).toBe(false);
+      expect(await targets(accountId, unbound)).toEqual([]);
+    }
+    expect(canHandle("default", bound)).toBe(false);
+    expect(canHandle("ops", bound)).toBe(true);
+    expect(await targets("default", bound)).toEqual([]);
+    expect(await targets("ops", bound)).toEqual([{ to: "team:T11111111:user:U11111111" }]);
+  });
+
   it("subscribes the native runtime to all approval events", () => {
     expect(slackApprovalCapability.nativeRuntime?.eventKinds).toEqual([
       "exec",

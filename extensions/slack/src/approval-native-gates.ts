@@ -345,6 +345,13 @@ function isSlackNativeApprovalAccountEligible(params: {
 function listSlackNativeApprovalEligibleAccountIds(
   params: Parameters<typeof isSlackNativeApprovalAccountEligible>[0],
 ): string[] {
+  if (params.approvalKind === "plugin") {
+    // Match Gateway custody's full account set so an unbound request cannot
+    // send reviewer cards from multiple accounts that neither can resolve.
+    return listSlackAccountIds(params.cfg).filter((accountId) =>
+      isSlackNativeApprovalAccountEligible({ ...params, accountId }),
+    );
+  }
   const accountId = params.accountId ?? resolveDefaultSlackAccountId(params.cfg);
   return isSlackNativeApprovalAccountEligible({ ...params, accountId }) ? [accountId] : [];
 }
