@@ -388,11 +388,11 @@ struct OpenClawChatComposer: View {
             if self.composerChrome == .clean {
                 self.cleanComposerCard
             } else {
-                if self.showsToolbar, self.voiceNoteControl?.recorder.isRecording != true {
+                if self.style == .standard, self.voiceNoteControl?.recorder.isRecording != true {
                     self.composerToolbar
                 }
 
-                if self.showsAttachments, !self.viewModel.attachments.isEmpty {
+                if self.style == .standard, !self.viewModel.attachments.isEmpty {
                     self.attachmentsStrip
                 }
 
@@ -678,7 +678,7 @@ struct OpenClawChatComposer: View {
                             visualSize: 32)
                     }
                 }
-                if self.showsConnectionPill {
+                if self.style == .standard {
                     ChatConnectionPill(
                         isConnected: self.viewModel.healthOK || (self.talkControl?.isGatewayConnected ?? false))
                 }
@@ -699,7 +699,7 @@ struct OpenClawChatComposer: View {
 
     private var cleanComposerCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if self.showsAttachments, !self.viewModel.attachments.isEmpty {
+            if self.style == .standard, !self.viewModel.attachments.isEmpty {
                 #if os(iOS)
                 self.attachmentsStrip
                     .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
@@ -883,9 +883,6 @@ struct OpenClawChatComposer: View {
                 })
                 .padding(.horizontal, 4)
                 .padding(.vertical, self.usesDesktopModelMenu ? 0 : 3)
-                .onChange(of: self.viewModel.input) { _, _ in
-                    self.updateSlashPopoverPresentation()
-                }
             #elseif os(iOS)
             ChatComposerTextViewIOS(
                 text: self.inputText,
@@ -902,16 +899,6 @@ struct OpenClawChatComposer: View {
                 onHistoryDown: { !self.isSlashPopoverPresented && self.inputModel?.recallNextInput() == true })
                 .padding(.horizontal, self.cleanFieldTextInset)
                 .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
-                .onChange(of: self.viewModel.input) { _, _ in
-                    self.updateSlashPopoverPresentation()
-                }
-                .onChange(of: self.isFocused) { _, focused in
-                    if focused {
-                        self.updateSlashPopoverPresentation()
-                    } else {
-                        self.setSlashPanelPresented(false)
-                    }
-                }
             #else
             TextField(
                 "",
@@ -929,16 +916,6 @@ struct OpenClawChatComposer: View {
                 .focused(self.$isFocused)
                 .disabled(!self.isComposerEnabled)
                 .accessibilityIdentifier("chat-message-input")
-                .onChange(of: self.viewModel.input) { _, _ in
-                    self.updateSlashPopoverPresentation()
-                }
-                .onChange(of: self.isFocused) { _, focused in
-                    if focused {
-                        self.updateSlashPopoverPresentation()
-                    } else {
-                        self.setSlashPanelPresented(false)
-                    }
-                }
                 // SwiftUI exposes neither the caret row nor soft-wrap geometry.
                 // Start recall only from an empty draft; an active recall can
                 // still walk both directions through the shared state machine.
@@ -954,6 +931,18 @@ struct OpenClawChatComposer: View {
                 }
             #endif
         }
+        .onChange(of: self.viewModel.input) { _, _ in
+            self.updateSlashPopoverPresentation()
+        }
+        #if !os(macOS)
+        .onChange(of: self.isFocused) { _, focused in
+            if focused {
+                self.updateSlashPopoverPresentation()
+            } else {
+                self.setSlashPanelPresented(false)
+            }
+        }
+        #endif
     }
 }
 
@@ -1283,18 +1272,6 @@ extension OpenClawChatComposer {
         .buttonStyle(.bordered)
         .controlSize(.small)
         .help("Refresh")
-    }
-
-    private var showsToolbar: Bool {
-        self.style == .standard && self.composerChrome == .full
-    }
-
-    private var showsAttachments: Bool {
-        self.style == .standard
-    }
-
-    private var showsConnectionPill: Bool {
-        self.style == .standard && self.composerChrome == .full
     }
 
     private var composerPadding: CGFloat {

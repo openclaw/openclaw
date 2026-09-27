@@ -274,13 +274,11 @@ extension OpenClawChatViewModel {
 
     func syncThinkingLevelOptions() {
         let currentSession = currentSessionEntry()
-        showsThinkingPicker = self.thinkingPickerIsAvailable(
-            for: currentSession,
-            modelChoice: self.selectedModelChoice(for: currentSession))
-
+        let modelChoice = self.selectedModelChoice(for: currentSession)
         let resolved = self.resolvedThinkingLevelOptions(
-            for: currentSession, modelChoice: self.selectedModelChoice(for: currentSession))
+            for: currentSession, modelChoice: modelChoice)
         let options = resolved.options
+        showsThinkingPicker = options.contains { $0.id != "off" } && modelChoice?.reasoning != false
         let target = currentModelPatchTarget()
         let preferredLevel = self.prefersExplicitThinkingLevel
             ? self.preferredThinkingLevel
@@ -322,14 +320,6 @@ extension OpenClawChatViewModel {
             return "high"
         }
         return preferred
-    }
-
-    private func thinkingPickerIsAvailable(
-        for session: OpenClawChatSessionEntry?,
-        modelChoice: OpenClawChatModelChoice?) -> Bool
-    {
-        let resolved = self.resolvedThinkingLevelOptions(for: session, modelChoice: modelChoice)
-        return resolved.options.contains { $0.id != "off" } && modelChoice?.reasoning != false
     }
 
     private struct ThinkingLevelOptionsResolution {

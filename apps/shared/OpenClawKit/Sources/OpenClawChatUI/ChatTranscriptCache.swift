@@ -534,7 +534,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                         command.sessionKey,
                         command.deliverySessionKey,
                         command.routingContract ?? "",
-                        Self.normalizedAgentID(command.agentID),
+                        command.agentID ?? "",
                         command.text,
                         command.thinking,
                         Self.encodeSessionSettingsExpectation(command.expectedSessionSettings),
@@ -803,7 +803,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                         lastError,
                         gatewayID,
                         scope.sessionKey,
-                        Self.normalizedAgentID(scope.agentID),
+                        scope.agentID ?? "",
                     ])
                 return db.changesCount > 0
             }
@@ -920,7 +920,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                         Date().timeIntervalSince1970,
                         gatewayID,
                         scope.sessionKey,
-                        Self.normalizedAgentID(scope.agentID),
+                        scope.agentID ?? "",
                     ])
                 return db.changesCount > 0 ? 2 : 0
             }
@@ -957,7 +957,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                         needsReconciliation,
                         gatewayID,
                         scope.sessionKey,
-                        Self.normalizedAgentID(scope.agentID),
+                        scope.agentID ?? "",
                     ])
                 return db.changesCount > 0
             }
@@ -996,11 +996,11 @@ extension OpenClawChatSQLiteTranscriptCache {
                         leaf,
                         gatewayID,
                         scope.sessionKey,
-                        Self.normalizedAgentID(scope.agentID),
+                        scope.agentID ?? "",
                         expectedEpoch,
                         gatewayID,
                         scope.sessionKey,
-                        Self.normalizedAgentID(scope.agentID),
+                        scope.agentID ?? "",
                     ])
                 return db.changesCount > 0
             }
@@ -1295,7 +1295,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                 gateway_id, session_key, agent_id, branch_epoch, last_active_leaf_id, needs_reconciliation
             ) VALUES (?, ?, ?, 0, NULL, 0)
             """,
-            arguments: [gatewayID, scope.sessionKey, self.normalizedAgentID(scope.agentID)])
+            arguments: [gatewayID, scope.sessionKey, scope.agentID ?? ""])
     }
 
     private nonisolated static func readBranchState(
@@ -1310,7 +1310,7 @@ extension OpenClawChatSQLiteTranscriptCache {
             FROM outbox_branch_scopes
             WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
             """,
-            arguments: [gatewayID, scope.sessionKey, normalizedAgentID(scope.agentID)])
+            arguments: [gatewayID, scope.sessionKey, scope.agentID ?? ""])
         else { throw DatabaseError(message: "missing branch scope") }
         return OpenClawChatOutboxBranchState(
             epoch: row["branch_epoch"],
@@ -1340,7 +1340,7 @@ extension OpenClawChatSQLiteTranscriptCache {
             WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
               AND status IN (\(statuses))
             """,
-            arguments: [gatewayID, scope.sessionKey, self.normalizedAgentID(scope.agentID)]) ?? 0
+            arguments: [gatewayID, scope.sessionKey, scope.agentID ?? ""]) ?? 0
     }
 
     private nonisolated static func expireBranchSwitchLeases(
@@ -1358,7 +1358,7 @@ extension OpenClawChatSQLiteTranscriptCache {
             SELECT session_key, agent_id FROM outbox_branch_scopes
             WHERE gateway_id = ? AND session_key = ? AND agent_id = ? AND switch_pending_since <= ?
             """
-            arguments = [gatewayID, scope.sessionKey, Self.normalizedAgentID(scope.agentID), cutoff]
+            arguments = [gatewayID, scope.sessionKey, scope.agentID ?? "", cutoff]
         } else {
             sql = """
             SELECT session_key, agent_id FROM outbox_branch_scopes
@@ -1406,7 +1406,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                 lastActiveLeafEntryID,
                 gatewayID,
                 scope.sessionKey,
-                self.normalizedAgentID(scope.agentID),
+                scope.agentID ?? "",
                 expectedRevision,
                 expectedRevision,
             ])
@@ -1454,7 +1454,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                 lastError + "\n# branch-park:" + UUID().uuidString,
                 gatewayID,
                 scope.sessionKey,
-                self.normalizedAgentID(scope.agentID),
+                scope.agentID ?? "",
                 excludingEpoch,
                 excludingEpoch,
             ])
@@ -1511,10 +1511,6 @@ extension OpenClawChatSQLiteTranscriptCache {
     private static func encodeJSON(_ value: some Encodable) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(value)
-        guard let result = String(data: data, encoding: .utf8) else {
-            throw CocoaError(.fileWriteInapplicableStringEncoding)
-        }
-        return result
+        return try String(decoding: encoder.encode(value), as: UTF8.self)
     }
 }

@@ -167,8 +167,10 @@ public struct OpenClawChatView: View {
     private let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
 
     private enum Layout {
-        #if os(macOS)
         static let outerPaddingHorizontal: CGFloat = 6
+        static let newTurnAnchor = UnitPoint(x: 0.5, y: 0.18)
+        static let liveEdgeThreshold: CGFloat = 48
+        #if os(macOS)
         static let outerPaddingVertical: CGFloat = 0
         static let composerPaddingHorizontal: CGFloat = 0
         static let swarmPaddingHorizontal: CGFloat = 12
@@ -178,10 +180,7 @@ public struct OpenClawChatView: View {
         static let messageListPaddingTop: CGFloat = 12
         static let messageListPaddingBottom: CGFloat = 16
         static let messageListPaddingHorizontal: CGFloat = 6
-        static let newTurnAnchor = UnitPoint(x: 0.5, y: 0.18)
-        static let liveEdgeThreshold: CGFloat = 48
         #else
-        static let outerPaddingHorizontal: CGFloat = 6
         static let outerPaddingVertical: CGFloat = 6
         static let composerPaddingHorizontal: CGFloat = 6
         static let swarmPaddingHorizontal: CGFloat = 6
@@ -191,8 +190,6 @@ public struct OpenClawChatView: View {
         static let messageListPaddingTop: CGFloat = 10
         static let messageListPaddingBottom: CGFloat = 6
         static let messageListPaddingHorizontal: CGFloat = 8
-        static let newTurnAnchor = UnitPoint(x: 0.5, y: 0.18)
-        static let liveEdgeThreshold: CGFloat = 48
         #endif
     }
 
@@ -730,6 +727,7 @@ extension OpenClawChatView {
         contextWindowTokens: Int?,
         showsActions: Bool = true) -> some View
     {
+        let isUser = msg.role.lowercased() == "user"
         let bubble = ChatMessageBubble(
             message: msg,
             liveToolCalls: self.viewModel.toolActivities.filter {
@@ -776,8 +774,7 @@ extension OpenClawChatView {
             })
             .frame(
                 maxWidth: .infinity,
-                alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
-        let isUser = msg.role.lowercased() == "user"
+                alignment: isUser ? .trailing : .leading)
         let row = VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
             bubble
             if let outboxState = self.viewModel.outboxState(for: msg.id) {

@@ -185,30 +185,22 @@ public enum OpenClawChatGatewayPayloadCodec {
     }
 
     public static func event(from frame: EventFrame) -> OpenClawChatTransportEvent? {
+        func decode<T: Decodable>(_ type: T.Type) -> T? {
+            frame.payload.flatMap { try? GatewayPayloadDecoding.decode($0, as: type) }
+        }
+
         switch frame.event {
         case "tick":
             return .tick
         case "chat.metadata.changed":
-            let payload = frame.payload.flatMap {
-                try? GatewayPayloadDecoding.decode($0, as: MetadataChangedPayload.self)
-            }
+            let payload = decode(MetadataChangedPayload.self)
             return payload?.modelSelectionChanged == true ? .modelSelectionChanged : .chatMetadataChanged
         case "config.changed":
             return .modelSelectionChanged
         case "sessions.changed":
-            guard let payload = frame.payload,
-                  let change = try? GatewayPayloadDecoding.decode(
-                      payload,
-                      as: OpenClawChatSessionsChangedEvent.self)
-            else { return nil }
-            return .sessionsChanged(change)
+            return decode(OpenClawChatSessionsChangedEvent.self).map(OpenClawChatTransportEvent.sessionsChanged)
         case "session.observer":
-            guard let payload = frame.payload,
-                  let digest = try? GatewayPayloadDecoding.decode(
-                      payload,
-                      as: SessionObserverDigest.self)
-            else { return nil }
-            return .sessionObserver(digest)
+            return decode(SessionObserverDigest.self).map(OpenClawChatTransportEvent.sessionObserver)
         case "seqGap":
             return .seqGap
         case "health":
@@ -218,17 +210,9 @@ public enum OpenClawChatGatewayPayloadCodec {
                 as: OpenClawGatewayHealthOK.self))?.ok ?? true
             return .health(ok: ok)
         case "chat":
-            guard let payload = frame.payload,
-                  let chat = try? GatewayPayloadDecoding.decode(
-                      payload,
-                      as: OpenClawChatEventPayload.self)
-            else { return nil }
-            return .chat(chat)
+            return decode(OpenClawChatEventPayload.self).map(OpenClawChatTransportEvent.chat)
         case "session.message":
-            guard let payload = frame.payload,
-                  let message = try? GatewayPayloadDecoding.decode(
-                      payload,
-                      as: OpenClawSessionMessageEventPayload.self)
+            guard let message = decode(OpenClawSessionMessageEventPayload.self)
             else { return nil }
             if var canonicalMessage = message.message,
                canonicalMessage.transcriptMessageID?
@@ -251,36 +235,15 @@ public enum OpenClawChatGatewayPayloadCodec {
             }
             return .sessionMessage(message)
         case "agent":
-            guard let payload = frame.payload,
-                  let agent = try? GatewayPayloadDecoding.decode(
-                      payload,
-                      as: OpenClawAgentEventPayload.self)
-            else { return nil }
-            return .agent(agent)
+            return decode(OpenClawAgentEventPayload.self).map(OpenClawChatTransportEvent.agent)
         case "progressCard.changed":
-            guard let payload = frame.payload,
-                  let event = try? GatewayPayloadDecoding.decode(
-                      payload,
-                      as: ProgressCardChangedEvent.self)
-            else { return nil }
-            return .progressCardChanged(event)
-        default:
-            return self.secondaryEvent(from: frame)
-        }
-    }
-
-    private static func secondaryEvent(from frame: EventFrame) -> OpenClawChatTransportEvent? {
-        guard let payload = frame.payload else { return nil }
-        switch frame.event {
+            return decode(ProgressCardChangedEvent.self).map(OpenClawChatTransportEvent.progressCardChanged)
         case "task":
-            return (try? GatewayPayloadDecoding.decode(payload, as: OpenClawChatTaskEvent.self))
-                .map(OpenClawChatTransportEvent.task)
+            return decode(OpenClawChatTaskEvent.self).map(OpenClawChatTransportEvent.task)
         case "question.requested":
-            return (try? GatewayPayloadDecoding.decode(payload, as: QuestionRecord.self))
-                .map(OpenClawChatTransportEvent.questionRequested)
+            return decode(QuestionRecord.self).map(OpenClawChatTransportEvent.questionRequested)
         case "question.resolved":
-            return (try? GatewayPayloadDecoding.decode(payload, as: OpenClawQuestionResolvedEvent.self))
-                .map(OpenClawChatTransportEvent.questionResolved)
+            return decode(OpenClawQuestionResolvedEvent.self).map(OpenClawChatTransportEvent.questionResolved)
         default:
             return nil
         }

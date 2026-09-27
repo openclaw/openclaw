@@ -51,6 +51,17 @@ public struct TalkWaveformPalette: Equatable, Sendable {
             Color(white: 0.72),
             Color(white: 0.82),
         ])
+
+    fileprivate func contourColors(for phase: TalkWaveformPhase) -> (primary: Color, secondary: Color) {
+        let primary = self.active.first ?? .red
+        let secondary = self.active.dropFirst().first ?? primary
+        switch phase {
+        case .listening:
+            return (secondary, primary)
+        case .idle, .thinking, .speaking:
+            return (primary, secondary)
+        }
+    }
 }
 
 public struct TalkWaveformView: View {
@@ -150,7 +161,7 @@ public struct TalkAvatarWaveformView<Avatar: View>: View {
     }
 
     private var measuredContour: some View {
-        let colors = self.contourColors
+        let colors = self.palette.contourColors(for: self.phase)
         let renderedSamples = self.reduceMotion ? [0.16] : self.renderedSamples
         let previousSamples = renderedSamples.count > 1
             ? Array(renderedSamples.dropLast())
@@ -187,7 +198,7 @@ public struct TalkAvatarWaveformView<Avatar: View>: View {
 
     private func fallbackContour(isActive: Bool) -> some View {
         let frozen = self.reduceMotion || !isActive
-        let colors = self.contourColors
+        let colors = self.palette.contourColors(for: self.phase)
 
         return TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: frozen)) { timeline in
             let time = frozen ? 0 : timeline.date.timeIntervalSince(TalkWaveformClock.born)
@@ -250,16 +261,6 @@ public struct TalkAvatarWaveformView<Avatar: View>: View {
         }
     }
 
-    private var contourColors: (primary: Color, secondary: Color) {
-        let primary = self.palette.active.first ?? .red
-        let secondary = self.palette.active.dropFirst().first ?? primary
-        switch self.phase {
-        case .listening:
-            return (secondary, primary)
-        case .idle, .thinking, .speaking:
-            return (primary, secondary)
-        }
-    }
 }
 
 /// A compact, center-origin voice envelope for constrained surfaces such as
@@ -289,7 +290,7 @@ struct TalkVoiceTraceView: View {
 
     var body: some View {
         let isActive = self.phase != .idle
-        let colors = self.traceColors
+        let colors = self.palette.contourColors(for: self.phase)
         let renderedSamples = self.reduceMotion ? [0.16] : (self.samples.isEmpty ? [0.03] : self.samples)
         let previousSamples = renderedSamples.count > 1
             ? Array(renderedSamples.dropLast())
@@ -338,16 +339,6 @@ struct TalkVoiceTraceView: View {
         .accessibilityHidden(true)
     }
 
-    private var traceColors: (primary: Color, secondary: Color) {
-        let primary = self.palette.active.first ?? .red
-        let secondary = self.palette.active.dropFirst().first ?? primary
-        switch self.phase {
-        case .listening:
-            return (secondary, primary)
-        case .idle, .thinking, .speaking:
-            return (primary, secondary)
-        }
-    }
 }
 
 /// Pure waveform math, split from the view for unit testing and so the Android

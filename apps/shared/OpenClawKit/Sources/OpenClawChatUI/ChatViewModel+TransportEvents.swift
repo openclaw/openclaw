@@ -1392,36 +1392,28 @@ extension OpenClawChatViewModel {
                   sessionSnapshot: sessionSnapshot,
                   armID: armID)
         else { return nil }
+        let terminalState: OpenClawChatRunTerminalState?
         switch observation {
-        case let .terminal(terminalState):
-            let terminalAgeMs = completedObservedAtMs.map {
-                (Date().timeIntervalSince1970 * 1000) - $0
-            }
-            let allowNoOutputCompletion = terminalAgeMs.map {
-                $0 >= Double(model.pendingRunTerminalHistoryGraceMs)
-            } ?? false
-            let shouldContinue = await model.refreshIfPending(
-                runId: runId,
-                sessionSnapshot: sessionSnapshot,
-                armID: armID,
-                after: userMessageTimestamp,
-                terminalState: terminalState,
-                allowNoOutputCompletion: allowNoOutputCompletion,
-                diagnostic: "chat.ui run observation sessionKey=\(sessionSnapshot.key) "
-                    + "runId=\(runId) observation=\(observation)")
-            return shouldContinue ? model.pendingRunTerminalRetryMs : nil
+        case let .terminal(state):
+            terminalState = state
         case .checkAgain:
-            let shouldContinue = await model.refreshIfPending(
-                runId: runId,
-                sessionSnapshot: sessionSnapshot,
-                armID: armID,
-                after: userMessageTimestamp,
-                diagnostic: "chat.ui run observation sessionKey=\(sessionSnapshot.key) "
-                    + "runId=\(runId) observation=\(observation)")
-            return shouldContinue ? model.pendingRunTerminalRetryMs : nil
+            terminalState = nil
         case .unavailable:
             return model.pendingRunUnavailableRetryMs
         }
+        let allowNoOutputCompletion = terminalState != nil && completedObservedAtMs.map {
+            (Date().timeIntervalSince1970 * 1000) - $0 >= Double(model.pendingRunTerminalHistoryGraceMs)
+        } == true
+        let shouldContinue = await model.refreshIfPending(
+            runId: runId,
+            sessionSnapshot: sessionSnapshot,
+            armID: armID,
+            after: userMessageTimestamp,
+            terminalState: terminalState,
+            allowNoOutputCompletion: allowNoOutputCompletion,
+            diagnostic: "chat.ui run observation sessionKey=\(sessionSnapshot.key) "
+                + "runId=\(runId) observation=\(observation)")
+        return shouldContinue ? model.pendingRunTerminalRetryMs : nil
     }
 
     private nonisolated static func pollPendingRunHistory(
