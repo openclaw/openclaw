@@ -1,5 +1,8 @@
+import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cdp } from "vitest/browser";
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -17,16 +20,20 @@ class SessionNavigationPluginPage extends PluginPage {
 
 const tag = "openclaw-plugin-session-navigation-test";
 customElements.define(tag, SessionNavigationPluginPage);
+const pluginPath = "/plugins/example/panel";
 const sessionKey = "agent:writer:subagent:11111111-2222-4333-8444-555555555555";
 const message: ControlUiPluginSessionOpenMessage = {
   type: "openclaw-plugin-session-open",
   sessionKey,
 };
-const dispose: Array<() => void> = [];
+const dispose: Array<() => void | Promise<void>> = [];
 
-afterEach(() => {
-  dispose.splice(0).forEach((cleanup) => cleanup());
-  vi.restoreAllMocks();
+afterEach(async () => {
+  try {
+    await Promise.all(dispose.splice(0).map(async (cleanup) => cleanup()));
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 async function mount(
@@ -34,13 +41,14 @@ async function mount(
     requiresGatewayAuth?: boolean;
     path?: string;
     boardFace?: "dashboard";
+    view?: SessionNavigationPluginPage;
   } = {},
 ) {
   const descriptor: GatewayControlUiPluginTab = {
     pluginId: "example-plugin",
     id: "panel",
     label: "Example panel",
-    path: options.path ?? "/plugins/example/panel",
+    path: options.path ?? pluginPath,
     requiresGatewayAuth: options.requiresGatewayAuth ?? true,
   };
   const config = {
@@ -112,7 +120,7 @@ async function mount(
     navigate,
   } as unknown as ApplicationContext;
   const provider = createApplicationContextProvider(context);
-  const view = document.createElement(tag) as SessionNavigationPluginPage;
+  const view = options.view ?? (document.createElement(tag) as SessionNavigationPluginPage);
   view.pluginId = descriptor.pluginId;
   view.tabId = descriptor.id;
   provider.append(view);
@@ -142,48 +150,77 @@ function dispatch(
   window.dispatchEvent(new MessageEvent("message", { source, data, origin, ports }));
 }
 
-async function installClickDocument(frame: HTMLIFrameElement, signal: AbortSignal) {
+async function prepareClickDocument(view: SessionNavigationPluginPage, signal: AbortSignal) {
   signal.throwIfAborted();
-  await new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
+  const session: CDPSession = cdp();
+  const ready = createDeferred<void>();
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () =>
+    (cleanupPromise ??= (async () => {
       window.removeEventListener("message", onReady);
       signal.removeEventListener("abort", onAbort);
-    };
-    const onReady = (event: MessageEvent<unknown>) => {
-      if (event.source === frame.contentWindow && event.data === "test-click-ready") {
-        cleanup();
-        resolve();
-      }
-    };
-    const onAbort = () => {
-      cleanup();
-      reject(new Error("Iframe readiness aborted", { cause: signal.reason }));
-    };
-    window.addEventListener("message", onReady);
-    signal.addEventListener("abort", onAbort, { once: true });
-    try {
-      frame.srcdoc = `<button id="open">Open work session</button><script>
+      session.off("Fetch.requestPaused", onRequest);
+      await session.send("Fetch.disable");
+    })());
+  const fail = (error: unknown) => {
+    void cleanup().then(
+      () => ready.reject(new Error("Plugin click document failed", { cause: error })),
+      (cleanupError: unknown) =>
+        ready.reject(new Error("Plugin click document cleanup failed", { cause: cleanupError })),
+    );
+  };
+  const onReady = (event: MessageEvent<unknown>) => {
+    const frame = view.querySelector("iframe");
+    if (frame && event.source === frame.contentWindow && event.data === "test-click-ready") {
+      void cleanup().then(() => ready.resolve(), fail);
+    }
+  };
+  const onAbort = () => fail(new Error("Iframe readiness aborted", { cause: signal.reason }));
+  const clickHtml = `<button id="open">Open work session</button><script>
     document.getElementById("open").onclick = () => parent.postMessage(${JSON.stringify(message)}, ${JSON.stringify(window.location.origin)});
     addEventListener("message", event => {
       if (event.source === parent && event.data === "test-click") document.getElementById("open").click();
     });
     parent.postMessage("test-click-ready", ${JSON.stringify(window.location.origin)});
   </script>`;
-    } catch (error) {
-      cleanup();
-      reject(new Error("Could not install iframe click document", { cause: error }));
-    }
-  });
-  frame.contentWindow!.postMessage("test-click", "*");
+  const onRequest = ({ requestId }: { requestId: string }) => {
+    void session
+      .send("Fetch.fulfillRequest", {
+        requestId,
+        responseCode: 200,
+        responseHeaders: [{ name: "Content-Type", value: "text/html; charset=utf-8" }],
+        body: btoa(clickHtml),
+      })
+      .catch(fail);
+  };
+  dispose.push(cleanup);
+  window.addEventListener("message", onReady);
+  session.on("Fetch.requestPaused", onRequest);
+  try {
+    // Own the initial document; replacing srcdoc after mount races Vite's SPA fallback navigation.
+    await session.send("Fetch.enable", {
+      patterns: [
+        { urlPattern: new URL(pluginPath, window.location.href).href, resourceType: "Document" },
+      ],
+    });
+    signal.throwIfAborted();
+  } catch (error) {
+    await cleanup();
+    throw new Error("Could not prepare plugin click document", { cause: error });
+  }
+  signal.addEventListener("abort", onAbort, { once: true });
+  return { ready: ready.promise };
 }
 
 describe("authenticated plugin-frame session navigation", () => {
   it("routes a real sandbox-frame click with the canonical base path and ordered selection", async ({
     signal,
   }) => {
-    const fixture = await mount();
+    const view = document.createElement(tag) as SessionNavigationPluginPage;
+    const clickDocument = await prepareClickDocument(view, signal);
+    const [fixture] = await Promise.all([mount({ view }), clickDocument.ready]);
     expect(fixture.frame.getAttribute("sandbox")).toBe("allow-scripts");
-    await installClickDocument(fixture.frame, signal);
+    fixture.frame.contentWindow!.postMessage("test-click", "*");
     await expect.poll(() => fixture.navigate.mock.calls.length).toBe(1);
     expect(fixture.selectAgent).toHaveBeenCalledExactlyOnceWith("writer");
     expect(fixture.setSessionKey).toHaveBeenCalledExactlyOnceWith(sessionKey);
