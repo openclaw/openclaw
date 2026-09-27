@@ -18,7 +18,9 @@ function createLoopHarness(maxOutputBytes?: number) {
   const [exec, wait] = harness.tools.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, { ...harness.ctx, loopDetection: { enabled: true } }),
   );
-  if (!exec || !wait) throw new Error("Code Mode controls missing");
+  if (!exec || !wait) {
+    throw new Error("Code Mode controls missing");
+  }
   return { ...harness, exec, wait, fixture };
 }
 
