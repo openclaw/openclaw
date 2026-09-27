@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../cron/types.js";
+import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 const mocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -35,8 +37,10 @@ describe("sendGatewayCronWebhook", () => {
   it("propagates cancellation and the remaining run deadline without retrying", async () => {
     const controller = new AbortController();
     const ssrfPolicy = { allowedHostnames: ["127.0.0.1"] };
-    mocks.fetchWithSsrFGuard.mockImplementationOnce(async (value: unknown) => {
-      const request = value as { signal?: AbortSignal };
+    const started = createDeferredCore();
+    mocks.fetchWithSsrFGuard.mockImplementationOnce(async (request: GuardedFetchOptions) => {
+      request.beforeRequest?.();
+      started.resolve();
       const signal = request.signal;
       if (!signal) {
         throw new Error("expected run abort signal");
@@ -59,7 +63,7 @@ describe("sendGatewayCronWebhook", () => {
       ssrfPolicy,
     });
 
-    await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce());
+    await started.promise;
     const request = mocks.fetchWithSsrFGuard.mock.calls[0]?.[0] as
       | { signal?: AbortSignal; timeoutMs?: number }
       | undefined;
@@ -72,7 +76,40 @@ describe("sendGatewayCronWebhook", () => {
     ).toBe(ssrfPolicy);
 
     controller.abort("Cancelled by operator.");
-    await expect(delivery).rejects.toBeDefined();
+    await expect(delivery).resolves.toMatchObject({
+      status: "unknown",
+      error: "Cancelled by operator.",
+    });
     expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
   });
+  it.each([
+    { redirected: false, status: "not-delivered" },
+    { redirected: true, status: "unknown" },
+  ] as const)(
+    "keeps DNS failure evidence after redirect=$redirected",
+    async ({ redirected, status }) => {
+      const controller = new AbortController();
+      mocks.fetchWithSsrFGuard.mockImplementationOnce(async (request: GuardedFetchOptions) => {
+        request.beforeRequest?.();
+        if (redirected) {
+          request.onResponse?.(302);
+        } else {
+          controller.abort();
+        }
+        throw Object.assign(new Error("getaddrinfo ENOTFOUND"), {
+          code: "ENOTFOUND",
+          syscall: "getaddrinfo",
+        });
+      });
+      const job = createWebhookJob();
+      await expect(
+        sendGatewayCronWebhook({
+          event: { jobId: job.id, action: "finished", status: "ok", summary: "done" },
+          job,
+          abortSignal: controller.signal,
+        }),
+      ).resolves.toEqual({ status, error: "getaddrinfo ENOTFOUND" });
+      expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
+    },
+  );
 });
