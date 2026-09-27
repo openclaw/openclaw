@@ -16,7 +16,7 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
-import { listManagedImageRecordEntriesInDatabase } from "../../gateway/managed-image-record-store.kernel.js";
+import { executeManagedImageRecordCommand } from "../../gateway/managed-image-record-store.kernel.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
   beginSessionWorkAdmission,
@@ -109,7 +109,11 @@ async function createCompletionFixture(state: OpenClawTestState) {
     }
     updates += 1;
     // Observe records at publication, before a wrongly late write could make the test pass.
-    for (const { record } of listManagedImageRecordEntriesInDatabase(database.db, sessionKey)) {
+    const entries = executeManagedImageRecordCommand(
+      { type: "managedImages.entries", input: { sessionKey } },
+      database,
+    );
+    for (const { record } of entries) {
       const pending = resolveManagedOutgoingMediaArtifactDownload({
         sessionKey,
         agentId: "main",

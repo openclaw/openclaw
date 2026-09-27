@@ -21,9 +21,10 @@ import type {
   ManagedImageRecordRow,
   ManagedImageRecordInsert,
   ManagedImageRecordEntry,
+  ManagedImageRecordWorkerOperations,
 } from "./managed-image-record-store.types.js";
 
-export const MANAGED_IMAGE_RECORD_COLUMNS = [
+const MANAGED_IMAGE_RECORD_COLUMNS = [
   "attachment_id",
   "session_key",
   "agent_id",
@@ -112,7 +113,7 @@ function readManagedImageRecordInDatabase(
   return row ? managedImageRecordFromRow(row) : null;
 }
 
-export function listManagedImageRecordEntriesInDatabase(
+function listManagedImageRecordEntriesInDatabase(
   db: DatabaseSync,
   sessionKey?: string,
 ): ManagedImageRecordEntry[] {
@@ -314,6 +315,10 @@ export function isManagedImageRecordCommand(command: {
   }
 }
 
+export function executeManagedImageRecordCommand<Command extends ManagedImageRecordCommand>(
+  command: Command,
+  database: OpenClawStateDatabase,
+): ManagedImageRecordWorkerOperations[Command["type"]]["output"];
 export function executeManagedImageRecordCommand(
   command: ManagedImageRecordCommand,
   database: OpenClawStateDatabase,

@@ -35,7 +35,7 @@ import {
   claimManagedImageRecordCleanupIfCurrent,
   listManagedImageRecordEntries,
 } from "./managed-image-record-store.js";
-import { listManagedImageRecordEntriesInDatabase } from "./managed-image-record-store.kernel.js";
+import { executeManagedImageRecordCommand } from "./managed-image-record-store.kernel.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
@@ -80,7 +80,11 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     }
     updates.push(update);
     // Observe records at publication, before a wrongly late write could make the test pass.
-    for (const { record } of listManagedImageRecordEntriesInDatabase(database.db, sessionKey)) {
+    const entries = executeManagedImageRecordCommand(
+      { type: "managedImages.entries", input: { sessionKey } },
+      database,
+    );
+    for (const { record } of entries) {
       const pending = resolveManagedOutgoingMediaArtifactDownload({
         sessionKey,
         agentId: "main",
