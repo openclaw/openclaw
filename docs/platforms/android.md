@@ -40,7 +40,13 @@ capabilities; this prevents simultaneous Gateways from issuing camera,
 location, screen, or notification commands to the same phone. Android can
 suspend the secondary connections after the app leaves the foreground.
 
-The sidebar footer opens **Add Gateway** when none are saved and Gateway
+The sidebar defaults to **Home → Threads → Skills → Overview**. Existing
+personalized orders and pinned pages are preserved; **Pages → Edit pinned items →
+Reset pinned items** restores these defaults. The **Settings** gear beside the
+Gateway selector opens all settings, including while offline. Settings remains
+available in the Pages menu if you want to pin it explicitly.
+
+The sidebar footer's Gateway selector opens **Add Gateway** when none are saved and Gateway
 settings when one is saved. With multiple saved Gateways, it opens a native
 quick picker with a checkmark for the focused route, **Add Gateway**, and **Manage Gateways**.
 

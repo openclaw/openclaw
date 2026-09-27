@@ -39,9 +39,9 @@ class SidebarShellLogicTest {
       listOf(
         SidebarDestination.Threads,
         SidebarDestination.Home,
-        SidebarDestination.Settings,
-        SidebarDestination.Work,
         SidebarDestination.Skills,
+        SidebarDestination.Work,
+        SidebarDestination.Settings,
       ),
       orderedSidebarDestinations(listOf("threads", "home", "threads", "unknown")),
     )
