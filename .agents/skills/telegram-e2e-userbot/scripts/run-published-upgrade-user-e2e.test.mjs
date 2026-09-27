@@ -173,6 +173,12 @@ test("public failure evidence keeps typed outcomes while dropping credentials, i
     code: "FOLLOWUP_ROUTED_TO_CHILD",
     earlyPhase: secret,
   });
+  write("routing-after.json.diagnostic.json", {
+    status: "failed",
+    stage: "phase-conditions",
+    code: "PRIOR_PARENT_PHASE_DISAPPEARED",
+    missingPhase: secret,
+  });
   write("cleanup.json", { ok: false, retainedLease: true, error: secret, groupId: secret });
   const report = publicUpgradeFailure(root, "live-scenario");
   assert.equal(report.updater.exitCode, 17);
@@ -185,6 +191,10 @@ test("public failure evidence keeps typed outcomes while dropping credentials, i
   assert.deepEqual(
     { phase: report.checkpoints[1].phase, code: report.checkpoints[1].code },
     { phase: "before", code: "FOLLOWUP_ROUTED_TO_CHILD" },
+  );
+  assert.deepEqual(
+    { phase: report.checkpoints[2].phase, code: report.checkpoints[2].code },
+    { phase: "after", code: "PRIOR_PARENT_PHASE_DISAPPEARED" },
   );
   assert.deepEqual(report.cleanup, {
     confirmed: false,
