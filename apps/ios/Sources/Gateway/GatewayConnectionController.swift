@@ -1,7 +1,6 @@
 import Foundation
 import Network
 import Observation
-import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 
