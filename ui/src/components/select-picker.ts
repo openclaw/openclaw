@@ -59,6 +59,8 @@ export class SelectPicker<
   @state() private mode: "closed" | "compact" | "search" = "closed";
   @state() private query = "";
   @state() private activeValue: string | null = null;
+  /** Keyboard use since the last pointer use; styles may reserve focus rings for it. */
+  @state() private keyboard = false;
 
   @state() private collapsedGroups = new Set<string>();
 
@@ -226,6 +228,7 @@ export class SelectPicker<
     this.hoverTimer = setTimeout(
       () => {
         if (enter) {
+          this.keyboard = false;
           this.hoverOpened = this.openMenu() !== undefined;
         } else {
           this.closeMenu(this.contains(this.ownerDocument.activeElement));
@@ -237,6 +240,7 @@ export class SelectPicker<
 
   private readonly handleTriggerClick = () => {
     clearTimeout(this.hoverTimer);
+    this.keyboard = false;
     if (this.mode === "closed") {
       this.openMenu();
     } else if (this.hoverOpened) {
@@ -281,6 +285,7 @@ export class SelectPicker<
     if (this.mode === "closed" && !opensMenu && !printable) {
       return;
     }
+    this.keyboard = true;
     event.stopPropagation();
     if (event.isComposing || this.params.disabled) {
       return;
@@ -388,6 +393,7 @@ export class SelectPicker<
         ?data-active=${option.value === this.activeValue}
         @mousedown=${(event: MouseEvent) => event.preventDefault()}
         @mousemove=${() => {
+          this.keyboard = false;
           if (!option.disabled) {
             this.activeValue = option.value;
           }
@@ -424,6 +430,7 @@ export class SelectPicker<
         @keydown=${this.handleKeydown}
         @pointerenter=${this.handleHover}
         @pointerleave=${this.handleHover}
+        ?data-keyboard=${this.keyboard}
       >
         <button
           id=${this.params.id ?? nothing}

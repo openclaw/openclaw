@@ -229,6 +229,31 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   outline-offset: var(--wa-focus-ring-offset);
 }
 
+/* Pickers show focus rings only after keyboard use: a pointer-opened owner
+   list keeps the trigger, search field, and hovered row unringed. */
+.sidebar-session-filter-panel
+  .picker-select
+  > :not([data-keyboard])
+  :is(.picker-select__trigger[aria-expanded="true"]:not(:focus-visible), .picker-select__search) {
+  outline: none;
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  box-shadow: none;
+}
+
+.sidebar-session-filter-panel
+  .picker-select
+  > :not([data-keyboard])
+  .picker-select__option[data-active] {
+  outline: none;
+}
+
+.sidebar-session-filter-panel
+  .picker-select
+  > :not([data-keyboard])
+  .picker-select__option[data-active]:not([aria-selected="true"]) {
+  background: var(--bg-hover);
+}
+
 .sidebar-session-menu-switch > span:first-child {
   flex: 1;
 }

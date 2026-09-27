@@ -21,6 +21,9 @@ import "./app-sidebar.ts";
 
 setupSidebarTest();
 
+const ringStyle = (root: Element, selector: string) =>
+  getComputedStyle(root.querySelector(selector)!).outlineStyle;
+
 async function mountFilters(width: number) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, 560);
@@ -116,6 +119,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       ).toHaveLength(2);
       const search = page.getByRole("combobox", { name: "Search", exact: true });
       await expect.element(search).toHaveFocus();
+      expect(ringStyle(sidebar, ".picker-select__search")).not.toBe("none");
+      expect(ringStyle(sidebar, ".picker-select__option[data-active]")).not.toBe("none");
       await userEvent.keyboard("bo");
       await expect.poll(() => sidebar.querySelectorAll(".picker-select__option").length).toBe(1);
       await expect.element(page.getByRole("option", { name: "Bob", exact: true })).toBeVisible();
@@ -271,6 +276,12 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     }
     const owner = page.getByRole("button", { name: /^Owners:/ });
     await owner.click();
+    await expect.element(page.getByRole("combobox", { name: "Search", exact: true })).toHaveFocus();
+    expect(ringStyle(sidebar, ".picker-select__search")).toBe("none");
+    expect(ringStyle(sidebar, ".picker-select__option[data-active]")).toBe("none");
+    expect(getComputedStyle(sidebar.querySelector("#sidebar-sessions-owner")!).boxShadow).toBe(
+      "none",
+    );
     await page.getByRole("option", { name: "Involving me", exact: true }).click();
     expect(sessions.list).toHaveBeenCalledWith(expect.objectContaining({ involvingMe: true }));
     await expectFilterCount(4);
