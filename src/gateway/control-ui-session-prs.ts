@@ -111,7 +111,7 @@ async function resolveSessionPullRequestGitContext(
   }
   return runGitReadOperation(
     { type: "checkout.context", input: { root: source } },
-    { refresh: params.refresh === true, cacheSignal: deps.cacheSignal },
+    { refresh: params.refresh ? "unversioned" : false, cacheSignal: deps.cacheSignal },
   );
 }
 
