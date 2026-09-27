@@ -11,7 +11,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.unit.Constraints
@@ -22,6 +21,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
 import androidx.window.layout.DisplayFeature
+
+internal val scrollToLatestButtonSize = 56.dp
 
 @Composable
 internal fun ChatPaneLayout(
@@ -36,6 +37,7 @@ internal fun ChatPaneLayout(
   transcript: @Composable () -> Unit,
   status: @Composable () -> Unit,
   composer: @Composable (compact: Boolean, tabletop: Boolean) -> Unit,
+  scrollToLatest: @Composable (available: Boolean) -> Unit,
 ) {
   SubcomposeLayout(modifier.fillMaxSize()) { constraints ->
     val width = constraints.maxWidth
@@ -46,6 +48,7 @@ internal fun ChatPaneLayout(
     val headerFloor = minimumHeaderHeight.roundToPx()
     val readerFloor = minimumReaderHeight.roundToPx()
     val statusFloor = touchTarget.roundToPx()
+    val jumpHeight = scrollToLatestButtonSize.roundToPx()
     val widthFloor = 320.dp.roundToPx()
     layout(width, height) {
       // This host is already inside scaffold/IME padding. Translate window facts only here.
@@ -65,44 +68,67 @@ internal fun ChatPaneLayout(
       val compact = lowerHeight < inputFloor + statusFloor * 2 + padding * 2 + gap * 2
       val inset = if (tabletop || !compact) padding else 0
       val spacing = if (tabletop || !compact) gap else 0
+      val jumpGap = 16.dp.roundToPx()
+      // Ordinary panes already leave spacing between reader and composer; compact panes do not.
+      val jumpClearance = jumpHeight + jumpGap - (if (tabletop) 0 else spacing)
       subcompose(Unit) {
-        Layout(
-          content = {
-            Box { header(compact, tabletop) }
-            Box(Modifier.recalculateWindowInsets().clipToBounds()) { transcript() }
-            Box(Modifier.clipToBounds().verticalScroll(rememberScrollState())) {
-              if (tabletop) Column { status() }
-            }
-            Box(Modifier.clipToBounds()) { composer(compact, tabletop) }
-          },
-        ) { measurables, _ ->
+        SubcomposeLayout { _ ->
           val upperHeight = (upperBounds.height - inset * 2).coerceAtLeast(0)
           val lowerAvailable = (lowerBounds.height - inset * 2).coerceAtLeast(0)
           val headerLimit = if (tabletop) headerFloor else (upperHeight - inputFloor).coerceAtLeast(0)
           val headerPlaceable =
-            measurables[0].measure(Constraints(minWidth = upperBounds.width, maxWidth = upperBounds.width, maxHeight = headerLimit))
+            subcompose("header") { Box { header(compact, tabletop) } }
+              .single()
+              .measure(Constraints(minWidth = upperBounds.width, maxWidth = upperBounds.width, maxHeight = headerLimit))
           val headerGap = if (headerPlaceable.height > 0) spacing else 0
           // The input gets its real remaining height before transcript or auxiliary content.
-          val composerLimit =
+          val composerSpace =
             if (tabletop) lowerAvailable else (lowerAvailable - headerPlaceable.height - headerGap - spacing).coerceAtLeast(0)
+          val composerLimit =
+            if (!tabletop && composerSpace >= inputFloor + jumpClearance) composerSpace - jumpClearance else composerSpace
           val composerPlaceable =
-            measurables[3].measure(Constraints(minWidth = lowerBounds.width, maxWidth = lowerBounds.width, maxHeight = composerLimit))
+            subcompose("composer") { Box(Modifier.clipToBounds()) { composer(compact, tabletop) } }
+              .single()
+              .measure(Constraints(minWidth = lowerBounds.width, maxWidth = lowerBounds.width, maxHeight = composerLimit))
           val statusLimit =
             if (tabletop) (upperHeight - headerPlaceable.height - headerGap - readerFloor - spacing).coerceAtLeast(0) else 0
           val statusPlaceable =
-            measurables[2].measure(Constraints(minWidth = upperBounds.width, maxWidth = upperBounds.width, maxHeight = statusLimit))
+            subcompose("status") {
+              Box(Modifier.clipToBounds().verticalScroll(rememberScrollState())) {
+                if (tabletop) Column { status() }
+              }
+            }.single().measure(Constraints(minWidth = upperBounds.width, maxWidth = upperBounds.width, maxHeight = statusLimit))
           val statusGap = if (statusPlaceable.height > 0) spacing else 0
           val readerHeight =
             (
               upperHeight - headerPlaceable.height - headerGap - statusPlaceable.height - statusGap -
                 if (tabletop) 0 else composerPlaceable.height + spacing
             ).coerceAtLeast(0)
-          val readerPlaceable = measurables[1].measure(Constraints.fixed(upperBounds.width, readerHeight))
+          val readerPlaceable =
+            subcompose("reader") { Box(Modifier.recalculateWindowInsets().clipToBounds()) { transcript() } }
+              .single()
+              .measure(Constraints.fixed(upperBounds.width, readerHeight))
+          val jumpAvailable = readerHeight >= jumpClearance
+          val scrollToLatestPlaceable =
+            subcompose("scrollToLatest") { Box { scrollToLatest(jumpAvailable) } }.single().measure(Constraints())
           layout(width, height) {
+            val composerTop = lowerBounds.bottom - inset - composerPlaceable.height
             headerPlaceable.place(upperBounds.left, upperBounds.top + inset)
             readerPlaceable.place(upperBounds.left, upperBounds.top + inset + headerPlaceable.height + headerGap)
             statusPlaceable.place(upperBounds.left, upperBounds.bottom - inset - statusPlaceable.height)
-            composerPlaceable.place(lowerBounds.left, lowerBounds.bottom - inset - composerPlaceable.height)
+            composerPlaceable.place(lowerBounds.left, composerTop)
+            val readerTop = upperBounds.top + inset + headerPlaceable.height + headerGap
+            val aboveComposerTop =
+              if (tabletop) {
+                readerTop + readerHeight - scrollToLatestPlaceable.height - jumpGap
+              } else {
+                composerTop - scrollToLatestPlaceable.height - jumpGap
+              }
+            val overlayBounds = if (tabletop) upperBounds else lowerBounds
+            scrollToLatestPlaceable.place(
+              if (jumpAvailable) overlayBounds.left + (overlayBounds.width - scrollToLatestPlaceable.width) / 2 else -scrollToLatestPlaceable.width,
+              if (jumpAvailable) aboveComposerTop else -scrollToLatestPlaceable.height,
+            )
           }
         }
       }.single().measure(Constraints.fixed(width, height)).place(0, 0)

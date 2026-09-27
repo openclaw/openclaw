@@ -97,6 +97,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -517,7 +518,7 @@ class ChatComposerLayoutTest {
       assertEquals(editorId, editor.fetchSemanticsNode().id)
       assertEquals(readerId, transcript.fetchSemanticsNode().id)
       assertTrue("Posture must not jump the reading viewport to latest", transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f)
-      readerHeaderControl("Jump to latest").assertIsDisplayed()
+      readerJumpControl().assertIsDisplayed()
       assertTrue(chatWindowBounds(readerHeaderControl("Show Sidebar")).bottom <= 540)
       composeRule.onNodeWithContentDescription(nativeString("Details")).performClick()
       val details = composeRule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, nativeString("Details")))
@@ -549,7 +550,7 @@ class ChatComposerLayoutTest {
       editor.assertTextEquals("kept tailx")
       assertEquals(editorId, editor.fetchSemanticsNode().id)
       assertEquals(readerId, transcript.fetchSemanticsNode().id)
-      readerHeaderControl("Jump to latest").assertIsDisplayed().performClick()
+      readerJumpControl().assertIsDisplayed().performClick()
       assertEquals(0f, transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
       assertReaderMessageVisible("OpenClaw", "Reader answer 24")
     }
@@ -597,8 +598,8 @@ class ChatComposerLayoutTest {
         "Manual reading must move above the latest reply",
         transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
       )
-      assertReaderHeaderControl("Jump to latest")
-      readerHeaderControl("Jump to latest").performClick()
+      assertReaderJumpControl()
+      readerJumpControl().performClick()
       composeRule.waitForIdle()
 
       assertReaderMessageVisible("OpenClaw", "Reader answer 24")
@@ -634,13 +635,16 @@ class ChatComposerLayoutTest {
         "Manual reading must move away from latest before opening Details",
         transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
       )
-      assertReaderHeaderControl("Jump to latest")
+      assertReaderJumpControl()
       applyChatImeInsets()
       composeRule.runOnIdle { height.value = 440.dp }
       composeRule.onNodeWithContentDescription(nativeString("Details")).assertIsDisplayed().performClick()
-      readerHeaderControl("Jump to latest").assertIsDisplayed().assertIsEnabled()
-
       val detailsPane = SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, nativeString("Details"))
+      val compactJump = readerJumpControl().assertIsDisplayed().assertIsEnabled().getUnclippedBoundsInRoot()
+      val detailsBounds = composeRule.onNode(detailsPane).getUnclippedBoundsInRoot()
+      assertTrue("The floating jump stays above Details: $compactJump versus $detailsBounds", compactJump.bottom <= detailsBounds.top)
+      val compactReader = transcript.getUnclippedBoundsInRoot()
+      assertTrue("The floating jump stays inside the reader: $compactJump versus $compactReader", compactJump.top >= compactReader.top)
       val compactViewport = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
       composeRule.runOnIdle { height.value = 720.dp }
       composeRule.waitForIdle()
@@ -650,7 +654,7 @@ class ChatComposerLayoutTest {
         grownViewport.bottom - grownViewport.top > compactViewport.bottom - compactViewport.top,
       )
       composeRule.onNode(detailsPane).assertIsDisplayed()
-      for (label in listOf("Show Sidebar", "Chat actions", "Jump to latest")) {
+      for (label in listOf("Show Sidebar", "Chat actions")) {
         val control = hasContentDescription(nativeString(label)) and hasClickAction() and hasAnyAncestor(hasTestTag("chat-viewport"))
         composeRule.onAllNodes(control).assertCountEquals(1)
         composeRule
@@ -659,6 +663,7 @@ class ChatComposerLayoutTest {
           .assertIsEnabled()
           .assert(hasAnyAncestor(detailsPane))
       }
+      readerJumpControl().assertIsDisplayed().assertIsEnabled()
       assertEquals("Growth must retain the same reader", readerId, transcript.fetchSemanticsNode().id)
 
       val newest = "Reader newest after refresh"
@@ -676,7 +681,7 @@ class ChatComposerLayoutTest {
       }
       composeRule.onNode(detailsPane).assertIsDisplayed()
       composeRule.onNodeWithContentDescription(nativeString("Close")).assertIsDisplayed()
-      readerHeaderControl("Jump to latest").assertIsDisplayed().performClick()
+      readerJumpControl().assertIsDisplayed().performClick()
       composeRule.waitForIdle()
 
       composeRule.onNodeWithText(nativeString("Details")).assertDoesNotExist()
@@ -697,7 +702,7 @@ class ChatComposerLayoutTest {
       )
       composeRule.runOnIdle { height.value = 440.dp }
       composeRule.onNodeWithContentDescription(nativeString("Details")).performClick()
-      readerHeaderControl("Jump to latest").assertDoesNotExist()
+      readerJumpControl().assertDoesNotExist()
       composeRule.onNodeWithContentDescription(nativeString("Close")).performClick()
     }
   }
@@ -712,7 +717,7 @@ class ChatComposerLayoutTest {
       val viewport = transcript.getUnclippedBoundsInRoot()
       val range = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
       assertEquals("The unchanged loaded prompt starts at the live edge", 0f, range.value(), 0f)
-      readerHeaderControl("Jump to latest").assertDoesNotExist()
+      readerJumpControl().assertDoesNotExist()
       val viewAll = composeRule.onNode(hasText(nativeString("View all")) and hasClickAction())
       val button = viewAll.assertIsDisplayed().assertIsEnabled().getUnclippedBoundsInRoot()
       assertTrue(
@@ -745,8 +750,8 @@ class ChatComposerLayoutTest {
         "BringIntoView must actually move the transcript away from latest",
         transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
       )
-      assertReaderHeaderControl("Jump to latest")
-      readerHeaderControl("Jump to latest").performClick()
+      assertReaderJumpControl()
+      readerJumpControl().performClick()
       composeRule.waitForIdle()
       val restoredEnding = readerMarkerBounds(tail, speaker = "You")
       assertTrue(
@@ -754,7 +759,7 @@ class ChatComposerLayoutTest {
         restoredEnding.left >= viewport.left && restoredEnding.right <= viewport.right && restoredEnding.top >= viewport.top && restoredEnding.bottom <= viewport.bottom,
       )
       assertEquals(0f, transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
-      readerHeaderControl("Jump to latest").assertDoesNotExist()
+      readerJumpControl().assertDoesNotExist()
       assertEquals("Disclosure and Jump preserve the transcript viewport", viewport, transcript.getUnclippedBoundsInRoot())
     }
   }
@@ -806,8 +811,8 @@ class ChatComposerLayoutTest {
         "Fixture precondition: the ending must now be below the viewport: $hiddenEnding versus $viewport",
         hiddenEnding.top > viewport.bottom,
       )
-      assertReaderHeaderControl("Jump to latest")
-      readerHeaderControl("Jump to latest").performClick()
+      assertReaderJumpControl()
+      readerJumpControl().performClick()
       composeRule.waitForIdle()
       assertTailVisible()
       composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
@@ -897,7 +902,7 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun readerHeaderKeepsSidebarJumpAndActionsReachableAtLargeFont() {
+  fun readerHeaderAndFloatingJumpStayReachableAtLargeFont() {
     var sidebarRequests = 0
     withReaderHistory(
       assistantCount = 24,
@@ -913,7 +918,7 @@ class ChatComposerLayoutTest {
         "Manual reading must move above the latest reply",
         transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
       )
-      val controls = listOf("Show Sidebar", "Jump to latest", "Chat actions").map(::assertReaderHeaderControl)
+      val controls = listOf("Show Sidebar", "Chat actions").map(::assertReaderHeaderControl)
       val sidebar = controls.first()
       controls.drop(1).forEach { bounds ->
         assertEquals(
@@ -926,14 +931,16 @@ class ChatComposerLayoutTest {
       controls.zipWithNext().forEach { (left, right) ->
         assertTrue("Header touch targets stay disjoint: $left and $right", left.right <= right.left)
       }
+      val jump = assertReaderJumpControl()
+      assertTrue("The floating jump stays below the header", jump.top >= sidebar.bottom)
 
       readerHeaderControl("Show Sidebar").performClick()
       composeRule.runOnIdle { assertEquals("The sidebar action remains reachable", 1, sidebarRequests) }
-      readerHeaderControl("Jump to latest").performClick()
+      readerJumpControl().performClick()
       composeRule.waitForIdle()
       assertReaderMessageVisible("OpenClaw", "Reader answer 24")
       composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
-      assertEquals("Changing header actions keeps the same transcript viewport", before, transcript.getUnclippedBoundsInRoot())
+      assertEquals("Using the floating action keeps the same transcript viewport", before, transcript.getUnclippedBoundsInRoot())
 
       readerHeaderControl("Chat actions").performClick()
       composeRule
@@ -6230,6 +6237,26 @@ class ChatComposerLayoutTest {
     composeRule.onNode(
       hasContentDescription(nativeString(label)) and hasClickAction() and hasAnyAncestor(hasTestTag("chat-viewport")),
     )
+
+  private fun readerJumpControl() =
+    composeRule.onNode(
+      hasContentDescription(nativeString("Jump to latest")) and hasClickAction() and hasAnyAncestor(hasTestTag("chat-viewport")),
+    )
+
+  private fun assertReaderJumpControl(): DpRect {
+    val bounds =
+      readerJumpControl()
+        .assertIsDisplayed()
+        .assertIsEnabled()
+        .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
+        .getUnclippedBoundsInRoot()
+    val root = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
+    val composer = composeRule.onNodeWithTag("chat-composer-surface").getUnclippedBoundsInRoot()
+    assertTrue("Floating jump keeps a 56dp touch target", bounds.right - bounds.left >= 56.dp && bounds.bottom - bounds.top >= 56.dp)
+    assertTrue("Floating jump stays inside the viewport", bounds.left >= root.left && bounds.right <= root.right && bounds.top >= root.top)
+    assertTrue("Floating jump sits above the composer", bounds.bottom <= composer.top)
+    return bounds
+  }
 
   private fun assertReaderHeaderControl(label: String): DpRect {
     val bounds = readerHeaderControl(label).assertIsDisplayed().assertIsEnabled().getUnclippedBoundsInRoot()
