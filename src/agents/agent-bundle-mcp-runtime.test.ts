@@ -25,6 +25,7 @@ import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-
 import {
   createSessionMcpRuntimeManager,
   getOrCreateSessionMcpRuntime,
+  makeRequesterParams,
   unopenedMcpConfig,
 } from "./agent-bundle-mcp-manager.test-support.js";
 import { createMcpProbeFixture } from "./agent-bundle-mcp-probe.test-support.js";
@@ -703,22 +704,6 @@ async function makeStdioRuntime(
     },
     ...(options.toolOverrides ? { toolOverrides: options.toolOverrides } : {}),
   });
-}
-
-function makeRequesterParams(
-  sessionId: string,
-  cfg: RuntimeParams["cfg"],
-  requesterSenderId: string,
-  overrides: Partial<RuntimeParams> = {},
-): RuntimeParams {
-  return {
-    sessionId,
-    workspaceDir: "/workspace",
-    cfg,
-    requesterSenderId,
-    messageChannel: "telegram",
-    ...overrides,
-  };
 }
 
 afterEach(async () => {

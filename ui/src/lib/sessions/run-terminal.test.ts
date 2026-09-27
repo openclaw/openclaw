@@ -343,7 +343,6 @@ describe("terminal metadata ownership", () => {
       ).toBe(true);
 
       expect(h.row()).toMatchObject({
-        lastRunId,
         status,
         hasActiveRun: false,
         activeRunIds: [],
@@ -351,6 +350,7 @@ describe("terminal metadata ownership", () => {
         endedAt: 200,
         runtimeMs: 100,
       });
+      expect(h.row()?.lastRunId).toBe(lastRunId);
       expect(h.row()?.lastRunError).toBeUndefined();
     },
   );

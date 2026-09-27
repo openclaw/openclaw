@@ -10,6 +10,7 @@ import { publishSqliteWalCheckpointObservation } from "../infra/sqlite-wal-check
 import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import type {
@@ -191,6 +192,18 @@ export function createAgentDatabaseNativeGeneration(
         if (!nativeIdentity || creatingIdentity) {
           assertCallerCurrent?.();
         }
+        if (
+          request.stage === "prepare" &&
+          isRecord(facts) &&
+          facts.kind === "agent-registration-start"
+        ) {
+          assertSourceCurrent();
+          if (!registration || !lease || !isDeepStrictEqual(facts.lease, lease)) {
+            throw new Error("Agent registration start differs from its admitted native owner");
+          }
+          registration.begin();
+          return undefined;
+        }
         if (request.stage === "prepare" && isRecord(facts) && facts.kind === "shared-owner") {
           if (!(facts.validationPort instanceof MessagePort)) {
             throw new Error("Agent worker lost its validation handoff port");
@@ -312,7 +325,14 @@ export function createAgentDatabaseNativeGeneration(
           const identity = authorizeNative(request);
           if (request.stage === "open" && registration) {
             assertSourceCurrent();
-            registration.begin();
+            const creating = creatingIdentity
+              ? creatingIdentity.key.startsWith("path:")
+              : !nativeIdentity &&
+                !expectedIdentity &&
+                readDatabasePathIdentitySync(pathname).key.startsWith("path:");
+            if (creating) {
+              registration.begin();
+            }
           }
           if (
             request.stage === "prepare" &&

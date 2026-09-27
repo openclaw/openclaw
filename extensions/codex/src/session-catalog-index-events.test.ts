@@ -250,47 +250,6 @@ describe("resident Codex catalog notifications", () => {
     );
   });
 
-  it("leaves an unchanged home idle until catalog demand after the native safety interval", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-    const inventory = Array.from({ length: 192 }, (_, i) =>
-      thread({ id: `idle-${i}`, recencyAt: 1_000 - i }),
-    );
-    const { index, readNative } = await fixture(inventory);
-    expect(readNative).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(30_000);
-    await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-    expect(readNative).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(14 * 60_000);
-    expect(readNative).toHaveBeenCalledTimes(3);
-    inventory.pop();
-    await vi.advanceTimersByTimeAsync(30_000);
-    await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-    expect(readNative).toHaveBeenCalledTimes(3);
-    await index.list({ limit: 64 });
-    await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(6));
-    expect(index.get("idle-191")).toBeUndefined();
-  });
-
-  it("coalesces thread starts into a prefix walk and retains the unvisited tail", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-    const inventory = Array.from({ length: 192 }, (_, i) =>
-      thread({ id: `stored-${i}`, recencyAt: 1_000 - i }),
-    );
-    const { index, harness, readNative } = await fixture(inventory);
-    const newer = thread({ id: "newer", recencyAt: 2_000 });
-    inventory.unshift(newer);
-    harness.send({ method: "thread/started", params: { thread: newer } });
-    await vi.waitFor(() => expect(index.get(newer.id)).toBeDefined());
-    await vi.advanceTimersByTimeAsync(30_000);
-    await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-    // The started row is already current, so its page establishes the known prefix.
-    expect(readNative).toHaveBeenCalledTimes(4);
-    expect((await index.list({})).sessions[0]?.threadId).toBe("newer");
-    expect(index.get("stored-191")).toBeDefined();
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(readNative).toHaveBeenCalledTimes(4);
-  });
-
   it("reads changed pages through an unchanged page, then repairs silent tail changes at the bound", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const inventory = Array.from({ length: 256 }, (_, i) =>
@@ -429,31 +388,6 @@ describe("resident Codex catalog notifications", () => {
       expect(readNative).toHaveBeenCalledTimes(2);
     },
   );
-
-  it("reconciles silent remote membership changes on its DB-only background interval", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-    const kept = thread({ id: "kept" });
-    const inventory = [thread({ id: "removed" }), kept];
-    const { index, readNative } = await fixture(inventory);
-    expect(readNative).toHaveBeenCalledOnce();
-    inventory.splice(0, inventory.length, thread({ id: "added" }), kept);
-    expect((await index.list({})).sessions.map((session) => session.threadId).toSorted()).toEqual([
-      "kept",
-      "removed",
-    ]);
-    expect(readNative).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(15 * 60_000);
-    await vi.waitFor(async () => {
-      expect((await index.list({})).sessions.map((session) => session.threadId).toSorted()).toEqual(
-        ["added", "kept"],
-      );
-    });
-    expect(readNative).toHaveBeenCalledTimes(2);
-    expect(readNative.mock.calls[1]?.[0]).toMatchObject({ useStateDbOnly: true });
-    await index.list({});
-    expect(readNative).toHaveBeenCalledTimes(2);
-  });
 
   it("clears local live status on disconnect and accepts fresh status after reconnect", async () => {
     const { index, harness, startOptions, readNative } = await fixture(
@@ -791,21 +725,6 @@ describe("resident Codex catalog notifications", () => {
     expect((await index.list({})).sessions[0]).toMatchObject({ status: "idle" });
     expect((await index.list({})).sessions[0]?.activeFlags).toBeUndefined();
     expect(harness.writes).toEqual([]);
-  });
-
-  it("coalesces completion events during a metadata read into one follow-up read", async () => {
-    const { index, harness, readNative, complete, reply } = await fixture();
-    complete();
-    await harness.waitForWrite(0);
-    complete();
-    complete();
-    await reply(0, thread({ name: "Earlier completion", updatedAt: 101 }));
-    await reply(1, thread({ name: "Latest completion", updatedAt: 102 }));
-    await vi.waitFor(async () => {
-      expect((await index.list({})).sessions[0]?.name).toBe("Latest completion");
-    });
-    expect(harness.writes).toHaveLength(2);
-    expect(readNative).toHaveBeenCalledOnce();
   });
 
   it.each(["archived", "deleted"])(

@@ -181,7 +181,7 @@ export function createSessionRowProvenance() {
     }
     const fields = new Map<string, FieldObservation>();
     // Only these optional fields are deliberately omitted by non-enriched reads.
-    for (const field of ["derivedTitle", "lastMessagePreview"] as const) {
+    for (const field of ["derivedTitle", "lastMessagePreview", "activitySummary"] as const) {
       if (row[field] === undefined) {
         fields.set(field, { source: { revision: 0, updatedAt: null } });
       }

@@ -46,8 +46,9 @@ export function workerSessionToolErrorResult(error: unknown) {
   });
 }
 
-function responseFrameBytes(resultJson: string): number {
-  return Buffer.byteLength(
+export function serializeWorkerSessionToolResult(result: unknown): string {
+  const resultJson = JSON.stringify(result);
+  const frameBytes = Buffer.byteLength(
     JSON.stringify({
       type: "res",
       id: "x".repeat(WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH),
@@ -56,11 +57,7 @@ function responseFrameBytes(resultJson: string): number {
     }),
     "utf8",
   );
-}
-
-export function serializeWorkerSessionToolResult(result: unknown): string {
-  const resultJson = JSON.stringify(result);
-  if (responseFrameBytes(resultJson) > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
+  if (frameBytes > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
     return JSON.stringify(
       workerSessionToolErrorResult(new Error("Worker session tool result exceeded the limit")),
     );
