@@ -420,7 +420,6 @@ function renderWidgetContent(
           })
         : nothing;
   }
-  return nothing;
 }
 
 function handleWidgetExportAction(

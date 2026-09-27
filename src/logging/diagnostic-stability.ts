@@ -485,10 +485,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
         }
       }
       break;
-    case "log.record":
-      record.level = event.level;
-      record.source = event.loggerName;
-      break;
     case "security.event":
       record.source = event.category;
       copy(event, "action", "outcome");
@@ -508,12 +504,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "payload.large":
       copy(event, "surface", "action", "bytes", "limitBytes", "count", "channel", "pluginId");
       assignReasonCode(record, event.reason);
-      break;
-    case "telemetry.exporter":
-      record.source = copyExporterCode(event.exporter);
-      record.target = event.signal;
-      record.outcome = event.status;
-      assignReasonCode(record, event.reason ?? event.errorCategory);
       break;
     case "diagnostic.async_queue.dropped":
       copy(

@@ -77,7 +77,6 @@ const EXTENSION_LOADER_ALIAS_IMPORT_PATTERN =
   /(?:@openclaw\/plugin-sdk|openclaw\/plugin-sdk|@sinclair\/typebox|typebox)(?:\/[A-Za-z0-9_-]+)?/u;
 const RELATIVE_EXTENSION_IMPORT_PATTERN =
   /(?:import\s*(?:[^'"]*?\s*from\s*)?["']\.{1,2}\/|export\s*(?:[^'"]*?\s*from\s*)["']\.{1,2}\/|import\s*\(\s*["']\.{1,2}\/|require\s*\(\s*["']\.{1,2}\/)/u;
-const COMMONJS_EXTENSION_EXPORT_PATTERN = /\b(?:module\.exports|exports\.)/u;
 
 async function loadCreateJitiLoaderFactory(): Promise<typeof createJiti> {
   if (createJitiLoaderFactory) {
@@ -352,9 +351,7 @@ function extensionSourceNeedsJitiAliasResolution(extensionPath: string): boolean
     const source = fs.readFileSync(extensionPath, "utf8");
     return (
       EXTENSION_LOADER_ALIAS_IMPORT_PATTERN.test(source) ||
-      RELATIVE_EXTENSION_IMPORT_PATTERN.test(source) ||
-      (path.extname(extensionPath).toLowerCase() === ".js" &&
-        COMMONJS_EXTENSION_EXPORT_PATTERN.test(source))
+      RELATIVE_EXTENSION_IMPORT_PATTERN.test(source)
     );
   } catch {
     return true;
