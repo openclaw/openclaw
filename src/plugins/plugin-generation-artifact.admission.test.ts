@@ -16,7 +16,11 @@ import {
   preparePluginNativeAdmissions,
   settlePluginNativeAdmissions,
 } from "./plugin-native-admission-state.js";
-import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
+import {
+  auditOpenClawPeerDependenciesInManagedNpmRoot,
+  linkOpenClawPeerDependencies,
+  relinkOpenClawPeerDependenciesInManagedNpmRoot,
+} from "./plugin-peer-link.js";
 
 const nativeSize = 2 * 1024 * 1024;
 
@@ -240,6 +244,23 @@ it.each(["npm", "clawhub"] as const)(
   async (source) => {
     await withOpenClawTestState({ label: "native-admission-managed" }, async (state) => {
       const fixture = createFixture(state.path("installed"), true, source);
+      const dependencyRoot = path.join(fixture.installRoot, "node_modules", "native-addon");
+      const dependencyManifest = path.join(dependencyRoot, "package.json");
+      const dependencyNative = path.join(dependencyRoot, "addon.node");
+      fs.mkdirSync(dependencyRoot, { recursive: true });
+      fs.writeFileSync(
+        dependencyManifest,
+        JSON.stringify({ name: "native-addon", version: "1.0.0", main: "addon.node" }),
+      );
+      fs.writeFileSync(dependencyNative, "native dependency fixture");
+      const packageFile = path.join(fixture.root, "package.json");
+      fs.writeFileSync(
+        packageFile,
+        JSON.stringify({
+          ...JSON.parse(fs.readFileSync(packageFile, "utf8")),
+          dependencies: { "native-addon": "1.0.0" },
+        }),
+      );
       fs.writeFileSync(
         path.join(fixture.root, "child.cjs"),
         "module.exports = require('openclaw/plugin-sdk/identity');\n",
@@ -275,6 +296,35 @@ it.each(["npm", "clawhub"] as const)(
           artifact.assertSourceCurrent();
           return artifact;
         });
+      const assertDependencyCapture = async (
+        artifact: ReturnType<typeof capturePluginGenerationArtifact>,
+      ) => {
+        const capturedDependency = artifact.sourceAliases[fs.realpathSync(dependencyRoot)];
+        expect(capturedDependency).toBeDefined();
+        const retainedNative = fs.realpathSync(path.join(capturedDependency!, "addon.node"));
+        const retainedManifest = path.join(path.dirname(retainedNative), "package.json");
+        const installed = fs.statSync(dependencyManifest);
+        const retained = fs.statSync(retainedManifest);
+        expect(installed.nlink).toBe(1);
+        expect(retained.nlink).toBe(1);
+        expect([retained.dev, retained.ino]).not.toEqual([installed.dev, installed.ino]);
+        expect(fs.readFileSync(retainedManifest, "utf8")).toBe(
+          fs.readFileSync(dependencyManifest, "utf8"),
+        );
+        const native = fs.statSync(dependencyNative);
+        expect(fs.statSync(retainedNative)).toMatchObject({ dev: native.dev, ino: native.ino });
+        const onPackageReadError = vi.fn();
+        await auditOpenClawPeerDependenciesInManagedNpmRoot({
+          npmRoot: fixture.installRoot,
+          onPackageReadError,
+        });
+        await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+          npmRoot: fixture.installRoot,
+          logger: {},
+          onPackageReadError,
+        });
+        expect(onPackageReadError).not.toHaveBeenCalled();
+      };
       try {
         const firstCache = caches[0]!;
         preparePluginNativeAdmissions(fixture.index, firstCache);
@@ -287,6 +337,7 @@ it.each(["npm", "clawhub"] as const)(
           wholeFileReads: 0,
         });
         expect(first.io.largestBuffer).toBeLessThanOrEqual(1024 * 1024);
+        await assertDependencyCapture(first.value);
         for (let registration = 0; registration < 2; registration++) {
           const next = capture(firstCache);
           expectNoNativeIo(next.io);
@@ -314,6 +365,7 @@ it.each(["npm", "clawhub"] as const)(
         preparePluginNativeAdmissions(persisted, freshCache);
         const warm = capture(freshCache);
         expectNoNativeIo(warm.io);
+        await assertDependencyCapture(warm.value);
         expect(warm.value.sourceDigest).toBe(first.value.sourceDigest);
         expect(fs.realpathSync(warm.value.resolve(fixture.filename))).toBe(retainedNativePath);
         expect(fs.readFileSync(warm.value.resolve(fixture.filename)).equals(fixture.bytes)).toBe(
@@ -376,6 +428,7 @@ it.each(["npm", "clawhub"] as const)(
           wholeFileReads: 0,
         });
         expect(successor.value.sourceDigest).toBe(warm.value.sourceDigest);
+        await assertDependencyCapture(successor.value);
         expect(readChildSdk(successor.value)).toBe("second");
         expect(readChildSdk(warm.value)).toBe("first");
         expect(
