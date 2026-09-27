@@ -11,6 +11,7 @@ import {
 } from "../lib/keyboard-shortcut-catalog.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
+import { icons } from "./icons.ts";
 import "./modal-dialog.ts";
 
 class KeyboardShortcutsDialog extends OpenClawLitElement {
@@ -58,7 +59,16 @@ class KeyboardShortcutsDialog extends OpenClawLitElement {
       border-radius: 6px;
       background: transparent;
       color: var(--muted);
-      font-size: 20px;
+    }
+
+    .close span {
+      display: flex;
+    }
+
+    .close svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 1.5;
     }
 
     .close:hover {
@@ -190,7 +200,7 @@ class KeyboardShortcutsDialog extends OpenClawLitElement {
           <header class="header">
             <h2>${t("shortcutsOverlay.title")}</h2>
             <button class="close" type="button" aria-label=${t("common.close")} @click=${close}>
-              <span aria-hidden="true">×</span>
+              <span aria-hidden="true">${icons.x}</span>
             </button>
           </header>
           <div class="body">

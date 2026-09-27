@@ -269,6 +269,12 @@ openclaw-custodian-page {
   cursor: var(--cursor-action);
 }
 
+.custodian__nudge-dismiss svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.5;
+}
+
 .custodian__nudge-action:focus-visible,
 .custodian__nudge-dismiss:focus-visible {
   outline: none;

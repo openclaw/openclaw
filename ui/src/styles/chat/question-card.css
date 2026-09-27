@@ -379,12 +379,23 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__error-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  vertical-align: middle;
   margin-left: 4px;
   padding: 0 2px;
   border: 0;
   background: transparent;
   color: inherit;
   cursor: var(--cursor-action);
+}
+
+.chat-question-panel__error-dismiss svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.7;
 }
 
 .chat-question-panel__skip {

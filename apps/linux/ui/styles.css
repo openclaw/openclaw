@@ -593,13 +593,15 @@ button.update-action {
   font-size: 12px;
 }
 button.update-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
-  min-height: 28px;
+  min-height: 32px;
   padding: 0;
   border: 0;
   color: var(--muted);
   background: transparent;
-  font-size: 20px;
 }
 .update-progress {
   display: block;
