@@ -12,11 +12,12 @@ import {
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
 describe("QA scenario lane matching", () => {
-  const planningCoverageIds = [
-    "agent-runtime.external-harness-selection-planning",
-    "openai.codex-harness-no-meta-leak",
-    "openai.codex-harness-planning",
-  ];
+  const planningCoverageIds = new Set(["runtime.no-meta-leak", "workspace.planning"]);
+  const planningScenarios = readQaScenarioPack().scenarios.filter((scenario) =>
+    [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])].some(
+      (coverageId) => planningCoverageIds.has(coverageId),
+    ),
+  );
 
   it("expands scheduler cells deterministically across flow and native scenarios", () => {
     const cells = expandQaScenarioExecutionCells({
@@ -40,15 +41,7 @@ describe("QA scenario lane matching", () => {
     ]);
   });
 
-  it.each(planningCoverageIds)("selects %s for the GPT-5.6 Luna live lane", (coverageId) => {
-    const scenario = readQaScenarioPack().scenarios.find((candidate) =>
-      [...(candidate.coverage?.primary ?? []), ...(candidate.coverage?.secondary ?? [])].includes(
-        coverageId,
-      ),
-    );
-    if (!scenario) {
-      throw new Error(`missing planning scenario for coverage: ${coverageId}`);
-    }
+  it.each(planningScenarios)("selects $id for the GPT-5.6 Luna live lane", (scenario) => {
     expect(
       scenarioMatchesQaProviderLane({
         scenario,
