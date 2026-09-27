@@ -434,6 +434,51 @@ it.each(["npm", "clawhub"] as const)(
   },
 );
 
+it("keeps captured companions current across independent native admissions", async () => {
+  await withOpenClawTestState({ label: "native-admission-independent" }, async (state) => {
+    const fixture = createFixture(state.path("installed"), true);
+    const companion = path.join(fixture.root, "lib", "companion.cjs");
+    const original = "module.exports = 'original';\n";
+    fs.mkdirSync(path.dirname(companion));
+    fs.writeFileSync(companion, original);
+    await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+    const caches = [createPluginCache(), createPluginCache()];
+    const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
+    const capture = (cache: ReturnType<typeof createPluginCache>) => {
+      // Independent readers can begin from the same index before either publishes its receipt.
+      preparePluginNativeAdmissions(fixture.index, cache);
+      const artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
+      artifacts.push(artifact);
+      return artifact;
+    };
+    try {
+      const first = capture(caches[0]!);
+      expect(fs.readFileSync(first.resolve(companion), "utf8")).toBe(original);
+      expect(first.assertSourceCurrent).not.toThrow();
+
+      const second = capture(caches[1]!);
+      for (const artifact of [first, second]) {
+        expect(fs.readFileSync(artifact.resolve(companion), "utf8")).toBe(original);
+        expect(fs.readFileSync(artifact.resolve(fixture.filename)).equals(fixture.bytes)).toBe(
+          true,
+        );
+        expect(artifact.assertSourceCurrent).not.toThrow();
+      }
+
+      fs.writeFileSync(companion, "module.exports = 'modified';\n");
+      expect(first.assertSourceCurrent).toThrow("Plugin source changed");
+      expect(fs.readFileSync(first.resolve(companion), "utf8")).toBe(original);
+    } finally {
+      for (const artifact of artifacts) {
+        await artifact.disposeAsync();
+      }
+      for (const cache of caches) {
+        await retirePluginCache(cache);
+      }
+    }
+  });
+});
+
 it.each([false, true])(
   "captures managed native packages that share a companion dependency (copied=%s)",
   async (copied) => {

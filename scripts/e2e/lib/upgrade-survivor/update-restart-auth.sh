@@ -23,10 +23,11 @@ MANAGER_ENV
   cp "$(dirname "${BASH_SOURCE[0]}")/systemd-fixture.mjs" "$shim_dir/systemd-fixture.mjs"
   node - "$shim_dir/systemd-fixture-runtime.json" \
     "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-$shim_dir/systemctl-shim.pid}" \
-    "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-$shim_dir/systemctl-shim-gateway.log}" <<'RUNTIME_PATHS'
+    "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-$shim_dir/systemctl-shim-gateway.log}" "${1:-native}" <<'RUNTIME_PATHS'
 const fs = require("node:fs");
-const [file, pidFile, daemonLog] = process.argv.slice(2);
-const controlGroup = fs.existsSync("/sys/fs/cgroup/openclaw-gateway.service/cgroup.procs")
+const [file, pidFile, daemonLog, containment] = process.argv.slice(2);
+if (containment !== "native" && containment !== "absent") throw new Error("Unsupported fixture containment");
+const controlGroup = containment === "native" && fs.existsSync("/sys/fs/cgroup/openclaw-gateway.service/cgroup.procs")
   ? "/openclaw-gateway.service" : undefined;
 fs.writeFileSync(file, JSON.stringify({ pidFile, daemonLog, controlGroup }), { mode: 0o600 });
 RUNTIME_PATHS

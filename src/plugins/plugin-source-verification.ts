@@ -48,7 +48,7 @@ export function verifyPluginSourceInputs(
       ? pluginSourceFileIdentity(source, input.boundary)
       : pluginSourceInputIdentity(fs.statSync(source, { bigint: true }));
     if (
-      input.native &&
+      !input.directory &&
       identity !== input.identity &&
       pluginSourceIdentityChangedOnlyByCtime(input.identity, identity) &&
       hashPluginSourceFile(source, input.boundary).contentHash === input.contentHash
