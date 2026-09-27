@@ -97,7 +97,9 @@ export class AcpSessionManager {
       this.stopping = true;
       const acceptedTurns = [];
       for (const turns of this.acceptedTurns.values()) {
-        acceptedTurns.push(...turns);
+        for (const turn of turns) {
+          acceptedTurns.push(turn);
+        }
       }
       await Promise.all(
         acceptedTurns.map(async (acceptedTurn) => {
