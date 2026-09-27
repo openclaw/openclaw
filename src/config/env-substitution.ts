@@ -127,23 +127,21 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
  * the two drifted.
  */
 export function scanEnvTemplateTokens(value: string): EnvTemplateToken[] {
-  const tokens: EnvTemplateToken[] = [];
-  if (!value.includes("$")) {
-    return tokens;
-  }
+  return Array.from(iterateEnvTemplateTokens(value), (token) => ({
+    kind: token.kind,
+    name: token.name,
+    defaultValue: token.defaultValue,
+  }));
+}
 
-  for (let i = 0; i < value.length; i += 1) {
-    if (value[i] !== "$") {
-      continue;
+function* iterateEnvTemplateTokens(value: string): Generator<EnvToken & { start: number }> {
+  for (let index = value.indexOf("$"); index !== -1; index = value.indexOf("$", index + 1)) {
+    const token = parseEnvTokenAt(value, index);
+    if (token) {
+      yield { ...token, start: index };
+      index = token.end;
     }
-    const token = parseEnvTokenAt(value, i);
-    if (!token) {
-      continue;
-    }
-    tokens.push({ kind: token.kind, name: token.name, defaultValue: token.defaultValue });
-    i = token.end;
   }
-  return tokens;
 }
 
 /** Missing environment variable warning emitted when substitution is configured to continue. */
@@ -176,79 +174,49 @@ function substituteString(
     opts?.onPendingEnvSecretRef?.(authoredRef.id, configPath);
   }
   const chunks: string[] = [];
-
-  for (let i = 0; i < value.length; i += 1) {
-    const char = value.charAt(i);
-    if (char !== "$") {
-      chunks.push(char);
-      continue;
-    }
-
-    const token = parseEnvTokenAt(value, i);
-    if (token?.kind === "escaped") {
+  let end = 0;
+  for (const token of iterateEnvTemplateTokens(value)) {
+    chunks.push(value.slice(end, token.start));
+    end = token.end + 1;
+    if (token.kind === "escaped") {
       chunks.push(renderEnvTemplateToken(token));
-      i = token.end;
       continue;
     }
-    if (token?.kind === "substitution") {
-      const envValue = env[token.name];
-      if (envValue === undefined || envValue === "") {
-        if (token.defaultValue !== undefined) {
-          // An authored fallback resolves the reference, so this is not a missing var:
-          // no warning, no MissingEnvVarError, and no pending-SecretRef signal.
-          chunks.push(token.defaultValue);
-          i = token.end;
-          continue;
-        }
-        if (opts?.onMissing) {
-          opts.onMissing({ varName: token.name, configPath });
-          if (authoredRef?.id === token.name) {
-            opts.onPendingEnvSecretRef?.(token.name, configPath);
-          }
-          // Preserve the original placeholder so the value is visibly unresolved.
-          chunks.push(renderEnvTemplateToken(token));
-          i = token.end;
-          continue;
-        }
-        throw new MissingEnvVarError(token.name, configPath);
+    const envValue = env[token.name];
+    if (envValue === undefined || envValue === "") {
+      if (token.defaultValue !== undefined) {
+        // An authored fallback resolves the reference without a missing or pending signal.
+        chunks.push(token.defaultValue);
+        continue;
       }
-      if (authoredRef?.id === token.name) {
-        opts?.onResolvedEnvSecretRef?.(token.name, configPath);
+      if (opts?.onMissing) {
+        opts.onMissing({ varName: token.name, configPath });
+        if (authoredRef?.id === token.name) {
+          opts.onPendingEnvSecretRef?.(token.name, configPath);
+        }
+        // Preserve the original placeholder so the value is visibly unresolved.
+        chunks.push(renderEnvTemplateToken(token));
+        continue;
       }
-      chunks.push(envValue);
-      i = token.end;
-      continue;
+      throw new MissingEnvVarError(token.name, configPath);
     }
-
-    // Leave untouched if not a recognized pattern
-    chunks.push(char);
+    if (authoredRef?.id === token.name) {
+      opts?.onResolvedEnvSecretRef?.(token.name, configPath);
+    }
+    chunks.push(envValue);
   }
+  chunks.push(value.slice(end));
 
   return chunks.join("");
 }
 
 /** Detects unescaped `${VAR}` references without treating escaped `$${VAR}` as references. */
 export function containsEnvVarReference(value: string): boolean {
-  if (!value.includes("$")) {
-    return false;
-  }
-
-  for (let i = 0; i < value.length; i += 1) {
-    const char = value[i];
-    if (char !== "$") {
-      continue;
-    }
-
-    const token = parseEnvTokenAt(value, i);
-    if (token?.kind === "escaped") {
-      i = token.end;
-      continue;
-    }
-    if (token?.kind === "substitution") {
+  for (const token of iterateEnvTemplateTokens(value)) {
+    if (token.kind === "substitution") {
       return true;
     }
   }
-
   return false;
 }
 

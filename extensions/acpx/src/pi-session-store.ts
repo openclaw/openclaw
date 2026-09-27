@@ -218,7 +218,7 @@ function parsePiJsonLines(content: string): Record<string, unknown>[] {
   });
 }
 
-function textFromContent(content: unknown): string {
+export function piMessageText(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }
@@ -255,7 +255,7 @@ function processSummaryLine(state: PiSummaryScanState, line: Buffer): void {
     isRecord(entry.message) &&
     entry.message.role === "user"
   ) {
-    state.firstMessage = readBoundedString(textFromContent(entry.message.content), 1_000);
+    state.firstMessage = readBoundedString(piMessageText(entry.message.content), 1_000);
   }
 }
 

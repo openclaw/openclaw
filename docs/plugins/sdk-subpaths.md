@@ -576,6 +576,15 @@ HTTP capture reads a cloned response body: waiting for that read must not delay
 handing the original response to its caller. WebSocket event callbacks likewise
 leave capture completion to their lifecycle owner.
 
+The published 2026.9.6 host does not expose these async capture operations. Plugins
+supporting that host must read optional diagnostic operations from the SDK module
+namespace and check availability before calling them. Ordinary channel or provider
+operations continue without those diagnostics; configured proxy routing still
+applies. Do not fall back to synchronous capture writes. Features that require
+capture storage or readback must report an unavailable capability instead of
+claiming successful capture. Remove these availability checks when the plugin's
+minimum supported host includes the async operations.
+
 For long-lived streams, observe capture completion separately and let the runtime
 finalizer settle it during cleanup. If a maintenance callback returns or awaits
 the capture Promise, maintenance waits for that body capture too. Use the capture

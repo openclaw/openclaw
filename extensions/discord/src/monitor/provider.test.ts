@@ -294,7 +294,7 @@ describe("monitorDiscordProvider", () => {
     );
     providerTesting.setCreateClient((options, handlers, plugins = []) => {
       clientConstructorOptionsMock(options);
-      const pluginRegistry = plugins.map((plugin) => ({ id: plugin.id, plugin }));
+      const pluginRegistry = [...plugins];
       return {
         options,
         listeners: handlers.listeners ?? [],
@@ -310,7 +310,7 @@ describe("monitorDiscordProvider", () => {
           await clientDeployCommandsMock(deployOptions),
         fetchUser: async (target: string) => await clientFetchUserMock(target),
         getPlugin: (name: string) =>
-          clientGetPluginMock(name) ?? pluginRegistry.find((entry) => entry.id === name)?.plugin,
+          clientGetPluginMock(name) ?? pluginRegistry.find((plugin) => plugin.id === name),
       } as never;
     });
     setActivePluginRegistry(createEmptyPluginRegistry());

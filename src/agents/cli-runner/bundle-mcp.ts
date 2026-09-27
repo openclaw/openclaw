@@ -2,6 +2,7 @@
  * Prepares bundled MCP configuration for CLI runner backends.
  */
 import path from "node:path";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -170,9 +171,7 @@ function applyCodexMcpToolDenials(
           return [serverName, server];
         }
         const toolFilter = isRecord(server.toolFilter) ? server.toolFilter : {};
-        const existing = Array.isArray(toolFilter.exclude)
-          ? toolFilter.exclude.filter((name): name is string => typeof name === "string")
-          : [];
+        const existing = filterStringEntries(toolFilter.exclude);
         return [
           serverName,
           {

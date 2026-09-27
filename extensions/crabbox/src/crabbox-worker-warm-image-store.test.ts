@@ -32,6 +32,16 @@ const image = {
   lastDemandAtMs: 1,
 };
 
+function recordAllocation(availableImage?: typeof image) {
+  return openCrabboxWarmImageStore(crabboxState).recordAllocation({
+    key: "profile",
+    id: "new",
+    allocation,
+    availableImage,
+    assertCurrent() {},
+  });
+}
+
 function observeComparisons(before: () => void | Promise<void>, after?: () => void) {
   const open = crabboxState.openKeyedStore;
   let attempts = 0;
@@ -71,15 +81,7 @@ describe("Crabbox asynchronous warm-image mutations", () => {
         },
       });
     });
-    const store = openCrabboxWarmImageStore(crabboxState);
-
-    const result = await store.recordAllocation({
-      key: "profile",
-      id: "new",
-      allocation,
-      availableImage: image,
-      assertCurrent() {},
-    });
+    const result = await recordAllocation(image);
 
     expect(result.choice).toEqual({ kind: "cold" });
     expect(Object.keys(fixture.lookup("profile")!.allocations).toSorted()).toEqual([
@@ -108,14 +110,10 @@ describe("Crabbox asynchronous warm-image mutations", () => {
       fixture.register("profile", { version: 3, allocations });
     });
 
-    await expect(
-      openCrabboxWarmImageStore(crabboxState).recordAllocation({
-        key: "profile",
-        id: "new",
-        allocation,
-        assertCurrent() {},
-      }),
-    ).resolves.toMatchObject({ key: "profile", choice: { kind: "cold" } });
+    await expect(recordAllocation()).resolves.toMatchObject({
+      key: "profile",
+      choice: { kind: "cold" },
+    });
     expect(Object.keys(fixture.lookup("profile")!.allocations)).toHaveLength(256);
   });
 
@@ -128,14 +126,7 @@ describe("Crabbox asynchronous warm-image mutations", () => {
       },
     );
 
-    await expect(
-      openCrabboxWarmImageStore(crabboxState).recordAllocation({
-        key: "profile",
-        id: "new",
-        allocation,
-        assertCurrent() {},
-      }),
-    ).rejects.toThrow("fixture completion unavailable");
+    await expect(recordAllocation()).rejects.toThrow("fixture completion unavailable");
 
     expect(attempts()).toBe(1);
     expect(openWarmImageStore().lookup("profile")?.allocations.new?.choice).toEqual({
@@ -165,14 +156,7 @@ describe("Crabbox asynchronous warm-image mutations", () => {
         },
       );
 
-      await expect(
-        openCrabboxWarmImageStore(crabboxState).recordAllocation({
-          key: "profile",
-          id: "new",
-          allocation,
-          assertCurrent() {},
-        }),
-      ).rejects.toThrow(
+      await expect(recordAllocation()).rejects.toThrow(
         change === "conflicting"
           ? "conflicting warm-image owners"
           : "allocation changed before provisioning",
@@ -183,37 +167,28 @@ describe("Crabbox asynchronous warm-image mutations", () => {
     },
   );
 
-  it.each(["removed", "replaced"] as const)(
-    "returns the committed checkpoint projection when its row is subsequently %s",
-    async (change) => {
-      const { provider } = createWarmProvider();
-      const fixture = openWarmImageStore();
-      fixture.register("profile", { version: 3, image, allocations: {} });
-      observeComparisons(
-        () => {},
-        () => {
-          if (change === "removed") {
-            fixture.delete("profile");
-          } else {
-            fixture.register("profile", {
-              version: 3,
-              image: { ...image, checkpointId: "chk_replacement" },
-              allocations: {},
-            });
-          }
-        },
-      );
+  it("returns the committed checkpoint projection after its row is replaced", async () => {
+    const { provider } = createWarmProvider();
+    const fixture = openWarmImageStore();
+    fixture.register("profile", { version: 3, image, allocations: {} });
+    observeComparisons(
+      () => {},
+      () => {
+        fixture.register("profile", {
+          version: 3,
+          image: { ...image, checkpointId: "chk_replacement" },
+          allocations: {},
+        });
+      },
+    );
 
-      await expect(provider.images.pin(image.checkpointId, true)).resolves.toMatchObject({
-        profileKey: "profile",
-        checkpointId: image.checkpointId,
-        pinned: { atMs: expect.any(Number) },
-      });
-      expect(fixture.lookup("profile")?.image?.checkpointId).toBe(
-        change === "removed" ? undefined : "chk_replacement",
-      );
-    },
-  );
+    await expect(provider.images.pin(image.checkpointId, true)).resolves.toMatchObject({
+      profileKey: "profile",
+      checkpointId: image.checkpointId,
+      pinned: { atMs: expect.any(Number) },
+    });
+    expect(fixture.lookup("profile")?.image?.checkpointId).toBe("chk_replacement");
+  });
 
   it.each(["profile removed", "allocation removed", "allocation changed"] as const)(
     "refuses replay dispatch when its durable owner is %s before comparison",

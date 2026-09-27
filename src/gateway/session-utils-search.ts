@@ -67,11 +67,6 @@ function matchesSessionListSearch(fields: Array<string | undefined>, search: str
   );
 }
 
-function shouldResolveDerivedSessionModelSearchFields(search: string): boolean {
-  // Preserve key-query semantics: derived model aliases are not agent-key matches.
-  return !search.startsWith("agent:");
-}
-
 // Selection facts are replaced with the resident entry; weak keys release retired revisions.
 const staticSearchFields = new WeakMap<
   NonNullable<ReturnType<SessionListTargetLookup>>["selection"],
@@ -154,7 +149,8 @@ export function createSessionListSearchMatcher(params: {
       target.materialized?.source ?? target.getModelFacts?.(),
       "prepared search row model facts",
     );
-    if (shouldResolveDerivedSessionModelSearchFields(search)) {
+    // Derived model aliases are not agent-key matches.
+    if (!search.startsWith("agent:")) {
       const subagentRun = context().subagentRuns.getDisplaySubagentRun(storeKey);
       const resolvedModel = resolveSessionModelIdentityRef(
         cfg,

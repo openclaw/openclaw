@@ -18,7 +18,6 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
-import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import type { NativeSubagentMonitorRuntime } from "./native-subagent-monitor-types.js";
 import {
@@ -41,44 +40,9 @@ import {
   turnStartedNotification,
   threadRead,
   taskRecord,
+  observeCompletionAttempts,
 } from "./native-subagent-monitor.test-support.js";
 import type { JsonObject } from "./protocol.js";
-
-function observeCompletionAttempts() {
-  const attempts = new Map<Promise<void>, string>();
-  // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
-  const original = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
-  const observer = vi
-    .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
-    .mockImplementation(function (
-      this: CodexNativeSubagentCompletionDelivery,
-      state,
-      child,
-      trigger,
-    ) {
-      const attempt = original.call(this, state, child, trigger);
-      attempts.set(attempt, child.runId);
-      return attempt;
-    });
-  onTestFinished(() => observer.mockRestore());
-  return {
-    async settle(runId?: string) {
-      // Observe the real attempt through worker persistence and receipt settlement.
-      // Advancing a timer or yielding one event-loop turn cannot establish either.
-      while (true) {
-        const batch = [...attempts].filter(([, id]) => runId === undefined || id === runId);
-        if (batch.length === 0) {
-          return;
-        }
-        for (const [attempt] of batch) {
-          attempts.delete(attempt);
-        }
-        await Promise.all(batch.map(([attempt]) => attempt));
-      }
-    },
-    restore: () => observer.mockRestore(),
-  };
-}
 
 describe("Native completion delivery settlement", () => {
   async function withDeliveryFixture(
@@ -345,7 +309,7 @@ describe("CodexNativeSubagentMonitor", () => {
     await client.notify(nativeCompletionNotification({ agentPath: "child-b" }));
 
     expect(releaseParentThread).toHaveBeenCalledOnce();
-    monitor.dispose();
+    await monitor.dispose();
     expect(releaseParentThread).toHaveBeenCalledOnce();
   });
 
@@ -447,7 +411,7 @@ describe("CodexNativeSubagentMonitor", () => {
     for (const pin of pins.filter((candidate) => candidate.release.mock.calls.length > 0)) {
       expect(pin.release).toHaveBeenCalledOnce();
     }
-    monitor.dispose();
+    await monitor.dispose();
     for (const pin of pins) {
       expect(pin.release).toHaveBeenCalledOnce();
     }
@@ -481,7 +445,7 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(retainChildThread).toHaveBeenCalledExactlyOnceWith("child-thread");
     expect(forgetChildThread).toHaveBeenCalledOnce();
     expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("cancels running children and releases their parent pin when closeAgent completes", async () => {
@@ -506,7 +470,7 @@ describe("CodexNativeSubagentMonitor", () => {
     );
     expect(releaseParentThread).toHaveBeenCalledOnce();
     expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("retires parent generations idempotently and fences late child completions", async () => {
@@ -519,8 +483,10 @@ describe("CodexNativeSubagentMonitor", () => {
     const parent = await registerParent(monitor);
     await notifyChildStarted(client);
 
-    monitor.retireParent("parent-thread");
-    monitor.retireParent("parent-thread");
+    await Promise.all([
+      monitor.retireParent("parent-thread"),
+      monitor.retireParent("parent-thread"),
+    ]);
     await parent.unregister();
     await client.notify(nativeCompletionNotification());
 
@@ -529,7 +495,7 @@ describe("CodexNativeSubagentMonitor", () => {
     );
     expect(releaseParentThread).toHaveBeenCalledOnce();
     expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("keeps native subagent task mirroring on the shared client", async () => {
@@ -632,7 +598,7 @@ describe("CodexNativeSubagentMonitor", () => {
         result: "child v2 result",
       }),
     );
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("selects the exact bound parent turn and preserves the remaining owner on unregister", async () => {
@@ -672,7 +638,7 @@ describe("CodexNativeSubagentMonitor", () => {
       },
     });
     expect(firstClaim).toHaveBeenCalledWith("child-first");
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("leaves wait snapshots to receipts until the child turn authoritatively completes", async () => {
@@ -719,7 +685,7 @@ describe("CodexNativeSubagentMonitor", () => {
         terminalSummary: "child final result",
       }),
     );
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("does not complete mirrored task rows from idle status before native completion", async () => {
@@ -853,10 +819,10 @@ describe("CodexNativeSubagentMonitor", () => {
     const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
     const events: Parameters<Parameters<typeof onAgentEvent>[0]>[0][] = [];
     const unsubscribe = onAgentEvent((event) => events.push(event));
-    onTestFinished(() => {
+    onTestFinished(async () => {
       unsubscribe();
-      monitor.retireParent("parent-thread");
-      monitor.dispose();
+      await monitor.retireParent("parent-thread");
+      await monitor.dispose();
     });
     (await registerParent(monitor)).bindTurn("parent-turn");
     await notifyChildStarted(client, "parent-thread", "receiver-thread", "receiver-thread");
@@ -958,6 +924,7 @@ describe("CodexNativeSubagentMonitor", () => {
         ].map((observation) => Object.assign(observation, { sourceId })),
       );
       client.close();
+      await monitor.dispose();
       expect(events.at(-1)?.data).toEqual({ state: "unknown", sourceId, invalidate: true });
       expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
       expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
@@ -2177,7 +2144,7 @@ describe("CodexNativeSubagentMonitor", () => {
         await client.notify(nativeCompletionNotification());
         expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
         if (outcome === "retired") {
-          monitor.retireParent("parent-thread");
+          await monitor.retireParent("parent-thread");
         } else if (outcome === "replaced") {
           const replacement = {
             ...task,
@@ -3423,7 +3390,7 @@ describe("CodexNativeSubagentMonitor", () => {
       await vi.advanceTimersByTimeAsync(30);
 
       expect(client.request).not.toHaveBeenCalled();
-      monitor.dispose();
+      await monitor.dispose();
     } finally {
       vi.useRealTimers();
     }

@@ -186,7 +186,6 @@ export async function verifyUpdatedGateway(
   params: UpdateGatewayReadinessParams & {
     result: UpdateRunResult;
     opts: UpdateCommandOptions;
-    nodeRunner?: string;
     onVerified?: (verifiedAtMs: number) => void;
     purpose?: "recovery";
   },

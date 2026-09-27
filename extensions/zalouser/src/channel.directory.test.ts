@@ -1,25 +1,18 @@
-// Zalouser tests cover channelirectory plugin behavior.
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import "./accounts.test-mocks.js";
 import { listZalouserDirectoryGroupMembers } from "./directory.js";
-// Preserve module setup before modules that consume it.
-// oxfmt-ignore
-import { listZaloGroupMembersMock } from "./zalo-js.test-mocks.js";
 
 describe("zalouser directory group members", () => {
-  beforeEach(() => {
-    listZaloGroupMembersMock.mockClear();
-  });
-
   it.each([
     ["group:1471383327500481391", "1471383327500481391"],
     ["1471383327500481391", "1471383327500481391"],
     ["g-1471383327500481391", "g-1471383327500481391"],
   ])("resolves directory group %s to %s", async (groupId, expectedId) => {
+    const listZaloGroupMembers = vi.fn(async () => []);
     await listZalouserDirectoryGroupMembers(
       { cfg: {}, accountId: "default", groupId },
-      { listZaloGroupMembers: listZaloGroupMembersMock },
+      { listZaloGroupMembers },
     );
-    expect(listZaloGroupMembersMock).toHaveBeenLastCalledWith("default", expectedId);
+    expect(listZaloGroupMembers).toHaveBeenLastCalledWith("default", expectedId);
   });
 });

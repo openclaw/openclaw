@@ -3,6 +3,7 @@
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 
 type OpenAiCompatError = {
   status: number;
@@ -82,9 +83,9 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
   return {
     status,
     error: {
-      message,
+      message: redactToolPayloadText(message),
       type,
-      ...(described.code ? { code: described.code } : {}),
+      ...(described.code ? { code: redactToolPayloadText(described.code) } : {}),
     },
   };
 }

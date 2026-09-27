@@ -1,3 +1,4 @@
+import { retainMutationAuthority } from "./mutation-authority.js";
 import {
   discardPackageUpdateBackup,
   discardPackageLauncherBackup,
@@ -38,18 +39,7 @@ export async function retireVerifiedPackageSwap(params: {
   const messages: string[] = [];
   // The filesystem fallback can recheck an assertion after catching it.
   // A later successful read cannot turn that authority failure into cleanup.
-  let assertionFailure: { cause: unknown } | undefined;
-  const assertRetirementCurrent = () => {
-    if (assertionFailure) {
-      throw assertionFailure.cause;
-    }
-    try {
-      assertCurrent();
-    } catch (cause) {
-      assertionFailure = { cause };
-      throw cause;
-    }
-  };
+  const assertRetirementCurrent = retainMutationAuthority(assertCurrent);
   if (activation) {
     await activation.retire();
     // The anchor and helper are retired; only the executor fence remains.

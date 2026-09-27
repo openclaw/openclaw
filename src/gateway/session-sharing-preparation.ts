@@ -20,7 +20,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
-import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
+import {
+  isSessionStoreTopologyChange,
+  sessionChanges,
+  type SessionRowChange,
+} from "../sessions/session-row-changes.js";
 import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import {
@@ -126,7 +130,10 @@ export async function prepareSessionMutationFacts(
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
       // RAM has its original handle/resource fence; durable discovery waits for writer promotion.
-      if (change.scope === "stores" && (beforeDiscovery || incognito)) {
+      if (isSessionStoreTopologyChange(change)) {
+        if (!beforeDiscovery && !incognito) {
+          invalidate();
+        }
         return;
       }
       if (
@@ -140,6 +147,8 @@ export async function prepareSessionMutationFacts(
           "worker-placements",
           "worker-environments",
           "config",
+          "config-presentation",
+          "config-profiles",
         ].includes(change.scope)
       ) {
         return;

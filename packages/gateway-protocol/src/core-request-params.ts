@@ -13,6 +13,7 @@ import type {
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
 import type * as PortalSchema from "./schema/portals.js";
+import type { PresenceActivityParams } from "./schema/presence.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
 import type {
   ThemesListParams,
@@ -26,6 +27,7 @@ import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "presence.activity": PresenceActivityParams;
   "cron.history": CronHistoryParams;
   "users.personalFile.get": UsersSchema.UsersPersonalFileGetParams;
   "users.personalFile.set": UsersSchema.UsersPersonalFileSetParams;

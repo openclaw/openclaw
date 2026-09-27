@@ -4,6 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
+  appendTranscriptEvent,
   listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntry,
@@ -47,6 +48,47 @@ export async function writeSessionStore(
     } else {
       await upsertSessionEntryCore({ storePath, sessionKey }, canonical);
     }
+  }
+}
+
+export async function writeTerminalTranscriptSessionStore(params: {
+  storePath: string;
+  sessionKey: string;
+  sessionId: string;
+  status?: SessionEntry["status"];
+  omitStatus?: boolean;
+  updatedAt: number;
+  endedAt: number;
+  transcriptMutationOrder: "after-registry" | "before-registry";
+}): Promise<void> {
+  const sessionFile = `${params.sessionId}.jsonl`;
+  const status = params.status ?? (params.omitStatus ? undefined : "done");
+  const appendTranscript = () =>
+    appendTranscriptEvent(
+      {
+        agentId: "main",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
+      { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
+    );
+  if (params.transcriptMutationOrder === "before-registry") {
+    await appendTranscript();
+  }
+  await writeSessionStore(params.storePath, {
+    [params.sessionKey]: {
+      sessionId: params.sessionId,
+      sessionFile,
+      updatedAt: params.updatedAt,
+      startedAt: params.endedAt - 10_000,
+      endedAt: params.endedAt,
+      runtimeMs: 9_000,
+      ...(status ? { status } : {}),
+    },
+  });
+  if (params.transcriptMutationOrder === "after-registry") {
+    await appendTranscript();
   }
 }
 

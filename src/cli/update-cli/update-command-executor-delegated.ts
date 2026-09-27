@@ -16,8 +16,6 @@ import {
 import { resolveUpdateCommandChildBinding } from "./update-command-executor-grant.js";
 import {
   admittedAuthorities,
-  admittedRunIds,
-  retainedOwners,
   slotReservations,
   occupiedSlotKey,
   childOwners,
@@ -176,7 +174,6 @@ export async function withDelegatedUpdateCommandExecutor<T>(
           try {
             fence.assertCurrent();
             if (databaseIdentity) {
-              admittedRunIds.set(fence, runId);
               admittedAuthorities.set(fence, {
                 authority: Object.freeze({
                   ...databaseIdentity,
@@ -185,10 +182,9 @@ export async function withDelegatedUpdateCommandExecutor<T>(
                 }),
                 assertCurrent: assertBase,
                 managedHandoff,
+                runId,
+                retainedRoot: retained?.key,
               });
-            }
-            if (retained) {
-              retainedOwners.set(fence, retained.key);
             }
             if (options) {
               activation.start(
@@ -227,8 +223,6 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         childOwners.delete(fence);
         slotReservations.delete(fence);
         admittedAuthorities.delete(fence);
-        admittedRunIds.delete(fence);
-        retainedOwners.delete(fence);
       }
     }, activation.signal),
   );

@@ -680,6 +680,10 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
           onSplitRight: splitMode ? this.handleSplitRight : undefined,
           ownerKey: JSON.stringify([column.id, pane.id]),
           pane,
+          panePosition: {
+            column: layout.columns.indexOf(column) + 1,
+            row: column.panes.indexOf(pane) + 1,
+          },
           sessionSlots: retainedSessions.get(pane.id) ?? [],
           splitMode,
           unbound: this.retainedSessions.unboundPaneIds.has(pane.id),

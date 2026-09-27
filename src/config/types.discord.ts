@@ -32,6 +32,8 @@ export type DiscordDmConfig = {
 
 export type DiscordGuildChannelConfig = {
   requireMention?: boolean;
+  /** Override mention gating in threads created by this bot; omitted preserves autoThread behavior. */
+  requireMentionInBotThreads?: boolean;
   /**
    * If true, drop messages addressed to another identity by mention or bot reply, but not this
    * bot (not @everyone/@here).
@@ -66,6 +68,8 @@ export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
+  /** Default for bot-created threads unless the channel overrides it. */
+  requireMentionInBotThreads?: boolean;
   /**
    * If true, drop messages addressed to another identity by mention or bot reply, but not this
    * bot (not @everyone/@here).

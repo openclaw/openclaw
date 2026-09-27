@@ -49,7 +49,9 @@ import {
   WorkerFaultPlacementLifecycle,
 } from "./worker-fault-placement-lifecycle.test-support.js";
 import { bindWorkerFixtureTurnSource } from "./worker-fault-session-target.test-support.js";
-import * as workerRpc from "./worker-rpc-clients.js";
+import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
+import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
+import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 
 export const SESSION_ID = "fault-session";
 export const SESSION_KEY = "agent:main:fault-session";
@@ -146,9 +148,9 @@ type ProviderPlan =
 
 export type WorkerClients = {
   connection: WorkerConnection;
-  transcript: workerRpc.WorkerTranscriptCommitClient;
-  live: workerRpc.WorkerLiveEventClient;
-  inference: workerRpc.WorkerInferenceProxyClient;
+  transcript: WorkerTranscriptCommitClient;
+  live: WorkerLiveEventClient;
+  inference: WorkerInferenceProxyClient;
 };
 
 type WorkerClientOptions = {
@@ -367,16 +369,16 @@ export class ComposedGatewayHarness {
     });
     return {
       connection,
-      transcript: new workerRpc.WorkerTranscriptCommitClient(connection, {
+      transcript: new WorkerTranscriptCommitClient(connection, {
         runEpoch: epoch,
         baseLeafId: params.baseLeafId ?? null,
         initialSeq: params.initialSeq ?? 1,
       }),
-      live: new workerRpc.WorkerLiveEventClient(connection, {
+      live: new WorkerLiveEventClient(connection, {
         runEpoch: epoch,
         initialAckedSeq: params.initialAckedSeq ?? 0,
       }),
-      inference: new workerRpc.WorkerInferenceProxyClient(connection),
+      inference: new WorkerInferenceProxyClient(connection),
     };
   }
 

@@ -12,10 +12,10 @@ export const admittedAuthorities = new WeakMap<
     authority: ManagedUpdateLeaseAuthority;
     assertCurrent: () => void;
     managedHandoff: boolean;
+    runId: string;
+    retainedRoot?: string;
   }
 >();
-export const admittedRunIds = new WeakMap<UpdateRecoveryFence, string>();
-export const retainedOwners = new WeakMap<UpdateRecoveryFence, string>();
 
 export const preflightReleases = new WeakMap<UpdateRecoveryFence, () => void>();
 export const slotReservations = new WeakMap<UpdateRecoveryFence, (root: string) => void>();

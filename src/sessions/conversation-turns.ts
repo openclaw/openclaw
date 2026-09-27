@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type ConversationTurnReply = {
@@ -102,22 +103,10 @@ export function registerPendingConversationTurn(params: {
   const createdAt = Date.now();
   const timeoutMs = Math.max(0, params.timeoutMs);
   let settled = false;
-  let resolvePromise: (reply: ConversationTurnReply | undefined) => void = () => undefined;
-  const promise = new Promise<ConversationTurnReply | undefined>((resolve) => {
-    resolvePromise = resolve;
-  });
-  let resolveCorrelationReady: () => void = () => undefined;
-  const correlationReady = new Promise<void>((resolve) => {
-    resolveCorrelationReady = resolve;
-  });
-  let correlationReadySettled = false;
-  const markCorrelationReady = () => {
-    if (correlationReadySettled) {
-      return;
-    }
-    correlationReadySettled = true;
-    resolveCorrelationReady();
-  };
+  const { promise, resolve: resolvePromise } = createDeferredCore<
+    ConversationTurnReply | undefined
+  >();
+  const { promise: correlationReady, resolve: markCorrelationReady } = createDeferredCore();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stopTimeout = () => {
     if (timer) {

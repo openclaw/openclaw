@@ -4,8 +4,6 @@ import type { ChildOperation, ChildPurpose } from "./update-command-executor-chi
 import {
   originalCancellations,
   admittedAuthorities,
-  admittedRunIds,
-  retainedOwners,
   preflightReleases,
   slotReservations,
   childOwners,
@@ -35,7 +33,7 @@ export function captureUpdateCommandExecutorAuthority(
 ): ManagedUpdateLeaseAuthority {
   fence.assertCurrent();
   const admitted = admittedAuthorities.get(fence);
-  if (!admitted || (runId !== undefined && admittedRunIds.get(fence) !== runId)) {
+  if (!admitted || (runId !== undefined && admitted.runId !== runId)) {
     throw new UpdateCommandRecoveryPendingError("Package recovery requires its admitted executor.");
   }
   return admitted.authority;
@@ -47,7 +45,7 @@ export function assertUpdateRequesterContinuationOwner(
   runId: string,
 ): void {
   const admitted = admittedAuthorities.get(fence);
-  if (!admitted?.managedHandoff || admittedRunIds.get(fence) !== runId) {
+  if (!admitted?.managedHandoff || admitted.runId !== runId) {
     throw new UpdateCommandRecoveryPendingError(
       "Requester continuation requires its admitted Gateway update owner.",
     );
@@ -58,12 +56,12 @@ export function assertUpdateRequesterContinuationOwner(
 /** Compatibility requirement from a live admission, never a serialized claim. */
 export function requiresRetainedUpdateCommandOwner(fence: UpdateRecoveryFence): boolean {
   captureUpdateCommandExecutorAuthority(fence);
-  return retainedOwners.has(fence);
+  return admittedAuthorities.get(fence)?.retainedRoot !== undefined;
 }
 
 export function assertRetainedUpdateCommandRoot(fence: UpdateRecoveryFence, root: string): void {
   captureUpdateCommandExecutorAuthority(fence);
-  if (retainedOwners.get(fence) !== resolveUpdateInstallRoot(root)) {
+  if (admittedAuthorities.get(fence)?.retainedRoot !== resolveUpdateInstallRoot(root)) {
     throw new UpdateCommandRecoveryPendingError(
       "Service recovery requires its retained executor root.",
     );

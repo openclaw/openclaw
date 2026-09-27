@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi, type Mock } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
+import { resolveGatewayTaskScriptPath } from "../../daemon/paths.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   POST_CORE_EXECUTOR_CAPABILITY,
@@ -362,6 +363,9 @@ export function createUpdateCliPackageFixtures({
   ) => {
     serviceReadCommand.mockResolvedValue({
       programArguments,
+      ...(process.platform === "win32"
+        ? { sourcePath: resolveGatewayTaskScriptPath(process.env) }
+        : {}),
       environment: {
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",

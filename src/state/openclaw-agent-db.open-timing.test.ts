@@ -21,14 +21,14 @@ import {
 import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
-const logger = vi.hoisted(() => ({ warn: vi.fn() }));
+const logger = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
   return {
     ...actual,
     createSubsystemLogger: (name: string) => {
       const original = actual.createSubsystemLogger(name);
-      return name === "state/agent-db" ? { ...original, warn: logger.warn } : original;
+      return name === "state/agent-db" ? { ...original, ...logger } : original;
     },
   };
 });
@@ -41,6 +41,7 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
   logger.warn.mockClear();
+  logger.info.mockClear();
 });
 
 function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheckMs = 0) {
@@ -66,7 +67,7 @@ function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheck
       const prepare = database.prepare.bind(database);
       vi.spyOn(database, "prepare").mockImplementation((sql) => {
         const statement = prepare(sql);
-        if (sql === "PRAGMA integrity_check;") {
+        if (sql === "PRAGMA integrity_check('sqlite_schema');") {
           const all = statement.all.bind(statement);
           vi.spyOn(statement, "all").mockImplementation((...parameters) => {
             try {
@@ -221,6 +222,15 @@ describe("agent database open timings", () => {
           /integrity_check failed.*idx_agent_session_nodes_updated_at.*openclaw doctor --fix/,
         );
         expect(logger.warn).not.toHaveBeenCalled();
+        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
+          "agent database integrity gate",
+          expect.objectContaining({
+            path: pathname,
+            integrityGateOutcome: "failed",
+            integrityGateReason: "revoked",
+            integrityGateMode: "tables",
+          }),
+        );
         const unchanged = sqlite.openNodeSqliteDatabase(pathname, { readOnly: true });
         try {
           expect(unchanged.prepare("PRAGMA integrity_check").get()?.integrity_check).toMatch(
@@ -308,6 +318,12 @@ describe("agent database open timings", () => {
       thresholdMs: 1_000,
       integrityGateMs: 1_120,
       integrityGateOutcome: "healthy",
+      integrityGateReason: "revoked",
+      integrityGateMode: "tables",
+      integrityTableTimings: expect.arrayContaining([
+        { table: "sqlite_schema", check: "integrity_check", elapsedMs: 120 },
+        { table: "transcript_events", check: "quick_check", elapsedMs: 0 },
+      ]),
       integrityCheckSyncMs: 120,
       integrityOutsideCheckMs: 1_000,
       canonicalIndexMs: 0,
@@ -376,6 +392,12 @@ describe("agent database open timings", () => {
         thresholdMs: 1_000,
         integrityGateMs: 1_000,
         integrityGateOutcome: "healthy",
+        integrityGateReason: "revoked",
+        integrityGateMode: "tables",
+        integrityTableTimings: expect.arrayContaining([
+          { table: "sqlite_schema", check: "integrity_check", elapsedMs: expect.any(Number) },
+          { table: "transcript_events", check: "quick_check", elapsedMs: expect.any(Number) },
+        ]),
         integrityWorkerCheckMs: expect.any(Number),
         integrityWorkerLifetimeMs: 0,
         integrityOutsideWorkerMs: 1_000,

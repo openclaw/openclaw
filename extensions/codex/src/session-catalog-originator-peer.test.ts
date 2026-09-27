@@ -1,7 +1,6 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -46,7 +45,6 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   const methods: string[] = [];
   const cursors: Array<string | undefined> = [];
-  const pendingReplies = new Set<ReturnType<typeof setTimeout>>();
   let control: ReturnType<typeof createCodexSessionCatalogControl> | undefined;
   server.on("connection", (socket) => {
     socket.on("message", (raw) => {
@@ -73,19 +71,15 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
         const params = request.params as { cursor?: string; limit?: number };
         cursors.push(params.cursor);
         const page = Number(params.cursor ?? "0");
-        const reply = setTimeout(() => {
-          pendingReplies.delete(reply);
-          socket.send(
-            JSON.stringify({
-              id: request.id,
-              result: {
-                data: [pages[page]],
-                nextCursor: page + 1 < pages.length ? String(page + 1) : null,
-              },
-            }),
-          );
-        }, 10);
-        pendingReplies.add(reply);
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              data: [pages[page]],
+              nextCursor: page + 1 < pages.length ? String(page + 1) : null,
+            },
+          }),
+        );
         return;
       }
       socket.send(
@@ -124,7 +118,6 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
       ...(await control.homesForAgent("main"))[0]!,
       localSessionsRoot: sessionsRoot,
     };
-    const started = performance.now();
     await control.forRequest("main", source).initialize();
     const listParams = {
       agentId: "main",
@@ -140,12 +133,6 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
     const openedRollouts = opening.mock.calls.filter(
       ([file]) => typeof file === "string" && rolloutPaths.has(file),
     );
-    console.info("catalog-originator-peer", {
-      elapsedMs: Math.round(performance.now() - started),
-      pageCalls: cursors.length,
-      openedRollouts: openedRollouts.length,
-      methods,
-    });
     expect(result.hosts).toHaveLength(1);
     expect(result.hosts[0]).toMatchObject({ connected: true, sessions: [] });
     expect(result.hosts[0]).not.toHaveProperty("nextCursor");
@@ -164,9 +151,6 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
     await control?.stop();
     opening.mockRestore();
     await clearSharedCodexAppServerClientAndWait();
-    for (const pending of pendingReplies) {
-      clearTimeout(pending);
-    }
     await Promise.all(
       [...server.clients].map((socket) => {
         const closed = once(socket, "close");

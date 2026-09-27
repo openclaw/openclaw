@@ -14,17 +14,10 @@ import {
   type CoreHealthCheckDeps,
 } from "./doctor-core-checks.js";
 import { clearHealthChecksForTest } from "./health-check-registry.js";
-import type { HealthCheck, HealthFinding, HealthRepairEffect } from "./health-checks.js";
+import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn(async () => []),
-  detectExtraGatewayServiceIssues: vi.fn(async (): Promise<readonly { label: string }[]> => []),
-  extraGatewayServiceToHealthFinding: vi.fn((service: { label: string }): HealthFinding => ({
-    checkId: "core/doctor/gateway-services/extra",
-    severity: "warning",
-    message: service.label,
-  })),
-  extraGatewayServiceToRepairEffects: vi.fn((): readonly HealthRepairEffect[] => []),
   callGateway: vi.fn(),
   collectClawStateHealthFindings: vi.fn(
     async (_options?: {
@@ -38,12 +31,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   readPreparedModelCatalog: mocks.loadModelCatalog,
-}));
-
-vi.mock("../commands/doctor-gateway-services.js", () => ({
-  detectExtraGatewayServiceIssues: mocks.detectExtraGatewayServiceIssues,
-  extraGatewayServiceToHealthFinding: mocks.extraGatewayServiceToHealthFinding,
-  extraGatewayServiceToRepairEffects: mocks.extraGatewayServiceToRepairEffects,
 }));
 
 vi.mock("../claws/doctor.js", () => ({
@@ -179,10 +166,6 @@ describe("CORE_HEALTH_CHECKS", () => {
   beforeEach(() => {
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
-    mocks.detectExtraGatewayServiceIssues.mockClear();
-    mocks.detectExtraGatewayServiceIssues.mockResolvedValue([]);
-    mocks.extraGatewayServiceToHealthFinding.mockClear();
-    mocks.extraGatewayServiceToRepairEffects.mockClear();
     mocks.callGateway.mockReset();
     mocks.collectClawStateHealthFindings.mockReset();
     mocks.collectClawStateHealthFindings.mockResolvedValue([]);
@@ -300,73 +283,6 @@ describe("CORE_HEALTH_CHECKS", () => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     expect(createCoreHealthChecks(createDeps()).map((check) => check.id)).not.toContain(
       "core/doctor/claws-state",
-    );
-  });
-
-  it("threads deep mode into structured extra gateway service detection", async () => {
-    const check = getCheck(
-      createCoreHealthChecks(createDeps()),
-      "core/doctor/gateway-services/extra",
-    );
-    mocks.detectExtraGatewayServiceIssues.mockResolvedValueOnce([
-      {
-        label: "custom-gateway.service",
-      },
-    ]);
-
-    const ctx = {
-      mode: "lint" as const,
-      runtime,
-      cfg: {},
-      deep: true,
-    };
-
-    await check.detect(ctx);
-
-    expect(mocks.detectExtraGatewayServiceIssues).toHaveBeenCalledWith({ deep: true });
-    expect(mocks.extraGatewayServiceToHealthFinding).toHaveBeenCalledWith(
-      {
-        label: "custom-gateway.service",
-      },
-      0,
-      [{ label: "custom-gateway.service" }],
-    );
-  });
-
-  it("threads deep mode into structured extra gateway service repair previews", async () => {
-    const check = getCheck(
-      createCoreHealthChecks(createDeps()),
-      "core/doctor/gateway-services/extra",
-    );
-    mocks.detectExtraGatewayServiceIssues.mockResolvedValueOnce([
-      {
-        label: "legacy-gateway.service",
-      },
-    ]);
-    mocks.extraGatewayServiceToRepairEffects.mockReturnValueOnce([
-      {
-        kind: "service",
-        action: "would-remove-legacy-gateway-service",
-        target: "legacy-gateway.service",
-        dryRunSafe: false,
-      },
-    ]);
-
-    const ctx = {
-      mode: "fix" as const,
-      runtime,
-      cfg: {},
-      deep: true,
-      dryRun: true,
-    };
-
-    const result = await check.repair?.(ctx, []);
-
-    expect(mocks.detectExtraGatewayServiceIssues).toHaveBeenCalledWith({ deep: true });
-    expect(result?.effects).toContainEqual(
-      expect.objectContaining({
-        target: "legacy-gateway.service",
-      }),
     );
   });
 

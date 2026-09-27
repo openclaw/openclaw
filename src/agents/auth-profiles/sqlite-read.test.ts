@@ -40,6 +40,7 @@ beforeEach(() => {
     environment: { OPENCLAW_STATE_DIR: "/fixture" },
     coordinatorRuntime: { directory: "/fixture/coordinator", keepAlive: false },
     admission: {
+      coordinationKey: "file:root",
       databasePath: "/fixture/state.sqlite",
       identity: { key: "file:root", canonicalPath: "/fixture/state.sqlite" },
       assertCurrent: () => {},

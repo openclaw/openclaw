@@ -19,13 +19,9 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
 import { resolveSlackStreamingConfig } from "../../stream-mode.js";
-import { resolveSlackThreadTargets } from "../../threading.js";
+import { resolveSlackThreadContext } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
-import {
-  createSlackReplyDeliveryPlan,
-  resolveSlackThreadTs,
-  sanitizeSlackMonitorReplyPayload,
-} from "../replies.js";
+import { createSlackReplyDeliveryPlan, sanitizeSlackMonitorReplyPayload } from "../replies.js";
 import {
   isSlackStreamingEnabled,
   resolveSlackDisableBlockStreaming,
@@ -94,14 +90,14 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     }
   }
 
-  const threadTargets = resolveSlackThreadTargets({
+  const threadContext = resolveSlackThreadContext({
     message,
     replyToMode: prepared.replyToMode,
   });
   const forcedReplyThreadTs = prepared.forcedReplyThreadTs;
   const slackMessageMetadata = prepared.slackMessageMetadata;
-  const statusThreadTs = forcedReplyThreadTs ?? threadTargets.statusThreadTs;
-  const isThreadReply = threadTargets.isThreadReply;
+  const statusThreadTs = forcedReplyThreadTs ?? threadContext.messageThreadId;
+  const isThreadReply = threadContext.isThreadReply;
   const replyDeliveryMode = forcedReplyThreadTs ? "off" : prepared.replyToMode;
   const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
     cfg,
@@ -269,15 +265,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   });
 
   const slackStreaming = resolveSlackStreamingConfig({ streaming: account.config.streaming });
-  const streamThreadHint =
-    forcedReplyThreadTs ??
-    resolveSlackThreadTs({
-      replyToMode: replyDeliveryMode,
-      incomingThreadTs,
-      messageTs,
-      isThreadReply,
-      hasReplied: false,
-    });
+  const streamThreadHint = forcedReplyThreadTs ?? replyPlan.peekThreadTs();
   const hookRunner = getGlobalHookRunner();
   const modifyingHooksRegistered =
     (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
@@ -332,13 +320,10 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     isThreadReply,
     replyDeliveryMode,
     sourceReplyDeliveryMode,
-    sourceRepliesAreToolOnly,
     suppressRoomEventTyping,
     messageSentHookTarget,
     messageSentHookContext,
     messageSentDeliveryHookContext,
-    incomingThreadTs,
-    messageTs,
     statusReactionsEnabled,
     statusReactions,
     hasRepliedRef,

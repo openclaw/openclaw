@@ -358,13 +358,19 @@ export async function prepareGatewayKernelState(params: {
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
-  const authRateLimiter = createGatewayAuthRateLimiter(rateLimitConfig);
-  // Browser-origin attempts are throttled even when local CLI clients are exempt.
-  const browserAuthRateLimiter = createGatewayAuthRateLimiter({
-    ...rateLimitConfig,
-    exemptLoopback: false,
+  const authRateLimiter = createGatewayAuthRateLimiter(rateLimitConfig, {
+    scheduler,
+    id: "auth/main",
   });
-  const nodeReapprovalCoordinator = createNodeReapprovalCoordinator(rateLimitConfig);
+  // Browser-origin attempts are throttled even when local CLI clients are exempt.
+  const browserAuthRateLimiter = createGatewayAuthRateLimiter(
+    {
+      ...rateLimitConfig,
+      exemptLoopback: false,
+    },
+    { scheduler, id: "auth/browser" },
+  );
+  const nodeReapprovalCoordinator = createNodeReapprovalCoordinator(rateLimitConfig, { scheduler });
 
   const controlUiRootLifecycle = await startupTrace.measure("control-ui.root", () =>
     createGatewayControlUiRootLifecycle({
@@ -484,6 +490,7 @@ export async function prepareGatewayKernelState(params: {
     },
   });
   const createHttpTransportOptions = () => ({
+    scheduler: params.scheduler,
     cfg: cfgAtStart,
     getRuntimeConfig,
     bindHost,
@@ -525,26 +532,6 @@ export async function prepareGatewayKernelState(params: {
     clients: connectionState.clients,
     tailscaleMode,
   });
-  const {
-    clients,
-    mentionInbox,
-    broadcast,
-    broadcastToConnIds,
-    broadcastPluginEvent,
-    getBufferedAmount,
-    agentRunSeq,
-    dedupe,
-    chatRunState,
-    addChatRun,
-    removeChatRun,
-    chatAbortControllers,
-    chatQueuedTurns,
-    toolEventRecipients,
-    sessionEventSubscribers,
-    sessionMessageSubscribers,
-    isConnectionActive,
-  } = connectionState;
-
   return {
     ...bootstrap,
     scheduler,
@@ -607,27 +594,8 @@ export async function prepareGatewayKernelState(params: {
     watchNodeRequestHandler,
     createHttpTransportOptions,
     transportBridge,
-    connectionWork: connectionState.connectionWork,
+    ...connectionState,
     publishPresence: presencePublisher.publish,
     stopPresencePublications: presencePublisher.stop,
-    getSessionRowProjection: connectionState.getSessionRowProjection,
-    attachSessionRowProjection: connectionState.attachSessionRowProjection,
-    clients,
-    mentionInbox,
-    broadcast,
-    broadcastToConnIds,
-    broadcastPluginEvent,
-    getBufferedAmount,
-    agentRunSeq,
-    dedupe,
-    chatRunState,
-    addChatRun,
-    removeChatRun,
-    chatAbortControllers,
-    chatQueuedTurns,
-    toolEventRecipients,
-    sessionEventSubscribers,
-    sessionMessageSubscribers,
-    isConnectionActive,
   };
 }

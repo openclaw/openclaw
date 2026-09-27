@@ -31,6 +31,7 @@ import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
+import { registerBareRootArgumentTests } from "./run-main.bare-root.test-support.js";
 import {
   makeProxyHandle,
   registerRunMainProxyExitTests,
@@ -3168,21 +3169,15 @@ describe("runCli exit behavior", () => {
     });
   });
 
-  it("points noninteractive fresh bare root invocations to onboarding automation", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: false,
-      valid: true,
-      sourceConfig: {},
-    });
-
-    await expectNonInteractiveBareCliError(
-      "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
-      () => {
-        expect(setupWizardCommandMock).not.toHaveBeenCalled();
-        expect(tryRouteCliMock).not.toHaveBeenCalled();
-        expect(buildProgramMock).not.toHaveBeenCalled();
-      },
-    );
+  registerBareRootArgumentTests({
+    runCli: (argv) => runCli(argv),
+    readConfigFileSnapshotMock,
+    buildProgramMock,
+    setupWizardCommandMock,
+    runTuiMock,
+    tryRouteCliMock,
+    withInteractiveTty,
+    expectNonInteractiveBareCliError,
   });
 
   it("starts the gateway-backed TUI for bare root invocations when config already exists", async () => {

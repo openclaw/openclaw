@@ -2212,7 +2212,7 @@ describe("sendTypingMatrix", () => {
       stopAndPersist: vi.fn(async () => undefined),
     } as unknown as import("./sdk.js").MatrixClient;
 
-    await sendTypingMatrix("room:!room:example", true, undefined, client);
+    await sendTypingMatrix("room:!room:example", true, { client });
 
     expect(setTyping).toHaveBeenCalledWith("!room:example", true, 30_000);
   });

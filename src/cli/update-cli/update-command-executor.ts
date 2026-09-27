@@ -34,8 +34,6 @@ import {
 import {
   originalCancellations,
   admittedAuthorities,
-  admittedRunIds,
-  retainedOwners,
   preflightReleases,
   slotReservations,
   occupiedSlotKey,
@@ -395,8 +393,9 @@ export async function withUpdateCommandExecutor<T>(
               authority,
               assertCurrent: assertBase,
               managedHandoff,
+              runId,
+              retainedRoot: serviceLease?.key,
             });
-            admittedRunIds.set(fence, runId);
             const originalOwner =
               !borrowed &&
               !legacyParent &&
@@ -405,9 +404,6 @@ export async function withUpdateCommandExecutor<T>(
             if (originalOwner) {
               originalFence = fence;
               cancellation.register(fence);
-            }
-            if (serviceLease) {
-              retainedOwners.set(fence, serviceLease.key);
             }
             if (enterOptions?.preflight && !borrowed) {
               preflightReleases.set(fence, () => {
@@ -422,8 +418,6 @@ export async function withUpdateCommandExecutor<T>(
                 childOwners.delete(fence);
                 slotReservations.delete(fence);
                 admittedAuthorities.delete(fence);
-                admittedRunIds.delete(fence);
-                retainedOwners.delete(fence);
                 preflightReleases.delete(fence);
                 if (serviceLease) {
                   if (!store.release(serviceLease)) {
@@ -473,8 +467,6 @@ export async function withUpdateCommandExecutor<T>(
       childOwners.delete(fence);
       slotReservations.delete(fence);
       admittedAuthorities.delete(fence);
-      admittedRunIds.delete(fence);
-      retainedOwners.delete(fence);
       if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
         throw new UpdateCommandRecoveryPendingError(
           "Command cleanup is unconfirmed; update ownership remains retained.",

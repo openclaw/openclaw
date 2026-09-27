@@ -10,6 +10,7 @@ import { prepareUpdateFailureReport } from "../../infra/update-failure-report-pr
 import * as updateGlobal from "../../infra/update-global.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import * as exec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { expectGitMetadataPreview } from "../update-cli-invocation.test-support.js";
@@ -19,9 +20,137 @@ import { updateStatusCommand } from "./status.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
+import { resolveUpdateCommandTarget } from "./update-command-target.js";
 import { updateCommand } from "./update-command.js";
 
 const { fixture } = installFreshUpdateFixture();
+
+it.each(
+  ["npm", "pnpm"].flatMap((manager) =>
+    [
+      { name: "default", requests: ["latest"] },
+      { name: "stable", channel: "stable", requests: ["latest"] },
+      { name: "tag", tag: "preview", requests: ["preview"] },
+      { name: "beta", channel: "beta", requests: ["beta", "latest"] },
+      { name: "beta fallback", channel: "beta", requests: ["beta", "latest"] },
+      { name: "numeric", tag: "2026.9.4", requests: ["2026.9.4"] },
+      { name: "tarball", tag: "./candidate.tgz", requests: [] },
+      {
+        name: "moving override",
+        requests: manager === "npm" ? ["latest", "latest"] : ["latest", "2026.9.4"],
+      },
+      {
+        name: "explicit moving override",
+        tag: "preview",
+        requests: manager === "npm" ? ["latest", "latest"] : ["preview", "2026.9.4"],
+      },
+    ].map((entry) => Object.assign({}, entry, { manager })),
+  ),
+)("resolves $manager $name with paired metadata and bounded requests", async (entry) => {
+  vi.mocked(shared.resolveTargetVersion).mockRestore();
+  vi.mocked(updateCheck.resolveNpmChannelTag).mockRestore();
+  vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockRestore();
+  const manager = entry.manager === "npm" ? "npm" : "pnpm";
+  vi.mocked(shared.resolveGlobalManager).mockResolvedValue(manager);
+  vi.mocked(updateGlobal.resolveGlobalInstallTarget).mockResolvedValue({
+    manager,
+    command: "/selected/npm",
+    globalRoot: path.dirname(fixture.root),
+    packageRoot: fixture.root,
+    ...(manager === "npm"
+      ? { npmOwner: { version: "11.10.0", lifecyclePolicy: "unflagged" as const } }
+      : {}),
+  });
+  const env = { ...process.env, NPM_CONFIG_REGISTRY: "https://registry.example.test/" };
+  const override = entry.name.includes("override");
+  if (override) {
+    vi.stubEnv("OPENCLAW_UPDATE_PACKAGE_SPEC", "openclaw@latest");
+  }
+  vi.mocked(updateGlobal.createGlobalInstallEnv).mockResolvedValue(env);
+  const requests: string[] = [];
+  const respond = (tag: string) => {
+    requests.push(tag);
+    const version =
+      tag === "beta"
+        ? entry.name === "beta fallback"
+          ? "2026.9.3-beta.1"
+          : "2026.9.5-beta.1"
+        : /^\d/.test(tag)
+          ? tag
+          : "2026.9.4";
+    return {
+      // A mutable package override can move after target selection.
+      version: override && requests.length > 1 ? "2026.9.6" : version,
+      engines: { node: tag === "beta" ? ">=24.0.0" : ">=22.0.0" },
+      openclaw: { schemaVersions: { state: tag === "beta" ? 18 : 17, agent: 19 } },
+    };
+  };
+  const spawn = vi
+    .spyOn(exec, "runCommandWithTimeout")
+    .mockImplementation(async (argv, options) => {
+      expect(argv.slice(0, 2)).toEqual(["/selected/npm", "view"]);
+      expect(typeof options === "number" ? undefined : options.env?.NPM_CONFIG_REGISTRY).toBe(
+        env.NPM_CONFIG_REGISTRY,
+      );
+      return {
+        code: 0,
+        stdout: JSON.stringify(respond(argv[2]!.split("@").at(-1)!)),
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    return Response.json(respond(url.pathname.split("/").at(-1)!));
+  });
+  vi.stubGlobal("fetch", fetch);
+  try {
+    const opts = { tag: entry.tag, channel: entry.channel, dryRun: true, json: true };
+    const prepared = await commandRun.prepareUpdateCommand(opts);
+    if (!prepared) {
+      throw new Error("fixture preparation failed");
+    }
+    const pending = resolveUpdateCommandTarget(
+      opts,
+      { triageTarget: { root: fixture.root, env } },
+      process.cwd(),
+      {
+        ...prepared,
+        requestedChannel:
+          entry.channel === "beta" ? "beta" : entry.channel === "stable" ? "stable" : null,
+      },
+      { enter: vi.fn() },
+      5000,
+    );
+    if (override) {
+      await expect(pending).rejects.toMatchObject({
+        result: { reason: "target-metadata-preflight" },
+      });
+    }
+    const result = override ? undefined : await pending;
+    expect(requests).toEqual(entry.requests);
+    expect(spawn).toHaveBeenCalledTimes(manager === "npm" ? entry.requests.length : 0);
+    expect(fetch).toHaveBeenCalledTimes(manager === "pnpm" ? entry.requests.length : 0);
+    if (override) {
+      expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
+    } else if (entry.name === "tarball") {
+      expect(result).toMatchObject({ targetVersion: null, packageInstallSpec: "./candidate.tgz" });
+    } else {
+      const beta = entry.name === "beta";
+      const version = beta ? "2026.9.5-beta.1" : "2026.9.4";
+      expect(result).toMatchObject({
+        targetVersion: version,
+        packageInstallSpec: `openclaw@${version}`,
+        packageRuntimeTarget: { version, nodeEngine: beta ? ">=24.0.0" : ">=22.0.0" },
+        packageTargetSchemaVersions: { state: beta ? 18 : 17, agent: 19 },
+      });
+    }
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 function readPrintedFailureReport() {
   expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();

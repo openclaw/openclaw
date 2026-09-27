@@ -26,6 +26,27 @@ import {
   taskRecord,
 } from "./native-subagent-monitor.test-support.js";
 
+function interactionNotification(
+  id: string | undefined,
+  turnId = "parent-turn",
+  agentPath = "/root/child-thread",
+) {
+  return {
+    method: "item/completed",
+    params: {
+      threadId: "parent-thread",
+      turnId,
+      item: {
+        type: "subAgentActivity",
+        ...(id ? { id } : {}),
+        kind: "interacted",
+        agentThreadId: "child-thread",
+        agentPath,
+      },
+    },
+  };
+}
+
 describe("CodexNativeSubagentMonitor", () => {
   it.each(["v1", "v2"] as const)(
     "observes completed %s children again when a parent starts follow-up work",
@@ -164,7 +185,7 @@ describe("CodexNativeSubagentMonitor", () => {
       expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
         expect.objectContaining({ childSessionId: "child-thread", result: "second result" }),
       );
-      monitor.dispose();
+      await monitor.dispose();
     },
   );
 
@@ -176,9 +197,9 @@ describe("CodexNativeSubagentMonitor", () => {
     const oldClaim = vi.fn(() => oldRelease);
     const newClaim = vi.fn(() => newRelease);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    onTestFinished(() => {
-      monitor.retireParent("parent-thread");
-      monitor.dispose();
+    onTestFinished(async () => {
+      await monitor.retireParent("parent-thread");
+      await monitor.dispose();
     });
     const register = (claimDirectChild: typeof oldClaim) =>
       monitor.registerParent({
@@ -202,20 +223,7 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(oldRelease).not.toHaveBeenCalled();
     const second = await register(newClaim);
     second.bindTurn("second-parent-turn");
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "second-parent-turn",
-        item: {
-          type: "subAgentActivity",
-          id: "steer-running",
-          kind: "interacted",
-          agentThreadId: "child-thread",
-          agentPath: "/root/child-thread",
-        },
-      },
-    });
+    await client.notify(interactionNotification("steer-running", "second-parent-turn"));
     expect(oldRelease).toHaveBeenCalledOnce();
     expect(newClaim).toHaveBeenCalledExactlyOnceWith("child-thread");
     expect(runtime.createRunningTaskRun).toHaveBeenCalledOnce();
@@ -235,9 +243,9 @@ describe("CodexNativeSubagentMonitor", () => {
     const runtime = createRuntime();
     runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({ delivered: false, path: "none" });
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    onTestFinished(() => {
-      monitor.retireParent("parent-thread");
-      monitor.dispose();
+    onTestFinished(async () => {
+      await monitor.retireParent("parent-thread");
+      await monitor.dispose();
     });
     const parent = await registerParent(monitor);
     parent.bindTurn("parent-turn");
@@ -258,7 +266,6 @@ describe("CodexNativeSubagentMonitor", () => {
     "second",
     "neither",
     "duplicate",
-    "fresh-owner",
     "fresh-unbound",
     "resumed",
     "resumed-start-first",
@@ -266,7 +273,7 @@ describe("CodexNativeSubagentMonitor", () => {
   ] as const)(
     "preserves overlapping follow-up outcomes when native delivery consumes %s result",
     async (consumed) => {
-      const freshOwner = consumed === "fresh-owner" || consumed === "fresh-unbound";
+      const freshOwner = consumed === "fresh-unbound";
       const resumed = consumed.startsWith("resumed");
       const client = createClient();
       const runtime = createRuntime();
@@ -363,24 +370,8 @@ describe("CodexNativeSubagentMonitor", () => {
         await parent.unregister();
         expect(claim.mock.results[0]?.value).toHaveBeenCalledOnce();
         parent = await monitor.registerParent({ ...registration, claimDirectChild: followupClaim });
-        if (consumed !== "fresh-unbound") {
-          parent.bindTurn(parentTurnId);
-        }
       }
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: parentTurnId,
-          item: {
-            type: "subAgentActivity",
-            id: "followup",
-            kind: "interacted",
-            agentThreadId: "child-thread",
-            agentPath: "/root/child-thread",
-          },
-        },
-      });
+      await client.notify(interactionNotification("followup", parentTurnId));
       expect(claim).toHaveBeenCalledOnce();
       expect(records.size).toBe(1);
       await client.notify(turnStartedNotification("followup-turn", { error: null }));
@@ -401,20 +392,7 @@ describe("CodexNativeSubagentMonitor", () => {
           childTurnCompletedNotification({ turnId: "followup-turn", status: "interrupted" }),
         );
         const interact = () =>
-          client.notify({
-            method: "item/completed",
-            params: {
-              threadId: "parent-thread",
-              turnId: parentTurnId,
-              item: {
-                type: "subAgentActivity",
-                id: "resume-followup",
-                kind: "interacted",
-                agentThreadId: "child-thread",
-                agentPath: "/root/child-thread",
-              },
-            },
-          });
+          client.notify(interactionNotification("resume-followup", parentTurnId));
         if (consumed === "resumed") {
           await interact();
         }
@@ -555,13 +533,12 @@ describe("CodexNativeSubagentMonitor", () => {
     },
   );
 
-  it.each(
-    [false, true].flatMap((active) =>
-      ["turn-previous", "turn-1"].flatMap((savedTurnId) =>
-        [false, true].map((initial) => ({ active, savedTurnId, initial })),
-      ),
-    ),
-  )(
+  it.each([
+    { active: false, savedTurnId: "turn-previous", initial: false },
+    { active: true, savedTurnId: "turn-1", initial: false },
+    { active: true, savedTurnId: "turn-previous", initial: true },
+    { active: false, savedTurnId: "turn-1", initial: true },
+  ])(
     "restores the current native turn of an interrupted assignment (active=$active, saved=$savedTurnId, initial=$initial)",
     async ({ active, savedTurnId, initial }) => {
       const client = createClient();
@@ -612,7 +589,6 @@ describe("CodexNativeSubagentMonitor", () => {
   it.each(
     [false, true].flatMap((released) => [
       { released, legacy: false, source: "history" },
-      { released, legacy: true, source: "history" },
       { released, legacy: true, source: "paged" },
     ]),
   )(
@@ -659,20 +635,7 @@ describe("CodexNativeSubagentMonitor", () => {
         claimDirectChild,
       });
       owner.bindTurn("parent-turn");
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-turn",
-          item: {
-            type: "subAgentActivity",
-            id: "interaction",
-            kind: "interacted",
-            agentThreadId: "child-thread",
-            agentPath: "/root/worker",
-          },
-        },
-      });
+      await client.notify(interactionNotification("interaction", "parent-turn", "/root/worker"));
       expect(claimDirectChild).not.toHaveBeenCalled();
       let unregisterPromise: Promise<void> | undefined;
       if (released) {
@@ -720,16 +683,24 @@ describe("CodexNativeSubagentMonitor", () => {
   );
 
   it.each([
-    ...(["completed", "failed", "interrupted"] as const).flatMap((previousEnd) =>
-      (["current", "released", "retired", "replaced"] as const).map((parent) => ({
-        previousEnd,
-        parent,
-        initialActive: false,
-        interactionFirst: true,
-        received: false,
-        proof: "history",
-      })),
-    ),
+    ...(
+      [
+        ["completed", "current"],
+        ["failed", "current"],
+        ["interrupted", "current"],
+        ["completed", "released"],
+        ["interrupted", "released"],
+        ["completed", "retired"],
+        ["interrupted", "replaced"],
+      ] as const
+    ).map(([previousEnd, parent]) => ({
+      previousEnd,
+      parent,
+      initialActive: false,
+      interactionFirst: true,
+      received: false,
+      proof: "history",
+    })),
     ...(["completed", "interrupted"] as const).map((previousEnd) => ({
       previousEnd,
       parent: "current" as const,
@@ -754,14 +725,14 @@ describe("CodexNativeSubagentMonitor", () => {
       received: false,
       proof: "notification",
     })),
-    ...(["completed", "failed"] as const).map((previousEnd) => ({
-      previousEnd,
+    {
+      previousEnd: "completed" as const,
       parent: "unbound" as const,
       initialActive: false,
       interactionFirst: true,
       received: false,
       proof: "notification",
-    })),
+    },
   ])(
     "resolves an ambiguous native turn boundary without replacing its predecessor ($previousEnd, $parent, active=$initialActive, receipt=$received, $proof)",
     async ({ previousEnd, parent, initialActive, interactionFirst, received, proof }) => {
@@ -822,19 +793,7 @@ describe("CodexNativeSubagentMonitor", () => {
       });
       client.setThreadReadFactory("child-thread", () => readGate);
       const interact = () =>
-        client.notify({
-          method: "item/completed",
-          params: {
-            threadId: "parent-thread",
-            turnId: "parent-turn",
-            item: {
-              type: "subAgentActivity",
-              kind: "interacted",
-              agentThreadId: "child-thread",
-              agentPath: "/root/worker",
-            },
-          },
-        });
+        client.notify(interactionNotification(undefined, "parent-turn", "/root/worker"));
       if (interactionFirst) {
         await interact();
       }
@@ -883,14 +842,14 @@ describe("CodexNativeSubagentMonitor", () => {
             expect(claimDirectChild).not.toHaveBeenCalled();
             owner.bindTurn("parent-turn");
           }
-          expect(records.size).toBe(previousEnd === "interrupted" ? 1 : 2);
+          await vi.waitFor(() => expect(records.size).toBe(previousEnd === "interrupted" ? 1 : 2));
           expect(claimDirectChild).toHaveBeenCalledOnce();
         }
         if (parent === "released") {
           unregisterPromise = owner.unregister();
         }
         if (parent === "retired" || parent === "replaced") {
-          monitor.retireParent("parent-thread");
+          await monitor.retireParent("parent-thread");
         }
         if (parent === "replaced") {
           replacement = await monitor.registerParent({

@@ -18,8 +18,7 @@ import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
   preparePostCorePluginInstallRecordsForFreshProcess,
-  postCoreUpdateParentOwnsCompletion,
-  resolvePostCoreUpdateOperatorOptions,
+  resolvePostCoreUpdateHandoff,
   readPostCorePluginInstallRecordsFile,
   shouldResumePostCoreUpdateInFreshProcess,
   writePostCorePluginInstallRecordsFile,
@@ -488,19 +487,20 @@ describe("post-core operator deadline provenance", () => {
       JSON.stringify({ completionOwner: "parent", timeout: value }),
     );
     const opts = { json: true, timeout: "2700" };
-    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toEqual({
-      ...opts,
-      timeout: expected,
+    expect(await resolvePostCoreUpdateHandoff({ opts, resultPath })).toEqual({
+      opts: { ...opts, timeout: expected },
+      parentOwnsCompletion: true,
     });
-    // The shipped completion reader ignores added metadata and keeps its ownership contract.
-    expect(await postCoreUpdateParentOwnsCompletion(resultPath)).toBe(true);
   });
 
   it("retains an explicit deadline without private parent ownership", async () => {
     const root = await withTempDir();
     const resultPath = path.join(root, "plugins.json");
     const opts = { timeout: "3" };
-    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toBe(opts);
+    expect(await resolvePostCoreUpdateHandoff({ opts, resultPath })).toEqual({
+      opts,
+      parentOwnsCompletion: false,
+    });
     await fs.writeFile(
       path.join(root, "handoff.json"),
       JSON.stringify({
@@ -508,8 +508,11 @@ describe("post-core operator deadline provenance", () => {
         timeout: { version: 1, serialized: "3", operator: null },
       }),
     );
-    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toBe(opts);
+    expect(await resolvePostCoreUpdateHandoff({ opts, resultPath })).toEqual({
+      opts,
+      parentOwnsCompletion: false,
+    });
     await fs.writeFile(path.join(root, "handoff.json"), "{");
-    await expect(resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).rejects.toThrow();
+    await expect(resolvePostCoreUpdateHandoff({ opts, resultPath })).rejects.toThrow();
   });
 });

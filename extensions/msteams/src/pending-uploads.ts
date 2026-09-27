@@ -9,7 +9,7 @@
 import crypto from "node:crypto";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 
-interface PendingUpload {
+export interface PendingUpload {
   id: string;
   buffer: Buffer;
   filename: string;
@@ -36,7 +36,6 @@ const { pendingUploads, pendingUploadTimers } = resolveGlobalSingleton(
   },
 );
 
-/** TTL for pending uploads: 5 minutes */
 const PENDING_UPLOAD_TTL_MS = 5 * 60 * 1000;
 
 /**
@@ -52,7 +51,6 @@ export function storePendingUpload(upload: Omit<PendingUpload, "id" | "createdAt
   };
   pendingUploads.set(id, entry);
 
-  // Auto-cleanup after TTL; timer ref stored so removePendingUpload can cancel it
   const timer = setTimeout(() => {
     pendingUploads.delete(id);
     pendingUploadTimers.delete(id);
@@ -62,10 +60,6 @@ export function storePendingUpload(upload: Omit<PendingUpload, "id" | "createdAt
   return id;
 }
 
-/**
- * Retrieve a pending upload by ID.
- * Returns undefined if not found or expired.
- */
 export function getPendingUpload(id?: string): PendingUpload | undefined {
   if (!id) {
     return undefined;
@@ -99,10 +93,6 @@ export function removePendingUpload(id?: string): void {
   }
 }
 
-/**
- * Set the consent card activity ID on an existing pending upload.
- * Called after the FileConsentCard is sent and we know its activity ID.
- */
 export function setPendingUploadActivityId(uploadId: string, activityId: string): void {
   const entry = pendingUploads.get(uploadId);
   if (entry) {

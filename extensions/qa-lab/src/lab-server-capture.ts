@@ -1,18 +1,24 @@
 import net from "node:net";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  acquireDebugProxyCaptureStoreAsync,
-  type AsyncDebugProxyCaptureStore,
-  type CaptureQueryPreset,
+import * as proxyCapture from "openclaw/plugin-sdk/proxy-capture";
+import type {
+  AsyncDebugProxyCaptureStore,
+  CaptureQueryPreset,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import {
+  normalizeOptionalString,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function createQaCaptureLifecycle() {
   const captureEnv = {
     OPENCLAW_STATE_DIR: resolveStateDir(),
     OPENCLAW_SUPERVISOR_MODE: process.env.OPENCLAW_SUPERVISOR_MODE,
   };
-  let captureStoreLease: ReturnType<typeof acquireDebugProxyCaptureStoreAsync> | undefined;
+  let captureStoreLease:
+    | ReturnType<typeof proxyCapture.acquireDebugProxyCaptureStoreAsync>
+    | undefined;
   let captureClosing = false;
   const captureOperations = new Set<Promise<unknown>>();
   const withCaptureStore = <T>(operation: (store: AsyncDebugProxyCaptureStore) => Promise<T>) => {
@@ -20,6 +26,12 @@ export function createQaCaptureLifecycle() {
       return Promise.reject(new Error("Capture store is closing."));
     }
     if (!captureStoreLease) {
+      const { acquireDebugProxyCaptureStoreAsync } = proxyCapture;
+      if (typeof acquireDebugProxyCaptureStoreAsync !== "function") {
+        return Promise.reject(
+          new Error("QA capture requires async proxy capture support. Upgrade the OpenClaw host."),
+        );
+      }
       const lease = acquireDebugProxyCaptureStoreAsync({ env: captureEnv });
       captureStoreLease = lease;
       void lease.catch(() => {
@@ -84,23 +96,15 @@ function parseCaptureMeta(metaJson: unknown): Record<string, unknown> | null {
   }
 }
 
-function readCaptureMetaString(
-  meta: Record<string, unknown> | null,
-  key: string,
-): string | undefined {
-  const value = meta?.[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 export function mapCaptureEventForQa(row: Record<string, unknown>) {
   const meta = parseCaptureMeta(row.metaJson);
   return {
     ...row,
     payloadPreview: typeof row.dataText === "string" ? row.dataText : undefined,
-    provider: readCaptureMetaString(meta, "provider"),
-    api: readCaptureMetaString(meta, "api"),
-    model: readCaptureMetaString(meta, "model"),
-    captureOrigin: readCaptureMetaString(meta, "captureOrigin"),
+    provider: normalizeOptionalString(readStringField(meta, "provider")),
+    api: normalizeOptionalString(readStringField(meta, "api")),
+    model: normalizeOptionalString(readStringField(meta, "model")),
+    captureOrigin: normalizeOptionalString(readStringField(meta, "captureOrigin")),
   };
 }
 

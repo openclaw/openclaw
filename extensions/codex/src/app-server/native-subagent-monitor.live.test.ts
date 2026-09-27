@@ -4,12 +4,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import type {
-  AgentHarnessScopedCreateRunningTaskRunParams,
-  AgentHarnessScopedFinalizeTaskRunParams,
-  AgentHarnessScopedSetDeliveryStatusParams,
-  AgentHarnessTaskRecord,
-  AgentHarnessTaskRuntimeScope,
+import {
+  matchesAgentHarnessTaskAssignment,
+  type AgentHarnessScopedFinalizeTaskRunParams,
+  type AgentHarnessTaskRecord,
+  type AgentHarnessTaskRuntime,
+  type AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -45,9 +45,18 @@ function createDeliveryRecorder(
   requesterSessionKey = "live:streamed",
 ) {
   const deliveries: RecordedDelivery[] = [];
-  const taskRuntime = {
+  const findTask = (
+    params: Pick<AgentHarnessScopedFinalizeTaskRunParams, "runId" | "expectedTask">,
+  ) => {
+    const task = taskRecords.find((record) => record.runId === params.runId);
+    return task &&
+      (!params.expectedTask || matchesAgentHarnessTaskAssignment(task, params.expectedTask))
+      ? task
+      : undefined;
+  };
+  const taskRuntime: AgentHarnessTaskRuntime = {
     assertTaskAssignmentSupported() {},
-    tryCreateRunningTaskRun: (params: AgentHarnessScopedCreateRunningTaskRunParams) => {
+    createRunningTaskRun: (params) => {
       const existing = taskRecords.find((task) => task.runId === params.runId);
       if (existing) {
         if (params.detail !== undefined) {
@@ -78,9 +87,18 @@ function createDeliveryRecorder(
       });
       return task;
     },
-    recordTaskRunProgressByRunId: () => [],
-    finalizeTaskRunByRunId: (params: AgentHarnessScopedFinalizeTaskRunParams) => {
-      const task = taskRecords.find((record) => record.runId === params.runId);
+    tryCreateRunningTaskRun: (params) => taskRuntime.createRunningTaskRun(params),
+    recordTaskRunProgressByRunId: (params) => {
+      const task = findTask(params);
+      if (!task) {
+        return [];
+      }
+      const { expectedTask: _expectedTask, completionCustody: _custody, ...progress } = params;
+      Object.assign(task, progress);
+      return [task];
+    },
+    finalizeTaskRunByRunId: (params) => {
+      const task = findTask(params);
       if (!task) {
         return [];
       }
@@ -94,13 +112,14 @@ function createDeliveryRecorder(
       return [task];
     },
     listTaskRecords: () => taskRecords,
-    setDetachedTaskDeliveryStatusByRunId: (params: AgentHarnessScopedSetDeliveryStatusParams) => {
-      const task = taskRecords.find((record) => record.runId === params.runId);
+    setDetachedTaskDeliveryStatusByRunId: (params) => {
+      const task = findTask(params);
       if (!task) {
         return [];
       }
       const previous = task.deliveryStatus;
-      Object.assign(task, params);
+      const { expectedTask: _expectedTask, completionCustody: _custody, ...delivery } = params;
+      Object.assign(task, delivery);
       if (task.deliveryStatus !== previous) {
         traceNativeLive("task-delivery-state", {
           runId: params.runId,
@@ -110,6 +129,16 @@ function createDeliveryRecorder(
       }
       return [task];
     },
+    createRunningTaskRunAsync: async (params) => taskRuntime.createRunningTaskRun(params),
+    tryCreateRunningTaskRunAsync: async (params) => taskRuntime.tryCreateRunningTaskRun(params),
+    recordTaskRunProgressByRunIdAsync: async (params) =>
+      taskRuntime.recordTaskRunProgressByRunId(params),
+    finalizeTaskRunByRunIdAsync: async (params) => taskRuntime.finalizeTaskRunByRunId(params),
+    setDetachedTaskDeliveryStatusByRunIdAsync: async (params) =>
+      taskRuntime.setDetachedTaskDeliveryStatusByRunId(params),
+    prepareTaskRecordsRead: async () => () => taskRuntime.listTaskRecords(),
+    prepareTaskRunRead: async (runId) => () =>
+      taskRuntime.listTaskRecords().filter((task) => task.runId === runId),
   };
   return {
     deliveries,
@@ -326,7 +355,7 @@ describeLive("codex native subagent monitor live", () => {
         expect(claims).toEqual({ first: 1, second: 1, third: 1 });
         expect(releases).toEqual({ first: 1, second: 1, third: 1 });
         expect(recorder.deliveries).toEqual([]);
-        monitor.dispose();
+        await monitor.dispose();
       } finally {
         await client.closeAndWait();
       }
@@ -533,7 +562,7 @@ describeLive("codex native subagent monitor live", () => {
         expect(latestTurn?.status).toBe("completed");
 
         // Replay the saved unfinished row through a new monitor with the same owner.
-        monitor.dispose();
+        await monitor.dispose();
         const recovery = createDeliveryRecorder([recoveryTask], requesterSessionKey);
         traceNativeLive("recovery-fixture", {
           tasks: recovery.records.map((task) => ({

@@ -80,12 +80,7 @@ function runtimeLookupAllowsSetupProviderFallback(params: {
 function resolveRuntimeEnvApiKeyLookupOptions(params: {
   provider: string;
   runtimeLookup?: RuntimeProviderAuthLookup;
-}):
-  | Pick<
-      EnvApiKeyLookupOptions,
-      "aliasMap" | "candidateMap" | "authEvidenceMap" | "skipSetupProviderFallback"
-    >
-  | undefined {
+}): RuntimeProviderAuthLookup["envApiKey"] | undefined {
   const envApiKey = params.runtimeLookup?.envApiKey;
   if (!envApiKey) {
     return undefined;
@@ -159,15 +154,10 @@ function resolveRuntimeAvailableProviderAuth<T>(
   // Callers that supply the auth store get inline provider keys hidden while
   // their billing/auth cooldown is active, so browse and tool selection stop
   // advertising a credential the resolver would refuse to hand back.
-  const inlineProviderApiKeyUsable = params.store
-    ? (() => {
-        const unusableUntil = authConfig.resolveInlineProviderApiKeyCooldownUntil(
-          params.store,
-          provider,
-        );
-        return unusableUntil === null || unusableUntil <= Date.now();
-      })()
-    : true;
+  const unusableUntil = params.store
+    ? authConfig.resolveInlineProviderApiKeyCooldownUntil(params.store, provider)
+    : null;
+  const inlineProviderApiKeyUsable = unusableUntil === null || unusableUntil <= Date.now();
 
   const envAuth = resolveEnvApiKey(provider, params.env, {
     config: params.cfg,

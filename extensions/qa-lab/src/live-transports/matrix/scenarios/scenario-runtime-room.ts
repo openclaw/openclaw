@@ -12,6 +12,7 @@ import {
 import {
   assertThreadReplyArtifact,
   advanceMatrixQaActorCursor,
+  buildMatrixQaToken,
   buildMatrixBlockStreamingPrompt,
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
@@ -57,8 +58,8 @@ export {
 export async function runBlockStreamingScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_BLOCK_ROOM_KEY);
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
-  const firstText = `MATRIX_QA_BLOCK_ONE_${randomUUID().slice(0, 8).toUpperCase()}`;
-  const secondText = `MATRIX_QA_BLOCK_TWO_${randomUUID().slice(0, 8).toUpperCase()}`;
+  const firstText = buildMatrixQaToken("MATRIX_QA_BLOCK_ONE");
+  const secondText = buildMatrixQaToken("MATRIX_QA_BLOCK_TWO");
   const triggerBody = buildMatrixBlockStreamingPrompt(context.sutUserId, firstText, secondText);
   const driverEventId = await client.sendTextMessage({
     body: triggerBody,
@@ -233,9 +234,6 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
     baseUrl: context.baseUrl,
   });
   let membershipRestored = false;
-  let outcome:
-    | { execution: MatrixQaScenarioExecution; kind: "success" }
-    | { error: unknown; kind: "failure" };
 
   try {
     await driverClient.kickUserFromRoom({
@@ -256,7 +254,7 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
       timeoutMs: context.timeoutMs,
     });
 
-    const noReplyToken = `MATRIX_QA_MEMBERSHIP_LOSS_${randomUUID().slice(0, 8).toUpperCase()}`;
+    const noReplyToken = buildMatrixQaToken("MATRIX_QA_MEMBERSHIP_LOSS");
     await runNoReplyExpectedScenario({
       accessToken: context.driverAccessToken,
       actorId: "driver",
@@ -289,55 +287,42 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
       tokenPrefix: "MATRIX_QA_MEMBERSHIP_RETURN",
     });
 
-    outcome = {
-      execution: {
-        artifacts: {
-          ...recovered.artifacts,
-          membershipJoinEventId: joinEvent.eventId,
-          membershipLeaveEventId: leaveEvent.eventId,
-          recoveredDriverEventId: recovered.artifacts?.driverEventId,
-          recoveredReply: recovered.artifacts?.reply,
-        },
-        details: [
-          `room key: ${MATRIX_QA_MEMBERSHIP_ROOM_KEY}`,
-          `room id: ${roomId}`,
-          `leave event: ${leaveEvent.eventId}`,
-          `join event: ${joinEvent.eventId}`,
-          recovered.details,
-        ].join("\n"),
+    return {
+      artifacts: {
+        ...recovered.artifacts,
+        membershipJoinEventId: joinEvent.eventId,
+        membershipLeaveEventId: leaveEvent.eventId,
+        recoveredDriverEventId: recovered.artifacts?.driverEventId,
+        recoveredReply: recovered.artifacts?.reply,
       },
-      kind: "success",
-    };
+      details: [
+        `room key: ${MATRIX_QA_MEMBERSHIP_ROOM_KEY}`,
+        `room id: ${roomId}`,
+        `leave event: ${leaveEvent.eventId}`,
+        `join event: ${joinEvent.eventId}`,
+        recovered.details,
+      ].join("\n"),
+    } satisfies MatrixQaScenarioExecution;
   } catch (error) {
-    outcome = { error, kind: "failure" };
-  }
-
-  // Arm cleanup before the kick: a lost response can still mean the kick applied.
-  if (!membershipRestored) {
-    try {
-      await ensureMembershipLossRoomRestored({
-        driverClient,
-        roomId,
-        sutClient,
-        sutUserId: context.sutUserId,
-      });
-    } catch (cleanupError) {
-      if (outcome.kind === "failure") {
-        const combinedFailure = new AggregateError(
-          [outcome.error, cleanupError],
+    // A lost kick response can still mean the kick applied.
+    if (!membershipRestored) {
+      try {
+        await ensureMembershipLossRoomRestored({
+          driverClient,
+          roomId,
+          sutClient,
+          sutUserId: context.sutUserId,
+        });
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
           "Matrix membership-loss scenario and membership restoration both failed",
           { cause: cleanupError },
         );
-        throw combinedFailure;
       }
-      throw cleanupError;
     }
+    throw error;
   }
-
-  if (outcome.kind === "failure") {
-    throw outcome.error;
-  }
-  return outcome.execution;
 }
 
 export async function runReactionThreadedScenario(context: MatrixQaScenarioContext) {

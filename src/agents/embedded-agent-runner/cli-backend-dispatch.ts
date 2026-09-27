@@ -91,7 +91,7 @@ function resolveDispatchableToolsAllow(params: RunEmbeddedAgentParams): string[]
     return undefined;
   }
   const names = params.toolsAllow.map((name) => normalizeToolPolicyName(name));
-  if (names.some((name) => !name || name === "*" || name.includes("*"))) {
+  if (names.some((name) => !name || name.includes("*"))) {
     return undefined;
   }
   return [...new Set(names)];
@@ -146,9 +146,6 @@ async function runEmbeddedAgentViaCliBackend(
   // names; strip and normalize so observers and transcript records see the
   // same tool names and soft-error signal the native embedded path reports.
   const unsubscribe = onAgentEventForRun(params.runId, (evt) => {
-    if (evt.runId !== params.runId) {
-      return;
-    }
     if (evt.stream === "assistant" && typeof evt.data.text === "string") {
       transcript?.noteAssistantText(evt.data.text);
       return;

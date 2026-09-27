@@ -1448,20 +1448,36 @@ describePosix("scripts/pr per-PR operation lock", () => {
   });
   it("runs lock recovery without the normal PR toolchain", () => {
     const repoDir = createRepo();
+    const inheritedAnchor = createRepo();
     const { binDir, cli } = installPrCliFixture(repoDir);
     const ownerOid = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: repoDir,
       encoding: "utf8",
     }).trim();
     execFileSync("git", ["update-ref", lockRef, ownerOid], { cwd: repoDir });
+    execFileSync("git", ["update-ref", lockRef, ownerOid], { cwd: inheritedAnchor });
+    const anchorRefs = execFileSync("git", ["show-ref"], {
+      cwd: inheritedAnchor,
+      encoding: "utf8",
+    });
     const result = spawnSync(
       cli,
       ["lock-recover", "42", ownerOid, "--confirmed-no-running-tools"],
       {
         cwd: repoDir,
         encoding: "utf8",
-        env: { ...createIndependentPrFixtureEnv(), PATH: binDir },
+        env: {
+          ...createIndependentPrFixtureEnv({
+            ...process.env,
+            OPENCLAW_PR_ANCHOR_REPO_ROOT: inheritedAnchor,
+            OPENCLAW_PR_TOOLING_ROOT: inheritedAnchor,
+          }),
+          PATH: binDir,
+        },
       },
+    );
+    expect(execFileSync("git", ["show-ref"], { cwd: inheritedAnchor, encoding: "utf8" })).toBe(
+      anchorRefs,
     );
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout.trim()).toBe("Recovered the stale operation lock for PR #42.");
@@ -1476,6 +1492,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const result = spawnSync(cli, [command, "42"], {
       cwd: repoDir,
       encoding: "utf8",
+      env: createIndependentPrFixtureEnv(),
     });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
     expect(result.stdout).toContain("Usage:");
@@ -1559,6 +1576,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       const result = spawnSync(cli, ["gc", ...args], {
         cwd: repoDir,
         encoding: "utf8",
+        env: createIndependentPrFixtureEnv(),
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
       expect(result.stdout).toContain("Usage:");
@@ -2469,6 +2487,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     ]);
     const controller = spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
       cwd: repoDir,
+      env: createIndependentPrFixtureEnv(),
       stdio: "ignore",
     });
     let waiter: ChildProcess | undefined;
@@ -2670,6 +2689,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     ]);
     const controller = spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
       cwd: repoDir,
+      env: createIndependentPrFixtureEnv(),
       stdio: "ignore",
     });
     try {
@@ -2830,6 +2850,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     ]);
     const controller = spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
       cwd: repoDir,
+      env: createIndependentPrFixtureEnv(),
       stdio: "ignore",
     });
     let pgid: number | undefined;
@@ -2892,7 +2913,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         repoDir,
         fixture,
       ],
-      { cwd: repoDir, stdio: ["ignore", "ignore", "pipe"] },
+      { cwd: repoDir, env: createIndependentPrFixtureEnv(), stdio: ["ignore", "ignore", "pipe"] },
     );
     let stderr = "";
     let stderrOverflow = false;

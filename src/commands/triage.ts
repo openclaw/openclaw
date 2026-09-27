@@ -193,7 +193,7 @@ export async function triageCommand(
   let findings: readonly HealthFinding[] = [];
   if (!deferDiagnostics) {
     try {
-      const { collectDoctorFindings } = await import("./doctor-lint.js");
+      const { collectDoctorFindings } = await import("./doctor-lint-runner.js");
       findings = await collectDoctorFindings(runtime);
     } catch (error) {
       findings = [
@@ -593,7 +593,6 @@ export async function triageCommand(
           ),
         ),
     },
-    budget: { maxTurns: 1 },
     isCurrent,
     onEvent: (event) => {
       if (event.type === "turn-started" && isCurrent()) {

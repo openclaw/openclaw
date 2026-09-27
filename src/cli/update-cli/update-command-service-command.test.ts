@@ -20,7 +20,7 @@ it.each(["git", "unknown"] as const)(
         runUpdatedInstallGatewayCommand(
           {
             result: { root, mode },
-            opts: { json: true },
+            opts: {},
             invocationEnv: {},
             onGatewayStartAttempted,
           },
@@ -85,7 +85,7 @@ it.each([
       const result = runUpdatedInstallGatewayCommand(
         {
           result: { root, mode: "npm" },
-          opts: { json: true },
+          opts: {},
           invocationEnv: {},
           definitionRecovery,
           onWarnings: (messages) => warnings.push(...messages),
@@ -126,7 +126,7 @@ it("restarts the updated runtime without admitting another definition writer", a
       runUpdatedInstallGatewayCommand(
         {
           result: { root, mode: "npm" },
-          opts: { json: true },
+          opts: {},
           invocationEnv: {},
           onGatewayStartAttempted: () => writeFileSync(activation, "attempted"),
         },

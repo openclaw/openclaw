@@ -36,6 +36,7 @@ export type TlonSettingsStore = {
     {
       mode?: "restricted" | "open";
       allowedShips?: string[];
+      requireMentionInBotThreads?: boolean;
     }
   >;
   defaultAuthorizedShips?: string[];
@@ -45,11 +46,6 @@ export type TlonSettingsStore = {
   pendingApprovals?: PendingApproval[];
 };
 
-type TlonSettingsState = {
-  current: TlonSettingsStore;
-  loaded: boolean;
-};
-
 const SETTINGS_DESK = "moltbot";
 const SETTINGS_BUCKET = "tlon";
 
@@ -57,9 +53,7 @@ const SETTINGS_BUCKET = "tlon";
  * Parse channelRules - handles both JSON string and object formats.
  * Settings-store doesn't support nested objects, so we store as JSON string.
  */
-function parseChannelRules(
-  value: unknown,
-): Record<string, { mode?: "restricted" | "open"; allowedShips?: string[] }> | undefined {
+function parseChannelRules(value: unknown): TlonSettingsStore["channelRules"] {
   if (!value) {
     return undefined;
   }
@@ -129,9 +123,7 @@ function parseSettingsResponse(raw: unknown): TlonSettingsStore {
   };
 }
 
-function isChannelRulesObject(
-  val: unknown,
-): val is Record<string, { mode?: "restricted" | "open"; allowedShips?: string[] }> {
+function isChannelRulesObject(val: unknown): val is NonNullable<TlonSettingsStore["channelRules"]> {
   if (!val || typeof val !== "object" || Array.isArray(val)) {
     return false;
   }
@@ -233,17 +225,14 @@ type SettingsLogger = {
 };
 
 export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogger) {
-  const state: TlonSettingsState = {
-    current: {},
-    loaded: false,
-  };
+  let current: TlonSettingsStore = {};
 
   const listeners = new Set<(settings: TlonSettingsStore) => void>();
 
   const notify = () => {
     for (const listener of listeners) {
       try {
-        listener(state.current);
+        listener(current);
       } catch (err) {
         logger?.error?.(`[settings] Listener error: ${String(err)}`);
       }
@@ -251,36 +240,20 @@ export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogg
   };
 
   return {
-    /**
-     * Get current settings (may be empty if not loaded yet).
-     */
-    get current(): TlonSettingsStore {
-      return state.current;
-    },
-
-    /**
-     * Whether initial settings have been loaded.
-     */
-    get loaded(): boolean {
-      return state.loaded;
-    },
-
     async load(): Promise<TlonSettingsStore> {
       try {
         const raw = await api.scry("/settings/all.json");
         // Response shape: { all: { [desk]: { [bucket]: { [key]: value } } } }
         const allData = raw as { all?: Record<string, Record<string, unknown>> };
         const deskData = allData?.all?.[SETTINGS_DESK];
-        state.current = parseSettingsResponse(deskData ?? {});
-        state.loaded = true;
-        logger?.log?.(`[settings] Loaded: ${JSON.stringify(state.current)}`);
-        return state.current;
+        current = parseSettingsResponse(deskData ?? {});
+        logger?.log?.(`[settings] Loaded: ${JSON.stringify(current)}`);
+        return current;
       } catch (err) {
         // Settings desk may not exist yet - that's fine, use defaults
         logger?.log?.(`[settings] No settings found (using defaults): ${String(err)}`);
-        state.current = {};
-        state.loaded = true;
-        return state.current;
+        current = {};
+        return current;
       }
     },
 
@@ -295,7 +268,7 @@ export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogg
           }
 
           logger?.log?.(`[settings] Update: ${update.key} = ${JSON.stringify(update.value)}`);
-          state.current = applySettingsUpdate(state.current, update.key, update.value);
+          current = applySettingsUpdate(current, update.key, update.value);
           notify();
         },
         err: (error) => {

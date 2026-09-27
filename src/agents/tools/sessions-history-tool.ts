@@ -89,6 +89,7 @@ const SessionsHistoryOutputSchema = Type.Union([
       nextOffset: Type.Optional(Type.Number()),
       hasMore: Type.Optional(Type.Boolean()),
       totalMessages: Type.Optional(Type.Number()),
+      windowReset: Type.Optional(Type.Boolean()),
       pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
     },
     { additionalProperties: false },
@@ -106,7 +107,10 @@ const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 const SESSIONS_HISTORY_PENDING_MAX_BYTES = 4096;
 type ChatHistoryPaginationMetadata = Partial<
-  Record<"offset" | "nextOffset" | "totalMessages", number> & { hasMore: boolean }
+  Record<"offset" | "nextOffset" | "totalMessages", number> & {
+    hasMore: boolean;
+    windowReset: boolean;
+  }
 >;
 
 function truncateHistoryText(
@@ -572,6 +576,7 @@ export function createSessionsHistoryTool(opts?: {
         contentTruncated,
         contentRedacted,
         bytes: hardened.bytes + (pending?.bytes ?? 0),
+        ...(result?.windowReset ? { windowReset: true } : {}),
         ...(pending ? { pendingInputs: pending.pendingInputs } : {}),
         ...(opts?.sessionLinkBase
           ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }

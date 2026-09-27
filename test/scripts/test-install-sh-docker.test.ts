@@ -510,7 +510,7 @@ function expectInstallDockerfileContract(
 ): string {
   const dockerfile = readFileSync(dockerfilePath, "utf8");
 
-  expect(dockerfile).toContain("# syntax=docker/dockerfile:1.7");
+  expect(dockerfile).toContain("# syntax=docker/dockerfile:1.27.0");
   expect(dockerfile).toMatch(/^FROM \S+@sha256:[a-f0-9]{64}$/m);
   expect(dockerfile).toContain("apt-get");
   expect(dockerfile).toContain("bash");
@@ -761,6 +761,128 @@ describe("test-install-sh-docker", () => {
       runDefaultSmokePlatform({ OPENCLAW_INSTALL_SMOKE_PLATFORM: "linux/s390x" }, "x86_64"),
     ).toBe("linux/s390x");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "serves distinct candidate and baseline bytes when npm packs the same version",
+    () => {
+      const root = tempDirs.make("openclaw-install-same-version-");
+      const bin = join(root, "bin");
+      const ready = join(root, "server-ready");
+      const receipts = join(root, "served.jsonl");
+      mkdirSync(bin);
+      symlinkSync(testNodeExecPath, join(bin, "node"));
+      expect(spawnSync("mkfifo", [ready]).status).toBe(0);
+      const writeCommand = (name: string, source: string) =>
+        writeFileSync(join(bin, name), source, { mode: 0o755 });
+      writeCommand(
+        "npm",
+        `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+const pack = args.indexOf("pack");
+if (pack >= 0) {
+  const dir = args[args.indexOf("--pack-destination") + 1];
+  const filename = "openclaw-2026.9.6.tgz";
+  const bytes = args[pack + 1].startsWith("openclaw@") ? "published baseline" : "candidate build";
+  fs.writeFileSync(path.join(dir, filename), bytes);
+  console.log(JSON.stringify([{ name: "openclaw", version: "2026.9.6", filename, size: bytes.length, unpackedSize: bytes.length }]));
+} else if (args.includes("view")) {
+  console.log("2026.9.6");
+} else {
+  throw new Error("Unexpected npm invocation: " + args.join(" "));
+}
+`,
+      );
+      writeCommand(
+        "python3",
+        `#!/usr/bin/env node
+const fs = require("node:fs");
+const http = require("node:http");
+const path = require("node:path");
+http.createServer((request, response) => {
+  const file = path.join(process.cwd(), new URL(request.url, "http://localhost").pathname.slice(1));
+  fs.createReadStream(file).on("error", () => {
+    response.statusCode = 404;
+    response.end("missing package");
+  }).pipe(response);
+}).listen(Number(process.argv[4]), "127.0.0.1", () => {
+  fs.writeFileSync(process.env.SERVER_READY, "ready\\n");
+});
+`,
+      );
+      // Join actual listener readiness instead of spending the runner's startup sleep.
+      writeCommand(
+        "sleep",
+        '#!/bin/bash\nIFS= read -r ready < "$SERVER_READY"\n[[ "$ready" == ready ]]\n',
+      );
+      writeCommand(
+        "docker",
+        `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] !== "run") throw new Error("Unexpected Docker invocation");
+const env = new Map();
+for (let index = 0; index < args.length; index++) {
+  if (args[index] === "-e") {
+    const entry = args[++index];
+    const equals = entry.indexOf("=");
+    env.set(entry.slice(0, equals), entry.slice(equals + 1));
+  }
+}
+(async () => {
+  for (const [key, kind] of [
+    ["OPENCLAW_INSTALL_FRESH_TAG_URL", "fresh"],
+    ["OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL", "baseline"],
+    ["OPENCLAW_INSTALL_UPDATE_TAG_URL", "update"],
+  ]) {
+    const url = env.get(key);
+    if (!url) continue;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error("Package HTTP status " + response.status);
+    const bytes = await response.text();
+    fs.appendFileSync(process.env.SERVED_RECEIPTS, JSON.stringify({ kind, url, bytes }) + "\\n");
+  }
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+`,
+      );
+
+      const result = spawnSync("bash", [SCRIPT_PATH], {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: {
+          HOME: root,
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          TMPDIR: root,
+          SERVER_READY: ready,
+          SERVED_RECEIPTS: receipts,
+          npm_config_userconfig: "/dev/null",
+          npm_config_globalconfig: "/dev/null",
+          OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS: "1",
+          OPENCLAW_INSTALL_SMOKE_GROUP: "update",
+          OPENCLAW_INSTALL_SMOKE_SKIP_IMAGE_BUILD: "1",
+          OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1",
+          OPENCLAW_INSTALL_SMOKE_SKIP_FRESHNESS: "1",
+          OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: "2026.9.6",
+          OPENCLAW_INSTALL_SMOKE_UPDATE_PACKAGE_SPEC: "candidate-fixture",
+          OPENCLAW_INSTALL_SMOKE_UPDATE_HOST: "127.0.0.1",
+        },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      const served = readFileSync(receipts, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { kind: string; url: string; bytes: string });
+      expect(served.map(({ kind, bytes }) => ({ kind, bytes }))).toEqual([
+        { kind: "fresh", bytes: "candidate build" },
+        { kind: "baseline", bytes: "published baseline" },
+        { kind: "update", bytes: "candidate build" },
+      ]);
+      expect(served[0]?.url).toBe(served[2]?.url);
+      expect(served[1]?.url).not.toBe(served[2]?.url);
+    },
+  );
 
   it("supports npm update package specs without a separate expected-version env", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
@@ -2562,7 +2684,7 @@ syncBuiltinESMExports();
     expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"');
     expect(script).toContain("docker_e2e_restore_package_dist_from_image");
     expect(script).toContain(
-      'COMMAND_TIMEOUT_MS="$(read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"',
+      'COMMAND_TIMEOUT_MS="$(docker_e2e_read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"',
     );
     expect(script).toContain(
       'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"',

@@ -38,7 +38,8 @@ import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js"
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { collectDoctorFindings, runDoctorLintCli } from "./doctor-lint.js";
+import { collectDoctorFindings } from "./doctor-lint-runner.js";
+import { runDoctorLintCli } from "./doctor-lint.js";
 import { verifyDoctorLintOAuthStateIsolation } from "./doctor-lint.oauth-isolation.test-support.js";
 import { verifyDoctorLintPrivateAuthRetirement } from "./doctor-lint.private-auth-retirement.test-support.js";
 import {

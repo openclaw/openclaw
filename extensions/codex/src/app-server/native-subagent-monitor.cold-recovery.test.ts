@@ -32,14 +32,13 @@ describe("cold native task identity across history reads", () => {
         });
         const replacement = { ...task, taskId: "replacement-task" };
         let rows = [task];
-        let listCalls = 0;
         const runtime = createRuntime();
-        runtime.listTaskRecords.mockImplementation(() => {
-          listCalls += 1;
-          if (kind === "before-read" && listCalls === 2) {
+        runtime.listTaskRecords.mockImplementation(() => rows);
+        runtime.prepareTaskRunRead.mockImplementation(async (runId) => {
+          if (kind === "before-read") {
             rows = [replacement];
           }
-          return rows;
+          return () => runtime.listTaskRecords().filter((record) => record.runId === runId);
         });
         runtime.finalizeTaskRunByRunId.mockImplementation(() => rows);
         runtime.setDetachedTaskDeliveryStatusByRunId.mockImplementation((params) => {

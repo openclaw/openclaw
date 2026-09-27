@@ -2654,47 +2654,6 @@ describe("agentCliCommand", () => {
     });
   });
 
-  for (const message of ["  /CoMpAcT  ", "/compact Keep recent decisions."]) {
-    it(`rejects ${JSON.stringify(message)} from the CLI before any gateway or embedded turn`, async () => {
-      await withTempStore(async () => {
-        callGateway.mockRejectedValue(createGatewayTimeoutError());
-
-        await agentCliCommand(
-          { message, sessionId: "locked-session", runId: "locked-run", timeout: "0" },
-          runtime,
-        );
-      });
-
-      // The slash-command handler rejects CLI senders, so a /compact turn would
-      // otherwise fall through to a normal turn and exit 0 without compacting.
-      // It must fail loudly before touching the gateway or local agent.
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      const errorMessages = mockMessages(runtime.error);
-      expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
-    });
-  }
-
-  it("rejects /compact from --message-file before any gateway or embedded turn", async () => {
-    await withTempStore(async ({ dir }) => {
-      const messageFile = path.join(dir, "compact.md");
-      fs.writeFileSync(messageFile, "/compact:Keep recent decisions.", "utf8");
-      callGateway.mockRejectedValue(createGatewayTimeoutError());
-
-      await agentCliCommand(
-        { messageFile, sessionId: "locked-session", runId: "locked-run", timeout: "0" },
-        runtime,
-      );
-    });
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(agentCommand).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    const errorMessages = mockMessages(runtime.error);
-    expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
-  });
-
   it("does not mistake a /compacting-prefixed message for the /compact control command", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();

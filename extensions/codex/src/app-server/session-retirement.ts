@@ -40,7 +40,8 @@ async function releaseSessionSubscription(
   assertCurrent?.();
   // End child ownership before the parent subscription, so late completions
   // cannot deliver into a replacement OpenClaw session generation.
-  codexNativeSubagentMonitorRuntime.retireParent(client, binding.threadId);
+  await codexNativeSubagentMonitorRuntime.retireParent(client, binding.threadId);
+  assertCurrent?.();
   const released = await releaseCodexAppServerLiveThread(client, binding.threadId, assertCurrent);
   assertCurrent?.();
   if (!released && isIncognitoSessionKey(sessionKey)) {

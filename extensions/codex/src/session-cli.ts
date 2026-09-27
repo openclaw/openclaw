@@ -119,11 +119,9 @@ function sessionTitle(session: CodexSessionCatalogSession): string {
 }
 
 function sessionStatus(session: CodexSessionCatalogSession): string {
-  const status =
-    session.status === "notLoaded"
-      ? "stored / activity unknown"
-      : singleLineTerminalText(session.status) || "unknown";
-  return status;
+  return session.status === "notLoaded"
+    ? "stored / activity unknown"
+    : singleLineTerminalText(session.status) || "unknown";
 }
 
 function quoteShellArgument(value: string): string {
@@ -330,9 +328,7 @@ export function registerCodexSessionCli(program: Command): void {
       .option("--cursor <cursor>", "Continue one host page (requires --host)")
       .option("--json", "Print the structured catalog response", false),
     { timeoutMs: CODEX_SESSION_CATALOG_CLI_TIMEOUT_MS },
-  ).action(async (options: CodexSessionsCliOptions) => {
-    await listCodexSessions(options);
-  });
+  ).action(listCodexSessions);
 
   addGatewayClientOptions(
     codex
@@ -341,9 +337,7 @@ export function registerCodexSessionCli(program: Command): void {
       .option("--agent <id>", "Agent id that owns the Codex session")
       .option("--host <id>", "Stable local host id from codex sessions")
       .option("--json", "Print the structured response", false),
-  ).action(async (threadId: string, options: CodexActionCliOptions) => {
-    await continueCodexSession(threadId, options);
-  });
+  ).action(continueCodexSession);
 
   addGatewayClientOptions(
     codex
@@ -357,7 +351,5 @@ export function registerCodexSessionCli(program: Command): void {
         false,
       )
       .option("--json", "Print the structured response", false),
-  ).action(async (threadId: string, options: CodexArchiveCliOptions) => {
-    await archiveCodexSession(threadId, options);
-  });
+  ).action(archiveCodexSession);
 }

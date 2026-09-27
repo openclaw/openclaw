@@ -131,34 +131,12 @@ function scopeCandidatesForUrl(url: string): string[] {
 
 function canonicalizeInlineBase64Payload(value: string): string | undefined {
   let cleaned = "";
-  let padding = 0;
-  let sawPadding = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x20) {
-      continue;
+  for (const char of value) {
+    if (char.charCodeAt(0) > 0x20) {
+      cleaned += char;
     }
-    if (code === 0x3d) {
-      padding += 1;
-      if (padding > 2) {
-        return undefined;
-      }
-      sawPadding = true;
-      cleaned += "=";
-      continue;
-    }
-    const isDataChar =
-      (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x61 && code <= 0x7a) ||
-      (code >= 0x30 && code <= 0x39) ||
-      code === 0x2b ||
-      code === 0x2f;
-    if (sawPadding || !isDataChar) {
-      return undefined;
-    }
-    cleaned += value[index];
   }
-  return cleaned && cleaned.length % 4 === 0 ? cleaned : undefined;
+  return cleaned.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(cleaned) ? cleaned : undefined;
 }
 
 function decodeInlineDataImage(
@@ -279,10 +257,6 @@ async function fetchWithAuthFallback(params: {
   return fallbackAttempt;
 }
 
-/**
- * Download all file attachments from a Teams message (images, documents, etc.).
- * Renamed from downloadMSTeamsImageAttachments to support all file types.
- */
 export async function downloadMSTeamsAttachments(params: {
   attachments: MSTeamsAttachmentLike[] | undefined;
   maxBytes: number;
@@ -295,11 +269,6 @@ export async function downloadMSTeamsAttachments(params: {
   deadline?: MSTeamsRequestDeadline;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
-  /**
-   * Optional logger used to surface inline data decode failures and remote
-   * media download errors. Errors that are not logged here are invisible at
-   * INFO level and block diagnosis of issues like #63396.
-   */
   logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<MSTeamsInboundMedia[]> {
   const list = Array.isArray(params.attachments) ? params.attachments : [];

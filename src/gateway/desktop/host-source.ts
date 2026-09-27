@@ -65,61 +65,42 @@ function managedPlatformError(platform: NodeJS.Platform): string {
   return `desktop.host.managed is available only on Linux; disable it on ${platform} or configure desktop.host.port for an existing loopback VNC server`;
 }
 
-function managedInspection(managedStatus: ManagedLinuxDesktopStatus): HostDesktopInspection {
+function managedInspection(
+  managedStatus: ManagedLinuxDesktopStatus | { state: "unknown" },
+): HostDesktopInspection {
+  const status: Extract<HostDesktopStatus, { state: "managed" }> = {
+    enabled: true,
+    state: "managed",
+    managedState: managedStatus.state,
+    port: DEFAULT_HOST_DESKTOP_PORT,
+  };
+  if (managedStatus.state !== "not-started" && managedStatus.state !== "unknown") {
+    status.port = managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT;
+    if (managedStatus.display !== undefined) {
+      status.display = managedStatus.display;
+    }
+  }
   if (managedStatus.state === "running") {
     return {
-      status: {
-        enabled: true,
-        state: "managed",
-        managedState: "running",
-        display: managedStatus.display,
-        port: managedStatus.port,
-        security: "VncAuth",
-      },
+      status: { ...status, security: "VncAuth" },
       detail: `managed (running, display :${managedStatus.display}, port ${managedStatus.port}, security: VncAuth)`,
     };
   }
   if (managedStatus.state === "failed") {
     return {
-      status: {
-        enabled: true,
-        state: "managed",
-        managedState: "failed",
-        port: managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT,
-        ...(managedStatus.display !== undefined ? { display: managedStatus.display } : {}),
-        error: managedStatus.error,
-      },
+      status: { ...status, error: managedStatus.error },
       detail: `managed (failed: ${managedStatus.error})`,
       unavailableReason: "unsupported",
     };
   }
-  const startingCoordinates =
-    managedStatus.state === "starting"
-      ? {
-          port: managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT,
-          ...(managedStatus.display !== undefined ? { display: managedStatus.display } : {}),
-        }
-      : { port: DEFAULT_HOST_DESKTOP_PORT };
   return {
-    status: {
-      enabled: true,
-      state: "managed",
-      managedState: managedStatus.state,
-      ...startingCoordinates,
-    },
-    detail: managedStatus.state === "starting" ? "managed (starting)" : "managed (not started)",
-  };
-}
-
-function configuredManagedInspection(): HostDesktopInspection {
-  return {
-    status: {
-      enabled: true,
-      state: "managed",
-      managedState: "unknown",
-      port: DEFAULT_HOST_DESKTOP_PORT,
-    },
-    detail: "managed (configured; runtime state is available from the running Gateway status)",
+    status,
+    detail:
+      managedStatus.state === "unknown"
+        ? "managed (configured; runtime state is available from the running Gateway status)"
+        : managedStatus.state === "starting"
+          ? "managed (starting)"
+          : "managed (not started)",
   };
 }
 
@@ -197,9 +178,7 @@ async function inspectConfiguredHostDesktop(
           unavailableReason: "unsupported",
         };
       }
-      return params.managedDesktop
-        ? managedInspection(params.managedDesktop.status())
-        : configuredManagedInspection();
+      return managedInspection(params.managedDesktop?.status() ?? { state: "unknown" });
     }
     return {
       status: { enabled: true, state: "unavailable", port },

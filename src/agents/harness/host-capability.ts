@@ -140,7 +140,9 @@ function gateBoundTool(
         }
       : {}),
   };
-  copyAgentToolMetadata(tool, gated);
+  copyAgentToolMetadata(tool, gated, (source) =>
+    gateBoundTool(source, assertActive, observeResult),
+  );
   if (sourcePreparer) {
     attachInternalToolExecutionPreparer(gated, async (preparationParams) => {
       assertActive();

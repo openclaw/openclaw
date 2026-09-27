@@ -35,6 +35,7 @@ export type ChatImageContent = {
   type: "image";
   data: string;
   mimeType: string;
+  fileName?: string;
   sourceIndex: number;
 };
 
@@ -165,6 +166,8 @@ export async function persistInboundImagesForTranscript(params: {
         Buffer.from(image.data, "base64"),
         image.mimeType,
         "inbound",
+        undefined,
+        image.fileName,
       );
       const trusted = assertSavedMedia(saved, `inline image ${image.sourceIndex + 1}`);
       entries.push({
@@ -176,6 +179,7 @@ export async function persistInboundImagesForTranscript(params: {
           url: trusted.mediaRef,
           contentType: saved.contentType ?? image.mimeType,
           kind: "image",
+          ...(image.fileName ? { fileName: image.fileName } : {}),
           sizeBytes: saved.size,
         },
       });
@@ -408,7 +412,13 @@ export async function parseMessageWithAttachments(
         (opts?.imageStorage !== "inline" && sizeBytes > ATTACHMENT_OFFLOAD_THRESHOLD_BYTES);
 
       if (!shouldOffload) {
-        images.push({ type: "image", data: b64, mimeType: finalMime, sourceIndex: idx });
+        images.push({
+          type: "image",
+          data: b64,
+          mimeType: finalMime,
+          ...(att.fileName ? { fileName: att.fileName } : {}),
+          sourceIndex: idx,
+        });
         imageOrder.push("inline");
         continue;
       }

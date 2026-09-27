@@ -21,7 +21,8 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import {
-  isPresenceViewerIdle,
+  presenceViewerActivity,
+  presenceActivityLabel,
   presenceViewerLabel,
   projectOnlinePresenceViewers,
 } from "../lib/presence-users.ts";
@@ -421,6 +422,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
           ? nothing
           : html`<div class="sidebar-online__list">
               ${repeat(users, presenceUserKey, (user) => {
+                const activityState = presenceViewerActivity(user);
                 const activity = personActivityLink(
                   user.identity?.id,
                   routing,
@@ -434,12 +436,14 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                 >
                   <${tag}
                     class="sidebar-online__person ${
-                      isPresenceViewerIdle(user) ? "sidebar-online__person--away" : ""
+                      activityState === "idle" ? "sidebar-online__person--away" : ""
                     }"
                     type=${activity ? nothing : "button"}
                     href=${activity?.href ?? nothing}
                     @click=${activity?.open ?? nothing}
                     data-online-user-id=${user.id}
+                    data-presence-activity=${activityState}
+                    aria-description=${presenceActivityLabel(activityState)}
                     data-person-card-key=${presenceUserKey(user)}
                     data-person-card-trigger
                     aria-haspopup="dialog"
@@ -455,6 +459,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                       aria-hidden="true"
                     ></openclaw-viewer-avatar>
                     <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
+                    <span class="sidebar-online__person-status" aria-hidden="true">${t(activityState === "active" ? "presence.active" : activityState === "idle" ? "presence.idle" : "presence.rosterTitle")}</span>
                     <span class="sidebar-online__person-action" aria-hidden="true"
                       >${icons.chevronRight}</span
                     >

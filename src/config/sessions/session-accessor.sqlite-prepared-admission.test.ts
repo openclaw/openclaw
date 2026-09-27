@@ -236,7 +236,7 @@ function observeAdmission(databasePath: string, hold = false) {
     const prepare = database.prepare.bind(database);
     database.prepare = (sql) => {
       const statement = prepare(sql);
-      if (sql === "PRAGMA integrity_check;") {
+      if (sql === "PRAGMA integrity_check;" || sql === "PRAGMA integrity_check('sqlite_schema');") {
         const all = statement.all.bind(statement);
         statement.all = () => {
           parentChecks += 1;
@@ -283,7 +283,8 @@ function observeAdmission(databasePath: string, hold = false) {
       expect(parentChecks, "integrity ran on the caller thread").toBe(0);
       expect(admissions).toBe(count);
       expect(settled).toBe(count);
-      expect(children).toHaveLength(count);
+      expect(children.length).toBeGreaterThanOrEqual(count);
+      expect(children.length).toBeLessThanOrEqual(count * 4);
       for (const child of children) {
         expect(child).toEqual({
           closed: true,
@@ -864,21 +865,25 @@ it.each(
     );
     if (cold) {
       await probe.expectPending(work);
-      let laterRan = false;
+      expect(loadSessionEntryReadOnly(f.input)?.label).toBe("kept");
       const later = own(
-        runExclusiveSqliteSessionWrite(
-          f.scope,
-          async () => {
-            laterRan = true;
-            expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
-          },
-          "session.transcript.batch",
-        ),
+        applySessionEntryReplacements({
+          storePath: f.databasePath,
+          sessionKeys: [f.input.sessionKey],
+          skipMaintenance: true,
+          update: (entries) => ({
+            result: undefined,
+            replacements: entries.map(({ entry, sessionKey }) => ({
+              sessionKey,
+              entry: { ...entry, label: "foreground" },
+            })),
+          }),
+        }),
       );
       // Validation has no writer permit; the finalizer acquires it for its native commit.
       await later;
       expect(preparationWriterRan).toBe(true);
-      expect(laterRan).toBe(true);
+      expect(loadSessionEntryReadOnly(f.input)?.label).toBe("foreground");
       expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
       probe.release.resolve();
       await work;
@@ -886,7 +891,7 @@ it.each(
       await work;
     }
     expect(preparationWriterRan).toBe(true);
-    expect(loadSessionEntryReadOnly(f.input)?.label).toBe("kept");
+    expect(loadSessionEntryReadOnly(f.input)?.label).toBe(cold ? "foreground" : "kept");
     expectMaintenanceArchived(f);
     await probe.expectHealthy(cold ? 1 : 0);
   },

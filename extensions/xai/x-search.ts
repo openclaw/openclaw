@@ -192,10 +192,7 @@ export function createXSearchTool(options?: {
       query,
       model,
       tookMs: Date.now() - startedAt,
-      content: result.content,
-      citations: result.citations,
-      inlineCitations: result.inlineCitations,
-      truncated: result.truncated,
+      ...result,
       options: xSearchOptions,
     });
     writeCache(X_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
