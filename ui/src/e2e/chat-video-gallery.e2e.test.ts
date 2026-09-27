@@ -123,6 +123,23 @@ suite.define(() => {
             .toBeGreaterThanOrEqual(2);
           await expect.poll(async () => (await counter.textContent())?.trim()).toBe("1 / 3");
           await page.screenshot({ path: `${dir}/expanded-first.png`, animations: "disabled" });
+          expect(
+            await viewer.evaluate((element) => {
+              const root = element.shadowRoot!;
+              const videoBox = root.querySelector("video")!.getBoundingClientRect();
+              return [...root.querySelectorAll(".actions, .navigation, .gallery-counter")].every(
+                (control) => {
+                  const box = control.getBoundingClientRect();
+                  return (
+                    box.bottom + 8 <= videoBox.top ||
+                    box.top >= videoBox.bottom + 8 ||
+                    box.right + 8 <= videoBox.left ||
+                    box.left >= videoBox.right + 8
+                  );
+                },
+              );
+            }),
+          ).toBe(true);
           await page.keyboard.press("ArrowRight");
           await expect.poll(() => player.getAttribute("src")).toContain("after.mp4");
           await page.keyboard.press("ArrowRight");

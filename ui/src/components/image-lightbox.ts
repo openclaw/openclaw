@@ -250,7 +250,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
             </div>
           </header>
           <div
-            class=${this.hasGallery ? `stage ${this.mediaKind === "video" ? "stage--video-gallery" : "stage--gallery"}` : "stage"}
+            class=${this.mediaKind === "video" ? "stage stage--video" : this.hasGallery ? "stage stage--gallery" : "stage"}
             @pointerdown=${{ handleEvent: this.handleStagePointerDown, capture: true }}
             @pointermove=${this.handleStagePointerMove}
             @pointerup=${this.handleStagePointerUp}
