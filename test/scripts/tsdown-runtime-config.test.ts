@@ -291,7 +291,6 @@ describe("tsdown config", () => {
       "state/openclaw-database-verify.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
-      "task-registry-control.runtime",
       "link-understanding/apply.runtime",
       "media-understanding/apply.runtime",
       "index",

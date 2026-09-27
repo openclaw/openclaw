@@ -9,6 +9,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "../registry/subagent-lifecycle-events.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
 
@@ -99,6 +100,9 @@ function describeSubagentOutcome(child: ChildCompletionRow): string {
     const error = outcome?.error?.trim();
     return error ? `cancelled: ${error}` : "cancelled";
   }
+  if (child.execution.interruptionReason === "gateway-restart") {
+    return "interrupted by gateway restart";
+  }
   if (!outcome) {
     return "unknown";
   }
@@ -132,6 +136,7 @@ type ChildCompletionExecution = CompletionResultSource["execution"] & {
   endedAt?: number;
   outcome?: NonNullable<CompletionResultSource["execution"]["outcome"]> & { error?: string };
   transcriptTarget?: AgentRunSessionTarget;
+  interruptionReason?: SubagentRunRecord["execution"]["interruptionReason"];
 };
 
 export type ChildCompletionRow = {

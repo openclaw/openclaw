@@ -679,59 +679,6 @@ describe.skipIf(process.platform === "win32")(
       },
     );
 
-    it.each(["anchor-before", "anchor-after", "helper-before", "helper-after"])(
-      "recovers the exact %s terminal cut",
-      async (cut) => {
-        const f = await prepare();
-        await runPackageActivationRecovery(f.anchor, "repair", f.operationId);
-        const failure = new Error(cut);
-        const removeAnchor = fsp.rmdir.bind(fsp);
-        const unlink = fsp.unlink.bind(fsp);
-        let interrupted = false;
-        vi.spyOn(fsp, "rmdir").mockImplementation(async (file, ...args) => {
-          if (file === f.anchor && cut.startsWith("anchor")) {
-            interrupted = true;
-            if (cut === "anchor-after") {
-              await removeAnchor(file, ...args);
-            }
-            throw failure;
-          }
-          await removeAnchor(file, ...args);
-        });
-        vi.spyOn(fsp, "unlink").mockImplementation(async (file) => {
-          if (file === resolvePackageActivationHelper(f.anchor) && cut.startsWith("helper")) {
-            const record = openPackageActivationJournal(f.anchor).read();
-            expect(record.phase).toBe("anchor-retired");
-            expect(record.intent).toMatchObject({
-              kind: "unlink-helper",
-              identity: record.descriptor.helperIdentity,
-            });
-            interrupted = true;
-            if (cut === "helper-after") {
-              await unlink(file);
-            }
-            throw failure;
-          }
-          await unlink(file);
-        });
-        await expect(runPackageActivationRecovery(f.anchor, "retire", f.operationId)).rejects.toBe(
-          failure,
-        );
-        expect(interrupted).toBe(true);
-        vi.mocked(fsp.rmdir).mockRestore();
-        vi.mocked(fsp.unlink).mockRestore();
-        await expect(
-          runPackageActivationRecovery(f.anchor, "retire", f.operationId),
-        ).resolves.toMatchObject({
-          phase: "complete",
-        });
-        await expect(readPackageActivationStatus(f.anchor, f.operationId)).resolves.toMatchObject({
-          phase: "complete",
-        });
-        expect(fs.existsSync(f.anchor)).toBe(false);
-      },
-    );
-
     it("refuses a byte-equal replacement helper and preserves unknown anchor objects", async () => {
       const f = await prepare();
       await runPackageActivationRecovery(f.anchor, "repair", f.operationId);

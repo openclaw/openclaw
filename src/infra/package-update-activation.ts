@@ -174,21 +174,22 @@ export async function runPackageActivationRecovery(
   const admission = await journal.readForRecovery();
   const initial = admission.record;
   assertPackageActivationOperation(initial, operationId);
-  if (isPackageActivationComplete(anchor, initial)) {
+  const complete = isPackageActivationComplete(anchor, initial);
+  if (complete) {
     assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
-    return status(initial);
+  } else {
+    // Reject malformed/foreign/disarmed recovery before acquiring a new writer.
+    // Admission is still followed by the same observations under the fresh fence.
+    await createPublicationOwner(
+      anchor,
+      journal,
+      () => {
+        assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
+      },
+      initial,
+      admission.assertUnchanged,
+    ).preflight(action);
   }
-  // Reject malformed/foreign/disarmed recovery before acquiring a new writer.
-  // Admission is still followed by the same observations under the fresh fence.
-  await createPublicationOwner(
-    anchor,
-    journal,
-    () => {
-      assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
-    },
-    initial,
-    admission.assertUnchanged,
-  ).preflight(action);
   return withUpdateCommandExecutor(
     randomUUID(),
     async (executor) => {
@@ -197,6 +198,9 @@ export async function runPackageActivationRecovery(
       admission.admit(fence.assertCurrent);
       journal.assertCurrent(initial);
       const owner = createPublicationOwner(anchor, journal, fence.assertCurrent, initial);
+      if (complete) {
+        return owner.persistRetirement();
+      }
       return action === "repair" ? owner.publish(true) : owner.retire();
     },
     { existingAuthority: initial.descriptor.authority },

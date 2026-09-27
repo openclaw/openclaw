@@ -1,11 +1,10 @@
+import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import * as agentHarnessTaskRuntime from "openclaw/plugin-sdk/agent-harness-task-runtime";
-import type {
-  AgentHarnessCompletionCustody,
-  AgentHarnessTaskRecord,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import {
+  codexNativeSubagentRunId,
+  type NativeSubagentAssignment,
+} from "./native-subagent-assignment.js";
 import { readNativeTurnEnd } from "./native-subagent-history-recovery.js";
 import type {
   NativeModelInputRequest,
@@ -40,11 +39,6 @@ import {
 } from "./native-subagent-submission-call.js";
 import { readCodexNativeSubmissionTurn } from "./native-subagent-submission-history.js";
 import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
-import {
-  codexNativeSubagentRunId,
-  readNativeTaskAssignment,
-  type NativeSubagentAssignment,
-} from "./native-subagent-task-ids.js";
 import { isJsonObject, type JsonObject, type CodexServerNotification } from "./protocol.js";
 
 type SubmissionCustody = {
@@ -62,11 +56,10 @@ type SubmissionDependencies = NativeSubmissionCallDependencies & {
   assertPersistenceCurrent: (state: ParentState) => void;
   client: NativeSubagentMonitorClient;
   recovery: CodexNativeSubagentRecoveryCoordinator;
-  restoreKnownChild: (
-    state: ParentState,
-    assignment: NativeSubagentAssignment,
-    records: readonly AgentHarnessTaskRecord[],
-  ) => void;
+  knownChildren: ReadonlyMap<string, KnownChild>;
+  currentChild: (threadId: string) => ChildState | undefined;
+  prepareReceiver: (state: ParentState, threadId: string) => boolean;
+  restoreKnownChild: (state: ParentState, assignment: NativeSubagentAssignment) => void;
   registerChild: (
     state: ParentState,
     assignment: NativeSubagentAssignment,
@@ -83,6 +76,11 @@ type SubmissionDependencies = NativeSubmissionCallDependencies & {
     childThreadId: string,
     call: SubmissionCall,
     modelOwner?: ParentOwner,
+  ) => void;
+  recordPendingAssignment: (
+    state: ParentState,
+    receipt: CodexNativeSubagentSubmission,
+    nativeParentThreadId: string,
   ) => void;
   onSettled: (state: ParentState) => void;
   recoveryPollDelaysMs?: readonly number[];
@@ -386,6 +384,13 @@ export class CodexNativeSubagentSubmissionOwner {
     };
     entries.set(key, custody);
     this.pending.set(state, entries);
+    if (persist) {
+      this.dependencies.recordPendingAssignment(
+        state,
+        receipt,
+        this.nativeParentThreadId(state, receipt.childThreadId),
+      );
+    }
     if (persist && state.submissionStore) {
       custody.recorded = this.track(
         state,
@@ -427,57 +432,61 @@ export class CodexNativeSubagentSubmissionOwner {
     turn: JsonObject,
     historyValidated = false,
   ): void {
-    if (!this.isObserving(state, custody)) {
+    if (
+      !this.isObserving(state, custody) ||
+      !this.admitTurn(
+        state,
+        custody.receipt,
+        turn,
+        custody.owner,
+        historyValidated,
+        custody.completionCustody,
+      )
+    ) {
       return;
     }
-    const previousPhase = custody.phase;
     custody.phase = "promoting";
     if (custody.timer) {
       clearTimeout(custody.timer);
     }
-    const consumed = (async () => {
-      try {
-        if (
-          !(await this.admitTurn(
-            state,
-            custody.receipt,
-            turn,
-            custody.owner,
-            historyValidated,
-            custody.completionCustody,
-          ))
-        ) {
-          if (custody.phase === "promoting") {
-            custody.phase = previousPhase;
-            this.scheduleReconciliation(state, custody);
-          }
-          return;
-        }
+    // Native history owns execution. Keep its existing submission receipt until
+    // the result is acknowledged; there is no task row to take restart custody.
+  }
+
+  settleChild(state: ParentState, child: ChildState): void {
+    for (const custody of this.pending.get(state)?.values() ?? []) {
+      if (
+        custody.phase === "settled" ||
+        codexNativeSubagentRunId(custody.receipt.childThreadId, custody.receipt.submissionId) !==
+          child.runId
+      ) {
+        continue;
+      }
+      custody.phase = "settled";
+      const settlement = (async () => {
         await custody.recorded;
-        if (state.submissionStore) {
-          try {
+        try {
+          if (
+            (child.nativeCompletionDelivered ||
+              (child.subscriptionClosed && !child.pendingCompletion)) &&
+            state.submissionStore
+          ) {
             await state.submissionStore.consume(custody.receipt, () =>
               this.dependencies.assertPersistenceCurrent(state),
             );
-          } catch (error) {
-            embeddedAgentLog.warn(
-              "Native follow-up task is persisted but its receipt remains for reconciliation",
-              { error: formatErrorMessage(error) },
-            );
+          }
+        } catch (error) {
+          embeddedAgentLog.warn("Native follow-up receipt remains for reconciliation", {
+            error: formatErrorMessage(error),
+          });
+        } finally {
+          if ([...(this.pending.get(state)?.values() ?? [])].includes(custody)) {
+            this.finishCustody(state, custody);
           }
         }
-        this.finishCustody(state, custody);
-      } catch (error) {
-        embeddedAgentLog.warn("Failed to persist an accepted native follow-up task", {
-          error: formatErrorMessage(error),
-        });
-        if (custody.phase === "promoting") {
-          custody.phase = previousPhase;
-          this.scheduleReconciliation(state, custody);
-        }
-      }
-    })();
-    void this.track(state, consumed);
+      })();
+      void this.track(state, settlement);
+    }
   }
 
   private async reconcile(state: ParentState, custody: SubmissionCustody): Promise<void> {
@@ -494,10 +503,6 @@ export class CodexNativeSubagentSubmissionOwner {
         error: formatErrorMessage(error),
       });
     }
-    this.scheduleReconciliation(state, custody);
-  }
-
-  private scheduleReconciliation(state: ParentState, custody: SubmissionCustody): void {
     if (!this.isObserving(state, custody) || !this.pollDelays.length) {
       return;
     }
@@ -545,14 +550,14 @@ export class CodexNativeSubagentSubmissionOwner {
     this.dependencies.onSettled(state);
   }
 
-  private async admitTurn(
+  private admitTurn(
     state: ParentState,
     receipt: CodexNativeSubagentSubmission,
     turn: JsonObject,
     owner: ParentOwner | undefined,
     historyValidated: boolean,
     completionCustody: AgentHarnessCompletionCustody | undefined,
-  ): Promise<boolean> {
+  ): boolean {
     if (
       readString(turn, "id") !== receipt.submissionId ||
       this.disposed ||
@@ -561,53 +566,18 @@ export class CodexNativeSubagentSubmissionOwner {
       return false;
     }
     const runId = codexNativeSubagentRunId(receipt.childThreadId, receipt.submissionId);
-    if (state.taskRuntime) {
-      state.readTaskRecords = await state.taskRuntime.prepareTaskRecordsRead!();
-    }
-    if (this.disposed || !this.isCurrent(state)) {
-      return false;
-    }
-    const records = state.readTaskRecords?.() ?? [];
-    const existing = records.find((task) => task.runId === runId);
-    if (existing) {
-      const assignment = readNativeTaskAssignment(existing);
-      const history = readCodexNativeSubagentHistoryOwner(existing.detail);
-      if (
-        assignment?.nativeTurnId !== receipt.submissionId ||
-        (history &&
-          history.parentThreadId !== this.nativeParentThreadId(state, receipt.childThreadId))
-      ) {
-        return false;
-      }
-      if (
-        (existing.status === "succeeded" ||
-          existing.status === "failed" ||
-          existing.status === "cancelled") &&
-        existing.deliveryStatus === "delivered"
-      ) {
-        return true;
-      }
-    }
     let known = this.dependencies.knownChildren.get(receipt.childThreadId);
     if (!known) {
       if (!historyValidated) {
         return false;
       }
-      this.dependencies.restoreKnownChild(
-        state,
-        {
-          runId: receipt.predecessorRunId,
-          childThreadId: receipt.childThreadId,
-          nativeTurnId: receipt.predecessorNativeTurnId,
-        },
-        records,
-      );
+      this.dependencies.restoreKnownChild(state, {
+        runId: receipt.predecessorRunId,
+        childThreadId: receipt.childThreadId,
+        nativeTurnId: receipt.predecessorNativeTurnId,
+      });
       known = this.dependencies.knownChildren.get(receipt.childThreadId);
-      if (
-        known &&
-        known.assignment.runId === receipt.predecessorRunId &&
-        !records.some((task) => task.runId === receipt.predecessorRunId)
-      ) {
+      if (known && known.assignment.runId === receipt.predecessorRunId) {
         known.assignment.terminal = true;
       }
     }
@@ -633,20 +603,6 @@ export class CodexNativeSubagentSubmissionOwner {
       return false;
     }
     if (known.assignment.runId === runId) {
-      if (!existing) {
-        await state.mirror?.startFollowupTurn(
-          receipt.childThreadId,
-          receipt.submissionId,
-          this.nativeParentThreadId(state, receipt.childThreadId),
-        );
-        if (
-          this.disposed ||
-          !this.isCurrent(state) ||
-          this.dependencies.knownChildren.get(receipt.childThreadId) !== known
-        ) {
-          return false;
-        }
-      }
       const child =
         this.dependencies.currentChild(receipt.childThreadId) ??
         this.dependencies.registerChild(
@@ -679,30 +635,6 @@ export class CodexNativeSubagentSubmissionOwner {
     }
     const child = this.dependencies.currentChild(receipt.childThreadId);
     if (child?.runId !== runId) {
-      return false;
-    }
-    await state.mirror?.waitForTaskCreation(runId);
-    if (
-      this.disposed ||
-      !this.isCurrent(state) ||
-      this.dependencies.currentChild(receipt.childThreadId) !== child
-    ) {
-      return false;
-    }
-    if (state.taskRuntime) {
-      state.readTaskRecords = await state.taskRuntime.prepareTaskRecordsRead!();
-    }
-    if (
-      this.disposed ||
-      !this.isCurrent(state) ||
-      this.dependencies.currentChild(receipt.childThreadId) !== child ||
-      !child.expectedTask ||
-      !state
-        .readTaskRecords?.()
-        .some((task) =>
-          agentHarnessTaskRuntime.matchesAgentHarnessTaskAssignment(task, child.expectedTask!),
-        )
-    ) {
       return false;
     }
     if (nativeState === "active") {

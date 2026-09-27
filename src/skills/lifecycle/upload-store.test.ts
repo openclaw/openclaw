@@ -316,7 +316,7 @@ describe("skill upload store", () => {
     );
   });
 
-  it("rejects offset, size, and sha mismatches", async () => {
+  it("preserves the upload base64 dialect and rejects offset, size, and sha mismatches", async () => {
     const { store } = await makeStore();
     const archive = Buffer.from("abc");
     const begin = await store.begin({
@@ -324,6 +324,12 @@ describe("skill upload store", () => {
       slug: "demo-skill",
       sizeBytes: archive.length,
     });
+    for (const dataBase64 of ["", "YQ", "Y Q=", "YQ==YQ==", "YQ==?", "YQ==="]) {
+      await expectUploadError(
+        store.chunk({ uploadId: begin.uploadId, offset: 0, dataBase64 }),
+        "invalid dataBase64",
+      );
+    }
     await expectUploadError(
       store.chunk({
         uploadId: begin.uploadId,
@@ -343,7 +349,8 @@ describe("skill upload store", () => {
     await store.chunk({
       uploadId: begin.uploadId,
       offset: 0,
-      dataBase64: archive.subarray(0, 2).toString("base64"),
+      // Uploads trim outer whitespace and accept nonzero pad bits in padded base64.
+      dataBase64: " \tYWJ=\n",
     });
     await expectUploadError(
       store.commit({ uploadId: begin.uploadId }),

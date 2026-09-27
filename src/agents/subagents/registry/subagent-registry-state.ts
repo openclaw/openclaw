@@ -2,7 +2,6 @@ import {
   emitSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../../../sessions/session-lifecycle-events.js";
-import { isStateDatabaseReadAdmissionInvalidatedError } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import {
@@ -30,7 +29,6 @@ import {
   indexedSnapshotRows,
   getPersistedSubagentRunsSnapshot,
   loadPersistedSubagentRunsForRead,
-  mergeSelectedFullRuns,
   prepareSubagentRunsCache,
   readCompactSubagentRuns,
   rememberSubagentRunsSnapshot,
@@ -207,10 +205,11 @@ export function publishSubagentRunsAfterAtomicStore(
   runs: Map<string, SubagentRunRecord>,
   changedRunIds: readonly string[],
   deferredObserverEvents: Array<() => void>,
+  databasePath?: string,
 ): void {
   supersedePendingSubagentRegistryWrites(changedRunIds);
   subagentRuns.settleCompletionAuthorities(runs, changedRunIds);
-  const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds);
+  const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds, { databasePath });
   const events = updateCommittedSwarmNotifications(runs, changedRunIds);
   deferredObserverEvents.push(() => {
     emitSubagentRegistryPersisted(keys, changedRunIds);
@@ -223,14 +222,7 @@ export function getSubagentSessionListReadSnapshotIdentity(): object | undefined
   if (!shouldReadPersistedSubagentRuns()) {
     return subagentRuns;
   }
-  try {
-    return getPersistedSubagentRunsSnapshot(persistedSubagentSessionListRunsReadCache) ?? undefined;
-  } catch (error) {
-    if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
-      throw error;
-    }
-    return undefined;
-  }
+  return getPersistedSubagentRunsSnapshot(persistedSubagentSessionListRunsReadCache) ?? undefined;
 }
 
 export type SubagentSessionListReadView = {
@@ -256,14 +248,7 @@ export function createSubagentSessionListReadView(options: {
       if (!readPersisted) {
         return subagentRuns;
       }
-      try {
-        return getPersistedSubagentRunsSnapshot(cache, source.current()) ?? undefined;
-      } catch (error) {
-        if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
-          throw error;
-        }
-        return undefined;
-      }
+      return getPersistedSubagentRunsSnapshot(cache, source.current()) ?? undefined;
     },
     runs(runIds) {
       if (runIds) {
@@ -660,20 +645,4 @@ export function getSubagentRunsSnapshotForChildSession(
     load: () => loadSubagentRunsForChildSessionFromSqlite(key),
     matches: (entry) => entry.childSessionKey === key,
   });
-}
-
-/** Merge fresh durable rows with this source's unpublished facts and current live owners. */
-export function getPreparedSubagentRunsSnapshotForChildSession(
-  inMemoryRuns: Map<string, SubagentRunRecord>,
-  childSessionKey: string,
-  persisted: readonly SubagentRunRecord[],
-  context: OpenClawStateWorkerContext,
-): Map<string, SubagentRunRecord> {
-  return mergeSelectedFullRuns(
-    persistedSubagentRunsReadCache,
-    inMemoryRuns,
-    new Map(persisted.map((entry) => [entry.runId, structuredClone(entry)])),
-    (entry) => entry.childSessionKey === childSessionKey,
-    { context, fresh: true },
-  );
 }

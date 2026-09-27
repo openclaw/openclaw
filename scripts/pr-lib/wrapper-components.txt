@@ -1250,6 +1250,7 @@ src/shared/lazy-promise.ts
 src/shared/lazy-runtime.ts
 src/shared/listeners.ts
 src/shared/model-key.ts
+src/shared/node-list-parse.ts
 src/shared/path-array-index.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
@@ -1328,7 +1329,6 @@ src/state/openclaw-state-db-snapshot-owner.ts
 src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
-src/state/openclaw-state-db-task-identifiers.ts
 src/state/openclaw-state-db-transaction.ts
 src/state/openclaw-state-db.paths.ts
 src/state/openclaw-state-db.ts

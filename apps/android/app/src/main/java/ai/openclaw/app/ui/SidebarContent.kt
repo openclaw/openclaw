@@ -12,6 +12,7 @@ import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.defaultSidebarVisiblePages
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.operatorScopesAllowWrite
+import ai.openclaw.app.sanitizeSidebarPageOrder
 import ai.openclaw.app.ui.design.ClawColors
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
@@ -145,8 +146,7 @@ private enum class SidebarPagesMenuMode {
 
 internal fun orderedSidebarDestinations(pageIds: List<String>): List<SidebarDestination> {
   val byId = SidebarDestination.entries.associateBy(SidebarDestination::stableId)
-  val supplied = pageIds.mapNotNull(byId::get).distinct()
-  return supplied + SidebarDestination.entries.filterNot(supplied::contains)
+  return sanitizeSidebarPageOrder(pageIds).mapNotNull(byId::get)
 }
 
 internal fun moveSidebarDestination(
@@ -192,10 +192,11 @@ internal data class SidebarSessionPresentation(
 
 internal fun sidebarRecentSessions(
   sessions: List<ChatSessionEntry>,
+  currentSessionKey: String = "",
 ): List<ChatSessionEntry> =
   sessions
     .asSequence()
-    .filter { it.archived != true }
+    .filter { isSessionVisibleInNavigation(it, currentSessionKey) }
     .sortedWith(
       compareByDescending<ChatSessionEntry> { it.pinned == true }
         .thenByDescending { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
@@ -207,8 +208,9 @@ internal fun sidebarSessionPresentation(
   knownGroups: List<String>,
   expanded: Boolean,
   excludedSessionKeys: Set<String> = emptySet(),
+  currentSessionKey: String = "",
 ): SidebarSessionPresentation {
-  val activeSessions = sidebarRecentSessions(sessions)
+  val activeSessions = sidebarRecentSessions(sessions, currentSessionKey)
   val pinned = activeSessions.filter { it.pinned == true }
   val recent =
     activeSessions.filter { session ->
@@ -481,6 +483,7 @@ internal fun OpenClawSidebar(
       knownGroups = storedGroups,
       expanded = sessionsExpanded,
       excludedSessionKeys = catalogSessionKeys,
+      currentSessionKey = activeSessionKey,
     )
   val pinnedSessions = recentPresentation.pinned
   val recentSections = recentPresentation.recentSections
@@ -868,7 +871,7 @@ internal fun OpenClawSidebar(
 
           SidebarCollapsibleHeader(
             label = nativeString("Recent"),
-            attention = if (recentExpanded) null else attentionFor(sidebarRecentSessions(sessions).filter { it.pinned != true && it.key !in catalogSessionKeys }.map { it.key }),
+            attention = if (recentExpanded) null else attentionFor(sidebarRecentSessions(sessions, activeSessionKey).filter { it.pinned != true && it.key !in catalogSessionKeys }.map { it.key }),
             expanded = recentExpanded,
             palette = palette,
             onClick = { recentExpanded = !recentExpanded },
@@ -905,9 +908,24 @@ internal fun OpenClawSidebar(
       }
     }
     HorizontalDivider(color = palette.hairline)
-    SidebarGatewayControl(viewModel, connection, palette) {
-      viewModel.openGatewaySettings()
-      onClose()
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+      Box(Modifier.weight(1f)) {
+        SidebarGatewayControl(viewModel, connection, palette) {
+          viewModel.openGatewaySettings()
+          onClose()
+        }
+      }
+      IconButton(
+        onClick = { onSelectDestination(SidebarDestination.Settings) },
+        modifier = Modifier.size(48.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Outlined.Settings,
+          contentDescription = nativeString("Settings"),
+          tint = palette.text,
+          modifier = Modifier.size(20.dp),
+        )
+      }
     }
   }
 }

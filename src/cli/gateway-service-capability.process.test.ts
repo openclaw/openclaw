@@ -57,7 +57,15 @@ function createFixture() {
   return {
     databasePath,
     stateDir,
-    configPath,
+    gateway: acquireGatewayStateOwner({
+      databasePath,
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath,
+        role: "gateway",
+      },
+    }),
     run: (args: string[]) =>
       source
         ? tempDirs.track(
@@ -92,15 +100,6 @@ describe("candidate service capability startup", () => {
     "answers capability and version probes without state writes or locks while a Gateway owns an older schema",
     async () => {
       const fixture = createFixture();
-      const gateway = acquireGatewayStateOwner({
-        databasePath: fixture.databasePath,
-        payload: {
-          pid: process.pid,
-          createdAt: new Date().toISOString(),
-          configPath: fixture.configPath,
-          role: "gateway",
-        },
-      });
       const before = snapshotState(fixture.stateDir);
       try {
         const result = await fixture.run([
@@ -140,7 +139,7 @@ describe("candidate service capability startup", () => {
           database.close();
         }
       } finally {
-        gateway.release();
+        fixture.gateway.release();
       }
     },
     getCliProcessTestTimeout(CLI_CHILD_TIMEOUT_MS, CLI_CHILD_TIMEOUT_MS, CLI_CHILD_TIMEOUT_MS),
@@ -148,15 +147,6 @@ describe("candidate service capability startup", () => {
 
   it("keeps ordinary service commands behind the live Gateway schema fence", async () => {
     const fixture = createFixture();
-    const gateway = acquireGatewayStateOwner({
-      databasePath: fixture.databasePath,
-      payload: {
-        pid: process.pid,
-        createdAt: new Date().toISOString(),
-        configPath: fixture.configPath,
-        role: "gateway",
-      },
-    });
     const before = fs.readFileSync(fixture.databasePath);
     try {
       const result = await fixture.run(["gateway", "install", "--json"]);
@@ -172,7 +162,7 @@ describe("candidate service capability startup", () => {
       });
       expect(fs.readFileSync(fixture.databasePath)).toEqual(before);
     } finally {
-      gateway.release();
+      fixture.gateway.release();
     }
   });
 });

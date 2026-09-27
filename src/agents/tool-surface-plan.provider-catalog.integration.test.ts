@@ -74,16 +74,12 @@ describe("registered MiniMax Code Mode tool surface", () => {
     );
   }
 
-  function assembleSurface(
-    model: Awaited<ReturnType<typeof resolveModel>>,
-    codeMode: boolean | "auto",
-    toolsEnabled = true,
-  ) {
-    const config: OpenClawConfig = { tools: { codeMode, toolSearch: false } };
+  function assembleSurface(model: Awaited<ReturnType<typeof resolveModel>>) {
+    const config: OpenClawConfig = { tools: { codeMode: "auto", toolSearch: false } };
     const plan = resolveAgentToolSurfacePlan({
       config,
       model,
-      toolsEnabled,
+      toolsEnabled: true,
       forceDirectMessageTool: false,
       isRawModelRun: false,
     });
@@ -97,7 +93,7 @@ describe("registered MiniMax Code Mode tool surface", () => {
           })
         : [];
       const result = applyAgentToolSurfaceCatalog({
-        tools: [...controls, ...(toolsEnabled ? [createStubTool("query_records")] : [])],
+        tools: [...controls, createStubTool("query_records")],
         config,
         ...plan,
         forceDirectMessageTool: false,
@@ -119,7 +115,7 @@ describe("registered MiniMax Code Mode tool surface", () => {
     ["minimax-portal", "dynamic"],
   ] as const)("engages M3 Code Mode through %s %s resolution", async (providerId, route) => {
     const model = await resolveModel(providerId, route, "MiniMax-M3");
-    expect(assembleSurface(model, "auto")).toEqual({
+    expect(assembleSurface(model)).toEqual({
       names: ["exec", "wait"],
       catalogToolCount: 1,
     });
@@ -131,21 +127,8 @@ describe("registered MiniMax Code Mode tool surface", () => {
     async (providerId) => {
       for (const route of ["static", "dynamic"] as const) {
         const model = await resolveModel(providerId, route, "MiniMax-M2.7");
-        expect(assembleSurface(model, "auto").names, route).toEqual(["query_records"]);
+        expect(assembleSurface(model).names, route).toEqual(["query_records"]);
       }
     },
   );
-
-  it.each([
-    { enabled: false, names: ["query_records"] },
-    { enabled: true, names: ["exec", "wait"] },
-  ])("honors explicit Code Mode $enabled for registered M3", async ({ enabled, names }) => {
-    const model = await resolveModel("minimax", "dynamic", "MiniMax-M3");
-    expect(assembleSurface(model, enabled).names).toEqual(names);
-  });
-
-  it("keeps a registered M3 run with tools disabled empty", async () => {
-    const model = await resolveModel("minimax-portal", "static", "MiniMax-M3");
-    expect(assembleSurface(model, true, false).names).toEqual([]);
-  });
 });

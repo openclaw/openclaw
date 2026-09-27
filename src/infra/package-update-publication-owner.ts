@@ -18,6 +18,7 @@ import {
   type PackageActivationPhase,
   type PackageActivationRecord,
   encodePackageActivationLauncher,
+  isPackageActivationComplete,
 } from "./package-update-activation-journal.js";
 import { readPackageActivationRecordStatus as packageActivationStatus } from "./package-update-activation-status.js";
 import {
@@ -417,6 +418,21 @@ export function createPublicationOwner(
     transition("publication-complete");
     return packageActivationStatus(record);
   };
+  const persistRetirement = async () => {
+    const assertRetired = () => {
+      assertCurrent();
+      if (!isPackageActivationComplete(anchor, record)) {
+        throw new Error("Package recovery artifacts were not retired.");
+      }
+    };
+    assertRetired();
+    const outcome = await syncDirectory(path.dirname(helper()));
+    assertRetired();
+    requireDirectorySync(outcome, "Package helper retirement");
+    // Retrying a lost acknowledgement persists the same recorded absence without
+    // another journal write. Read-only receipts remain observations, not grants.
+    return packageActivationStatus(record);
+  };
   const retire = async () => {
     await verifyClosure();
     if (
@@ -542,13 +558,12 @@ export function createPublicationOwner(
       throw new Error("Final helper identity changed.");
     }
     await fsp.unlink(helper());
-    // The bounded last receipt remains. A later reader can recognize this exact
-    // intended absence even when this acknowledgement is lost. No trailing write.
-    return packageActivationStatus(record);
+    return persistRetirement();
   };
   return {
     publish,
     retire,
+    persistRetirement,
     preflight,
     async disarmRollback() {
       assertCurrent();

@@ -134,6 +134,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
   "scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs!",
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
+  // run.sh starts this persistent native peer as a separate process.
+  "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
@@ -144,7 +146,6 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
-  "scripts/e2e/lib/upgrade-survivor/taskflow-restoration.mjs!",
   // The first-hop shell executes the packaged admission entry probe by path.
   "scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs!",
   "scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs!",
@@ -376,8 +377,6 @@ const rootEntries = [
   "scripts/release-verify-publish.ts!",
   // Spawned by the agent concurrency benchmark; no static import edge exists.
   "scripts/bench-agent-concurrency-worker.ts!",
-  // Spawned by the durable task registry churn benchmark in a fresh GC-enabled process.
-  "scripts/bench-task-registry-sqlite-worker.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   "scripts/bench-cron-session-reaper.ts!",
   "scripts/bench-codex-catalog-pages.ts!",
@@ -395,8 +394,6 @@ const rootEntries = [
   "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
   "src/agents/subagents/registry/subagent-registry-restart-recovery.ts!",
-  // Task cancellation loads this control facade by string path to avoid a registry cycle.
-  "src/tasks/task-registry-control.runtime.ts!",
   // Reply dispatch and Gateway startup consume this namespace through loadGetReplyFromConfigRuntime.
   "src/auto-reply/reply/get-reply-from-config.runtime.ts!",
   // Command attempts consume this namespace through runtime-loaders.ts's Promise.all preload.

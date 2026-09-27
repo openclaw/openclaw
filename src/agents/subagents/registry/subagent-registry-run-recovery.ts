@@ -9,8 +9,6 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
-import { prepareCanonicalTaskActivation } from "../../../tasks/task-backing-authority-write.js";
-import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
@@ -21,7 +19,7 @@ import {
 } from "./subagent-delivery-state.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { commitSubagentTaskReplacement } from "./subagent-registry-replacement-store.js";
+import { commitSubagentRunReplacement } from "./subagent-registry-replacement-store.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { nextSubagentRunGeneration } from "./subagent-run-generation.js";
@@ -179,22 +177,6 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     );
     clearDeliveryState(next);
 
-    const taskActivation =
-      source.expectsCompletionMessage === false
-        ? undefined
-        : prepareCanonicalTaskActivation({
-            runtime: "subagent",
-            childSessionKey: next.childSessionKey,
-            runId: source.taskRunId ?? source.runId,
-            detail: createSubagentTaskBackingDetail(generation),
-            startedAt: now,
-            // An admitted kill owns the provisional task projection until its
-            // reconciliation settles. An unclaimed marker yields to the admitted
-            // successor and must not leave its task cancelled.
-            preserveProvisionalCancellation:
-              source.killReconciliation?.taskCancellationAccepted === true,
-          });
-
     const restoreCompletionAuthority = subagentRuns.transferCompletionAuthority(source, next);
     if (previousRunId !== nextRunId) {
       this.options.runs.delete(previousRunId);
@@ -227,17 +209,12 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       ...[...wakeSnapshots.keys()].map((entry) => entry.runId),
     ];
     try {
-      if (taskActivation) {
-        commitSubagentTaskReplacement({
-          runs: this.options.runs,
-          changedRunIds,
-          source: sourceSnapshot,
-          successor: next,
-          task: taskActivation,
-        });
-      } else {
-        this.options.persistOrThrow(...changedRunIds);
-      }
+      commitSubagentRunReplacement({
+        runs: this.options.runs,
+        changedRunIds,
+        source: sourceSnapshot,
+        successor: next,
+      });
     } catch (error) {
       restoreCompletionAuthority();
       this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
@@ -269,9 +246,6 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       next,
       preserve: replaceParams.preserveRequesterSettleWake === true,
     });
-    if (!taskActivation) {
-      subagentRuns.commitOwnership(next);
-    }
     if (previousRunId !== nextRunId) {
       this.options.clearPendingLifecycleError(previousRunId);
       this.options.resumedRuns.delete(previousRunId);

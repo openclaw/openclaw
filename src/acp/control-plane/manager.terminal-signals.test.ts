@@ -1,13 +1,10 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import {
-  requireTaskByRunId,
-  withAcpManagerTaskStateDir,
-} from "../../../test/helpers/acp-manager-task-state.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import * as terminalState from "../../sessions/subagent-terminal-state.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import {
   AcpSessionManager,
@@ -42,7 +39,7 @@ describe("ACP terminal state signals", () => {
   }
 
   it("records parented ACP turns only for human provenance", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
       const childSessionKey = "agent:main:acp:child-state";
       const { runtimeState, manager, input } = setupParentedTurn(childSessionKey);
 
@@ -81,7 +78,7 @@ describe("ACP terminal state signals", () => {
   });
 
   it("keeps ACP completion joined without blocking the event loop on terminal signal contention", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
       const childSessionKey = "agent:main:acp:contended-terminal";
       const { manager, input } = setupParentedTurn(childSessionKey);
       await manager.runTurn({ ...input, requestId: "warm-terminal-worker" });
@@ -123,7 +120,6 @@ describe("ACP terminal state signals", () => {
         }
       }
       expect(settled).toBe(true);
-      expect(requireTaskByRunId("contended-terminal").status).toBe("succeeded");
       expect(
         listSessionStateEventsSince(childSessionKey, "main", 0, 200).events.map((event) => ({
           kind: event.kind,

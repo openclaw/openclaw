@@ -149,12 +149,13 @@ describe("TUI PTY harness", { concurrent: false }, () => {
             entry.method === "loadHistory" &&
             objectFieldEquals(entry, "sessionKey", "agent:main:mode-target"),
         );
+        // Wait for loaded target metadata, not a reset placeholder or late source redraw.
         const targetRows = await waitForSynchronizedFrameRows(
           modeFixture.run,
-          (rows) => rows.some((row) => row.includes("session mode-target | fixture-model")),
+          (rows) => rows.some((row) => row.includes("| session mode-target | fixture-model")),
           STARTUP_TIMEOUT_MS,
         );
-        const targetOutput = targetRows.join("\n");
+        const targetOutput = targetRows.join(" ");
         expect(targetOutput).toContain("deliver:on");
         expect(targetOutput).not.toContain(" | fast | ");
         expect(targetOutput).not.toContain("fast:auto");
