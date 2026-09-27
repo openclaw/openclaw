@@ -57,7 +57,6 @@ export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/ma
 export {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
-  type SessionTranscriptInstance,
 } from "../../../../src/config/sessions/session-history.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
