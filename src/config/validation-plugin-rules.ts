@@ -27,6 +27,7 @@ import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import {
   bundledChannelIds,
   collectChannelDmPolicyDependencyWarnings,
+  collectChannelUnsafeIntegerWarnings,
   hasChannelDmPolicyDependencyWarningCandidates,
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
@@ -253,6 +254,7 @@ export function validatePreparedConfigWithPlugins(
       )
     : undefined;
   warnings.push(...collectChannelDmPolicyDependencyWarnings(parsedConfig, { dmPolicyMetadata }));
+  warnings.push(...collectChannelUnsafeIntegerWarnings(parsedConfig));
 
   let mutatedConfig = config;
   let channelsCloned = false;

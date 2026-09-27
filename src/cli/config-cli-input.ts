@@ -11,7 +11,11 @@ import {
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
-import { rejectConfigNonFiniteNumbers, visitConfigValueTree } from "../config/value-tree.js";
+import {
+  rejectConfigNonFiniteNumbers,
+  rejectConfigLostIntegerDigits,
+  visitConfigValueTree,
+} from "../config/value-tree.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -490,6 +494,7 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
     throw new Error(`Failed to parse ${sourceLabel} as JSON5: ${String(err)}`, { cause: err });
   }
   rejectConfigNonFiniteNumbers(parsed);
+  rejectConfigLostIntegerDigits(raw);
   return parsed;
 }
 

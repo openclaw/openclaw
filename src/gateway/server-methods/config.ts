@@ -43,6 +43,7 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "../../config/validation.js";
+import { rejectConfigLostIntegerDigits } from "../../config/value-tree.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
 import { redactToolDetail } from "../../logging/redact.js";
@@ -1063,6 +1064,12 @@ export const configHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "config.patch raw must be an object"),
       );
+      return;
+    }
+    try {
+      rejectConfigLostIntegerDigits(params.raw);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(err)));
       return;
     }
     const normalizedPatch = normalizeSubmittedConfigModelRefs(
