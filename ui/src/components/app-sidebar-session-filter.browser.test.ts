@@ -23,8 +23,15 @@ setupSidebarTest();
 
 const ringStyle = (root: Element, selector: string) =>
   getComputedStyle(root.querySelector(selector)!).outlineStyle;
+const ownerOptions = (root: Element) =>
+  [
+    ...root
+      .querySelector("#sidebar-sessions-owner")!
+      .closest("openclaw-select-picker")!
+      .querySelectorAll<HTMLElement>(".picker-select__option"),
+  ].map((option) => option.textContent!.trim());
 
-async function mountFilters(width: number) {
+async function mountFilters(width: number, teammates = 0) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, 560);
   // The app shell marks phone layouts; the filter panel becomes a bottom sheet there.
@@ -37,6 +44,11 @@ async function mountFilters(width: number) {
   result.owners = [
     { type: "human", id: "profile-ada", label: "Ada" },
     { type: "human", id: "profile-bob", label: "Bob" },
+    ...Array.from({ length: teammates }, (_, index) => ({
+      type: "human" as const,
+      id: `profile-${index}`,
+      label: `Teammate ${index}`,
+    })),
   ];
   for (const [index, row] of result.sessions.entries()) {
     row.owner = { actor: result.owners[index]! };
@@ -89,6 +101,18 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         expect(bounds.bottom).toBeLessThanOrEqual(innerHeight);
         expect(bounds.left).toBeGreaterThanOrEqual(0);
         expect(bounds.right).toBeLessThanOrEqual(innerWidth);
+        // Every row label shares one typography; section titles and values may differ.
+        const labels = menu.querySelectorAll(
+          ".sidebar-session-menu-row > :first-child, .sidebar-session-menu-switch > span:first-child, .picker-select__name, #sidebar-sessions-sources",
+        );
+        expect(
+          new Set(
+            [...labels].map((label) => {
+              const style = getComputedStyle(label);
+              return `${style.fontSize} ${style.fontWeight} ${style.color}`;
+            }),
+          ).size,
+        ).toBe(1);
         const rows = [...menu.querySelectorAll<HTMLElement>(".sidebar-session-menu-row")];
         const controls = rows.map((row) => row.lastElementChild!.getBoundingClientRect());
         for (const [index, row] of rows.entries()) {
@@ -107,21 +131,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expect
         .element(page.getByRole("listbox", { name: "Owners", exact: true }))
         .toBeVisible();
-      await expect
-        .element(page.getByRole("option", { name: "All owners", exact: true }))
-        .toBeVisible();
-      await expect
-        .element(page.getByRole("option", { name: "Involving me", exact: true }))
-        .toBeVisible();
-      await expect
-        .element(page.getByRole("option", { name: "Ada (You)", exact: true }))
-        .toBeVisible();
-      await expect.element(page.getByRole("option", { name: "Bob", exact: true })).toBeVisible();
-      expect(
-        sidebar.querySelectorAll(
-          ".picker-select__option .picker-select__leading openclaw-viewer-avatar",
-        ),
-      ).toHaveLength(2);
+      expect(ownerOptions(sidebar)).toEqual(["All owners", "Involving me", "Ada (You)", "Bob"]);
       const search = page.getByRole("combobox", { name: "Search", exact: true });
       await expect.element(search).toHaveFocus();
       expect(getComputedStyle(sidebar.querySelector(".picker-select__search")!).boxShadow).not.toBe(
@@ -129,11 +139,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       );
       expect(ringStyle(sidebar, ".picker-select__option[data-active]")).not.toBe("none");
       await userEvent.keyboard("bo");
-      await expect.poll(() => sidebar.querySelectorAll(".picker-select__option").length).toBe(1);
-      await expect.element(page.getByRole("option", { name: "Bob", exact: true })).toBeVisible();
+      await expect.poll(() => ownerOptions(sidebar)).toEqual(["Bob"]);
       await userEvent.keyboard("{Escape}");
       await expect.element(search).toHaveValue("");
-      await expect.poll(() => sidebar.querySelectorAll(".picker-select__option").length).toBe(4);
+      await expect.poll(() => ownerOptions(sidebar)).toHaveLength(4);
       await userEvent.keyboard("{Escape}");
       await expect.element(owners).toHaveFocus();
       await expectFits();
@@ -205,7 +214,12 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await trigger.click();
       await expect.element(owners).toHaveFocus();
       await expect.poll(() => occlusion).toEqual([false, true, false, true]);
-      await trigger.click();
+      // The phone sheet covers the toolbar; its backdrop dismisses it instead.
+      if (width < 560) {
+        sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel__backdrop")!.click();
+      } else {
+        await trigger.click();
+      }
       expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
       await expect.poll(() => occlusion).toEqual([false, true, false, true, false]);
     },
@@ -255,7 +269,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await page.getByRole("button", { name: "Group by: Custom groups", exact: true }).click();
     const choices = sidebar.querySelector<HTMLElement>('[role="listbox"][aria-label="Group by"]')!;
     await expect.element(choices).toBeVisible();
-    const pageBounds = choices.closest(".picker-select__menu")!.getBoundingClientRect();
+    const choicePage = choices.closest<HTMLElement>(".picker-select__menu")!;
+    await Promise.all(choicePage.getAnimations().map((animation) => animation.finished));
+    const pageBounds = choicePage.getBoundingClientRect();
     expect(pageBounds.left).toBe(sheet.left);
     expect(pageBounds.right).toBe(sheet.right);
     const back = page.getByRole("button", { name: "Back", exact: true });
@@ -272,6 +288,20 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel__backdrop")!.click();
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
     await expect.element(trigger).toHaveFocus();
+  });
+
+  it("fades the owner list at the edges it scrolls past", async () => {
+    const { sidebar, page } = await mountFilters(1440, 30);
+    await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+    await page.getByRole("button", { name: "Owners: All owners", exact: true }).click();
+    const list = sidebar.querySelector<HTMLElement>('[role="listbox"][aria-label="Owners"]')!;
+    await expect.element(list).toBeVisible();
+    await expect.poll(() => list.hasAttribute("data-fade-end")).toBe(true);
+    expect(list.hasAttribute("data-fade-start")).toBe(false);
+    expect(getComputedStyle(list).maskImage).not.toBe("none");
+    list.scrollTop = list.scrollHeight;
+    await expect.poll(() => list.hasAttribute("data-fade-start")).toBe(true);
+    expect(list.hasAttribute("data-fade-end")).toBe(false);
   });
 
   it("applies every preference instantly and resets only active filters", async () => {
@@ -332,6 +362,11 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     expect(getComputedStyle(sidebar.querySelector("#sidebar-sessions-owner")!).boxShadow).toBe(
       "none",
     );
+    // The checked row is plain: no tint or inset border, just the trailing check.
+    const checked = getComputedStyle(
+      sidebar.querySelector('.picker-select__option[aria-selected="true"]')!,
+    );
+    expect([checked.backgroundColor, checked.boxShadow]).toEqual(["rgba(0, 0, 0, 0)", "none"]);
     await page.getByRole("option", { name: "Involving me", exact: true }).click();
     expect(sessions.list).toHaveBeenCalledWith(expect.objectContaining({ involvingMe: true }));
     await expectFilterCount(2);
