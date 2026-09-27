@@ -236,55 +236,65 @@ function beginsIndependentMediaSource(raw: string): boolean {
 // taken from the fallback below. Ending a token at that inner quote would cut the value short.
 const MEDIA_DIRECTIVE_PART_RE = /"[^"]*"(?=\s|$)|'[^']*'(?=\s|$)|`[^`]*`(?=\s|$)|\S+/g;
 
+const QUOTE_CHARS = new Set(['"', "'", "`"]);
+
+// An explicitly quoted chunk carries its own boundaries, so it is never a fragment of a neighbouring
+// reference: the quote pair already states where that value starts and ends.
+function isQuotedChunk(token: string): boolean {
+  const quote = token.charAt(0);
+  return token.length > 1 && QUOTE_CHARS.has(quote) && token.endsWith(quote);
+}
+
+type MediaDirectiveToken = { token: string; index: number };
+
+// One tokenizer owns the reference boundaries, so splitting and list detection agree on them. Reading a
+// quoted value with its own tokenizer let a value that contains the enclosing quote look like two
+// references to one caller and one reference to the other.
+function tokenizeMediaDirectiveParts(payload: string): MediaDirectiveToken[] {
+  return Array.from(payload.matchAll(MEDIA_DIRECTIVE_PART_RE), (match) => ({
+    token: match[0],
+    index: match.index ?? 0,
+  }));
+}
+
+// A payload the tokenizer reads as two or more references lists them, even when its first and last
+// characters are the same quote: `MEDIA:"/tmp/a.png" "/tmp/b.png"` starts and ends with a quote but
+// holds two references. A single quoted value whose own text ends with that quote, such as
+// `MEDIA:"https://example.com/video.mp4?token=ends""`, leaves that final quote outside every pair and
+// tokenizes as one reference, so it still unwraps as one value.
+function listsSeparateQuotedReferences(payload: string): boolean {
+  return tokenizeMediaDirectiveParts(payload).length >= 2;
+}
+
 function splitMediaDirectiveParts(payload: string): string[] {
   const parts: string[] = [];
-  let previousEnd = 0;
-  for (const match of payload.matchAll(MEDIA_DIRECTIVE_PART_RE)) {
-    const candidate = normalizeMediaSource(cleanCandidate(match[0]));
+  const tokens = tokenizeMediaDirectiveParts(payload);
+  for (let position = 0; position < tokens.length; position += 1) {
+    const token = expectDefined(tokens[position], "media directive part");
+    const previousToken = tokens[position - 1];
+    const candidate = normalizeMediaSource(cleanCandidate(token.token));
     const previous = parts.at(-1);
     const previousCandidate = previous ? normalizeMediaSource(cleanCandidate(previous)) : "";
     if (
+      !isQuotedChunk(token.token) &&
+      !(previousToken !== undefined && isQuotedChunk(previousToken.token)) &&
       MEDIA_SOURCE_ROOT_RE.test(previousCandidate) &&
       !beginsIndependentMediaSource(candidate) &&
       (!HAS_FILE_EXT.test(previousCandidate) || !isValidMedia(candidate))
     ) {
-      // Preserve real filename whitespace while keeping independently valid attachments separate.
-      parts[parts.length - 1] = `${previous}${payload.slice(previousEnd, match.index)}${match[0]}`;
+      // Preserve real filename whitespace while keeping independently valid attachments separate. This
+      // reconstruction only serves unquoted paths: an explicit quote pair already ends its reference,
+      // so reaching across one would fuse two references the author delimited.
+      const previousEnd = previousToken
+        ? previousToken.index + previousToken.token.length
+        : token.index;
+      parts[parts.length - 1] =
+        `${previous}${payload.slice(previousEnd, token.index)}${token.token}`;
     } else {
-      parts.push(match[0]);
+      parts.push(token.token);
     }
-    previousEnd = match.index + match[0].length;
   }
   return parts;
-}
-
-// A directive can list several quoted references, as in
-// `MEDIA:"/tmp/first image.png" "/tmp/second image.png"`. Such a payload also starts and ends with the
-// same quote, so unwrapping it as one value would merge the references. They are only separate when
-// whitespace — at least one character of it — sits between them. A single quoted reference whose own
-// value ends with the enclosing quote, such as `MEDIA:"https://example.com/video.mp4?token=ends""`,
-// leaves that final quote outside every pair, so it still unwraps as one value. A value that ends with
-// a quote pair, such as `MEDIA:"https://example.com/video.mp4?token=ends"""`, pairs those two trailing
-// quotes with no gap between them, so it unwraps as one value as well and the URL keeps its tail.
-const QUOTED_REFERENCE_RE = /"[^"]*"|'[^']*'|`[^`]*`/g;
-
-function listsSeparateQuotedReferences(payload: string): boolean {
-  const references = [...payload.matchAll(QUOTED_REFERENCE_RE)];
-  if (references.length < 2) {
-    return false;
-  }
-  let cursor = 0;
-  for (const [position, reference] of references.entries()) {
-    const index = reference.index ?? 0;
-    const gap = payload.slice(cursor, index);
-    // Only real whitespace separates references. Touching quote pairs are siblings of one value, so
-    // an empty gap after the first reference keeps the payload whole instead of truncating it.
-    if (gap.trim() !== "" || (position > 0 && gap === "")) {
-      return false;
-    }
-    cursor = index + reference[0].length;
-  }
-  return payload.slice(cursor).trim() === "";
 }
 
 function unwrapQuoted(value: string): string | undefined {

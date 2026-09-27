@@ -221,6 +221,37 @@ describe("splitMediaFromOutput", () => {
         "MEDIA:'https://example.com/video.mp4?token=it'\\''s' /tmp/second.png",
         ["https://example.com/video.mp4?token=it'\\''s", "/tmp/second.png"],
       ],
+      // The list check and the tokenizer must agree on where a reference ends, so a quoted second
+      // reference separates from the first one even when the first value holds that same inner quote.
+      [
+        "MEDIA:'https://example.com/video.mp4?token=it's' '/tmp/second.png'",
+        ["https://example.com/video.mp4?token=it's", "/tmp/second.png"],
+      ],
+      [
+        'MEDIA:"https://example.com/video.mp4?token=it\'s" "/tmp/second.png"',
+        ["https://example.com/video.mp4?token=it's", "/tmp/second.png"],
+      ],
+    ] as const) {
+      expectParsedMediaOutputCase(input, { mediaUrls: [...expected] });
+      expect(splitMediaFromOutput(input).segments).toEqual(
+        expected.map((url) => ({ type: "media", url })),
+      );
+    }
+  });
+
+  it("keeps a quoted relative reference separate from the quoted reference before it", () => {
+    // Explicit quotes already delimit each reference. The unquoted-path reconstruction heuristic exists
+    // for bare paths with real filename spaces, so it must not reach across those quotes and fuse the
+    // second reference into the first one.
+    for (const [input, expected] of [
+      [
+        'MEDIA:"/tmp/first image.png" "media/second image.png"',
+        ["/tmp/first image.png", "media/second image.png"],
+      ],
+      [
+        "MEDIA:'/tmp/first image.png' 'media/second image.png'",
+        ["/tmp/first image.png", "media/second image.png"],
+      ],
     ] as const) {
       expectParsedMediaOutputCase(input, { mediaUrls: [...expected] });
       expect(splitMediaFromOutput(input).segments).toEqual(
