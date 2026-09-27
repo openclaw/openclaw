@@ -47,8 +47,8 @@ export function tryParseJson<T>(raw: string): T | null {
 /** Normalizes phone-like input into the loose E.164 shape used by channel helpers. */
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^[a-z][a-z0-9-]*:/i, "").trim();
-  const digits = withoutPrefix.replace(/\D/g, "");
-  return digits ? `+${digits}` : "";
+  const phoneDigits = withoutPrefix.replace(/\D/g, "");
+  return phoneDigits ? `+${phoneDigits}` : "";
 }
 
 // Surrogate-safe slicing helpers live in a node-free leaf module so browser/UI
