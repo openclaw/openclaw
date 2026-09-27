@@ -16,12 +16,13 @@ describe("Tool Search activation defaults", () => {
   );
 
   it.each([
-    { raw: false, enabled: false, mode: "code" },
-    { raw: true, enabled: true, mode: "code" },
-    { raw: {}, enabled: false, mode: "code" },
+    { raw: false, enabled: false, mode: "tools" },
+    { raw: true, enabled: true, mode: "tools" },
+    { raw: {}, enabled: false, mode: "tools" },
+    { raw: { enabled: true }, enabled: true, mode: "tools" },
+    { raw: { searchDefaultLimit: 4 }, enabled: true, mode: "tools" },
     { raw: { mode: "tools" }, enabled: true, mode: "tools" },
     { raw: { mode: "directory" }, enabled: true, mode: "directory" },
-    { raw: { mode: "code" }, enabled: true, mode: "code" },
     { raw: { enabled: false, mode: "tools" }, enabled: false, mode: "tools" },
   ] satisfies Array<{
     raw: NonNullable<NonNullable<OpenClawConfig["tools"]>["toolSearch"]>;
@@ -32,22 +33,5 @@ describe("Tool Search activation defaults", () => {
       enabled,
       mode,
     });
-  });
-
-  it("honors code mode under Electron", () => {
-    const electronDescriptor = Object.getOwnPropertyDescriptor(process.versions, "electron");
-    Object.defineProperty(process.versions, "electron", {
-      configurable: true,
-      value: "99.0.0",
-    });
-    try {
-      expect(resolveToolSearchConfig({ tools: { toolSearch: true } }).mode).toBe("code");
-    } finally {
-      if (electronDescriptor) {
-        Object.defineProperty(process.versions, "electron", electronDescriptor);
-      } else {
-        delete (process.versions as NodeJS.ProcessVersions & { electron?: string }).electron;
-      }
-    }
   });
 });

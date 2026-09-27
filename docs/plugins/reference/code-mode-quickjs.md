@@ -20,9 +20,3 @@ Hardened JavaScript execution for Code Mode using QuickJS in WebAssembly.
 ## Surface
 
 - Contracts: `codeModeExecutors`
-
-<!-- openclaw-plugin-reference:manual-start -->
-
-The bundled QuickJS executor also sandboxes `tool_search_code`; denying or disabling this plugin makes `tool_search_code` fail explicitly.
-
-<!-- openclaw-plugin-reference:manual-end -->

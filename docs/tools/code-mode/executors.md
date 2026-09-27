@@ -41,10 +41,6 @@ the Code Mode tool bridge retain OpenClaw's normal policy, approvals, hooks,
 and session ownership under either executor. These checks mediate tool calls;
 they cannot contain hostile code that escapes a Node VM context.
 
-The bundled QuickJS executor also sandboxes `tool_search_code` regardless of the
-Code Mode executor setting; denying or disabling the plugin makes
-`tool_search_code` fail explicitly.
-
 ## Set the executor
 
 In the web interface, open **Settings → Agents & Tools → Labs** and use

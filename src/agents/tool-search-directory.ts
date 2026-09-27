@@ -192,11 +192,9 @@ function formatToolSearchCatalogDirectory(
   let guidance: string;
   for (;;) {
     guidance =
-      mode === "code"
-        ? "Use tool_search_code with openclaw.tools.search(query), openclaw.tools.describe(id), and openclaw.tools.call(id, args)."
-        : omitted > 0
-          ? "Use tool_search to find a tool and its input signature; use tool_describe when a full schema is needed."
-          : "Use tool_search for a compact input signature or tool_describe for a full schema.";
+      omitted > 0
+        ? "Use tool_search to find a tool and its input signature; use tool_describe when a full schema is needed."
+        : "Use tool_search for a compact input signature or tool_describe for a full schema.";
     if (mode === "tools") {
       guidance +=
         " Deferred names are not directly callable. Call tool_call with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";

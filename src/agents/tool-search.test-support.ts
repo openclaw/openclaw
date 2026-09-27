@@ -2,7 +2,6 @@ import "./tool-search.js";
 
 type ToolSearchTestApi = {
   maxToolSchemaDirectoryPromptChars: number;
-  setToolSearchMinCodeTimeoutMsForTest(value: number | undefined): void;
 };
 
 function getTestApi(): ToolSearchTestApi {
@@ -15,6 +14,4 @@ export const testing: ToolSearchTestApi = {
   get maxToolSchemaDirectoryPromptChars() {
     return getTestApi().maxToolSchemaDirectoryPromptChars;
   },
-  setToolSearchMinCodeTimeoutMsForTest: (value) =>
-    getTestApi().setToolSearchMinCodeTimeoutMsForTest(value),
 };

@@ -7,7 +7,6 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.j
 import type { ToolDefinition } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-export const TOOL_SEARCH_CODE_MODE_TOOL_NAME = "tool_search_code";
 export const TOOL_SEARCH_RAW_TOOL_NAME = "tool_search";
 export const TOOL_DESCRIBE_RAW_TOOL_NAME = "tool_describe";
 export const TOOL_CALL_RAW_TOOL_NAME = "tool_call";
@@ -20,7 +19,6 @@ export const MAX_TOOL_SEARCH_BATCH_QUERY_BYTES = 512;
 export const MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS = 4_000;
 
 export const TOOL_SEARCH_CONTROL_TOOL_NAMES = new Set([
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_CALL_RAW_TOOL_NAME,
@@ -32,7 +30,7 @@ export const TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES = new Set([
   TOOL_CALL_RAW_TOOL_NAME,
 ]);
 
-export type ToolSearchMode = "code" | "tools" | "directory";
+export type ToolSearchMode = "tools" | "directory";
 export type ToolSearchRequest =
   | { kind: "single"; search: { query: string; limit: number } }
   | { kind: "batch"; searches: Array<{ query: string; limit: number }> };
@@ -80,7 +78,6 @@ export type ToolSearchCatalogToolExecutor = (params: {
 export type ToolSearchConfig = {
   enabled: boolean;
   mode: ToolSearchMode;
-  codeTimeoutMs: number;
   searchDefaultLimit: number;
   maxSearchLimit: number;
 };

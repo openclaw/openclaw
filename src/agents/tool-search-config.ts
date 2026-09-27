@@ -6,18 +6,13 @@ import {
   type ToolSearchMode,
 } from "./tool-search-types.js";
 
-const DEFAULT_CODE_TIMEOUT_MS = 10_000;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
 
 function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
   const toolSearch = tools?.toolSearch;
-  // Only the unauthored default changes; explicit shorthand and objects retain their modes.
-  if (toolSearch === undefined) {
-    return { enabled: true, mode: "tools" };
-  }
-  if (toolSearch === true) {
+  if (toolSearch === undefined || toolSearch === true) {
     return { enabled: true };
   }
   if (toolSearch === false) {
@@ -30,11 +25,9 @@ function readInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-let toolSearchMinCodeTimeoutMsForTest: number | undefined;
-
 export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {
   const raw = readToolSearchConfig(config);
-  const mode: ToolSearchMode = raw.mode === "tools" || raw.mode === "directory" ? raw.mode : "code";
+  const mode: ToolSearchMode = raw.mode === "directory" ? "directory" : "tools";
   const configured = Object.keys(raw).some((key) => key !== "enabled");
   const maxSearchLimit = Math.min(
     MAX_TOOL_SEARCH_RESULTS,
@@ -43,21 +36,10 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : configured,
     mode,
-    codeTimeoutMs: Math.max(
-      toolSearchMinCodeTimeoutMsForTest ?? 1000,
-      Math.min(60_000, readInteger(raw.codeTimeoutMs, DEFAULT_CODE_TIMEOUT_MS)),
-    ),
     searchDefaultLimit: Math.min(
       maxSearchLimit,
       readInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT),
     ),
     maxSearchLimit,
   };
-}
-
-export function setToolSearchMinCodeTimeoutMsForTest(value: number | undefined): void {
-  toolSearchMinCodeTimeoutMsForTest =
-    typeof value === "number" && Number.isFinite(value) && value > 0
-      ? Math.floor(value)
-      : undefined;
 }
