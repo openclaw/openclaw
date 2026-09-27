@@ -333,6 +333,7 @@ openclaw-select-picker {
 
 .picker-select--sheet .picker-select__options {
   flex: 1 1 auto;
+  overscroll-behavior: contain;
 }
 
 .picker-select__page-header {

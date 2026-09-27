@@ -71,6 +71,8 @@ export class SelectPicker<
   private typeaheadAt = 0;
   private renderedSections: PickerSection<Option>[] = [];
   private hoverTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The sheet a page covers, and the scroll position to restore on Back. */
+  private sheetScroll: { root: Element; top: number } | null = null;
   private hoverOpened = false;
 
   private options(): readonly Option[] {
@@ -120,6 +122,10 @@ export class SelectPicker<
 
   private closeMenu(restoreFocus = false) {
     clearTimeout(this.hoverTimer);
+    if (this.sheetScroll) {
+      this.sheetScroll.root.scrollTop = this.sheetScroll.top;
+      this.sheetScroll = null;
+    }
     this.hoverOpened = false;
     this.mode = "closed";
     this.query = "";
@@ -155,6 +161,12 @@ export class SelectPicker<
     void this.updateComplete.then(() => {
       if (this.mode === "closed") {
         return;
+      }
+      // A page covers its sheet from the top, whatever the sheet had scrolled to.
+      const root = this.querySelector<HTMLElement>(".picker-select__menu")?.offsetParent;
+      if (this.params.sheet && root) {
+        this.sheetScroll = { root, top: root.scrollTop };
+        root.scrollTop = 0;
       }
       // A tapped sheet page lands on Back so touch never pops the keyboard.
       const target =
@@ -288,12 +300,13 @@ export class SelectPicker<
     // A narrow viewport may have no room on either side; retain the same choice
     // list above or below its row rather than letting a flyout leave the viewport.
     // The attribute converter is what splits this list into placements.
-    element.setAttribute(
-      "flip-fallback-placements",
-      this.params.variant === "submenu"
-        ? `${this.submenuSide === "right" ? "left" : "right"}-start bottom-start top-start`
-        : "",
-    );
+    // Other pickers keep Floating UI's default opposite-side fallback.
+    if (this.params.variant === "submenu") {
+      element.setAttribute(
+        "flip-fallback-placements",
+        `${this.submenuSide === "right" ? "left" : "right"}-start bottom-start top-start`,
+      );
+    }
     configureAnchoredPopup(
       element,
       this.trigger,

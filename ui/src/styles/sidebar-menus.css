@@ -402,6 +402,11 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   margin-inline: auto;
 }
 
+/* An open choice page owns scrolling until Back returns to the sheet. */
+.sidebar-session-filter-panel:has(.picker-select--sheet [aria-expanded="true"]) {
+  overflow: hidden;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .shell--mobile-nav .sidebar-session-sort-menu .sidebar-session-filter-panel,
   .shell--mobile-nav .sidebar-session-filter-panel__backdrop {
