@@ -12,7 +12,6 @@ import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
   isCommandReplyForDelivery,
-  isHostProgressSupervisorPayload,
   readAskUserQuestionId,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -32,6 +31,7 @@ import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import {
   createProgressSupervisor,
+  isHostProgressSupervisorPayload,
   resolveProgressSupervisorConfig,
 } from "./progress-supervisor.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";

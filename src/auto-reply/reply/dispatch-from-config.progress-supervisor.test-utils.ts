@@ -1,6 +1,5 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { isHostProgressSupervisorPayload } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { createDispatcher, mocks } from "./dispatch-from-config.shared.test-harness.js";
 import {
@@ -10,6 +9,7 @@ import {
   installThreadingTestPlugin,
   setNoAbort,
 } from "./dispatch-from-config.test-harness.js";
+import { isHostProgressSupervisorPayload } from "./progress-supervisor.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 

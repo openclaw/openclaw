@@ -1,11 +1,18 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { HOST_PROGRESS_SUPERVISOR_KIND, type ReplyPayload } from "../reply-payload.js";
+import type { ReplyPayload } from "../reply-payload.js";
 
 const DEFAULT_PROGRESS_SUPERVISOR_INTERVAL_MS = 55_000;
 const DEFAULT_PROGRESS_SUPERVISOR_TEXT =
   "Work is still in progress. Another update will follow if needed.";
 const PROGRESS_SUPERVISOR_GENERATION_KEY = "openclawProgressGeneration";
+const HOST_PROGRESS_SUPERVISOR_KIND = "host-progress-supervisor";
+
+export function isHostProgressSupervisorPayload(
+  payload: Pick<ReplyPayload, "channelData">,
+): boolean {
+  return payload.channelData?.openclawProgressKind === HOST_PROGRESS_SUPERVISOR_KIND;
+}
 
 export function resolveProgressSupervisorConfig(params: { cfg: OpenClawConfig; agentId: string }): {
   enabled: boolean;

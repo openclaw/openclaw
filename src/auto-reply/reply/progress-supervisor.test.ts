@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProgressSupervisorSchema } from "../../config/zod-schema.agent-entry-base.js";
-import { isHostProgressSupervisorPayload, type ReplyPayload } from "../reply-payload.js";
+import type { ReplyPayload } from "../reply-payload.js";
 import {
   createProgressSupervisor,
+  isHostProgressSupervisorPayload,
   resolveProgressSupervisorConfig,
 } from "./progress-supervisor.js";
 
