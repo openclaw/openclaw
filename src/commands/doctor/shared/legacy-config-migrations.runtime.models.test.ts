@@ -8,6 +8,7 @@ import {
   collectBlockedLegacyOpenAICodexProviderPlan,
   LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS,
 } from "./legacy-config-migrations.runtime.models.js";
+import { rewriteKnownModelRefs } from "./legacy-config-migrations.runtime.models.refs.js";
 
 function migration(id: string) {
   return expectDefined(
@@ -27,6 +28,54 @@ function expectUnchanged(migrate: ReturnType<typeof migration>, raw: Record<stri
 function providerConfig(providers: Record<string, unknown>) {
   return { models: { providers } };
 }
+
+describe("deep canonical model-reference migration", () => {
+  const depth = 10_000;
+  const migrate = migration("models.canonical-model-refs");
+  const rule = expectDefined(
+    migrate.legacyRules?.find((entry) => entry.path[0] === "agents"),
+    "registered agents model-reference migration rule",
+  );
+
+  it.each(["objects", "arrays"])("detects and repairs model refs nested in %s", (shape) => {
+    const leaf = {
+      model: "google/gemini-3-pro-preview",
+      fallbacks: ["google/gemini-3-pro-preview", "custom/unchanged"],
+      note: "google/gemini-3-pro-preview",
+    };
+    let nested: unknown = leaf;
+    for (let index = 0; index < depth; index++) {
+      nested = shape === "arrays" ? [nested] : { x: nested };
+    }
+    const raw = { agents: nested };
+    const changes: string[] = [];
+
+    expect(rule.match?.(raw.agents, raw)).toBe(true);
+    migrate.apply(raw, changes);
+
+    let repaired: unknown = raw.agents;
+    for (let index = 0; index < depth; index++) {
+      repaired = Array.isArray(repaired) ? repaired[0] : (repaired as Record<string, unknown>).x;
+    }
+    expect(repaired).toEqual({
+      model: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview", "custom/unchanged"],
+      note: "google/gemini-3-pro-preview",
+    });
+    const leafPath = `config.agents${(shape === "arrays" ? ".0" : ".x").repeat(depth)}`;
+    expect(changes).toEqual([
+      `Upgraded ${leafPath}.model from "google/gemini-3-pro-preview" to "google/gemini-3.1-pro-preview".`,
+      `Upgraded ${leafPath}.fallbacks.0 from "google/gemini-3-pro-preview" to "google/gemini-3.1-pro-preview".`,
+    ]);
+    expect(leaf.model).toBe("google/gemini-3-pro-preview");
+    expect(rule.match?.(raw.agents, raw)).toBe(false);
+    const repairedRoot = raw.agents;
+    const repeatedChanges: string[] = [];
+    migrate.apply(raw, repeatedChanges);
+    expect(raw.agents).toBe(repairedRoot);
+    expect(repeatedChanges).toEqual([]);
+  });
+});
 
 it.each<[Record<string, unknown>, Record<string, unknown>, string[]]>([
   [{ qwenThinkingFormat: null }, { temperature: 0 }, ["models.providers.vllm.params"]],
@@ -253,4 +302,59 @@ describe("stale contextWindow migration", () => {
       expectUnchanged(migrate, raw);
     },
   );
+});
+
+describe("rewriteKnownModelRefs deep nesting", () => {
+  // Regression: deeply nested config used to overflow the call stack because
+  // rewriteModelRefs recursed once per nesting level. The traversal is now
+  // iterative, so arbitrary depth must complete without RangeError.
+  it("completes without RangeError for deeply nested config", () => {
+    const depth = 5000;
+    let value: unknown = "anthropic/claude-3-sonnet";
+    for (let i = 0; i < depth; i++) {
+      value = { x: value };
+    }
+    const changes: string[] = [];
+
+    expect(() => rewriteKnownModelRefs(value, "config", changes)).not.toThrow();
+  });
+
+  it("rewrites a deeply nested model ref and reports its notice", () => {
+    // A recognized retired model ref (openai/gpt-4) buried under many levels
+    // must still be reached for normalization, rewritten to its successor,
+    // flagged as changed, and emit a notice naming the full deep path.
+    const depth = 3000;
+    let value: unknown = { model: "openai/gpt-4" };
+    for (let i = 0; i < depth; i++) {
+      value = { agents: value };
+    }
+    const changes: string[] = [];
+
+    const result = rewriteKnownModelRefs(value, "config", changes);
+
+    expect(result.changed).toBe(true);
+    expect(changes).toHaveLength(1);
+    // The notice names the full deep path down to the rewritten leaf.
+    const expectedPath = "config" + ".agents".repeat(depth) + ".model";
+    expect(changes[0]).toBe(`Upgraded ${expectedPath} from "openai/gpt-4" to "openai/gpt-5.5".`);
+    // The deeply nested leaf model was rewritten in place.
+    let cursor: unknown = result.value;
+    for (let i = 0; i < depth; i++) {
+      cursor = (cursor as Record<string, unknown>).agents;
+    }
+    expect((cursor as { model: string }).model).toBe("openai/gpt-5.5");
+  });
+
+  it("preserves depth-first notice order for mixed arrays", () => {
+    // An array with an object entry before a string entry must report the
+    // object's notice first, matching the recursive version's traversal.
+    const value = [{ model: "openai/gpt-4" }, "openai/gpt-4o"];
+    const changes: string[] = [];
+
+    rewriteKnownModelRefs(value, "config.fallbacks", changes);
+
+    expect(changes).toHaveLength(2);
+    expect(changes[0]).toContain("config.fallbacks.0.model");
+    expect(changes[1]).toContain("config.fallbacks.1");
+  });
 });

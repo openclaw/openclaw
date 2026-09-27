@@ -67,46 +67,70 @@ function scanProviderCatalogModelIds(providers: Record<string, unknown>): boolea
   });
 }
 
-export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boolean {
-  if (typeof value === "string") {
-    return Boolean(
-      key &&
-      (MODEL_REF_STRING_KEYS.has(key) ||
-        isChannelModelOverridePath(path) ||
-        isMediaModelPath(path)) &&
-      normalizeKnownModelRef(value),
-    );
+export function scanKnownModelRefs(input: unknown, initialKey?: string, initialPath = ""): boolean {
+  const pending = [{ value: input, key: initialKey, path: initialPath }];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    const { value, key, path } = current;
+    if (typeof value === "string") {
+      if (
+        key &&
+        (MODEL_REF_STRING_KEYS.has(key) ||
+          isChannelModelOverridePath(path) ||
+          isMediaModelPath(path)) &&
+        normalizeKnownModelRef(value)
+      ) {
+        return true;
+      }
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (let index = value.length - 1; index >= 0; index--) {
+        if (!(index in value)) {
+          continue;
+        }
+        const entry = value[index];
+        pending.push({
+          value: entry,
+          key:
+            typeof entry === "string" &&
+            key &&
+            (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
+              ? "model"
+              : undefined,
+          path: `${path}.${index}`,
+        });
+      }
+      continue;
+    }
+    const record = getRecord(value);
+    if (!record) {
+      continue;
+    }
+    const provider = typeof record.provider === "string" ? record.provider : undefined;
+    const model = typeof record.model === "string" ? record.model : undefined;
+    const providerModelPair = provider !== undefined && model !== undefined;
+    if (providerModelPair && normalizeKnownModelRef(`${provider}/${model}`)) {
+      return true;
+    }
+    if (isProviderCatalogsPath(path) && scanProviderCatalogModelIds(record)) {
+      return true;
+    }
+    if (key && MODEL_REF_MAP_KEYS.has(key)) {
+      if (Object.keys(record).some((entryKey) => Boolean(normalizeKnownModelRef(entryKey)))) {
+        return true;
+      }
+      continue;
+    }
+    const entries = Object.entries(record);
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const [childKey, child] = entries[index]!;
+      if (!(providerModelPair && childKey === "model")) {
+        pending.push({ value: child, key: childKey, path: `${path}.${childKey}` });
+      }
+    }
   }
-  if (Array.isArray(value)) {
-    return value.some((entry, index) =>
-      typeof entry === "string" &&
-      key &&
-      (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
-        ? Boolean(normalizeKnownModelRef(entry))
-        : scanKnownModelRefs(entry, undefined, `${path}.${index}`),
-    );
-  }
-  const record = getRecord(value);
-  if (!record) {
-    return false;
-  }
-  const provider = typeof record.provider === "string" ? record.provider : undefined;
-  const model = typeof record.model === "string" ? record.model : undefined;
-  const providerModelPair = provider !== undefined && model !== undefined;
-  if (providerModelPair && normalizeKnownModelRef(`${provider}/${model}`)) {
-    return true;
-  }
-  if (isProviderCatalogsPath(path) && scanProviderCatalogModelIds(record)) {
-    return true;
-  }
-  if (key && MODEL_REF_MAP_KEYS.has(key)) {
-    return Object.keys(record).some((entryKey) => Boolean(normalizeKnownModelRef(entryKey)));
-  }
-  return Object.entries(record).some(
-    ([childKey, child]) =>
-      !(providerModelPair && childKey === "model") &&
-      scanKnownModelRefs(child, childKey, `${path}.${childKey}`),
-  );
+  return false;
 }
 
 type ModelRefNormalizer = (value: string) => string | null;
@@ -368,12 +392,98 @@ function rewriteProviderCatalogModelIds(
   return { value: changed ? next : providers, changed };
 }
 
+// Iterative frame for rewriteModelRefs: pre-transforms run at creation (pushing
+// changes inline to match the recursive version's order), children are processed
+// depth-first via the stack, then mergeRewriteTask combines the results.
+type RewriteTask = {
+  value: unknown;
+  normalize: ModelRefNormalizer;
+  pending: {
+    key: string;
+    child: unknown;
+    childPath: string;
+    skip: boolean;
+    stringShortcut: boolean;
+  }[];
+  // Cursor over `pending` so children are consumed in order without Array.shift()
+  // (which is O(n) per call and makes wide-config traversal quadratic).
+  cursor: number;
+  collected: { key: string; value: unknown; changed: boolean }[];
+  merge: "array" | "record";
+  arrayNext: unknown[];
+  preChanged: boolean;
+  working: Record<string, unknown>;
+  arrayPlaceholderIndexes: number[];
+  resolve: (result: { value: unknown; changed: boolean }) => void;
+};
+
 export function rewriteModelRefs(
   value: unknown,
   path: string,
   changes: string[],
   normalize: ModelRefNormalizer,
 ): { value: unknown; changed: boolean } {
+  let rootResult: { value: unknown; changed: boolean } = { value, changed: false };
+  const stack: RewriteTask[] = [];
+  const rootTask = createRewriteTask(value, path, normalize, changes, (result) => {
+    rootResult = result;
+  });
+  if (rootTask) {
+    stack.push(rootTask);
+  }
+  while (stack.length > 0) {
+    const task = stack[stack.length - 1]!;
+    if (task.cursor < task.pending.length) {
+      const child = task.pending[task.cursor]!;
+      task.cursor += 1;
+      if (child.skip) {
+        task.collected.push({ key: child.key, value: child.child, changed: false });
+        continue;
+      }
+      if (child.stringShortcut) {
+        // SAFETY: stringShortcut is only set for string entries (array branch in createRewriteTask).
+        const stringEntry = child.child as string;
+        const rewritten = rewriteModelRefString(
+          stringEntry,
+          child.childPath,
+          changes,
+          task.normalize,
+        );
+        task.collected.push({
+          key: child.key,
+          value: rewritten,
+          changed: rewritten !== child.child,
+        });
+        continue;
+      }
+      const childTask = createRewriteTask(
+        child.child,
+        child.childPath,
+        task.normalize,
+        changes,
+        (result) => {
+          task.collected.push({ key: child.key, value: result.value, changed: result.changed });
+        },
+      );
+      if (childTask) {
+        stack.push(childTask);
+      }
+      continue;
+    }
+    // All children processed: merge and resolve.
+    stack.pop();
+    mergeRewriteTask(task);
+  }
+  return rootResult;
+}
+
+function createRewriteTask(
+  value: unknown,
+  path: string,
+  normalize: ModelRefNormalizer,
+  changes: string[],
+  resolve: (result: { value: unknown; changed: boolean }) => void,
+): RewriteTask | null {
   const key = pathKey(path);
   if (typeof value === "string") {
     if (
@@ -381,31 +491,69 @@ export function rewriteModelRefs(
       !isChannelModelOverridePath(path) &&
       !isMediaModelPath(path)
     ) {
-      return { value, changed: false };
+      resolve({ value, changed: false });
+      return null;
     }
     const next = rewriteModelRefString(value, path, changes, normalize);
-    return { value: next, changed: next !== value };
+    resolve({ value: next, changed: next !== value });
+    return null;
   }
   if (Array.isArray(value)) {
-    let changed = false;
-    const next = value.map((entry, index) => {
+    const next: unknown[] = [];
+    const pending: {
+      key: string;
+      child: unknown;
+      childPath: string;
+      skip: boolean;
+      stringShortcut: boolean;
+    }[] = [];
+    const arrayPlaceholderIndexes: number[] = [];
+    value.forEach((entry, index) => {
       if (
         typeof entry === "string" &&
         (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
       ) {
-        const rewritten = rewriteModelRefString(entry, `${path}.${index}`, changes, normalize);
-        changed ||= rewritten !== entry;
-        return rewritten;
+        // Defer string rewriting to its array position so notice order matches
+        // the recursive version's depth-first traversal.
+        pending.push({
+          key: String(index),
+          child: entry,
+          childPath: `${path}.${index}`,
+          skip: false,
+          stringShortcut: true,
+        });
+        arrayPlaceholderIndexes.push(index);
+        next[index] = undefined;
+        return;
       }
-      const rewritten = rewriteModelRefs(entry, `${path}.${index}`, changes, normalize);
-      changed ||= rewritten.changed;
-      return rewritten.value;
+      pending.push({
+        key: String(index),
+        child: entry,
+        childPath: `${path}.${index}`,
+        skip: false,
+        stringShortcut: false,
+      });
+      arrayPlaceholderIndexes.push(index);
+      next[index] = undefined;
     });
-    return { value: changed ? next : value, changed };
+    return {
+      value,
+      normalize,
+      pending,
+      cursor: 0,
+      collected: [],
+      merge: "array",
+      arrayNext: next,
+      preChanged: false,
+      working: {},
+      arrayPlaceholderIndexes,
+      resolve,
+    };
   }
   const record = getRecord(value);
   if (!record) {
-    return { value, changed: false };
+    resolve({ value, changed: false });
+    return null;
   }
   let working = record;
   let changed = false;
@@ -438,16 +586,70 @@ export function rewriteModelRefs(
     working = rewrittenKeys.value;
     changed ||= rewrittenKeys.changed;
   }
-  const next: Record<string, unknown> = {};
+  const pending: {
+    key: string;
+    child: unknown;
+    childPath: string;
+    skip: boolean;
+    stringShortcut: boolean;
+  }[] = [];
   for (const [childKey, child] of Object.entries(working)) {
-    const rewritten =
-      providerModelPair && childKey === "model"
-        ? { value: child, changed: false }
-        : rewriteModelRefs(child, `${path}.${childKey}`, changes, normalize);
-    changed ||= rewritten.changed;
-    setRecordEntry(next, childKey, rewritten.value);
+    if (providerModelPair && childKey === "model") {
+      // `model` under a provider/model pair is already handled by the pre-transform;
+      // carry it as-is without recursing, matching the recursive version.
+      pending.push({
+        key: childKey,
+        child,
+        childPath: `${path}.${childKey}`,
+        skip: true,
+        stringShortcut: false,
+      });
+      continue;
+    }
+    pending.push({
+      key: childKey,
+      child,
+      childPath: `${path}.${childKey}`,
+      skip: false,
+      stringShortcut: false,
+    });
   }
-  return { value: changed ? next : value, changed };
+  return {
+    value,
+    normalize,
+    pending,
+    cursor: 0,
+    collected: [],
+    merge: "record",
+    arrayNext: [],
+    preChanged: changed,
+    working,
+    arrayPlaceholderIndexes: [],
+    resolve,
+  };
+}
+
+function mergeRewriteTask(task: RewriteTask): void {
+  if (task.merge === "array") {
+    let changed = task.preChanged;
+    const next = task.arrayNext;
+    for (let i = 0; i < task.arrayPlaceholderIndexes.length; i++) {
+      const index = task.arrayPlaceholderIndexes[i]!;
+      const result = task.collected[i]!;
+      changed ||= result.changed;
+      next[index] = result.value;
+    }
+    task.resolve({ value: changed ? next : task.value, changed });
+    return;
+  }
+  let changed = task.preChanged;
+  const next: Record<string, unknown> = {};
+  // `pending` was drained during processing; `collected` preserves entry order.
+  for (const result of task.collected) {
+    changed ||= result.changed;
+    setRecordEntry(next, result.key, result.value);
+  }
+  task.resolve({ value: changed ? next : task.value, changed });
 }
 
 export const MODEL_REF_CANONICALIZATION_MESSAGE =
