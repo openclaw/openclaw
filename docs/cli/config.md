@@ -246,6 +246,10 @@ openclaw config set gateway.port 19001 --strict-json --expect-current-absent
 the effective authored config after includes and environment substitution, before runtime defaults
 are applied.
 
+If the expectation does not match, no settings are saved. Read the current config and
+review the expected value before retrying; repeating the same mismatched expectation
+will not succeed.
+
 The two expectation flags are mutually exclusive. They apply only to a single `config set`
 operation, require a direct non-redirected config path, and cannot be combined with batch mode or
 `--dry-run`. If input or roster resolution would write a different path than the caller requested,
@@ -478,7 +482,7 @@ openclaw config set channels.discord.token \
     - `checks.resolvabilityComplete`: whether resolvability checks ran to completion (false when exec refs are skipped)
     - `refsChecked`: number of refs actually resolved during dry-run
     - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
-    - `errors`: structured failures when `ok=false`; each carries a `kind` of `missing-path`, `schema`, `resolvability`, `model`, or `conflict` (`conflict` means the config file changed while the command was writing, so nothing was changed — re-run to pick up the new file)
+    - `errors`: structured failures when `ok=false`; each carries a `kind` of `missing-path`, `schema`, `resolvability`, `model`, or `conflict` (`conflict` means the write was declined because its config snapshot, target, or conditional expectation no longer matched; follow the message before retrying)
 
   </Accordion>
 </AccordionGroup>
