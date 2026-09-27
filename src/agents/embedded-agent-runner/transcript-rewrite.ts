@@ -7,10 +7,9 @@ import type {
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getRawSessionAppendMessage } from "../session-raw-append-message.js";
-import { SessionManager } from "../sessions/session-manager.js";
+import type { SessionManager } from "../sessions/session-manager.js";
 
-type SessionManagerLike = ReturnType<typeof SessionManager.open>;
-type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
+type SessionBranchEntry = ReturnType<SessionManager["getBranch"]>[number];
 
 function stripStalePrefixReplay(message: AgentMessage): AgentMessage {
   return message.role === "assistant" ? stripCompactionReplayCheckpoint(message) : message;
@@ -54,10 +53,10 @@ function remapEntryId(
 }
 
 async function appendBranchEntry(params: {
-  sessionManager: SessionManagerLike;
+  sessionManager: SessionManager;
   entry: SessionBranchEntry;
   rewrittenEntryIds: ReadonlyMap<string, string>;
-  appendMessage: SessionManagerLike["appendMessage"];
+  appendMessage: SessionManager["appendMessage"];
 }): Promise<string> {
   const { sessionManager, entry, rewrittenEntryIds, appendMessage } = params;
   if (entry.type === "message") {
@@ -105,10 +104,7 @@ async function appendBranchEntry(params: {
     );
   }
   if (entry.type === "session_info") {
-    if (entry.name) {
-      return sessionManager.appendSessionInfo(entry.name);
-    }
-    return sessionManager.appendSessionInfo("");
+    return sessionManager.appendSessionInfo(entry.name || "");
   }
   if (entry.type === "branch_summary") {
     return sessionManager.branchWithSummary(
@@ -129,7 +125,7 @@ async function appendBranchEntry(params: {
  * from the first rewritten message's parent and re-appending the suffix.
  */
 export async function rewriteTranscriptEntriesInSessionManager(params: {
-  sessionManager: SessionManagerLike;
+  sessionManager: SessionManager;
   replacements: TranscriptRewriteReplacement[];
   /** Preserve a checkpoint freshly captured on an explicit replacement. */
   preserveReplacementCompactionReplay?: boolean;
@@ -210,7 +206,7 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
   // re-running persistence hooks or size truncation on replayed messages.
   const rawAppendMessage = getRawSessionAppendMessage(rewriteManager);
   // Deliberate copies retain ingress keys without adopting their old branch entries.
-  const appendMessage: SessionManagerLike["appendMessage"] = (message) =>
+  const appendMessage: SessionManager["appendMessage"] = (message) =>
     rawAppendMessage(message, { idempotencyLookup: "caller-checked" });
   const rewrittenEntryIds = new Map<string, string>();
   // Every re-appended message follows the rewritten prefix, so its prefix-bound checkpoint is stale.

@@ -416,12 +416,15 @@ export async function resolveModelWithPreparedRegistry(
   if (explicitModel?.kind === "suppressed") {
     return resolveRuntimePreferredSuppressedModel(params);
   }
+  if (
+    explicitModel?.kind === "resolved" &&
+    !shouldCompareProviderRuntimeResolvedModel({ ...params, runtimeHooks })
+  ) {
+    return explicitModel.model;
+  }
+  const pluginDynamicModel = await resolvePluginDynamicModelWithRegistry(params);
+  params.assertCurrent?.();
   if (explicitModel?.kind === "resolved") {
-    if (!shouldCompareProviderRuntimeResolvedModel({ ...params, runtimeHooks })) {
-      return explicitModel.model;
-    }
-    const pluginDynamicModel = await resolvePluginDynamicModelWithRegistry(params);
-    params.assertCurrent?.();
     return (
       pluginDynamicModel ??
       (explicitModel.source === "registry" && explicitModel.dropOnRuntimeMiss
@@ -429,8 +432,6 @@ export async function resolveModelWithPreparedRegistry(
         : explicitModel.model)
     );
   }
-  const pluginDynamicModel = await resolvePluginDynamicModelWithRegistry(params);
-  params.assertCurrent?.();
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }

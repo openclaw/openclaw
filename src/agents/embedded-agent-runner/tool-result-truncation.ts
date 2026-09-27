@@ -109,7 +109,7 @@ function cacheTtlMessageChars(message: AgentMessage): number {
   if (message.role !== "user" && message.role !== "assistant" && message.role !== "toolResult") {
     return 256;
   }
-  const content = Array.isArray(message.content) ? message.content : [];
+  const content: unknown[] = Array.isArray(message.content) ? message.content : [];
   return content.reduce((chars, block) => {
     if (!isRecord(block)) {
       return chars;
@@ -124,23 +124,22 @@ function cacheTtlMessageChars(message: AgentMessage): number {
     if (message.role !== "assistant") {
       return chars;
     }
-    const record = block as Record<string, unknown>;
-    if (record.type === "thinking" || record.type === "redacted_thinking") {
+    if (block.type === "thinking" || block.type === "redacted_thinking") {
       const values = [
-        record.thinking,
-        record.thinkingSignature,
-        ...(record.type === "redacted_thinking" ? [record.data] : []),
+        block.thinking,
+        block.thinkingSignature,
+        ...(block.type === "redacted_thinking" ? [block.data] : []),
       ];
       return values.reduce<number>(
         (sum, value) => sum + (typeof value === "string" ? estimateStringChars(value) : 0),
         chars,
       );
     }
-    if (record.type !== "toolCall") {
+    if (block.type !== "toolCall") {
       return chars;
     }
     try {
-      return chars + JSON.stringify(record.arguments ?? {}).length;
+      return chars + JSON.stringify(block.arguments ?? {}).length;
     } catch {
       return chars + 128;
     }
@@ -598,7 +597,6 @@ export function truncateToolResultMessage(
     if (!isToolResultTextBlock(block)) {
       return block;
     }
-    const textBlock = block;
     const textChars = blockTextChars[index] ?? 0;
     const preserveBlock = preserveSmallBlocks && smallBlocks[index];
     const blockShare = reducibleChars > 0 ? textChars / reducibleChars : 0;
@@ -607,13 +605,13 @@ export function truncateToolResultMessage(
       ? textChars
       : Math.floor(noticeBudget + distributableBudget * blockShare);
     const blockMinKeepChars = preserveBlock ? textChars : Math.floor(minKeepChars * blockShare);
-    const truncatedText = truncateToolResultText(textBlock.text, blockBudget, {
+    const truncatedText = truncateToolResultText(block.text, blockBudget, {
       suffix: suffixFactory,
       minKeepChars: blockMinKeepChars,
       minimumRawWeight: options.minimumRawWeight,
     });
-    const nextBlock = Object.assign({}, textBlock, { text: truncatedText });
-    if (typeof textBlock.content === "string") {
+    const nextBlock = Object.assign({}, block, { text: truncatedText });
+    if (typeof block.content === "string") {
       nextBlock.content = truncatedText;
     }
     return nextBlock;

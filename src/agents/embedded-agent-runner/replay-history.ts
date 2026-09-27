@@ -1,6 +1,3 @@
-/**
- * Sanitizes and validates replayed session history before model calls.
- */
 import { isDeepStrictEqual } from "node:util";
 import {
   hasOnlyAssistantReasoningContent,
@@ -407,7 +404,6 @@ function normalizeAssistantUsageSnapshot(usage: unknown) {
 }
 
 function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["cost"] | undefined {
-  const base = makeZeroUsageSnapshot().cost;
   if (!usage || typeof usage !== "object") {
     return undefined;
   }
@@ -416,25 +412,19 @@ function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["co
     return undefined;
   }
   const cost = rawCost as Record<string, unknown>;
-  const inputRaw = toFiniteCostNumber(cost.input);
-  const outputRaw = toFiniteCostNumber(cost.output);
-  const cacheReadRaw = toFiniteCostNumber(cost.cacheRead);
-  const cacheWriteRaw = toFiniteCostNumber(cost.cacheWrite);
-  const totalRaw = toFiniteCostNumber(cost.total);
-  if (
-    inputRaw === undefined &&
-    outputRaw === undefined &&
-    cacheReadRaw === undefined &&
-    cacheWriteRaw === undefined &&
-    totalRaw === undefined
-  ) {
+  const values = ["input", "output", "cacheRead", "cacheWrite", "total"].map((field) =>
+    toFiniteCostNumber(cost[field]),
+  );
+  if (values.every((value) => value === undefined)) {
     return undefined;
   }
-  const input = inputRaw ?? base.input;
-  const output = outputRaw ?? base.output;
-  const cacheRead = cacheReadRaw ?? base.cacheRead;
-  const cacheWrite = cacheWriteRaw ?? base.cacheWrite;
-  const total = totalRaw ?? input + output + cacheRead + cacheWrite;
+  const [
+    input = 0,
+    output = 0,
+    cacheRead = 0,
+    cacheWrite = 0,
+    total = input + output + cacheRead + cacheWrite,
+  ] = values;
   // Keep authoritative provider billing provenance through replay repair. Dropping it
   // turns a real zero-dollar total back into a local estimate during later accounting.
   const totalOrigin = cost.totalOrigin === "provider-billed" ? cost.totalOrigin : undefined;

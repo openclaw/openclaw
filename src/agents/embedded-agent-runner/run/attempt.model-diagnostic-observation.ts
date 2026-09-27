@@ -11,7 +11,6 @@ import { derivePromptTokens, normalizeUsage, type UsageLike } from "../../usage.
 import type {
   ModelCallEventBase,
   ModelCallObservationState,
-  ModelCallObserver,
   ModelCallPromptStats,
   ModelCallUsage,
 } from "./attempt.model-diagnostic-lifecycle.js";
@@ -295,7 +294,7 @@ export function createModelObserver(params: {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   suppressPluginHooks?: boolean;
   capturePromptStats: boolean;
-}): ModelCallObserver {
+}) {
   const modelContent = streamContextModelContentFields(params.contentCapture, params.streamContext);
   const promptStats = params.capturePromptStats
     ? streamContextModelPromptStats(params.streamContext)
@@ -311,22 +310,22 @@ export function createModelObserver(params: {
     state,
     promptStats,
     modelContent,
-    assignRequestPayloadBytes(payload) {
+    assignRequestPayloadBytes(payload: unknown) {
       const bytes = utf8JsonByteLength(payload);
       if (bytes !== undefined) {
         state.requestPayloadBytes = bytes;
       }
     },
-    observeResponseChunk(startedAt, chunk) {
+    observeResponseChunk(startedAt: number, chunk: unknown) {
       observeResponseChunk(state, startedAt, chunk);
     },
-    observeFinalResult(eventBase, startedAt, result) {
+    observeFinalResult(eventBase: ModelCallEventBase, startedAt: number, result: unknown) {
       observeResultMessageContent(state, startedAt, result);
       // Queue semantic progress beside model lifecycle events so request starts,
       // progress, and the next request retain their authoritative FIFO ordering.
       maybeEmitModelCallSemanticProgress(eventBase, state, result);
     },
-    maybeEmitStreamProgress(eventBase) {
+    maybeEmitStreamProgress(eventBase: ModelCallEventBase) {
       reportStreamProgress({
         ...eventBase,
         callId: state.terminalEventEmitted ? undefined : eventBase.callId,

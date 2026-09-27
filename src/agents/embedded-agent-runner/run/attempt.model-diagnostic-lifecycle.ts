@@ -37,6 +37,7 @@ import type {
   PluginHookModelCallStartedEvent,
 } from "../../../plugins/hook-types.js";
 import type { StreamFn } from "../../runtime/index.js";
+import type { createModelObserver } from "./attempt.model-diagnostic-observation.js";
 
 export type ModelCallDiagnosticContext = {
   config?: OpenClawConfig;
@@ -74,10 +75,6 @@ type ModelCallEndedHookFields = Omit<
   PluginHookModelCallEndedEvent,
   keyof PluginHookModelCallStartedEvent
 >;
-type ModelCallSizeTimingFields = Pick<
-  Extract<DiagnosticEventInput, { type: "model.call.completed" }>,
-  "requestPayloadBytes" | "responseStreamBytes" | "timeToFirstByteMs"
->;
 export type ModelCallPromptStats = NonNullable<
   Extract<DiagnosticEventInput, { type: "model.call.started" }>["promptStats"]
 >;
@@ -103,49 +100,11 @@ export type ModelCallObservationState = {
   terminalSucceeded?: boolean;
   suppressPluginHooks?: boolean;
 };
-export type ModelCallObserver = {
-  state: ModelCallObservationState;
-  promptStats?: ModelCallPromptStats;
-  modelContent?: DiagnosticModelCallContent;
-  assignRequestPayloadBytes: (payload: unknown) => void;
-  observeResponseChunk: (startedAt: number, chunk: unknown) => void;
-  observeFinalResult: (eventBase: ModelCallEventBase, startedAt: number, result: unknown) => void;
-  maybeEmitStreamProgress: (eventBase: ModelCallEventBase) => void;
-  sizeTimingFields: () => ModelCallSizeTimingFields;
-  completedContent: () => DiagnosticModelCallContent | undefined;
-  usageField: () => { usage?: ModelCallUsage };
-};
+type ModelCallObserver = ReturnType<typeof createModelObserver>;
 
 const TRACEPARENT_HEADER_NAME = "traceparent";
 const TIMELINE_ATTRIBUTE_MAX_LENGTH = 256;
 type ModelCallStreamOptions = Parameters<StreamFn>[2];
-
-function baseModelCallEvent(
-  ctx: ModelCallDiagnosticContext,
-  callId: string,
-  trace: DiagnosticTraceContext,
-  promptStats: ModelCallPromptStats | undefined,
-): ModelCallEventBase {
-  return {
-    runId: ctx.runId,
-    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
-    callId,
-    ...(ctx.sessionKey && { sessionKey: ctx.sessionKey }),
-    ...(ctx.sessionId && { sessionId: ctx.sessionId }),
-    provider: ctx.provider,
-    model: ctx.model,
-    ...(ctx.api && { api: ctx.api }),
-    ...(ctx.transport && { transport: ctx.transport }),
-    observationUnit: "request",
-    ...(ctx.contextTokenBudget ? { contextTokenBudget: ctx.contextTokenBudget } : {}),
-    ...(ctx.contextWindowSource ? { contextWindowSource: ctx.contextWindowSource } : {}),
-    ...(ctx.contextWindowReferenceTokens
-      ? { contextWindowReferenceTokens: ctx.contextWindowReferenceTokens }
-      : {}),
-    ...(promptStats ? { promptStats } : {}),
-    trace,
-  };
-}
 
 function modelContentPrivateData(modelContent: DiagnosticModelCallContent | undefined) {
   return modelContent ? { modelContent } : undefined;
@@ -225,7 +184,9 @@ function processMemoryUsageSnapshot(): DiagnosticMemoryUsage | undefined {
   }
 }
 
-function modelCallHookEventBase(eventBase: ModelCallEventBase): PluginHookModelCallStartedEvent {
+function modelCallHookEventBase(
+  eventBase: PluginHookModelCallStartedEvent,
+): PluginHookModelCallStartedEvent {
   return {
     runId: eventBase.runId,
     callId: eventBase.callId,
@@ -432,7 +393,13 @@ export function createModelLifecycle(params: {
   const callId = params.ctx.nextCallId();
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
   const observer = params.createObserver(areDiagnosticsEnabledForProcess());
-  const eventBase = baseModelCallEvent(params.ctx, callId, trace, observer.promptStats);
+  const eventBase: ModelCallEventBase = {
+    ...modelCallHookEventBase({ ...params.ctx, callId }),
+    ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+    observationUnit: "request",
+    ...(observer.promptStats ? { promptStats: observer.promptStats } : {}),
+    trace,
+  };
   emitCoreModelRequestStartedDiagnosticEvent(
     eventBase,
     params.ctx.ownerGeneration,

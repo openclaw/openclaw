@@ -1,6 +1,3 @@
-/**
- * Test harness mocks for embedded-agent compaction hook coverage.
- */
 import { join } from "node:path";
 import { vi, type Mock } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -16,9 +13,11 @@ import {
 } from "../sessions/agent-session-compaction.js";
 import {
   acquireCompactHooksPreparedModelRuntime,
+  createCompactHooksAuthStorage,
   emptyPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshotMock,
   mockCompactHooksPluginMetadata,
+  resolveCompactHooksApiKeyMock,
   type CompactHooksQueuedCompaction,
   type MockResolvedModel,
 } from "./compact.hooks.metadata.test-support.js";
@@ -66,7 +65,7 @@ export const resolveModelMock: Mock<
     input: [],
   },
   error: null,
-  authStorage: { setRuntimeApiKey: vi.fn() },
+  authStorage: createCompactHooksAuthStorage(),
   modelRegistry: {},
 }));
 export const resolveModelAsyncMock = vi.fn(
@@ -578,7 +577,7 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
       input: [],
     },
     error: null,
-    authStorage: { setRuntimeApiKey: vi.fn() },
+    authStorage: createCompactHooksAuthStorage(),
     modelRegistry: {},
   }));
   resolveModelAsyncMock.mockReset();
@@ -866,7 +865,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   }));
 
   vi.doMock("./stream-resolution.js", () => ({
-    resolveEmbeddedAgentApiKey: vi.fn(async () => "test-api-key"),
+    resolveEmbeddedAgentApiKey: resolveCompactHooksApiKeyMock,
     resolveEmbeddedAgentBaseStreamFn: vi.fn(() => vi.fn()),
     resolveEmbeddedAgentStream: resolveEmbeddedAgentStreamMock,
   }));
