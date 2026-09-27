@@ -6,20 +6,17 @@ import {
   resolveIosReleasePlan,
   type IosReleasePlanInput,
 } from "../../scripts/lib/ios-release-plan.ts";
-import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-support.ts";
-
-installIosFixtureCleanup();
-
 function input(overrides: Partial<IosReleasePlanInput> = {}): IosReleasePlanInput {
-  const rootDir = writeIosFixture({
-    packageVersion: "2026.7.2",
-    changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nRetry notes.\n",
-  });
+  const publicVersion =
+    overrides.appStoreVersions?.find((version) => version.state === "READY_FOR_DISTRIBUTION")
+      ?.versionString ?? null;
   return {
     appStoreVersions: [],
     buildUploads: [],
     gatewayVersion: "2026.7.2",
-    rootDir,
+    releaseNotesBaselines: [
+      { audience: "ios", version: publicVersion, build: publicVersion ? "5" : null },
+    ],
     ...overrides,
   };
 }
@@ -30,7 +27,7 @@ describe("resolveIosReleasePlan", () => {
       appStoreRevision: 0,
       appStoreVersion: "2026.7.20",
       buildNumber: 1,
-      changelogStatus: "needs-cut",
+      releaseNotesBaselines: [{ audience: "ios", version: null, build: null }],
       decision: "new-revision",
     });
   });
@@ -267,22 +264,39 @@ describe("resolveIosReleasePlan", () => {
     });
   });
 
-  it("requires another cut when retry notes remain Unreleased", () => {
-    const rootDir = writeIosFixture({
-      packageVersion: "2026.7.2",
-      changelog:
-        "# OpenClaw iOS Changelog\n\n## Unreleased\n\nRetry notes.\n\n## 2026.7.21\n\nOriginal notes.\n",
-    });
-    const plan = resolveIosReleasePlan({
-      appStoreVersions: [
-        { id: "editable", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.21" },
-      ],
-      buildUploads: [],
-      gatewayVersion: "2026.7.2",
-      rootDir,
-    });
+  it("keeps the public build baseline independent of later candidate uploads", () => {
+    const plan = resolveIosReleasePlan(
+      input({
+        appStoreVersions: [
+          { id: "public", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.2" },
+          { id: "editable", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.21" },
+        ],
+        buildUploads: [{ shortVersion: "2026.7.21", buildNumber: "19", state: "COMPLETE" }],
+        releaseNotesBaselines: [{ audience: "ios", version: "2026.7.2", build: "3" }],
+      }),
+    );
+    expect(plan.buildNumber).toBe(20);
+    expect(plan.releaseNotesBaselines).toEqual([
+      { audience: "ios", version: "2026.7.2", build: "3" },
+    ]);
+  });
 
-    expect(plan.changelogStatus).toBe("needs-cut");
+  it.each([
+    { version: null, build: null },
+    { version: "2026.7.2", build: null },
+    { version: "2026.7.21", build: "3" },
+    { version: "2026.7.2", build: "unknown" },
+  ])("rejects an unresolvable public notes baseline %j", (baseline) => {
+    expect(() =>
+      resolveIosReleasePlan(
+        input({
+          appStoreVersions: [
+            { id: "public", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.2" },
+          ],
+          releaseNotesBaselines: [{ audience: "ios", ...baseline }],
+        }),
+      ),
+    ).toThrow(/baseline|build number/);
   });
 });
 

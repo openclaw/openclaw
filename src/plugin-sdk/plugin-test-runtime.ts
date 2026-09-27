@@ -1,10 +1,11 @@
 // Focused public test helpers for plugin runtime, registry, and setup fixtures.
 
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
 
 type AgentHarnessHostTestAttempt = Omit<
-  EmbeddedRunAttemptParams,
+  Parameters<
+    typeof import("../agents/harness/host-capability.js").createAgentHarnessHostCapabilities
+  >[0]["attempt"],
   "admittedRunContext" | "hostCapabilities" | "disableToolSearch" | "sessionReadScopeKey"
 >;
 

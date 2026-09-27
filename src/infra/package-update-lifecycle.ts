@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isPathInside } from "./fs-safe.js";
+import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import {
   completePendingPackageLifecycle,
   discardPendingPackageLifecycle,
@@ -18,7 +19,7 @@ import {
 } from "./update-global.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export async function resolveNpmUpdateLifecyclePolicy(params: {
   installTarget: ResolvedGlobalInstallTarget;
@@ -50,7 +51,7 @@ export type PackageUpdateStepRunner = (params: {
   name: string;
   argv: string[];
   cwd?: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }) => Promise<UpdateStepResult>;
 
@@ -64,6 +65,8 @@ export async function runPackageUpdateLifecycle(params: {
   nodeRunner?: string;
   manager: ResolvedGlobalInstallTarget["manager"];
   timeoutMs: number;
+  /** Null leaves script work unbounded; omission retains the caller's timeout. */
+  workTimeoutMs?: number | null;
   env?: NodeJS.ProcessEnv;
   runStep: PackageUpdateStepRunner;
   verifyCompleted: () => Promise<void>;
@@ -92,7 +95,7 @@ export async function runPackageUpdateLifecycle(params: {
           ],
           cwd: params.packageRoot,
           env,
-          timeoutMs: params.timeoutMs,
+          timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs),
         });
         params.steps.push(step);
         if (isFailedUpdateStep(step)) {

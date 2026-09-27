@@ -146,37 +146,21 @@ async function matchingResumeState(plan: ClawAddPlan, opts: ClawsAddOptions) {
   };
 }
 
-function failNonDryRun(opts: ClawsAddOptions, runtime: RuntimeEnv): boolean {
-  if (opts.dryRun) {
-    return false;
-  }
-  const consented = opts.yes && opts.planIntegrity;
-  if (consented) {
-    return false;
-  }
-  const code = opts.yes ? "plan_integrity_required" : "consent_required";
-  const message = opts.yes
-    ? "Claw add consent must include --plan-integrity from the exact dry-run plan."
-    : "Claw add requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to create the new agent and workspace.";
-  emitClawFailure(runtime, opts.json, message, {
-    schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
-    stability: CLAW_OUTPUT_STABILITY,
-    ok: false,
-    error: { code, message },
-  });
-  return true;
-}
-
-function requireRemoveConsent(opts: ClawsRemoveOptions, runtime: RuntimeEnv): boolean {
+function requireClawPlanConsent(
+  action: "add" | "remove",
+  opts: ClawsAddOptions | ClawsRemoveOptions,
+  runtime: RuntimeEnv,
+): boolean {
   if (opts.dryRun || (opts.yes && opts.planIntegrity)) {
     return false;
   }
   const code = opts.yes ? "plan_integrity_required" : "consent_required";
   const message = opts.yes
-    ? "Claw remove consent must include --plan-integrity from the exact dry-run plan."
-    : "Claw remove requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to remove owned state.";
+    ? `Claw ${action} consent must include --plan-integrity from the exact dry-run plan.`
+    : `Claw ${action} requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to ${action === "add" ? "create the new agent and workspace" : "remove owned state"}.`;
   emitClawFailure(runtime, opts.json, message, {
-    schemaVersion: CLAW_REMOVE_PLAN_SCHEMA_VERSION,
+    schemaVersion:
+      action === "add" ? CLAW_ADD_PLAN_SCHEMA_VERSION : CLAW_REMOVE_PLAN_SCHEMA_VERSION,
     stability: CLAW_OUTPUT_STABILITY,
     ok: false,
     error: { code, message },
@@ -257,7 +241,7 @@ export async function runClawsAddCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   assertExperimentalClawsEnabled();
-  if (failNonDryRun(opts, runtime)) {
+  if (requireClawPlanConsent("add", opts, runtime)) {
     return;
   }
   let legacyV1ResumeRecord: PersistedClawInstall | undefined;
@@ -299,24 +283,20 @@ export async function runClawsAddCommand(
     existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
     packagePreflight: preflightClawPackage,
   };
-  let plan = await buildClawAddPlan({
+  const planInput = {
     manifest: result.manifest,
     clawMarkdownBody: result.clawMarkdownBody,
     packageBootstrap: result.packageBootstrap,
     openClawProfile: result.openClawProfile,
     source: result.source,
     diagnostics: result.diagnostics,
-    context: basePlanContext,
-  });
+  };
+  let plan = await buildClawAddPlan({ ...planInput, context: basePlanContext });
   let legacyResumePlan = result.legacyOpenClawProfile
     ? await buildClawAddPlan({
-        manifest: result.manifest,
-        clawMarkdownBody: result.clawMarkdownBody,
-        packageBootstrap: result.packageBootstrap,
+        ...planInput,
         openClawProfile: result.legacyOpenClawProfile,
         reconstructLegacyDynamicToolProfilePlan: true,
-        source: result.source,
-        diagnostics: result.diagnostics,
         context: basePlanContext,
       })
     : undefined;
@@ -383,24 +363,12 @@ export async function runClawsAddCommand(
         : existingWorkspacePaths,
       ...(canResumeWorkspace ? { resumableWorkspace: resumeRecord.workspace } : {}),
     };
-    plan = await buildClawAddPlan({
-      manifest: result.manifest,
-      clawMarkdownBody: result.clawMarkdownBody,
-      packageBootstrap: result.packageBootstrap,
-      openClawProfile: result.openClawProfile,
-      source: result.source,
-      diagnostics: result.diagnostics,
-      context: resumePlanContext,
-    });
+    plan = await buildClawAddPlan({ ...planInput, context: resumePlanContext });
     if (result.legacyOpenClawProfile) {
       legacyResumePlan = await buildClawAddPlan({
-        manifest: result.manifest,
-        clawMarkdownBody: result.clawMarkdownBody,
-        packageBootstrap: result.packageBootstrap,
+        ...planInput,
         openClawProfile: result.legacyOpenClawProfile,
         reconstructLegacyDynamicToolProfilePlan: true,
-        source: result.source,
-        diagnostics: result.diagnostics,
         context: resumePlanContext,
       });
     }
@@ -547,7 +515,7 @@ export async function runClawsRemoveCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   assertExperimentalClawsEnabled();
-  if (requireRemoveConsent(opts, runtime)) {
+  if (requireClawPlanConsent("remove", opts, runtime)) {
     return;
   }
   const selected = opts.removeReferenced ?? [];

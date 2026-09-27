@@ -16,6 +16,8 @@ export type DiagnosticSessionActivitySnapshot = {
   activeToolCallId?: string;
   activeToolAgeMs?: number;
   activeToolDeadlineAtMs?: number;
+  /** Latest explicit or quiet allowance across every current-owner tool. */
+  activeToolRecoveryDeadlineAtMs?: number;
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
   repeatedRequestNoProgressAgeMs?: number;
@@ -71,6 +73,7 @@ export function buildDiagnosticSessionActivitySnapshot(
           : undefined;
   let activeTool: SnapshotTool | undefined;
   let activeToolDeadlineAtMs: number | undefined;
+  let activeToolRecoveryDeadlineAtMs: number | undefined;
   const currentOwnerRunId = resolveCurrentDiagnosticRunId(activity.activeEmbeddedRuns.values());
   for (const tool of activity.activeTools.values()) {
     if (!activeTool || tool.startedAt < activeTool.startedAt) {
@@ -80,6 +83,11 @@ export function buildDiagnosticSessionActivitySnapshot(
     // enforced waits own its allowance. Prior runs cannot extend that budget.
     if (currentOwnerRunId !== undefined && tool.runId === currentOwnerRunId) {
       const deadline = tool.deadlineAtMs;
+      const recoveryDeadline = deadline ?? tool.startedAt + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS;
+      activeToolRecoveryDeadlineAtMs = Math.max(
+        activeToolRecoveryDeadlineAtMs ?? recoveryDeadline,
+        recoveryDeadline,
+      );
       if (deadline !== undefined) {
         activeToolDeadlineAtMs = Math.max(activeToolDeadlineAtMs ?? deadline, deadline);
       }
@@ -94,6 +102,7 @@ export function buildDiagnosticSessionActivitySnapshot(
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
     activeToolDeadlineAtMs:
       currentOwnerRunId === undefined ? activeTool?.deadlineAtMs : activeToolDeadlineAtMs,
+    activeToolRecoveryDeadlineAtMs,
     lastProgressAgeMs: Math.max(0, now - churnProgress.lastProgressAt),
     lastProgressReason: churnProgress.lastProgressReason,
     repeatedRequestNoProgressAgeMs: resolveRepeatedRequestNoProgressAgeMs(

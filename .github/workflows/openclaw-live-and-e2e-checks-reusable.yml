@@ -565,7 +565,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
   OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
   OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
@@ -1290,9 +1290,9 @@ jobs:
           trap 'rm -f "$package_path"' EXIT
           curl -LsSf --connect-timeout 10 --max-time 120 \
             -o "$package_path" \
-            https://github.com/NVIDIA/OpenShell/releases/download/v0.0.109/openshell_0.0.109-1_amd64.deb
+            https://github.com/NVIDIA/OpenShell/releases/download/v0.0.116/openshell_0.0.116-1_amd64.deb
           printf '%s  %s\n' \
-            0364a21f279023a241d967309ebb0177dadb66bd792eeb3daf542283158ca40f \
+            883b5223399dd30a2b33b7f76817fd81295d610ce6f2d04a0266fc7cfbf87575 \
             "$package_path" | sha256sum --check -
           sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$package_path"
           openshell --version

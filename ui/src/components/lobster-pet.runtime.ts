@@ -603,7 +603,7 @@ class LobsterPet extends LitElement {
     if (act === "hop") {
       this.startFloorHop();
     } else if (act === "scuttle") {
-      this.startScuttle();
+      this.applyMove(this.geometry.planWalk(this.anchor, this.spotPct, this.rng()));
     }
     const duration = this.travel
       ? lobsterTravelDuration(this.travel)
@@ -666,10 +666,6 @@ class LobsterPet extends LitElement {
     this.facing = move.facing;
     this.travel = move.travel;
     this.travelScene = this.geometry.scene;
-  }
-
-  private startScuttle() {
-    this.applyMove(this.geometry.planWalk(this.anchor, this.spotPct, this.rng()));
   }
 
   private startFloorHop() {

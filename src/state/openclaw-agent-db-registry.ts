@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
 import path from "node:path";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -16,7 +17,10 @@ import {
   invalidateOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidationsForAgent,
 } from "./openclaw-agent-db-validation-cache.js";
-import { isPersistentOpenClawAgentDatabasePath } from "./openclaw-agent-db.paths.js";
+import {
+  isPersistentOpenClawAgentDatabasePath,
+  isSameOpenClawAgentDatabasePath,
+} from "./openclaw-agent-db.paths.js";
 import { requireOpenClawStateDatabaseIdentity } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
@@ -33,6 +37,30 @@ export {
 } from "./openclaw-agent-db-registry-listing.js";
 
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
+
+function resolveRegisteredAgentDatabaseStoredPath(
+  database: OpenClawStateDatabase,
+  params: { agentId: string; path: string },
+): string {
+  const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
+  if (params.path !== resolveIdentityPathViaExistingAncestorSync(params.path)) {
+    return storedPath;
+  }
+  const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
+  const { rows } = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("agent_databases").select("path").where("agent_id", "=", params.agentId),
+  );
+  // A canonical native open must update the existing configured locator, including external aliases.
+  return rows.some((row) => row.path === storedPath)
+    ? storedPath
+    : (rows.find((row) =>
+        isSameOpenClawAgentDatabasePath(
+          resolveOpenClawRegisteredAgentDatabasePath(database.path, row.path),
+          params.path,
+        ),
+      )?.path ?? storedPath);
+}
 
 export function registerOpenClawAgentDatabase(
   params: {
@@ -60,7 +88,7 @@ export function registerOpenClawAgentDatabase(
   runOpenClawStateWriteTransaction(
     (database) => {
       assertAgentDeletionPathFence(database, deletionFence);
-      const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
+      const storedPath = resolveRegisteredAgentDatabaseStoredPath(database, params);
       const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
       executeSqliteQuerySync(
         database.db,
@@ -102,7 +130,10 @@ export function registerOpenClawAgentDatabase(
           );
         }
       }
-      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+      sessionChanges.emit(
+        { all: true, scope: { agentId: params.agentId, topology: true } },
+        database.db,
+      );
     },
     { env: params.env },
   );
@@ -116,7 +147,7 @@ export function unregisterOpenClawAgentDatabase(params: {
 }): void {
   runOpenClawStateWriteTransaction(
     (database) => {
-      const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
+      const storedPath = resolveRegisteredAgentDatabaseStoredPath(database, params);
       const matchingPaths = [...new Set([storedPath, params.path, path.resolve(params.path)])];
       const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
       executeSqliteQuerySync(
@@ -127,7 +158,10 @@ export function unregisterOpenClawAgentDatabase(params: {
           .where("path", "in", matchingPaths),
       );
       invalidateRegisteredAgentDatabasesMemo({ env: params.env });
-      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+      sessionChanges.emit(
+        { all: true, scope: { agentId: params.agentId, topology: true } },
+        database.db,
+      );
     },
     { env: params.env, initializationAgentPaths: [params.path] },
   );
@@ -151,7 +185,10 @@ export function unregisterOpenClawAgentDatabases(params: {
       db.deleteFrom("agent_databases").where("agent_id", "=", params.agentId).returning("path"),
     );
     invalidateRegisteredAgentDatabasesMemo(options);
-    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+    sessionChanges.emit(
+      { all: true, scope: { agentId: params.agentId, topology: true } },
+      database.db,
+    );
     return removed.rows.map((row) =>
       resolveOpenClawRegisteredAgentDatabasePath(database.path, row.path),
     );

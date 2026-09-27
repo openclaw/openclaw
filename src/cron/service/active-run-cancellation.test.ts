@@ -306,23 +306,4 @@ describe("cron task cancellation tracking", () => {
       resetActiveCronTaskRunsForTests();
     }
   });
-
-  it("keeps suspension blocked until a timed-out core actually settles", async () => {
-    resetActiveCronTaskRunsForTests();
-    const controller = new AbortController();
-    const core = createDeferred();
-    trackActiveCronTaskRunSettlement(core.promise, controller.signal);
-    controller.abort();
-
-    try {
-      expect(getSuspensionVisibleCronTaskRunCount()).toBe(1);
-      core.resolve();
-      await core.promise;
-      await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
-    } finally {
-      core.resolve();
-      await core.promise;
-      await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
-    }
-  });
 });

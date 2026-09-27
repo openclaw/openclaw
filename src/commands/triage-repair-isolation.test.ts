@@ -31,7 +31,7 @@ vi.mock("../agents/embedded-agent-runner/run-entry.js", () => ({
     return { result, provider, model, terminal: { outcome: { status: "ok" } } };
   },
 }));
-vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: async () => [] }));
+vi.mock("./doctor-lint-runner.js", () => ({ collectDoctorFindings: async () => [] }));
 vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
   runUtf8CommandWithTimeout: mocks.oracle,

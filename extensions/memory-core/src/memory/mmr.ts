@@ -1,14 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jaccardSimilarity, tokenize } from "./tokenize.js";
 
-/**
- * Maximal Marginal Relevance (MMR) re-ranking algorithm.
- *
- * MMR balances relevance with diversity by iteratively selecting results
- * that maximize: λ * relevance - (1-λ) * max_similarity_to_selected
- *
- * @see Carbonell & Goldstein, "The Use of MMR, Diversity-Based Reranking" (1998)
- */
+// Carbonell & Goldstein (1998): maximize λ * relevance - (1-λ) * similarity.
 
 type MMRItem = {
   score: number;
@@ -36,18 +29,6 @@ type PreparedMMRItem<T extends MMRItem> = {
   maxSimilarity: number;
 };
 
-/**
- * Re-rank items using Maximal Marginal Relevance (MMR).
- *
- * The algorithm iteratively selects items that balance relevance with diversity:
- * 1. Start with the highest-scoring item
- * 2. For each remaining slot, select the item that maximizes the MMR score
- * 3. MMR score = λ * relevance - (1-λ) * max_similarity_to_already_selected
- *
- * @param items - Items to re-rank, must have score and snippet
- * @param config - MMR configuration (lambda, enabled)
- * @returns Re-ranked items in MMR order
- */
 export function applyMMRToHybridResults<T extends MMRItem & { path: string; startLine: number }>(
   items: T[],
   config: Partial<MMRConfig> = {},

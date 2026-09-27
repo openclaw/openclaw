@@ -70,13 +70,15 @@ export function clearStoredComposerDraftInput(session: {
   draft?: unknown;
   draftMentions?: unknown;
   goalMode?: unknown;
+  replyTarget?: unknown;
 }): boolean {
-  if (!session.draft && !session.draftMentions && !session.goalMode) {
+  if (!session.draft && !session.draftMentions && !session.goalMode && !session.replyTarget) {
     return false;
   }
   delete session.draft;
   delete session.draftMentions;
   delete session.goalMode;
+  delete session.replyTarget;
   return true;
 }
 
@@ -211,7 +213,10 @@ export function resolvePendingComposerSessions(
       const existingIds = new Set(destination.queue?.map((item) => item.id));
       const conflict = session.queue?.some((item) => existingIds.has(item.id));
       const sourceNewer = (session.draftRevision ?? 0) > (destination.draftRevision ?? 0);
-      if (conflict || (session.draft && !sourceNewer)) {
+      if (
+        conflict ||
+        ((session.draft || session.goalMode || session.replyTarget) && !sourceNewer)
+      ) {
         holdComposerRecovery(store, `pending:${key}`, 4, key, session);
       } else {
         const draftOwner = sourceNewer ? session : destination;
@@ -291,7 +296,12 @@ function holdComposerRecovery(
 ): void {
   const { queue, ...draft } = session;
   const groups = new Map<string | undefined, ChatQueueItem[]>();
-  if (draft.draft || draft.goalMode || (!queue?.length && draft.draftRevision !== undefined)) {
+  if (
+    draft.draft ||
+    draft.goalMode ||
+    draft.replyTarget ||
+    (!queue?.length && draft.draftRevision !== undefined)
+  ) {
     groups.set(undefined, []);
   }
   for (const item of queue ?? []) {
@@ -482,6 +492,7 @@ export function readStoredOutboxStore(
       if (
         session.draft ||
         session.goalMode ||
+        session.replyTarget ||
         session.draftRevision !== undefined ||
         session.queue?.length
       ) {
@@ -582,6 +593,8 @@ export function writeStoredOutboxStore(
         ([sessionKey, session]) =>
           sessionKey !== unresolvedGlobalKey &&
           !session.draft &&
+          !session.goalMode &&
+          !session.replyTarget &&
           session.draftRevision !== undefined,
       )
       .toSorted(byNewest),
@@ -591,7 +604,9 @@ export function writeStoredOutboxStore(
       ...outboxes.toSorted(byNewest),
       ...drafts
         .filter(
-          ([sessionKey, session]) => sessionKey !== unresolvedGlobalKey && Boolean(session.draft),
+          ([sessionKey, session]) =>
+            sessionKey !== unresolvedGlobalKey &&
+            Boolean(session.draft || session.goalMode || session.replyTarget),
         )
         .toSorted(byNewest),
     ].slice(0, MAX_STORED_SESSIONS),

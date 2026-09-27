@@ -124,6 +124,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // compatibility barrels while external harnesses migrate to AgentHarnessV2.
   core: 3,
   "plugin-entry": 1,
+  // Shipped synchronous capture remains available while plugins migrate to async capture.
+  "proxy-capture": 9,
   routing: 1,
   // +4: shipped default/session-agent resolvers remain available through
   // compatibility barrels while callers migrate to explicit/sole selection.
@@ -407,7 +409,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: approved shared preview lifecycle factory and delivery/lifecycle types.
       // +1: approved canonical resolveConfigPath export for pre-config native browser admission.
       // +1: supported read-only admitted operator scopes for tool presentation.
-      4570,
+      // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
+      // +5: approved meeting participation contract: four types and one callable (#152327).
+      // +2: shared workspace context preparation and bounded instruction snapshots.
+      // +1: Gateway-verified legacy webhook endpoint attribution.
+      // Six async capture counterparts and four types consumed by bundled plugins.
+      4590,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -567,7 +574,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved shared preview lifecycle factory.
       // +1: approved canonical resolveConfigPath callable for pre-config native browser admission.
       // +1: supported read-only readGatewayToolOperatorScopes callable.
-      2682,
+      // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
+      // +1: approved runMeetingParticipationWithBrowser callable (#152327).
+      // +2: shared workspace context preparation and bounded instruction snapshots.
+      // +1: Gateway-verified legacy webhook endpoint attribution.
+      // Async capture initialization, HTTP/WS events, finalization, store, and reader.
+      2694,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -587,7 +599,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -18: retire the expired August compatibility exports and messaging-targets subpath.
       // +4: rendering helpers forwarded by the shipped channel-message wildcard.
-      1138,
+      // Retain deprecated synchronous capture alongside its async migration surface.
+      1139,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
@@ -597,7 +610,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: infra-runtime re-exports number coercion directly from its canonical owner.
       // -1: channel-message pins its published compatibility exports explicitly.
       // -1: infra-runtime pins its existing diagnostics type-query surface.
-      48,
+      // -1: infra-runtime pins its existing local-file-access exports.
+      47,
       env,
     ),
   };

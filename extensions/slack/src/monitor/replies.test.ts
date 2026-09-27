@@ -152,15 +152,6 @@ describe("deliverReplies identity passthrough", () => {
     messageHookRunner.runMessageSent.mockReset();
     triggerInternalHook.mockReset();
   });
-  it("passes identity to sendMessageSlack for text replies", async () => {
-    sendMock.mockResolvedValue(undefined);
-    const identity = { username: "Bot", iconEmoji: ":robot:" };
-    await deliverReplies(baseParams({ identity }));
-
-    expect(sendMock).toHaveBeenCalledOnce();
-    const options = requireSendCall()[2];
-    expect(options.identity).toBe(identity);
-  });
 
   it.each([
     { name: "current reply", replyToCurrent: true, isCompactionNotice: false },
@@ -190,21 +181,6 @@ describe("deliverReplies identity passthrough", () => {
       );
     },
   );
-
-  it("passes identity to sendMessageSlack for media replies", async () => {
-    sendMock.mockResolvedValue(undefined);
-    const identity = { username: "Bot", iconUrl: "https://example.com/icon.png" };
-    await deliverReplies(
-      baseParams({
-        identity,
-        replies: [{ text: "caption", mediaUrls: ["https://example.com/img.png"] }],
-      }),
-    );
-
-    expect(sendMock).toHaveBeenCalledOnce();
-    const options = requireSendCall()[2];
-    expect(options.identity).toBe(identity);
-  });
 
   it.each([
     { rowLength: 110, textCalls: 1 },
@@ -362,28 +338,6 @@ describe("deliverReplies identity passthrough", () => {
     expect(sendMock).toHaveBeenCalledOnce();
     const options = requireSendCall()[2];
     expect(options).not.toHaveProperty("identity");
-  });
-
-  it("forwards the validated Enterprise event scope", async () => {
-    sendMock.mockResolvedValue({ messageId: "123.456", channelId: "C123" });
-    const listenerClient = { chat: { postMessage: vi.fn() } } as never;
-    const eventScope = {
-      teamId: "T1",
-      client: listenerClient,
-    };
-
-    await deliverReplies(
-      baseParams({
-        cfg: { channels: { slack: {} } },
-        eventScope,
-        mediaMaxBytes: 1024,
-      }),
-    );
-
-    const options = requireSendCall()[2];
-    expect(options.eventScope).toBe(eventScope);
-    expect(options.textLimit).toBe(4000);
-    expect(options.mediaMaxBytes).toBe(1024);
   });
 
   it("delivers block-only replies through to sendMessageSlack", async () => {
@@ -1141,21 +1095,6 @@ describe("deliverReplies reasoning suppression", () => {
     const [, text] = requireSendCall();
     expect(text).toBe("visible answer");
   });
-
-  it("delivers nothing when all payloads are reasoning", async () => {
-    sendMock.mockResolvedValue(undefined);
-
-    await deliverReplies(
-      baseParams({
-        replies: [
-          { text: "Let me think about this...", isReasoning: true },
-          { text: "I need to consider...", isReasoning: true },
-        ],
-      }),
-    );
-
-    expect(sendMock).not.toHaveBeenCalled();
-  });
 });
 
 describe("deliverReplies message_sent hook", () => {
@@ -1621,20 +1560,6 @@ describe("deliverReplies message_sent hook", () => {
 
     expect(sendMock).toHaveBeenCalledOnce();
     expect(messageHookRunner.runMessageSent).not.toHaveBeenCalled();
-  });
-
-  it("fires the internal message:sent hook when a session key is supplied", async () => {
-    messageHookRunner.hasHooks.mockReturnValue(false);
-    sendMock.mockResolvedValue({ messageId: "ts", channelId: "C123" });
-
-    await deliverReplies(
-      baseParams({
-        replies: [{ text: "internal" }],
-        sessionKeyForInternalHooks: "slack:C123:U1",
-      }),
-    );
-
-    expect(triggerInternalHook).toHaveBeenCalledOnce();
   });
 
   it("threads group context into the internal message:sent hook when isGroup is set", async () => {

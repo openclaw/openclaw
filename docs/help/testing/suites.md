@@ -18,6 +18,11 @@ Most days:
 - Docker-backed QA site: `pnpm qa:lab:up`
 - Linux VM-backed QA lane: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
 
+The last two lanes need tooling the other commands do not: `qa:lab:up` needs a
+running Docker daemon and a source checkout, because the npm tarball omits QA
+Lab, and the `multipass` runner needs Multipass installed. See
+[QA-specific runners](/help/testing/qa-runners).
+
 When you touch tests or want extra confidence:
 
 - Informational V8 coverage report: `pnpm test:coverage`
@@ -75,6 +80,7 @@ Native dependency policy:
     - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
     - `pnpm test:changed` expands changed git paths into cheap scoped lanes by default: direct test edits, sibling `*.test.ts` files, explicit source mappings, and local import-graph dependents. Config/setup/package edits do not broad-run tests unless you explicitly use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed`.
     - `pnpm check:changed` is the normal smart local check gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, live Docker tooling, and tooling, then runs the matching typecheck, lint, and guard commands. Selected paths also schedule targeted Vitest owner tests via `pnpm test:serial`; use `pnpm test:changed` or explicit `pnpm test <target>` for additional test proof matching the touched contract. Release metadata-only version bumps run targeted version/config/root-dependency checks, with a guard that rejects package changes outside the top-level version field.
+    - In the default Git diff mode against `HEAD`, comment/whitespace-only TypeScript edits skip their typecheck lanes and core graph boundary check when tokens and line-break boundaries match the merge base. Files with TypeScript/JSX directives, triple-slash comments, parse errors, or path lifecycle changes retain typechecking, as do JavaScript files. Lint, formatting, ratchets, guards, and tests keep the full changed-path scope. Staged, explicit-path, and non-`HEAD` comparisons retain normal typecheck selection; `--dry-run` reports any skipped paths.
     - Live Docker ACP harness edits run focused checks: shell syntax for the live Docker auth scripts and a live Docker scheduler dry-run. `package.json` changes are included only when the diff is limited to `scripts["test:docker:live-*"]`; dependency, export, version, and other package-surface edits still use the broader guards.
     - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
     - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.

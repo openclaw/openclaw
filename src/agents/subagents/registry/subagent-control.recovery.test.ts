@@ -39,7 +39,7 @@ it("does not promote a provisional task when replacement wins before admin admis
     sessionKey,
     defaultSessionId: "publication-admission-session",
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: "admission-b0",
     childSessionKey: sessionKey,
     requesterSessionKey: "agent:main:main",

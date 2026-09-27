@@ -83,6 +83,10 @@ type CreateLaneTextDelivererParams = {
     payload: ReplyPayload;
     candidateTexts: readonly (string | undefined)[];
   }) => Promise<ReplyPayload | undefined> | ReplyPayload | undefined;
+  resolveFinalPresentationText?: (params: {
+    payload: ReplyPayload;
+    text: string;
+  }) => Promise<string | undefined> | string | undefined;
   log: (message: string) => void;
   markDelivered: () => void;
 };
@@ -278,7 +282,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     rotateFinalizedStream(lane);
 
     const finalText = text.trimEnd();
-    const previewText = useFinalTextRecovery
+    const recoveredText = useFinalTextRecovery
       ? await resolveTranscriptBackedChannelFinalText({
           payload,
           finalText,
@@ -289,6 +293,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
             }),
         })
       : finalText;
+    const previewText =
+      finalizePreview && payload.presentation
+        ? ((await params.resolveFinalPresentationText?.({
+            payload,
+            text: recoveredText,
+          })) ?? recoveredText)
+        : recoveredText;
     lane.lastPartialText = previewText;
     lane.hasStreamedMessage = true;
     lane.finalized = false;

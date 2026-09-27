@@ -57,12 +57,12 @@ describe("reconciliation continuation authority", () => {
     async ({ mode, authority, revokeAt }) => {
       const remote = path.join(root, "remote-attachments");
       await mkdir(remote);
-      seedActivePlacement(mode, remote);
+      await seedActivePlacement(mode, remote);
       const active = placements.get(SESSION_ID);
       if (active?.state !== "active") {
         throw new Error("expected active placement");
       }
-      const prior = placements.claimTurn({
+      const prior = await placements.claimTurn({
         ...sessionTarget,
         claimId: "prior-result",
         runId: "prior-run",

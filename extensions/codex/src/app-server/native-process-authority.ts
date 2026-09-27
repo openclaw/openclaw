@@ -6,7 +6,7 @@ import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
 } from "./notification-correlation.js";
-import { isJsonObject } from "./protocol.js";
+import { isJsonObject, type CodexAppServerRequestResult } from "./protocol.js";
 import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 
 type RetainedSource = NonNullable<
@@ -57,7 +57,10 @@ export async function readCodexRetainedBackgroundCommands(params: {
   assertCurrent: () => void;
   signal: AbortSignal;
   timeoutMs: number;
-}): Promise<() => ReadonlyMap<string, string>> {
+}): Promise<{
+  inventory: CodexAppServerRequestResult<"thread/backgroundTerminals/list">["data"];
+  readCurrent: () => ReadonlyMap<string, string>;
+}> {
   params.assertCurrent();
   const { data } = await params.client.request(
     "thread/backgroundTerminals/list",
@@ -68,26 +71,29 @@ export async function readCodexRetainedBackgroundCommands(params: {
   params.assertCurrent();
   // Consumption follows a second notification drain. Recheck source custody then,
   // so revocation during that await cannot turn an orphan into retained work.
-  return () => {
-    params.signal.throwIfAborted();
-    params.assertCurrent();
-    const retained = new Map<string, string>();
-    for (const { itemId, processId } of data) {
-      if (
-        params.commands.has(itemId) &&
-        // Approval starts omit the process ID; the native inventory supplies it.
-        (params.commands.get(itemId) === null || params.commands.get(itemId) === processId) &&
-        (!params.authority ||
-          params.authority.ownsCurrentCommand(params.client, {
-            threadId: params.threadId,
-            turnId: params.turnId,
-            itemId,
-          }))
-      ) {
-        retained.set(itemId, processId);
+  return {
+    inventory: data,
+    readCurrent: () => {
+      params.signal.throwIfAborted();
+      params.assertCurrent();
+      const retained = new Map<string, string>();
+      for (const { itemId, processId } of data) {
+        if (
+          params.commands.has(itemId) &&
+          // Approval starts omit the process ID; the native inventory supplies it.
+          (params.commands.get(itemId) === null || params.commands.get(itemId) === processId) &&
+          (!params.authority ||
+            params.authority.ownsCurrentCommand(params.client, {
+              threadId: params.threadId,
+              turnId: params.turnId,
+              itemId,
+            }))
+        ) {
+          retained.set(itemId, processId);
+        }
       }
-    }
-    return retained;
+      return retained;
+    },
   };
 }
 
@@ -292,8 +298,15 @@ export class CodexNativeProcessAuthority {
   }
 
   ownsCurrentCommand(client: CodexAppServerClient, receipt: NativeCommand): boolean {
+    return this.findCurrentCommand(client, receipt) !== undefined;
+  }
+
+  private findCurrentCommand(
+    client: CodexAppServerClient,
+    receipt: NativeCommand,
+  ): CommandAdmission | undefined {
     this.assertCurrent();
-    return [...this.commands].some(
+    return [...this.commands].find(
       (command) =>
         command.client === clients.get(client) &&
         command.threadId === receipt.threadId &&
@@ -374,6 +387,15 @@ export class CodexNativeProcessAuthority {
           command.parentTurn.turnId === turnId,
       ),
     );
+  }
+
+  async cancelCommand(client: CodexAppServerClient, receipt: NativeCommand): Promise<boolean> {
+    const command = this.findCurrentCommand(client, receipt);
+    if (!command) {
+      return false;
+    }
+    await this.terminate([command]);
+    return true;
   }
 
   cancelClient(client: CodexNativeProcessClient): void {

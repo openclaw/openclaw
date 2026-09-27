@@ -46,8 +46,9 @@ import {
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
 import {
   createUsageCostResolver,
-  resolveUsageCostPricingFingerprint,
+  prepareUsageCostPricing,
 } from "./session-cost-usage-pricing-context.js";
+import type { UsageCostResolver } from "./session-cost-usage-pricing.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
 import {
   UsageCostWorkerReplyError,
@@ -317,20 +318,16 @@ export async function runUsageCostWorker(
       }
     }
     assertCurrent();
-    const workerOperation: UsageCostWorkerOperation =
-      capturedOperation.kind === "refresh"
-        ? {
-            ...capturedOperation,
-            pricingFingerprint: await resolveUsageCostPricingFingerprint(
-              prepared.config,
-              prepared.agentDir,
-            ),
-          }
-        : capturedOperation;
-    const resolveCost = createUsageCostResolver({
-      config: prepared.config,
-      agentDir: prepared.agentDir,
-    });
+    let workerOperation: UsageCostWorkerOperation;
+    let resolveCost: UsageCostResolver;
+    if (capturedOperation.kind === "refresh") {
+      const pricing = await prepareUsageCostPricing(prepared.config, prepared.agentDir);
+      workerOperation = { ...capturedOperation, pricingFingerprint: pricing.fingerprint() };
+      resolveCost = createUsageCostResolver(prepared, pricing);
+    } else {
+      workerOperation = capturedOperation;
+      resolveCost = createUsageCostResolver(prepared);
+    }
     const failures = openUsageCostRefreshFailures(location.env);
     const failureKey = (sessionFile: string) =>
       JSON.stringify([location.databasePath, sessionFile]);

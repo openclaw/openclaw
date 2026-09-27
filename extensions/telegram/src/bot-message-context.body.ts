@@ -74,7 +74,7 @@ const loadStickerVisionRuntime = createLazyRuntimeModule(
 );
 
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
-  () => import("./media-understanding.runtime.js"),
+  () => import("openclaw/plugin-sdk/media-runtime"),
 );
 
 type TelegramInboundBodyResult = {

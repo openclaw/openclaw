@@ -524,10 +524,11 @@ Usage:
   scripts/pr prepare-correction-review-init <PR>
   scripts/pr prepare-validate-commit <PR>
   scripts/pr prepare-gates <PR>
-  scripts/pr prepare-push <PR>
+  scripts/pr prepare-push <PR> [--resume-crabbox-run <Actions run ID>]
+    Resume observes the selected protected publisher only; never pushes or dispatches.
   scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
-  scripts/pr ci-dispatch <PR> [--backend crabbox --run-id <id> --lease-id <id> --bootstrap-sha256 <hash>]
+  scripts/pr ci-dispatch <PR> [--backend crabbox]
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR> [--auto-merge] [--body-file <path>]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
@@ -697,12 +698,30 @@ main() {
       [ "$cancel_auto" = false ] || [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] || { usage; exit 2; }
       set -- "$merge_pr"
       ;;
-    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
+    prepare-push)
+      if [ "$#" -ne 1 ]; then
+        [ "$#" -eq 3 ] && [ "$2" = --resume-crabbox-run ] &&
+          [[ "$3" =~ ^[1-9][0-9]*$ ]] &&
+          { [ "${#3}" -lt 16 ] || { [ "${#3}" -eq 16 ] && [[ "$3" < 9007199254740992 ]]; }; } || { usage; exit 2; }
+      fi
+      ;;
+    ci-dispatch)
+      [ "$#" -eq 1 ] || { [ "$#" -eq 3 ] && [ "$2" = --backend ] && [ "$3" = crabbox ]; } || { usage; exit 2; }
+      ;;
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-sync-head | prepare-run | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }
       ;;
     *)
       usage
       exit 2
+      ;;
+  esac
+
+  # Reject contradictory instructions before PR reads, locks, or preparation can
+  # retire valid evidence. prepare-push can refresh a head and rerun gates too.
+  case "$cmd" in
+    prepare-run | prepare-gates | prepare-push)
+      resolve_pr_gates_remote_mode >/dev/null || return $?
       ;;
   esac
 
@@ -809,7 +828,7 @@ main() {
     prepare-push)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      prepare_push "$pr"
+      prepare_push "$pr" "" "${3:-}"
       ;;
     prepare-sync-head)
       local pr="${1-}"

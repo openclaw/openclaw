@@ -19,10 +19,7 @@ import {
   type SqliteIntegrityOperation,
   type SqliteIntegrityConfirmation,
 } from "../infra/sqlite-integrity.js";
-import {
-  deferSqlitePostCommitPublication,
-  withSqlitePostCommitPublications,
-} from "../infra/sqlite-post-commit.js";
+import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import {
   runSqliteImmediateTransactionSync,
@@ -30,7 +27,6 @@ import {
 } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
-import { registerSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -115,7 +111,7 @@ import {
   isSameOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
+import { registerOpenClawAgentWalMaintenance } from "./openclaw-agent-db.wal.js";
 import { requestOpenClawAgentDatabaseQuickCheck } from "./openclaw-database-verify.js";
 import {
   clearOpenClawDatabaseQuarantine,
@@ -138,6 +134,7 @@ export {
   assertOpenClawAgentDatabaseForMaintenance,
   migrateOpenClawAgentDatabaseForMaintenance,
 } from "./openclaw-agent-db-maintenance.js";
+export { deferOpenClawAgentPostCommitPublication } from "./openclaw-agent-db-lifecycle.js";
 export { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 export {
   listOpenClawRegisteredAgentDatabases,
@@ -302,15 +299,15 @@ function* openOpenClawAgentDatabaseSteps(
     throw new Error("Prepared agent database lease belongs to another store");
   }
   let verification: OpenClawAgentIntegrityVerification | undefined;
-  let hasLiveLease = false;
+  let reuseIntegrity = false;
   const validation = pending?.validation ?? preparedLease?.validation;
   const captureVerification: OpenClawAgentIntegrityVerificationReceiver = (
     record,
-    liveLease,
+    runtimeIntegrityAllowed,
     invalidated,
   ) => {
     verification = record;
-    hasLiveLease = liveLease;
+    reuseIntegrity = runtimeIntegrityAllowed;
     if (invalidated && validation) {
       // Stale-peer cleanup precedes adoption of proof already transferred by the host.
       Atomics.store(new Int32Array(validation.valid), 0, 0);
@@ -371,7 +368,7 @@ function* openOpenClawAgentDatabaseSteps(
         assertSupportedAgentSchemaVersion(db, pathname);
         const existingSchema = readExistingAgentSchemaMeta(db);
         assertExistingAgentSchemaOwner(existingSchema, agentId, pathname);
-        // Live owners may lend runtime proof; cold opens require clean-close proof.
+        // Runtime proof survives last-lease close; cold opens require clean-close proof.
         // Runtime proof carries owner revocation; every open still checks schema convergence.
         const requiresCurrentVersionConvergence = yield* agentDatabaseIntegrityBeforeMutationSteps(
           db,
@@ -379,7 +376,7 @@ function* openOpenClawAgentDatabaseSteps(
           pathname,
           diagnostics,
           verification,
-          isValidatedReopen && hasLiveLease,
+          isValidatedReopen && reuseIntegrity,
         );
         if (isValidatedReopen && (!existingSchema || requiresCurrentVersionConvergence)) {
           // New files and same-version divergence cannot inherit an earlier validation.
@@ -436,14 +433,14 @@ function* openOpenClawAgentDatabaseSteps(
     const cleanup = registerAgentDeletionDatabaseCleanup(database, databaseOptions);
     if (cleanup) {
       const release = retainAgentDatabase(db);
-      cleanup.registerClose(() => {
-        release();
+      cleanup.registerClose(async () => {
         // The scope owns this connection, not a later cache entry at the same pathname.
         if (cache.databases.get(database.path) === database) {
-          closeOpenClawAgentDatabaseByPath(database.path, database.agentId);
+          await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
         } else if (database.db.isOpen) {
           throw new Error("Agent deletion cleanup lost its database close owner.");
         }
+        release();
       });
     }
     if (!isValidatedReopen) {
@@ -461,7 +458,7 @@ function* openOpenClawAgentDatabaseSteps(
     cache.leases.set(pathname, { leaseId, env: leaseEnvironment });
     cache.databases.set(pathname, database);
     const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-    if (diagnostics.integrityGateOutcome === "cached") {
+    if (diagnostics.integrityGateOutcome === "cached" && !(isValidatedReopen && reuseIntegrity)) {
       if (preparedLease) {
         requestSqliteWorkerOperationAdmission({
           stage: "prepare",
@@ -473,7 +470,7 @@ function* openOpenClawAgentDatabaseSteps(
       } else {
         requestOpenClawAgentDatabaseQuickCheck({ path: pathname, env: leaseEnvironment });
       }
-    } else if (typeof identity === "string") {
+    } else if (diagnostics.integrityGateOutcome !== "cached" && typeof identity === "string") {
       recordOpenClawAgentDatabaseIntegrityVerified(
         leaseId,
         { agentId, path: pathname, env: leaseEnvironment },
@@ -482,14 +479,7 @@ function* openOpenClawAgentDatabaseSteps(
     }
     refreshAgentDatabaseIdleTimer(database);
     if (isMainThread) {
-      const writeOptions = { agentId, path: pathname, env: leaseEnvironment };
-      registerSqliteWalWriteAdmission(db, (operation) =>
-        runOpenClawAgentWriteAdmission(writeOptions, () => {
-          if (findOpenClawAgentDatabaseIfOpen(writeOptions) === database) {
-            operation();
-          }
-        }),
-      );
+      registerOpenClawAgentWalMaintenance(database, leaseEnvironment);
     }
     getOpenClawDatabaseMaintenanceScope()?.own(database.db, "agent-handles", () =>
       closeMaintenanceAgentDatabase(database),
@@ -556,14 +546,6 @@ function* openOpenClawAgentDatabaseSteps(
     }
     throw closeError ?? error;
   }
-}
-
-/** Queue a non-throwing runtime publication on the outer database commit edge. */
-export function deferOpenClawAgentPostCommitPublication(
-  database: OpenClawAgentDatabase,
-  publish: () => void,
-): boolean {
-  return deferSqlitePostCommitPublication(database.db, publish);
 }
 
 export function runOpenClawAgentWriteTransaction<T>(

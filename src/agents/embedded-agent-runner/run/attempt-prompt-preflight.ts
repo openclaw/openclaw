@@ -68,6 +68,11 @@ export async function handleEmbeddedAttemptMidTurnPrecheck(input: {
   promptError?: Error;
 }> {
   const { attempt, request } = input;
+  const preflightRecovery = {
+    route: request.route,
+    source: "mid-turn" as const,
+    ...buildPreflightRecoveryBudgetSnapshot(request),
+  };
   const logMidTurnPrecheck = (route: string, extra?: string) => {
     log.warn(
       `[context-overflow-midturn-precheck] sessionKey=${attempt.sessionKey ?? attempt.sessionId} ` +
@@ -98,63 +103,35 @@ export async function handleEmbeddedAttemptMidTurnPrecheck(input: {
       sessionKey: attempt.sessionKey,
       agentId: input.sessionAgentId,
     });
-    if (truncationResult.truncated) {
-      const preflightRecovery = {
-        route: "truncate_tool_results_only" as const,
-        source: "mid-turn" as const,
-        ...buildPreflightRecoveryBudgetSnapshot(request),
-        handled: true as const,
-        truncatedCount: truncationResult.truncatedCount,
-      };
-      input.replaceSessionMessages(
-        sanitizeCompactionReplayMessages(input.sessionManager.buildSessionContext().messages),
-      );
-      logMidTurnPrecheck(
-        request.route,
-        `handled=true truncatedCount=${truncationResult.truncatedCount}`,
-      );
-      return { preflightRecovery };
-    }
-
-    if (truncationResult.reason === "no oversized or aggregate tool results") {
-      const preflightRecovery = {
-        route: "truncate_tool_results_only" as const,
-        source: "mid-turn" as const,
-        ...buildPreflightRecoveryBudgetSnapshot(request),
-        handled: true as const,
-        truncatedCount: 0,
-      };
+    if (
+      truncationResult.truncated ||
+      truncationResult.reason === "no oversized or aggregate tool results"
+    ) {
+      if (truncationResult.truncated) {
+        input.replaceSessionMessages(
+          sanitizeCompactionReplayMessages(input.sessionManager.buildSessionContext().messages),
+        );
+      }
       // The mid-turn estimate sees the in-memory prompt view, while persisted
       // recovery may already have capped the same tool results. Retry without
       // manufacturing compaction when the persisted branch has nothing to trim.
+      const truncatedCount = truncationResult.truncated ? truncationResult.truncatedCount : 0;
       logMidTurnPrecheck(
         request.route,
-        `handled=true truncatedCount=0 truncateSkippedReason=${truncationResult.reason}`,
+        `handled=true truncatedCount=${truncatedCount}` +
+          (truncationResult.truncated ? "" : ` truncateSkippedReason=${truncationResult.reason}`),
       );
-      return { preflightRecovery };
+      return { preflightRecovery: { ...preflightRecovery, handled: true, truncatedCount } };
     }
 
-    const preflightRecovery = {
-      route: "compact_only" as const,
-      source: "mid-turn" as const,
-      ...buildPreflightRecoveryBudgetSnapshot(request),
-    };
+    preflightRecovery.route = "compact_only";
     logMidTurnPrecheck(
-      "compact_only",
+      preflightRecovery.route,
       `truncateFallbackReason=${truncationResult.reason ?? "unknown"}`,
     );
-    return {
-      preflightRecovery,
-      promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
-    };
+  } else {
+    logMidTurnPrecheck(request.route);
   }
-
-  const preflightRecovery = {
-    route: request.route,
-    source: "mid-turn" as const,
-    ...buildPreflightRecoveryBudgetSnapshot(request),
-  };
-  logMidTurnPrecheck(request.route);
   return {
     preflightRecovery,
     promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),

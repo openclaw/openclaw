@@ -30,8 +30,6 @@ import type {
 } from "./store-worker-contract.js";
 import type { WorkerEnvironmentPruneInput } from "./store-write-types.js";
 
-export { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
-export { normalizeWorkerSshEndpoint } from "./store-validation.js";
 export type {
   PreparedEnvironmentPlacementBinding,
   PreparedEnvironmentSelection,
@@ -64,7 +62,8 @@ function isCommitAdmission(value: unknown): value is WorkerEnvironmentCommitAdmi
         isRecord(fact) &&
         typeof fact.environmentId === "string" &&
         typeof fact.recordAuthority === "string" &&
-        typeof fact.transferAuthority === "string",
+        typeof fact.transferAuthority === "string" &&
+        typeof fact.attachmentAuthority === "string",
     )
   );
 }
@@ -346,6 +345,8 @@ export async function createWorkerEnvironmentStore(
       read(() => owner.hasPendingNodeEnrollmentSetup(setup, device)),
     preparedCapacity: (input: Parameters<typeof preparedCapacityFromReservations>[1]) =>
       read(() => preparedCapacityFromReservations(prepared(), input)),
+    preparedReservationEnvironmentIds: () =>
+      read(() => prepared().map((record) => record.environmentId)),
     isPreparedIntentWithinCapacity: (
       input: Parameters<typeof isPreparedReservationWithinCapacity>[1],
     ) =>

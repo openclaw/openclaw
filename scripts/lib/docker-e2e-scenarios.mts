@@ -63,6 +63,9 @@ const updateMigrationCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
 );
+const dreamingCronDoctorCommand = upgradeSurvivorScriptCommand(
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.6 OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE=current OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=dreaming-cron-doctor OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0",
+);
 // One lane per recorded source release so the hops run concurrently; each hop
 // takes ~9-11 minutes on hosted runners as of 2026.9.6.
 const updateFirstHopCompatLanes = listRecordedFirstHopSourceVersions().map((version) =>
@@ -230,6 +233,12 @@ function createPackageUpdateMaintenanceLanes() {
       upgradeSurvivorScenario: "base",
       weight: 3,
     }),
+    npmLane("dreaming-cron-doctor", dreamingCronDoctorCommand, {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      upgradeSurvivorScenario: "dreaming-cron-doctor",
+      weight: 3,
+    }),
     npmLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, {
       stateScenario: "upgrade-survivor",
       timeoutMs: 25 * 60 * 1000,
@@ -360,6 +369,16 @@ export const fleetCacheLane = lane("fleet-cache", "pnpm test:docker:fleet-cache"
 });
 
 export const mainLanes: DockerE2eLane[] = [
+  lane(
+    "container-image-upgrade",
+    "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:container-image-upgrade",
+    {
+      e2eImageKind: false,
+      resources: ["docker", "service"],
+      timeoutMs: 30 * 60 * 1000,
+      weight: 4,
+    },
+  ),
   lane(
     "docker-selected-plugins",
     "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:selected-plugins",

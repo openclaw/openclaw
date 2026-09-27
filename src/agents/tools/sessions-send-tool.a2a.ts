@@ -1,8 +1,3 @@
-/**
- * sessions_send agent-to-agent reply flow.
- *
- * Runs bounded ping-pong delivery, waits for target replies, and suppresses control-token messages.
- */
 import crypto from "node:crypto";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { bindInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
@@ -119,21 +114,32 @@ export async function runSessionsSendA2AFlow(params: {
   sourceReplyDelivered?: true;
   roundOneReply?: string;
   waitRunId?: string;
+  settledReply?: AgentWaitResult & { replyText?: string };
   replyRunId?: string;
   notifyRequesterOnWaitFailure?: boolean;
 }) {
   const runContextId = params.replyRunId ?? params.waitRunId ?? crypto.randomUUID();
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
+  const requesterStepContext = {
+    agentId: params.requesterAgentId,
+    deliveryContext: params.requesterOrigin,
+    expectedSession: params.requesterSession,
+    timeoutMs: params.announceTimeoutMs,
+    sourceSessionKey: params.targetSessionKey,
+    callGateway: gatewayCall,
+  };
   try {
     let primaryReply = params.roundOneReply;
     let sourceReplyDelivered = params.sourceReplyDelivered;
-    if (!primaryReply && params.waitRunId) {
-      const wait = await waitForAgentRunReply({
-        runId: params.waitRunId,
-        timeoutMs: Math.min(params.announceTimeoutMs, 60_000),
-        callGateway: gatewayCall,
-        untilTerminal: true,
-      });
+    if (!primaryReply && (params.waitRunId || params.settledReply)) {
+      const wait =
+        params.settledReply ??
+        (await waitForAgentRunReply({
+          runId: params.waitRunId!,
+          timeoutMs: Math.min(params.announceTimeoutMs, 60_000),
+          callGateway: gatewayCall,
+          untilTerminal: true,
+        }));
       if (wait.status === "ok") {
         primaryReply = wait.replyText;
         sourceReplyDelivered = wait.sourceReplyDelivered;
@@ -146,21 +152,16 @@ export async function runSessionsSendA2AFlow(params: {
           const error =
             typeof wait.error === "string" && wait.error.trim() ? `: ${wait.error.trim()}` : "";
           await runAgentStep({
-            agentId: params.requesterAgentId,
+            ...requesterStepContext,
             sessionKey: params.requesterSessionKey,
-            deliveryContext: params.requesterOrigin,
-            expectedSession: params.requesterSession,
             message: wait.sourceReplyDelivered
               ? `sessions_send target run for ${params.displayKey} failed${error}. The target's final reply was already delivered to its source conversation. Do not resend; report the run failure.`
               : `sessions_send delivery to ${params.displayKey} failed${error}. The target may not have received the message; retry or report the failure instead of assuming delivery succeeded.`,
             extraSystemPrompt: wait.sourceReplyDelivered
               ? "The target run failed after its final source reply was delivered. Preserve the run error diagnosis. Do not resend the message or the reply."
               : "A previous sessions_send delivery failed after it was accepted. Inspect the accepted operation before retrying, or report the failure. Preserve attributed session-tool delivery; do not replace it with an operator CLI request. Do not assume the target received the message.",
-            timeoutMs: params.announceTimeoutMs,
-            sourceSessionKey: params.targetSessionKey,
             sourceTool: params.replyMode === "one-way" ? "subagent_announce" : "sessions_send",
             ...(params.replyMode === "one-way" ? { sourceRole: "subagent" as const } : {}),
-            callGateway: gatewayCall,
           });
         }
         return;
@@ -174,18 +175,13 @@ export async function runSessionsSendA2AFlow(params: {
     if (params.replyMode === "one-way") {
       if (params.requesterSessionKey) {
         await runAgentStep({
-          agentId: params.requesterAgentId,
+          ...requesterStepContext,
           sessionKey: params.requesterSessionKey,
-          deliveryContext: params.requesterOrigin,
-          expectedSession: params.requesterSession,
           message: latestReply,
           extraSystemPrompt: `A child session returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the child.`,
-          timeoutMs: params.announceTimeoutMs,
           sourceAgentId: params.targetAgentId,
-          sourceSessionKey: params.targetSessionKey,
           sourceTool: "subagent_announce",
           sourceRole: "subagent",
-          callGateway: gatewayCall,
         });
       }
       return;
@@ -217,17 +213,12 @@ export async function runSessionsSendA2AFlow(params: {
         : undefined;
     if (oneWayInternalRequesterSessionKey) {
       await runAgentStep({
-        agentId: params.requesterAgentId,
+        ...requesterStepContext,
         sessionKey: oneWayInternalRequesterSessionKey,
-        deliveryContext: params.requesterOrigin,
-        expectedSession: params.requesterSession,
         message: latestReply,
         extraSystemPrompt: `Another session returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the target session.`,
-        timeoutMs: params.announceTimeoutMs,
         sourceAgentId: params.targetAgentId,
-        sourceSessionKey: params.targetSessionKey,
         sourceTool: "sessions_send",
-        callGateway: gatewayCall,
       });
       if (sourceReplyDelivered) {
         return;

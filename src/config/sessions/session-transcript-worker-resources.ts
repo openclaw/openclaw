@@ -10,6 +10,7 @@ import {
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { joinOwnedWorkerTasks } from "../../infra/worker-task-pool-owned.js";
 import {
   createOwnedWorkerTaskPool,
   WorkerTaskError,
@@ -24,6 +25,7 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
   sessionHistoryCleanupError,
   decodeSessionTranscriptWorkerReadError,
@@ -152,8 +154,27 @@ export const costRefreshLane: SessionCostWorkerLane = {
 };
 
 const databaseWorkerLanes = [historyLane, maintenanceLane, costReadLane, costRefreshLane];
+const memoryPressure = channel("openclaw.memory.critical");
+let pressureSubscribed = false;
 
-channel("openclaw.memory.critical").subscribe(() => {
+registerOpenClawStateDatabaseAsyncResource({
+  phase: "after-resources",
+  async close(identity) {
+    if (identity) {
+      return;
+    }
+    // Per-database closes retain execution; whole-runtime close owns its final retirement.
+    await joinOwnedWorkerTasks(
+      databaseWorkerLanes.map(async (lane) => {
+        historyClearTimeout(lane.idleTimer);
+        lane.idleTimer = undefined;
+        await rotateDatabaseWorkers(lane);
+      }),
+    );
+  },
+});
+
+function retireIdleDatabaseWorkers(): void {
   for (const lane of databaseWorkerLanes) {
     if (lane.pending > 0 || lane.rotation || lane.nativeSequence <= lane.retiredSequence) {
       continue;
@@ -163,7 +184,23 @@ channel("openclaw.memory.critical").subscribe(() => {
       process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
     });
   }
-});
+}
+
+export function refreshDatabaseWorkerPressureSubscription(): void {
+  const required = databaseWorkerLanes.some(
+    (lane) =>
+      lane.pending > 0 || lane.rotation !== undefined || lane.nativeSequence > lane.retiredSequence,
+  );
+  if (required === pressureSubscribed) {
+    return;
+  }
+  pressureSubscribed = required;
+  if (required) {
+    memoryPressure.subscribe(retireIdleDatabaseWorkers);
+  } else {
+    memoryPressure.unsubscribe(retireIdleDatabaseWorkers);
+  }
+}
 
 export function pruneHistoryDatabases(): void {
   for (const [key, resource] of historyDatabases) {
@@ -192,6 +229,7 @@ export function releaseRetiredDatabaseCustody(
     }
   }
   pruneHistoryDatabases();
+  refreshDatabaseWorkerPressureSubscription();
 }
 
 export function rotateDatabaseWorkers(lane: SessionDatabaseWorkerLane): Promise<void> {
@@ -199,9 +237,11 @@ export function rotateDatabaseWorkers(lane: SessionDatabaseWorkerLane): Promise<
   // rotate pauses dispatch synchronously; later factories receive a greater sequence.
   const rotation = lane.pool.rotate().then(() => releaseRetiredDatabaseCustody(lane, through));
   lane.rotation = rotation;
+  refreshDatabaseWorkerPressureSubscription();
   const finished = () => {
     if (lane.rotation === rotation) {
       lane.rotation = undefined;
+      refreshDatabaseWorkerPressureSubscription();
     }
   };
   void rotation.then(finished, finished);
@@ -211,6 +251,7 @@ export function rotateDatabaseWorkers(lane: SessionDatabaseWorkerLane): Promise<
 // Missing reads can leave an idle worker without retaining any database custody.
 export function armDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane): void {
   historyClearTimeout(lane.idleTimer);
+  refreshDatabaseWorkerPressureSubscription();
   if (lane.nativeSequence <= lane.retiredSequence || lane.pending > 0) {
     return;
   }
@@ -238,6 +279,40 @@ export function clearClosedDatabaseCustody(
   }
 }
 
+async function closeDatabaseWorkerResource(
+  resource: HistoryDatabaseResource,
+  lane: SessionDatabaseWorkerLane,
+  idle: boolean,
+): Promise<void> {
+  const pool =
+    lane === historyLane
+      ? historyLane.pool
+      : lane === maintenanceLane
+        ? maintenanceLane.pool
+        : undefined;
+  // Active reads and Bun retain native-exit custody. Idle Node readers can
+  // release the exact database while retaining the worker's loaded code.
+  if (!idle || process.versions.bun || !pool) {
+    await rotateDatabaseWorkers(lane);
+    return;
+  }
+  const through = lane.nativeSequence;
+  try {
+    await pool.closeResources(JSON.stringify([{ path: resource.database.path }]));
+  } catch (error) {
+    try {
+      await rotateDatabaseWorkers(lane);
+    } catch (retirementError) {
+      throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
+    }
+    throw error;
+  }
+  const sequence = resource.nativeSequences.get(lane);
+  if (sequence !== undefined && sequence <= through) {
+    resource.nativeSequences.delete(lane);
+  }
+}
+
 export function acquireHistoryDatabaseResource(
   options: OpenClawAgentDatabaseOptions,
 ): HistoryDatabaseResource {
@@ -261,8 +336,13 @@ export function acquireHistoryDatabaseResource(
     };
     const close = () => {
       if (!owned.closing) {
+        const idle = owned.pending === 0;
         owned.closing = (async () => {
-          await Promise.all([...owned.nativeSequences.keys()].map(rotateDatabaseWorkers));
+          await Promise.all(
+            [...owned.nativeSequences.keys()].map((lane) =>
+              closeDatabaseWorkerResource(owned, lane, idle),
+            ),
+          );
           await Promise.allSettled(owned.hostEffects);
           for (const cleanup of owned.cleanups) {
             await cleanup.run();
@@ -323,6 +403,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   }));
   historyClearTimeout(lane.idleTimer);
   lane.pending++;
+  refreshDatabaseWorkerPressureSubscription();
   try {
     let revoked = false;
     let closing: Promise<void> | undefined;
@@ -353,6 +434,40 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         }
       })();
       return closing;
+    };
+    const settleCandidates = async () => {
+      // Bun and failed discovery can retain native handles outside candidate custody.
+      if (discoveryFailed || process.versions.bun) {
+        await retire();
+        return;
+      }
+      const through = lane.nativeSequence;
+      candidateCleanupPending = true;
+      try {
+        await lane.pool.closeResources(JSON.stringify(selected));
+        candidateCleanupPending = false;
+        for (const resource of historyDatabases.values()) {
+          const sequence = resource.nativeSequences.get(lane);
+          if (
+            sequence !== undefined &&
+            sequence <= through &&
+            selected.some((candidate) =>
+              matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
+            )
+          ) {
+            resource.nativeSequences.delete(lane);
+          }
+        }
+        pruneHistoryDatabases();
+      } catch (error) {
+        try {
+          await retire();
+          candidateCleanupPending = false;
+        } catch (retirementError) {
+          throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
+        }
+        throw error;
+      }
     };
     const close = async () => {
       await retire();
@@ -452,9 +567,9 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             );
           }
           if (result.kind === "session-target-registry-required") {
-            // Native discovery may already have opened other candidates. Settle
-            // their worker before continuing through the registry's read owner.
-            await retire();
+            // Release native readers before registry work without discarding a healthy worker.
+            discoveryFailed ||= result.readFailed === true;
+            await settleCandidates();
           }
           assertCurrent();
           return result;
@@ -469,37 +584,10 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     // settle; a later close through an alias must never miss a retained handle.
     if (dispatched) {
       try {
-        // Bun retains native statements after close; failed reads may leave unowned handles.
-        if ("error" in outcome || discoveryFailed || process.versions.bun) {
+        if ("error" in outcome) {
           await retire();
         } else {
-          const through = lane.nativeSequence;
-          candidateCleanupPending = true;
-          try {
-            await lane.pool.closeResources(JSON.stringify(selected));
-            candidateCleanupPending = false;
-            for (const resource of historyDatabases.values()) {
-              const sequence = resource.nativeSequences.get(lane);
-              if (
-                sequence !== undefined &&
-                sequence <= through &&
-                selected.some((candidate) =>
-                  matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
-                )
-              ) {
-                resource.nativeSequences.delete(lane);
-              }
-            }
-            pruneHistoryDatabases();
-          } catch (error) {
-            try {
-              await retire();
-              candidateCleanupPending = false;
-            } catch (retirementError) {
-              throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
-            }
-            throw error;
-          }
+          await settleCandidates();
         }
       } catch (cleanupError) {
         outcome = {

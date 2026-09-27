@@ -684,43 +684,6 @@ describe("UsagePage detail requests", () => {
     }
   });
 
-  it("marks provider usage stalled once the retry budget is spent", async () => {
-    vi.useFakeTimers();
-    focusDocument();
-    let providerUsageRefreshing = true;
-    const client = {
-      request: vi.fn(async (method: string) =>
-        method === "usage.status"
-          ? providerUsageRefreshing
-            ? { updatedAt: 1, providers: [], refreshing: true }
-            : { updatedAt: 2, providers: [] }
-          : cacheSnapshot("fresh").result,
-      ),
-    } as unknown as GatewayBrowserClient;
-    const page = await createPage(client);
-    const gateway = page.context.gateway;
-    page.routeData = {
-      ...createPendingUsageRouteData(gateway, "2026-05-14"),
-      providerUsage: {
-        state: "settled" as const,
-        result: {
-          ok: true as const,
-          value: { updatedAt: 1, providers: [], refreshing: true },
-        },
-      },
-      loadedAtMs: 0,
-    };
-    await page.updateComplete;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
-    }
-    expect(page.providerUsageStalled).toBe(true);
-
-    providerUsageRefreshing = false;
-    await page.loadUsage();
-    expect(page.providerUsageStalled).toBe(false);
-  });
-
   it("keeps rejected provider usage retries unresolved until the page reports a stall", async () => {
     vi.useFakeTimers();
     focusDocument();

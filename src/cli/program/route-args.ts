@@ -131,19 +131,10 @@ export function parseGatewayStatusRouteArgs(argv: string[]) {
     return null;
   }
   const url = getFlagValue(argv, "--url");
-  if (url === null) {
-    return null;
-  }
   const token = getFlagValue(argv, "--token");
-  if (token === null) {
-    return null;
-  }
   const password = getFlagValue(argv, "--password");
-  if (password === null) {
-    return null;
-  }
   const timeout = getFlagValue(argv, "--timeout");
-  if (timeout === null) {
+  if (url === null || token === null || password === null || timeout === null) {
     return null;
   }
   const ssh = getFlagValue(argv, "--ssh");
@@ -234,19 +225,10 @@ export function parseSessionsRouteArgs(argv: string[]) {
     return null;
   }
   const agent = getFlagValue(argv, "--agent");
-  if (agent === null) {
-    return null;
-  }
   const store = getFlagValue(argv, "--store");
-  if (store === null) {
-    return null;
-  }
   const active = getFlagValue(argv, "--active");
-  if (active === null) {
-    return null;
-  }
   const limit = getFlagValue(argv, "--limit");
-  if (limit === null) {
+  if (agent === null || store === null || active === null || limit === null) {
     return null;
   }
   return {
@@ -376,23 +358,17 @@ export function parseModelsStatusRouteArgs(argv: string[]) {
     return null;
   }
   const probeProvider = getFlagValue(argv, "--probe-provider");
-  if (probeProvider === null) {
-    return null;
-  }
   const probeTimeout = getFlagValue(argv, "--probe-timeout");
-  if (probeTimeout === null) {
-    return null;
-  }
   const probeConcurrency = getFlagValue(argv, "--probe-concurrency");
-  if (probeConcurrency === null) {
-    return null;
-  }
   const probeMaxTokens = getFlagValue(argv, "--probe-max-tokens");
-  if (probeMaxTokens === null) {
-    return null;
-  }
   const agent = getFlagValue(argv, "--agent");
-  if (agent === null) {
+  if (
+    probeProvider === null ||
+    probeTimeout === null ||
+    probeConcurrency === null ||
+    probeMaxTokens === null ||
+    agent === null
+  ) {
     return null;
   }
   const probeProfileValues = parseRepeatedFlagValues(argv, "--probe-profile");
@@ -446,10 +422,7 @@ export function parseChannelsStatusRouteArgs(argv: string[]) {
   }
   const timeout = getFlagValue(argv, "--timeout");
   const channel = getFlagValue(argv, "--channel");
-  if (timeout === null) {
-    return null;
-  }
-  if (channel === null) {
+  if (timeout === null || channel === null) {
     return null;
   }
   return {
@@ -489,11 +462,8 @@ function parseTasksListRouteArgsForCommandPath(argv: string[], commandPath: stri
     return null;
   }
   const runtime = getFlagValue(argv, "--runtime");
-  if (runtime === null) {
-    return null;
-  }
   const status = getFlagValue(argv, "--status");
-  if (status === null) {
+  if (runtime === null || status === null) {
     return null;
   }
   return {
@@ -525,15 +495,9 @@ export function parseTasksAuditRouteArgs(argv: string[]) {
     return null;
   }
   const severity = getFlagValue(argv, "--severity");
-  if (severity === null) {
-    return null;
-  }
   const code = getFlagValue(argv, "--code");
-  if (code === null) {
-    return null;
-  }
   const rawLimit = getFlagValue(argv, "--limit");
-  if (rawLimit === null) {
+  if (severity === null || code === null || rawLimit === null) {
     return null;
   }
   const limit = rawLimit === undefined ? undefined : parseStrictPositiveInteger(rawLimit);

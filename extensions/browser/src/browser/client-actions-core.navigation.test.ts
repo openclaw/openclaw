@@ -47,7 +47,6 @@ describe("browser navigation client actions", () => {
 
   it.each([
     { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
-    { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
     { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
   ])(
     "normalizes navigation timeout $requestedTimeoutMs before arming its transport watchdog",

@@ -22,13 +22,12 @@ import {
   type ImageGenerationTaskHandle,
 } from "./media-generate-background.js";
 import {
+  buildMediaGenerateToolExecutionResult,
   describeMediaGenerationResult,
   resolveMediaGenerationResultGeometry,
-  type MediaGenerateToolExecutionResult,
 } from "./media-generate-result-shared.js";
 import {
   buildMediaReferenceDetails,
-  buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
   type LoadedMediaToolReference,
 } from "./media-tool-shared.js";
@@ -93,7 +92,6 @@ export async function executeImageGenerationJob(params: {
       progressSummary: "Saving generated image",
     });
   }
-  const ignoredOverrides = result.ignoredOverrides ?? [];
   const { displayProvider, displayModel, warning } = describeMediaGenerationResult(result);
   const {
     normalizedSize,
@@ -134,24 +132,14 @@ export async function executeImageGenerationJob(params: {
     ...(warning ? [`Warning: ${warning}`] : []),
     ...formatGeneratedAttachmentLines(attachments),
   ];
-  return {
-    provider: result.provider,
-    model: result.model,
-    count: savedImages.length,
+  const execution = buildMediaGenerateToolExecutionResult({
+    result,
     attachments,
-    contentText: lines.join("\n"),
-    wakeResult: lines.join("\n"),
+    mediaUrls: savedImages.map((media) => media.path),
+    lines,
+    taskHandle: params.taskHandle,
+    warning,
     details: {
-      provider: result.provider,
-      model: result.model,
-      count: savedImages.length,
-      media: {
-        mediaUrls: savedImages.map((image) => image.path),
-        attachments,
-      },
-      attachments,
-      paths: savedImages.map((image) => image.path),
-      ...buildTaskRunDetails(params.taskHandle),
       ...buildMediaReferenceDetails({
         entries: params.loadedReferenceImages,
         singleKey: "image",
@@ -170,14 +158,12 @@ export async function executeImageGenerationJob(params: {
       ...(params.background ? { background: params.background } : {}),
       ...(params.filename ? { filename: params.filename } : {}),
       ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
-      attempts: result.attempts,
-      ...(result.normalization ? { normalization: result.normalization } : {}),
-      metadata: result.metadata,
-      ...(warning ? { warning } : {}),
-      ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),
-      ...(revisedPrompts.length > 0 ? { revisedPrompts } : {}),
     },
-  } satisfies MediaGenerateToolExecutionResult;
+  });
+  if (revisedPrompts.length > 0) {
+    execution.details.revisedPrompts = revisedPrompts;
+  }
+  return execution;
 }
 
 export async function inferImageGenerationResolution(

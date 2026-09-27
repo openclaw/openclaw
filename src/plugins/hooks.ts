@@ -34,6 +34,7 @@ import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-pay
 import { withHookTimeout } from "./hook-timeout.js";
 import { isPluginHookReplyDispatchKind } from "./hook-types.js";
 import type {
+  PluginAgentTurnPrepareResult,
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentTrigger,
@@ -81,8 +82,6 @@ import {
   type PluginToolMatcherScope,
 } from "./tool-hook-matcher.js";
 
-// Re-export types for consumers
-
 type HookRunnerLogger = {
   debug?: (message: string) => void;
   warn: (message: string) => void;
@@ -123,16 +122,8 @@ type HookRunnerOptions = {
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   agent_end: 30_000,
   channel_pairing_requested: 2_000,
-  // Defensive default for the compaction lifecycle hooks. Without a budget an
-  // unresponsive handler runs fully unbounded, and in the codex agent harness
-  // these hooks fire on the serialized notification queue
-  // (event-projector handleItemStarted awaits before_compaction / after_compaction
-  // for a contextCompaction item), so a hung handler freezes every later codex
-  // notification — including turn/completed — and the whole turn hangs. These
-  // hooks can legitimately do real work (e.g. a memory flush), so the budget
-  // matches agent_end's 30s rather than the tighter modifying-hook defaults.
-  // The runner is fail-open for void hooks, so a timed-out handler is logged
-  // and compaction proceeds.
+  // Compaction hooks run on the serialized notification queue. Allow memory
+  // flushes the agent_end budget, then fail open so later notifications proceed.
   before_compaction: 30_000,
   after_compaction: 30_000,
   skill_changed: 30_000,
@@ -288,9 +279,6 @@ function getHooksForNameAndPlugin<K extends PluginHookName>(
   return getHooksForName(registry, hookName).filter((hook) => hook.pluginId === pluginId);
 }
 
-/**
- * Create a hook runner for a specific registry.
- */
 export function createHookRunner(
   registry: GlobalHookRunnerRegistry,
   options: HookRunnerOptions = {},
@@ -465,14 +453,7 @@ export function createHookRunner(
     return {
       // Keep the first defined system prompt so higher-priority hooks win.
       systemPrompt: firstDefined(acc?.systemPrompt, next.systemPrompt),
-      prependContext: concatOptionalTextSegments({
-        left: acc?.prependContext,
-        right: next.prependContext,
-      }),
-      appendContext: concatOptionalTextSegments({
-        left: acc?.appendContext,
-        right: next.appendContext,
-      }),
+      ...mergeAgentTurnPrepare(acc, next),
       ...(toolsAllow !== undefined ? { toolsAllow } : {}),
       prependSystemContext: concatOptionalTextSegments({
         left: acc?.prependSystemContext,
@@ -485,22 +466,19 @@ export function createHookRunner(
     };
   };
 
-  const mergeAgentTurnPrepare = <
-    TResult extends { prependContext?: string; appendContext?: string },
-  >(
-    acc: TResult | undefined,
-    next: TResult,
-  ): TResult =>
-    ({
-      prependContext: concatOptionalTextSegments({
-        left: acc?.prependContext,
-        right: next.prependContext,
-      }),
-      appendContext: concatOptionalTextSegments({
-        left: acc?.appendContext,
-        right: next.appendContext,
-      }),
-    }) as TResult;
+  const mergeAgentTurnPrepare = (
+    acc: PluginAgentTurnPrepareResult | undefined,
+    next: PluginAgentTurnPrepareResult,
+  ): PluginAgentTurnPrepareResult => ({
+    prependContext: concatOptionalTextSegments({
+      left: acc?.prependContext,
+      right: next.prependContext,
+    }),
+    appendContext: concatOptionalTextSegments({
+      left: acc?.appendContext,
+      right: next.appendContext,
+    }),
+  });
 
   const mergeBeforeAgentFinalize = (
     acc: PluginHookBeforeAgentFinalizeResult | undefined,
@@ -583,16 +561,6 @@ export function createHookRunner(
     return next.action === "continue" ? { action: "continue", reason: next.reason } : (acc ?? next);
   };
 
-  const mergeSubagentDeliveryTargetResult = (
-    acc: PluginHookSubagentDeliveryTargetResult | undefined,
-    next: PluginHookSubagentDeliveryTargetResult,
-  ): PluginHookSubagentDeliveryTargetResult => {
-    if (acc?.origin) {
-      return acc;
-    }
-    return next;
-  };
-
   const handleHookError = (params: {
     hookName: PluginHookName;
     pluginId: string;
@@ -615,26 +583,19 @@ export function createHookRunner(
   const getPluginPackageVersion = (pluginId: string): string | undefined =>
     registry.plugins.find((plugin) => plugin.id === pluginId)?.packageVersion;
 
-  const normalizePositiveTimeoutMs = (timeoutMs: number | undefined): number | undefined => {
-    return clampPositiveTimerTimeoutMs(timeoutMs);
-  };
-
   const getVoidHookTimeoutMs = (
     hookName: PluginHookName,
     hook: PluginHookRegistration,
   ): number | undefined =>
-    normalizePositiveTimeoutMs(hook.timeoutMs) ??
-    normalizePositiveTimeoutMs(voidHookTimeoutMsByHook[hookName]);
+    clampPositiveTimerTimeoutMs(hook.timeoutMs) ??
+    clampPositiveTimerTimeoutMs(voidHookTimeoutMsByHook[hookName]);
 
   const getModifyingHookTimeoutMs = (
     hookName: PluginHookName,
     hook: PluginHookRegistration,
   ): number | undefined =>
-    normalizePositiveTimeoutMs(hook.timeoutMs) ??
-    normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
-
-  const getClaimingHookTimeoutMs = (hook: PluginHookRegistration): number | undefined =>
-    normalizePositiveTimeoutMs(hook.timeoutMs);
+    clampPositiveTimerTimeoutMs(hook.timeoutMs) ??
+    clampPositiveTimerTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
 
   const runSyncMessageHookStep = <K extends SyncHookName>(
     hook: PluginHookRegistration<K>,
@@ -922,7 +883,7 @@ export function createHookRunner(
           const promise = Promise.resolve(
             (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
           );
-          const timeoutMs = getClaimingHookTimeoutMs(hook);
+          const timeoutMs = clampPositiveTimerTimeoutMs(hook.timeoutMs);
           return timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
         };
         const handlerResult = runHandler ? await runHandler(invokeHandler) : await invokeHandler();
@@ -937,49 +898,6 @@ export function createHookRunner(
     return firstError ? { status: "error", error: firstError } : { status: "declined" };
   }
 
-  async function runClaimingHookForPluginOutcome<
-    K extends PluginHookName,
-    // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Targeted hook outcomes preserve caller-specific handled result types.
-    TResult extends { handled: boolean },
-  >(
-    hookName: K,
-    pluginId: string,
-    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
-    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
-  ): Promise<
-    | { status: "handled"; result: TResult }
-    | { status: "missing_plugin" }
-    | { status: "no_handler" }
-    | { status: "declined" }
-    | { status: "error"; error: string }
-  > {
-    const pluginLoaded = registry.plugins.some(
-      (plugin) => plugin.id === pluginId && plugin.status === "loaded",
-    );
-    if (!pluginLoaded) {
-      return { status: "missing_plugin" };
-    }
-
-    const hooks = getHooksForNameAndPlugin(registry, hookName, pluginId);
-    if (hooks.length === 0) {
-      return { status: "no_handler" };
-    }
-
-    logger?.debug?.(
-      `[hooks] running ${hookName} for ${pluginId} (${hooks.length} handlers, targeted outcome)`,
-    );
-
-    return runClaimingHooksList<K, TResult>(hooks, hookName, event, ctx);
-  }
-
-  // =========================================================================
-  // Agent Hooks
-  // =========================================================================
-
-  /**
-   * Run before_prompt_build hook.
-   * Allows plugins to inject context and system prompt before prompt submission.
-   */
   async function runBeforePromptBuild(
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
@@ -1068,11 +986,6 @@ export function createHookRunner(
     }
   }
 
-  /**
-   * Run agent_end hook.
-   * Allows plugins to analyze completed conversations.
-   * Runs handlers in parallel.
-   */
   async function runAgentEnd(
     event: PluginHookAgentEndEvent,
     ctx: PluginHookAgentContext,
@@ -1081,11 +994,7 @@ export function createHookRunner(
     return runVoidHook("agent_end", projectAgentEndEvent(event, ctx), ctx, optionsLocal);
   }
 
-  /**
-   * Run before_agent_finalize hook.
-   * Allows plugins to request one more model pass before a natural final reply
-   * is accepted. This is not the user-facing /stop cancellation path.
-   */
+  /** Allows another model pass before natural finalization, separate from user cancellation. */
   async function runBeforeAgentFinalize(
     event: PluginHookBeforeAgentFinalizeEvent,
     ctx: PluginHookAgentContext,
@@ -1097,10 +1006,6 @@ export function createHookRunner(
       { mergeResults: mergeBeforeAgentFinalize },
     );
   }
-
-  // =========================================================================
-  // Message Hooks
-  // =========================================================================
 
   async function runInboundClaimForPlugin(
     pluginId: string,
@@ -1122,19 +1027,27 @@ export function createHookRunner(
     event: PluginHookInboundClaimEvent,
     ctx: PluginHookInboundClaimContext,
   ): Promise<PluginTargetedInboundClaimOutcome> {
-    return runClaimingHookForPluginOutcome<"inbound_claim", PluginHookInboundClaimResult>(
+    const pluginLoaded = registry.plugins.some(
+      (plugin) => plugin.id === pluginId && plugin.status === "loaded",
+    );
+    if (!pluginLoaded) {
+      return { status: "missing_plugin" };
+    }
+    const hooks = getHooksForNameAndPlugin(registry, "inbound_claim", pluginId);
+    if (hooks.length === 0) {
+      return { status: "no_handler" };
+    }
+    logger?.debug?.(
+      `[hooks] running inbound_claim for ${pluginId} (${hooks.length} handlers, targeted outcome)`,
+    );
+    return runClaimingHooksList<"inbound_claim", PluginHookInboundClaimResult>(
+      hooks,
       "inbound_claim",
-      pluginId,
       event,
       ctx,
     );
   }
 
-  /**
-   * Run before_dispatch hook.
-   * Allows plugins to inspect or handle a message before model dispatch.
-   * First handler returning { handled: true } wins.
-   */
   async function runBeforeDispatch(
     event: PluginHookBeforeDispatchEvent,
     ctx: PluginHookBeforeDispatchContext,
@@ -1152,12 +1065,7 @@ export function createHookRunner(
     );
   }
 
-  /**
-   * Run before_agent_run gate hook.
-   * Fires after session resolution and workspace preparation, before model inference.
-   * Returns the most-restrictive pass/block decision from all handlers.
-   * Handlers that return void are treated as pass.
-   */
+  /** After session preparation, the first block wins; void handlers allow inference. */
   async function runBeforeAgentRun(
     event: PluginHookBeforeAgentRunEvent,
     ctx: PluginHookAgentContext,
@@ -1169,14 +1077,6 @@ export function createHookRunner(
       ctx,
       {
         mergeResults: (_acc, next, reg) => {
-          if (next === undefined || next === null) {
-            const normalized: InputGateDecision = {
-              outcome: "block",
-              reason: "before_agent_run returned an invalid decision",
-            };
-            winningPluginId = reg.pluginId;
-            return normalized;
-          }
           const normalized: InputGateDecision = isHookDecision(next)
             ? next
             : {
@@ -1203,14 +1103,6 @@ export function createHookRunner(
     return { decision, pluginId: winningPluginId ?? "unknown" };
   }
 
-  // Tool Hooks
-  // =========================================================================
-
-  /**
-   * Run before_tool_call hook.
-   * Allows plugins to modify or block tool calls.
-   * Runs sequentially.
-   */
   async function runBeforeToolCall(
     event: PluginHookBeforeToolCallEvent,
     ctx: PluginHookToolContext,
@@ -1279,10 +1171,6 @@ export function createHookRunner(
     );
   }
 
-  /**
-   * Run after_tool_call hook.
-   * Runs in parallel (fire-and-forget).
-   */
   async function runAfterToolCall(
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
@@ -1290,16 +1178,7 @@ export function createHookRunner(
     return runVoidHook("after_tool_call", event, ctx, {}, event.toolName);
   }
 
-  /**
-   * Run tool_result_persist hook.
-   *
-   * This hook is intentionally synchronous: it runs in hot paths where session
-   * transcripts are appended synchronously.
-   *
-   * Handlers are executed sequentially in priority order (higher first). Each
-   * handler may return `{ message }` to replace the message passed to the next
-   * handler.
-   */
+  /** Transcript hooks stay synchronous and pass each replacement to the next handler. */
   function runToolResultPersist(
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
@@ -1308,22 +1187,7 @@ export function createHookRunner(
     return result ? { message: result.message } : undefined;
   }
 
-  // =========================================================================
-  // Message Write Hooks
-  // =========================================================================
-
-  /**
-   * Run before_message_write hook.
-   *
-   * This hook is intentionally synchronous: it runs on the hot path where
-   * session transcripts are appended synchronously.
-   *
-   * Handlers are executed sequentially in priority order (higher first).
-   * If any handler returns { block: true }, the message is NOT written
-   * to the session JSONL and we return immediately.
-   * If a handler returns { message }, the modified message replaces the
-   * original for subsequent handlers and the final write.
-   */
+  /** A blocked transcript write stops the chain; otherwise publish only a changed message. */
   function runBeforeMessageWrite(
     event: PluginHookBeforeMessageWriteEvent,
     ctx: { agentId?: string; sessionKey?: string },
@@ -1334,14 +1198,6 @@ export function createHookRunner(
     }
     return result && result.message !== event.message ? { message: result.message } : undefined;
   }
-
-  // =========================================================================
-  // Session Hooks
-  // =========================================================================
-
-  // =========================================================================
-  // Skill Hooks
-  // =========================================================================
 
   /**
    * Run every registered proposal evaluator and retain its attribution.
@@ -1406,10 +1262,6 @@ export function createHookRunner(
     return result ?? {};
   }
 
-  // =========================================================================
-  // Utility
-  // =========================================================================
-
   function hasHooks<K extends PluginHookName>(
     hookName: K,
     ctx?: Partial<Parameters<PluginHookHandlerMap[K]>[1]>,
@@ -1420,9 +1272,6 @@ export function createHookRunner(
     );
   }
 
-  /**
-   * Get count of registered hooks for a given hook name.
-   */
   function getHookCount(hookName: PluginHookName): number {
     return registry.typedHooks.filter((h) => h.hookName === hookName).length;
   }
@@ -1444,13 +1293,7 @@ export function createHookRunner(
     runLlmOutput: withoutIncognitoLlmContent(bindVoidHook("llm_output")),
     runBeforeAgentFinalize,
     runAgentEnd,
-    /**
-     * Run before_compaction hook.
-     */
     runBeforeCompaction: bindVoidHook("before_compaction"),
-    /**
-     * Run after_compaction hook.
-     */
     runAfterCompaction: bindVoidHook("after_compaction"),
     runBeforeReset: bindVoidHook("before_reset"),
     // Lifecycle gate hooks
@@ -1514,7 +1357,8 @@ export function createHookRunner(
     runSessionStart: bindVoidHook("session_start"),
     runSessionEnd: bindVoidHook("session_end"),
     runSubagentDeliveryTarget: bindModifyingHook("subagent_delivery_target", {
-      mergeResults: mergeSubagentDeliveryTargetResult,
+      mergeResults: (acc, next): PluginHookSubagentDeliveryTargetResult =>
+        acc?.origin ? acc : next,
     }),
     runSubagentSpawned: bindVoidHook("subagent_spawned"),
     runSubagentProgress: bindVoidHook("subagent_progress"),

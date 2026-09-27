@@ -189,7 +189,7 @@ suite.define(() => {
       .toContain("shell--nav-collapsed");
     const header = page.locator(".content .content-header").first();
     const title = header.locator(".page-title");
-    await expectOnCenterline(title, 26);
+    await expectOnCenterline(title, 24);
     await expectCenteredIn(title, header);
     const controls = header.page().locator(".shell-chrome-controls button:visible");
     const controlRight = Math.max(
@@ -201,7 +201,7 @@ suite.define(() => {
     const buttons = header.locator(".page-header-actions .btn");
     expect(await buttons.count()).toBeGreaterThan(0);
     for (let index = 0; index < (await buttons.count()); index += 1) {
-      await expectOnCenterline(buttons.nth(index), 26);
+      await expectOnCenterline(buttons.nth(index), 24);
       const box = (await buttons.nth(index).boundingBox())!;
       // Actions sit at the physical right, past the title, never under the cluster.
       expect(box.x).toBeGreaterThan(titleBox.x + titleBox.width);

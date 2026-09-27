@@ -86,7 +86,7 @@ async function fixture(state: OpenClawTestState, options?: { foreign?: boolean }
       assertCurrent: () => sourceController.signal.throwIfAborted(),
     },
   };
-  const source = captureGatewayOperatorRunAuthority({
+  const source = await captureGatewayOperatorRunAuthority({
     client: owner,
     context: { getRuntimeConfig: () => cfg },
   });

@@ -29,9 +29,8 @@ export function createTaskRecordInDatabase(
   write: <T>(operation: () => T) => T,
   options: TaskCreateOptions,
 ): TaskCreateResult {
-  const { params } = input;
   return runTaskCreateOperation(input, {
-    readSelection: (identity) => {
+    readSelection: (identity, params) => {
       const parentFlowId = params.parentFlowId?.trim();
       assertParentFlowRecordLinkAllowed(
         { ...identity, parentFlowId },

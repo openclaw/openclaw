@@ -155,7 +155,6 @@ export async function waitForViaPlaywright(
   },
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
   const fn = normalizeOptionalString(opts.fn) ?? "";
   const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
@@ -600,7 +599,6 @@ export async function setInputFilesViaPlaywright(
   },
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   if (!opts.paths.length) {
     throw new Error("paths are required");

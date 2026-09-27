@@ -101,10 +101,6 @@ function getDriveInternalClient(client: Lark.Client): FeishuDriveInternalClient 
   return client as FeishuDriveInternalClient;
 }
 
-function buildReplyElements(content: string) {
-  return [{ type: "text", text: content }];
-}
-
 async function requestDriveApi<T>(params: {
   client: Lark.Client;
   method: "GET" | "POST";
@@ -211,10 +207,6 @@ function resolveDriveCommentParams<
   };
 }
 
-function formatDriveApiError(error: unknown): string {
-  return formatFeishuApiError(error, { includeConfigParams: true });
-}
-
 function extractDriveApiErrorMeta(error: unknown): {
   message: string;
   httpStatus?: number;
@@ -228,25 +220,13 @@ function extractDriveApiErrorMeta(error: unknown): {
   const response = isRecord(error.response) ? error.response : undefined;
   const responseData = isRecord(response?.data) ? response?.data : undefined;
   return {
-    message:
-      typeof error.message === "string"
-        ? error.message
-        : typeof error === "string"
-          ? error
-          : JSON.stringify(error),
+    message: typeof error.message === "string" ? error.message : JSON.stringify(error),
     httpStatus: typeof response?.status === "number" ? response.status : undefined,
     feishuCode:
       typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
     feishuMsg: readString(responseData?.msg),
     feishuLogId: readString(responseData?.log_id),
   };
-}
-
-function isReplyNotAllowedError(error: unknown): boolean {
-  if (!(error instanceof FeishuReplyCommentError)) {
-    return false;
-  }
-  return error.feishuCode === 1069302;
 }
 
 async function getRootFolderToken(client: Lark.Client): Promise<string> {
@@ -427,20 +407,15 @@ async function moveFile(client: Lark.Client, fileToken: string, type: string, fo
   };
 }
 
-async function deleteFile(client: Lark.Client, fileToken: string, type: string) {
+async function deleteFile(
+  client: Lark.Client,
+  fileToken: string,
+  type: Extract<FeishuDriveParams, { action: "delete" }>["type"],
+) {
   const res = await client.drive.file.delete({
     path: { file_token: fileToken },
     params: {
-      type: type as
-        | "doc"
-        | "docx"
-        | "sheet"
-        | "bitable"
-        | "folder"
-        | "file"
-        | "mindnote"
-        | "slides"
-        | "shortcut",
+      type,
     },
   });
   assertFeishuApiSuccess(res);
@@ -503,7 +478,7 @@ async function addComment(
         url: `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/new_comments`,
         data: {
           file_type: params.file_type,
-          reply_elements: buildReplyElements(params.content),
+          reply_elements: [{ type: "text", text: params.content }],
           ...(params.block_id?.trim() ? { anchor: { block_id: params.block_id.trim() } } : {}),
         },
       }),
@@ -606,15 +581,9 @@ async function replyComment(
     console.warn(
       `[feishu_drive] replyComment threw ` +
         `comment=${params.comment_id} file_type=${params.file_type} ` +
-        `error=${formatDriveApiError(error)}`,
+        `error=${formatFeishuApiError(error, { includeConfigParams: true })}`,
     );
-    throw new FeishuReplyCommentError({
-      message: meta.message,
-      httpStatus: meta.httpStatus,
-      feishuCode: meta.feishuCode,
-      feishuMsg: meta.feishuMsg,
-      feishuLogId: meta.feishuLogId,
-    });
+    throw new FeishuReplyCommentError(meta);
   }
 }
 
@@ -655,7 +624,6 @@ export async function deliverCommentThreadText(
         `Whole-document comment follow-ups are only supported for doc/docx (got ${params.file_type})`,
       );
     }
-    const wholeCommentFileType: "doc" | "docx" = params.file_type;
     console.info(
       `[feishu_drive] whole-comment compatibility path ` +
         `comment=${params.comment_id} file_type=${params.file_type} mode=add_comment`,
@@ -664,7 +632,7 @@ export async function deliverCommentThreadText(
       delivery_mode: "add_comment",
       ...(await addComment(client, {
         file_token: params.file_token,
-        file_type: wholeCommentFileType,
+        file_type: params.file_type,
         content: params.content,
       })),
     };
@@ -675,11 +643,10 @@ export async function deliverCommentThreadText(
       ...(await replyComment(client, params)),
     };
   } catch (error) {
-    if (error instanceof FeishuReplyCommentError && isReplyNotAllowedError(error)) {
+    if (error instanceof FeishuReplyCommentError && error.feishuCode === 1069302) {
       if (params.file_type !== "doc" && params.file_type !== "docx") {
         throw error;
       }
-      const fallbackFileType: "doc" | "docx" = params.file_type;
       console.info(
         `[feishu_drive] reply-not-allowed compatibility path ` +
           `comment=${params.comment_id} file_type=${params.file_type} mode=add_comment ` +
@@ -689,7 +656,7 @@ export async function deliverCommentThreadText(
         delivery_mode: "add_comment",
         ...(await addComment(client, {
           file_token: params.file_token,
-          file_type: fallbackFileType,
+          file_type: params.file_type,
           content: params.content,
         })),
       };
@@ -719,13 +686,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
         });
         switch (p.action) {
           case "list":
-            return jsonResult(
-              await listFolder(client, {
-                folder_token: p.folder_token,
-                page_size: p.page_size,
-                page_token: p.page_token,
-              }),
-            );
+            return jsonResult(await listFolder(client, p));
           case "info":
             return jsonResult(await getFileInfo(client, p.file_token, p.type));
           case "create_folder":
@@ -763,4 +724,3 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
     },
   });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

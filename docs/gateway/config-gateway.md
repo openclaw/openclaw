@@ -67,7 +67,7 @@ For the full key index and the other top-level config domains, see [Configuratio
       // embedSandbox: "scripts", // strict | scripts | trusted
       // allowExternalEmbedUrls: false, // dangerous: allow absolute external http(s) embed URLs
       // automaticallyFetchFavicons: true, // SSRF-guarded link favicon fetches
-      // allowedOrigins: ["https://control.example.com"], // required for non-loopback Control UI
+      // allowedOrigins: ["https://control.example.com"], // optional override of publicOrigin
       // dangerouslyAllowHostHeaderOriginFallback: false, // dangerous Host-header origin fallback mode
     },
     cliAgents: {
@@ -133,7 +133,8 @@ For the full key index and the other top-level config domains, see [Configuratio
   Per-requester MCP OAuth requires this value and uses
   `<publicOrigin>/oauth/mcp/callback` as its callback URL.
   Slack session-card actions, plugin-generated viewer links, and chat deep links
-  into the Control UI also use this origin. Set `gateway.controlUi.basePath`
+  into the Control UI also use this origin. It supplies the browser-origin
+  allowlist when `gateway.controlUi.allowedOrigins` is omitted. Set `gateway.controlUi.basePath`
   separately when the Control UI is served below a reverse-proxy path prefix.
 - `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IPv4 when available, otherwise loopback), or `custom` (one IPv4 address). A resolved `tailnet` address and any `custom` address other than `127.0.0.1` or `0.0.0.0` require `127.0.0.1` on the same port for same-host clients; startup fails if either listener cannot bind. Non-loopback exposure remains limited to the selected interface.
 - **Legacy bind aliases**: use bind mode values in `gateway.bind` (`auto`, `loopback`, `lan`, `tailnet`, `custom`), not host aliases (`0.0.0.0`, `127.0.0.1`, `localhost`, `::`, `::1`).
@@ -175,7 +176,7 @@ For the full key index and the other top-level config domains, see [Configuratio
   run `openclaw config set gateway.tailscale.mode funnel`, followed by
   `openclaw config unset gateway.tailscale.preserveFunnel`. Default `false`.
 - `controlUi.experimental.customPlugins`: allow native browser UI from user-installed plugins, including local development plugins. Default: `false`. Enable through **Settings → Labs → Custom plugin UI** or set this boolean to `true`. Native UI runs with the signed-in operator's Gateway authority, so enable it only for trusted plugins. Native UI from enabled bundled plugins remains available with the setting off; backend plugin APIs, ordinary plugin loading, sandboxed dashboard widgets, and MCP Apps are unaffected. Changes hot-apply and refresh plugin views in connected browser tabs. After disabling it, reload tabs to clear plugin JavaScript that already ran. See [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui).
-- `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required for public non-loopback browser origins. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
+- `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway browser connections. When omitted, defaults to `gateway.publicOrigin` if configured. An explicit list, including `[]`, replaces this default. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.environment`: optional visual identity for distinguishing Gateway environments. Set `{ label: "edge", color: "amber" }` to show a matching top stripe, agent-avatar ring, environment pills, browser-title suffix, and tinted favicon. `label` is trimmed and must contain 1–24 characters. `color` must be `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, or `gray`. The label and color are visible before sign-in; omit the setting to keep the default appearance unchanged.
 - `controlUi.newSessionModelDefaults`: `"last-used"` (default) restores remembered new-session model, runtime, and reasoning choices. Set `"configured"` to start fresh drafts with the selected agent’s configured defaults instead. Applies to `/new` and the command palette in the UI served by this Gateway, after browser refresh or reconnect. Explicit choices remain editable and survive reload with the current unsent draft; submitting that draft retires its choices so the next fresh draft uses configured defaults. Existing conversations are untouched. Workspace, placement, and Fast Mode preferences are preserved; stored preferences are not deleted. Configure the desired model and `thinkingDefault` on the agent (or `agents.defaults`); this setting does not force a particular model or reasoning level.
 - `controlUi.communityInvite`: show the Discord community invitation in the sidebar. Default: `true`. Set `false` on the Gateway serving the UI to hide it for every browser using that deployment, including browsers connected to a different remote Gateway. The setting hot-reloads; existing pages pick it up after browser refresh or reconnect. Re-enabling preserves browser-local dismissals.

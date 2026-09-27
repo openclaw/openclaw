@@ -375,6 +375,7 @@ export function normalizeProviderAuthChoices(
     const choiceHint = normalizeOptionalString(entry.choiceHint) ?? "";
     const icon = normalizeSetupPresentationHttpsUrl(entry.icon);
     const website = normalizeSetupPresentationHttpsUrl(entry.website);
+    const docsUrl = normalizeSetupPresentationHttpsUrl(entry.docsUrl);
     const assistantPriority =
       typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
         ? entry.assistantPriority
@@ -415,6 +416,7 @@ export function normalizeProviderAuthChoices(
       ...(choiceHint ? { choiceHint } : {}),
       ...(icon ? { icon } : {}),
       ...(website ? { website } : {}),
+      ...(docsUrl ? { docsUrl } : {}),
       ...(assistantPriority !== undefined ? { assistantPriority } : {}),
       ...(assistantVisibility ? { assistantVisibility } : {}),
       ...(deprecatedChoiceIds.length > 0 ? { deprecatedChoiceIds } : {}),

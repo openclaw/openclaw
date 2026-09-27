@@ -10,7 +10,7 @@ import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
 } from "./session-binding.js";
-import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
+import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
 
 export async function clearCodexBindingAfterInvalidImagePayload(
   bindingStore: CodexAppServerBindingStore,
@@ -58,7 +58,6 @@ export function shouldUseFreshCodexThreadAfterContextEngineOverflow(params: {
   }
   const message = formatErrorMessage(params.error);
   return (
-    /ran out of room in the model'?s context window/iu.test(message) ||
     /context window/iu.test(message) ||
     /context length/iu.test(message) ||
     /maximum context/iu.test(message) ||
@@ -76,10 +75,6 @@ export function isCodexActiveCompactTurnError(error: unknown): boolean {
     ? codexErrorInfo.activeTurnNotSteerable
     : undefined;
   return activeTurn?.turnKind === "compact";
-}
-
-export function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 export function prependCurrentInboundContext(

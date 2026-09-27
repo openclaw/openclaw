@@ -1,6 +1,10 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
@@ -670,7 +674,7 @@ describe("prepared worker reserve lifecycle", () => {
           ...lifecycleOptions,
           prepareInstallation,
           now: () => fixture.nowMs,
-          cancelInferenceEnvironment: () => {},
+          cancelInferenceEnvironment: async () => {},
         }),
         callBootstrap: unexpectedLifecycleOperation,
         bootstrapWorker: unexpectedLifecycleOperation,
@@ -777,6 +781,120 @@ describe("prepared worker reserve lifecycle", () => {
     },
   );
 
+  it("keeps reserve and provider maintenance ticking during slow inspection and joins them at stop", async () => {
+    await fixture.ready(await fixture.seed("slow-inspection"));
+    fixture.provider.supportedExecutionModes = ["worker-turn"];
+    const time = createGatewaySchedulerClock(fixture.nowMs);
+    const scheduler = createTestGatewayScheduler(time.clock);
+    const inspected = createDeferred();
+    const finishInspection = createDeferred();
+    const finishMaintenance = createDeferred();
+    const finishDestroy = createDeferred();
+    const destroyEntered = createDeferred();
+    const release = () => {
+      finishInspection.resolve();
+      finishMaintenance.resolve();
+      finishDestroy.resolve();
+    };
+    fixture.releases.push(release);
+    const inspect = vi.fn(async () => {
+      inspected.resolve();
+      await finishInspection.promise;
+      return { status: "active" as const };
+    });
+    fixture.provider.inspect = inspect;
+    fixture.provider.destroy = vi.fn(async ({ leaseId }) => {
+      if (leaseId === "lease:reserve-2") {
+        destroyEntered.resolve();
+        await finishDestroy.promise;
+      }
+    });
+    let holdMaintenance = false;
+    const maintainProviders = vi.fn(async (_signal: AbortSignal) => {
+      if (holdMaintenance) {
+        await finishMaintenance.promise;
+      }
+    });
+    const completed = new Map<string, () => void>();
+    const transition = fixture.store.transition.bind(fixture.store);
+    vi.spyOn(fixture.store, "transition").mockImplementation(async (input) => {
+      const record = await transition(input);
+      if (input.to === "destroyed") {
+        completed.get(input.environmentId)?.();
+      }
+      return record;
+    });
+    const closeArtifacts = vi.fn(async () => {});
+    const service = createWorkerEnvironmentService({
+      scheduler,
+      store: fixture.store,
+      getConfig: () => fixture.config,
+      resolveProvider: () => fixture.provider,
+      prepareInstallation: async () => ({
+        install: "bundle",
+        ...RECEIPT,
+        tarballBytes: 1,
+        tarballSha256: "e".repeat(64),
+        tarballPath: path.join(fixture.root, "unused.tgz"),
+      }),
+      bootstrapWorker: async () => RECEIPT,
+      executeInference: async () => ({ type: "error", reason: "cancelled", message: "unused" }),
+      maintainProviders,
+      closeNodeBootstrapArtifacts: closeArtifacts,
+      reconcileIntervalMs: 25,
+      now: () => fixture.nowMs,
+    });
+    fixture.service = service;
+    const reconciliation = service.reconcileOnce();
+    const wakes: Array<ReturnType<typeof time.advanceBy>> = [];
+    let stopping: Promise<void> | undefined;
+    try {
+      await inspected.promise;
+      service.start();
+      for (let sweep = 0; sweep < 3; sweep++) {
+        const id = `reserve-${sweep}`;
+        const destroyed = createDeferred();
+        completed.set(id, () => destroyed.resolve());
+        await fixture.ready(await fixture.seed(id, { reserve: true }));
+        if (sweep === 0) {
+          maintainProviders.mockClear();
+        }
+        holdMaintenance = sweep === 2;
+        fixture.nowMs += IDLE_TIMEOUT_MS;
+        wakes.push(time.advanceBy(IDLE_TIMEOUT_MS));
+        await Promise.resolve();
+        expect(maintainProviders).toHaveBeenCalledTimes(sweep + 1);
+        expect(inspect).toHaveBeenCalledOnce();
+        if (sweep < 2) {
+          await destroyed.promise;
+          expect(fixture.store.get(id)?.state).toBe("destroyed");
+        }
+      }
+      await destroyEntered.promise;
+      expect(fixture.provider.destroy).toHaveBeenCalledTimes(3);
+      stopping = service.stop();
+      expect(maintainProviders.mock.lastCall?.[0].aborted).toBe(true);
+      finishInspection.resolve();
+      await reconciliation;
+      expect(closeArtifacts).not.toHaveBeenCalled();
+      finishMaintenance.resolve();
+      await maintainProviders.mock.results.at(-1)?.value;
+      expect(closeArtifacts).not.toHaveBeenCalled();
+      finishDestroy.resolve();
+      await stopping;
+      expect(closeArtifacts).toHaveBeenCalledOnce();
+      expect(fixture.store.get("reserve-2")?.state).toBe("destroyed");
+      await time.advanceBy(IDLE_TIMEOUT_MS);
+      expect(inspect).toHaveBeenCalledOnce();
+      expect(maintainProviders).toHaveBeenCalledTimes(3);
+    } finally {
+      release();
+      await Promise.allSettled([reconciliation, stopping, ...wakes]);
+      await service.stop();
+      await scheduler.stop();
+    }
+  });
+
   it("keeps actual service reserve cleanup outside the installed placement fence while stop drains it", async () => {
     const reserve = await fixture.ready(await fixture.seed("expired", { reserve: true }));
     fixture.nowMs = 2_000;
@@ -788,6 +906,7 @@ describe("prepared worker reserve lifecycle", () => {
       await release.promise;
     });
     fixture.service = createWorkerEnvironmentService({
+      scheduler: createTestGatewayScheduler(),
       store: fixture.store,
       getConfig: () => fixture.config,
       resolveProvider: () => fixture.provider,

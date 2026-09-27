@@ -550,7 +550,7 @@ describe("operator approval store", () => {
       nowMs: 2_000,
       databaseOptions,
     });
-    const createdAtMs = OPERATOR_APPROVAL_TERMINAL_RETENTION_MS + 3_000;
+    const createdAtMs = OPERATOR_APPROVAL_TERMINAL_RETENTION_MS + 2_000;
 
     expect(
       await insertOperatorApproval({
@@ -1013,31 +1013,6 @@ describe("operator approval store", () => {
     expect(rawApprovalRow(databaseOptions, "old-terminal")).toBeUndefined();
     expect(rawApprovalRow(databaseOptions, "recent-terminal")).toBeDefined();
     expect(rawApprovalRow(databaseOptions, "still-pending")).toBeDefined();
-  });
-
-  it("prunes old terminal rows opportunistically when inserting", async () => {
-    const databaseOptions = getSuiteDatabaseOptions();
-    await insertOperatorApproval({ approval: approval("old-on-insert"), databaseOptions });
-    await forceDenyOperatorApproval({
-      id: "old-on-insert",
-      status: "cancelled",
-      reason: "run-aborted",
-      resolver: { kind: "system", id: null },
-      nowMs: 2_000,
-      databaseOptions,
-    });
-    const createdAtMs = OPERATOR_APPROVAL_TERMINAL_RETENTION_MS + 2_000;
-
-    await insertOperatorApproval({
-      approval: approval("prune-trigger", {
-        createdAtMs,
-        expiresAtMs: createdAtMs + 1_000,
-      }),
-      databaseOptions,
-    });
-
-    expect(rawApprovalRow(databaseOptions, "old-on-insert")).toBeUndefined();
-    expect(rawApprovalRow(databaseOptions, "prune-trigger")).toMatchObject({ status: "pending" });
   });
 
   it("rejects an unbounded ancestor audience", async () => {

@@ -349,51 +349,46 @@ describe("Skill Workshop proposal evaluation", () => {
     expect((await inspectSkillProposal(proposal.record.id))?.record.evaluation).toBe(undefined);
   });
 
-  // Each row owns a distinct skill under the shared agent's Workshop root.
-  it.each([
-    { skillFileName: "skill.md", skillName: "existing-marker-lower" },
-    { skillFileName: "SKILL.MD", skillName: "existing-marker-upper" },
-  ])(
-    "preserves the target marker casing in evaluation bundles for $skillFileName",
-    async ({ skillFileName, skillName }) => {
-      const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-filename-");
-      const skillDir = await createOwnedSkill(workspaceDir, skillName);
-      const canonicalSkillFile = path.join(skillDir, "SKILL.md");
-      await fs.writeFile(
-        canonicalSkillFile,
-        `---\nname: ${skillName}\ndescription: Existing skill\n---\n\n# Existing\n`,
-      );
-      const proposal = await proposeUpdateSkill({
-        workspaceDir,
-        agentId: "main",
-        skillName,
-        content: "# Existing\n\nUpdated.\n",
+  it("preserves the target marker casing in evaluation bundles", async () => {
+    const skillFileName = "skill.md";
+    const skillName = "existing-marker-lower";
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-filename-");
+    const skillDir = await createOwnedSkill(workspaceDir, skillName);
+    const canonicalSkillFile = path.join(skillDir, "SKILL.md");
+    await fs.writeFile(
+      canonicalSkillFile,
+      `---\nname: ${skillName}\ndescription: Existing skill\n---\n\n# Existing\n`,
+    );
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      agentId: "main",
+      skillName,
+      content: "# Existing\n\nUpdated.\n",
+    });
+    const intermediateSkillFile = path.join(skillDir, "marker.tmp");
+    await fs.rename(canonicalSkillFile, intermediateSkillFile);
+    await fs.rename(intermediateSkillFile, path.join(skillDir, skillFileName));
+
+    const buildBundles = () =>
+      buildSkillProposalEvaluationBundles({
+        proposal,
+        supportFiles: [],
       });
-      const intermediateSkillFile = path.join(skillDir, "marker.tmp");
-      await fs.rename(canonicalSkillFile, intermediateSkillFile);
-      await fs.rename(intermediateSkillFile, path.join(skillDir, skillFileName));
+    if (
+      !(await fs.stat(canonicalSkillFile).then(
+        () => true,
+        () => false,
+      ))
+    ) {
+      await expect(buildBundles()).rejects.toThrow("missing SKILL.md");
+      return;
+    }
 
-      const buildBundles = () =>
-        buildSkillProposalEvaluationBundles({
-          proposal,
-          supportFiles: [],
-        });
-      if (
-        !(await fs.stat(canonicalSkillFile).then(
-          () => true,
-          () => false,
-        ))
-      ) {
-        await expect(buildBundles()).rejects.toThrow("missing SKILL.md");
-        return;
-      }
-
-      const bundles = await buildBundles();
-      expect(bundles.baseline?.skillMd.path).toBe(skillFileName);
-      expect(bundles.candidate.skillMd.path).toBe(skillFileName);
-      expect(bundles.candidate.files.map((file) => file.path)).not.toContain("SKILL.md");
-    },
-  );
+    const bundles = await buildBundles();
+    expect(bundles.baseline?.skillMd.path).toBe(skillFileName);
+    expect(bundles.candidate.skillMd.path).toBe(skillFileName);
+    expect(bundles.candidate.files.map((file) => file.path)).not.toContain("SKILL.md");
+  });
 
   it("uses filesystem path equivalence for create support-file collisions", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-create-collision-");

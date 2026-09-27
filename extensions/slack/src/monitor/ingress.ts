@@ -1,4 +1,3 @@
-// Slack plugin module owns durable Events API admission and replay.
 import type { App, Receiver, ReceiverEvent } from "@slack/bolt";
 import {
   createChannelIngressError,

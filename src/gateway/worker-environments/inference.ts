@@ -3,26 +3,25 @@ import { stableStringify } from "@openclaw/normalization-core";
 import {
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
   type WorkerInferenceCancelParams,
-  type WorkerInferenceCancelResult,
   type WorkerInferenceErrorReason,
   type WorkerInferenceEventFrame,
-  type WorkerInferenceEventParams,
   type WorkerInferenceStartParams,
-  type WorkerInferenceStartResult,
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
   validateWorkerInferenceEventFrame,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
-import type { OpenClawConfig } from "../../config/types.js";
-import { withTimeout } from "../../infra/fs-safe.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
-  WorkerInferenceSessionDrainBusyError,
-  type WorkerInferenceCancellation,
-  type WorkerInferenceSessionDrain,
+  createWorkerInferenceSessionControls,
+  joinInferenceOperations,
+  matchesIdentity,
+  preserveInferenceAuthorityFailure,
+  safeRevalidate,
+  WorkerInferenceAuthorityError,
 } from "./inference-control-internal.js";
 import {
   normalizeTerminalOutcome,
@@ -30,80 +29,32 @@ import {
   terminalFrame,
   validFrameBytes,
 } from "./inference-frames.js";
-import {
-  createWorkerInferenceStore,
-  type WorkerInferenceStore,
-  type WorkerInferenceTurnInput,
-} from "./inference-store.js";
+import { createWorkerInferenceStore } from "./inference-store.js";
+import type {
+  ActiveInference,
+  InferenceTurnIdentity,
+  RevalidateInference,
+  WorkerInferenceCancelApplicationResult,
+  WorkerInferenceManagerOptions,
+  WorkerInferenceSink,
+  WorkerInferenceStartApplicationResult,
+} from "./inference.types.js";
 import {
   serializeWorkerSessionTurnClaim,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import { formatWorkerInferenceError } from "./worker-error.js";
 
+export type { WorkerInferenceExecutor, WorkerInferenceSink } from "./inference.types.js";
+
 const DEFAULT_REQUEST_MAX_BYTES = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
 // One active turn plus one provider that ignored abort. This prevents repeated
 // cancel/restart from creating unbounded provider work without wedging the session forever.
 const MAX_PROVIDER_OPERATIONS_PER_SESSION = 2;
 
-type WorkerInferenceFenceReason = Extract<
-  WorkerInferenceErrorReason,
-  "epoch-mismatch" | "session-not-attached"
->;
-
-export type WorkerInferenceSink = {
-  connectionId: string;
-  send(frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame): void;
-};
-
-export type WorkerInferenceExecutor = (params: {
-  identity: WorkerConnectionIdentity;
-  request: WorkerInferenceStartParams;
-  signal: AbortSignal;
-  emit: (event: WorkerInferenceEventParams["event"]) => void;
-  isCurrent(): boolean;
-  sessionTarget: BoundAgentRunSessionTarget;
-  config?: OpenClawConfig;
-}) => Promise<WorkerInferenceTerminalOutcome>;
-
-type RevalidateInference = () => WorkerInferenceFenceReason | null;
-
-function safeRevalidate(revalidate?: RevalidateInference): WorkerInferenceErrorReason | null {
-  try {
-    return revalidate?.() ?? null;
-  } catch {
-    return "provider-error";
-  }
+function inferenceTurnKey(input: InferenceTurnIdentity): string {
+  return JSON.stringify([input.sessionId, input.runEpoch, input.runId, input.turnId]);
 }
-
-type WorkerInferenceStartApplicationResult =
-  | {
-      ok: true;
-      result: WorkerInferenceStartResult;
-      launch(): void;
-    }
-  | { ok: false; reason: WorkerInferenceErrorReason };
-
-type WorkerInferenceCancelApplicationResult =
-  | { ok: true; result: WorkerInferenceCancelResult }
-  | { ok: false; reason: WorkerInferenceErrorReason };
-
-type ActiveInference = {
-  claimKey: string;
-  identity: WorkerConnectionIdentity;
-  request: WorkerInferenceStartParams;
-  sessionTarget: BoundAgentRunSessionTarget;
-  requestHash: string;
-  storeInput: WorkerInferenceTurnInput;
-  sink: WorkerInferenceSink;
-  revalidate?: RevalidateInference;
-  controller: AbortController;
-  seq: number;
-  streamedBytes: number;
-  launched: boolean;
-  settled: boolean;
-  abortReason?: WorkerInferenceErrorReason;
-};
 
 function trySend(
   sink: WorkerInferenceSink,
@@ -117,140 +68,245 @@ function trySend(
   }
 }
 
-function matchesIdentity(
-  identity: WorkerConnectionIdentity,
-  request: WorkerInferenceStartParams | WorkerInferenceCancelParams,
-): WorkerInferenceErrorReason | null {
-  const claim = identity.turnClaim;
-  if (
-    !claim ||
-    identity.sessionId !== request.sessionId ||
-    identity.runId !== request.runId ||
-    claim.sessionId !== request.sessionId ||
-    claim.runId !== request.runId
-  ) {
-    return "session-not-attached";
-  }
-  if (identity.ownerEpoch !== request.runEpoch) {
-    return "epoch-mismatch";
-  }
-  return null;
-}
-
-export function createWorkerInferenceManager(options: {
-  execute: WorkerInferenceExecutor;
-  store?: WorkerInferenceStore;
-  getConfig?: () => OpenClawConfig;
-  requestMaxBytes?: number;
-  streamMaxBytes?: number;
-  stopDrainMs?: number;
-}) {
+export function createWorkerInferenceManager(options: WorkerInferenceManagerOptions) {
   const store = options.store ?? createWorkerInferenceStore();
   const requestMaxBytes = options.requestMaxBytes ?? DEFAULT_REQUEST_MAX_BYTES;
   const streamMaxBytes = options.streamMaxBytes ?? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
   const active = new Map<string, ActiveInference>();
-  const operations = new Map<Promise<void>, string>();
-  const drainingSessionIds = new Set<string>();
-  let stopping = false;
-  store.recoverPending(terminalError("provider-error"));
+  const operations = new Map<Promise<unknown>, { sessionId: string; storeKey: string }>();
+  const providers = new Map<Promise<void>, string>();
+  const unknownSettlements = new Map<string, Set<unknown>>();
+  const retainUnknown = (storeKey: string, error: unknown) => {
+    if (!hasSqliteWorkerOutcomeUnknown(error)) {
+      return;
+    }
+    let failures = unknownSettlements.get(storeKey);
+    if (!failures) {
+      failures = new Set();
+      unknownSettlements.set(storeKey, failures);
+    }
+    failures.add(error);
+  };
+  const unknownFailureFor = (storeKey: string): unknown => {
+    const errors = [...(unknownSettlements.get(storeKey) ?? [])];
+    return errors.length > 1
+      ? new AggregateError(errors, "Worker inference settlement failed")
+      : errors[0];
+  };
+  const assertKnownTurn = (storeKey: string) => {
+    if (unknownSettlements.has(storeKey)) {
+      throw unknownFailureFor(storeKey);
+    }
+  };
+  const recovered = store.recoverPending(terminalError("provider-error"));
+  // Startup and every admitted operation join the original recovery result.
+  void recovered.catch(() => undefined);
 
+  const track = <T>(operation: Promise<T>, input: InferenceTurnIdentity): Promise<T> => {
+    const storeKey = inferenceTurnKey(input);
+    operations.set(operation, { sessionId: input.sessionId, storeKey });
+    void operation.then(
+      () => operations.delete(operation),
+      (error: unknown) => {
+        operations.delete(operation);
+        retainUnknown(storeKey, error);
+      },
+    );
+    return operation;
+  };
   const processFence = (entry: ActiveInference): WorkerInferenceErrorReason | null => {
     if (entry.abortReason) {
       return entry.abortReason;
+    }
+    if (unknownSettlements.has(entry.storeKey)) {
+      return "provider-error";
     }
     const bindingError = matchesIdentity(entry.identity, entry.request);
     if (bindingError) {
       return bindingError;
     }
-    if (active.get(entry.claimKey) !== entry) {
-      return "cancelled";
-    }
-    return null;
+    return active.get(entry.claimKey) === entry ? null : "cancelled";
   };
-
-  const durableFence = (entry: ActiveInference): WorkerInferenceErrorReason | null => {
-    const currentError = processFence(entry);
-    if (currentError) {
-      return currentError;
-    }
-    const revalidationError = safeRevalidate(entry.revalidate);
-    if (revalidationError) {
-      entry.abortReason = revalidationError;
-      entry.controller.abort();
-      return revalidationError;
-    }
-    return null;
-  };
-
   const abortEntry = (entry: ActiveInference, reason: WorkerInferenceErrorReason): void => {
-    if (!entry.abortReason) {
-      entry.abortReason = reason;
-    }
+    entry.abortReason ??= reason;
     if (!entry.controller.signal.aborted) {
       entry.controller.abort();
     }
   };
-
-  const sendTerminal = (entry: ActiveInference, outcome: WorkerInferenceTerminalOutcome): void => {
-    entry.seq += 1;
-    trySend(entry.sink, terminalFrame(entry, outcome, entry.seq));
+  const durableFence = (entry: ActiveInference): WorkerInferenceErrorReason | null => {
+    const processError = processFence(entry);
+    if (processError) {
+      return processError;
+    }
+    const revalidationError = safeRevalidate(
+      entry.revalidate,
+      (error) => {
+        entry.authorityFailure ??= { error };
+      },
+      entry.assertSourceCurrent,
+    );
+    if (revalidationError) {
+      abortEntry(entry, revalidationError);
+    }
+    return revalidationError;
   };
-
-  const settleAbort = (entry: ActiveInference, reason: WorkerInferenceErrorReason): boolean => {
-    if (entry.settled) {
+  const assertEntry = (entry: ActiveInference) => {
+    assertKnownTurn(entry.storeKey);
+    if (active.get(entry.claimKey) !== entry) {
+      throw new WorkerInferenceAuthorityError("cancelled");
+    }
+  };
+  const assertLiveEntry = (entry: ActiveInference) => {
+    assertKnownTurn(entry.storeKey);
+    const reason = durableFence(entry);
+    if (entry.authorityFailure && hasSqliteWorkerOutcomeUnknown(entry.authorityFailure.error)) {
+      throw entry.authorityFailure.error;
+    }
+    if (reason) {
+      throw new WorkerInferenceAuthorityError(reason, entry.authorityFailure?.error);
+    }
+  };
+  const forget = (entry: ActiveInference) => {
+    if (active.get(entry.claimKey) === entry) {
+      active.delete(entry.claimKey);
+    }
+  };
+  const sendFrame = (
+    entry: ActiveInference,
+    frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame,
+  ): boolean => {
+    if (!entry.sinkReady) {
+      entry.pendingFrames.push(frame);
       return true;
     }
-    abortEntry(entry, reason);
-    let outcome: WorkerInferenceTerminalOutcome;
-    try {
-      outcome = store.complete({
-        ...entry.storeInput,
-        outcome: terminalError(entry.abortReason ?? reason),
-      });
-    } catch {
-      return false;
-    }
+    return trySend(entry.sink, frame);
+  };
+  const sendTerminal = (entry: ActiveInference, outcome: WorkerInferenceTerminalOutcome): void => {
+    entry.seq += 1;
+    sendFrame(entry, terminalFrame(entry, outcome, entry.seq));
+  };
+  const retainFailure = (entry: ActiveInference, error: unknown) => {
+    entry.failure ??= { error };
+    retainUnknown(entry.storeKey, error);
     entry.settled = true;
-    if (active.get(entry.claimKey) === entry) {
-      active.delete(entry.claimKey);
-      sendTerminal(entry, outcome);
-    }
-    return true;
+    abortEntry(entry, "provider-error");
   };
 
-  const finish = (entry: ActiveInference, rawOutcome: WorkerInferenceTerminalOutcome): void => {
+  const finish = (
+    entry: ActiveInference,
+    rawOutcome: WorkerInferenceTerminalOutcome,
+  ): Promise<void> => {
+    if (entry.terminal) {
+      return entry.terminal;
+    }
+    if (unknownSettlements.has(entry.storeKey)) {
+      return joinInferenceOperations([], [unknownFailureFor(entry.storeKey)]);
+    }
+    if (entry.failure) {
+      return joinInferenceOperations([], [entry.failure.error]);
+    }
     if (entry.settled) {
-      return;
+      return Promise.resolve();
     }
-    const fence = durableFence(entry);
-    const outcome = normalizeTerminalOutcome(
-      entry,
-      fence ? terminalError(fence, rawOutcome) : rawOutcome,
+    // The first terminal operation owns this identity through native settlement.
+    // Cancellation can abort a provider immediately, but never submits a second write.
+    entry.terminal = track(
+      (async () => {
+        try {
+          const begin = await entry.begun;
+          assertKnownTurn(entry.storeKey);
+          if (!begin || begin.kind === "rejected") {
+            entry.settled = true;
+            forget(entry);
+            return;
+          }
+          if (begin.kind === "replay") {
+            entry.settled = true;
+            forget(entry);
+            return;
+          }
+          const fence = durableFence(entry);
+          if (
+            entry.authorityFailure &&
+            hasSqliteWorkerOutcomeUnknown(entry.authorityFailure.error)
+          ) {
+            throw entry.authorityFailure.error;
+          }
+          const outcome = normalizeTerminalOutcome(
+            entry,
+            fence ? terminalError(fence, rawOutcome) : rawOutcome,
+          );
+          let storedOutcome: WorkerInferenceTerminalOutcome;
+          try {
+            storedOutcome = await store.complete(
+              { ...entry.storeInput, outcome },
+              fence ? () => assertEntry(entry) : () => assertLiveEntry(entry),
+            );
+          } catch (error) {
+            if (
+              !(error instanceof WorkerInferenceAuthorityError) ||
+              hasSqliteWorkerOutcomeUnknown(error)
+            ) {
+              throw error;
+            }
+            // A refused live-authority grant rolls back the first transaction. The
+            // captured registration still owns its cancellation receipt, never a retry
+            // of an uncertain write or a provider success under retired authority.
+            storedOutcome = await store.complete(
+              { ...entry.storeInput, outcome: terminalError(error.reason, rawOutcome) },
+              () => assertEntry(entry),
+            );
+          }
+          entry.settled = true;
+          entry.terminalOutcome = storedOutcome;
+          if (active.get(entry.claimKey) === entry) {
+            forget(entry);
+            if (!entry.replay) {
+              sendTerminal(entry, storedOutcome);
+            }
+          }
+          if (entry.authorityFailure) {
+            throw entry.authorityFailure.error;
+          }
+        } catch (error) {
+          const failure = preserveInferenceAuthorityFailure(error, entry.authorityFailure);
+          retainFailure(entry, failure);
+          throw failure;
+        }
+      })(),
+      entry.storeInput,
     );
-    let storedOutcome: WorkerInferenceTerminalOutcome;
-    try {
-      storedOutcome = store.complete({ ...entry.storeInput, outcome });
-    } catch {
-      entry.settled = true;
-      if (active.get(entry.claimKey) === entry) {
-        active.delete(entry.claimKey);
-      }
-      return;
-    }
-    entry.settled = true;
-    if (active.get(entry.claimKey) === entry) {
-      active.delete(entry.claimKey);
-      sendTerminal(entry, storedOutcome);
-    }
+    return entry.terminal;
   };
-
+  const settleAbort = (
+    entry: ActiveInference,
+    reason: WorkerInferenceErrorReason,
+  ): Promise<void> => {
+    abortEntry(entry, reason);
+    return finish(entry, terminalError(entry.abortReason ?? reason));
+  };
+  const controls = createWorkerInferenceSessionControls({
+    active,
+    operations,
+    unknownSettlements,
+    recovered,
+    settleAbort,
+  });
   const executeEntry = async (entry: ActiveInference): Promise<void> => {
     const initialFence = durableFence(entry);
     if (initialFence) {
-      finish(entry, terminalError(initialFence));
+      if (entry.authorityFailure && hasSqliteWorkerOutcomeUnknown(entry.authorityFailure.error)) {
+        retainFailure(entry, entry.authorityFailure.error);
+        throw entry.authorityFailure.error;
+      }
+      await joinInferenceOperations(
+        [finish(entry, terminalError(initialFence))],
+        entry.authorityFailure ? [entry.authorityFailure.error] : [],
+      );
       return;
     }
     let outcome: WorkerInferenceTerminalOutcome;
+    let failure: { error: unknown } | undefined;
     try {
       const config = options.getConfig?.();
       outcome = await options.execute({
@@ -278,12 +334,12 @@ export function createWorkerInferenceManager(options: {
             },
           };
           const frameBytes = validFrameBytes(frame, validateWorkerInferenceEventFrame);
-          if (frameBytes === null || entry.streamedBytes + frameBytes > streamMaxBytes) {
-            settleAbort(entry, "provider-error");
-            return;
-          }
-          if (!trySend(entry.sink, frame)) {
-            settleAbort(entry, "provider-error");
+          if (
+            frameBytes === null ||
+            entry.streamedBytes + frameBytes > streamMaxBytes ||
+            !sendFrame(entry, frame)
+          ) {
+            void settleAbort(entry, "provider-error").catch(() => undefined);
             return;
           }
           entry.streamedBytes += frameBytes;
@@ -292,182 +348,215 @@ export function createWorkerInferenceManager(options: {
         isCurrent: () => durableFence(entry) === null,
         ...(config ? { config } : {}),
       });
-    } catch (error) {
+    } catch (caught) {
+      const error = preserveInferenceAuthorityFailure(caught, entry.authorityFailure);
+      failure = { error };
       outcome = terminalError(
         entry.abortReason ?? "provider-error",
         undefined,
         entry.abortReason ? undefined : formatWorkerInferenceError(error),
       );
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        retainFailure(entry, error);
+        // Native uncertainty is a local settlement failure, never another terminal mutation.
+        if (entry.terminal) {
+          await joinInferenceOperations([entry.terminal], [error]);
+        }
+        throw error;
+      }
     }
-    finish(entry, outcome);
+    failure ??= entry.authorityFailure;
+    await joinInferenceOperations([finish(entry, outcome)], failure ? [failure.error] : []);
   };
-
   const launchEntry = (entry: ActiveInference): void => {
-    if (entry.launched || entry.settled) {
+    if (
+      entry.launched ||
+      entry.settled ||
+      entry.abortReason ||
+      controls.isStopping() ||
+      controls.isDraining(entry.request.sessionId)
+    ) {
       return;
     }
     entry.launched = true;
-    const operation = runWithGatewayIndependentRootWorkContinuation(
-      () => executeEntry(entry),
-      "worker:dispatch",
-    ).catch((error: unknown) => {
-      finish(
-        entry,
-        terminalError(
-          entry.abortReason ?? "provider-error",
-          undefined,
-          entry.abortReason ? undefined : formatWorkerInferenceError(error),
-        ),
-      );
-    });
-    operations.set(operation, entry.request.sessionId);
+    // Register the raw operation before executor callbacks can reserve a drain.
+    const operation = track(
+      runWithGatewayIndependentRootWorkContinuation(
+        () => Promise.resolve().then(() => executeEntry(entry)),
+        "worker:dispatch",
+      ),
+      entry.storeInput,
+    );
+    providers.set(operation, entry.request.sessionId);
     void operation.then(
-      () => operations.delete(operation),
-      () => operations.delete(operation),
+      () => providers.delete(operation),
+      (error: unknown) => {
+        providers.delete(operation);
+        if (!entry.settled || hasSqliteWorkerOutcomeUnknown(error)) {
+          retainFailure(entry, error);
+        }
+      },
     );
   };
 
-  const start = (params: {
+  const acceptedResult = (
+    entry: ActiveInference,
+    sink: WorkerInferenceSink,
+  ): WorkerInferenceStartApplicationResult => ({
+    ok: true,
+    result: { status: "accepted" },
+    launch() {
+      // Each connection acknowledges its own admission before it can receive
+      // buffered events. An earlier coalesced caller cannot launch its successor sink.
+      if (entry.sink !== sink) {
+        return;
+      }
+      entry.sinkReady = true;
+      for (const frame of entry.pendingFrames.splice(0)) {
+        if (!trySend(sink, frame)) {
+          void settleAbort(entry, "provider-error").catch(() => undefined);
+          return;
+        }
+      }
+      launchEntry(entry);
+    },
+  });
+
+  const replayResult = (
+    entry: ActiveInference,
+    outcome: WorkerInferenceTerminalOutcome,
+    sink: WorkerInferenceSink,
+  ): WorkerInferenceStartApplicationResult => {
+    let launched = false;
+    entry.settled = true;
+    entry.terminalOutcome = outcome;
+    forget(entry);
+    return {
+      ok: true,
+      result: { status: "replayed" },
+      launch() {
+        if (launched || entry.sink !== sink) {
+          return;
+        }
+        launched = true;
+        entry.sinkReady = true;
+        const fence =
+          entry.abortReason ??
+          safeRevalidate(
+            entry.revalidate,
+            (error) => retainUnknown(entry.storeKey, error),
+            entry.assertSourceCurrent,
+          );
+        if (!unknownSettlements.has(entry.storeKey)) {
+          sendTerminal(entry, fence ? terminalError(fence) : outcome);
+        }
+      },
+    };
+  };
+  const start = async (params: {
     identity: WorkerConnectionIdentity;
     request: WorkerInferenceStartParams;
     sink: WorkerInferenceSink;
     sessionTarget: BoundAgentRunSessionTarget;
+    assertSourceCurrent?: () => void;
     revalidate?: RevalidateInference;
-  }): WorkerInferenceStartApplicationResult => {
-    if (stopping || drainingSessionIds.has(params.request.sessionId)) {
+  }): Promise<WorkerInferenceStartApplicationResult> => {
+    const assertSourceCurrent = params.assertSourceCurrent;
+    if (controls.isStopping() || controls.isDraining(params.request.sessionId)) {
       return { ok: false, reason: "cancelled" };
+    }
+    if (unknownSettlements.has(inferenceTurnKey(params.request))) {
+      return { ok: false, reason: "provider-error" };
     }
     const identityError = matchesIdentity(params.identity, params.request);
     if (identityError) {
       return { ok: false, reason: identityError };
     }
-    const revalidationError = safeRevalidate(params.revalidate);
+    // No inference work is admitted yet; return the original authority failure to
+    // this caller without giving a later session drain custody of the attempt.
+    assertSourceCurrent?.();
+    const revalidationError = params.revalidate?.() ?? null;
     if (revalidationError) {
       return { ok: false, reason: revalidationError };
+    }
+    // An unresolved executor has no separate proof that it lost write capability.
+    // Only uncertain predecessors require this join; ordinary canceled providers
+    // retain the existing bounded overlap allowance.
+    if (
+      [...operations.values()].some(
+        (owner) =>
+          owner.sessionId === params.request.sessionId && unknownSettlements.has(owner.storeKey),
+      )
+    ) {
+      return { ok: false, reason: "provider-error" };
     }
     const measured = boundedJsonUtf8Bytes(params.request, requestMaxBytes);
     if (!measured.complete || measured.bytes > requestMaxBytes) {
       return { ok: false, reason: "invalid-context" };
     }
     const serialized = stableStringify(params.request);
-    const claim = params.identity.turnClaim!;
-    const claimKey = serializeWorkerSessionTurnClaim(claim);
+    const claimKey = serializeWorkerSessionTurnClaim(params.identity.turnClaim!);
     const hash = createHash("sha256").update(`${claimKey}\0${serialized}`).digest("hex");
+    // An explicit retry reconciles a known failure through durable begin/replay.
+    // A new identity may replace an uncertain predecessor only after its raw work
+    // settles; the predecessor's own key remains fenced above.
+    for (const previous of active.values()) {
+      if (previous.request.sessionId === params.request.sessionId && previous.failure) {
+        forget(previous);
+      }
+    }
     const existing = active.get(claimKey);
-    if (existing) {
-      if (
-        existing.request.turnId === params.request.turnId &&
-        existing.requestHash === hash &&
-        !existing.settled
-      ) {
-        const retryEntry = existing;
-        retryEntry.identity = params.identity;
-        retryEntry.sink = params.sink;
-        if (params.revalidate) {
-          retryEntry.revalidate = params.revalidate;
-        } else {
-          delete retryEntry.revalidate;
-        }
-        return {
-          ok: true,
-          result: { status: "accepted" },
-          launch: () => launchEntry(retryEntry),
-        };
+    if (
+      existing &&
+      existing.request.turnId === params.request.turnId &&
+      existing.requestHash === hash &&
+      !existing.settled
+    ) {
+      existing.identity = params.identity;
+      existing.sink = params.sink;
+      existing.sinkReady = false;
+      existing.revalidate = params.revalidate;
+      const result = await existing.admission!;
+      if (!result.ok) {
+        return result;
       }
-      const staleFence = durableFence(existing);
-      if (!staleFence) {
-        return { ok: false, reason: "invalid-context" };
-      }
-      settleAbort(existing, staleFence);
-      return { ok: false, reason: "invalid-context" };
+      return result.result.status === "accepted"
+        ? acceptedResult(existing, params.sink)
+        : replayResult(existing, existing.terminalOutcome!, params.sink);
     }
     for (const concurrent of active.values()) {
       if (concurrent.request.sessionId !== params.request.sessionId) {
         continue;
       }
-      const staleFence = durableFence(concurrent);
-      if (!staleFence) {
-        return { ok: false, reason: "invalid-context" };
+      const fence = durableFence(concurrent);
+      if (fence) {
+        try {
+          await settleAbort(concurrent, fence);
+        } catch {
+          return { ok: false, reason: "provider-error" };
+        }
       }
-      settleAbort(concurrent, staleFence);
       return { ok: false, reason: "invalid-context" };
-    }
-    const storeInput: WorkerInferenceTurnInput = {
-      environmentId: params.identity.environmentId,
-      sessionId: params.request.sessionId,
-      runEpoch: params.request.runEpoch,
-      runId: params.request.runId,
-      turnId: params.request.turnId,
-      requestHash: hash,
-    };
-    let begin: ReturnType<WorkerInferenceStore["begin"]>;
-    try {
-      begin = store.begin(storeInput);
-    } catch {
-      return { ok: false, reason: "provider-error" };
-    }
-    if (begin.kind === "rejected") {
-      return { ok: false, reason: "invalid-context" };
-    }
-    const replayResult = (
-      cachedOutcome: WorkerInferenceTerminalOutcome,
-    ): WorkerInferenceStartApplicationResult => {
-      let launched = false;
-      return {
-        ok: true,
-        result: { status: "replayed" },
-        launch: () => {
-          if (launched) {
-            return;
-          }
-          launched = true;
-          const fence = safeRevalidate(params.revalidate);
-          trySend(
-            params.sink,
-            terminalFrame(
-              { request: params.request, seq: 0 },
-              fence ? terminalError(fence) : cachedOutcome,
-            ),
-          );
-        },
-      };
-    };
-    if (begin.kind === "replay") {
-      return replayResult(begin.outcome);
-    }
-    if (begin.kind === "recover") {
-      const outcome = terminalError("provider-error");
-      let storedOutcome: WorkerInferenceTerminalOutcome;
-      try {
-        storedOutcome = store.complete({ ...storeInput, outcome });
-      } catch {
-        return { ok: false, reason: "provider-error" };
-      }
-      return replayResult(storedOutcome);
-    }
-    let runningForSession = 0;
-    for (const sessionId of operations.values()) {
-      if (sessionId === params.request.sessionId) {
-        runningForSession += 1;
-      }
-    }
-    if (runningForSession >= MAX_PROVIDER_OPERATIONS_PER_SESSION) {
-      try {
-        return replayResult(
-          store.complete({ ...storeInput, outcome: terminalError("provider-error") }),
-        );
-      } catch {
-        return { ok: false, reason: "provider-error" };
-      }
     }
     const entry: ActiveInference = {
       claimKey,
+      storeKey: inferenceTurnKey(params.request),
       identity: params.identity,
-      request: params.request,
+      request: structuredClone(params.request),
       sessionTarget: params.sessionTarget,
       requestHash: hash,
-      storeInput,
+      storeInput: {
+        environmentId: params.identity.environmentId,
+        sessionId: params.request.sessionId,
+        runEpoch: params.request.runEpoch,
+        runId: params.request.runId,
+        turnId: params.request.turnId,
+        requestHash: hash,
+      },
       sink: params.sink,
+      sinkReady: false,
+      pendingFrames: [],
+      ...(assertSourceCurrent ? { assertSourceCurrent } : {}),
       ...(params.revalidate ? { revalidate: params.revalidate } : {}),
       controller: new AbortController(),
       seq: 0,
@@ -475,226 +564,165 @@ export function createWorkerInferenceManager(options: {
       launched: false,
       settled: false,
     };
+    // Register before recovery or BEGIN can yield, so Stop and drains own pending admissions.
     active.set(claimKey, entry);
-    return {
-      ok: true,
-      result: { status: "accepted" },
-      launch: () => launchEntry(entry),
-    };
+    entry.begun = track(
+      (async () => {
+        await recovered;
+        if (entry.abortReason) {
+          return undefined;
+        }
+        try {
+          return await store.begin(entry.storeInput, () => assertLiveEntry(entry));
+        } catch (error) {
+          if (
+            error instanceof WorkerInferenceAuthorityError &&
+            !hasSqliteWorkerOutcomeUnknown(error) &&
+            !entry.authorityFailure
+          ) {
+            abortEntry(entry, error.reason);
+            return undefined;
+          }
+          const failure = preserveInferenceAuthorityFailure(error, entry.authorityFailure);
+          retainFailure(entry, failure);
+          throw failure;
+        }
+      })(),
+      entry.storeInput,
+    );
+    const admission = track(
+      (async (): Promise<WorkerInferenceStartApplicationResult> => {
+        const begin = await entry.begun;
+        assertKnownTurn(entry.storeKey);
+        if (!begin || begin.kind === "rejected") {
+          forget(entry);
+          return { ok: false, reason: entry.abortReason ?? "invalid-context" };
+        }
+        if (begin.kind === "replay") {
+          return replayResult(entry, begin.outcome, params.sink);
+        }
+        if (begin.kind === "recover") {
+          entry.replay = true;
+          await finish(entry, terminalError("provider-error"));
+          return replayResult(entry, entry.terminalOutcome!, params.sink);
+        }
+        const fence = durableFence(entry);
+        // An accepted drain owns cancellation; its pending acknowledgment stays inert.
+        if (fence || (controls.isStopping() && !controls.isDraining(entry.request.sessionId))) {
+          await settleAbort(entry, fence ?? "cancelled");
+          return acceptedResult(entry, params.sink);
+        }
+        const running = [...providers.values()].filter(
+          (sessionId) => sessionId === entry.request.sessionId,
+        ).length;
+        if (running >= MAX_PROVIDER_OPERATIONS_PER_SESSION) {
+          entry.replay = true;
+          await finish(entry, terminalError("provider-error"));
+          return replayResult(entry, entry.terminalOutcome!, params.sink);
+        }
+        return acceptedResult(entry, params.sink);
+      })(),
+      entry.storeInput,
+    );
+    entry.admission = admission.catch((error: unknown): WorkerInferenceStartApplicationResult => {
+      retainFailure(entry, error);
+      return { ok: false, reason: "provider-error" };
+    });
+    return await entry.admission;
   };
 
-  const cancel = (params: {
+  const cancelOperation = async (params: {
     identity: WorkerConnectionIdentity;
     request: WorkerInferenceCancelParams;
     revalidate?: RevalidateInference;
-  }): WorkerInferenceCancelApplicationResult => {
-    const identityError = matchesIdentity(params.identity, params.request);
-    if (identityError) {
-      return { ok: false, reason: identityError };
-    }
-    const revalidationError = safeRevalidate(params.revalidate);
-    if (revalidationError) {
-      return { ok: false, reason: revalidationError };
+  }): Promise<WorkerInferenceCancelApplicationResult> => {
+    if (unknownSettlements.has(inferenceTurnKey(params.request))) {
+      await joinInferenceOperations([], unknownSettlements.get(inferenceTurnKey(params.request)));
     }
     const claimKey = serializeWorkerSessionTurnClaim(params.identity.turnClaim!);
+    const failed = active.get(claimKey);
+    if (failed?.failure && !hasSqliteWorkerOutcomeUnknown(failed.failure.error)) {
+      forget(failed);
+    }
     const entry = active.get(claimKey);
     if (entry?.request.turnId === params.request.turnId) {
-      if (!settleAbort(entry, "cancelled")) {
-        return { ok: false, reason: "provider-error" };
-      }
+      await settleAbort(entry, "cancelled");
     } else {
-      try {
-        store.cancelPending({
-          environmentId: params.identity.environmentId,
-          sessionId: params.request.sessionId,
-          runEpoch: params.request.runEpoch,
-          runId: params.request.runId,
-          turnId: params.request.turnId,
-          outcome: terminalError("cancelled"),
-        });
-      } catch {
-        return { ok: false, reason: "provider-error" };
-      }
+      await track(
+        (async () => {
+          await recovered;
+          assertKnownTurn(inferenceTurnKey(params.request));
+          let authorityFailure: { error: unknown } | undefined;
+          try {
+            await store.cancelPending(
+              {
+                environmentId: params.identity.environmentId,
+                sessionId: params.request.sessionId,
+                runEpoch: params.request.runEpoch,
+                runId: params.request.runId,
+                turnId: params.request.turnId,
+                outcome: terminalError("cancelled"),
+              },
+              () => {
+                assertKnownTurn(inferenceTurnKey(params.request));
+                const failure = safeRevalidate(params.revalidate, (error) => {
+                  authorityFailure ??= { error };
+                  retainUnknown(inferenceTurnKey(params.request), error);
+                });
+                if (failure) {
+                  throw authorityFailure
+                    ? authorityFailure.error
+                    : new WorkerInferenceAuthorityError(failure);
+                }
+              },
+            );
+          } catch (error) {
+            throw preserveInferenceAuthorityFailure(error, authorityFailure);
+          }
+        })(),
+        params.request,
+      );
     }
     return { ok: true, result: { status: "cancelled" } };
   };
 
-  const captureCancellationEntries = (predicate: (entry: ActiveInference) => boolean) =>
-    [...active.values()].filter(predicate).map((entry) => ({
-      entry,
-      claimKey: entry.claimKey,
-      sessionId: entry.request.sessionId,
-      runId: entry.request.runId,
-      turnId: entry.request.turnId,
+  const cancel = async (
+    params: Parameters<typeof cancelOperation>[0],
+  ): Promise<WorkerInferenceCancelApplicationResult> => {
+    const reason =
+      matchesIdentity(params.identity, params.request) ?? params.revalidate?.() ?? null;
+    if (reason) {
+      return { ok: false, reason };
+    }
+    if (unknownSettlements.has(inferenceTurnKey(params.request))) {
+      return { ok: false, reason: "provider-error" };
+    }
+    const closing = controls.getClosing(params.request.sessionId);
+    if (closing) {
+      // A later RPC joins accepted cancellation without starting native work
+      // before its deferred start or outside the original drain's custody.
+      return closing.then(
+        () => ({ ok: true, result: { status: "cancelled" } }),
+        () => ({ ok: false, reason: "provider-error" }),
+      );
+    }
+    return track(cancelOperation(params), params.request).catch(() => ({
+      ok: false,
+      reason: "provider-error",
     }));
-
-  const cancelCaptured = (
-    captured: ReturnType<typeof captureCancellationEntries>,
-    reason: WorkerInferenceErrorReason,
-    control?: Parameters<WorkerInferenceCancellation["cancel"]>[0],
-  ): boolean => {
-    let terminalPersistenceFailed = false;
-    for (const { entry, claimKey, sessionId, runId, turnId } of captured) {
-      control?.assertCurrent?.();
-      if (
-        active.get(claimKey) !== entry ||
-        entry.claimKey !== claimKey ||
-        entry.request.sessionId !== sessionId ||
-        entry.request.runId !== runId ||
-        entry.request.turnId !== turnId
-      ) {
-        continue;
-      }
-      // Terminal delivery can synchronously admit a successor with the same claim.
-      // Only this captured registration owns the accepted cancellation.
-      terminalPersistenceFailed = !settleAbort(entry, reason) || terminalPersistenceFailed;
-      control?.onCancelled?.(runId);
-    }
-    return terminalPersistenceFailed;
   };
-
-  const cancelWhere = (
-    predicate: (entry: ActiveInference) => boolean,
-    reason: WorkerInferenceErrorReason,
-  ) => cancelCaptured(captureCancellationEntries(predicate), reason);
-
-  const cancelEnvironment = (
-    environmentId: string,
-    reason: WorkerInferenceErrorReason = "session-not-attached",
-  ): void => {
-    cancelWhere((entry) => entry.identity.environmentId === environmentId, reason);
-  };
-
-  const cancelClaim = (claim: WorkerSessionTurnClaim): void => {
-    const claimKey = serializeWorkerSessionTurnClaim(claim);
-    cancelWhere((entry) => entry.claimKey === claimKey, "session-not-attached");
-  };
-
-  const captureSessionCancellation = (
-    sessionId: string,
-    runId?: string,
-  ): WorkerInferenceCancellation => {
-    const captured = captureCancellationEntries(
-      (entry) =>
-        entry.request.sessionId === sessionId &&
-        (runId === undefined || entry.request.runId === runId),
-    );
-    return {
-      runIds: [...new Set(captured.map((entry) => entry.runId))].toSorted(),
-      cancel: (control) => {
-        const cancelledRunIds = new Set<string>();
-        cancelCaptured(captured, "cancelled", {
-          assertCurrent: control?.assertCurrent,
-          onCancelled: (cancelledRunId) => {
-            cancelledRunIds.add(cancelledRunId);
-            control?.onCancelled?.(cancelledRunId);
-          },
-        });
-        return [...cancelledRunIds].toSorted();
-      },
-    };
-  };
-
-  const cancelSession = (sessionId: string, runId?: string): string[] =>
-    captureSessionCancellation(sessionId, runId).cancel();
-
-  const hasSession = (sessionId: string, runId?: string): boolean => {
-    for (const entry of active.values()) {
-      if (
-        entry.request.sessionId === sessionId &&
-        (runId === undefined || entry.request.runId === runId)
-      ) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  const hasSessionOperation = (sessionId: string): boolean => {
-    for (const operationSessionId of operations.values()) {
-      if (operationSessionId === sessionId) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  const beginSessionDrain = (sessionId: string): WorkerInferenceSessionDrain => {
-    if (drainingSessionIds.has(sessionId)) {
-      throw new WorkerInferenceSessionDrainBusyError(sessionId);
-    }
-    // Block first so cancellation cannot race a replacement provider operation.
-    drainingSessionIds.add(sessionId);
-    const terminalPersistenceFailed = cancelWhere(
-      (entry) => entry.request.sessionId === sessionId,
-      "cancelled",
-    );
-    const providerOperations: Promise<void>[] = [];
-    for (const [operation, operationSessionId] of operations) {
-      if (operationSessionId === sessionId) {
-        providerOperations.push(operation);
-      }
-    }
-    let released = false;
-    return {
-      drained: Promise.allSettled(providerOperations).then(() => {
-        if (terminalPersistenceFailed) {
-          throw new Error(`Worker inference terminal persistence failed for session ${sessionId}`);
-        }
-      }),
-      hasWork: () => hasSession(sessionId) || hasSessionOperation(sessionId),
-      release: () => {
-        if (released) {
-          return;
-        }
-        released = true;
-        drainingSessionIds.delete(sessionId);
-      },
-    };
-  };
-
-  const resolveSessionTargetForRunId = (runId: string): BoundAgentRunSessionTarget | undefined => {
-    let target: BoundAgentRunSessionTarget | undefined;
-    for (const entry of active.values()) {
-      if (entry.request.runId === runId) {
-        const source = entry.sessionTarget;
-        if (
-          target &&
-          (source.agentId !== target.agentId ||
-            source.sessionId !== target.sessionId ||
-            source.sessionKey !== target.sessionKey ||
-            source.storePath !== target.storePath ||
-            source.expectedLifecycleRevision !== target.expectedLifecycleRevision ||
-            source.expectedWriterRunId !== target.expectedWriterRunId)
-        ) {
-          return undefined;
-        }
-        target = source;
-      }
-    }
-    return target;
-  };
-
-  const stop = async (): Promise<void> => {
-    stopping = true;
-    cancelWhere(() => true, "provider-error");
-    await withTimeout(
-      Promise.allSettled(operations.keys()),
-      options.stopDrainMs ?? 5_000,
-      "Worker inference shutdown",
-    ).catch(() => undefined);
-  };
-
   return {
+    ready: () => recovered,
     start,
     cancel,
-    cancelEnvironment,
-    cancelClaim,
-    cancelSession,
-    captureSessionCancellation,
-    beginSessionDrain,
-    hasSession,
-    resolveSessionTargetForRunId,
-    stop,
+    cancelEnvironment: controls.cancelEnvironment,
+    cancelClaim: (claim: WorkerSessionTurnClaim) =>
+      controls.cancelClaim(serializeWorkerSessionTurnClaim(claim)),
+    cancelSession: controls.cancelSession,
+    captureSessionCancellation: controls.captureSessionCancellation,
+    reserveSessionDrain: controls.reserveSessionDrain,
+    hasSession: controls.hasSession,
+    resolveSessionTargetForRunId: controls.resolveSessionTargetForRunId,
+    stop: controls.stop,
   };
 }

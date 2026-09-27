@@ -112,7 +112,7 @@ export function createTelegramClientFetch(params: {
   const isRawSourceFetch =
     params.transport?.sourceFetch !== undefined &&
     params.fetchImpl === asTelegramClientFetch(params.transport.sourceFetch);
-  const wrappedFetch = async (input: TelegramFetchInput, init?: TelegramFetchInit) => {
+  return async (input: TelegramFetchInput, init?: TelegramFetchInit) => {
     const assertCurrent = getTelegramRequestAuthority(init);
     const method = extractTelegramApiMethod(input);
     const requestTimeoutMs = resolveTelegramRequestTimeoutMs(method, params.timeoutSeconds);
@@ -226,6 +226,4 @@ export function createTelegramClientFetch(params: {
       throw err;
     }
   };
-
-  return wrappedFetch;
 }

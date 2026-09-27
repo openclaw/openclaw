@@ -122,6 +122,7 @@ describe("requester settle retry lifetime", () => {
         getLatestRunForChildSession: () => null,
         suppressAnnounceForSteerRestart: () => false,
         resolveSubagentTask: () => ({ lookup: "available" }),
+        resolveSubagentTaskAsync: unexpected,
         shouldEmitEndedHookForRun: () => false,
         emitSubagentEndedHookForRun: unexpected,
         emitSubagentProgressEndedForRun: unexpected,

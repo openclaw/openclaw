@@ -79,7 +79,7 @@ it.each(["end", "error"] as const)(
       sessionKey: childSessionKey,
       defaultSessionId: sessionId,
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "timeout-predecessor",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -100,7 +100,7 @@ it.each(["end", "error"] as const)(
       sessionId,
       ownerEpoch: 1,
     });
-    let placement = placementStore.startDispatch(placementIdentity);
+    let placement = await placementStore.startDispatch(placementIdentity);
     for (const transition of [
       { from: "requested", to: "provisioning", patch: { environmentId: "timeout-worker" } },
       { from: "provisioning", to: "syncing", patch: { workerBundleHash: "b".repeat(64) } },
@@ -120,7 +120,7 @@ it.each(["end", "error"] as const)(
         ...transition,
       });
     }
-    const turnClaim = placementStore.claimTurn({
+    const turnClaim = await placementStore.claimTurn({
       ...placementIdentity,
       claimId: "fixture-turn-claim",
       runId: previous.runId,
@@ -304,7 +304,7 @@ it.each(["successor", "task activation", "flow activation"] as const)(
       sessionKey: childSessionKey,
       defaultSessionId: "rearm-rollback-session",
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "rollback-predecessor",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -403,7 +403,7 @@ it("rearms the canonical task and mirrored flow for an interrupted run's success
     sessionKey: childSessionKey,
     defaultSessionId: "interrupted-task-session",
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: "interrupted-task-old",
     childSessionKey,
     requesterSessionKey,

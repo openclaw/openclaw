@@ -187,36 +187,44 @@ describe("GPT-Live werift audio peer", () => {
   });
 
   it("keeps raw Opus RTP payload framing and round-trips relay PCM", async () => {
-    const [
-      { Application, createDecoder, createEncoder },
-      { RtpHeader, RtpPacket, dePacketizeRtpPackets },
-    ] = await Promise.all([import("libopus-wasm"), import("werift")]);
-    const encoder = await createEncoder({
-      application: Application.Voip,
-      channels: 2,
-      sampleRate: 48_000,
-      frameSize: 960,
+    const { RtpPacket, dePacketizeRtpPackets } = await import("werift");
+    const onAudio = vi.fn<(audio: Buffer) => void>();
+    const onError = vi.fn();
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio, onError },
+      iceServers: [],
     });
-    const decoder = await createDecoder({ channels: 2, sampleRate: 48_000 });
-    try {
-      const packet = encoder.encode(OpenAIQuicksilverAudioPeer.convertRelayPcm(createRelayTone()), {
-        frameSize: 960,
+    const testPeer = peer as unknown as TestableAudioPeer;
+    const send = vi
+      .spyOn(testPeer.state.transceiver.sender, "sendRtp")
+      .mockImplementation(async (packet) => {
+        if (!(packet instanceof RtpPacket)) {
+          throw new Error("Expected an RTP packet");
+        }
+        expect(dePacketizeRtpPackets("opus", [packet]).data).toEqual(packet.payload);
+        testPeer.handleInboundRtp(packet);
       });
-      const rtp = new RtpPacket(
-        new RtpHeader({ payloadType: 111, sequenceNumber: 7, timestamp: 960 }),
-        Buffer.from(packet),
-      );
-      const depacketized = dePacketizeRtpPackets("opus", [rtp]).data;
-      expect(depacketized).toEqual(Buffer.from(packet));
-      const decoded = decoder.decode(depacketized, { maxFrameSize: 5_760 });
-      const relayPcm = OpenAIQuicksilverAudioPeer.convertQuicksilverPcm(decoded);
-      expect(relayPcm).toHaveLength(480 * 2);
+    try {
+      testPeer.connected = true;
+      for (let index = 0; index < 3; index += 1) {
+        peer.sendAudio(createRelayTone());
+        testPeer.sendNextAudioFrame();
+      }
+      await Promise.resolve();
+      const relayPcm = Buffer.concat(onAudio.mock.calls.map(([audio]) => audio));
+      expect(send).toHaveBeenCalledTimes(3);
+      expect(onError).not.toHaveBeenCalled();
+      // The streaming filter retains seven samples until the next packet.
+      expect(relayPcm).toHaveLength((3 * 480 - 7) * 2);
       expect(
-        Math.max(...Array.from({ length: 480 }, (_, i) => Math.abs(relayPcm.readInt16LE(i * 2)))),
+        Math.max(
+          ...Array.from({ length: relayPcm.length / 2 }, (_, i) =>
+            Math.abs(relayPcm.readInt16LE(i * 2)),
+          ),
+        ),
       ).toBeGreaterThan(1_000);
     } finally {
-      encoder.free();
-      decoder.free();
+      peer.close();
     }
   });
 

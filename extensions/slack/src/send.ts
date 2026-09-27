@@ -23,7 +23,6 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
-  normalizeOptionalString as normalizeSlackApiString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
@@ -78,17 +77,11 @@ const SLACK_RECONCILE_MAX_PAGES = 10;
 const SLACK_ENTERPRISE_LISTENER_QUEUE_CREDENTIAL = "listener-scoped-enterprise";
 const slackSendQueue = new KeyedAsyncQueue();
 
-type SlackRecipient =
-  | {
-      kind: "user";
-      id: string;
-      teamId?: string;
-    }
-  | {
-      kind: "channel";
-      id: string;
-      teamId?: string;
-    };
+type SlackRecipient = {
+  kind: "user" | "channel";
+  id: string;
+  teamId?: string;
+};
 
 export type SlackSendIdentity = SlackPostMessageIdentity;
 
@@ -200,12 +193,12 @@ function formatSlackWebApiErrorMessage(err: unknown): string | undefined {
     return undefined;
   }
   const data = getSlackWebApiErrorData(err);
-  const code = normalizeSlackApiString(data?.error);
+  const code = normalizeOptionalString(data?.error);
   if (!code) {
     return undefined;
   }
   const details: string[] = [];
-  const needed = normalizeSlackApiString(data?.needed);
+  const needed = normalizeOptionalString(data?.needed);
   if (needed) {
     details.push(`needed: ${needed}`);
   }
@@ -394,8 +387,7 @@ function parseEnterpriseEventRecipient(raw: string): SlackRecipient {
   return { kind: "channel", id: canonicalizeSlackApiTargetId("channel", match[1]) };
 }
 
-function resolveSlackSendEventScope(params: { opts: SlackSendOpts }): SlackEventScope | undefined {
-  const scope = params.opts.eventScope;
+function resolveSlackSendEventScope(scope?: SlackEventScope): SlackEventScope | undefined {
   if (!scope) {
     return undefined;
   }
@@ -776,30 +768,21 @@ async function scanSlackConversationForDelivery(params: {
   let expectedPartCount: number | undefined;
   const deliveryParts = new Map<number, SlackDeliveryPart>();
   for (let page = 0; page < SLACK_RECONCILE_MAX_PAGES; page += 1) {
-    const response = (
-      threadTs
-        ? await withSlackDnsRequestRetry("conversations.replies", () =>
-            params.client.conversations.replies({
-              channel: params.channelId,
-              ts: threadTs,
-              oldest: params.oldest,
-              latest: params.latest,
-              include_all_metadata: true,
-              limit: SLACK_RECONCILE_LIMIT,
-              ...(cursor ? { cursor } : {}),
-            }),
-          )
-        : await withSlackDnsRequestRetry("conversations.history", () =>
-            params.client.conversations.history({
-              channel: params.channelId,
-              oldest: params.oldest,
-              latest: params.latest,
-              include_all_metadata: true,
-              limit: SLACK_RECONCILE_LIMIT,
-              ...(cursor ? { cursor } : {}),
-            }),
-          )
-    ) as SlackConversationLookupResponse;
+    const query = {
+      channel: params.channelId,
+      oldest: params.oldest,
+      latest: params.latest,
+      include_all_metadata: true,
+      limit: SLACK_RECONCILE_LIMIT,
+      ...(cursor ? { cursor } : {}),
+    };
+    const response = threadTs
+      ? await withSlackDnsRequestRetry("conversations.replies", () =>
+          params.client.conversations.replies({ ...query, ts: threadTs }),
+        )
+      : await withSlackDnsRequestRetry("conversations.history", () =>
+          params.client.conversations.history(query),
+        );
     const matches = findSlackConversationDeliveryParts({
       messages: asSlackConversationMessages(response),
       queueId: params.queueId,
@@ -1025,7 +1008,7 @@ export async function sendMessageSlack(
     cfg,
     accountId: opts.accountId,
   });
-  const eventScope = resolveSlackSendEventScope({ opts });
+  const eventScope = resolveSlackSendEventScope(opts.eventScope);
   const recipient = eventScope ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
   if (!eventScope) {
     assertSlackDetachedTargetAllowed(account.accountId, recipient.teamId);
@@ -1051,6 +1034,8 @@ export async function sendMessageSlack(
       account,
       blocks,
       delivery,
+    }).catch((err: unknown) => {
+      throw enrichSlackWebApiError(err);
     }),
   );
   const threadTs = result.threadTs ?? normalizeSlackThreadTsCandidate(queuedOpts.threadTs);
@@ -1062,17 +1047,7 @@ export async function sendMessageSlack(
   return result;
 }
 
-async function sendMessageSlackQueued(
-  params: Parameters<typeof sendMessageSlackQueuedInner>[0],
-): Promise<SlackSendResult> {
-  try {
-    return await sendMessageSlackQueuedInner(params);
-  } catch (err) {
-    throw enrichSlackWebApiError(err);
-  }
-}
-
-async function sendMessageSlackQueuedInner(params: {
+async function sendMessageSlackQueued(params: {
   trimmedMessage: string;
   opts: SlackSendOpts;
   cfg: OpenClawConfig;
@@ -1186,6 +1161,36 @@ async function sendMessageSlackQueuedInner(params: {
   let deliveredChannelId = channelId;
   let canonicalDeliveredThreadTs: string | undefined;
   let sendIdentity = identity;
+  const postPart = async (
+    part: Pick<
+      Parameters<typeof postSlackMessageBestEffort>[0],
+      "text" | "blocks" | "metadata" | "replyBroadcast" | "mrkdwn"
+    >,
+  ) => {
+    const posted = await postSlackMessageBestEffort({
+      client,
+      channelId,
+      threadTs: opts.threadTs,
+      identity: sendIdentity,
+      unfurl,
+      ...part,
+    });
+    const { response } = posted;
+    sendIdentity = posted.identity;
+    lastMessageId = response.ts;
+    deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
+    const responseThreadTs = resolvePostedMessageThreadTs(response);
+    canonicalDeliveredThreadTs ??= responseThreadTs;
+    return await reportDelivery(
+      createSlackSendResult(
+        response.ts,
+        deliveredChannelId,
+        part.blocks ? "card" : "text",
+        responseThreadTs ?? normalizeSlackThreadTsCandidate(opts.threadTs),
+      ),
+      part.blocks,
+    );
+  };
   if (blocks && opts.mediaUrl) {
     throw new Error("Slack send does not support blocks with mediaUrl");
   }
@@ -1207,26 +1212,13 @@ async function sendMessageSlackQueuedInner(params: {
       });
       await dispatchOnce();
       try {
-        const { response } = await postSlackMessageBestEffort({
-          client,
-          channelId,
+        return await postPart({
           text: accessibilityText,
-          threadTs: opts.threadTs,
           replyBroadcast: opts.replyBroadcast,
-          identity,
           blocks,
           metadata: initialBlockMetadata,
           ...(usesOrderedBlockAccessibility ? { mrkdwn: false } : {}),
-          unfurl,
         });
-        const messageId = response.ts;
-        deliveredChannelId = resolvePostedMessageChannelId(response, channelId);
-        const deliveredThreadTs =
-          resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
-        return await reportDelivery(
-          createSlackSendResult(messageId, deliveredChannelId, "card", deliveredThreadTs),
-          blocks,
-        );
       } catch (error) {
         if (!hasNativeData || !isSlackInvalidBlocksError(error)) {
           throw error;
@@ -1249,34 +1241,13 @@ async function sendMessageSlackQueuedInner(params: {
         if (partIndex === 0) {
           await dispatchOnce();
         }
-        const posted = await postSlackMessageBestEffort({
-          client,
-          channelId,
+        const fallbackDelivery = await postPart({
           text: fallback.text,
-          threadTs: opts.threadTs,
           replyBroadcast: partIndex === 0 ? opts.replyBroadcast : undefined,
-          identity: sendIdentity,
           ...(fallback.blocks ? { blocks: fallback.blocks } : {}),
           metadata,
           mrkdwn: false,
-          unfurl,
         });
-        const response = posted.response;
-        sendIdentity = posted.identity;
-        lastMessageId = response.ts;
-        deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
-        canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);
-        const deliveredThreadTs =
-          resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
-        const fallbackDelivery = await reportDelivery(
-          createSlackSendResult(
-            response.ts,
-            deliveredChannelId,
-            fallback.blocks ? "card" : "text",
-            deliveredThreadTs,
-          ),
-          fallback.blocks,
-        );
         if (fallbackDelivery.meta?.slackQuestionActionIds.length) {
           questionDelivery = fallbackDelivery;
         }
@@ -1366,30 +1337,12 @@ async function sendMessageSlackQueuedInner(params: {
     if (partIndex === 0 && !opts.mediaUrl) {
       await dispatchOnce();
     }
-    const posted = await postSlackMessageBestEffort({
-      client,
-      channelId,
+    await postPart({
       text: chunk,
-      threadTs: opts.threadTs,
       replyBroadcast: carriesPrimaryMessageOptions ? opts.replyBroadcast : undefined,
-      identity: sendIdentity,
       metadata,
       ...(opts.textIsSlackPlainText ? { mrkdwn: false } : {}),
-      unfurl,
     });
-    const response = posted.response;
-    sendIdentity = posted.identity;
-    lastMessageId = response.ts;
-    deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
-    canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);
-    await reportDelivery(
-      createSlackSendResult(
-        response.ts,
-        deliveredChannelId,
-        "text",
-        resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs),
-      ),
-    );
   }
 
   const deliveredThreadTs =

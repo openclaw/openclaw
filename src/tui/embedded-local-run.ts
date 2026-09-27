@@ -11,7 +11,6 @@ export type LocalRunState = {
   assistantScope?: AssistantTextSnapshot["scope"];
   managedMediaUrls: Set<string>;
   lastBroadcastText?: string;
-  isBtw: boolean;
   question?: string;
   finishing: boolean;
   lifecycleEnded: boolean;
@@ -61,14 +60,6 @@ export function buildLocalQueuedPrompt(queue: NonNullable<LocalRunState["pending
         })
       : (queue.messages[0] ?? "");
   return [summary, prompt].filter(Boolean).join("\n\n");
-}
-
-export function createQueuedRunReadiness() {
-  let markReady!: () => void;
-  const promise = new Promise<void>((ready) => {
-    markReady = ready;
-  });
-  return { promise, markReady };
 }
 
 export async function waitForLocalRunShutdown(promises: Promise<void>[]): Promise<boolean> {

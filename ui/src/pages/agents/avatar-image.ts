@@ -1,4 +1,3 @@
-// Control UI helper converts picked avatar images into compact data URLs.
 import { AVATAR_MAX_BYTES } from "../../../../src/shared/avatar-limits.js";
 
 /** Uploaded avatars also mirror into prompt-injected IDENTITY.md. Keep their

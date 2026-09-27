@@ -4,12 +4,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAuthRateLimiter, type AuthRateLimiter } from "../auth-rate-limit.js";
+import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "../auth-rate-limit.js";
+import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
 import type { TransferArtifact } from "./artifact-transfer-service.js";
-import {
-  createWorkerBootstrapArtifactTransferHttpCallback,
-  handleWorkerBootstrapArtifactTransferHttpRequest,
-} from "./worker-bootstrap-artifact-transfer-http.js";
+import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-bootstrap-artifact-transfer-http.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 describe("worker bootstrap artifact transfer", () => {
@@ -26,7 +24,7 @@ describe("worker bootstrap artifact transfer", () => {
     authorized = true;
     now = 1_000;
     service = createWorkerBootstrapArtifactTransferService({ now: () => now });
-    const callback = createWorkerBootstrapArtifactTransferHttpCallback(service);
+    const callback = createArtifactTransferHttpCallback(service);
     server = http.createServer((req, res) => {
       void handleWorkerBootstrapArtifactTransferHttpRequest({
         req,
@@ -206,7 +204,7 @@ describe("worker bootstrap artifact transfer", () => {
 
   it("shares the transfer authentication rate limit without exposing artifact presence", async () => {
     const { url } = await prepare();
-    rateLimiter = createAuthRateLimiter({ maxAttempts: 1, exemptLoopback: false });
+    rateLimiter = createGatewayAuthRateLimiter({ maxAttempts: 1, exemptLoopback: false });
     expect((await fetch(url)).status).toBe(404);
     const limited = await fetch(url);
     expect(limited.status).toBe(429);

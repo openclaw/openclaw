@@ -4,6 +4,57 @@ Read this file only for a non-default backend, manual driver operation, event
 interpretation, persistent fixtures, forum topics, or a failed run. The primary proof sequence stays in
 [`SKILL.md`](../SKILL.md).
 
+## Published-driver topic-binding upgrade
+
+The npm Telegram lane's standalone `telegram-published-upgrade-bindings` selector
+proves an actual binding created by an installed published Gateway survives its
+own updater and the candidate's next restart. Run it only in the lane's isolated
+container: the secretless install phase owns the published prefix, and the
+validated candidate tarball is mounted read-only for the live phase.
+
+The lane invokes:
+
+```sh
+node .agents/skills/telegram-e2e-userbot/scripts/run-published-upgrade-user-e2e.mjs \
+  --baseline /npm-global/bin/openclaw \
+  --baseline-spec openclaw@2026.9.6 \
+  --candidate /package-under-test/openclaw-2026.9.6.tgz \
+  --output /out/telegram-upgrade
+```
+
+Use the exact published version selected by the workflow. Before leasing, the
+command verifies the installed baseline, reads the candidate's build identity
+and nine reached runtime artifacts without executing package code, and prepares
+the pinned TDLib through the maintained loader. It uses existing Python 3 and
+the driver's standard-library implementation, without `uv` or a source build.
+
+One maintained credential/run scope owns fixture setup, the proxy, recorder,
+mock provider, installed Gateway children, and updater. The published Gateway
+must accept a real `sessions_spawn` with `thread:true` and `mode:session`, and
+both parent and child must reply in the actual topic before shutdown. The
+genuine published CLI then runs `update --tag file:<candidate> --yes --no-restart
+--json` with the same runner-created config, token file, workspace, and databases.
+The candidate must route the next topic turn to that same child, restart, and
+continue routing to it. Each of the three Gateway stops requires a joined exit
+code 0 with no signal; forced process cleanup cannot qualify orderly shutdown.
+Artifact hashes, native observations, accepted tool-result correlation, canonical
+session identity, and receipt-scoped cleanup all participate in the verdict.
+
+Initial windows are 900 seconds for the updater and 1,800 seconds for recording;
+the native readiness and authoritative RPC checkpoints retain their own bounded
+deadlines. A timeout fails the run and is not retried. Existing package-registry
+settings belong to the npm lane and are preserved for the updater; broker
+credentials are not inherited by it.
+
+Only `published-upgrade.json` goes to the public output directory. It reports
+package identities, proved relationships, and typed failure facts for updater,
+shutdown, checkpoints, and cleanup. Missing lease-release confirmation stays
+unknown even after fixture deletion succeeds. Raw logs, transcripts, native
+identities, credentials, and runtime state remain in separate private temporary
+storage. Successful runs remove that storage; failed runs retain it for their
+container's existing cleanup policy. Do not upload the raw temporary tree or
+replay uncertain fixture/update mutations without reconciling the owned state.
+
 ## Chat selection
 
 `--chat` accepts a TDLib chat id, `@username`, invite link, or `t.me` link.

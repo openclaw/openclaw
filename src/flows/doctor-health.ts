@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import type { BackupSqliteSnapshotFact } from "../commands/backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import {
@@ -166,6 +167,7 @@ async function runDoctorHealthFlowWithResult(
       root,
       runtime: repairRuntime,
       assertCurrent: writeAuthority?.assertCurrent,
+      databaseGenerations: writeAuthority?.databaseGenerations,
     });
     const runChecks = async () => {
       const doctorRuntime = maintenance ? repairRuntime : effectiveRuntime;
@@ -199,7 +201,7 @@ async function runDoctorHealthFlowWithResult(
         maintenance &&
         databasePreflight?.agentDatabaseMigrationDiscovery?.discovery.deletionJournal.status ===
           "unavailable";
-      const schemas =
+      let schemas =
         databasePreflight && !refreshRecoveryInventory
           ? databasePreflight
           : await prepareDoctorDatabasePreflight();
@@ -211,12 +213,51 @@ async function runDoctorHealthFlowWithResult(
       }
       const { guardUpdateDoctorSchemaUpgrade } =
         await import("../commands/doctor-update-schema-guard.js");
+      let verifiedSnapshots: readonly BackupSqliteSnapshotFact[] = [];
       await guardUpdateDoctorSchemaUpgrade({
         schemas,
         runtime: doctorRuntime,
         json: options.json,
         postCoreSchemaRepair: writeAuthority?.postCoreSchemaRepair,
+        onVerifiedBackup: (snapshots) => {
+          verifiedSnapshots = snapshots;
+        },
       });
+
+      if (maintenance && (options.repair === true || options.yes === true)) {
+        const {
+          repairOpenClawStateDatabaseIndexesForDoctor,
+          repairOpenClawStateDatabaseReadabilityForDoctor,
+        } = await import("../state/openclaw-state-db.js");
+        // Restore physical indexes, then legacy catalog readability before config discovery.
+        let repairedState = false;
+        for (const repair of [
+          repairOpenClawStateDatabaseIndexesForDoctor,
+          repairOpenClawStateDatabaseReadabilityForDoctor,
+        ]) {
+          const result = repair({ env: process.env });
+          repairedState ||= result.changes.length > 0;
+          if (result.warnings.length > 0) {
+            throw new Error(result.warnings.join("\n"));
+          }
+          for (const change of result.changes) {
+            effectiveRuntime.log(change);
+          }
+        }
+        if (repairedState) {
+          schemas = await prepareDoctorDatabasePreflight();
+        }
+        const { backupDoctorMigrationDatabases } =
+          await import("../commands/doctor-migration-backup.js");
+        const backups = await backupDoctorMigrationDatabases({
+          env: process.env,
+          pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
+          verifiedSnapshots,
+        });
+        for (const change of backups.changes) {
+          effectiveRuntime.log(change);
+        }
+      }
 
       const { repairDoctorAgentDeletionJournal } =
         await import("../commands/doctor-agent-deletion-journal.js");
@@ -231,20 +272,17 @@ async function runDoctorHealthFlowWithResult(
       for (const message of deletionJournal.warnings) {
         effectiveRuntime.log(message);
       }
-
-      if (maintenance && (options.repair === true || options.yes === true)) {
-        const { repairOpenClawStateDatabaseReadabilityForDoctor } =
-          await import("../state/openclaw-state-db.js");
-        // Restore catalog reads before config discovery; versioned migrations remain in its graph.
-        const readability = repairOpenClawStateDatabaseReadabilityForDoctor({
-          env: process.env,
+      if (prompter.shouldRepair && deletionJournal.warnings.length > 0) {
+        const failure = createUpdateFailureFact({
+          check: "agent-deletion-journal",
+          code: "unverified-agent-databases",
+          message: deletionJournal.warnings.join("\n"),
         });
-        if (readability.warnings.length > 0) {
-          throw new Error(readability.warnings.join("\n"));
-        }
-        for (const change of readability.changes) {
-          effectiveRuntime.log(change);
-        }
+        throw new DoctorMaintenanceRefusalError(
+          formatUpdateFailureFact(failure),
+          { kind: "data-at-risk", reason: "incomplete-migration" },
+          { failureFacts: [failure] },
+        );
       }
 
       // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
@@ -516,12 +554,16 @@ async function runDoctorHealthFlowWithResult(
         const warnings = normalizeUpdatePostInstallDoctorWarnings([
           ...contributionWarnings.slice(0, deferredCount),
           ...(doctorResult.warnings ?? []),
+          ...(maintenance?.warnings ?? []).filter(
+            (warning) => !doctorResult.warnings?.includes(warning),
+          ),
           ...contributionWarnings.slice(deferredCount),
         ]);
         await writeUpdatePostInstallDoctorResult({
           resultPath: updateResult.resultPath,
           result: {
             ...doctorResult,
+            ...(maintenance?.databaseWrites ? { databaseWrites: maintenance.databaseWrites } : {}),
             ...(warnings.length ? { warnings } : {}),
             ...(updateResult.capture.configChanges.length
               ? { configChanges: updateResult.capture.configChanges }

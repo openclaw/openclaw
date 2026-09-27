@@ -1,4 +1,3 @@
-// Memory Core tests cover deleted-file cleanup after same-file legacy migration.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -114,37 +113,22 @@ describe("memory legacy migration cleanup", () => {
       count: 2,
     });
 
-    const createConfig = (params: {
-      extensionPath?: string;
-      provider: "none" | "openai";
-      vectorEnabled: boolean;
-    }) =>
-      ({
-        memory: {
-          backend: "builtin",
-          search: {
-            provider: params.provider,
-            model: params.provider === "none" ? "" : "text-embedding-3-small",
-            rememberAcrossConversations: false,
-            sources: ["memory"],
-            store: {
-              vector: {
-                enabled: params.vectorEnabled,
-                ...(params.extensionPath ? { extensionPath: params.extensionPath } : {}),
-              },
-            },
-            cache: { enabled: false },
-            query: { hybrid: { enabled: true } },
-          },
+    const cfg: OpenClawConfig = {
+      memory: {
+        search: {
+          provider: "none",
+          model: "",
+          rememberAcrossConversations: false,
+          sources: ["memory"],
+          store: { vector: { enabled: false } },
+          cache: { enabled: false },
         },
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-          list: [{ id: "main", default: true }],
-        },
-      }) as OpenClawConfig;
-    const cfg = createConfig({ provider: "none", vectorEnabled: false });
+      },
+      agents: {
+        defaults: { workspace: workspaceDir },
+        list: [{ id: "main", default: true }],
+      },
+    };
     const result = await MemoryIndexManager.get({ cfg, agentId: "main" });
     if (!result) {
       throw new Error("memory manager missing");
@@ -154,27 +138,17 @@ describe("memory legacy migration cleanup", () => {
     expect(Reflect.get(manager, "sessionsFullRetryDirty")).toBe(false);
 
     const db = Reflect.get(manager, "db") as DatabaseSync;
+    const countRows = (table: string, sourcePath: string) =>
+      db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE path = ?`).get(sourcePath);
     expect(
       db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/deleted.md'").get(),
     ).toEqual({ hash: "" });
     expect(
       db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/ownerless.md'").get(),
     ).toEqual({ hash: "" });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE path = ?")
-        .get("memory/deleted.md"),
-    ).toEqual({ count: 1 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
-        .get("memory/deleted.md"),
-    ).toEqual({ count: 1 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
-        .get("memory/ownerless.md"),
-    ).toEqual({ count: 1 });
+    expect(countRows("memory_index_chunks", "memory/deleted.md")).toEqual({ count: 1 });
+    expect(countRows("memory_index_chunks_fts", "memory/deleted.md")).toEqual({ count: 1 });
+    expect(countRows("memory_index_chunks_fts", "memory/ownerless.md")).toEqual({ count: 1 });
 
     await (
       manager as unknown as {
@@ -182,36 +156,15 @@ describe("memory legacy migration cleanup", () => {
       }
     ).syncMemoryFiles({ needsFullReindex: false });
 
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_sources WHERE path = ?")
-        .get("memory/deleted.md"),
-    ).toEqual({ count: 0 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE path = ?")
-        .get("memory/deleted.md"),
-    ).toEqual({ count: 0 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
-        .get("memory/deleted.md"),
-    ).toEqual({ count: 0 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_sources WHERE path = ?")
-        .get("memory/ownerless.md"),
-    ).toEqual({ count: 0 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE path = ?")
-        .get("memory/ownerless.md"),
-    ).toEqual({ count: 0 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
-        .get("memory/ownerless.md"),
-    ).toEqual({ count: 0 });
+    for (const sourcePath of ["memory/deleted.md", "memory/ownerless.md"]) {
+      for (const table of [
+        "memory_index_sources",
+        "memory_index_chunks",
+        "memory_index_chunks_fts",
+      ]) {
+        expect(countRows(table, sourcePath), `${table}: ${sourcePath}`).toEqual({ count: 0 });
+      }
+    }
     // Cleanup ran while vectors were disabled. Keep the old table untouched and
     // persist a rebuild marker; one-sided orphan pruning would still miss vector
     // rows that should exist but were never written.

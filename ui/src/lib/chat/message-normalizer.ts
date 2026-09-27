@@ -1,7 +1,4 @@
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
-/**
- * Message normalization utilities for chat rendering.
- */
 import {
   asFiniteNumber,
   asNonNegativeFiniteNumber,
@@ -368,17 +365,13 @@ function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem
   return merged.filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
-export function stripMessageDisplayMetadataText(text: string): string {
-  return stripInboundMetadata(text);
-}
-
 function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageContentItem[] {
   return items
     .map((item) => {
       if (item.type !== "text" || typeof item.text !== "string") {
         return item;
       }
-      return { ...item, text: stripMessageDisplayMetadataText(item.text) };
+      return { ...item, text: stripInboundMetadata(item.text) };
     })
     .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
@@ -458,9 +451,6 @@ function expandTextContent(
   };
 }
 
-/**
- * Normalize a raw message object into a consistent structure.
- */
 export function normalizeMessage(message: unknown): NormalizedMessage {
   const m =
     asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
@@ -482,7 +472,6 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     return preview ? [preview] : [];
   });
 
-  // Extract content
   let content: MessageContentItem[] = [];
   let audioAsVoice = false;
   let replyTarget: NormalizedMessage["replyTarget"] = null;

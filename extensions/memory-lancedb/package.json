@@ -9,8 +9,8 @@
   "type": "module",
   "dependencies": {
     "apache-arrow": "21.2.0",
-    "openai": "7.15.0",
-    "typebox": "1.3.32"
+    "openai": "7.17.0",
+    "typebox": "1.3.33"
   },
   "devDependencies": {
     "@lancedb/lancedb": "0.38.0",
@@ -39,7 +39,10 @@
       "pluginApi": ">=2026.9.6"
     },
     "build": {
-      "openclawVersion": "2026.9.6"
+      "openclawVersion": "2026.9.6",
+      "workerEntries": [
+        "./lancedb-runtime.ts"
+      ]
     },
     "release": {
       "bundleRuntimeDependencies": false,

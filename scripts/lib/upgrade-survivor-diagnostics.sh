@@ -5,12 +5,24 @@ prepare_diagnostics_capture() {
   if [ -L "$ARTIFACT_DIR" ] || [ -L "$ARTIFACT_DIR/diagnostics" ] || [ -L "$ARTIFACT_DIR/missing-load-path" ] ||
     ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json" "$ARTIFACT_DIR/diagnostics/post-core.json" "$ARTIFACT_DIR/summary.json" \
       "$ARTIFACT_DIR/update.json" "$ARTIFACT_DIR/repair.json" "$ARTIFACT_DIR/recovery-update.json" \
+      "$ARTIFACT_DIR"/update-noop.{json,err} \
       "$ARTIFACT_DIR/candidate-cohort.json" \
+      "$ARTIFACT_DIR/backup-rollback.json" \
+      "$ARTIFACT_DIR"/backup-rollback-{create,restore}.json \
+      "$ARTIFACT_DIR"/backup-rollback-{create,restore}.json.err \
+      "$ARTIFACT_DIR/legacy-operator-restored-index.json" \
+      "$ARTIFACT_DIR"/restored-index-{post-update,candidate-import,rollback}.json \
       "$ARTIFACT_DIR"/legacy-operator-baseline-turn.{out,err} \
       "$ARTIFACT_DIR"/legacy-operator-candidate-turn.{out,err} \
+      "$ARTIFACT_DIR"/legacy-operator-run-survivor-{default,ops}-owner.{out,err} \
+      "$ARTIFACT_DIR"/legacy-operator-{post-update,candidate}-transcript-{0,1}{,-earlier}.{out,err} \
       "$ARTIFACT_DIR/missing-load-path/baseline-gateway.log" \
       "$ARTIFACT_DIR/missing-load-path/baseline-gateway-convergence-refusal.log" \
       "$ARTIFACT_DIR/sibling-registrations.jsonl" "$ARTIFACT_DIR/sibling-source.json" "$ARTIFACT_DIR/sibling-canary.json" \
+      "$ARTIFACT_DIR/sibling-refusal.armed" "$ARTIFACT_DIR/sibling-refusal-preload.mjs" \
+      "$ARTIFACT_DIR"/sibling-refusal-{update,status}.{json,err} \
+      "$ARTIFACT_DIR"/sibling-refusal-{baseline,worker,child,cleanup}.json \
+      "$ARTIFACT_DIR/sibling-refusal-registrations.jsonl" \
       "$ARTIFACT_DIR"/diagnostics/doctor-*.json; then
     echo "Upgrade survivor diagnostics missing: private capture setup failed." >&2
     return 0

@@ -3,8 +3,8 @@ import { resolveNativeModelParentOwner } from "./native-subagent-model-lookup.js
 import {
   createNativeModelSourceOwner,
   bindNativeChildModelAdmission,
+  admitNativeChildModelExecution,
   retainNativeModelSource,
-  retainNativeModelExecution,
 } from "./native-subagent-model-source.js";
 import type {
   ChildState,
@@ -500,16 +500,11 @@ export function drainNativeChildModelAdmissions(
       nativeParentThreadId: evidence.nativeParentThreadId,
     });
     if (childState) {
-      const known = dependencies.knownChildren.get(childState.childThreadId);
-      if (known) {
-        known.configurationQualification = owner.configurationQualification;
-      }
-      childState.modelExecution ??= retainNativeModelExecution(
+      admitNativeChildModelExecution(
+        childState,
         owner,
-        childState.nativeTurnId,
-        childState.childThreadId,
+        dependencies.knownChildren.get(childState.childThreadId),
       );
-      owner.onDirectChildAccepted?.();
     }
   }
   dependencies.replaceAdmissions(turnId, remaining);

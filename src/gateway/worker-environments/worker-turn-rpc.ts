@@ -601,11 +601,11 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     return binding.ok ? null : "reason" in binding ? binding.reason : "session-not-attached";
   };
 
-  const startInference = (
+  const startInference = async (
     identity: WorkerConnectionIdentity,
     request: WorkerInferenceStartParams,
     sink: WorkerInferenceSink,
-  ): WorkerInferenceStartServiceResult => {
+  ): Promise<WorkerInferenceStartServiceResult> => {
     if (request.sessionId !== identity.sessionId || request.runId !== identity.runId) {
       return { ok: false, reason: "session-not-attached" };
     }
@@ -624,17 +624,15 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       request,
       sink,
       sessionTarget: source.sessionTarget,
-      revalidate: () => {
-        source.receiptAuthority();
-        return revalidateInference(identity, request);
-      },
+      assertSourceCurrent: source.receiptAuthority,
+      revalidate: () => revalidateInference(identity, request),
     });
   };
 
-  const cancelInference = (
+  const cancelInference = async (
     identity: WorkerConnectionIdentity,
     request: WorkerInferenceCancelParams,
-  ): WorkerInferenceCancelServiceResult => {
+  ): Promise<WorkerInferenceCancelServiceResult> => {
     if (request.sessionId !== identity.sessionId || request.runId !== identity.runId) {
       return { ok: false, reason: "session-not-attached" };
     }
@@ -738,7 +736,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     executeComputer,
     startInference,
     cancelInference,
-    cancelInferenceForSession: (params: { sessionId: string; runId?: string }): string[] =>
+    cancelInferenceForSession: (params: { sessionId: string; runId?: string }): Promise<string[]> =>
       inference.cancelSession(params.sessionId, params.runId),
     hasInferenceForSession: (sessionId: string, runId?: string): boolean =>
       inference.hasSession(sessionId, runId),

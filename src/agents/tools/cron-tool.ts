@@ -191,7 +191,7 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
 
 ACTIONS: status | list [includeDisabled,limit?,offset?] (compact summaries with timing; use nextOffset for the next page) | get jobId (full schedule, payload, and delivery details) | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
 
-SCOPE: Authenticated configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns see only caller-visible jobs; totals/counts and hasMore describe that scoped view, not global inventory. In that restricted view, an empty list or failed list/get/update/remove (including not-found) does not establish global absence, whatever the source of a known job id (including your own history). Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results. Report that you cannot establish global absence and ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page; do not bypass caller scope. Genuinely new, requested automations can still be created.
+SCOPE: Authenticated configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns see only caller-visible jobs; totals/counts and hasMore describe that scoped view, not global inventory. In that restricted view, an empty list or failed list/get/update/remove (including not-found) does not establish global absence, whatever the source of a known job id (including your own history). Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results. Report that you cannot establish global absence and ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page. Genuinely new, requested automations can still be created.
 
 ADD: job requires schedule+payload.
 
@@ -407,10 +407,12 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               }),
             );
           }
-          case "get": {
+          case "get":
+          case "remove":
+          case "runs": {
             const id = requireCronJobIdParam(params);
             return jsonResult(
-              await callGateway("cron.get", gatewayOpts, {
+              await callGateway(`cron.${action}`, gatewayOpts, {
                 id,
               }),
             );
@@ -485,27 +487,21 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               : opts?.creatorToolAllowlistCaptureRef;
             capCronJobToolsAllowOnCreate(job, creatorToolAllowlist);
             assertInheritedCronToolCaptureReady(job, creatorToolAllowlistCaptureRef);
-            if (job && typeof job === "object") {
-              const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
-              const resolvedSessionKey = opts?.agentSessionKey
-                ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
-                : undefined;
-              const sessionTarget = normalizeLowercaseStringOrEmpty(
-                (job as { sessionTarget?: unknown }).sessionTarget,
-              );
-              if (!("sessionKey" in job) && resolvedSessionKey && sessionTarget !== "isolated") {
-                (job as { sessionKey?: string }).sessionKey = resolvedSessionKey;
-              }
+            const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
+            const resolvedSessionKey = opts?.agentSessionKey
+              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+              : undefined;
+            const sessionTarget = normalizeLowercaseStringOrEmpty(job.sessionTarget);
+            if (!("sessionKey" in job) && resolvedSessionKey && sessionTarget !== "isolated") {
+              job.sessionKey = resolvedSessionKey;
             }
 
             if (
               (opts?.agentSessionKey || opts?.currentDeliveryContext) &&
-              job &&
-              typeof job === "object" &&
               "payload" in job &&
               (job as { payload?: { kind?: string } }).payload?.kind === "agentTurn"
             ) {
-              const deliveryValue = (job as { delivery?: unknown }).delivery;
+              const deliveryValue = job.delivery;
               const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
               const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
               const mode = normalizeLowercaseStringOrEmpty(modeRaw);
@@ -535,7 +531,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                   agentSessionKey: opts.agentSessionKey,
                 });
                 if (inferred) {
-                  (job as { delivery?: unknown }).delivery = {
+                  job.delivery = {
                     ...inferred,
                     ...delivery,
                   } satisfies CronDelivery;
@@ -545,8 +541,6 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
 
             const contextMessages = readNonNegativeIntegerParam(params, "contextMessages") ?? 0;
             if (
-              job &&
-              typeof job === "object" &&
               "payload" in job &&
               (job as { payload?: { kind?: string; text?: string } }).payload?.kind ===
                 "systemEvent"
@@ -629,14 +623,6 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               }),
             );
           }
-          case "remove": {
-            const id = requireCronJobIdParam(params);
-            return jsonResult(
-              await callGateway("cron.remove", gatewayOpts, {
-                id,
-              }),
-            );
-          }
           case "run": {
             const id = requireCronJobIdParam(params);
             const runMode =
@@ -645,14 +631,6 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               await callGateway("cron.run", gatewayOpts, {
                 id,
                 mode: runMode,
-              }),
-            );
-          }
-          case "runs": {
-            const id = requireCronJobIdParam(params);
-            return jsonResult(
-              await callGateway("cron.runs", gatewayOpts, {
-                id,
               }),
             );
           }

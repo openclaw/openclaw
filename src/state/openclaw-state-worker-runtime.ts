@@ -16,14 +16,22 @@ import {
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import {
   isWorktreeRegistryReadCommand,
   executeWorktreeRegistryReadCommand,
 } from "../agents/worktrees/registry-read.worker.js";
-import { retireMissingWorktreeInWorker } from "../agents/worktrees/registry-retirement.worker.js";
+import {
+  retireMissingWorktreeInWorker,
+  deferWorktreeCleanupInWorker,
+} from "../agents/worktrees/registry-retirement.worker.js";
 import { executeWorktreeRunLeaseCommand } from "../agents/worktrees/run-lease-store.worker.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
+import {
+  isChannelIngressCommand,
+  executeChannelIngressCommand,
+} from "../channels/message/ingress-queue.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
 import { readWorkshopMigrationRecordsInDatabase } from "../commands/doctor-skill-workshop-read.kernel.js";
@@ -35,6 +43,7 @@ import {
 import {
   executeCronStateCommand,
   isCronStateWorkerCommand,
+  prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
 import { executeFleetRegistryCommand } from "../fleet/registry.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
@@ -48,23 +57,28 @@ import {
   isOperatorApprovalCommand,
 } from "../gateway/operator-approval-store.worker.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
+import { isWorkerInferenceStoreCommand } from "../gateway/worker-environments/inference-store.worker-contract.js";
+import { executeWorkerInferenceStoreCommand } from "../gateway/worker-environments/inference-store.worker.js";
+import { startWorkerPlacementDispatchInWorker } from "../gateway/worker-environments/placement-dispatch-store.worker.js";
+import { isPlacementTurnClaimCommand } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
+import { executePlacementTurnClaimCommand } from "../gateway/worker-environments/placement-turn-claims.worker.js";
 import { isWorkerEnvironmentCommand } from "../gateway/worker-environments/store-worker-contract.js";
 import { executeWorkerEnvironmentCommand } from "../gateway/worker-environments/store.worker.js";
-import { readDeferredPluginMigrationsInWorker } from "../infra/deferred-plugin-migrations.worker.js";
+import {
+  readDeferredPluginMigrationsInWorker,
+  recordDeferredPluginMigrationsInWorker,
+} from "../infra/deferred-plugin-migrations.worker.js";
 import * as deliveryQueue from "../infra/delivery-queue.worker.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import { executeDevicePairingMutationInWorker } from "../infra/device-pairing-dispatch.worker.js";
 import { isDevicePairingMutationCommand } from "../infra/device-pairing-worker-contract.js";
 import { commitExecAuthorizationsInWorker } from "../infra/exec-approvals-authorization.worker.js";
-import {
-  executeCurrentConversationBindingCommand,
-  readCurrentConversationBindingSelectionInWorker,
-} from "../infra/outbound/current-conversation-bindings.worker.js";
+import * as conversationBindings from "../infra/outbound/current-conversation-bindings.worker.js";
 import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
 import { isApnsRegistrationWorkerCommand } from "../infra/push-apns-store.worker-contract.js";
 import { executeApnsRegistrationCommand } from "../infra/push-apns-store.worker.js";
 import { readPersistedVapidKeyPairInDatabase } from "../infra/push-web-store.kernel.js";
-import { executeWebPushCommand } from "../infra/push-web-store.worker.js";
+import { executeWebPushCommand, isWebPushCommand } from "../infra/push-web-store.worker.js";
 import { isSessionDeliveryCommand } from "../infra/session-delivery-queue.worker-contract.js";
 import { executeSessionDeliveryCommand } from "../infra/session-delivery-queue.worker.js";
 import { createSqliteAuditRecordKernel } from "../infra/sqlite-audit-record.kernel.js";
@@ -100,9 +114,11 @@ import {
   executeProjectRegistryCommand,
   isProjectRegistryCommand,
 } from "../projects/project-registry.worker.js";
+import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   isSkillUploadCommand,
   executeSkillUploadCommand,
@@ -115,12 +131,14 @@ import {
   executeTranscriptWrite,
   isTranscriptWriteCommand,
 } from "../transcripts/store-worker-write.js";
+import { clearRetiredTuiPointers } from "../tui/tui-last-session.kernel.js";
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
 } from "./agent-provenance.kernel.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
+import { writeConfigMachineState } from "./config-machine-state-write.js";
 import { readConfigMachineState } from "./config-machine-state.js";
 import { isOnboardingRecommendationWriteCommand } from "./onboarding-recommendations.contract.js";
 import { executeOnboardingRecommendationCommand } from "./onboarding-recommendations.kernel.js";
@@ -149,7 +167,19 @@ type Operations = OpenClawStateWorkerOperations &
 
 const log = createSubsystemLogger("state/worker");
 
-export { prepareCronStateWorkerCommand as prepareSharedStateCommand } from "../cron/store/dispatch.worker.js";
+const loadPluginIndexWriter = createLazyRuntimeModule(
+  () => import("../plugins/installed-plugin-index-store-write.js"),
+);
+let pluginIndexWriter: Awaited<ReturnType<typeof loadPluginIndexWriter>> | undefined;
+
+export function prepareSharedStateCommand(type: PropertyKey): Promise<void> | undefined {
+  if (type === "plugins.metadata.sourceAdmission.publish" && !pluginIndexWriter) {
+    return loadPluginIndexWriter().then((loaded) => {
+      pluginIndexWriter = loaded;
+    });
+  }
+  return prepareCronStateWorkerCommand(type);
+}
 
 export function executeSharedStateCommand(
   command: OpenClawStateWorkerRuntimeCommand,
@@ -176,14 +206,23 @@ export function executeSharedStateCommand(
   if (isDevicePairingMutationCommand(command)) {
     return executeDevicePairingMutationInWorker(command, open());
   }
+  if (isWorkerInferenceStoreCommand(command)) {
+    return executeWorkerInferenceStoreCommand(command, open());
+  }
+  if (isPlacementTurnClaimCommand(command)) {
+    return executePlacementTurnClaimCommand(command, open());
+  }
   if (isWorkerEnvironmentCommand(command)) {
     return executeWorkerEnvironmentCommand(command, open());
+  }
+  if (command.type === "workerPlacements.startDispatch") {
+    return startWorkerPlacementDispatchInWorker(command.input, open());
   }
   if (command.type === "audit.events.list") {
     return listAuditEventsInDatabase(open().db, command.input);
   }
   if (command.type === "conversationBindings.readSelection") {
-    return readCurrentConversationBindingSelectionInWorker(command.input, context.databasePath);
+    return conversationBindings.readSelection(command.input, context.databasePath);
   }
   if (command.type === "audit.writer.process" || command.type === "audit.writer.prune") {
     return executeAuditWriterCommand(
@@ -265,21 +304,7 @@ export function executeSharedStateCommand(
       env: getSqliteWorkerStateContext().environment,
     });
   }
-  if (
-    command.type === "webPush.findBoundWebPushSubscriptionByEndpoint" ||
-    command.type === "webPush.setWebPushSubscriptionPreferences" ||
-    command.type === "webPush.listWebPushSubscriptions" ||
-    command.type === "webPush.hasBoundWebPushSubscriptions" ||
-    command.type === "webPush.listBoundWebPushSubscriptions" ||
-    command.type === "webPush.prepareWebPushApprovalDeliveries" ||
-    command.type === "webPush.listWebPushApprovalDeliveryTargets" ||
-    command.type === "webPush.deleteWebPushApprovalDeliveryTargets" ||
-    command.type === "webPush.listTerminalWebPushApprovalDeliveryIds" ||
-    command.type === "webPush.upsertWebPushSubscription" ||
-    command.type === "webPush.deleteBoundWebPushSubscription" ||
-    command.type === "webPush.deleteWebPushSubscriptionIfCurrent" ||
-    command.type === "webPush.insertVapidKeyPairIfAbsent"
-  ) {
+  if (isWebPushCommand(command)) {
     return executeWebPushCommand(command, open());
   }
   if (command.type === "nativeHookRelay.read") {
@@ -334,6 +359,13 @@ export function executeSharedStateCommand(
       { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
       (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
     );
+  }
+  if (command.type === "plugins.deferredMigrations.record") {
+    return recordDeferredPluginMigrationsInWorker(command.input, {
+      database: open(),
+      path: context.databasePath,
+      env: getSqliteWorkerStateContext().environment,
+    });
   }
   if (
     command.type === "plugins.deferredMigrations.read" ||
@@ -400,6 +432,13 @@ export function executeSharedStateCommand(
   }
   if (isNodeWorkerJournalCommand(command)) {
     return executeNodeWorkerJournalCommand(command, context.databasePath, open);
+  }
+  if (isChannelIngressCommand(command)) {
+    return executeChannelIngressCommand(
+      command,
+      { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+      open,
+    );
   }
   if (command.type === "deviceAuth.read" || command.type === "deviceAuth.readOrigin") {
     const read = (db: OpenClawStateDatabase["db"]) =>
@@ -490,8 +529,26 @@ export function executeSharedStateCommand(
   ) {
     return executeNativeHookRelayMutation(command, writeOptions);
   }
+  if (command.type === "tui.lastSession.write") {
+    return writeConfigMachineState(command.input.stateKey, command.input.sessionKey, writeOptions);
+  }
+  if (command.type === "tui.lastSession.clear") {
+    return clearRetiredTuiPointers(
+      command.input.stateKeys,
+      new Set(command.input.retiredSessionKeys),
+      writeOptions,
+    );
+  }
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
+  }
+  if (command.type === "workspace.replaceAttestation") {
+    return runOpenClawStateWriteTransaction((writer) => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      return result;
+    }, writeOptions);
   }
   if (command.type === "sandboxRegistry.write") {
     return writeSandboxRegistry(command.input, writeOptions);
@@ -499,11 +556,13 @@ export function executeSharedStateCommand(
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
   }
-  if (
-    command.type === "conversationBindings.resolve" ||
-    command.type === "conversationBindings.touch"
-  ) {
-    return executeCurrentConversationBindingCommand(command, writeOptions);
+  if (command.type === "secrets.writeForConfigRef") {
+    return writeSecretStoreEntryForConfigRefInDatabase(command.input, writeOptions, (stage) =>
+      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
+  }
+  if (conversationBindings.isWriteCommand(command)) {
+    return conversationBindings.executeCommand(command, writeOptions);
   }
   if (command.type === "sessionGroups.mutate") {
     return mutateSessionGroupCatalogInDatabase(database, command.input, writeOptions.env);
@@ -576,6 +635,16 @@ export function executeSharedStateCommand(
       throw error;
     }
   }
+  if (command.type === "plugins.metadata.sourceAdmission.publish") {
+    if (!pluginIndexWriter) {
+      throw new Error("Plugin source admission writer is not prepared");
+    }
+    const { publishPluginSourceAdmissionInDatabase } = pluginIndexWriter;
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => publishPluginSourceAdmissionInDatabase(db, command.input),
+      writeOptions,
+    );
+  }
   if (command.type === "subagents.persistChanges") {
     const { writeId, values, deleteRunIds } = command.input;
     let committed = false;
@@ -607,6 +676,9 @@ export function executeSharedStateCommand(
   }
   if (command.type === "worktrees.retireMissing") {
     return retireMissingWorktreeInWorker(command.input, writeOptions);
+  }
+  if (command.type === "worktrees.deferCleanup") {
+    return deferWorktreeCleanupInWorker(command.input, writeOptions);
   }
   if (command.type === "worktrees.releaseRunLease" || command.type === "worktrees.reapRunLeases") {
     return executeWorktreeRunLeaseCommand(command, writeOptions);

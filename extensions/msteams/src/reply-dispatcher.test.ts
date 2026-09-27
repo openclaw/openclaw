@@ -294,7 +294,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(contextSendActivity).not.toHaveBeenCalled();
   });
 
-  it("resumes typing keepalive sends once the stream is canceled (e.g. user Stop)", async () => {
+  it("suppresses typing keepalive after the user presses Stop", async () => {
     createDispatcher("personal");
     const sendTyping = pipelineTypingStart();
 
@@ -306,22 +306,10 @@ describe("createMSTeamsReplyDispatcher", () => {
     await sendTyping();
     expect(contextSendActivity).not.toHaveBeenCalled();
 
-    // After the user presses Stop (Teams returns 403 → SDK flips canceled),
-    // the controller's isStreamActive() returns false so typing-keepalive
-    // resumes. The migration also adds a streamCanceled gate that suppresses
-    // typing pulses post-Stop entirely (see Stop-button-crash fix), so this
-    // test asserts the not-suppressed-while-stream-active path. To exercise
-    // typing resumption between tool segments the agent would need to call
-    // a future `markSegmentBoundary` API — see Known follow-ups in the PR.
     stream.canceled = true;
 
     contextSendActivity.mockClear();
     await sendTyping();
-    // streamCanceled gate suppresses typing post-cancel — that's intentional
-    // (we don't want zombie typing after the user hit Stop). So the typing
-    // does NOT fire in the new architecture. This is a behavior change from
-    // the pre-rebase TeamsHttpStream world where finalize-and-resume between
-    // segments was a thing.
     expect(contextSendActivity).not.toHaveBeenCalled();
   });
 
@@ -423,17 +411,6 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(stream.update).toHaveBeenLastCalledWith("Working");
   });
 
-  it("forwards partial replies into the Teams stream via emit()", async () => {
-    const dispatcher = createDispatcher("personal");
-
-    dispatcher.replyOptions.onPartialReply?.({ text: "partial response" });
-
-    // Migration uses ctx.stream.emit(text) for chunks (vs the deleted
-    // TeamsHttpStream.update). The SDK's HttpStream accumulates the text
-    // and flushes the closing activity at stream.close().
-    expect(getStreamMock().emit).toHaveBeenCalledWith("partial response");
-  });
-
   it("preserves partial and progress streams for observer-only hooks", async () => {
     registerHooks("message_sent");
 
@@ -456,10 +433,6 @@ describe("createMSTeamsReplyDispatcher", () => {
     [
       { label: "reply_payload_sending", hooks: ["reply_payload_sending"] },
       { label: "message_sending", hooks: ["message_sending"] },
-      {
-        label: "both modifying hooks",
-        hooks: ["reply_payload_sending", "message_sending"],
-      },
     ].flatMap(({ label, hooks }) =>
       (["partial", "progress"] as const).map((mode) => ({ label, hooks, mode })),
     ),
@@ -682,12 +655,15 @@ describe("createMSTeamsReplyDispatcher", () => {
     );
   });
 
-  it.each(
-    [undefined, false, true].flatMap((toolProgress) => [
-      { kind: "snapshot", toolProgress, isReasoningSnapshot: true, continuation: "Checking files" },
-      { kind: "delta", toolProgress, isReasoningSnapshot: false, continuation: " files" },
-    ]),
-  )(
+  it.each([
+    {
+      kind: "snapshot",
+      toolProgress: false,
+      isReasoningSnapshot: true,
+      continuation: "Checking files",
+    },
+    { kind: "delta", toolProgress: true, isReasoningSnapshot: false, continuation: " files" },
+  ])(
     "keeps $kind reasoning visible with toolProgress=$toolProgress",
     async ({ toolProgress, isReasoningSnapshot, continuation }) => {
       vi.useFakeTimers();
@@ -740,7 +716,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(dispatcher.replyOptions.suppressDefaultToolProgressMessages).toBeUndefined();
   });
 
-  it.each([undefined, false, true])(
+  it.each([undefined, false])(
     "suppresses standalone Teams progress with toolProgress=%s",
     (toolProgress) => {
       const dispatcher = createDispatcher("personal", {

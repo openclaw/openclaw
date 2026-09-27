@@ -5,8 +5,13 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
+import type {
+  createWorkerEnvironmentService,
+  WorkerEnvironmentService,
+} from "./worker-environments/service.js";
 
 type WorkerSessionToolExecutor = ReturnType<
   typeof import("./worker-environments/worker-session-tool-executor.js").createWorkerSessionToolExecutor
@@ -20,13 +25,17 @@ const mocks = vi.hoisted(() => {
     createExecutor: vi.fn(() => execute),
     execute,
     executeSessionTool: undefined as WorkerSessionToolExecutor | undefined,
-    service: { get: vi.fn() },
+    service: {
+      get: vi.fn<WorkerEnvironmentService["get"]>(),
+      ready: vi.fn<WorkerEnvironmentService["ready"]>(async () => {}),
+      stop: vi.fn<WorkerEnvironmentService["stop"]>(async () => {}),
+    } satisfies Pick<WorkerEnvironmentService, "get" | "ready" | "stop">,
   };
 });
 
 vi.mock("./worker-environments/service.js", () => ({
   createWorkerEnvironmentService: vi.fn(
-    (options: { executeSessionTool?: typeof mocks.executeSessionTool }) => {
+    (options: Parameters<typeof createWorkerEnvironmentService>[0]) => {
       mocks.executeSessionTool = options.executeSessionTool;
       return mocks.service;
     },
@@ -60,6 +69,7 @@ describe("gateway worker session-tool startup", () => {
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const registry = createEmptyPluginRegistry();
       await createGatewayWorkerEnvironmentRuntime({
+        scheduler: createTestGatewayScheduler(),
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,
@@ -68,6 +78,7 @@ describe("gateway worker session-tool startup", () => {
         log: { child: () => ({ warn: () => {} }) },
       });
 
+      expect(mocks.service.ready).toHaveBeenCalledOnce();
       expect(mocks.createExecutor).not.toHaveBeenCalled();
       const executeSessionTool = mocks.executeSessionTool;
       if (!executeSessionTool) {

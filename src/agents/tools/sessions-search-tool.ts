@@ -50,7 +50,10 @@ const SESSIONS_SEARCH_INDEXING_WARNING =
 const SessionsSearchToolSchema = Type.Object({
   query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
   sessionKey: Type.Optional(Type.String()),
-  limit: optionalPositiveIntegerSchema({ maximum: SESSIONS_SEARCH_MAX_LIMIT }),
+  limit: optionalPositiveIntegerSchema({
+    maximum: SESSIONS_SEARCH_MAX_LIMIT,
+    description: `Maximum search results: ${SESSIONS_SEARCH_MAX_LIMIT}. Defaults to ${SESSIONS_SEARCH_DEFAULT_LIMIT}.`,
+  }),
 });
 
 const SessionsSearchHitSchema = Type.Object(
@@ -332,7 +335,7 @@ export function createSessionsSearchTool(opts?: {
     outputSchema: SessionsSearchOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const query = readToolStringParam(params, "query")?.trim() ?? "";
+      const query = readToolStringParam(params, "query") ?? "";
       if (!query) {
         throw new ToolInputError("query must not be empty");
       }

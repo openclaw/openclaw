@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Static } from "typebox";
 import { Value } from "typebox/value";
 import { WebSocket } from "ws";
@@ -43,10 +44,7 @@ import {
   createPendingRequestRegistry,
   type PendingRequestEntry,
 } from "../shared/pending-request-registry.js";
-import {
-  WorkerConnectionInterruptedError,
-  toWorkerConnectionError,
-} from "./worker-connection-contract.js";
+import { WorkerConnectionInterruptedError } from "./worker-connection-contract.js";
 
 const WORKER_REQUEST_SPECS = {
   "skill-workshop": {
@@ -245,7 +243,7 @@ export class WorkerConnectionFrameDispatcher {
     try {
       completed.value.beforeResolve?.(response);
     } catch (error) {
-      completed.reject(toWorkerConnectionError(error));
+      completed.reject(toStructuredErrorObject(error));
       return true;
     }
     completed.resolve(response);
@@ -270,7 +268,7 @@ export class WorkerConnectionFrameDispatcher {
     try {
       encoded = JSON.stringify(frame);
     } catch (error) {
-      return Promise.reject(toWorkerConnectionError(error));
+      return Promise.reject(toStructuredErrorObject(error));
     }
     const payloadLimit =
       value.kind === "inference-start" || value.kind === "transcript"
@@ -304,7 +302,7 @@ export class WorkerConnectionFrameDispatcher {
     } catch (error) {
       this.pending
         .take(id, pending)
-        ?.reject(new WorkerConnectionInterruptedError(toWorkerConnectionError(error).message));
+        ?.reject(new WorkerConnectionInterruptedError(toStructuredErrorObject(error).message));
       this.options.interruptReadySocket(readySocket);
     }
     return pending.promise;

@@ -351,6 +351,38 @@ const enSettings = {
     },
   },
   cloudWorkersPage: {
+    pool: {
+      tab: "Pool",
+      title: "Ready pool",
+      description:
+        "Workers preparing for upcoming sessions and spares already running. Refreshes every 10 seconds while this view is visible.",
+      ready: "Ready",
+      preparing: "Preparing",
+      releasing: "Releasing",
+      attention: "Needs attention",
+      expired: "Expired",
+      unavailable: "Unavailable",
+      unknownProject: "Unknown project",
+      reserve: "Automatic reserve",
+      build: "On-demand build",
+      age: "Age: {age}",
+      expiresAt: "Expires {time}",
+      expiredAt: "Expired {time}",
+      offline: "Connect to the Gateway to view the ready pool.",
+      adminRequired: "Administrator access is required to view the ready pool.",
+      refreshFailed: "Could not refresh the pool: {error}.",
+      lastUpdated: "Showing the last update from {time}.",
+      capacity: "{used} of {limit} reserve slots in use",
+      disabledCapacity: "Unused workers awaiting release: {count}",
+      capacityHelp:
+        "Preparing workers and pending cleanup count toward the limit. Unused running workers incur machine charges.",
+      disabled:
+        "The pool is disabled. Unused workers are being released; active sessions continue.",
+      inventoryUnavailable: "Pool inventory unavailable",
+      target: "Ready workers per eligible project: {count}",
+      empty:
+        "No unassigned prepared workers. Eligible sessions prepare a reserve after activation; Profiles controls the target and pool limit.",
+    },
     snapshots: {
       title: "Snapshots",
       viewLabel: "Cloud worker view",
@@ -597,13 +629,26 @@ const enSettings = {
       action: "Connect provider",
       title: "Connect a provider",
       noOptions: "No account connection methods are available.",
-      method: "Connection method",
+      accounts: "Accounts available to this agent",
+      noAccounts: "No connected accounts for this provider.",
+      connectAccount: "Connect an account",
+      apiKeyHint: "Connect with a key from your provider account.",
+      compareMethods: "Compare connection methods",
       searchProviders: "Search providers…",
       noMatches: "No providers match your search.",
       noProviders: "No providers are available to connect.",
       discover: "On this Gateway",
       description: "Save credentials for this agent. Choose the active model separately.",
       done: "Provider credentials saved.",
+      missingSelection:
+        "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",
+      chooseAccount: "Choose account",
+      useAccount: "Use this account",
+      useAccountDescription:
+        "Test {model} with this account and use it for this agent's default. Conversations with their own account selection keep it.",
+      activated: "Account verified and selected for this agent's default model.",
+      selectionChanged:
+        "The selected model or account changed. Close this dialog and choose again.",
       finishing: "Credentials are being saved. Wait for the result.",
       sessionExpired:
         "This sign-in session ended. Close this dialog and refresh Models to check the result.",

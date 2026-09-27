@@ -2,13 +2,13 @@ import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { cloneConfigObject } from "../config-form-utils.ts";
 import {
   adoptConfigWriteAck,
   applyConfigSnapshot,
   comparableSnapshotRaw,
   rebaseConfigDraft,
   resetConfigPendingChanges,
+  resetStaleAutoSaveStatus,
   serializeFormForSubmit,
 } from "./config-draft-model.ts";
 import { teardownFlushConfigDraft, type ConfigSubmission } from "./config-gateway-operations.ts";
@@ -194,8 +194,17 @@ export function createConfigWriteReconciliation({
         state.configSnapshot
       ) {
         applyConfigSnapshot(state, state.configSnapshot);
+        // A reverted, definitively rejected save has no remaining failure to recover.
+        if (flight.submission.operation === "save") {
+          resetStaleAutoSaveStatus(state);
+          publish();
+        }
       } else if (flight.submission?.rejected && hasUnacknowledgedDraftWrite()) {
         // The rejected successor may have raced our own earlier commit. Read once; retry stays explicit.
+        if (state.configAutoSaveStatus === "rejected") {
+          state.configAutoSaveStatus = "error";
+          state.lastError = t("configView.writeUnconfirmed");
+        }
         void refreshSnapshot();
       }
     },
@@ -234,7 +243,7 @@ export function createConfigWriteReconciliation({
       // never rebased the originals), so the reload below would replace
       // it with the committed bytes. Capture it for restoration.
       const captureDraft = () => ({
-        form: cloneConfigObject(state.configForm ?? {}),
+        form: structuredClone(state.configForm ?? {}),
         raw: state.configRaw,
         mode: state.configFormMode,
         originalRaw: state.configRawOriginal,

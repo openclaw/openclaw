@@ -199,24 +199,32 @@ describe("Buzz gateway lifecycle", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(
-    [
-      { label: "implicit root", accountId: "default", nested: false, path: "channels.buzz" },
-      { label: "named", accountId: "ada", nested: true, path: "channels.buzz.accounts.ada" },
-      {
-        label: "explicit default",
-        accountId: "default",
-        nested: true,
-        path: "channels.buzz.accounts.default",
-      },
-    ].flatMap((scope) =>
-      [
-        { rooms: "missing", groups: undefined },
-        { rooms: "empty", groups: {} },
-        { rooms: "disabled", groups: { [CHANNEL_ID]: { enabled: false } } },
-      ].map((rooms) => Object.assign({}, scope, rooms)),
-    ),
-  )(
+  it.each([
+    {
+      label: "implicit root",
+      accountId: "default",
+      nested: false,
+      path: "channels.buzz",
+      rooms: "missing",
+      groups: undefined,
+    },
+    {
+      label: "named",
+      accountId: "ada",
+      nested: true,
+      path: "channels.buzz.accounts.ada",
+      rooms: "empty",
+      groups: {},
+    },
+    {
+      label: "explicit default",
+      accountId: "default",
+      nested: true,
+      path: "channels.buzz.accounts.default",
+      rooms: "disabled",
+      groups: { [CHANNEL_ID]: { enabled: false } },
+    },
+  ])(
     "reports the $label account path when rooms are $rooms",
     async ({ accountId, nested, path, groups }) => {
       const cfg = createBuzzConfig();

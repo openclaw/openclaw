@@ -132,8 +132,8 @@ Snapshot restoration waits for earlier cache writes, and mutations received duri
 restoration fence stale saved rows from publication. Background work then
 reconciles changed files and native metadata. A
 database-only native metadata walk recovers changes made while the Gateway was
-stopped. A full safety walk repeats every 15 minutes, including renames, Git branch and other displayed metadata, and the selected rollout
-path after a native revert. Metadata changes and explicit clears are applied even
+stopped. A full safety walk becomes due after 15 minutes and runs in the background on the next resident catalog read, including renames, Git branch and other displayed metadata, and the selected rollout
+path after a native revert. An idle catalog does not re-list native history, and the first resident read after an idle interval can return cached rows before the walk finishes. Metadata changes and explicit clears are applied even
 when native activity timestamps do not change. Newer Gateway observations fence
 older background pages. These coalesced background walks reuse previews for
 unchanged rows and do not ask Codex to scan or repair rollouts. Requests over a
@@ -161,8 +161,7 @@ restores the stored metadata. Resume publication uses
 the response's current cwd, which can differ from the thread's persisted cwd.
 For remote app-servers without local filesystem access, the saved snapshot is
 available immediately and a background native walk reconciles changes made while
-the Gateway was stopped or its app-server connection was unavailable. The full
-15-minute safety walk reconciles remote membership and metadata.
+the Gateway was stopped or its app-server connection was unavailable. A full safety walk becomes due after 15 minutes and reconciles remote membership and metadata on resident catalog demand.
 Unchanged display rows reuse their bounded resident previews before delivery.
 Unchanged rows are not rewritten to SQLite.
 
@@ -172,19 +171,19 @@ It reads database-only pages in descending recency order and stops after a whole
 page leaves the resident metadata unchanged, or at the 20,000-row retained limit.
 The comparison includes timestamps, selected path, fingerprint, and bounded display
 metadata; exposed timestamp ties keep their existing ordering. An unvisited tail
-is never treated as deleted. With no activity, ticks issue no native requests or
-file scans between safety walks. These checks reuse the existing preview cache
+is never treated as deleted. With no activity, ticks issue no native requests; local file safety scans remain on their own 15-minute cycle. These checks reuse the existing preview cache
 after JSON decoding; they reduce wire parsing by requesting fewer pages.
 
 Silent changes outside the checked prefix, including timestamp-preserving metadata
 edits and remote deletions or archives, appear at the next successful full safety
-walk. Local file disappearance is checked on the same cycle; native database
-omission alone still cannot delete a local row. Safety cycles start 15 minutes
-apart, subject to timer scheduling, in-flight work, and
-scan/walk duration. A failed background check records its error and waits for new
-activity or the next safety cycle, subject to source backoff. It does not retry on
-every idle tick. File scans keep an independent deadline, so native failures
-neither repeat the scan nor postpone its next check.
+walk after resident catalog demand. Local file disappearance is checked on its independent
+15-minute cycle; native database omission alone still cannot delete a local row.
+Native walks become due 15 minutes after the previous walk attempt and start on a
+subsequent resident catalog read. Native-backed overflow requests do not
+start a second full walk. A failed native walk records its error and waits for
+the next safety interval and catalog demand, subject to source backoff; it does
+not retry on idle ticks or on every busy catalog read.
+File scans retain their independent deadline and failure handling.
 Notifications and acknowledged catalog actions continue to update rows immediately.
 
 Native lifecycle notifications update affected threads, and successful catalog
@@ -401,6 +400,16 @@ with the native process-wait tool to obtain its output and exit code. The
 continuation records that result without rewriting the earlier turn's snapshot.
 The existing unknown-outcome audit diagnostic remains; cancellation and a
 command with no confirmed live owner retain their failure handling.
+
+These retained commands also appear in **Tasks**, where you can follow completion
+or stop an individual command. The task follows the native process after the
+foreground turn ends; its final status does not rewrite the earlier tool row.
+A known nonzero exit reports **Command failed**, even if a Stop request races
+with completion. A confirmed Stop with no native exit result reports **Command
+stopped**; this records the acknowledged request without attributing the exit to
+a particular signal. Task updates do not automatically start another model
+turn. If the native connection is lost before completion is confirmed, the task
+reports an unknown outcome instead of success.
 
 Stopping an active Codex run interrupts its turn. With the OpenClaw sandbox
 exec-server, cleanup stops the concrete processes admitted by that turn and

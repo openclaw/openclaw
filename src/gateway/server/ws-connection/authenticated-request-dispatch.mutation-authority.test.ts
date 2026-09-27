@@ -95,18 +95,20 @@ describe("authenticated request mutation custody", () => {
         getCommittedRuntimeConfig: () => committedConfig,
       });
       context.resolveGatewayContext = () => context;
-      const captures: NonNullable<ReturnType<typeof captureGatewayOperatorRunAuthority>>[] = [];
+      const captures: NonNullable<
+        Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
+      >[] = [];
       const callbacks: NonNullable<GatewayRequestHandlerOptions["hasCurrentClientAuthority"]>[] =
         [];
       const harness = createDispatchTestHarness({
         buildRequestContext: () => context,
         extraHandlers: {
-          "test.model-ceiling": (options) => {
+          "test.model-ceiling": async (options) => {
             const current = expectDefined(options.hasCurrentClientAuthority, "WS caller guard");
             callbacks.push(current);
             captures.push(
               expectDefined(
-                captureGatewayOperatorRunAuthority({
+                await captureGatewayOperatorRunAuthority({
                   client: options.client,
                   context,
                   hasCurrentClientAuthority: current,
@@ -233,25 +235,32 @@ describe("authenticated request mutation custody", () => {
       client.sharedGatewaySessionGeneration = "generation-a";
       client.authPolicyGeneration = resolveGatewayAuthPolicyGeneration(committedConfig);
       client.connectionSignal = connection.signal;
-      client.internal = { operatorRoleActor: { kind: "operator", profileId: "profile-owner" } };
+      client.internal = {
+        operatorRoleActor: {
+          kind: "operator",
+          profileId: ensureProfileForEmail("transport-owner@example.test").id,
+        },
+      };
       const context = createDirectChatContext({
         getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? committedConfig,
         getCommittedRuntimeConfig: () => committedConfig,
       });
       context.resolveGatewayContext = () => context;
-      let captured: ReturnType<typeof captureGatewayOperatorRunAuthority>;
-      const handler = vi.fn<(options: GatewayRequestHandlerOptions) => void>((options) => {
-        captured = captureGatewayOperatorRunAuthority({
-          client: options.client,
-          context,
-          hasCurrentClientAuthority: options.hasCurrentClientAuthority,
-          sourceAuthority: {
-            assertCurrent: () => access.signal.throwIfAborted(),
-            signal: access.signal,
-          },
-        });
-        options.respond(true, { accepted: true });
-      });
+      let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      const handler = vi.fn<(options: GatewayRequestHandlerOptions) => Promise<void>>(
+        async (options) => {
+          captured = await captureGatewayOperatorRunAuthority({
+            client: options.client,
+            context,
+            hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+            sourceAuthority: {
+              assertCurrent: () => access.signal.throwIfAborted(),
+              signal: access.signal,
+            },
+          });
+          options.respond(true, { accepted: true });
+        },
+      );
       const harness = createDispatchTestHarness({
         getRequiredSharedGatewaySessionGeneration: generation.reader,
         buildRequestContext: () => context,

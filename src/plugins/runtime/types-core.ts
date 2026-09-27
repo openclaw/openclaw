@@ -1,6 +1,6 @@
 // Core runtime types define system, config, and task helper contracts for plugins.
 import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
-import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.js";
+import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
 import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
@@ -270,7 +270,10 @@ export type LlmIsolatedAgentRuntimeCompleteParams = LlmCompleteCommonParams & {
   /** Isolated runtimes currently accept one fresh user prompt, not a replayed chat history. */
   messages: [{ role: "user"; content: string }];
   execution: {
-    /** Fresh, literal-zero-tool completion through the configured agent runtime. */
+    /**
+     * Fresh completion through the configured agent runtime with no supplied tools.
+     * Agents API may retain service-owned helpers; it cannot guarantee zero tools.
+     */
     mode: "isolated-agent-runtime";
     /** Exact credential owner. Requires host-granted plugin policy. */
     authProfileId?: string;
@@ -526,7 +529,7 @@ export type PluginRuntimeCore = {
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
       options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
-    ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+    ) => import("../../channels/message/ingress-queue.types.js").ChannelIngressQueue<
       TPayload,
       TMetadata,
       TCompletedMetadata
@@ -536,7 +539,7 @@ export type PluginRuntimeCore = {
         CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
         "queue"
       > & {
-        queue?: import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+        queue?: import("../../channels/message/ingress-queue.types.js").ChannelIngressQueue<
           TPayload,
           TMetadata,
           TCompletedMetadata

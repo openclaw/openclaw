@@ -89,6 +89,7 @@ export function createManagedHandoffLeaseStore(
     processState,
     inspectProcessIdentity,
     isProcessIdentityCurrent,
+    validateDarwinAncestorProcesses,
     acceptSelfIdentity,
   } = createManagedHandoffProcessIdentityReader({
     env: serviceManagerEnv,
@@ -200,11 +201,10 @@ export function createManagedHandoffLeaseStore(
     );
   }
   function currentLegacyParent(parent: BorrowedLegacyHandoffParent, db: HandoffDatabase) {
-    return isBorrowedLegacyHandoffParentCurrent(
-      parent,
-      () => row(db, parent.key),
+    return isBorrowedLegacyHandoffParentCurrent(parent, () => row(db, parent.key), {
       isProcessIdentityCurrent,
-    );
+      validateDarwinAncestorProcesses,
+    });
   }
   const sameRow = (a: LeaseRow | undefined, b: LeaseRow | undefined) =>
     a?.owner === b?.owner && a?.payload_json === b?.payload_json && a?.updated_at === b?.updated_at;

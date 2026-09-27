@@ -193,7 +193,8 @@ export class ShellGatewayOwner {
       // A local settings draft owns config conflicts; external snapshots must not overwrite it.
       const runtimeConfig = this.host.context?.runtimeConfig;
       if (runtimeConfig && !runtimeConfig.state.configFormDirty) {
-        void runtimeConfig.refresh();
+        // Save notifications reconcile in place so active editors keep focus and stay interactive.
+        void runtimeConfig.refresh({ background: true });
       }
       this.scheduleAgentRosterRefresh();
       return;
@@ -272,7 +273,7 @@ export class ShellGatewayOwner {
       new CustomEvent(UI_COMMAND_EVENT, { detail: commandParams, cancelable: true }),
     );
     if (!handled && (command.kind === "navigate" || command.kind === "split")) {
-      this.host.selectChatSession(command.sessionKey);
+      this.host.selectChatSession(command.sessionKey, commandParams.agentId);
     }
   }
 

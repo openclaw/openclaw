@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   runWithRetainedGatewayRootWork,
@@ -52,8 +53,8 @@ type DecisionHandoff = {
 export type PendingEntry<TPayload> = {
   record: ExecApprovalRecord<TPayload>;
   resolve: (decision: ExecApprovalDecision | null) => void;
-  timer: ReturnType<typeof setTimeout> | null;
-  cleanupTimer: ReturnType<typeof setTimeout> | null;
+  expiryJob: GatewayScheduledJob | null;
+  cleanupJob: GatewayScheduledJob | null;
   handoffRetainCount: number;
   handoffReleasedAtMs: number | null;
   retainForManagerLifetime: boolean;
@@ -87,6 +88,8 @@ export abstract class ExecApprovalLifecycle<TPayload> {
   private readonly observers = new Set<() => void>();
   private readonly work = new AsyncWorkScope();
   private draining: Promise<void> | undefined;
+
+  constructor(protected readonly scheduler: GatewayScheduler) {}
 
   abstract get runtimeEpoch(): string;
   protected abstract expireDue(
@@ -228,10 +231,10 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     this.retired = true;
     this.beginClose();
     for (const [id, entry] of this.pending) {
-      clearTimeout(entry.timer ?? undefined);
-      clearTimeout(entry.cleanupTimer ?? undefined);
-      entry.timer = null;
-      entry.cleanupTimer = null;
+      entry.expiryJob?.cancel();
+      entry.cleanupJob?.cancel();
+      entry.expiryJob = null;
+      entry.cleanupJob = null;
       entry.admissionContinuation?.release();
       entry.admissionContinuation = null;
       if (entry.record.resolvedAtMs === undefined && !this.work.hasPendingWork) {
@@ -353,8 +356,8 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     const entry: PendingEntry<TPayload> = {
       record,
       resolve: decision.resolve,
-      timer: null,
-      cleanupTimer: null,
+      expiryJob: null,
+      cleanupJob: null,
       handoffRetainCount: 0,
       handoffReleasedAtMs: null,
       retainForManagerLifetime: false,
@@ -363,7 +366,7 @@ export abstract class ExecApprovalLifecycle<TPayload> {
       admissionContinuation: captureGatewayRootWorkAdmissionContinuationScope(),
     };
     this.pending.set(record.id, entry);
-    this.scheduleExpiryTimer(entry);
+    this.scheduleExpiry(entry);
     return decision.promise;
   }
 
@@ -465,8 +468,8 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     delete pending.uncertainVerdict;
     delete pending.expiryPersistence;
     delete pending.expiryRefusals;
-    clearTimeout(pending.timer ?? undefined);
-    pending.timer = null;
+    pending.expiryJob?.cancel();
+    pending.expiryJob = null;
     pending.record.resolvedAtMs = params.resolvedAtMs;
     if (params.decision === null) {
       delete pending.record.decision;
@@ -497,24 +500,23 @@ export abstract class ExecApprovalLifecycle<TPayload> {
   private scheduleResolvedCleanup(entry: PendingEntry<TPayload>): void {
     if (
       this.retired ||
-      entry.cleanupTimer ||
+      entry.cleanupJob ||
       entry.record.resolvedAtMs === undefined ||
       entry.retainForManagerLifetime ||
       entry.handoffRetainCount > 0
     ) {
       return;
     }
-    const cleanupTimer = setTimeout(() => {
-      if (entry.cleanupTimer !== cleanupTimer) {
-        return;
-      }
-      entry.cleanupTimer = null;
-      if (this.pending.get(entry.record.id) === entry && entry.handoffRetainCount === 0) {
-        this.pending.delete(entry.record.id);
-      }
-    }, EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS);
-    cleanupTimer.unref?.();
-    entry.cleanupTimer = cleanupTimer;
+    entry.cleanupJob = this.scheduler.schedule({
+      id: `approval:${this.runtimeEpoch}:${this.approvalKind}:${entry.record.id}:cleanup`,
+      delayMs: EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS,
+      run: () => {
+        entry.cleanupJob = null;
+        if (this.pending.get(entry.record.id) === entry && entry.handoffRetainCount === 0) {
+          this.pending.delete(entry.record.id);
+        }
+      },
+    });
   }
 
   protected resolvedGraceAnchorMs(entry: PendingEntry<TPayload>, nowMs: number): number | null {
@@ -543,8 +545,8 @@ export abstract class ExecApprovalLifecycle<TPayload> {
       this.pending.delete(recordId);
       return null;
     }
-    clearTimeout(entry.cleanupTimer ?? undefined);
-    entry.cleanupTimer = null;
+    entry.cleanupJob?.cancel();
+    entry.cleanupJob = null;
     entry.handoffRetainCount += 1;
     let released = false;
     return () => {
@@ -563,7 +565,7 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     };
   }
 
-  protected abstract scheduleExpiryTimer(entry: PendingEntry<TPayload>, delayMs?: number): void;
+  protected abstract scheduleExpiry(entry: PendingEntry<TPayload>, delayMs?: number): void;
 
   async getSnapshot(
     recordId: string,

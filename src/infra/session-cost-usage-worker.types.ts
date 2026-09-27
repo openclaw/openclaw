@@ -72,7 +72,7 @@ export type UsageCostWorkerResult =
       staleSessionFiles: string[];
       invalidRows: SessionCostUsageRollupRow[];
     }
-  | { kind: "refresh" };
+  | { kind: "refresh"; changed: boolean };
 
 export type UsageCostWorkerFailure = {
   message: string;

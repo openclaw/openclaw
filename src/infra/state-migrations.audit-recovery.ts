@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { writeFileWindowFully } from "./file-descriptor.js";
-import { readFileWindowFully } from "./file-read.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
 import {
   legacyAuditRawCheckpointKey,
@@ -396,11 +396,11 @@ export async function restoreInterruptedAuditRecoveryArchive(params: {
       await syncAuditRecoveryDirectory(params.root, params.relativePath);
       return true;
     }
-    const writable = await params.root.openWritable(params.relativePath, {
-      mode: 0o600,
-      writeMode: "update",
-    });
-    try {
+    {
+      await using writable = await params.root.openWritable(params.relativePath, {
+        mode: 0o600,
+        writeMode: "update",
+      });
       const verification = await readLegacyAuditSourceSnapshot(params.root, params.relativePath);
       if (
         writable.stat.dev !== verification.dev ||
@@ -446,8 +446,6 @@ export async function restoreInterruptedAuditRecoveryArchive(params: {
       });
       await writable.handle.chmod(0o600);
       await writable.handle.sync();
-    } finally {
-      await writable.handle.close().catch(() => undefined);
     }
     await params.root.remove(progressRelativePath).catch(() => undefined);
     await params.root.remove(stagingRelativePath).catch(() => undefined);
@@ -517,7 +515,8 @@ export async function scrubLegacyAuditRecoveryArchive(params: {
     return undefined;
   }
   try {
-    if (!legacyAuditRawCheckpointsMatch(params.expectedSnapshot, writable.stat)) {
+    await using opened = writable;
+    if (!legacyAuditRawCheckpointsMatch(params.expectedSnapshot, opened.stat)) {
       params.warnings.push(
         `Skipped scrubbing changed ${params.label} legacy recovery archive; rerun openclaw doctor --fix`,
       );
@@ -528,12 +527,11 @@ export async function scrubLegacyAuditRecoveryArchive(params: {
       relativePath: params.relativePath,
       progress,
       desiredContent: scrubbedContent,
-      handle: writable.handle,
+      handle: opened.handle,
     });
-    await writable.handle.chmod(0o600);
-    await writable.handle.sync();
+    await opened.handle.chmod(0o600);
+    await opened.handle.sync();
   } catch (error) {
-    await writable.handle.close().catch(() => undefined);
     const recoveryWarnings: string[] = [];
     const restored = await restoreInterruptedAuditRecoveryArchive({
       root: params.root,
@@ -552,8 +550,6 @@ export async function scrubLegacyAuditRecoveryArchive(params: {
       );
     }
     return undefined;
-  } finally {
-    await writable.handle.close().catch(() => undefined);
   }
   let scrubbedSnapshot: LegacyAuditSourceSnapshot;
   try {

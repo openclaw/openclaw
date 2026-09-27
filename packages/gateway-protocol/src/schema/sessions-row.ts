@@ -137,6 +137,8 @@ export const SessionRowSchema = Type.Object(
     updatedAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
     /** Gateway sampling time, retained when a read reuses a cached projection. */
     snapshotAt: Type.Optional(Type.Number()),
+    /** Connection-scoped presentation identity on full event ancestor rows. */
+    ancestorRevision: Type.Optional(NonEmptyString),
     /** Personal list preference for the authenticated viewer; not session visibility. */
     hiddenFromInvolvingMe: Type.Optional(Type.Boolean()),
     archived: Type.Optional(Type.Boolean()),
@@ -257,10 +259,27 @@ export const SessionRowSchema = Type.Object(
   { additionalProperties: true },
 );
 
+/** Unchanged presentation of an ancestor previously delivered on this connection. */
+export const SessionAncestorRefSchema = closedObject({
+  key: NonEmptyString,
+  sessionId: Type.Optional(Type.String()),
+  agentId: Type.Optional(NonEmptyString),
+  revision: NonEmptyString,
+  snapshotAt: Type.Number(),
+});
+
+/** Complete visible ancestor coverage shared by sessions.changed and session.message. */
+export const SessionEventAncestorsSchema = closedObject({
+  ancestorSessions: Type.Array(SessionRowSchema, { maxItems: 64 }),
+  ancestorSessionRefs: Type.Optional(Type.Array(SessionAncestorRefSchema, { maxItems: 64 })),
+});
+
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
 export type SessionPermissionMode = Static<typeof SessionPermissionModeSchema>;
 export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionRunStatus = Static<typeof SessionRunStatusSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
+export type SessionAncestorRef = Static<typeof SessionAncestorRefSchema>;
+export type SessionEventAncestors = Static<typeof SessionEventAncestorsSchema>;
 export type SessionEntryArchiveReason = Static<typeof SessionEntryArchiveReasonSchema>;

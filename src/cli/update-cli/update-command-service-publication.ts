@@ -10,6 +10,7 @@ import {
   isScheduledTaskDefinitelyNotRunning,
   readWindowsStartupFallbackRuntimeForUpdate,
 } from "../../daemon/schtasks-runtime.js";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
@@ -62,9 +63,13 @@ export async function withGatewayRuntimeArtifactPublication<T>(
       assertNative();
     };
     const refuse = (cause?: unknown): never => {
+      const inspectionDetail =
+        cause instanceof ServiceInspectionError && cause.reason === "windows-task-inspection-failed"
+          ? `${cause.message} `
+          : "";
       throw new UpdatePreMutationError(
         "runtime-artifact-publication",
-        `Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop", params.env)}\`, and retry the update.`,
+        `${inspectionDetail}Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop", params.env)}\`, and retry the update.`,
         { cause },
       );
     };

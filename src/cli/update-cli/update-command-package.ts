@@ -2,6 +2,7 @@ import path from "node:path";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { resolveInstallWorkTimeoutMs } from "../../infra/install-mode-options.js";
 import {
   runGlobalPackageUpdateSteps,
   type PackageUpdateTransaction,
@@ -12,6 +13,7 @@ import {
   markPackagePostInstallDoctorAdvisory,
 } from "../../infra/package-update-verification-step.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
   formatUpdateDoctorConfigWriteRefusal,
   getUpdateDoctorConfigFailureReason,
@@ -42,7 +44,8 @@ import {
   buildUpdateDoctorEnv,
   resolveUpdateDoctorExecutionPolicy,
 } from "../../infra/update-runner-doctor.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -62,6 +65,7 @@ import {
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
+import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
 import { withUpdateDoctorChild } from "./update-command-doctor-child.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 export async function readPackageUpdateIdentity(root: string) {
@@ -75,6 +79,7 @@ export async function readPackageUpdateIdentity(root: string) {
 type PackageDoctorOptions = {
   root: string;
   timeoutMs?: number;
+  workTimeoutMs?: number | null;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   results?: UpdateStepResult[];
   managedServiceEnv?: NodeJS.ProcessEnv;
@@ -88,6 +93,7 @@ type PackageDoctorOptions = {
         requester?: Readonly<UpdateRequester>;
         inputHash: string;
         changes: UpdateDoctorConfigChange[];
+        databaseBackup?: UpdateDatabaseBackup;
         assertCurrent: () => void;
         assertBoundChildCurrent: () => void;
         onStateHandoff?: () => void;
@@ -102,6 +108,7 @@ export function preparePackageDoctorContext(params: {
   requester?: Readonly<UpdateRequester>;
   inputHash?: string | null;
   changes: UpdateDoctorConfigChange[];
+  databaseBackup?: UpdateDatabaseBackup;
   assertCurrent: () => void;
   assertBoundChildCurrent: () => void;
   onStateHandoff?: () => void;
@@ -119,6 +126,7 @@ export function preparePackageDoctorContext(params: {
     requester: params.requester,
     inputHash: params.inputHash ?? hashConfigRaw(null),
     changes: params.changes,
+    databaseBackup: params.databaseBackup,
     assertCurrent: params.assertCurrent,
     assertBoundChildCurrent: params.assertBoundChildCurrent,
     onStateHandoff: params.onStateHandoff,
@@ -175,6 +183,16 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     failure?: { error: unknown },
   ) => {
     let completionFailure = failure;
+    if (context?.databaseBackup) {
+      const receipt = recordUpdateDatabaseWrites(
+        context.databaseBackup,
+        doctorResult?.databaseWrites,
+        doctorStep,
+      );
+      if (receipt) {
+        params.progress?.onStepComplete?.({ ...receipt, index: 0, total: 0 });
+      }
+    }
     try {
       const refusal = doctorResult?.configWriteRefusal;
       const configWriteRefusal = refusal
@@ -268,6 +286,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         termination: doctorStep.termination,
         advisory: doctorStep.advisory,
         warnings: doctorStep.warnings,
+        diagnostics: doctorStep.diagnostics,
         failureFacts: doctorStep.failureFacts,
         doctorLintFindings: doctorStep.doctorLintFindings,
         configChanges: doctorStep.configChanges,
@@ -308,7 +327,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         }),
         [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
       },
-      timeoutMs: params.timeoutMs,
+      timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs),
       ...(runCommand ? { runCommand } : {}),
     });
   let outcome: { step: UpdateStepResult } | { error: unknown };
@@ -319,7 +338,11 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
             {
               root: params.root,
               context: { ...context, assertRequesterCurrent: context.assertBoundChildCurrent },
-              input: { configInputHash: context.inputHash, repair: doctorPolicy.fix },
+              input: {
+                configInputHash: context.inputHash,
+                repair: doctorPolicy.fix,
+                databaseGenerations: context.databaseBackup?.sourceGenerations,
+              },
             },
             runDoctor,
           )
@@ -408,6 +431,8 @@ export type PackageInstallUpdateParams = {
   tag: string;
   installSpec?: string;
   timeoutMs: number;
+  /** Null leaves forward work unbounded; omission retains the caller's timeout. */
+  workTimeoutMs?: number | null;
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   managedServiceEnv?: NodeJS.ProcessEnv;
@@ -421,7 +446,7 @@ export type PackageInstallUpdateParams = {
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
   assertCurrent?: () => void;
-  onTransaction: (transaction: PackageUpdateTransaction) => void;
+  onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
   getDoctorContext?: PackageDoctorOptions["getDoctorContext"];
 };
@@ -453,7 +478,12 @@ export async function stagePackageInstallUpdate(
   const completed = runPackageInstallUpdate(
     {
       ...params,
-      requirePackageReplacement: true,
+      // Admission pauses before the no-op decision, so its resumed caller can
+      // preserve an identical installation. Fresh-profile staging pauses later
+      // and must retain the candidate through initialization.
+      get requirePackageReplacement() {
+        return !params.pauseBeforeVerification || requireActive().requirePackageReplacement;
+      },
       beforeVerifyCandidate:
         params.pauseBeforeVerification || params.beforeVerifyCandidate
           ? async (root) => {
@@ -540,9 +570,7 @@ export async function runPackageInstallUpdate(
     });
   }
   const pkgRoot = installTarget.packageRoot;
-  const packageName =
-    (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
-    DEFAULT_PACKAGE_NAME;
+  const packageName = (await readPackageName(pkgRoot || params.root)) ?? DEFAULT_PACKAGE_NAME;
   const installSpec =
     params.installSpec ??
     resolveGlobalInstallSpec({
@@ -572,10 +600,12 @@ export async function runPackageInstallUpdate(
     packageName,
     packageRoot: pkgRoot,
     // Artifact equality cannot skip a method switch or retained-runtime staging.
-    requirePackageReplacement:
-      params.requirePackageReplacement === true || params.installKind === "git",
+    get requirePackageReplacement() {
+      return params.requirePackageReplacement === true || params.installKind === "git";
+    },
     runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),
     runStep: (stepParams) =>
       runUpdateStep({

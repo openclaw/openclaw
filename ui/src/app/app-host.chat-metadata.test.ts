@@ -295,7 +295,7 @@ it.each(["automatic", "explicit", "remounted startup"])(
 );
 
 it.each([
-  { event: "config.changed", payload: {}, clearsChoices: true },
+  { event: "config.changed", payload: {}, clearsChoices: false },
   { event: "chat.metadata.changed", payload: { modelSelectionChanged: true }, clearsChoices: true },
   { event: "chat.metadata.changed", payload: {}, clearsChoices: false },
 ])(
@@ -492,7 +492,11 @@ describe.each(["auth", "catalog"] as const)("%s read lifecycle", (kind) => {
     }
     const replacement = read();
     stale.resolve(staleResult);
-    if (kind === "catalog" && transition !== "chat.metadata.changed") {
+    if (
+      kind === "catalog" &&
+      transition !== "chat.metadata.changed" &&
+      transition !== "config.changed"
+    ) {
       expect(await before).toHaveProperty("name", "AbortError");
     } else {
       expect(await before).toEqual(staleResult);

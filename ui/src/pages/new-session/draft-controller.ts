@@ -1,6 +1,12 @@
 import type { ReactiveControllerHost } from "lit";
+import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
+import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
+import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
+import { t } from "../../i18n/index.ts";
+import { showToast } from "../../lib/toast.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
 import { isTarget as isCatalogTarget } from "./catalog-target.ts";
 import { DraftGatewayState, type DraftPreferenceOptions } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -19,8 +25,105 @@ export class NewSessionDraftController {
   readonly browser: DraftPlaceBrowser;
   readonly place: DraftPlaceState;
   readonly submission: DraftSubmissionFlow;
+  private privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
   private readonly subscriptions: SubscriptionsController;
   private modelDefaultsPolicy: "last-used" | "configured" | null | undefined;
+
+  private protectPrivateDraftFromReload() {
+    const hasDraft = () =>
+      this.submission.visibility === "incognito" &&
+      Boolean(
+        this.submission.message ||
+        this.submission.mentions.length ||
+        this.submission.attachmentDraft.attachments.length ||
+        this.submission.attachmentDraft.pendingReads,
+      );
+    const showBlocked = (changed = false) =>
+      showToast({
+        message: t(changed ? "chat.privateDraftReload.changed" : "chat.privateDraftReload.blocked"),
+        actionLabel: t("chat.privateDraftReload.review"),
+        onAction: () => void review(),
+      });
+    const review = async () => {
+      const context = this.read().context;
+      if (!context || !this.read().isConnected || !hasDraft() || this.privateDraftReview) {
+        return;
+      }
+      const controller = new AbortController();
+      const client = context.gateway.snapshot.client;
+      const connection = context.gateway.connection;
+      const message = this.submission.message;
+      const mentions = this.submission.mentions;
+      const attachments = [...this.submission.attachmentDraft.attachments];
+      const pendingReads = this.submission.attachmentDraft.pendingReads;
+      const currentOwner = () =>
+        !controller.signal.aborted &&
+        this.read().isConnected &&
+        this.read().context === context &&
+        context.gateway.snapshot.client === client &&
+        context.gateway.connection === connection;
+      const current = () =>
+        currentOwner() &&
+        this.submission.visibility === "incognito" &&
+        this.submission.message === message &&
+        this.submission.mentions === mentions &&
+        this.submission.attachmentDraft.pendingReads === pendingReads &&
+        this.submission.attachmentDraft.attachments.length === attachments.length &&
+        attachments.every(
+          (attachment, index) => this.submission.attachmentDraft.attachments[index] === attachment,
+        );
+      this.privateDraftReview = { controller, isCurrent: current };
+      const reloadOptions = createGatewayControlUiReloadOptions(context.gateway);
+      try {
+        const discard = await reviewPrivateComposerDraft({
+          text: message,
+          attachments,
+          hasGoal: false,
+          pendingReads,
+          isCurrent: current,
+          signal: controller.signal,
+        });
+        if (!current()) {
+          if (currentOwner() && hasDraft()) {
+            showBlocked(true);
+          }
+          return;
+        }
+        if (!discard) {
+          return;
+        }
+        this.submission.attachmentDraft.reset({ release: true });
+        this.submission.setMessage("", []);
+        await retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...reloadOptions });
+      } catch {
+        if (currentOwner()) {
+          showToast({ message: t("chat.privateDraftReload.unavailable") });
+        }
+      } finally {
+        if (this.privateDraftReview?.controller === controller) {
+          this.privateDraftReview = undefined;
+        }
+        if (
+          controller.signal.reason === "draft-changed" &&
+          this.read().isConnected &&
+          this.read().context === context &&
+          context.gateway.connection === connection &&
+          context.gateway.snapshot.client === client &&
+          hasDraft()
+        ) {
+          showBlocked(true);
+        }
+      }
+    };
+    const unregister = registerControlUiReloadGuard(
+      () => !hasDraft(),
+      () => showBlocked(),
+    );
+    return () => {
+      unregister();
+      this.privateDraftReview?.controller.abort();
+    };
+  }
 
   constructor(
     host: ReactiveControllerHost,
@@ -35,7 +138,12 @@ export class NewSessionDraftController {
         pickerIdPrefix?: string;
       },
   ) {
-    const { requestUpdate } = callbacks;
+    const requestUpdate = () => {
+      if (this.privateDraftReview && !this.privateDraftReview.isCurrent()) {
+        this.privateDraftReview.controller.abort("draft-changed");
+      }
+      callbacks.requestUpdate();
+    };
     this.gateway = new DraftGatewayState(
       host,
       () => ({
@@ -107,7 +215,10 @@ export class NewSessionDraftController {
         onClearError: (error) => this.submission.clearError(error),
       },
     );
-    this.submission = new DraftSubmissionFlow(this.gateway, this.place, read, callbacks);
+    this.submission = new DraftSubmissionFlow(this.gateway, this.place, read, {
+      ...callbacks,
+      requestUpdate,
+    });
     this.submission.draftPersistence.modelSelection = {
       read: () =>
         read().context?.config?.current.newSessionModelDefaults === "configured"
@@ -126,6 +237,10 @@ export class NewSessionDraftController {
       }
     };
     this.subscriptions = new SubscriptionsController(host)
+      .effect(
+        () => this.read().context,
+        () => this.protectPrivateDraftFromReload(),
+      )
       .watch(
         () => this.read().context?.gateway,
         (gateway, notify) => gateway.subscribe(notify),

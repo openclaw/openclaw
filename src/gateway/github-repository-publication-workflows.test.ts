@@ -145,14 +145,14 @@ describe("repository checkpoint workflow authority", () => {
     const saved = await f.repository.capture("accepted code\n", "deferred-workflow", {
       [workflow]: definition,
     });
-    const claim = holdWorkerTurn(f);
+    const claim = await holdWorkerTurn(f);
     const accepted = await f.coordinator.requestForSession(f.request("deferred-workflow", f.guest));
     expect(accepted.status).toBe("requested");
     const original = f.readRequester(accepted.requestId);
     expect(original?.scopes).toEqual(guestScopes);
     await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
     invalidateOperatorRolePolicy(f.guestProfile);
-    f.placements.releaseTurn(claim);
+    await f.placements.releaseTurn(claim);
     f.guestSource.release();
 
     const restarted = f.restart();

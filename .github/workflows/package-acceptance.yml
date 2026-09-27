@@ -425,7 +425,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   PACKAGE_ARTIFACT_NAME: package-under-test-${{ github.run_id }}-${{ github.run_attempt }}
   TELEGRAM_PLUGIN_REGISTRY_ARTIFACT_NAME: package-acceptance-telegram-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
 

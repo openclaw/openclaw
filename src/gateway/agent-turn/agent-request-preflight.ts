@@ -12,8 +12,10 @@ import {
 import { isSubagentSessionFromEntry } from "../../agents/subagents/spawn/subagent-depth-policy.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swarm-output-schema.js";
+import { getSwarmRunExecutionLane } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isMainSessionRestartRecoveryInputProvenance,
@@ -60,6 +62,7 @@ export type AgentRequestPreflight = {
   isOneShotModelRun: boolean;
   isRawModelRun: boolean;
   agentDedupeKeys: string[];
+  swarmExecutionLane?: CommandLaneConfiguration;
 };
 
 export function prepareAgentRequestPreflight(params: {
@@ -101,6 +104,7 @@ export function prepareAgentRequestPreflight(params: {
     return undefined;
   }
   const collectorSession = findSwarmCollectorSession(requestSessionKey);
+  let swarmExecutionLane: CommandLaneConfiguration | undefined;
   // Collector children always use subagent session keys, so ordinary traffic
   // must never pay the persisted-store read. The store fallback only covers a
   // freshly restarted gateway whose in-memory registry has not reloaded yet.
@@ -173,6 +177,9 @@ export function prepareAgentRequestPreflight(params: {
       ]);
       return undefined;
     }
+    swarmExecutionLane = getSwarmRunExecutionLane(
+      registeredCollector.schedulerSlotId ?? registeredCollector.runId,
+    );
   }
   if (request.cwd && !path.isAbsolute(request.cwd)) {
     params.io.emitAcceptance([
@@ -376,5 +383,6 @@ export function prepareAgentRequestPreflight(params: {
     isOneShotModelRun,
     isRawModelRun,
     agentDedupeKeys,
+    swarmExecutionLane,
   };
 }

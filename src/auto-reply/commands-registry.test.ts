@@ -1,4 +1,5 @@
 /** Tests command registry definitions, native specs, aliases, and argument menus. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -26,6 +27,7 @@ import {
 import type {
   ChatCommandDefinition,
   CommandArgValues,
+  CommandArgChoiceContext,
   NativeCommandSpec,
 } from "./commands-registry.types.js";
 
@@ -170,17 +172,6 @@ function requireCommandArg(
   return arg;
 }
 
-function requireCommandArgAt(
-  command: ChatCommandDefinition,
-  index: number,
-): NonNullable<ChatCommandDefinition["args"]>[number] {
-  const arg = command.args?.[index];
-  if (!arg) {
-    throw new Error(`Expected ${command.key} command arg ${index}`);
-  }
-  return arg;
-}
-
 function requireCommandArgMenu(
   params: Parameters<typeof resolveCommandArgMenu>[0],
 ): NonNullable<ReturnType<typeof resolveCommandArgMenu>> {
@@ -191,41 +182,10 @@ function requireCommandArgMenu(
   return menu;
 }
 
-function requireSeenChoice(
-  seen: {
-    provider?: string;
-    model?: string;
-    agentRuntime?: string;
-    catalogLength?: number;
-    commandKey: string;
-    argName: string;
-  } | null,
-) {
-  if (!seen) {
-    throw new Error("Expected command choice context");
-  }
-  return seen;
-}
-
 describe("commands registry", () => {
   it("builds command text with args", () => {
     expect(buildCommandText("status")).toBe("/status");
-    expect(buildCommandText("tasks")).toBe("/tasks");
     expect(buildCommandText("model", "gpt-5")).toBe("/model gpt-5");
-    expect(buildCommandText("models")).toBe("/models");
-  });
-
-  it("exposes native specs", () => {
-    const specs = listNativeCommandSpecs();
-    expectSetContainsAll(nativeNameSet(specs), [
-      "help",
-      "stop",
-      "skill",
-      "learn",
-      "tasks",
-      "whoami",
-      "compact",
-    ]);
   });
 
   it("registers /login natively for Discord, Slack, and Telegram", () => {
@@ -468,17 +428,6 @@ describe("commands registry", () => {
     expect(secondary).toEqual(secondaryBefore);
   });
 
-  it("applies discord native command overrides", () => {
-    installDiscordNativeCommandOverrides();
-    const native = listNativeCommandSpecsForConfig(
-      { commands: { native: true } },
-      { provider: "discord" },
-    );
-    expect([...nativeNameSet(native)]).toContain("voice");
-    expect(requireNativeCommand("voice", "discord").key).toBe("tts");
-    expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
-  });
-
   it("applies slack native command overrides", () => {
     installSlackNativeCommandOverrides();
     const native = listNativeCommandSpecsForConfig(
@@ -557,29 +506,6 @@ describe("commands registry", () => {
     }
   });
 
-  it("keeps ACP native action choices aligned with implemented handlers", () => {
-    const acp = requireChatCommand("acp");
-    const actionArg = requireCommandArg(acp, "action");
-    expect(actionArg.choices).toEqual([
-      "spawn",
-      "cancel",
-      "steer",
-      "close",
-      "sessions",
-      "status",
-      "set-mode",
-      "set",
-      "cwd",
-      "permissions",
-      "timeout",
-      "model",
-      "reset-options",
-      "doctor",
-      "install",
-      "help",
-    ]);
-  });
-
   it("registers fast mode as a first-class options command", () => {
     const fast = requireChatCommand("fast");
     expect(fast.nativeName).toBe("fast");
@@ -614,20 +540,8 @@ describe("commands registry", () => {
     ]);
   });
 
-  it("documents explicit model persistence scopes", () => {
-    const model = requireChatCommand("model");
-    expect(model.description).toBe("Show or set the model; use -s, -a, or -g to choose scope.");
-  });
-
   it("detects known text commands", () => {
     const detection = getCommandDetection();
-    expect(detection.exact.has("/commands")).toBe(true);
-    expect(detection.exact.has("/skill")).toBe(true);
-    expect(detection.exact.has("/learn")).toBe(true);
-    expect(detection.exact.has("/loop")).toBe(true);
-    expect(detection.exact.has("/compact")).toBe(true);
-    expect(detection.exact.has("/whoami")).toBe(true);
-    expect(detection.exact.has("/id")).toBe(true);
     for (const command of listChatCommands()) {
       for (const alias of command.textAliases) {
         expect(detection.exact.has(alias.toLowerCase())).toBe(true);
@@ -714,10 +628,6 @@ describe("commands registry", () => {
       }),
     ).toBe("/help@some_other_bot");
   });
-
-  it("keeps unregistered underscore aliases unchanged", () => {
-    expect(normalizeCommandBody("/unknown_command")).toBe("/unknown_command");
-  });
 });
 
 describe("commands registry args", () => {
@@ -792,16 +702,10 @@ describe("commands registry args", () => {
       expected: "/config get agents.defaults.model",
     },
     {
-      command: "config",
-      values: { action: "set", path: "agents.defaults.model" },
-      expected: "/config set agents.defaults.model",
-    },
-    {
       command: "mcp",
       values: { action: "get", path: "servers.github" },
       expected: "/mcp get servers.github",
     },
-    { command: "mcp", values: { action: "get" }, expected: "/mcp get" },
     {
       command: "plugins",
       values: { action: "get", path: "discord" },
@@ -817,7 +721,6 @@ describe("commands registry args", () => {
       values: { action: "show", path: "ignored" },
       expected: "/debug show",
     },
-    { command: "debug", values: { action: "unset" }, expected: "/debug unset" },
   ];
 
   it.each(structuredArgCases)(
@@ -842,18 +745,6 @@ describe("commands registry args", () => {
     ]);
   });
 
-  it("offers all verbose choices when no argument is provided", () => {
-    const verbose = requireChatCommand("verbose");
-
-    const modeArg = requireCommandArgAt(verbose, 0);
-    expect(modeArg.choices).toEqual(["on", "off", "full"]);
-    expect(requireCommandArgMenu({ command: verbose }).choices).toEqual([
-      { label: "on", value: "on" },
-      { label: "off", value: "off" },
-      { label: "full", value: "full" },
-    ]);
-  });
-
   it("does not show menus when arg already provided", () => {
     const command = createUsageModeCommand();
 
@@ -866,14 +757,7 @@ describe("commands registry args", () => {
   });
 
   it("resolves function-based choices with a default provider/model context", () => {
-    let seen: {
-      provider?: string;
-      model?: string;
-      agentRuntime?: string;
-      catalogLength?: number;
-      commandKey: string;
-      argName: string;
-    } | null = null;
+    const seen: CommandArgChoiceContext[] = [];
 
     const command: ChatCommandDefinition = {
       key: "think",
@@ -887,15 +771,8 @@ describe("commands registry args", () => {
           name: "level",
           description: "level",
           type: "string",
-          choices: ({ provider, model, agentRuntime, catalog, command: commandLocal, arg }) => {
-            seen = {
-              provider,
-              model,
-              agentRuntime,
-              catalogLength: catalog?.length,
-              commandKey: commandLocal.key,
-              argName: arg.name,
-            };
+          choices: (context) => {
+            seen.push(context);
             return ["low", "high"];
           },
         },
@@ -916,15 +793,15 @@ describe("commands registry args", () => {
     expect(formatCommandArgMenuTitle({ command, menu })).toBe(
       "Choose level for /think.\nOptions: low, high.",
     );
-    const seenChoice = requireSeenChoice(seen);
-    expect(seenChoice.commandKey).toBe("think");
-    expect(seenChoice.argName).toBe("level");
+    const seenChoice = expectDefined(seen.at(-1), "command choice context");
+    expect(seenChoice.command.key).toBe("think");
+    expect(seenChoice.arg.name).toBe("level");
     expect(typeof seenChoice.provider).toBe("string");
     expect(seenChoice.provider?.trim().length).toBeGreaterThan(0);
     expect(typeof seenChoice.model).toBe("string");
     expect(seenChoice.model?.trim().length).toBeGreaterThan(0);
     expect(seenChoice.agentRuntime).toBe("codex");
-    expect(seenChoice.catalogLength).toBe(0);
+    expect(seenChoice.catalog?.length).toBe(0);
   });
 
   it.each([

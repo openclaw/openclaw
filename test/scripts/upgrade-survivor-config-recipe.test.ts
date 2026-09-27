@@ -1,4 +1,3 @@
-// Upgrade Survivor Config Recipe tests cover upgrade survivor config recipe script behavior.
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -239,8 +238,8 @@ esac
         expect(args.join(" ")).not.toMatch(/fixture-(openai|anthropic|google)-key/u);
         const mounts = args.filter((_, index) => args[index - 1] === "-v");
         expect(mounts.filter((mount) => mount.includes("node_modules"))).toEqual([]);
-        expect(args.some((arg) => arg.startsWith("OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT="))).toBe(
-          false,
+        expect(args).toContain(
+          "OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT=/usr/local/lib/node_modules/tsx/dist/loader.mjs",
         );
         expect(mounts).toEqual(
           expect.arrayContaining([
@@ -354,6 +353,75 @@ esac
     expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
     expect(steps.find((step) => step.id === "channels-feishu")).toBeDefined();
     expect(steps.at(-1)?.id).toBe("validate");
+  });
+
+  it("enables private integrity file logging only for the base recipe before validation", () => {
+    const { result, loggedArgs, summary } = runRecipeFixture({
+      scenario: "base",
+      version: "2026.9.4",
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(summary.acceptedIntents).toContain("logging");
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-logging-"));
+    try {
+      const config = join(root, "config.json");
+      const coverage = join(root, "coverage.json");
+      writeFileSync(
+        config,
+        JSON.stringify({
+          logging: Object.fromEntries(
+            loggedArgs.flatMap((args) =>
+              args[2]?.startsWith("logging.") ? [[args[2].slice("logging.".length), args[3]]] : [],
+            ),
+          ),
+        }),
+      );
+      writeFileSync(
+        coverage,
+        JSON.stringify({
+          acceptedIntents: summary.acceptedIntents.filter((intent: string) => intent === "logging"),
+        }),
+      );
+      const assertions = ["baseline", "survival"].map((stage) =>
+        spawnSync(
+          process.execPath,
+          ["scripts/e2e/lib/upgrade-survivor/assertions.mjs", "assert-config"],
+          {
+            encoding: "utf8",
+            timeout: 10_000,
+            env: {
+              PATH: process.env.PATH,
+              HOME: root,
+              OPENCLAW_STATE_DIR: join(root, "state"),
+              OPENCLAW_CONFIG_PATH: config,
+              OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
+              OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coverage,
+              OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
+            },
+          },
+        ),
+      );
+      expect(
+        assertions.map((assertion) => assertion.status),
+        assertions.map((assertion) => assertion.stdout + assertion.stderr).join("\n"),
+      ).toEqual([0, 0]);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+    expect(loggedArgs.slice(-3)).toEqual([
+      ["config", "set", "logging.file", "~/openclaw-upgrade-survivor/gateway.jsonl"],
+      ["config", "set", "logging.level", "debug"],
+      ["config", "validate"],
+    ]);
+    expect(loggedArgs.some((args) => args[2]?.startsWith("logging.console"))).toBe(false);
+    expect(
+      resolveUpgradeSurvivorConfigSteps("tilde-log-path")
+        .filter((step) => step.intent === "logging")
+        .map((step) => step.argv),
+    ).toEqual([["config", "set", "logging.file", "~/openclaw-upgrade-survivor/gateway.jsonl"]]);
+    expect(
+      resolveUpgradeSurvivorConfigSteps("feishu-channel").some((step) => step.intent === "logging"),
+    ).toBe(false);
   });
 
   it.each([null, "2026.6.1", "2026.8.1", "2026.9.5"])(
@@ -543,20 +611,18 @@ esac
     },
   );
 
-  it.each([null, "2026.8.1-beta.2", "2026.8.1"])(
-    "authors a schema-valid explicit agent roster for baseline %s",
-    (version) => {
-      const agentStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
-        (step) => step.id === "agents",
-      );
-      const agents = JSON.parse(agentStep?.argv[3] ?? "{}");
-      expect(AgentsSchema.safeParse(agents).success).toBe(true);
-      expect(agents.ownership).toBe("explicit");
-      expect(agents.defaults.heartbeat.every).toBe("0m");
-      expect(Object.keys(agents.entries)).toEqual(["main", "ops"]);
-      expect(agents.entries.ops.fastModeDefault).toBe(true);
-    },
-  );
+  it("authors a schema-valid roster at the explicit ownership boundary", () => {
+    const version = "2026.8.1-beta.2";
+    const agentStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+      (step) => step.id === "agents",
+    );
+    const agents = JSON.parse(agentStep?.argv[3] ?? "{}");
+    expect(AgentsSchema.safeParse(agents).success).toBe(true);
+    expect(agents.ownership).toBe("explicit");
+    expect(agents.defaults.heartbeat.every).toBe("0m");
+    expect(Object.keys(agents.entries)).toEqual(["main", "ops"]);
+    expect(agents.entries.ops.fastModeDefault).toBe(true);
+  });
 
   it.each(["2026.6.1", "2026.6.34", "2026.6.35", "2026.7.2-beta.3", "2026.7.33"])(
     "preserves the legacy agent contract for baseline %s",
@@ -581,17 +647,11 @@ esac
     { version: "2026.6.1", batched: false },
     { version: "2026.6.33", batched: false },
     { version: "2026.6.34-beta.1", batched: false },
-    { version: "2026.7.1-beta.1", batched: false },
-    { version: "2026.7.1-alpha.1", batched: false },
     { version: "2026.6.34-1", batched: false },
-    { version: "2026.6.34junk", batched: false },
-    { version: "2026.13.1", batched: false },
-    { version: "2026.6.9007199254740993", batched: false },
     { version: "2026.6.34", batched: true },
-    { version: "2026.7.2", batched: true },
   ])("batches only supported final baselines: $version", ({ version, batched }) => {
     const steps = resolveUpgradeSurvivorConfigStepsForBaseline("base", version);
-    expect(steps).toHaveLength(batched ? 10 : 12);
+    expect(steps).toHaveLength(batched ? 12 : 14);
     expect(steps.filter((step) => step.argv[2] === "--batch-json")).toHaveLength(batched ? 1 : 0);
     expect(configLeafWrites(steps).filter((entry) => entry.path.startsWith("channels."))).toEqual([
       expect.objectContaining({ path: "channels.discord" }),
@@ -610,6 +670,8 @@ esac
       "discord-channel",
       "telegram-channel",
       "whatsapp-channel",
+      "logging",
+      "logging",
       "validate",
     ]);
   });

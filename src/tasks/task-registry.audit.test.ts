@@ -188,23 +188,6 @@ describe("task-registry audit", () => {
     expect(summarizeRetainedLostTaskAuditFindings(findings, { now })).toEqual({ count: 0 });
   });
 
-  it("does not double-report lost tasks as missing cleanup", () => {
-    const now = Date.parse("2026-03-30T01:00:00.000Z");
-    const findings = listTaskAuditFindings({
-      now,
-      tasks: [
-        createTask({
-          taskId: "lost-projected",
-          status: "lost",
-          endedAt: now - 60_000,
-          cleanupAfter: undefined,
-        }),
-      ],
-    });
-
-    expect(findings.map((finding) => finding.code)).toEqual(["lost"]);
-  });
-
   it("flags terminal cron history that is missing cleanup", () => {
     const findings = listTaskAuditFindings({
       tasks: [

@@ -50,7 +50,10 @@ import {
   updateCommand,
 } from "./update-cli-modules.test-support.js";
 import { pluginSyncResult } from "./update-cli/update-cli-config.test-support.js";
-import { writeOpenClawPackageFixture } from "./update-cli/update-cli-package.test-support.js";
+import {
+  writeGitUpdateResultFixture,
+  writeOpenClawPackageFixture,
+} from "./update-cli/update-cli-package.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -234,8 +237,7 @@ describe("update-cli", () => {
       entrySource: "export {};\n",
     });
     mockGitUpdateAfterMutation(
-      makeOkUpdateResult({
-        mode: "git",
+      await writeGitUpdateResultFixture({
         root,
         before: { sha: "old-caller-sha", version: "2026.4.26" },
         after: { sha: "new-caller-sha", version: VERSION },

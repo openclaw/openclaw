@@ -143,7 +143,6 @@ export type SlackAccountConfig = Omit<
     postAs?: "bot" | "user";
     /** Slack connection mode (socket|http|relay). Default: socket. */
     mode?: "socket" | "http" | "relay";
-    /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
     /** Relay-delivered Slack event source. Used when mode is "relay". */
     relay?: SlackRelayConfig;
     /** Slack signing secret (required for HTTP mode). */

@@ -80,7 +80,7 @@ type ModelCallEndedHookFields = Pick<
   | "failureKind"
   | "upstreamRequestIdHash"
 >;
-export type ModelCallSizeTimingFields = Pick<
+type ModelCallSizeTimingFields = Pick<
   Extract<DiagnosticEventInput, { type: "model.call.completed" }>,
   "requestPayloadBytes" | "responseStreamBytes" | "timeToFirstByteMs"
 >;

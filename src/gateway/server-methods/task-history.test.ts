@@ -22,8 +22,11 @@ import {
 } from "../../infra/kysely-sync.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { getAsyncWorkSignal, trackAsyncWork } from "../../shared/async-work-scope.js";
+import { observeAsyncWorkScopeRuns } from "../../shared/async-work-scope.test-support.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { retainOpenClawStateDatabase } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { markTaskTerminalById, recordTaskProgressByRunId } from "../../tasks/runtime-internal.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "../../tasks/task-executor-create.async.js";
@@ -87,6 +90,25 @@ async function createRequester(actorId: string, incognito = false) {
 }
 
 describe("tasks.history", () => {
+  it("drains admitted history work before resetting its registry", async () => {
+    let released = false;
+    await withHistoryState(async () => {
+      const borrow = retainOpenClawStateDatabase(openOpenClawStateDatabase());
+      const signal = expectDefined(getAsyncWorkSignal(), "history fixture work owner");
+      void trackAsyncWork(async () => {
+        try {
+          await new Promise<void>((resolve) => {
+            signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        } finally {
+          borrow.release();
+          released = true;
+        }
+      });
+    });
+    expect(released).toBe(true);
+  });
+
   it.each(["progress", "history identity"] as const)(
     "checks current history while a committed %s result is held",
     async (change) => {
@@ -105,7 +127,7 @@ describe("tasks.history", () => {
         const pending = runTaskHandler("tasks.history", { taskId: task.taskId });
         const store = getTaskRegistryStore();
         // Detached results precede cleanup; the enclosing scope includes root release.
-        const scopeRuns = vi.spyOn(AsyncWorkScope.prototype, "run");
+        const scopeRuns = observeAsyncWorkScopeRuns();
         let mutation: Promise<unknown> | undefined;
         try {
           await entered.promise;
@@ -171,14 +193,17 @@ describe("tasks.history", () => {
           try {
             await pending;
             await mutation;
-            for (const result of scopeRuns.mock.results) {
+            for (const [index, result] of scopeRuns.mock.results.entries()) {
+              if (index < scopeRuns.startIndex) {
+                continue;
+              }
               expect(result.type).toBe("return");
               await result.value;
             }
             expect(getActiveGatewayRootWorkCount()).toBe(0);
             resetTaskFlowRegistryForTests({ persist: false });
           } finally {
-            scopeRuns.mockRestore();
+            scopeRuns[Symbol.dispose]();
           }
         }
       });

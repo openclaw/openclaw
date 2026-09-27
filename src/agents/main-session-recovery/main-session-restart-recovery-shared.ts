@@ -1,5 +1,4 @@
 import path from "node:path";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import {
@@ -39,31 +38,6 @@ export function resolveRestartRecoveryTerminalClientRunId(
   return entry.restartRecoverySourceIngress === "control-ui"
     ? normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId)
     : undefined;
-}
-
-export function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
-  const normalized = new Set<string>();
-  for (const value of values ?? []) {
-    const trimmed = value.trim();
-    if (trimmed) {
-      normalized.add(trimmed);
-    }
-  }
-  return normalized;
-}
-
-export const normalizeFiniteTimestamp = asFiniteNumber;
-
-export function hasCurrentProcessOwner(params: {
-  activeSessionIds: Set<string>;
-  activeSessionKeys: Set<string>;
-  entry: SessionEntry;
-  sessionKey: string;
-}): boolean {
-  if (params.activeSessionIds.has(params.entry.sessionId)) {
-    return true;
-  }
-  return params.activeSessionIds.size === 0 && params.activeSessionKeys.has(params.sessionKey);
 }
 
 export async function discoverRestartRecoveryStoreTargets(params: {

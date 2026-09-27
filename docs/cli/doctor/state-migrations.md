@@ -19,18 +19,19 @@ transient runs are never restored from them.
 
 ## Legacy state migration
 
-`openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
+`openclaw doctor --fix` owns general persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Gateway, node-host, and local CLI startup leave general legacy repair to Doctor. Normal versioned database opening, native initialization, and recovery of valid current config remain available. The narrow [restart-notice importer](/gateway/restart-recovery#agent-requested-restarts) also serves the late update notices written by shipped June updaters, through the same migration owner and receipts.
 
-Gateway startup invokes the same migration owners under exclusive maintenance
-ownership before checking runtime readiness. This lets container image upgrades
-complete agent schema, shared-state, session, and workspace migrations without
-an offline operator command. Startup preserves verified SQLite copies before
-schema upgrades, plus Doctor's normal config backups and legacy-file archives.
+The container image entrypoint automatically runs `openclaw doctor --fix --non-interactive`
+against the mounted state and config before starting the Gateway. If you override
+that entrypoint, run Doctor explicitly against the same mounts. Doctor performs
+the required legacy repairs under exclusive maintenance ownership and preserves
+verified SQLite copies before schema upgrades, along with its normal config
+backups and legacy-file archives. Gateway startup then checks runtime readiness.
 An unsafe required store exits with code 78 and its specific reason. Refused default
 or system agents never produce a healthy readiness response. Unused legacy stores,
 including loose `agent/settings.json` files without an agent owner, remain untouched
-and deferred. Startup records an advisory and continues independent migrations;
-Doctor reports the retained source for follow-up. An advisory never hides a separate
+and deferred. Doctor reports the retained source and continues independent migrations;
+startup reports remaining readiness advisories. An advisory never hides a separate
 required-store refusal.
 
 A step blocked solely by an earlier refusal keeps
@@ -103,12 +104,19 @@ agent must be restored before deletion. For a custom database filename, restore
 the original `session.store` configuration first; `agents add` refuses to create
 an empty replacement when it cannot select a held store. If Doctor cannot verify
 a custom store's owner, it leaves the journal unavailable and reports the path
-while continuing other repairs. Rerun Doctor after resolving the holds.
+as a failing `agent-deletion-journal` check. Rerun Doctor after resolving the holds.
 
 Invalid configuration also leaves the journal unavailable: Doctor cannot record
 a complete recovery inventory until it can validate configured ownership paths.
 Repair the configuration, then rerun `openclaw doctor --fix` to discover and hold
 external stores before reconstruction.
+
+The intact historical shared schema written by `2026.7.35` predates the deletion
+journal. Doctor recognizes that schema and initializes the journal during the
+shared-schema migration, before migrating the agent databases in the same pass.
+This does not apply to modern databases with a missing journal or to recorded
+recovery holds. Explicit repair exits nonzero while deletion-history recovery
+leaves stores unverified; the failing check names the reason and restoration steps.
 
 Doctor reports interrupted auth-profile archive recovery even when no new migration remains or you decline another migration. If recovery cannot finish, its warning includes the failure cause and leaves the pending source for recovery; do not delete it to silence the warning.
 
@@ -121,6 +129,11 @@ For malformed legacy `exec-approvals.json`, Doctor preserves the original bytes 
 Repair the preserved file locally, then rerun `openclaw doctor --fix` with the same `OPENCLAW_STATE_DIR` setting (leave it unset if it was unset before). Exec approvals remain blocked until migration succeeds. Explicit repair exits nonzero while the legacy file or an interrupted `.doctor-importing` claim remains, before restarting any Gateway stopped for that repair. Do not delete the file or broaden its policy to bypass validation.
 
 Agent database schema upgrades are reported with the database path and the observed before and after versions, independently of media rewrites. The media persistence message appears only when transcript sessions or trajectory rows were rewritten and includes both counts. A run that does both reports both; an unchanged rerun reports neither.
+
+Doctor resolves configured agent databases and custom session stores before its
+media/schema migration step. That prerequisite runs before auth-profile imports,
+session repairs, and post-session plugin repairs, including when preflight inspected
+a custom store that has not yet been registered.
 
 Media repair detection stops at the first event that needs repair. The repair
 transaction still validates every transcript and trajectory row before committing;

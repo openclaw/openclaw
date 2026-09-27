@@ -1,6 +1,8 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyCliProfileEnv } from "../cli/profile.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
@@ -11,6 +13,7 @@ import { createMockGatewayService, mockSystemAccountHome } from "../daemon/servi
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
 import { writeDoctorGatewayConfig } from "../flows/doctor-health-contribution-runners.gateway.js";
 import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -31,6 +34,7 @@ import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
+  gatewayPid: 4200,
   resident: vi.fn<() => { pid: number } | undefined>(),
   activeRoot: "",
   runtimeDirectory: "",
@@ -42,6 +46,11 @@ const mocks = vi.hoisted(() => ({
   health: vi.fn(async () => ({ healthy: true })),
   suspend: vi.fn<typeof import("../daemon/schtasks.js").suspendScheduledTaskAutoStartForUpdate>(),
   resume: vi.fn<typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate>(),
+}));
+vi.mock("../daemon/service-process-membership.js", () => ({
+  // This in-memory service places Doctor outside its synthetic process scope.
+  inspectServiceProcessMembershipSync: (pid: number) =>
+    pid === mocks.gatewayPid ? "outside" : "unknown",
 }));
 vi.mock("../gateway/call.js", async (original) => {
   const { gatewayMaintenanceResponse } = await import("../gateway/health-response.test-support.js");
@@ -118,12 +127,19 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let handoffBinding: ReturnType<typeof createManagedHandoffTestBinding>;
 useDoctorMaintenanceRuntimeDirectory(() => {
-  mocks.runtimeDirectory = tempDirs.make("openclaw-doctor-installation-runtime-");
+  mocks.runtimeDirectory = realpathSync(tempDirs.make("openclaw-doctor-installation-runtime-"));
+  handoffBinding = createManagedHandoffTestBinding(mocks.runtimeDirectory);
+  vi.stubEnv(
+    "NODE_OPTIONS",
+    `${process.env.NODE_OPTIONS ?? ""} ${handoffBinding.nodeOption}`.trim(),
+  );
   return mocks.runtimeDirectory;
 });
 const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 beforeEach(() => {
+  handoffBinding.assertPath(resolveManagedUpdateLeaseDatabasePath());
   vi.clearAllMocks();
   mocks.resident.mockReset();
   mocks.audit.mockResolvedValue({ ok: true, issues: [] });
@@ -260,7 +276,7 @@ async function runInstallationCase(params: {
       };
       const originalCommand = structuredClone(command);
       let running = !initiallyStopped;
-      const pid = 4200;
+      const pid = mocks.gatewayPid;
       mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
       let nativeInspectionReads = 0;
       let inspectionClock = 0;
@@ -438,6 +454,18 @@ async function runInstallationCase(params: {
       });
       if (params.inspectionScenario) {
         vi.spyOn(performance, "now").mockImplementation(() => inspectionClock);
+        // Charge both fresh byte validation and fallback snapshots: reusing decoded
+        // rows does not remove the fresh read at each native authority boundary.
+        const readVersion = sqliteSnapshotSource.readSqliteSourceContentVersionSync;
+        vi.spyOn(sqliteSnapshotSource, "readSqliteSourceContentVersionSync").mockImplementation(
+          (pathname) => {
+            const version = readVersion(pathname);
+            if (inspectingRuntime) {
+              inspectionClock += 100;
+            }
+            return version;
+          },
+        );
         const prepareSnapshot = sqliteSnapshotSource.prepareSqliteReadOnlyLocationSync;
         vi.spyOn(sqliteSnapshotSource, "prepareSqliteReadOnlyLocationSync").mockImplementation(
           (pathname) => {

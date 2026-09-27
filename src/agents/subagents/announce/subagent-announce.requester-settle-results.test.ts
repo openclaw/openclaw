@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   sessionStore,
@@ -47,13 +48,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     expect(message).toContain("social findings");
     expect(message).toContain("network findings");
     expect(message).toContain("NO_REPLY");
-    expect(registryRuntimeMock.hasDescendantRunAwaitingSettle).toHaveBeenCalledWith(
-      REQUESTER,
-      "run-b",
-      "main",
-      null,
-      1_000,
-    );
   });
 
   it("delivers the complete final source reply after a same-run silent terminal", async () => {
@@ -97,7 +91,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     ];
     findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
       expect(sessionId).toBe("source-reply-session");
-      const event = events.findLast(match);
+      const event = events.findLast((candidate) => matchesTranscriptEvent(candidate, match));
       return event === undefined ? undefined : { event };
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);

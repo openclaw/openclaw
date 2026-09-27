@@ -5,7 +5,6 @@ import {
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-// Matrix plugin module implements verification manager behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   resolveDateTimestampMs,
@@ -46,10 +45,7 @@ export type MatrixVerificationSummary = {
   chosenMethod?: string | null;
   canAccept: boolean;
   hasSas: boolean;
-  sas?: {
-    decimal?: [number, number, number];
-    emoji?: Array<[string, string]>;
-  };
+  sas?: MatrixShowSasCallbacks["sas"];
   hasReciprocateQr: boolean;
   completed: boolean;
   error?: string;
@@ -737,10 +733,7 @@ export class MatrixVerificationManager {
     return this.buildVerificationSummary(session);
   }
 
-  getVerificationSas(id: string): {
-    decimal?: [number, number, number];
-    emoji?: Array<[string, string]>;
-  } {
+  getVerificationSas(id: string): MatrixShowSasCallbacks["sas"] {
     const session = this.findVerificationSession(id);
     const callbacks = session.sasCallbacks ?? session.activeVerifier?.getShowSasCallbacks();
     if (!callbacks) {

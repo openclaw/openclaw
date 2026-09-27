@@ -34,6 +34,10 @@ import type {
   TelegramEventAuthorizationMode,
   TelegramHandlerAuthorization,
 } from "./bot-handlers.inbound-authorization.js";
+import {
+  buildSyntheticContext,
+  buildSyntheticTextMessage,
+} from "./bot-handlers.message-context.js";
 import type {
   RegisterTelegramHandlerParams,
   TelegramCallbackRouter,
@@ -92,8 +96,7 @@ export function createTelegramCallbackRouter({
   message: TelegramCallbackMessageRuntime;
   authorization: TelegramHandlerAuthorization;
 }): TelegramCallbackRouter {
-  const { buildSyntheticTextMessage, buildSyntheticContext, processMessageWithReplyChain } =
-    messageRuntime;
+  const { processMessageWithReplyChain } = messageRuntime;
   const {
     resolveTelegramEventAuthorizationContext,
     authorizeTelegramEventSender,
@@ -472,14 +475,16 @@ async function handleTelegramModelCallback(params: {
     }
     const agentId =
       paginationMatch[2]?.trim() ||
-      messageRuntime.resolveTelegramSessionState({
-        chatId,
-        isGroup,
-        threadSpec,
-        botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
-        senderId,
-        runtimeCfg,
-      }).agentId;
+      (
+        await messageRuntime.resolveTelegramSessionState({
+          chatId,
+          isGroup,
+          threadSpec,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+          senderId,
+          runtimeCfg,
+        })
+      ).agentId;
     const result = await retryModelAction(async () => {
       const skillCommands = telegramDeps.listSkillCommandsForAgents({
         cfg: runtimeCfg,
@@ -519,7 +524,7 @@ async function handleTelegramModelCallback(params: {
   }
 
   const { sessionState, modelData } = await retryModelAction(async () => {
-    const session = messageRuntime.resolveTelegramSessionState({
+    const session = await messageRuntime.resolveTelegramSessionState({
       chatId,
       isGroup,
       threadSpec,

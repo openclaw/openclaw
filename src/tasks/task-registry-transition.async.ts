@@ -15,16 +15,22 @@ import {
 } from "./task-registry-state.js";
 import { TaskRunTransitionUnsettledError } from "./task-registry-transition.operation.js";
 import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
-import type { TaskRecord, TaskRunTransition } from "./task-registry.types.js";
+import type {
+  TaskPersistenceReceipt,
+  TaskRecord,
+  TaskRunTransition,
+} from "./task-registry.types.js";
 import { getTaskRunOwner } from "./task-run-owner.js";
 
 /** Preserve accepted run-update order through preparation, commit, and publication. */
 export function transitionTaskRecordsByRunAsync(
   transition: TaskRunTransition,
   assertCurrent?: () => void,
+  expectedTask?: TaskPersistenceReceipt,
 ): Promise<TaskRecord[]> {
   const creation = captureTaskMutationContext();
   const input = structuredClone(transition);
+  const expected = expectedTask ? structuredClone(expectedTask) : undefined;
   const assertOwner = () => {
     creation.assertStores();
     assertCurrent?.();
@@ -37,7 +43,9 @@ export function transitionTaskRecordsByRunAsync(
     assertOwner();
     await prepareTaskRegistryProjectionAsync(creation.context, creation.store);
     assertOwner();
-    const matches = getTasksByRunScope(input.params);
+    const matches = getTasksByRunScope(input.params).filter(
+      (task) => !expected || matchesTaskPersistenceReceipt(task, expected),
+    );
     const taskId = input.kind === "state" ? input.params.taskId?.trim() : undefined;
     const selected =
       taskId !== undefined ? matches.find((task) => task.taskId === taskId) : undefined;

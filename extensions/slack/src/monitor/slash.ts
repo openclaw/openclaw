@@ -92,22 +92,22 @@ const SLACK_COMMAND_ARG_ACTION_BLOCKS_MAX = SLACK_MAX_BLOCKS - SLACK_COMMAND_ARG
 
 type SlackCommandHandlerArgs = SlackCommandMiddlewareArgs &
   Pick<AllMiddlewareArgs, "context" | "client">;
-type SlackArgActionHandlerArgs = SlackActionMiddlewareArgs<BlockAction> &
-  Pick<AllMiddlewareArgs, "context" | "client">;
+type SlackArgActionHandlerArgs = Omit<SlackActionMiddlewareArgs<BlockAction>, "respond"> &
+  Pick<AllMiddlewareArgs, "context" | "client"> & {
+    // Bolt only supplies respond when the action has a response URL.
+    respond?: SlackActionMiddlewareArgs<BlockAction>["respond"];
+  };
 type SlackArgOptionsHandlerArgs = SlackOptionsMiddlewareArgs<"block_suggestion"> &
   Pick<AllMiddlewareArgs, "context" | "client">;
 
 const loadSlashCommandsRuntime = createLazyRuntimeModule(
-  () => import("./slash-commands.runtime.js"),
+  () => import("openclaw/plugin-sdk/command-auth-native"),
 );
 
 const loadSlashDispatchRuntime = createLazyRuntimeModule(
   () => import("./slash-dispatch.runtime.js"),
 );
 
-const loadSlashSkillCommandsRuntime = createLazyRuntimeModule(
-  () => import("./slash-skill-commands.runtime.js"),
-);
 const loadPluginCommandRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/plugin-command-runtime"),
 );
@@ -164,7 +164,6 @@ function resolveSlackCommandMenuModelContext(params: {
   }
 }
 
-type EncodedMenuChoice = SlackExternalArgMenuChoice;
 const slackExternalArgMenuStore = createSlackExternalArgMenuStore();
 
 function buildSlackArgMenuConfirm(params: { command: string; arg: string }) {
@@ -212,33 +211,15 @@ function parseSlackCommandArgValue(raw?: string | null): {
   if (parts.length !== 5 || parts[0] !== SLACK_COMMAND_ARG_VALUE_PREFIX) {
     return null;
   }
-  const [, command, arg, value, userId] = parts;
-  if (!command || !arg || !value || !userId) {
+  try {
+    const [command, arg, value, userId] = parts.slice(1).map(decodeURIComponent);
+    return command && arg && value && userId ? { command, arg, value, userId } : null;
+  } catch {
     return null;
   }
-  const decode = (text: string) => {
-    try {
-      return decodeURIComponent(text);
-    } catch {
-      return null;
-    }
-  };
-  const decodedCommand = decode(command);
-  const decodedArg = decode(arg);
-  const decodedValue = decode(value);
-  const decodedUserId = decode(userId);
-  if (!decodedCommand || !decodedArg || !decodedValue || !decodedUserId) {
-    return null;
-  }
-  return {
-    command: decodedCommand,
-    arg: decodedArg,
-    value: decodedValue,
-    userId: decodedUserId,
-  };
 }
 
-function buildSlackArgMenuOptions(choices: EncodedMenuChoice[]) {
+function buildSlackArgMenuOptions(choices: SlackExternalArgMenuChoice[]) {
   return choices.map((choice) => ({
     text: {
       type: "plain_text" as const,
@@ -255,7 +236,7 @@ function buildSlackCommandArgMenuBlocks(params: {
   choices: Array<{ value: string; label: string }>;
   userId: string;
   supportsExternalSelect: boolean;
-  createExternalMenuToken: (choices: EncodedMenuChoice[]) => string;
+  createExternalMenuToken: (choices: SlackExternalArgMenuChoice[]) => string;
 }) {
   const encodedChoices = params.choices.map((choice) => ({
     label: choice.label,
@@ -498,7 +479,6 @@ export function createSlackCommandHandler(params: {
 
       // Privileged command surface: compute CommandAuthorized, don't assume true.
       // Keep this aligned with the Slack message path (message-handler/prepare.ts).
-      let commandAuthorized = false;
       let channelConfig: SlackChannelConfigResolved | null = null;
       if (isDirectMessage) {
         const allowed = await authorizeSlackDirectMessage({
@@ -605,15 +585,13 @@ export function createSlackCommandHandler(params: {
 
       // DMs: allow chatting in dmPolicy=open, but keep privileged command gating intact by setting
       // CommandAuthorized based on allowlists/access-groups (downstream decides which commands need it).
-      commandAuthorized = slashIngress.commandAccess.authorized;
-      if (isRoomish) {
-        if (ctx.useAccessGroups && !commandAuthorized) {
-          await respond({
-            text: "You are not authorized to use this command.",
-            response_type: "ephemeral",
-          });
-          return false;
-        }
+      const commandAuthorized = slashIngress.commandAccess.authorized;
+      if (isRoomish && ctx.useAccessGroups && !commandAuthorized) {
+        await respond({
+          text: "You are not authorized to use this command.",
+          response_type: "ephemeral",
+        });
+        return false;
       }
 
       const routeTarget = resolveSlackDeferredActionTarget({
@@ -775,17 +753,18 @@ export function createSlackCommandHandler(params: {
         kind: !slashCommand.ephemeral && isRoomish ? "channel" : "user",
         id: !slashCommand.ephemeral && isRoomish ? command.channel_id : command.user_id,
       }).target;
+      const from = isDirectMessage
+        ? `slack:${routeTarget.peerId}`
+        : isRoom
+          ? `slack:channel:${routeTarget.peerId}`
+          : `slack:group:${routeTarget.peerId}`;
       const ctxPayload = finalizeInboundContext({
         Body: prompt,
         BodyForAgent: prompt,
         RawBody: prompt,
         CommandBody: prompt,
         CommandArgs: commandArgs,
-        From: isDirectMessage
-          ? `slack:${routeTarget.peerId}`
-          : isRoom
-            ? `slack:channel:${routeTarget.peerId}`
-            : `slack:group:${routeTarget.peerId}`,
+        From: from,
         To: `slash:${slashUserTarget.peerId}`,
         ChatType: chatType,
         ConversationLabel:
@@ -793,11 +772,7 @@ export function createSlackCommandHandler(params: {
             ChatType: chatType,
             SenderName: senderName,
             GroupSubject: isRoomish ? roomLabel : undefined,
-            From: isDirectMessage
-              ? `slack:${routeTarget.peerId}`
-              : isRoom
-                ? `slack:channel:${routeTarget.peerId}`
-                : `slack:group:${routeTarget.peerId}`,
+            From: from,
           }) ?? (isDirectMessage ? senderName : roomLabel),
         GroupSubject: isRoomish ? roomLabel : undefined,
         GroupSpace: ctx.teamId || undefined,
@@ -1008,9 +983,41 @@ export async function registerSlackMonitorSlashCommands(params: {
     trackEvent,
     supportsExternalArgMenus: () => supportsExternalArgMenus,
   });
+  const registerCommand = (
+    matcher: string | RegExp,
+    prepareCommand: (
+      command: SlackCommandHandlerArgs["command"],
+    ) => Pick<
+      Parameters<typeof handleSlashCommand>[0],
+      "prompt" | "commandArgs" | "commandDefinition" | "pluginCommandReplyOptions"
+    > = (command) => ({ prompt: command.text?.trim() ?? "" }),
+  ) => {
+    ctx.app.command(matcher, async (args: SlackCommandHandlerArgs) => {
+      const { command, ack, respond, body } = args;
+      const eventScope = resolveEventScope(args);
+      if (eventScope === null) {
+        await ack({ text: "This Slack workspace is unavailable.", response_type: "ephemeral" });
+        return;
+      }
+      const input = prepareCommand(command);
+      await handleSlashCommand({
+        command,
+        ack,
+        respond: createSlackSlashResponderWithFallback({
+          respond,
+          client: args.client,
+          command,
+          runtime,
+        }),
+        body,
+        eventScope,
+        ...input,
+      });
+    });
+  };
 
   let nativeCommands: SlackNativeCommandSpec[] = [];
-  let slashCommandsRuntime: typeof import("./slash-commands.runtime.js") | null = null;
+  let slashCommandsRuntime: typeof import("openclaw/plugin-sdk/command-auth-native") | null = null;
   let pluginCommandRuntimeModule:
     | typeof import("openclaw/plugin-sdk/plugin-command-runtime")
     | null = null;
@@ -1031,7 +1038,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       providerSetting: account.config.commands?.nativeSkills,
       globalSetting: startupCfg.commands?.nativeSkills,
     })
-      ? (await loadSlashSkillCommandsRuntime()).listSkillCommandsForAgents({ cfg: startupCfg })
+      ? slashCommandsRuntime.listSkillCommandsForAgents({ cfg: startupCfg })
       : [];
     nativeCommands = slashCommandsRuntime.listNativeCommandSpecsForConfig(startupCfg, {
       skillCommands,
@@ -1047,43 +1054,14 @@ export async function registerSlackMonitorSlashCommands(params: {
   }
 
   if (registration.mode === "single") {
-    ctx.app.command(
-      buildSlackSlashCommandMatcher(registration.name),
-      async (args: SlackCommandHandlerArgs) => {
-        const { command, ack, respond, body } = args;
-        const eventScope = resolveEventScope(args);
-        if (eventScope === null) {
-          await ack({ text: "This Slack workspace is unavailable.", response_type: "ephemeral" });
-          return;
-        }
-        await handleSlashCommand({
-          command,
-          ack,
-          respond: createSlackSlashResponderWithFallback({
-            respond,
-            client: args.client,
-            command,
-            runtime,
-          }),
-          body,
-          eventScope,
-          prompt: command.text?.trim() ?? "",
-        });
-      },
-    );
+    registerCommand(buildSlackSlashCommandMatcher(registration.name));
   } else if (registration.mode === "native") {
     if (!slashCommandsRuntime || !pluginCommandRuntimeModule || !pluginCommandRuntime) {
       throw new Error("Missing command runtimes for native Slack commands.");
     }
     for (const command of nativeCommands) {
       const pluginCommandCandidate = "prepareDispatch" in command ? command : undefined;
-      ctx.app.command(`/${command.name}`, async (args: SlackCommandHandlerArgs) => {
-        const { command: cmd, ack, respond, body } = args;
-        const eventScope = resolveEventScope(args);
-        if (eventScope === null) {
-          await ack({ text: "This Slack workspace is unavailable.", response_type: "ephemeral" });
-          return;
-        }
+      registerCommand(`/${command.name}`, (cmd) => {
         const commandDefinition = pluginCommandCandidate
           ? undefined
           : slashCommandsRuntime.findCommandByNativeName(command.name, "slack");
@@ -1100,24 +1078,14 @@ export async function registerSlackMonitorSlashCommands(params: {
           : rawText
             ? `/${command.name} ${rawText}`
             : `/${command.name}`;
-        await handleSlashCommand({
-          command: cmd,
-          ack,
-          respond: createSlackSlashResponderWithFallback({
-            respond,
-            client: args.client,
-            command: cmd,
-            runtime,
-          }),
-          body,
-          eventScope,
+        return {
           prompt,
           commandArgs,
           commandDefinition: commandDefinition ?? undefined,
           pluginCommandReplyOptions: {
             [pluginCommandRuntimeModule.PLUGIN_COMMAND_DISPATCH]: pluginCommandDispatch,
           },
-        });
+        };
       });
     }
   } else {
@@ -1194,114 +1162,100 @@ export async function registerSlackMonitorSlashCommands(params: {
     );
   }
 
-  const registerArgAction = (actionId: string | RegExp) => {
-    (
-      ctx.app as unknown as {
-        action: NonNullable<(typeof ctx.app & { action?: unknown })["action"]>;
-      }
-    ).action(actionId, async (args: SlackArgActionHandlerArgs) => {
-      const { ack, body } = args;
-      const respond = (
-        args as unknown as {
-          respond?: SlackCommandMiddlewareArgs["respond"];
+  ctx.app.action(SLACK_COMMAND_ARG_ACTION_LISTENER, async (args: SlackArgActionHandlerArgs) => {
+    const { ack, body, respond } = args;
+    const action = args.action as { value?: string; selected_option?: { value?: string } };
+    await ack();
+    const eventScope = resolveEventScope(args);
+    if (eventScope === null) {
+      return;
+    }
+    if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
+      runtime.log?.("slack: drop slash arg action payload (mismatched app/team)");
+      return;
+    }
+    const respondFn: SlackCommandMiddlewareArgs["respond"] =
+      respond ??
+      (async (message) => {
+        if (!body.channel?.id || !body.user?.id) {
+          return new Response(null, { status: 204 });
         }
-      ).respond;
-      const action = args.action as { value?: string; selected_option?: { value?: string } };
-      await ack();
-      const eventScope = resolveEventScope(args);
-      if (eventScope === null) {
-        return;
-      }
-      if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
-        runtime.log?.("slack: drop slash arg action payload (mismatched app/team)");
-        return;
-      }
-      const respondFn: SlackCommandMiddlewareArgs["respond"] =
-        respond ??
-        (async (message) => {
-          if (!body.channel?.id || !body.user?.id) {
-            return new Response(null, { status: 204 });
-          }
-          const payload =
-            typeof message === "string"
-              ? { text: message }
-              : (message as {
-                  text?: string;
-                  blocks?: (Block | KnownBlock)[];
-                  mrkdwn?: boolean;
-                });
-          const threadTs = body.container?.thread_ts ?? body.message?.thread_ts;
-          await args.client.chat.postEphemeral({
-            token: ctx.botToken,
-            channel: body.channel.id,
-            user: body.user.id,
-            text: payload.text ?? "",
-            ...(threadTs ? { thread_ts: threadTs } : {}),
-            ...(payload.blocks ? { blocks: payload.blocks } : {}),
-            ...(typeof payload.mrkdwn === "boolean" ? { mrkdwn: payload.mrkdwn } : {}),
-          });
-          return new Response(null, { status: 200 });
+        const payload =
+          typeof message === "string"
+            ? { text: message }
+            : (message as {
+                text?: string;
+                blocks?: (Block | KnownBlock)[];
+                mrkdwn?: boolean;
+              });
+        const threadTs = body.container?.thread_ts ?? body.message?.thread_ts;
+        await args.client.chat.postEphemeral({
+          token: ctx.botToken,
+          channel: body.channel.id,
+          user: body.user.id,
+          text: payload.text ?? "",
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+          ...(payload.blocks ? { blocks: payload.blocks } : {}),
+          ...(typeof payload.mrkdwn === "boolean" ? { mrkdwn: payload.mrkdwn } : {}),
         });
-      const actionValue = action?.value ?? action?.selected_option?.value;
-      const parsed = parseSlackCommandArgValue(actionValue);
-      if (!parsed) {
-        await respondFn({
-          text: "Sorry, that button is no longer valid.",
-          response_type: "ephemeral",
-        });
-        return;
-      }
-      if (body.user?.id && parsed.userId !== body.user.id) {
-        await respondFn({
-          text: "That menu is for another user.",
-          response_type: "ephemeral",
-        });
-        return;
-      }
-      const { buildCommandTextFromArgs, findCommandByNativeName } =
-        await loadSlashCommandsRuntime();
-      const commandDefinition = findCommandByNativeName(parsed.command, "slack");
-      const commandArgs: CommandArgs = {
-        values: { [parsed.arg]: parsed.value },
-      };
-      const prompt = commandDefinition
-        ? buildCommandTextFromArgs(commandDefinition, commandArgs)
-        : `/${parsed.command} ${parsed.value}`;
-      const user = body.user;
-      const userName =
-        user && "name" in user && user.name
-          ? user.name
-          : user && "username" in user && user.username
-            ? user.username
-            : (user?.id ?? "");
-      const triggerId = "trigger_id" in body ? body.trigger_id : undefined;
-      const commandPayload = {
-        user_id: user?.id ?? "",
-        user_name: userName,
-        channel_id: body.channel?.id ?? "",
-        channel_name: body.channel?.name ?? body.channel?.id ?? "",
-        trigger_id: triggerId,
-        team_id: args.context.teamId ?? "",
-      } as SlackCommandMiddlewareArgs["command"];
-      await handleSlashCommand({
-        command: commandPayload,
-        ack: async () => {},
-        respond: respondFn,
-        // Bolt's action responder uses response_url; only the postEphemeral fallback
-        // goes through the uncapped Web API path.
-        responseTransport: respond ? "response-url" : "web-api",
-        body,
-        eventScope,
-        prompt,
-        commandArgs,
-        commandDefinition: commandDefinition ?? undefined,
-        pluginCommandReplyOptions: pluginCommandRuntimeModule
-          ? { [pluginCommandRuntimeModule.PLUGIN_COMMAND_DISPATCH]: NON_PLUGIN_COMMAND_DISPATCH }
-          : undefined,
+        return new Response(null, { status: 200 });
       });
+    const actionValue = action?.value ?? action?.selected_option?.value;
+    const parsed = parseSlackCommandArgValue(actionValue);
+    if (!parsed) {
+      await respondFn({
+        text: "Sorry, that button is no longer valid.",
+        response_type: "ephemeral",
+      });
+      return;
+    }
+    if (body.user?.id && parsed.userId !== body.user.id) {
+      await respondFn({
+        text: "That menu is for another user.",
+        response_type: "ephemeral",
+      });
+      return;
+    }
+    const { buildCommandTextFromArgs, findCommandByNativeName } = await loadSlashCommandsRuntime();
+    const commandDefinition = findCommandByNativeName(parsed.command, "slack");
+    const commandArgs: CommandArgs = {
+      values: { [parsed.arg]: parsed.value },
+    };
+    const prompt = commandDefinition
+      ? buildCommandTextFromArgs(commandDefinition, commandArgs)
+      : `/${parsed.command} ${parsed.value}`;
+    const user = body.user;
+    const userName =
+      user && "name" in user && user.name
+        ? user.name
+        : user && "username" in user && user.username
+          ? user.username
+          : (user?.id ?? "");
+    const triggerId = "trigger_id" in body ? body.trigger_id : undefined;
+    const commandPayload = {
+      user_id: user?.id ?? "",
+      user_name: userName,
+      channel_id: body.channel?.id ?? "",
+      channel_name: body.channel?.name ?? body.channel?.id ?? "",
+      trigger_id: triggerId,
+    };
+    await handleSlashCommand({
+      command: commandPayload,
+      ack: async () => {},
+      respond: respondFn,
+      // Bolt's action responder uses response_url; only the postEphemeral fallback
+      // goes through the uncapped Web API path.
+      responseTransport: respond ? "response-url" : "web-api",
+      body,
+      eventScope,
+      prompt,
+      commandArgs,
+      commandDefinition: commandDefinition ?? undefined,
+      pluginCommandReplyOptions: pluginCommandRuntimeModule
+        ? { [pluginCommandRuntimeModule.PLUGIN_COMMAND_DISPATCH]: NON_PLUGIN_COMMAND_DISPATCH }
+        : undefined,
     });
-  };
-  registerArgAction(SLACK_COMMAND_ARG_ACTION_LISTENER);
+  });
   return registration;
 }
 
@@ -1344,25 +1298,19 @@ export async function deliverSlackSlashResponseWithWebApi(params: {
   const mrkdwn =
     "mrkdwn" in payload && typeof payload.mrkdwn === "boolean" ? payload.mrkdwn : undefined;
 
+  const message = {
+    channel: params.command.channel_id,
+    ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
+    text,
+    ...(blocks ? { blocks } : {}),
+    ...(mrkdwn !== undefined ? { mrkdwn } : {}),
+  };
   if (payload.response_type === "in_channel") {
-    const postSlackMessage = params.client.chat.postMessage;
-    const response = await postSlackMessage({
-      channel: params.command.channel_id,
-      ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
-      text,
-      ...(blocks ? { blocks } : {}),
-      ...(mrkdwn !== undefined ? { mrkdwn } : {}),
-    });
+    const postSlackMessage = params.client.chat.postMessage.bind(params.client.chat);
+    const response = await postSlackMessage(message);
     requireSlackPostMessageTimestamp(response);
   } else {
-    await params.client.chat.postEphemeral({
-      channel: params.command.channel_id,
-      ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
-      user: params.command.user_id,
-      text,
-      ...(blocks ? { blocks } : {}),
-      ...(mrkdwn !== undefined ? { mrkdwn } : {}),
-    });
+    await params.client.chat.postEphemeral({ ...message, user: params.command.user_id });
   }
   return new Response(null, { status: 200 });
 }

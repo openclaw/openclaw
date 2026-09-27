@@ -1,5 +1,4 @@
 import { Command } from "commander";
-// Devices CLI tests cover device command registration and output behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
@@ -187,7 +186,6 @@ const approvalCommandContexts = [
 const nodeApprovalLabelCases = [
   { labelKind: "operator label", operatorLabel: "Kitchen Mac", expectedName: "Kitchen Mac" },
   { labelKind: "blank operator label", operatorLabel: "   ", expectedName: "Colin's S25" },
-  { labelKind: "missing operator label", operatorLabel: undefined, expectedName: "Colin's S25" },
 ] as const;
 
 const nodeApprovalErrorCases = [
@@ -238,13 +236,8 @@ describe("devices cli approve", () => {
     });
   });
 
-  it.each([
-    { name: "pairing only", scopes: ["operator.pairing"] },
-    {
-      name: "questions and talk",
-      scopes: ["operator.pairing", "operator.questions", "operator.talk"],
-    },
-  ])("keeps least-privilege scopes for non-admin approvals: $name", async ({ scopes }) => {
+  it("keeps least-privilege scopes for non-admin approvals", async () => {
+    const scopes = ["operator.pairing", "operator.questions", "operator.talk"];
     primeGatewayPairing([
       pendingDevice({
         requestId: "req-pairing",
@@ -354,27 +347,18 @@ describe("devices cli approve", () => {
   });
 
   it("prints selected details and exits when implicit approval is used", async () => {
-    callGateway.mockResolvedValueOnce({
-      pending: [
-        {
+    primeGatewayPairing(
+      [
+        pendingDevice({
           requestId: "req-abc",
           deviceId: "device-9",
           displayName: "Device Nine",
-          role: "operator",
-          scopes: ["operator.admin"],
           remoteIp: "10.0.0.9",
           ts: 1000,
-        },
+        }),
       ],
-      paired: [
-        {
-          deviceId: "device-9",
-          displayName: "Device Nine",
-          roles: ["operator"],
-          scopes: ["operator.read"],
-        },
-      ],
-    });
+      [pairedDevice({ deviceId: "device-9", displayName: "Device Nine" })],
+    );
 
     await runDevicesApprove([]);
 
@@ -391,27 +375,18 @@ describe("devices cli approve", () => {
   });
 
   it("sanitizes preview ip output for implicit approval", async () => {
-    callGateway.mockResolvedValueOnce({
-      pending: [
-        {
+    primeGatewayPairing(
+      [
+        pendingDevice({
           requestId: "req-abc",
           deviceId: "device-9",
           displayName: "Device Nine",
-          role: "operator",
-          scopes: ["operator.admin"],
           remoteIp: "10.0.0.9\rspoof",
           ts: 1000,
-        },
+        }),
       ],
-      paired: [
-        {
-          deviceId: "device-9",
-          displayName: "Device Nine",
-          roles: ["operator"],
-          scopes: ["operator.read"],
-        },
-      ],
-    });
+      [pairedDevice({ deviceId: "device-9", displayName: "Device Nine" })],
+    );
 
     await runDevicesApprove([]);
 
@@ -504,37 +479,35 @@ describe("devices cli approve", () => {
     },
   );
 
-  it.each(approvalCommandContexts)(
-    "returns JSON for the %s implicit approval preview",
-    async (_context, profile, container, prefix) => {
-      vi.stubEnv("OPENCLAW_PROFILE", profile);
-      vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
-      callGateway.mockResolvedValueOnce({
-        pending: [{ requestId: "req-json", deviceId: "device-json", ts: 1000 }],
-        paired: [],
-      });
+  it("returns JSON for the container implicit approval preview", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "demo");
+    callGateway.mockResolvedValueOnce({
+      pending: [{ requestId: "req-json", deviceId: "device-json", ts: 1000 }],
+      paired: [],
+    });
 
-      await runDevicesApprove(["--latest", "--json", "--url", "ws://gateway.example:18789"]);
+    await runDevicesApprove(["--latest", "--json", "--url", "ws://gateway.example:18789"]);
 
-      expect(runtime.log).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.writeJson).toHaveBeenCalledWith({
-        selected: { requestId: "req-json", deviceId: "device-json", ts: 1000 },
-        approvalState: {
-          kind: "new-pairing",
-          requested: { roles: [], scopes: [] },
-          approved: null,
-        },
-        approveCommand: `${prefix} devices approve req-json --url ws://gateway.example:18789 --json`,
-        requiresAuthFlags: {
-          token: false,
-          password: false,
-        },
-      });
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(hasGatewayMethod("device.pair.approve")).toBe(false);
-    },
-  );
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith({
+      selected: { requestId: "req-json", deviceId: "device-json", ts: 1000 },
+      approvalState: {
+        kind: "new-pairing",
+        requested: { roles: [], scopes: [] },
+        approved: null,
+      },
+      approveCommand:
+        "openclaw --container demo devices approve req-json --url ws://gateway.example:18789 --json",
+      requiresAuthFlags: {
+        token: false,
+        password: false,
+      },
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(hasGatewayMethod("device.pair.approve")).toBe(false);
+  });
 
   it("prints an error and exits when no pending requests are available", async () => {
     callGateway.mockResolvedValueOnce({ pending: [] });
@@ -787,10 +760,9 @@ describe("devices cli tokens", () => {
   });
 
   describe.each(["rotate", "revoke"])("%s", (command) => {
-    it.each([
-      { role: "node", scopes: ["operator.admin"] },
-      { role: "custom-role", scopes: ["operator.admin"] },
-    ])("selects connection scopes for the $role role", async ({ role, scopes }) => {
+    it("selects admin connection scopes for a non-operator role", async () => {
+      const role = "custom-role";
+      const scopes = ["operator.admin"];
       const argv = [command, "--device", " device-1 ", "--role", ` ${role} `];
       const tokenScopes = [`${role}.read`, `${role}.write`] as const;
       if (command === "rotate") {

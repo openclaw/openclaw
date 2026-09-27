@@ -126,7 +126,7 @@ export class BoardMcpAppLifecycle {
     const wasLoading = this.loading;
     this.state = { status: "stale", error: "MCP App view expired" };
     this.loading = false;
-    this.notify();
+    this.host.requestUpdate();
     if (this.host.active() && !wasLoading) {
       void this.load(widget, callbacks, "expired");
     }
@@ -149,7 +149,7 @@ export class BoardMcpAppLifecycle {
   private visibilityChanged(): void {
     queueMicrotask(() => {
       if (this.host.connected()) {
-        this.notify();
+        this.host.requestUpdate();
       }
     });
     if (!this.nearVisible && !this.loading) {
@@ -186,7 +186,7 @@ export class BoardMcpAppLifecycle {
     if (mode === "expired") {
       this.state = undefined;
     }
-    this.notify();
+    this.host.requestUpdate();
     if (previousLease) {
       this.expiryTimer = window.setTimeout(
         () => {
@@ -194,7 +194,7 @@ export class BoardMcpAppLifecycle {
           if (isCurrent()) {
             this.state = { status: "stale", error: "MCP App lease expired while renewing" };
             this.loading = false;
-            this.notify();
+            this.host.requestUpdate();
           }
         },
         Math.max(0, previousLease.expiresAtMs - Date.now()),
@@ -219,14 +219,14 @@ export class BoardMcpAppLifecycle {
     }
     if (appView.status === "stale" && previousLease && previousLease.expiresAtMs > Date.now()) {
       this.loading = false;
-      this.notify();
+      this.host.requestUpdate();
       return;
     }
     this.clearTimers();
     this.state = appView;
     this.loading = false;
     this.scheduleRenewal(widget, callbacks, appView, mode !== "cached");
-    this.notify();
+    this.host.requestUpdate();
   }
 
   private scheduleExpiry(widget: BoardWidget, appView: BoardWidgetAppViewState): void {
@@ -250,7 +250,7 @@ export class BoardMcpAppLifecycle {
           state.expiresAtMs === appView.expiresAtMs
         ) {
           this.state = { status: "stale", error: "MCP App lease expired" };
-          this.notify();
+          this.host.requestUpdate();
         }
       },
       Math.max(0, appView.expiresAtMs - Date.now()),
@@ -300,9 +300,5 @@ export class BoardMcpAppLifecycle {
         void this.load(current, callbacks, "refresh");
       }
     }, delayMs);
-  }
-
-  private notify(): void {
-    this.host.requestUpdate();
   }
 }

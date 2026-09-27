@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import * as sessionEntries from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import * as sessionAdmissions from "../../sessions/session-lifecycle-admission.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import {
   admitTestReplyTurn,
@@ -18,6 +19,13 @@ async function admitTestReplyOperation(params: Parameters<typeof admitTestReplyT
     throw new Error("Fixture requires an admitted reply operation");
   }
   return admission.operation;
+}
+
+function createTestReplyOperation(
+  overrides: Omit<Parameters<typeof createReplyOperation>[0], "resetTriggered"> &
+    Partial<Pick<Parameters<typeof createReplyOperation>[0], "resetTriggered">>,
+) {
+  return createReplyOperation({ resetTriggered: false, ...overrides });
 }
 
 describe("reply turn admission rotation", () => {
@@ -111,6 +119,82 @@ describe("reply turn admission rotation", () => {
       }
     },
   );
+
+  it("retries after an admitted owner enters and leaves during one read", async () => {
+    const sessionKey = "agent:main:telegram:topic:transient-owner";
+    const sessionId = "stable-session";
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
+    const preparationWitness = createTestReplyOperation({
+      sessionKey: `${sessionKey}:preparation-witness`,
+      sessionId: "preparation-witness",
+      turnKind: "visible",
+    });
+    let registeringOwner = false;
+    let transientOwner: ReplyOperation | undefined;
+    const ownerObserved = createDeferred();
+    const releaseRead = createDeferred();
+    const load = sessionEntries.loadSessionEntryForAdmission;
+    let reads = 0;
+    let transientOwnerCompleted = false;
+    let readAfterTransientOwnerCompletion = false;
+    const loadSpy = vi
+      .spyOn(sessionEntries, "loadSessionEntryForAdmission")
+      .mockImplementation(async (...args) => {
+        if (registeringOwner) {
+          return await load(...args);
+        }
+        const read = ++reads;
+        if (transientOwnerCompleted) {
+          readAfterTransientOwnerCompletion = true;
+        }
+        const snapshot = await load(...args);
+        if (read === 1) {
+          preparationWitness.updateSessionId("rotated-preparation-witness");
+        } else if (read === 2) {
+          registeringOwner = true;
+          try {
+            transientOwner = await admitTestReplyOperation({ sessionKey, sessionId, storePath });
+          } finally {
+            registeringOwner = false;
+          }
+          transientOwner.updateSessionId("transient-rotation");
+          transientOwner.complete();
+          transientOwnerCompleted = true;
+          ownerObserved.resolve();
+          await releaseRead.promise;
+        }
+        return snapshot;
+      });
+    const admitted = admitTestReplyTurn({
+      sessionKey,
+      sessionId,
+      expectedSessionId: sessionId,
+      expectedActiveOperations: [preparationWitness],
+      storePath,
+      kind: "queued_followup",
+    });
+
+    try {
+      await ownerObserved.promise;
+      releaseRead.resolve();
+      const result = await admitted;
+      expect(readAfterTransientOwnerCompletion).toBe(true);
+      expect(result.status).toBe("owned");
+      if (result.status === "owned") {
+        expect(result.operation.sessionId).toBe(sessionId);
+        result.operation.complete();
+      }
+    } finally {
+      releaseRead.resolve();
+      transientOwner?.complete();
+      preparationWitness.complete();
+      const result = await admitted.catch(() => undefined);
+      if (result?.status === "owned") {
+        result.operation.complete();
+      }
+      loadSpy.mockRestore();
+    }
+  });
 
   it("accepts a rotation already published by the expected active run", async () => {
     const sessionKey = "agent:main:telegram:topic:compaction-before-admission";

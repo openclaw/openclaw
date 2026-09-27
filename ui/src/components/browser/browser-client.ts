@@ -222,8 +222,14 @@ export function bindBrowserRequestClient(
   };
 }
 
-function browserRequest<T>(client: BrowserRequestClient, envelope: BrowserRequestEnvelope) {
-  return client.request<T>(BROWSER_REQUEST_METHOD, envelope);
+function browserRequest<T>(
+  client: BrowserRequestClient,
+  envelope: BrowserRequestEnvelope,
+  options?: GatewayClientRequestOptions,
+) {
+  return options
+    ? client.request<T>(BROWSER_REQUEST_METHOD, envelope, options)
+    : client.request<T>(BROWSER_REQUEST_METHOD, envelope);
 }
 
 function stringOrEmpty(value: unknown): string {
@@ -326,9 +332,10 @@ export async function navigateBrowser(
 export async function requestBrowserScreencast(
   client: BrowserRequestClient,
   params: { targetId: string; maxWidth: number; maxHeight: number },
+  options?: GatewayClientRequestOptions,
 ): Promise<{ token: string; wsPath: string; targetId: string; url: string }> {
   const result = asRecord(
-    await browserRequest(client, { method: "POST", path: "/screencast", body: params }),
+    await browserRequest(client, { method: "POST", path: "/screencast", body: params }, options),
   );
   const token = stringOrEmpty(result?.token);
   const wsPath = stringOrEmpty(result?.wsPath);
@@ -345,8 +352,7 @@ export async function requestBrowserScreencast(
 
 export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
   const record = asRecord(error);
-  const details =
-    error instanceof GatewayRequestError ? asRecord(error.details) : asRecord(record?.details);
+  const details = asRecord(record?.details);
   return (
     details?.code === "SCREENCAST_UNSUPPORTED" ||
     asRecord(details?.body)?.code === "SCREENCAST_UNSUPPORTED" ||

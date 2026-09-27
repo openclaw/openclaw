@@ -74,7 +74,7 @@ describe("resolveCachedMessageThreadSpec", () => {
     resetTelegramMessageCacheForTest();
   });
 
-  it("keeps account cache ownership separate from a topic-routed session owner", () => {
+  it("keeps account cache ownership separate from a topic-routed session owner", async () => {
     const resolveStorePath = vi.fn(
       (_store, options: { agentId?: string }) =>
         `/tmp/openclaw-telegram-owner-${options.agentId}.json`,
@@ -104,7 +104,7 @@ describe("resolveCachedMessageThreadSpec", () => {
       } as unknown as RegisterTelegramHandlerParams["telegramDeps"],
     });
 
-    const session = sessionRuntime.resolveTelegramSessionState({
+    const session = await sessionRuntime.resolveTelegramSessionState({
       chatId: CHAT_ID,
       isGroup: true,
       threadSpec: { id: TOPIC_ID, scope: "forum" },

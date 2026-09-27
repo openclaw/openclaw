@@ -58,10 +58,6 @@ function resolveTopicNameCacheNamespace(scope: string): string {
   return `${STORE_NAMESPACE_PREFIX}.${hash}`;
 }
 
-export function resolveTopicNameCacheScope(storePath: string): string {
-  return storePath;
-}
-
 function openTopicNamePersistentStore(namespace: string): TopicNamePersistentStore {
   return getTelegramRuntime().state.openKeyedStore<TopicEntry>({
     namespace,

@@ -46,6 +46,7 @@ import {
   resolveSlackReplyBlocks,
   type PreparedSlackReply,
 } from "../reply-blocks.js";
+import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "../send.js";
 import { resolveSlackReplyThreadTs } from "../thread-ts.js";
 import type { SlackEventScope } from "./event-scope.js";
 import {
@@ -53,7 +54,6 @@ import {
   SlackResponseAlreadyReportedError,
   type SlackResponseUrlBudget as ResponseUrlBudget,
 } from "./response-url-budget.js";
-import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "./send.runtime.js";
 
 // Receipt-tracked Web API fallbacks stay at 4k, but response_url gets only five calls.
 // Repack its complete fallback parts up to Slack's hard text and block limits.
@@ -98,10 +98,6 @@ function compactSlackResponseUrlFallback(
   }
   flush();
   return compacted;
-}
-
-export function readSlackReplyBlocks(payload: ReplyPayload) {
-  return resolveSlackReplyBlocks(payload);
 }
 
 export function sanitizeSlackMonitorReplyPayload(payload: ReplyPayload): ReplyPayload | null {
@@ -439,7 +435,7 @@ export async function deliverSlackSlashReplies(params: {
   const responseBudget = params.responseBudget ?? createSlackResponseUrlBudget(params.respond);
   const chunkLimit = Math.max(1, Math.min(params.textLimit, SLACK_TEXT_LIMIT));
   const createBlockMessagePlan = (input: {
-    blocks: NonNullable<ReturnType<typeof readSlackReplyBlocks>>;
+    blocks: NonNullable<ReturnType<typeof resolveSlackReplyBlocks>>;
     baseText?: string;
   }): PlannedSlashReplyMessage => {
     const plan = buildSlackNativeDataDeliveryPlan({

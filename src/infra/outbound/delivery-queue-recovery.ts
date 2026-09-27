@@ -13,7 +13,6 @@ import {
 import {
   createDeliveryRecoveryCoordinator,
   createEmptyDeliveryRecoverySummary,
-  findPlatformMessageRejectedError,
   getErrnoCode,
   isDeliveryRecoveryRetryEligible,
   isProvenDeliveryNotSentError,
@@ -30,6 +29,7 @@ import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
 import { buildPayloadSummary } from "./deliver-payload.js";
 import {
   createQueuedDeliveryOwner,
+  findTerminalBatchRejection,
   persistQueuedPostSendState,
   type QueuedPostSendState,
   type QueuedDeliveryOwner,
@@ -37,6 +37,7 @@ import {
 import {
   areOutboundPayloadsIntentionallySuppressed,
   isOutboundDeliveryError,
+  OutboundDeliveryError,
   isOutboundDeliveryAdmissionClosedError,
   OutboundDeliveryAdmissionClosedError,
   type OutboundDeliveryResult,
@@ -807,11 +808,12 @@ async function drainQueuedEntry(
             stateContext,
           )
         : undefined;
-    const deliveryParams = buildRecoveryDeliverParams(
+    const deliveryParams = await buildRecoveryDeliverParams(
       entry,
       opts.cfg,
       opts.stateDir,
       producerClaimId,
+      stateContext,
     );
     let dispatchAdmitted = false;
     const result = await deliver({
@@ -880,33 +882,13 @@ async function drainQueuedEntry(
     }
     const failedOutcome = failedOutcomes[0];
     if (failedOutcome) {
-      const errMsg = formatErrorMessage(failedOutcome.error);
-      opts.onFailed?.(entry, errMsg);
-      if (results.length > 0 || failedOutcomes.some((outcome) => outcome.sentBeforeError)) {
-        postSendState ??= await persistPostSendState();
-        opts.log.warn(
-          `Delivery entry ${entry.id} partially sent before best-effort recovery failed; preserving unknown_after_send`,
-        );
-        if (postSendState === "acked") {
-          await runCommitHooksAfterAck();
-          emitQueuedAuditTerminals(entry, () =>
-            failedOutboundAuditTerminals({
-              payloadCount: queuedPayloadCount(entry),
-              results: deliveredResults,
-              payloadOutcomes,
-              failureStage: "platform_send",
-            }),
-          );
-        }
-      } else {
-        const recordFailure = failedOutcomes.every((outcome) =>
-          isProvenDeliveryNotSentError(outcome.error),
-        )
-          ? failDeliveryBeforePlatformSend
-          : failDelivery;
-        await owner.fail(recordFailure, errMsg);
-      }
-      return "failed";
+      // Returned best-effort failures and thrown failures share custody classification.
+      throw new OutboundDeliveryError(formatErrorMessage(failedOutcome.error), {
+        cause: new AggregateError(failedOutcomes.map((outcome) => outcome.error)),
+        results,
+        payloadOutcomes,
+        stage: failedOutcome.stage,
+      });
     }
     if (entry.deliveryCompletion) {
       const terminalResult = results.at(-1);
@@ -1019,8 +1001,15 @@ async function drainQueuedEntry(
       );
       return "failed";
     }
-    const permanentPlatformRejection = findPlatformMessageRejectedError(err);
-    if (permanentPlatformRejection || isPermanentDeliveryError(errMsg)) {
+    const failureErrors = [
+      err,
+      ...payloadOutcomes.flatMap((outcome) => (outcome.status === "failed" ? [outcome.error] : [])),
+    ];
+    const permanentPlatformRejection = findTerminalBatchRejection(failureErrors);
+    if (
+      permanentPlatformRejection ||
+      failureErrors.every((error) => isPermanentDeliveryError(formatErrorMessage(error)))
+    ) {
       return settleQueuedFailure(
         {
           ...opts,

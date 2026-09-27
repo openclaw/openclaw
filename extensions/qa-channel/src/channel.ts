@@ -1,10 +1,10 @@
-// Qa Channel plugin module implements channel behavior.
 import type { ChannelThreadingToolContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
@@ -21,7 +21,6 @@ import { qaChannelMessageActions } from "./channel-actions.js";
 import { createQaChannelPluginBase, QA_CHANNEL_ID, qaChannelRuntimeMeta } from "./channel-base.js";
 import { startQaGatewayAccount } from "./gateway.js";
 import { sendQaChannelMedia, sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
-import type { ChannelPlugin } from "./runtime-api.js";
 import { qaChannelStatus } from "./status.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
@@ -175,8 +174,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
       normalizeTarget: normalizeQaTarget,
       inferTargetChatType: ({ to }) => parseQaTarget(to).chatType,
       targetResolver: {
-        looksLikeId: (raw) =>
-          /^((dm|channel|group):|thread:[^/]+\/)/i.test(raw.trim()) || raw.trim().length > 0,
+        looksLikeId: (raw) => raw.trim().length > 0,
         hint: "<dm:user|channel:room|group:room|thread:room/thread>",
       },
       resolveOutboundSessionRoute: ({
@@ -201,12 +199,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
           accountId,
           recipientSessionExact: true,
           peer: {
-            kind:
-              parsed.chatType === "direct"
-                ? "direct"
-                : parsed.chatType === "group"
-                  ? "group"
-                  : "channel",
+            kind: parsed.chatType,
             id: baseTarget,
           },
           chatType: parsed.chatType,

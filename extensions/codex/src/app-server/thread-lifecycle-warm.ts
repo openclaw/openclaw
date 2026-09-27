@@ -28,10 +28,7 @@ import {
 } from "./plugin-thread-config.js";
 import type { CodexThread } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
-import {
-  captureCodexAppServerClientLifetime,
-  retainSharedCodexAppServerClientByInstanceId,
-} from "./shared-client.js";
+import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
@@ -48,6 +45,7 @@ import {
 import {
   assertAdoptedCodexThreadResumeAllowed,
   CodexIncognitoPolicyChangeError,
+  refreshCodexThreadSkillsCatalog,
 } from "./thread-policy.js";
 import { buildThreadResumeParams } from "./thread-requests.js";
 
@@ -144,17 +142,13 @@ export async function releaseCodexBoundLiveThread(
 ): Promise<boolean> {
   const changedClient = options.ownerClientId && options.ownerClientId !== options.clientId;
   const previous = changedClient
-    ? retainSharedCodexAppServerClientByInstanceId(options.ownerClientId!)
+    ? await retainSharedCodexAppServerClientByInstanceId(options.ownerClientId!)
     : undefined;
   if (changedClient && !previous) {
     return false;
   }
+  const client = previous?.client ?? options.client;
   try {
-    const client = previous?.client ?? options.client;
-    const assertPrevious =
-      previous && options.assertCurrent
-        ? captureCodexAppServerClientLifetime(client, "connection")
-        : undefined;
     if (isCodexAppServerLiveThreadClaimed(client, options.threadId)) {
       throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
     }
@@ -165,12 +159,16 @@ export async function releaseCodexBoundLiveThread(
       assertCurrent: options.assertCurrent
         ? () => {
             options.assertCurrent?.();
-            assertPrevious?.();
+            const closed = previous?.client.getCloseError();
+            if (closed) {
+              throw closed;
+            }
           }
         : undefined,
     });
   } finally {
-    previous?.release();
+    // Rejection must free the lane so the claimed run can still be stopped.
+    await previous?.release(!isCodexAppServerLiveThreadClaimed(client, options.threadId));
   }
 }
 
@@ -313,24 +311,15 @@ export async function tryReuseCodexLiveThread(
     );
     const resumeParams = lifecycleTiming.measureSync("warm-thread-resume-params", () =>
       buildThreadResumeParams(params.params, {
+        ...params,
         threadId: binding.threadId,
-        cwd: params.cwd,
         authProfileId: resumeAuthProfileId,
         model: startModelSelection.model,
         modelProvider: startModelProvider,
         preserveNativeModel: binding.preserveNativeModel === true,
-        appServer: params.appServer,
-        dynamicTools: params.dynamicTools,
-        developerInstructions: params.developerInstructions,
         config: applyCodexNativeSkillIsolation(resumeConfig, nativeSkillIsolation),
-        nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-        nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
-        nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-        webSearchAllowed: params.webSearchAllowed,
         hostSystemAgentActive,
         restrictedToolSurfaceInheritedMcpServerNames,
-        shellEnvironment: params.shellEnvironment,
-        disableLoginShell: params.disableLoginShell,
       }),
     );
     assertCodexInferenceRouteConfig(
@@ -364,9 +353,11 @@ export async function tryReuseCodexLiveThread(
           resumeAuthProfileId,
           dynamicToolsFingerprint,
         );
+    const ephemeralPolicy = retainedThread.ephemeralPolicy;
     if (
       incognito &&
-      (retainedThread.ephemeralPolicy !== resumeParams.developerInstructions ||
+      (!ephemeralPolicy ||
+        ephemeralPolicy.developerInstructions !== params.developerInstructions ||
         getCodexInferenceThread(params.client, binding.threadId) !== params.inferenceRoute ||
         [...(params.inferenceProviderRoutes?.keys() ?? [])].some(
           (provider) =>
@@ -395,6 +386,23 @@ export async function tryReuseCodexLiveThread(
       assertCurrent: assertWarmOwner,
     });
     assertWarmOwner();
+    if (ephemeralPolicy && ephemeralPolicy.skillsInstructions !== params.skillsInstructions) {
+      try {
+        await refreshCodexThreadSkillsCatalog({
+          client: params.client,
+          threadId: binding.threadId,
+          skillsInstructions: params.skillsInstructions,
+          timeoutMs: params.appServer.requestTimeoutMs,
+          signal: params.signal,
+          assertCurrent: assertWarmOwner,
+        });
+      } catch (error) {
+        // The ephemeral conversation survives a failed catalog handoff; the retained
+        // record still names the old catalog, so the next turn delivers it again.
+        preserveSubscription = true;
+        throw error;
+      }
+    }
     const nativeHookRelayGeneration =
       prebuiltFinalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration;
     // Older App Servers omit model metadata; newer ones report native changes between turns.
@@ -455,7 +463,10 @@ export async function tryReuseCodexLiveThread(
             }
           : {}),
         liveThreadConfigFingerprint,
-        liveThreadEphemeralPolicy: retainedThread.ephemeralPolicy,
+        liveThreadEphemeralPolicy: ephemeralPolicy && {
+          ...ephemeralPolicy,
+          skillsInstructions: params.skillsInstructions,
+        },
         liveThreadOwnership: retainedThread,
         ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined
           ? { clearInheritedServiceTier: true }

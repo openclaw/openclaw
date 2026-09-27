@@ -1,4 +1,3 @@
-// Feishu helper module supports config schema behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   ContextVisibilityModeSchema,
@@ -9,9 +8,9 @@ import {
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
+import { buildSecretInputSchema, hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 import { FEISHU_EXTERNAL_KEY_PATTERN } from "./external-keys.js";
-import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 export { z };
 
@@ -236,8 +235,11 @@ const FeishuGroupSchema = buildGroupEntrySchema({
 }).omit({ toolsBySender: true });
 
 const FeishuSharedConfigShape = {
-  webhookHost: z.string().optional(),
-  webhookPort: z.number().int().positive().optional(),
+  legacyWebhook: z
+    .object({ port: z.number().int().min(1).max(65535), host: z.string().optional() })
+    .strict()
+    .or(z.literal(false))
+    .optional(),
   capabilities: z.array(z.string()).optional(),
   markdown: MarkdownConfigSchema,
   configWrites: z.boolean().optional(),

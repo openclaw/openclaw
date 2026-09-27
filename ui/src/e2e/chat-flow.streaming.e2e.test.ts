@@ -121,7 +121,7 @@ suite.define(() => {
         }
       };
       await reveal();
-      expect(await activeGroup.locator(".chat-group-footer").count()).toBe(0);
+      expect(await activeGroup.locator(".chat-group-footer > *").count()).toBe(0);
       await page.mouse.move(0, 0);
       await expect
         .poll(() => footerPresentation(earlierAssistant))
@@ -164,7 +164,7 @@ suite.define(() => {
       } else {
         await reveal();
       }
-      expect(await activeGroup.locator(".chat-group-footer").count()).toBe(0);
+      expect(await activeGroup.locator(".chat-group-footer > *").count()).toBe(0);
 
       await gateway.emitChatFinal({
         runId,

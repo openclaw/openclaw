@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "openai": "7.15.0",
+    "openai": "7.17.0",
     "zod": "4.6.5"
   },
   "devDependencies": {

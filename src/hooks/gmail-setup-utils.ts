@@ -213,28 +213,14 @@ export async function ensureSubscription(
     ["pubsub", "subscriptions", "describe", subscription, "--project", projectId],
     30_000,
   );
-  if (describe.code === 0) {
-    await runGcloud([
-      "pubsub",
-      "subscriptions",
-      "update",
-      subscription,
-      "--project",
-      projectId,
-      "--push-endpoint",
-      pushEndpoint,
-    ]);
-    return;
-  }
   await runGcloud([
     "pubsub",
     "subscriptions",
-    "create",
+    describe.code === 0 ? "update" : "create",
     subscription,
     "--project",
     projectId,
-    "--topic",
-    topicName,
+    ...(describe.code === 0 ? [] : ["--topic", topicName]),
     "--push-endpoint",
     pushEndpoint,
   ]);

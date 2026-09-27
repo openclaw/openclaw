@@ -1,11 +1,6 @@
 /** Exact-run final answer reads for subagent completion announcements. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import {
-  readSessionTranscriptRunId,
-  resolveTerminalAssistantTranscriptRunId,
-} from "../../../sessions/transcript-events.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
@@ -55,24 +50,6 @@ function captureAnnounceResultAuthority(child: AnnounceChild): () => boolean {
   };
 }
 
-export function isVisibleSubagentResultEventForRun(event: unknown, runId: string): boolean {
-  if (
-    !isRecord(event) ||
-    !isRecord(event.message) ||
-    readSessionTranscriptRunId(event.message) !== runId ||
-    resolveTerminalAssistantTranscriptRunId(event.message, runId) === undefined
-  ) {
-    return false;
-  }
-  const mirror = event.message.openclawDeliveryMirror;
-  if (isRecord(mirror) && mirror.kind === "message-tool-source-reply" && mirror.final !== true) {
-    return false;
-  }
-  // A final source reply remains visible when the run ends with NO_REPLY.
-  const text = extractStoredAssistantText(event.message);
-  return Boolean(text?.trim()) && !isSilentReplyText(text, SILENT_REPLY_TOKEN);
-}
-
 /** Read the final assistant message from the transcript identity owned by this run. */
 export async function readSubagentRunAnnounceResultUsing(
   child: AnnounceChild,
@@ -94,9 +71,8 @@ export async function readSubagentRunAnnounceResultUsing(
   const sessionId =
     target?.sessionId ?? deps.readSubagentSessionEntry(storePath, sessionKey)?.sessionId;
   const scope = { agentId, storePath, sessionKey };
-  const matchesRun = (event: unknown) => isVisibleSubagentResultEventForRun(event, runId);
   const found = sessionId
-    ? await deps.findTranscriptEvent({ ...scope, sessionId }, matchesRun)
+    ? await deps.findTranscriptEvent({ ...scope, sessionId }, { kind: "visible-final", runId })
     : undefined;
   let event: unknown = found?.event;
   if (!event) {

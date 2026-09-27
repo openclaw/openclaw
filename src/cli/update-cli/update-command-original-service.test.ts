@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, aroundEach, beforeEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   loadSessionEntryReadOnly,
@@ -10,6 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { GatewayServiceState } from "../../daemon/service.js";
 import * as packageIntegrity from "../../infra/package-update-integrity.js";
+import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
@@ -37,9 +38,7 @@ import type { PreManagedServiceStop } from "./update-command-service-context-typ
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
-// Native manager, HTTP and package transport are simulated. Execution, A observation,
-// config/schema reads, compensation selection, finalizer and leases are real.
-// This main composition has no capture producer. It is not migrated-worker proof.
+// Real update/state/lease owners; simulated native manager, HTTP, and package transport.
 const mocks = vi.hoisted(() => ({
   state: vi.fn<() => Promise<GatewayServiceState>>(),
   stop: vi.fn(),
@@ -55,6 +54,9 @@ const mocks = vi.hoisted(() => ({
   windows: false,
   suspend: vi.fn(),
   resume: vi.fn(),
+}));
+vi.mock("../../daemon/service-process-membership.js", () => ({
+  inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
 }));
 vi.mock("../../daemon/schtasks.js", async (original) => ({
   ...(await original<typeof import("../../daemon/schtasks.js")>()),
@@ -185,6 +187,7 @@ beforeEach(async () => {
     inspected: true,
     runtimeInspected: true,
     running: true,
+    servicePid: serviceState.runtime?.pid,
     serviceEnv: state.env,
     serviceNodeRunner: process.execPath,
     serviceManagerUid: process.getuid?.() ?? 501,
@@ -262,6 +265,7 @@ beforeEach(async () => {
   // Prepare its unchanged install inventory through the real metadata owner.
   expect(loadInstalledPluginIndexInstallRecordsSync({ env: state.env })).toEqual({});
 });
+aroundEach((runTest) => withSqliteReadOnlyWorkerScope(runTest));
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();

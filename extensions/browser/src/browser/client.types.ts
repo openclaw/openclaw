@@ -5,18 +5,12 @@
  */
 import type { lookup as dnsLookupCb } from "node:dns";
 import type { BrowserEngineDescriptor, BrowserEngineId } from "./engines/types.js";
+import type { ManagedBrowserHeadlessSource } from "./profile.types.js";
 
 type BrowserCdpLookup = typeof dnsLookupCb;
 
 /** Browser transport backing the selected profile. */
 export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
-type BrowserHeadlessSource =
-  | "request"
-  | "env"
-  | "profile"
-  | "config"
-  | "linux-display-fallback"
-  | "default";
 
 export type BrowserGraphicsAcceleration = "hardware" | "software" | "unknown";
 
@@ -112,7 +106,7 @@ export type BrowserStatus = {
   userDataDir: string | null;
   color: string;
   headless: boolean;
-  headlessSource?: BrowserHeadlessSource;
+  headlessSource?: ManagedBrowserHeadlessSource;
   noSandbox?: boolean;
   executablePath?: string | null;
   attachOnly: boolean;
@@ -155,13 +149,4 @@ export type BrowserOpenResult = BrowserTab & {
   resolvedProfile?: string;
 };
 
-/** ARIA snapshot node exposed in structured snapshot responses. */
-export type SnapshotAriaNode = {
-  ref: string;
-  role: string;
-  name: string;
-  value?: string;
-  description?: string;
-  backendDOMNodeId?: number;
-  depth: number;
-};
+export type { AriaSnapshotNode as SnapshotAriaNode } from "./cdp-ax.js";

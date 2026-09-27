@@ -176,11 +176,6 @@ type ActiveRecallRecentTurn = {
   text: string;
 };
 
-type PluginDebugEntry = {
-  pluginId: string;
-  lines: string[];
-};
-
 type ActiveMemorySearchDebug = {
   backend?: string;
   configuredMode?: string;
@@ -358,7 +353,6 @@ export type {
   CachedActiveRecallResult,
   CircuitBreakerEntry,
   ConversationRecallContext,
-  PluginDebugEntry,
   RecallSubagentResult,
   ResolvedActiveRecallPluginConfig,
   TerminalMemorySearchResult,

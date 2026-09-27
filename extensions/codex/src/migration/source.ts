@@ -1,7 +1,7 @@
-// Codex plugin module implements source behavior.
 import path from "node:path";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   defaultCodexAppInventoryCache,
   type CodexAppInventoryRequest,
@@ -11,6 +11,7 @@ import type { CodexAppServerStartOptions } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import {
   isOpenAiCuratedMarketplace,
+  marketplaceRef,
   pluginReadParams,
   type CodexPluginMarketplaceRef,
 } from "../app-server/plugin-inventory.js";
@@ -23,7 +24,7 @@ import {
   withCodexAppServerJsonClient,
   type CodexAppServerScopedRequest,
 } from "../app-server/request.js";
-import { exists, isDirectory, resolveHomePath, resolveUserHomeDir } from "./helpers.js";
+import { isDirectory, resolveHomePath, resolveUserHomeDir } from "./helpers.js";
 import {
   discoverCodexMemorySources,
   discoverPluginDirs,
@@ -219,7 +220,7 @@ function discoverInstalledCuratedPluginSources(
       }
       installedByName.set(plugin.pluginName, {
         plugin,
-        marketplace: marketplaceRef(marketplace),
+        marketplace: marketplaceRef(marketplace, CODEX_PLUGINS_MARKETPLACE_NAME),
         ...(remote
           ? { readPluginName: summary.remotePluginId?.trim() || undefined }
           : { readPluginName: plugin.pluginName }),
@@ -228,14 +229,6 @@ function discoverInstalledCuratedPluginSources(
     }
   }
   return Array.from(installedByName.values());
-}
-
-function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMarketplaceRef {
-  return {
-    name: CODEX_PLUGINS_MARKETPLACE_NAME,
-    ...(marketplace.path ? { path: marketplace.path } : {}),
-    ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
-  };
 }
 
 async function withPluginMigrationEligibility(params: {
@@ -282,7 +275,7 @@ async function withPluginMigrationEligibility(params: {
     }
 
     const apps = detail.detail.apps
-      .map(sourcePluginAppFact)
+      .map(({ id, name }) => ({ id, name }))
       .toSorted((left, right) => left.id.localeCompare(right.id));
     pending.push({ plugin, apps });
   }
@@ -318,7 +311,7 @@ async function withPluginMigrationEligibility(params: {
         ...plugin,
         migratable: false,
         migrationBlock: { code: "codex_subscription_required", apps },
-        message: codexSubscriptionRequiredMessage(plugin),
+        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but ${codexPluginMigrationSubscriptionWarning()}`,
       });
     }
     return evaluated;
@@ -451,13 +444,6 @@ async function refreshSourceAppInventory(
   });
 }
 
-function sourcePluginAppFact(app: v2.AppSummary): CodexPluginMigrationAppFact {
-  return {
-    id: app.id,
-    name: app.name,
-  };
-}
-
 type SourcePluginRuntimeAppFact = CodexPluginMigrationAppFact & {
   isCallable?: false;
 };
@@ -532,10 +518,6 @@ export function codexPluginMigrationSubscriptionWarning(): string {
   return "Codex app-backed plugin migration requires the Codex app-server source account to be logged in with a ChatGPT subscription account. Log in to the Codex app with subscription auth; OpenClaw auth or API-key auth does not satisfy Codex app connector access.";
 }
 
-function codexSubscriptionRequiredMessage(plugin: CodexPluginSource): string {
-  return `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but ${codexPluginMigrationSubscriptionWarning()}`;
-}
-
 function pluginNameFromSummary(summary: v2.PluginSummary): string | undefined {
   const candidates = [summary.name, summary.id];
   for (const candidate of candidates) {
@@ -601,7 +583,7 @@ export async function discoverCodexSource(
     a.source.localeCompare(b.source),
   );
   const archivePaths: CodexArchiveSource[] = [];
-  if (!skipAssets && (await exists(configPath))) {
+  if (!skipAssets && (await pathExists(configPath))) {
     archivePaths.push({
       id: "archive:config.toml",
       path: configPath,
@@ -609,7 +591,7 @@ export async function discoverCodexSource(
       message: "Codex config is archived for manual review; it is not activated automatically",
     });
   }
-  if (!skipAssets && (await exists(hooksPath))) {
+  if (!skipAssets && (await pathExists(hooksPath))) {
     archivePaths.push({
       id: "archive:hooks/hooks.json",
       path: hooksPath,
@@ -621,7 +603,7 @@ export async function discoverCodexSource(
   const skills = [...codexSkills, ...personalAgentSkills].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
-  const hasAuth = !options.memoryOnly && (await exists(authPath));
+  const hasAuth = !options.memoryOnly && (await pathExists(authPath));
   const high = Boolean(
     memoryFiles.length || codexSkills.length || plugins.length || archivePaths.length || hasAuth,
   );
@@ -633,7 +615,7 @@ export async function discoverCodexSource(
     ...((await isDirectory(codexSkillsDir)) ? { codexSkillsDir } : {}),
     ...((await isDirectory(agentsSkillsDir)) ? { personalAgentsSkillsDir: agentsSkillsDir } : {}),
     ...(hasAuth ? { authPath } : {}),
-    ...((await exists(modelsCachePath)) ? { modelsCachePath } : {}),
+    ...((await pathExists(modelsCachePath)) ? { modelsCachePath } : {}),
     memoryFiles,
     skills,
     plugins,

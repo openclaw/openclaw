@@ -125,9 +125,6 @@ export function renderBackgroundTasksStatusRow(
     (task) => !backgroundTasks.subagentActivity.taskIds.has(task.id),
   );
   const status = activeBackgroundTasksStatus(remainingTasks);
-  if (subagentActivity === nothing && !status) {
-    return nothing;
-  }
   if (!status) {
     return subagentActivity;
   }

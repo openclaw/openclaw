@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { onTestFinished, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import {
   createCodexNativeSubagentHistoryOwner,
   type CodexNativeSubagentHistoryOwner,
@@ -21,6 +22,7 @@ import type {
   NativeModelSourceCapture,
 } from "./native-subagent-monitor-types.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import { CodexNativeSubagentRecoveryCoordinator } from "./native-subagent-recovery-coordinator.js";
 import type {
   CodexAppServerRequestResult,
   CodexServerNotification,
@@ -75,6 +77,49 @@ export function successfulSendInputOutput(params: {
 export const CodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.Monitor;
 export const registerCodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register;
 type CodexNativeSubagentMonitorInstance = InstanceType<typeof CodexNativeSubagentMonitor>;
+
+/** Join real native persistence and recovery before asserting outcomes or releasing fixture stores. */
+export function captureNativeSubagentMonitorWork() {
+  const completion = vi.spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending");
+  const recovery = vi.spyOn(
+    CodexNativeSubagentRecoveryCoordinator.prototype,
+    "reconcileTaskCandidate",
+  );
+  let completed = 0;
+  let reconciled = 0;
+  return {
+    async settle(): Promise<unknown[]> {
+      const failures: unknown[] = [];
+      while (
+        completed < completion.mock.results.length ||
+        reconciled < recovery.mock.results.length
+      ) {
+        const work = [
+          ...completion.mock.results.slice(completed),
+          ...recovery.mock.results.slice(reconciled),
+        ];
+        completed = completion.mock.results.length;
+        reconciled = recovery.mock.results.length;
+        for (const result of work) {
+          if (result.type === "throw") {
+            failures.push(result.value);
+          }
+        }
+        const results = await Promise.allSettled(
+          work.filter((result) => result.type === "return").map((result) => result.value),
+        );
+        failures.push(
+          ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        );
+      }
+      return failures;
+    },
+    [Symbol.dispose]() {
+      recovery.mockRestore();
+      completion.mockRestore();
+    },
+  };
+}
 
 export function createClient() {
   type ThreadReadParams = { threadId?: string; includeTurns?: boolean };
@@ -214,7 +259,7 @@ export function createRuntime() {
   return {
     ...taskRuntime,
     captureAgentHarnessCompletionCustody: vi.fn<typeof captureAgentHarnessCompletionCustody>(
-      () => undefined,
+      async () => undefined,
     ),
     createAgentHarnessTaskEventSink: vi.fn<typeof createAgentHarnessTaskEventSink>(() => vi.fn()),
     createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
@@ -336,7 +381,7 @@ export async function registerDetachedChild(
   client: ReturnType<typeof createClient>,
   monitor: CodexNativeSubagentMonitorInstance,
 ): Promise<void> {
-  const owner = registerParent(monitor);
+  const owner = await registerParent(monitor);
   await notifyChildStarted(client);
   await owner.unregister();
 }

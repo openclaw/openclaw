@@ -1,5 +1,5 @@
-/** Shared media tool routing, auth, path, and reference helpers. */
 import path from "node:path";
+import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
@@ -10,10 +10,10 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import {
   findCapabilityProviderById,
   resolveCapabilityModelRefForProviders,
+  type CapabilityModelRef,
 } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { safeFileURLToPath } from "../../infra/local-file-access.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
 import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
@@ -35,19 +35,19 @@ import {
   type SandboxedBridgeMediaPathConfig,
 } from "../sandbox-media-paths.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import { normalizeWorkspaceDir } from "../workspace-dir.js";
 import {
   ToolInputError,
   readPositiveIntegerParam,
   readStringArrayParam,
   readToolStringParam,
 } from "./common.js";
-import type { decodeDataUrl, ImageModelConfig } from "./image-tool.helpers.js";
+import type { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   getCurrentCapabilityMetadataSnapshot,
   hasSnapshotCapabilityAvailability,
 } from "./manifest-capability-availability.js";
 import {
-  applyAgentDefaultModelConfig,
   buildToolModelConfigFromCandidates,
   coerceToolModelConfig,
   hasProviderAuthForTool,
@@ -55,7 +55,6 @@ import {
   resolveDefaultModelRef,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
-import { normalizeWorkspaceDir } from "./tool-runtime.helpers.js";
 
 type TextToolAttempt = {
   provider: string;
@@ -70,12 +69,7 @@ type TextToolResult = {
   attempts: TextToolAttempt[];
 };
 
-type GenerationModelRef = {
-  provider: string;
-  model: string;
-};
-
-type ParseGenerationModelRef = (raw: string | undefined) => GenerationModelRef | null;
+type ParseGenerationModelRef = (raw: string | undefined) => CapabilityModelRef | null;
 
 type TaskRunDetailHandle = {
   taskId: string;
@@ -84,32 +78,10 @@ type TaskRunDetailHandle = {
 
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
 
-/**
- * Applies an image-editing model as the agent default without mutating the loaded config.
- */
-export function applyImageModelConfigDefaults(
-  cfg: OpenClawConfig | undefined,
-  imageModelConfig: ImageModelConfig,
-): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "imageModel", imageModelConfig);
-}
-
-/**
- * Reads an optional generation timeout while preserving common tool parameter validation.
- */
 export function readGenerationTimeoutMs(args: Record<string, unknown>): number | undefined {
   return readPositiveIntegerParam(args, "timeoutMs", {
     message: "timeoutMs must be a positive integer in milliseconds.",
   });
-}
-
-/**
- * Resolves the shared remote-media SSRF policy used by media tools that fetch URLs.
- */
-export function resolveRemoteMediaSsrfPolicy(
-  cfg: OpenClawConfig | undefined,
-): SsrFPolicy | undefined {
-  return cfg?.tools?.web?.fetch?.ssrfPolicy;
 }
 
 type CapabilityProvider = {
@@ -127,23 +99,6 @@ type GenerationCapabilityProviderKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 
-function parseCapabilityModelRefForProviders(params: {
-  providers: CapabilityProvider[];
-  raw?: string;
-  parseModelRef: ParseGenerationModelRef;
-}): GenerationModelRef | null {
-  return resolveCapabilityModelRefForProviders({
-    providers: params.providers,
-    raw: params.raw,
-    parseModelRef: params.parseModelRef,
-    normalizeProviderId,
-  });
-}
-
-/**
- * Checks whether a generation provider is usable from either its custom readiness hook or
- * the generic tool auth profile/config lookup.
- */
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
   providers: T[];
   provider?: T;
@@ -199,9 +154,6 @@ export function createCapabilityProviderRuntimeDeps<T extends CapabilityProvider
     : undefined;
 }
 
-/**
- * Resolves the provider implied by a model override or configured primary model.
- */
 export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(params: {
   providers: T[];
   modelConfig: ToolModelConfig;
@@ -209,15 +161,17 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   parseModelRef: ParseGenerationModelRef;
 }): T | undefined {
   const selectedRef =
-    parseCapabilityModelRefForProviders({
+    resolveCapabilityModelRefForProviders({
       providers: params.providers,
       raw: params.modelOverride,
       parseModelRef: params.parseModelRef,
+      normalizeProviderId,
     }) ??
-    parseCapabilityModelRefForProviders({
+    resolveCapabilityModelRefForProviders({
       providers: params.providers,
       raw: params.modelConfig.primary,
       parseModelRef: params.parseModelRef,
+      normalizeProviderId,
     });
   if (!selectedRef) {
     return undefined;
@@ -308,12 +262,7 @@ export function resolveCapabilityModelConfigForTool(params: {
   if (hasToolModelConfig(explicit)) {
     return explicit;
   }
-  let resolvedProviders: CapabilityProvider[] | undefined;
-  const getProviders = (): CapabilityProvider[] => {
-    resolvedProviders ??=
-      typeof params.providers === "function" ? params.providers() : params.providers;
-    return resolvedProviders;
-  };
+  const providers = typeof params.providers === "function" ? params.providers() : params.providers;
   return buildToolModelConfigFromCandidates({
     explicit,
     cfg: params.cfg,
@@ -325,11 +274,11 @@ export function resolveCapabilityModelConfigForTool(params: {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
-      providers: getProviders(),
+      providers,
     }),
     isProviderConfigured: (providerId) =>
       isCapabilityProviderConfigured({
-        providers: getProviders(),
+        providers,
         providerId,
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
@@ -343,9 +292,6 @@ export function hasExplicitMediaModel(modelConfig?: AgentModelConfig): boolean {
   return hasToolModelConfig(coerceToolModelConfig(modelConfig));
 }
 
-/**
- * Reports whether a generation tool should be offered for the current config and auth state.
- */
 export function hasGenerationToolAvailability(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
@@ -408,9 +354,6 @@ export function hasGenerationToolAvailability(params: {
   );
 }
 
-/**
- * Reads a constrained generation action and raises a tool-input error for invalid values.
- */
 export function resolveGenerateAction(
   args: Record<string, unknown>,
 ): "generate" | "status" | "list" {
@@ -441,18 +384,10 @@ export function normalizeMediaReferenceInputs(params: {
 }): string[] {
   const single = readToolStringParam(params.args, params.singularKey);
   const multiple = readStringArrayParam(params.args, params.pluralKey);
-  const combined = [...(single ? [single] : []), ...(multiple ?? [])];
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of combined) {
-    const trimmed = candidate.trim();
-    const dedupe = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
-    if (!dedupe || (params.dedupe !== false && seen.has(dedupe))) {
-      continue;
-    }
-    seen.add(dedupe);
-    deduped.push(trimmed);
-  }
+  const deduped = normalizeMediaReferenceList(
+    [...(single ? [single] : []), ...(multiple ?? [])],
+    params.dedupe,
+  );
   if (deduped.length > params.maxCount) {
     throw new ToolInputError(
       `Too many ${params.label}: ${deduped.length} provided, maximum is ${params.maxCount}.`,
@@ -461,9 +396,22 @@ export function normalizeMediaReferenceInputs(params: {
   return deduped;
 }
 
-/**
- * Builds result detail fields for one or many rewritten media references.
- */
+// Keep the first spelling, but treat optional @ prefixes as the same reference.
+export function normalizeMediaReferenceList(candidates: string[], dedupe = true): string[] {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const trimmed = candidate.trim();
+    const key = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
+    if (!key || (dedupe && seen.has(key))) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(trimmed);
+  }
+  return deduped;
+}
+
 export function buildMediaReferenceDetails<T extends { rewrittenFrom?: string }>(params: {
   entries: readonly T[];
   singleKey: string;
@@ -493,9 +441,6 @@ export function buildMediaReferenceDetails<T extends { rewrittenFrom?: string }>
   return {};
 }
 
-/**
- * Adds task/run provenance details when an async media generation handle is present.
- */
 export function buildTaskRunDetails(
   handle: TaskRunDetailHandle | null | undefined,
 ): Record<string, unknown> {
@@ -509,9 +454,6 @@ export function buildTaskRunDetails(
     : {};
 }
 
-/**
- * Resolves the common filesystem access shape for media-tool references.
- */
 export async function resolveMediaToolReferenceAccess(params: {
   input: string;
   isDataUrl: boolean;
@@ -703,9 +645,6 @@ export function resolveMediaToolInboundRoots(options?: {
   );
 }
 
-/**
- * Resolves the effective prompt and optional model override from common media tool args.
- */
 export function resolvePromptAndModelOverride(
   args: Record<string, unknown>,
   defaultPrompt: string,
@@ -718,9 +657,6 @@ export function resolvePromptAndModelOverride(
   return { prompt, modelOverride };
 }
 
-/**
- * Wraps a generated text result in the common tool result shape with model attempt details.
- */
 export function buildTextToolResult(
   result: TextToolResult,
   extraDetails: Record<string, unknown>,

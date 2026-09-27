@@ -163,7 +163,6 @@ export async function createForumTopicTelegram(
 
       const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
         cfg,
-        account,
         retry: opts.retry,
         verbose: opts.verbose,
       });

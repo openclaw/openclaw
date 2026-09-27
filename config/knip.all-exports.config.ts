@@ -78,6 +78,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/vitest/vitest*.config.ts!",
   "test/vitest/vitest*.setup.ts!",
   "test/vitest/vitest*.global-setup.ts!",
+  // Worker execArgv imports this before Vitest creates the test environment.
+  "test/vitest/vitest.jsdom-preload.mts!",
   // Test drivers and Docker fixtures are executed by path from package scripts
   // and the test-project registry.
   "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts!",
@@ -141,6 +143,10 @@ const workspaces = Object.fromEntries(
           ? [".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!", ...ROOT_TEST_ENTRY_GLOBS]
           : [
               TEST_ENTRY_GLOB,
+              // The plugin README documents this standalone fixture benchmark command.
+              ...(workspace === "extensions/team-reports"
+                ? ["src/report-run.benchmark.test-support.ts!"]
+                : []),
               // Vitest's root aliases execute these Discord-owned runtime adapters.
               ...(workspace === "extensions/discord" ? ["test/*-runtime.ts!"] : []),
               // Core owner tests load this Telegram fixture through the bundled facade loader.

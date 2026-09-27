@@ -72,6 +72,11 @@ remove it from **Connection… → Gateways** and confirm **Remove**. This remov
 saved credentials and dashboard browser data. Use your identity provider's
 session controls to revoke account access more broadly.
 
+If you deny or cancel a Keychain access request, automatic Gateway refreshes
+stop asking for access for the rest of that app session. Saved credentials stay
+in Keychain. Choose **Connect** or **Reconnect** to try again; restarting the app
+also allows a new request.
+
 ### Open the Mac app from a website
 
 In the browser dashboard, open **Get the apps** from the account menu, then

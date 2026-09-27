@@ -38,6 +38,18 @@ beforeEach(() => {
   factory.mockReset().mockReturnValue(transport);
 });
 
+it.each([
+  Object.assign(new Error("spawn node EACCES"), { code: "EACCES" }),
+  Object.assign(new Error("spawn node ENOENT"), { code: "ENOENT" }),
+  new Error("SQLite snapshot staging owner launch context changed"),
+])("preserves non-directory allocation failures: $message", async (failure) => {
+  transport.run.mockRejectedValueOnce(failure);
+  await expect(
+    createSqliteSnapshotStagingDirectory("/fixture", false, undefined, true),
+  ).rejects.toBe(failure);
+  expect(transport.close).toHaveBeenCalledOnce();
+});
+
 it("acknowledges a lost session before reconciling retirement and accepting new allocations", async () => {
   const owned = await allocateWorkerOwnedSqliteSnapshotDirectory("/fixture", false);
   let acknowledge!: () => void;

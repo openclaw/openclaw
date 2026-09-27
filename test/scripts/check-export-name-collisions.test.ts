@@ -118,6 +118,7 @@ describe("export name collision guard", () => {
         "src/boards/sqlite-board-store.worker.ts",
         "src/agents/sessions/session-manager-metadata.worker.ts",
         "src/config/sessions/session-sharing-store.worker.ts",
+        "src/config/sessions/session-transcript-projection-publication.worker.ts",
         "src/infra/heartbeat-outcome-store.worker.ts",
       ],
     },
@@ -240,6 +241,40 @@ describe("export name collision guard", () => {
         ...collectModuleExportNames(...parseFixture(content, "src/runtime-facade.ts")).definitions,
       ]).toEqual([]);
     }
+  });
+
+  it.each([
+    [
+      "untyped named alias",
+      'import { runTask as runTaskInner } from "./inner.js";',
+      "export const runTask = runTaskInner;",
+    ],
+    [
+      "typed named alias",
+      'import { runTask as runTaskInner } from "./inner.js";',
+      "export const runTask: () => string = runTaskInner;",
+    ],
+    [
+      "namespace property alias",
+      'import * as runtime from "./inner.js";',
+      "export const runTask = runtime.runTask;",
+    ],
+    [
+      "type-asserted namespace element alias",
+      'import * as runtime from "./inner.js";',
+      'export const runTask = (runtime["runTask"] as () => string);',
+    ],
+  ])("records %s as a re-export instead of a value definition", (_name, imported, declaration) => {
+    const result = collectModuleExportNames(
+      ...parseFixture(`${imported}\n${declaration}`, "src/facade.ts"),
+    );
+
+    expect([...result.exportedNames]).toEqual(["runTask"]);
+    expect([...result.definitions]).toEqual([]);
+    expect([...result.valueDefinitions]).toEqual([]);
+    expect(result.namedReExports).toEqual([
+      { exportedName: "runTask", importedName: "runTask", moduleSpecifier: "./inner.js" },
+    ]);
   });
 
   it.each([

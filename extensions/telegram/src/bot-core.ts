@@ -72,22 +72,9 @@ import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff
 import { getTelegramSequentialConstraints } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
-type TelegramBotRuntime = {
-  Bot: typeof Bot;
-  sequentialize: typeof sequentialize;
-  apiThrottler: typeof apiThrottler;
-};
-type TelegramBotInstance = InstanceType<TelegramBotRuntime["Bot"]>;
-
-const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
-  Bot,
-  sequentialize,
-  apiThrottler,
-};
-export function createTelegramBotCore(
+export async function createTelegramBotCore(
   opts: TelegramBotOptions & { telegramDeps: TelegramBotDeps },
-): TelegramBotInstance {
-  const botRuntime = DEFAULT_TELEGRAM_BOT_RUNTIME;
+): Promise<InstanceType<typeof Bot>> {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const telegramDeps = opts.telegramDeps;
   const cfg = opts.config ?? telegramDeps.getRuntimeConfig();
@@ -140,8 +127,8 @@ export function createTelegramBotCore(
     client || opts.botInfo
       ? { ...(client ? { client } : {}), ...(opts.botInfo ? { botInfo: opts.botInfo } : {}) }
       : undefined;
-  const bot = new botRuntime.Bot(opts.token, botConfig);
-  const accountThrottler = getOrCreateAccountThrottler(opts.token, botRuntime.apiThrottler);
+  const bot = new Bot(opts.token, botConfig);
+  const accountThrottler = getOrCreateAccountThrottler(opts.token, apiThrottler);
   bot.api.config.use(accountThrottler.transformer);
   const sendChatActionHandler: TelegramSendChatActionHandler = {
     sendChatAction: (chatId, action, threadParams) =>
@@ -151,7 +138,6 @@ export function createTelegramBotCore(
     isSuspended: accountThrottler.chatActions.isSuspended,
     reset: accountThrottler.chatActions.reset,
   };
-  // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
   });
@@ -254,7 +240,7 @@ export function createTelegramBotCore(
     await next();
   });
 
-  bot.use(botRuntime.sequentialize(getTelegramSequentialConstraints));
+  bot.use(sequentialize(getTelegramSequentialConstraints));
 
   // A fast vote can know its route before outbound verification finishes. Hold
   // only that route's sequential lane until registration succeeds or declines it.
@@ -424,7 +410,7 @@ export function createTelegramBotCore(
   const originalStop = bot.stop.bind(bot);
   // Acquire the account owner only after bot setup has succeeded.
   const threadBindingManager = threadBindingPolicy.enabled
-    ? createTelegramThreadBindingManager({
+    ? await createTelegramThreadBindingManager({
         cfg,
         accountId: account.accountId,
         idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
@@ -448,7 +434,7 @@ export function createTelegramBotCore(
         listBySession: () => [],
         resolveByConversation: () => null,
       };
-  bot.stop = ((...args: Parameters<typeof originalStop>) => {
+  bot.stop = (async (...args: Parameters<typeof originalStop>) => {
     if (disabledBindingAdapter) {
       unregisterSessionBindingAdapter({
         channel: "telegram",
@@ -456,8 +442,11 @@ export function createTelegramBotCore(
         adapter: disabledBindingAdapter,
       });
     }
-    threadBindingManager?.stop();
-    return originalStop(...args);
+    try {
+      return await originalStop(...args);
+    } finally {
+      await threadBindingManager?.stop();
+    }
   }) as typeof bot.stop;
   if (disabledBindingAdapter) {
     registerSessionBindingAdapter(disabledBindingAdapter);

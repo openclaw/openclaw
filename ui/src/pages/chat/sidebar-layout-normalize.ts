@@ -1,12 +1,9 @@
 import { isRecord, normalizeOptionalString, readStringValue } from "@openclaw/normalization-core";
+import { clampHeight, clampWidth } from "./sidebar-layout-geometry.ts";
 import type { SidebarLayout, SidebarPanel, SidebarSlotId } from "./sidebar-layout-types.ts";
 
 const DEFAULT_WIDTH = 480;
 const DEFAULT_HEIGHT = 360;
-const MIN_WIDTH = 260;
-const MIN_HEIGHT = 220;
-const MAX_WIDTH = 1_200;
-const MAX_HEIGHT = 800;
 
 function isPluginSlotId(value: unknown): value is `plugin:${string}/${string}` {
   return (
@@ -36,14 +33,6 @@ function normalizeSlotId(value: unknown): SidebarSlotId | null {
     isPluginSlotId(value)
     ? value
     : null;
-}
-
-function clampWidth(width: number): number {
-  return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width));
-}
-
-function clampHeight(height: number): number {
-  return Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, height));
 }
 
 function uniqueId(base: string, used: Set<string>): string {
@@ -120,18 +109,16 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
         mainPanelId ??= panelId;
       }
       usedSlots.add(slot);
+      const environmentId = normalizeOptionalString(rawPanel.environmentId);
+      const portalId = normalizeOptionalString(rawPanel.portalId);
       panels.push({
         id: panelId,
         slot,
         ...(slot === "tasks" && taskId ? { taskId } : {}),
-        ...((slot === "desktop" ||
-          (slot === "portal" && !normalizeOptionalString(rawPanel.portalId))) &&
-        normalizeOptionalString(rawPanel.environmentId)
-          ? { environmentId: normalizeOptionalString(rawPanel.environmentId) }
+        ...((slot === "desktop" || (slot === "portal" && !portalId)) && environmentId
+          ? { environmentId }
           : {}),
-        ...(slot === "portal" && normalizeOptionalString(rawPanel.portalId)
-          ? { portalId: normalizeOptionalString(rawPanel.portalId) }
-          : {}),
+        ...(slot === "portal" && portalId ? { portalId } : {}),
       });
     }
     activePanelId = columnActivePanelId ?? activePanelId;

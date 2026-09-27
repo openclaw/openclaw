@@ -14,7 +14,9 @@ export function withCachedOpenClawStateDatabaseReadOnly<T>(
   pathname: string,
   currentAuthority: boolean,
 ): ReusedOpenClawStateReadOnlyDatabase<T> {
-  const opened = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(pathname);
+  const opened = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(pathname, {
+    readOnly: true,
+  });
   if (!opened?.db.isOpen) {
     return { reused: false };
   }

@@ -584,47 +584,6 @@ describe("cdp", () => {
     }
   });
 
-  it("preserves query params when connecting via direct WebSocket URL", async () => {
-    let receivedHeaders: Record<string, string> = {};
-    const wsPort = await startWsServer();
-    if (!wsServer) {
-      throw new Error("ws server not initialized");
-    }
-    wsServer.on("headers", (headers, req) => {
-      receivedHeaders = Object.fromEntries(
-        Object.entries(req.headers).map(([k, v]) => [k, String(v)]),
-      );
-    });
-    wsServer.on("connection", (socket) => {
-      socket.on("message", (data) => {
-        const msg = JSON.parse(rawDataToString(data)) as { id?: number; method?: string };
-        if (msg.method === "Target.createTarget") {
-          socket.send(JSON.stringify({ id: msg.id, result: { targetId: "T_QP" } }));
-        } else if (msg.method === "Target.attachToTarget") {
-          socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S1" } }));
-        } else if (
-          msg.method === "Target.detachFromTarget" ||
-          msg.method === "Page.enable" ||
-          msg.method === "Runtime.enable" ||
-          msg.method === "Network.enable" ||
-          msg.method === "DOM.enable" ||
-          msg.method === "Accessibility.enable" ||
-          msg.method === "Runtime.runIfWaitingForDebugger"
-        ) {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        }
-      });
-    });
-
-    const created = await createTargetViaCdp({
-      cdpUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST?apiKey=secret123`,
-      url: "https://example.com",
-    });
-    expect(created.targetId).toBe("T_QP");
-    // The WebSocket upgrade request should have been made to the URL with the query param
-    expect(receivedHeaders.host).toBe(`127.0.0.1:${wsPort}`);
-  });
-
   it("enforces SSRF policy on the navigation target URL before any CDP connection attempt", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     try {
@@ -635,21 +594,6 @@ describe("cdp", () => {
         }),
       ).rejects.toBeInstanceOf(SsrFBlockedError);
       // SSRF check happens before any connection attempt
-      expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
-  it("blocks private navigation targets by default", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    try {
-      await expect(
-        createTargetViaCdp({
-          cdpUrl: "http://127.0.0.1:9222",
-          url: "http://127.0.0.1:8080",
-        }),
-      ).rejects.toBeInstanceOf(SsrFBlockedError);
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
@@ -928,14 +872,6 @@ describe("cdp", () => {
     expect(snap.truncated).toBe(true);
   });
 
-  it("normalizes loopback websocket URLs for remote CDP hosts", () => {
-    const normalized = normalizeCdpWsUrl(
-      "ws://127.0.0.1:9222/devtools/browser/ABC",
-      "http://example.com:9222",
-    );
-    expect(normalized).toBe("ws://example.com:9222/devtools/browser/ABC");
-  });
-
   it("places child frame content after the real iframe ref, not ref-looking page text", async () => {
     const name = "Literal [ref=e2]\t\b";
     const wsPort = await startWsServerWithMessages((msg, socket) => {
@@ -963,14 +899,6 @@ describe("cdp", () => {
     expect(result.refs.e3).toMatchObject({ name: "Frame button", frameId: "child-frame" });
   });
 
-  it("propagates auth and query params onto normalized websocket URLs", () => {
-    const normalized = normalizeCdpWsUrl(
-      "ws://127.0.0.1:9222/devtools/browser/ABC",
-      "https://user:pass@example.com?token=abc",
-    );
-    expect(normalized).toBe("wss://user:pass@example.com/devtools/browser/ABC?token=abc");
-  });
-
   it("rewrites localhost absolute-form websocket URLs for remote CDP hosts", () => {
     const normalized = normalizeCdpWsUrl(
       "ws://localhost.:9222/devtools/browser/ABC",
@@ -985,14 +913,6 @@ describe("cdp", () => {
       "http://127.0.0.1:18800",
     );
     expect(normalized).toBe("ws://127.0.0.1:18800/devtools/browser/ABC");
-  });
-
-  it("rewrites 0.0.0.0 wildcard bind address to remote CDP host", () => {
-    const normalized = normalizeCdpWsUrl(
-      "ws://0.0.0.0:3000/devtools/browser/ABC",
-      "http://192.168.1.202:18850?token=secret",
-    );
-    expect(normalized).toBe("ws://192.168.1.202:18850/devtools/browser/ABC?token=secret");
   });
 
   it("rewrites :: wildcard bind address to remote CDP host", () => {

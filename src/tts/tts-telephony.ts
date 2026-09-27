@@ -43,12 +43,12 @@ export async function textToSpeechTelephony(params: {
           >;
           return {
             kind: "ready",
-            synthesize: ({ prepared, cfg: runtimeCfg, timeoutMs }) =>
+            synthesize: ({ text, cfg: runtimeCfg, providerConfig, providerOverrides, timeoutMs }) =>
               synthesizeTelephony({
-                text: prepared.text,
+                text,
                 cfg: runtimeCfg,
-                providerConfig: prepared.providerConfig,
-                providerOverrides: prepared.providerOverrides,
+                providerConfig,
+                providerOverrides,
                 timeoutMs,
               }),
           };

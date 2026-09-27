@@ -67,13 +67,19 @@ Bundled plugins and explicitly enabled installed plugins with matching
 manifest contracts can attach runtime-neutral tool-result middleware through
 `api.registerAgentToolResultMiddleware(...)` when their manifest declares the
 targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
-seam is for async tool-result transforms that must run before OpenClaw or
-Codex feeds tool output back into the model.
+seam is for async tool-result transforms that must run before the selected
+harness feeds tool output back into the model. Supported runtime ids are
+`agentsapi`, `codex`, and `openclaw`.
 
 Middleware options may combine `runtimes` with a `matcher` tool-name list.
 Each registration keeps that pair intact, so registering the same handler for
 different runtimes does not broaden either matcher. Matchers use non-empty
 canonical OpenClaw tool ids; omit `matcher` to match all tools.
+
+Omitting `runtimes` uses every supported runtime declared in the plugin's
+`contracts.agentToolResultMiddleware`, including `agentsapi` when declared.
+Supply `runtimes` only to select a subset of that declaration. Registration
+rejects an empty runtime list or any targeted runtime missing from the manifest.
 
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
@@ -85,6 +91,12 @@ Retain `details.messageDelivery.sourceReplyDelivered` from the host message tool
 before middleware transforms its result, and carry it into the attempt result.
 This confirms a final external source reply and does not depend on destination
 arguments or transcript mirrors.
+
+Use `extractMessagingToolSourceReplyPayload(result)` from the same runtime
+subpath to retain internal source-reply payloads through presentation changes.
+For a confirmed messaging delivery, `collectMessagingMediaUrlsFromRecord(args)`
+collects its attachment references for delivery deduplication. Neither helper
+establishes delivery or grants local-file trust.
 
 ## Reply attachments from a remote workspace
 
@@ -103,7 +115,17 @@ The reader must enforce the byte limit and workspace boundary and honor
 cancellation. It receives only paths authorized under the host's captured
 policy. Supply `workspaceRoot` when the remote workspace has a different
 absolute path; the host maps that alias to the logical workspace before checking
-policy. Keep the reader alive until preparation finishes.
+policy. Supply `assertCurrent` when native session or transport ownership can be
+revoked independently of the host attempt. The host retains this additional check
+through the final media write and publication. Keep the reader alive until preparation finishes.
+
+For artifacts whose bytes the provider has already admitted, use `kind: "artifact"`
+with `buffer`, `fileName`, `assertCurrent`, and an optional `signal`. The host
+stages those exact bytes under the captured channel/account byte limit and returns
+a prepared `payload`. This request grants no filesystem reads and applies no
+image transformation or host-file MIME allowlist. The harness owns validation of
+the provider artifact's session, turn, environment, and path before downloading it;
+the host owns the outbound destination and retains live authority through publication.
 
 Missing, denied, and oversized attachments produce the usual delivery failure
 notice; preparation does not fall back to a stale Gateway workspace file.
@@ -158,16 +180,34 @@ records an already-confirmed messaging delivery, and
 Callers retain their native receipt, routing, cancellation, and result-encoding
 contracts; these helpers do not establish delivery or grant execution authority.
 
-For final argument validation, wrap the host-bound tool's execution in
-`runWithToolExecutionValidation(callId, validate, execute)` from the same private
-subpath. The validator runs at the existing execution boundary after policy and
-before-call hooks adjust the arguments. It uses one per-invocation context across
-host and SDK chunks and does not dispatch a second before-call hook.
+## Workspace-staged attachments
 
-Accepted background task metadata is available through `isAsyncStartedToolResult`
-and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-tool-runtime`.
-Retain accepted work independently of result presentation so recovery cannot
-replay it.
+Admitted attachment facts can refer to files staged under the prepared workspace
+instead of the managed media store. Use `root(workspaceDir)` and
+`createStagedInputPathMatcher(root)` from `openclaw/plugin-sdk/file-access-runtime`
+to verify staging ownership before a bounded `root.read(relativePath, { maxBytes })`.
+Match the fact's workspace to the attempt's prepared workspace, retain the host's
+current-run assertion through awaited reads, and use admitted media facts rather
+than paths extracted from user or model text. The matcher shares the staging
+owner's exact marker contract and caches results only for that capture.
+
+## Final tool-argument validation
+
+Official native harness adapters can call
+`runWithToolExecutionValidation(callId, validate, execute)` from
+the private `openclaw/plugin-sdk/agent-harness-tool-runtime` around the host-bound tool's
+`execute` call. The validator receives the final arguments after policy and
+before-call hooks have adjusted them, at the existing tool execution boundary.
+Use the shared schema validation helpers for the declared tool schema. Do not
+copy private validation markers or run a second before-call hook. Validation is
+scoped to the tool call and remains isolated from concurrent calls.
+
+Retain accepted background work before middleware: `isAsyncStartedToolResult`
+and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-tool-runtime`
+expose its task metadata. `normalizeAcceptedSessionSpawnResult` from
+`openclaw/plugin-sdk/agent-harness-tool-runtime` preserves a child session's
+completion ownership. Carry their recorded facts into the attempt result so
+recovery cannot replay accepted work.
 
 ## Terminal outcome classification
 

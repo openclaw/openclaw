@@ -14,6 +14,7 @@ import {
 } from "./sqlite-reader-lifecycle.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import {
+  createSqliteWalCheckpoint,
   onSqliteWalCheckpoint,
   publishSqliteWalCheckpointObservation,
   type SqliteWalCheckpointSnapshot,
@@ -24,6 +25,36 @@ import { StateDatabaseCoordinatorContentionError } from "./state-database-coordi
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite WAL checkpoint observations", () => {
+  it("retains relayed health across native generations and rejects older observations", () => {
+    const databasePath = path.join(tempDirs.make("openclaw-wal-health-relay-"), "state.sqlite");
+    const database = openNodeSqliteDatabase(databasePath);
+    database.exec("PRAGMA journal_mode=WAL; CREATE TABLE events(value TEXT)");
+    const owner = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
+    const replacement = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
+    try {
+      expect(owner.checkpoint("PASSIVE")).toBe(true);
+      const completed = owner.snapshot!;
+      replacement.adopt(completed);
+      replacement.recordError(new StateDatabaseCoordinatorContentionError("state-lifecycle"));
+      owner.adopt(replacement.snapshot!);
+      expect(owner.health).toMatchObject({
+        state: "blocked",
+        consecutiveBlocked: 1,
+        lastCompletedAtMs: completed.health.lastCompletedAtMs,
+      });
+      owner.recordError(new StateDatabaseCoordinatorContentionError("state-lifecycle"));
+      const blocked = owner.snapshot;
+      owner.adopt(completed);
+      expect(owner.snapshot).toEqual(blocked);
+      expect(owner.health).toMatchObject({ consecutiveBlocked: 2, warning: true });
+      expect(owner.checkpoint("PASSIVE")).toBe(true);
+      owner.adopt(replacement.snapshot!);
+      expect(owner.health).toMatchObject({ state: "complete", consecutiveBlocked: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
   it("backs off once per interval, warns in health early, and throttles contention logs", async () => {
     vi.useFakeTimers();
     const databasePath = path.join(

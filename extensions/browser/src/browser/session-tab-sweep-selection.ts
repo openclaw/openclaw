@@ -1,6 +1,6 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   activeDurableStorageKeys,
-  normalizeBrowserSessionKey,
   readColdNativeActivity,
   volatileSessionTabTargetKey,
   volatileTabsBySession,
@@ -23,7 +23,7 @@ export function selectTrackedTabsForSessions(params: {
 }): TrackedTab[] {
   const sessionKeys = new Set(
     params.sessionKeys
-      .map((key) => normalizeBrowserSessionKey(key))
+      .map((key) => normalizeOptionalLowercaseString(key))
       .filter((key) => key !== undefined),
   );
   const volatile: VolatileSessionTab[] = [];

@@ -5,7 +5,7 @@ import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../node-
 import { resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { tryReadJson } from "./json-files.js";
 import { nodeVersionSatisfiesEngine } from "./runtime-guard.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 

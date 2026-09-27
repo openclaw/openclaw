@@ -134,7 +134,7 @@ it("discards category navigation and late responses across connection invalidati
   expect(controller.categoriesLoading).toBe(false);
 });
 
-it("populates the grouped home page from one overview response", async () => {
+it("populates the grouped home page and keeps it visible during a refresh", async () => {
   const featured = entry(1);
   featured.catalog.featured = true;
   featured.catalog.featuredRank = 0;
@@ -146,7 +146,11 @@ it("populates the grouped home page from one overview response", async () => {
   const categories = [
     { slug: "memory", label: "Memory", description: "Memory", icon: "database", order: 0 },
   ];
-  const { controller, request } = setup([{ items: [featured, trending, category], categories }]);
+  const refresh = createDeferred<PluginDiscoveryResult>();
+  const { controller, request } = setup([
+    { items: [featured, trending, category], categories },
+    refresh.promise,
+  ]);
 
   await controller.refresh();
 
@@ -159,6 +163,18 @@ it("populates the grouped home page from one overview response", async () => {
     { intent: "all", pageSize: 100 },
     expect.anything(),
   );
+
+  const loading = controller.refresh();
+  expect(controller.loading).toBe(false);
+  expect(controller.featuredLoading).toBe(false);
+  expect(controller.trendingLoading).toBe(false);
+  expect(controller.featured).toEqual([featured]);
+  expect(controller.trending).toEqual([trending]);
+  refresh.resolve({ items: [category], categories });
+  await loading;
+  expect(controller.result?.items).toEqual([category]);
+  expect(controller.featured).toEqual([]);
+  expect(controller.trending).toEqual([]);
 });
 
 it("switches filtered tabs to All when starting a unified search", async () => {
@@ -191,15 +207,17 @@ it("preserves home navigation when a category completes during the search deboun
     { slug: "channels", label: "Channels", description: "Channels", icon: "globe", order: 0 },
   ];
   const category = createDeferred<PluginDiscoveryResult>();
+  const search = createDeferred<PluginDiscoveryResult>();
   const categoryItems = [entry(3)];
   const searchItems = [entry(4)];
   const { controller, request } = setup([
     { items: [featured, trending], categories },
     category.promise,
-    { items: searchItems },
+    search.promise,
   ]);
   await controller.refresh();
   controller.selectCategory("channels");
+  expect(controller.loading).toBe(true);
   controller.updateQuery("calendar");
 
   category.resolve({ items: categoryItems });
@@ -213,6 +231,10 @@ it("preserves home navigation when a category completes during the search deboun
 
   await vi.advanceTimersByTimeAsync(250);
   expect(request.mock.lastCall?.[1]).toMatchObject({ query: "calendar" });
+  expect(controller.loading).toBe(true);
+  search.resolve({ items: searchItems });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(controller.loading).toBe(false);
   expect(controller.result?.items).toEqual(searchItems);
   expect.soft(controller.categories).toEqual(categories);
   expect.soft(controller.featured).toEqual([featured]);
@@ -422,4 +444,26 @@ it("surfaces a partial ClawHub failure once for the overview", async () => {
   await controller.refresh();
 
   expect(controller.remoteError).toBe("ClawHub is unavailable; local plugins remain available.");
+});
+
+it("keeps category pins ahead of a more popular community result after pagination", async () => {
+  const pinned = entry(1);
+  pinned.catalog.categoryRanks = { models: 0 };
+  const official = entry(2);
+  official.catalog.official = true;
+  official.catalog.downloads = 10;
+  const popular = entry(3);
+  popular.catalog.downloads = 100;
+  const { controller } = setup([
+    { items: [official, pinned], nextCursor: "next" },
+    { items: [popular] },
+  ]);
+  controller.category = "models";
+  await controller.refresh();
+  await controller.loadMore();
+  expect(controller.result?.items.map((item) => item.id)).toEqual([
+    pinned.id,
+    popular.id,
+    official.id,
+  ]);
 });

@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
   errorShape,
@@ -61,6 +62,7 @@ import {
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { readInProcessSessionDeliveryGeneration } from "../in-process-session-delivery.js";
@@ -182,33 +184,19 @@ async function acquireMessageOperationRouteBindingLock(params: {
     return () => undefined;
   }
 
-  let signalAcquired: (() => void) | undefined;
-  let signalRelease: (() => void) | undefined;
-  const acquired = new Promise<void>((resolve) => {
-    signalAcquired = resolve;
-  });
-  const held = new Promise<void>((resolve) => {
-    signalRelease = resolve;
-  });
+  const acquired = createDeferredCore();
+  const held = createDeferredCore();
   // The lock covers mutable route selection through canonical in-flight registration.
   // Otherwise a later retry can bind newer defaults while the first request is resolving.
   void getMessageOperationRouteBindingQueue(params.context).enqueue(
     params.binding.key,
     async () => {
-      signalAcquired?.();
-      await held;
+      acquired.resolve();
+      await held.promise;
     },
   );
-  await acquired;
-
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    signalRelease?.();
-  };
+  await acquired.promise;
+  return held.resolve;
 }
 
 function resolveMessageOperationAuthorityScope(params: {
@@ -659,10 +647,9 @@ export const sendHandlers: GatewayRequestHandlers = {
           respond(false, undefined, resolved.error);
           return undefined;
         }
-        const { cfg: selectedCfg, sourceCfg, channel } = resolved;
+        const { cfg: selectedCfg, channel } = resolved;
         const cfg =
-          trustedContext.messageActionConfig ??
-          resolveMessageActionRuntimeConfig({ cfg: selectedCfg, sourceCfg });
+          trustedContext.messageActionConfig ?? resolveMessageActionRuntimeConfig(selectedCfg);
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         const canonicalAction =
           ((request.action === "send" &&
@@ -977,11 +964,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     const to = normalizeOptionalString(request.to) ?? "";
     const message = request.message?.trim() ? request.message : "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
-    const mediaUrls = Array.isArray(request.mediaUrls)
-      ? request.mediaUrls
-          .map((entry) => normalizeOptionalString(entry))
-          .filter((entry): entry is string => Boolean(entry))
-      : undefined;
+    const mediaUrls = normalizeArrayBackedTrimmedStringList(request.mediaUrls);
     const buffer = readStringValue(request.buffer);
     if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0 && !buffer) {
       respond(
@@ -1117,11 +1100,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             }),
           });
           const hydratedMediaUrl = normalizeOptionalString(sendArgs.mediaUrl);
-          const hydratedMediaUrls = Array.isArray(sendArgs.mediaUrls)
-            ? sendArgs.mediaUrls
-                .map((entry) => normalizeOptionalString(entry))
-                .filter((entry): entry is string => Boolean(entry))
-            : undefined;
+          const hydratedMediaUrls = normalizeArrayBackedTrimmedStringList(sendArgs.mediaUrls);
           const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
           const outboundPayloads = [
             {

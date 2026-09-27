@@ -133,7 +133,11 @@ const finalizeSubagentCleanup = async (
     entry.expectsCompletionMessage === true &&
     announceOutcome !== "delivered"
   ) {
-    const resolution = params.resolveSubagentTask(entry);
+    const resolution = await params.resolveSubagentTaskAsync(entry);
+    if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+      return;
+    }
     if (resolution.lookup === "available" && !resolution.task) {
       suspendPendingFinalDelivery(context, { runId, entry, reason: "permanent_failure" });
       return;

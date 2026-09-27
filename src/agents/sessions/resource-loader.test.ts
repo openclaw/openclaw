@@ -52,6 +52,52 @@ afterEach(() => {
 });
 
 describe("DefaultResourceLoader", () => {
+  it("keeps the first prompt and theme while reporting the losing resource paths", async () => {
+    const root = tempDirs.make("openclaw-resource-collisions-");
+    const paths: [string, string] = [join(root, "first"), join(root, "second")];
+    for (const path of paths) {
+      await mkdir(path);
+      await writeFile(join(path, "shared.md"), `Prompt from ${path}`);
+      await writeFile(join(path, "shared.json"), JSON.stringify({ ...darkTheme, name: "shared" }));
+    }
+    const loader = new DefaultResourceLoader({
+      cwd: root,
+      agentDir: root,
+      settingsManager: SettingsManager.inMemory(),
+      additionalPromptTemplatePaths: paths,
+      additionalThemePaths: paths,
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+
+    await loader.reload();
+
+    expect(loader.getPrompts().prompts.map((prompt) => prompt.filePath)).toEqual([
+      join(paths[0], "shared.md"),
+    ]);
+    expect(loader.getThemes().themes.map((theme) => theme.sourcePath)).toEqual([
+      join(paths[0], "shared.json"),
+    ]);
+    for (const [resourceType, extension, diagnostics, name] of [
+      ["prompt", "md", loader.getPrompts().diagnostics, "/shared"],
+      ["theme", "json", loader.getThemes().diagnostics, "shared"],
+    ] as const) {
+      const winnerPath = join(paths[0], `shared.${extension}`);
+      const loserPath = join(paths[1], `shared.${extension}`);
+      expect(diagnostics).toEqual([
+        {
+          type: "collision",
+          message: `name "${name}" collision`,
+          path: loserPath,
+          collision: { resourceType, name: "shared", winnerPath, loserPath },
+        },
+      ]);
+    }
+  });
+
   it("does not load a direct local extension disabled by its package filter", async () => {
     const root = tempDirs.make("openclaw-resource-loader-filter-");
     const extensionPath = join(root, "extension.ts");

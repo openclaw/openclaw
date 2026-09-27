@@ -50,7 +50,7 @@ describe("Telegram startup with disabled thread bindings", () => {
   let serverTask: Promise<void>;
   const serverReady = createDeferred<string>();
   const serverRelease = createDeferred<void>();
-  const bots: ReturnType<typeof createTelegramBotCore>[] = [];
+  const bots: Awaited<ReturnType<typeof createTelegramBotCore>>[] = [];
   const calls: Array<{ method: string; fields: Record<string, unknown> }> = [];
   const errors = vi.fn();
   const replyResolver = vi.fn(async () => ({ text: "ordinary reply" }));
@@ -114,7 +114,7 @@ describe("Telegram startup with disabled thread bindings", () => {
         await bot.stop();
       }
       // Also release an owner leaked by a failing constructor in the pre-fix run.
-      getTelegramThreadBindingManager(accountId)?.stop();
+      await getTelegramThreadBindingManager(accountId)?.stop();
     } finally {
       resetTelegramClientOptionsCacheForTests();
       resetTelegramAccountThrottlersForTest();
@@ -165,8 +165,8 @@ describe("Telegram startup with disabled thread bindings", () => {
     };
   }
 
-  function createBot(cfg: OpenClawConfig, botToken = token) {
-    const bot = createTelegramBotCore({
+  async function createBot(cfg: OpenClawConfig, botToken = token) {
+    const bot = await createTelegramBotCore({
       token: botToken,
       accountId,
       config: cfg,
@@ -229,7 +229,7 @@ describe("Telegram startup with disabled thread bindings", () => {
     async (scope) => {
       const cfg = config(scope);
       await state.writeConfig(cfg);
-      const bot = createBot(cfg);
+      const bot = await createBot(cfg);
       await bot.handleUpdate({
         update_id: 1001,
         message: { message_id: 101, date: 1736380800, chat, from, text: "hello" },
@@ -274,10 +274,10 @@ describe("Telegram startup with disabled thread bindings", () => {
     async ({ previous, next }) => {
       const before = config(previous);
       await state.writeConfig(before);
-      const predecessor = createBot(before);
+      const predecessor = await createBot(before);
       const after = config(next);
       await state.writeConfig(after);
-      const current = createBot(after);
+      const current = await createBot(after);
       await predecessor.stop();
       await predecessor.stop();
       if (next === "enabled") {
@@ -298,7 +298,7 @@ describe("Telegram startup with disabled thread bindings", () => {
   it("refuses a missing owner after an enabled bot stops", async () => {
     const cfg = config("enabled");
     await state.writeConfig(cfg);
-    const bot = createBot(cfg);
+    const bot = await createBot(cfg);
     await expect(
       getSessionBindingService().resolveByConversationAsync(conversation),
     ).resolves.toBeNull();
@@ -313,7 +313,7 @@ describe("Telegram startup with disabled thread bindings", () => {
     async (scope) => {
       const cfg = config(scope);
       await state.writeConfig(cfg);
-      expect(() => createBot(cfg, "")).toThrow("Empty token!");
+      await expect(createBot(cfg, "")).rejects.toThrow("Empty token!");
       await expectUnavailableOwner();
       expect(storedBindings()).toEqual([]);
       expect(replyResolver).not.toHaveBeenCalled();

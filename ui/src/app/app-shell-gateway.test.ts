@@ -20,12 +20,14 @@ import { loadSettings, patchSettings } from "./settings.ts";
 
 function createProfileAppearanceGateway(profileId: string | null) {
   const pendingResponses: Array<(accent: string) => void> = [];
+  let requestStarted = createDeferred();
   const request = vi.fn(
     () =>
       new Promise<{ status: string; entries: { "ui.accent": string } }>((resolve) => {
         pendingResponses.push((accent) =>
           resolve({ status: "ok", entries: { "ui.accent": accent } }),
         );
+        requestStarted.resolve();
       }),
   );
   const client = {
@@ -81,10 +83,11 @@ function createProfileAppearanceGateway(profileId: string | null) {
   } as unknown as ShellGatewayHost;
   return {
     async completeProfileAppearance(this: void, accent = "#336699") {
-      await vi.waitFor(() => {
-        expect(pendingResponses).toHaveLength(1);
-      });
+      // The first request follows a lazy import; synchronize on its arrival, not loader speed.
+      await requestStarted.promise;
+      expect(pendingResponses).toHaveLength(1);
       const respond = pendingResponses.shift();
+      requestStarted = createDeferred();
       expect(respond, "pending users.prefs.get response").toBeDefined();
       // Config reconciliation can also refresh the theme. Arm this only when
       // releasing this request, after any synchronous reconciliation has finished.
@@ -903,6 +906,8 @@ describe("ShellGatewayOwner config invalidation", () => {
         );
         await vi.advanceTimersByTimeAsync(0);
         if (rejected) {
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
+          expect(runtimeConfig.state.lastError).toBeNull();
           request.mockResolvedValueOnce({
             config: { count: 1 },
             raw: '{\n  "count": 1\n}\n',

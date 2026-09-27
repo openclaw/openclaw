@@ -107,7 +107,6 @@ if (approvalPath) {
       packageName: process.env.PACKAGE_NAME,
       packageVersion: process.env.PACKAGE_VERSION,
       publishTag: process.env.PUBLISH_TAG,
-      currentStableSoakWaiver: process.env.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER ?? "",
     });
     expectedApproval = approval;
     mismatchMessage = "Stable npm bootstrap approval mismatch.";

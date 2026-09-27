@@ -22,14 +22,14 @@ test("rejects a replaced probe at precommit and persists the current connection'
   const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   const admission = vi
     .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit) =>
+    .mockImplementation((admit, attachment) =>
       createAdmission((request, grant) => {
         if (request.stage === "commit") {
           precommitObserved = true;
           connection = "connection-b";
         }
         admit(request, grant);
-      }),
+      }, attachment),
     );
 
   await expect(

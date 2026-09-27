@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { probePathCaseInsensitiveSync, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { isWithinDir, safeStatSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
-import { probePathCaseInsensitiveSync, resolvePathPrefixSync } from "./fs-safe-advanced.js";
 import { resolveUserPath } from "./home-dir.js";
-import { isWithinDir } from "./path-safety.js";
 import {
   migrateLegacyInstalledPluginIndex,
   preflightLegacyInstalledPluginIndexMigration,
@@ -191,14 +191,6 @@ function formatStateDirMigration(legacyDir: string, targetDir: string): string {
   return `State dir: ${legacyDir} → ${targetDir} (legacy path now symlinked)`;
 }
 
-function isDirPath(filePath: string): boolean {
-  try {
-    return fs.statSync(filePath).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
 function isEmptyDirPath(filePath: string): boolean {
   try {
     return fs.readdirSync(filePath).length === 0;
@@ -281,7 +273,7 @@ export function resolvePendingLegacyStateDirMigrationPaths(params: {
   const sourceTarget = resolveSymlinkTarget(source);
   if (
     (sourceTarget && path.resolve(sourceTarget) === path.resolve(target)) ||
-    (isDirPath(target) && isLegacyDirSymlinkMirror(source, target))
+    (safeStatSync(target)?.isDirectory() && isLegacyDirSymlinkMirror(source, target))
   ) {
     return undefined;
   }
@@ -399,7 +391,7 @@ export async function autoMigrateLegacyStateDir(params: {
     return { migrated: false, skipped: false, changes, warnings };
   }
 
-  if (isDirPath(targetDir)) {
+  if (safeStatSync(targetDir)?.isDirectory()) {
     if (legacyDir && isLegacyDirSymlinkMirror(legacyDir, targetDir)) {
       await migratePluginInstallIndex();
       return {

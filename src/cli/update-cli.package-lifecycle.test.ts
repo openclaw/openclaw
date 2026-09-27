@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { describe, expect, it, vi } from "vitest";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import type { PackageUpdateTransaction } from "../infra/package-update-steps.js";
@@ -192,7 +193,7 @@ describe("update-cli", () => {
     const tempDir = createCaseDir("openclaw-update");
     const nodeModules = path.join(tempDir, "lib", "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
-    mockPackageInstallStatus(tempDir);
+    mockPackageInstallStatus(pkgRoot);
     await writeOpenClawPackageFixture(pkgRoot, "2026.3.23", {
       inventory: true,
     });
@@ -235,16 +236,30 @@ describe("update-cli", () => {
       vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entryPath);
       const targetShim = path.join(prefix, "bin", "openclaw");
       if (failure !== "verification") {
+        const oldLauncher = path.join(pkgRoot, "openclaw.mjs");
+        await fs.writeFile(oldLauncher, "old shim\n");
         await fs.mkdir(path.dirname(targetShim), { recursive: true });
-        await fs.writeFile(targetShim, "old shim\n");
+        await fs.symlink(path.relative(path.dirname(targetShim), oldLauncher), targetShim);
       }
       let stagedShim: string | undefined;
-      const copyFile = fs.copyFile.bind(fs);
-      const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
-        if (String(args[0]) === stagedShim) {
+      const prototype = Object.getPrototypeOf(await fsSafeRoot(tempDir)) as Root;
+      // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+      const copy = prototype.copyIn;
+      let injections = 0;
+      const copySpy = vi.spyOn(prototype, "copyIn").mockImplementation(async function (
+        this: Root,
+        destination,
+        source,
+        options,
+      ) {
+        if (source === stagedShim) {
+          injections += 1;
+          expect(
+            JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")).version,
+          ).toBe("2026.8.1");
           throw new Error("staged shim copy failed");
         }
-        return await copyFile(...args);
+        await copy.call(this, destination, source, options);
       });
       readPackageVersion.mockResolvedValue("2026.7.1");
       primeNpmChannelTag("latest", "2026.8.1");
@@ -291,9 +306,10 @@ describe("update-cli", () => {
       try {
         await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
       } finally {
-        copyFileSpy.mockRestore();
+        copySpy.mockRestore();
       }
 
+      expect(injections).toBe(failure === "shim swap" ? 1 : 0);
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
       expect(doctorCommandCall()).toBeUndefined();
       expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();

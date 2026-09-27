@@ -1,7 +1,4 @@
-// Slack type declarations define plugin contracts.
 import type {
-  AgentSessionStoppedEvent,
-  AgentSessionTitleChangedEvent,
   AppContextChangedEvent,
   AppHomeOpenedEvent,
   ChannelIDChangedEvent,
@@ -57,8 +54,6 @@ export type SlackAppContextChangedEvent = Omit<
   LooseSlackEvent<AppContextChangedEvent>,
   "context"
 > & { context?: SlackAppContext };
-export type SlackAgentSessionStoppedEvent = AgentSessionStoppedEvent;
-export type SlackAgentSessionTitleChangedEvent = AgentSessionTitleChangedEvent;
 export type SlackPinEvent = LooseSlackEvent<PinAddedEvent | PinRemovedEvent>;
 
 type SlackMessageSubtypeMessage = Pick<

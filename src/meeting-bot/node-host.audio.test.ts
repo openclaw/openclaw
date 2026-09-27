@@ -312,18 +312,6 @@ describe("meeting node host audio output", () => {
     expect(bridge.host.hasActiveWork()).toBe(false);
   });
 
-  it("copies retained input buffers", async () => {
-    const bridge = await startAudioBridge();
-    const source = Buffer.from([1, 2, 3]);
-
-    bridge.inputStdout.emit("data", source);
-    source.fill(9);
-
-    const pulled = await invokeBridge(bridge, "pullAudio");
-    expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(Buffer.from([1, 2, 3]));
-    await invokeBridge(bridge, "stop");
-  });
-
   it("keeps only the newest bounded input chunks", async () => {
     const bridge = await startAudioBridge();
 
@@ -600,22 +588,31 @@ describe("meeting node host audio output", () => {
     );
   });
 
-  it("terminates output when input process construction throws", async () => {
-    const outputProcess = createProcess({ stdin: createStdin(true), autoClose: false });
-    const spawnError = new Error("input spawn failed");
-    childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockImplementationOnce(() => {
-      throw spawnError;
-    });
-    const host = createHost();
+  it.each([false, true])(
+    "terminates output when input process construction throws (output spawn failed: %s)",
+    async (outputSpawnFailed) => {
+      const outputProcess = createProcess({ stdin: createStdin(true), autoClose: false });
+      if (outputSpawnFailed) {
+        outputProcess.kill.mockReturnValueOnce(false);
+      }
+      const spawnError = new Error("input spawn failed");
+      childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockImplementationOnce(() => {
+        throw spawnError;
+      });
+      const host = createHost();
 
-    await expect(invokeHost(host, { ...AUDIO_START_PARAMS, launch: false })).rejects.toBe(
-      spawnError,
-    );
-    expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(host.hasActiveWork()).toBe(true);
-    outputProcess.emit("close", null, "SIGTERM");
-    expect(host.hasActiveWork()).toBe(false);
-  });
+      await expect(invokeHost(host, { ...AUDIO_START_PARAMS, launch: false })).rejects.toBe(
+        spawnError,
+      );
+      expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+      if (outputSpawnFailed) {
+        expect(() => outputProcess.emit("error", new Error("output spawn failed"))).not.toThrow();
+      }
+      expect(host.hasActiveWork()).toBe(true);
+      outputProcess.emit("close", null, "SIGTERM");
+      expect(host.hasActiveWork()).toBe(false);
+    },
+  );
 
   it("deletes a hidden audio session after browser launch fails", async () => {
     const inputProcess = createProcess({ stdout: new EventEmitter() });

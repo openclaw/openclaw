@@ -9,6 +9,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -75,6 +76,73 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
 afterEach(() => {
   delivery.afterResult = undefined;
   delivery.releaseFailure = undefined;
+});
+
+it("fences a delivery generation during native writes and restores it only on rollback", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const options = { agentId: "main", path: database.path };
+    const sessionKey = "agent:main:native-generation-publication";
+    const original = {
+      sessionId: "native-generation",
+      lifecycleRevision: "original-generation",
+      updatedAt: 1,
+    };
+    writeSessionEntry(database, sessionKey, original);
+    const originalRow = readExactSessionEntryRow(database, sessionKey);
+    expect(originalRow).toBeDefined();
+    const generation = await prepareSessionDeliveryGeneration({
+      agentId: options.agentId,
+      storePath: database.path,
+      sessionKey,
+      sessionId: original.sessionId,
+      lifecycleRevision: original.lifecycleRevision,
+    });
+    const rollback = new Error("roll back staged generation");
+    try {
+      generation.assertCurrent();
+      expect(() =>
+        runOpenClawAgentWriteTransaction((writer) => {
+          writeSessionEntry(writer, sessionKey, {
+            ...original,
+            lifecycleRevision: "uncommitted-generation",
+            updatedAt: 2,
+          });
+          expect(writer.db.isTransaction).toBe(true);
+          expect(readExactSessionEntryRow(writer, sessionKey)?.entry.lifecycleRevision).toBe(
+            "uncommitted-generation",
+          );
+          expect(generation.assertCurrent).toThrow(
+            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+          );
+          throw rollback;
+        }, options),
+      ).toThrow(rollback);
+      expect(database.db.isTransaction).toBe(false);
+      expect(readExactSessionEntryRow(database, sessionKey)).toEqual(originalRow);
+      generation.assertCurrent();
+
+      runOpenClawAgentWriteTransaction((writer) => {
+        writeSessionEntry(writer, sessionKey, {
+          ...original,
+          lifecycleRevision: "committed-replacement",
+          updatedAt: 3,
+        });
+      }, options);
+      expect(readExactSessionEntryRow(database, sessionKey)?.entry.lifecycleRevision).toBe(
+        "committed-replacement",
+      );
+      // Restoring the old values cannot restore a generation already replaced at COMMIT.
+      runOpenClawAgentWriteTransaction((writer) => {
+        writeSessionEntry(writer, sessionKey, original);
+      }, options);
+      expect(generation.assertCurrent).toThrow(
+        expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
+      );
+    } finally {
+      generation.release();
+    }
+  });
 });
 
 it.each([
@@ -227,6 +295,7 @@ it.each([
           ? [
               {
                 agentId: "main",
+                databaseIdentity: identity,
                 kind: "reset",
                 previous: { sessionId: "settlement", sessionKeys: [sessionKey] },
                 current: { sessionId: "settlement", sessionKeys: [sessionKey] },
@@ -284,10 +353,10 @@ it("keeps uncertain alias membership unavailable after newer native metadata set
       storePath: database.path,
       databaseIdentity: identity,
     });
-    const invalidations: string[] = [];
+    const invalidations: Array<{ sessionKey: string; scope: string | undefined }> = [];
     const stop = sessionChanges.subscribeFacts((change) => {
       if ("sessionKey" in change && change.sessionKey === sessionKey && change.factsInvalidated) {
-        invalidations.push(change.sessionKey);
+        invalidations.push({ sessionKey: change.sessionKey, scope: change.scope });
       }
     });
     try {
@@ -300,7 +369,7 @@ it("keeps uncertain alias membership unavailable after newer native metadata set
       expect(invalidations).toEqual([]);
       publication.settle(undefined, true);
       expect(sharing.readCurrent()).toBeUndefined();
-      expect(invalidations).toEqual([sessionKey]);
+      expect(invalidations).toEqual([{ sessionKey, scope: undefined }]);
       expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe("draft");
     } finally {
       publication.settle(undefined, false);

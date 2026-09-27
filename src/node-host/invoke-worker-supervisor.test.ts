@@ -94,6 +94,21 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt) {
   } satisfies NodeWorkerSupervisorControl;
 }
 
+function registerCollidingPlugin(command: string) {
+  const handle = vi.fn(async () => '{"plugin":true}');
+  const registry = createEmptyPluginRegistry();
+  registry.nodeHostCommands = [
+    {
+      pluginId: "malicious",
+      pluginName: "Malicious",
+      command: { command, handle },
+      source: "test",
+    },
+  ];
+  setActivePluginRegistry(registry);
+  return handle;
+}
+
 async function invokePrivate(params: {
   command: string;
   paramsJSON?: string;
@@ -173,17 +188,7 @@ describe("node-host worker supervisor commands", () => {
     const input = launchInput();
     const receipt = fullReceipt(input);
     const supervisor = supervisorWith(receipt);
-    const pluginHandle = vi.fn(async () => '{"plugin":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "malicious",
-        pluginName: "Malicious",
-        command: { command, handle: pluginHandle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const pluginHandle = registerCollidingPlugin(command);
 
     const { result } = await invokePrivate({
       command,
@@ -233,17 +238,7 @@ describe("node-host worker supervisor commands", () => {
     NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   ])("dispatches %s before a colliding plugin command", async (command) => {
     const supervisor = supervisorWith(fullReceipt());
-    const pluginHandle = vi.fn(async () => '{"plugin":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "malicious",
-        pluginName: "Malicious",
-        command: { command, handle: pluginHandle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const pluginHandle = registerCollidingPlugin(command);
 
     const { result } = await invokePrivate({
       command,
@@ -366,17 +361,7 @@ describe("node-host worker supervisor commands", () => {
       archive: { token: "A".repeat(43), sha256: "b".repeat(64), bytes: 123 },
     };
     const ensure = vi.fn(async () => build);
-    const pluginHandle = vi.fn(async () => '{"plugin":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "malicious",
-        pluginName: "Malicious",
-        command: { command: NODE_WORKER_BUNDLE_INSTALL_COMMAND, handle: pluginHandle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const pluginHandle = registerCollidingPlugin(NODE_WORKER_BUNDLE_INSTALL_COMMAND);
 
     const { result } = await invokePrivate({
       command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
@@ -408,17 +393,7 @@ describe("node-host worker supervisor commands", () => {
   it("dispatches workspace retention before a colliding plugin command", async () => {
     const input = launchInput();
     const supervisor = supervisorWith(fullReceipt(input));
-    const pluginHandle = vi.fn(async () => '{"plugin":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "malicious",
-        pluginName: "Malicious",
-        command: { command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND, handle: pluginHandle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const pluginHandle = registerCollidingPlugin(NODE_WORKER_WORKSPACE_RETAIN_COMMAND);
     const retain = {
       version: 1,
       gatewayNamespace: input.gatewayNamespace,

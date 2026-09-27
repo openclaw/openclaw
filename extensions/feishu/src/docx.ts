@@ -66,7 +66,6 @@ const BLOCK_TYPE_NAMES: Record<number, string> = {
 // Block types that cannot be created via documentBlockChildren.create API
 const UNSUPPORTED_CREATE_TYPES = new Set([31, 32]);
 
-/** Remove block types unsupported by the children insertion API. */
 function cleanBlocksForInsert(blocks: FeishuDocxBlock[]): {
   cleaned: FeishuDocxBlock[];
   skipped: string[];
@@ -83,9 +82,6 @@ function cleanBlocksForInsert(blocks: FeishuDocxBlock[]): {
   return { cleaned, skipped };
 }
 
-// ============ Core Functions ============
-
-/** Max blocks per documentBlockChildren.create request */
 const MAX_CONVERT_RETRY_DEPTH = 8;
 
 async function convertMarkdown(client: Lark.Client, markdown: string) {
@@ -183,23 +179,20 @@ function normalizeConvertedBlockTree(
     .map((block) => block.block_id)
     .filter((blockId): blockId is string => typeof blockId === "string");
 
-  const rootIds = (
-    firstLevelIds && firstLevelIds.length > 0 ? firstLevelIds : inferredTopLevelIds
-  ).filter((id): id is string => typeof id === "string" && byId.has(id));
+  const rootIds = (firstLevelIds.length > 0 ? firstLevelIds : inferredTopLevelIds).filter(
+    (id): id is string => typeof id === "string" && byId.has(id),
+  );
   const uniqueRootIds = uniqueStrings(rootIds);
 
   const orderedBlocks: FeishuDocxBlock[] = [];
   const visited = new Set<string>();
 
   const visit = (blockId: string) => {
-    if (!byId.has(blockId) || visited.has(blockId)) {
+    const block = byId.get(blockId);
+    if (!block || visited.has(blockId)) {
       return;
     }
     visited.add(blockId);
-    const block = byId.get(blockId);
-    if (!block) {
-      return;
-    }
     orderedBlocks.push(block);
     for (const childId of normalizeChildIds(block?.children)) {
       visit(childId);
@@ -342,6 +335,20 @@ async function insertBlocksWithDescendant(
   return { children: res.data?.children ?? [] };
 }
 
+async function deleteBlockChildren(
+  client: Lark.Client,
+  docToken: string,
+  parentId: string,
+  startIndex: number,
+  endIndex: number,
+) {
+  const res = await client.docx.documentBlockChildren.batchDelete({
+    path: { document_id: docToken, block_id: parentId },
+    data: { start_index: startIndex, end_index: endIndex },
+  });
+  assertFeishuApiSuccess(res);
+}
+
 async function clearDocumentContent(client: Lark.Client, docToken: string) {
   const existing = await client.docx.documentBlock.list({
     path: { document_id: docToken },
@@ -354,11 +361,7 @@ async function clearDocumentContent(client: Lark.Client, docToken: string) {
       .map((b) => b.block_id) ?? [];
 
   if (childIds.length > 0) {
-    const res = await client.docx.documentBlockChildren.batchDelete({
-      path: { document_id: docToken, block_id: docToken },
-      data: { start_index: 0, end_index: childIds.length },
-    });
-    assertFeishuApiSuccess(res);
+    await deleteBlockChildren(client, docToken, docToken, 0, childIds.length);
   }
 
   return childIds.length;
@@ -545,7 +548,6 @@ async function uploadImageBlock(
     docToken, // drive_route_token for multi-datacenter routing
   );
 
-  // Set the image token on the block.
   const patchRes = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: imageBlockId },
     data: { replace_image: { token: fileToken } },
@@ -573,9 +575,7 @@ async function uploadFileBlock(
 ) {
   const blockId = parentBlockId ?? docToken;
 
-  // Feishu API does not allow creating empty file blocks (block_type 23).
-  // Workaround: create a placeholder text block, then replace it with file content.
-  // Actually, file blocks need a different approach: use markdown link as placeholder.
+  // Feishu cannot create empty file blocks, so allocate a temporary Markdown placeholder.
   const upload = await resolveDocxUploadInput({
     url,
     filePath,
@@ -584,7 +584,6 @@ async function uploadFileBlock(
     fileName: filename,
   });
 
-  // Create a placeholder text block first
   const placeholderMd = "[file](https://example.com/placeholder)";
   const converted = await convertMarkdown(client, placeholderMd);
   const { orderedBlocks } = normalizeConvertedBlockTree(
@@ -593,13 +592,11 @@ async function uploadFileBlock(
   );
   const { children: inserted } = await insertBlocks(client, docToken, orderedBlocks, blockId);
 
-  // Get the first inserted block - we'll delete it and create the file in its place
   const placeholderBlock = inserted[0];
   if (!placeholderBlock?.block_id) {
     throw new Error("Failed to create placeholder block for file upload");
   }
 
-  // Delete the placeholder
   const parentId = placeholderBlock.parent_id ?? blockId;
   const childrenRes = await client.docx.documentBlockChildren.get({
     path: { document_id: docToken, block_id: parentId },
@@ -608,14 +605,9 @@ async function uploadFileBlock(
   const items = childrenRes.data?.items ?? [];
   const placeholderIdx = items.findIndex((item) => item.block_id === placeholderBlock.block_id);
   if (placeholderIdx >= 0) {
-    const deleteRes = await client.docx.documentBlockChildren.batchDelete({
-      path: { document_id: docToken, block_id: parentId },
-      data: { start_index: placeholderIdx, end_index: placeholderIdx + 1 },
-    });
-    assertFeishuApiSuccess(deleteRes);
+    await deleteBlockChildren(client, docToken, parentId, placeholderIdx, placeholderIdx + 1);
   }
 
-  // Upload file to Feishu drive
   const fileRes = await client.drive.media.uploadAll({
     data: {
       file_name: upload.fileName,
@@ -639,8 +631,6 @@ async function uploadFileBlock(
     note: "File uploaded to drive. Use the file_token to reference it. Direct file block creation is not supported by the Feishu API.",
   };
 }
-
-// ============ Actions ============
 
 const STRUCTURED_BLOCK_TYPES = new Set([14, 18, 21, 23, 27, 30, 31, 32]);
 
@@ -815,12 +805,8 @@ async function insertDoc(
   imageReadTimeoutMs: number,
   logger?: Logger,
 ) {
-  const blockInfo = await client.docx.documentBlock.get({
-    path: { document_id: docToken, block_id: afterBlockId },
-  });
-  assertFeishuApiSuccess(blockInfo);
-
-  const parentId = blockInfo.data?.block?.parent_id ?? docToken;
+  const { block } = await getBlock(client, docToken, afterBlockId);
+  const parentId = block?.parent_id ?? docToken;
 
   // Paginate through all children to reliably locate after_block_id.
   // documentBlockChildren.get returns up to 200 children per page; large
@@ -923,12 +909,7 @@ async function writeTableCells(
     throw new Error("values must be a non-empty 2D array");
   }
 
-  const tableRes = await client.docx.documentBlock.get({
-    path: { document_id: docToken, block_id: tableBlockId },
-  });
-  assertFeishuApiSuccess(tableRes);
-
-  const tableBlock = tableRes.data?.block;
+  const { block: tableBlock } = await getBlock(client, docToken, tableBlockId);
   if (tableBlock?.block_type !== 31) {
     throw new Error("table_block_id is not a table block");
   }
@@ -965,11 +946,7 @@ async function writeTableCells(
 
       const existingChildren = childrenRes.data?.items ?? [];
       if (existingChildren.length > 0) {
-        const delRes = await client.docx.documentBlockChildren.batchDelete({
-          path: { document_id: docToken, block_id: cellId },
-          data: { start_index: 0, end_index: existingChildren.length },
-        });
-        assertFeishuApiSuccess(delRes);
+        await deleteBlockChildren(client, docToken, cellId, 0, existingChildren.length);
       }
 
       const text = rowValues[c] ?? "";
@@ -1034,10 +1011,7 @@ async function updateBlock(
   blockId: string,
   content: string,
 ) {
-  const blockInfo = await client.docx.documentBlock.get({
-    path: { document_id: docToken, block_id: blockId },
-  });
-  assertFeishuApiSuccess(blockInfo);
+  await getBlock(client, docToken, blockId);
 
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
@@ -1053,12 +1027,8 @@ async function updateBlock(
 }
 
 async function deleteBlock(client: Lark.Client, docToken: string, blockId: string) {
-  const blockInfo = await client.docx.documentBlock.get({
-    path: { document_id: docToken, block_id: blockId },
-  });
-  assertFeishuApiSuccess(blockInfo);
-
-  const parentId = blockInfo.data?.block?.parent_id ?? docToken;
+  const { block } = await getBlock(client, docToken, blockId);
+  const parentId = block?.parent_id ?? docToken;
 
   const children = await client.docx.documentBlockChildren.get({
     path: { document_id: docToken, block_id: parentId },
@@ -1071,11 +1041,7 @@ async function deleteBlock(client: Lark.Client, docToken: string, blockId: strin
     throw new Error("Block not found");
   }
 
-  const res = await client.docx.documentBlockChildren.batchDelete({
-    path: { document_id: docToken, block_id: parentId },
-    data: { start_index: index, end_index: index + 1 },
-  });
-  assertFeishuApiSuccess(res);
+  await deleteBlockChildren(client, docToken, parentId, index, index + 1);
 
   return { success: true, deleted_block_id: blockId };
 }
@@ -1116,8 +1082,6 @@ async function listAppScopes(client: Lark.Client) {
     summary: `${granted.length} granted, ${pending.length} pending`,
   };
 }
-
-// ============ Tool Registration ============
 
 export function registerFeishuDocTools(api: OpenClawPluginApi) {
   registerFeishuTool(api, {

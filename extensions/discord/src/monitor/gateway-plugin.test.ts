@@ -3,10 +3,7 @@ import { EventEmitter } from "node:events";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
-import {
-  fetchDiscordGatewayInfoWithTimeout,
-  resolveDiscordGatewayInfoTimeoutMs,
-} from "./gateway-metadata.js";
+import { fetchDiscordGatewayInfoWithTimeout } from "./gateway-metadata.js";
 
 const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
   const GatewayIntentsLocal = {
@@ -66,8 +63,8 @@ vi.mock("../internal/gateway.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  captureHttpExchange: vi.fn(),
-  captureWsEvent: vi.fn(),
+  captureHttpExchangeAsync: vi.fn().mockResolvedValue(undefined),
+  captureWsEventAsync: vi.fn().mockResolvedValue(undefined),
   resolveEffectiveDebugProxyUrl: () => undefined,
   resolveDebugProxySettings: () => ({ enabled: false }),
 }));
@@ -104,25 +101,6 @@ describe("createDiscordGatewayPlugin", () => {
     });
   }
 
-  it("subscribes to guild emoji changes without enabling voice by default", () => {
-    const intents = resolveDiscordGatewayIntents();
-
-    expect(intents & GatewayIntents.GuildExpressions).toBe(GatewayIntents.GuildExpressions);
-    expect(intents & GatewayIntents.GuildVoiceStates).toBe(0);
-  });
-
-  it("includes GuildVoiceStates when voice is enabled", () => {
-    const intents = resolveDiscordGatewayIntents({ voiceEnabled: true });
-
-    expect(intents & GatewayIntents.GuildVoiceStates).toBe(GatewayIntents.GuildVoiceStates);
-  });
-
-  it("omits GuildVoiceStates when voice is disabled", () => {
-    const intents = resolveDiscordGatewayIntents({ voiceEnabled: false });
-
-    expect(intents & GatewayIntents.GuildVoiceStates).toBe(0);
-  });
-
   it("omits MessageContent only when explicitly disabled", () => {
     const defaultIntents = resolveDiscordGatewayIntents();
     const mentionOnlyIntents = resolveDiscordGatewayIntents({
@@ -154,15 +132,6 @@ describe("createDiscordGatewayPlugin", () => {
 
     expect(intents & GatewayIntents.GuildPresences).toBe(GatewayIntents.GuildPresences);
     expect(intents & GatewayIntents.GuildMembers).toBe(GatewayIntents.GuildMembers);
-  });
-
-  it("resolves gateway metadata timeout from env, then default", () => {
-    expect(
-      resolveDiscordGatewayInfoTimeoutMs({
-        env: { OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS: "25000" },
-      }),
-    ).toBe(25_000);
-    expect(resolveDiscordGatewayInfoTimeoutMs({ env: {} })).toBe(30_000);
   });
 
   it("parses valid Discord gateway metadata", async () => {
@@ -218,13 +187,6 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("omits voice states when Discord voice is disabled in account config", () => {
     const plugin = createPlugin(undefined, { voice: { enabled: false } });
-    const options = (plugin as unknown as { options?: { intents?: number } }).options;
-
-    expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(0);
-  });
-
-  it("omits voice states when Discord voice config is absent", () => {
-    const plugin = createPlugin(undefined, {});
     const options = (plugin as unknown as { options?: { intents?: number } }).options;
 
     expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(0);

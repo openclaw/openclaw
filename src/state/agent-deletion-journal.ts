@@ -8,13 +8,14 @@ import {
 import { isPathInside } from "../infra/path-guards.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { captureAgentDatabasePreparationDeletion } from "./agent-database-admission.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import { resolveAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
-import {
-  parseAgentDeletionDatabasePaths,
-  type AgentDeletionJournalPurpose,
-} from "./agent-deletion-journal.read.js";
+import { parseAgentDeletionDatabasePaths } from "./agent-deletion-journal.read.js";
+import type { AgentDeletionJournalPurpose } from "./agent-deletion-journal.types.js";
 import { deleteAgentProvenanceForAgent, ensureAgentProvenanceSchema } from "./agent-provenance.js";
 import type {
   OpenClawStateDatabase,
@@ -408,6 +409,21 @@ export function beginAgentDeletionJournal(
   let persisted: AgentDeletionJournalEntry | undefined;
   ensureAgentProvenanceSchema(options);
   runOpenClawStateWriteTransaction((database) => {
+    const invalidatePreparation = captureAgentDatabasePreparationDeletion(
+      normalized.agentId,
+      database,
+    );
+    // State publication precedes observers and waits for the outermost successful commit.
+    if (
+      !stageSqliteTransactionState(database.db, {
+        stage() {},
+        rollback() {},
+        commit: invalidatePreparation,
+      })
+    ) {
+      throw new Error("Agent deletion journal requires a managed transaction");
+    }
+    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
     assertAgentDeletionJournalAvailable(database.db);
     const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
     const existing = executeSqliteQueryTakeFirstSync(
@@ -504,6 +520,9 @@ export function updateAgentDeletionJournalCleanupPaths(
         .where("cleanup_completed", "=", 0),
     );
     updated = Number(result.numAffectedRows ?? 0) > 0;
+    if (updated) {
+      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+    }
   }, options);
   return updated;
 }
@@ -530,6 +549,9 @@ export function updateAgentDeletionJournalDatabasePaths(
         .where("cleanup_completed", "=", 0),
     );
     updated = Number(result.numAffectedRows ?? 0) > 0;
+    if (updated) {
+      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+    }
   }, options);
   return updated;
 }
@@ -558,6 +580,7 @@ export function completeAgentDeletionJournalInDatabase(
     const journal = readAgentDeletionJournalInDatabase(database, id);
     resolveAgentDeletionRecoveryHolds(database, id, journal?.databasePaths ?? []);
     deleteAgentProvenanceForAgent(database.db, id);
+    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
   }
   return completed;
 }
@@ -580,6 +603,9 @@ export function removeAgentDeletionJournal(
         .where("operation_id", "=", operationId),
     );
     removed = Number(result.numAffectedRows ?? 0) > 0;
+    if (removed) {
+      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+    }
   }, options);
   return removed;
 }
@@ -603,6 +629,9 @@ export function claimCompletedAgentDeletionJournal(
         .where("cleanup_completed", "=", 1),
     );
     removed = Number(result.numAffectedRows ?? 0) > 0;
+    if (removed) {
+      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+    }
   }, options);
   return removed;
 }

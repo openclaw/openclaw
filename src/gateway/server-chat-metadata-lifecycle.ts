@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import type { SessionCostUsagePublication } from "../shared/usage-types.js";
+import { modelSelectionPoliciesMatch } from "./operator-model-presentation.js";
 import { onOperatorRolePolicyChanged } from "./operator-role-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
@@ -9,7 +12,7 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 /** A committed auth change remains successful even if its best-effort UI notification fails. */
 export function broadcastChatMetadataChanged(
   context: Pick<GatewayRequestContext, "broadcast" | "logGateway">,
-  payload: {
+  payload: Partial<SessionCostUsagePublication> & {
     modelSelectionChanged?: boolean;
     modelCatalogChanged?: boolean;
     authChanged?: boolean;
@@ -123,8 +126,10 @@ export async function createGatewayChatMetadataLifecycle(params: {
         preparedModelRuntimeState = "available";
         refreshLogged();
       });
-    const unregisterSkillsChange = registerSkillsChangeListener(() => {
-      refreshForSubordinateChange();
+    const unregisterSkillsChange = registerSkillsChangeListener((event) => {
+      if (event.reason !== "watch-available") {
+        refreshForSubordinateChange();
+      }
     });
     const unregisterRuntimeAuthProfileStoreMutation =
       registerRuntimeAuthProfileStoreMutationListener(() => {
@@ -143,17 +148,30 @@ export async function createGatewayChatMetadataLifecycle(params: {
       publishSidecars: GatewaySidecarStopOwner["publish"],
     ) => {
       context = next;
+      let selectionConfig = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
       const unregister = await registerRefreshListeners();
+      const unregisterUsage = onSessionCostUsageUpdated((publication) => {
+        broadcastChatMetadataChanged(next, {
+          ...publication,
+          modelCatalogChanged: false,
+          authChanged: false,
+        });
+      });
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
         if (change.kind === "config" && change.context === next && context === next) {
-          // Retire choices at committed config publication, before replacement catalogs can yield.
-          broadcastChatMetadataChanged(next, { modelSelectionChanged: true });
+          const config = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
+          const unchanged = modelSelectionPoliciesMatch(selectionConfig, config);
+          selectionConfig = config;
+          if (!unchanged) {
+            broadcastChatMetadataChanged(next, { modelSelectionChanged: true });
+          }
         }
       });
       // Minimal Gateways still own read-triggered preparation. Every lifetime
       // must join it before shutdown retires the config and model owners.
       publishSidecars({
         stop: async () => {
+          unregisterUsage();
           unregisterRolePolicy();
           unregister?.();
           await runtime.stop();

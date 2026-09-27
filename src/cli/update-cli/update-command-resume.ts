@@ -32,7 +32,6 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isUnfencedUpdateDriver } from "../../state/openclaw-state-schema-publication.js";
@@ -49,9 +48,11 @@ import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
+import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
 import {
   collectPostCorePluginAdvisories,
+  createPostCorePluginUpdateResult,
   type PluginUpdateWarning,
 } from "./update-command-plugins-internals.js";
 import {
@@ -315,6 +316,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
         await withPluginLifecycleLease({ assertCurrent }, async (lease) => {
           await completeSourceUpdateRuntime({
             root: params.root,
+            sourceRuntimePrepared: params.opts.sourceRuntimePrepared,
             timeoutMs: params.timeoutMs,
             lease,
             beforePersistentEffect: assertCurrent,
@@ -403,18 +405,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
       error instanceof DoctorMaintenanceRefusalError && error.refusal.kind === "deferred"
         ? {
             pluginUpdate: {
-              ...(producedPluginUpdate ?? {
-                changed: false,
-                sync: {
-                  changed: false,
-                  switchedToBundled: [],
-                  switchedToNpm: [],
-                  warnings: [],
-                  errors: [],
-                },
-                npm: { changed: false, outcomes: [] },
-                integrityDrifts: [],
-              }),
+              ...(producedPluginUpdate ?? createPostCorePluginUpdateResult({ status: "warning" })),
               status: "warning",
               warnings: [
                 ...(producedPluginUpdate?.warnings ?? []),
@@ -432,37 +423,17 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   }
   // A legacy parent can terminate this child as soon as its result appears.
   // Settle child work and restore service custody before publishing either outcome.
-  if (maintenance && !("error" in outcome && hasCommandProcessCleanupError(outcome.error))) {
+  if (maintenance) {
     const owned = maintenance;
-    const failures = "error" in outcome ? [outcome.error] : [];
-    for (const restore of [
+    outcome = await settleUpdateDoctorMaintenance(
+      outcome,
       async () =>
         owned.finish(
           (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config,
         ),
       () => owned.release(),
-    ]) {
-      if (failures.some(hasCommandProcessCleanupError)) {
-        break;
-      }
-      try {
-        await withCommandProcessScope(restore);
-      } catch (error) {
-        if (!failures.includes(error)) {
-          failures.push(error);
-        }
-      }
-    }
-    if (failures.length) {
-      outcome = {
-        error:
-          failures.length === 1
-            ? failures[0]
-            : new AggregateError(failures, "Post-core update and service restoration failed", {
-                cause: failures[0],
-              }),
-      };
-    }
+      "Post-core update and service restoration failed",
+    );
   }
   if ("error" in outcome) {
     throw outcome.error;

@@ -1,7 +1,8 @@
 import { AsyncResource } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
+import * as walAdmission from "../infra/sqlite-wal-write-admission.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -20,6 +21,9 @@ describe("lease-backed source binding", () => {
         const options = { env: state.env };
         const outsider = new AsyncResource("independent-checkpoint-writer");
         let bindingConnection: DatabaseSync | undefined;
+        let periodicMaintenance:
+          | Promise<walAdmission.SqliteWalPeriodicResult | undefined>
+          | undefined;
         let bound = false;
         try {
           await withPluginLifecycleLease(options, async (plugin) => {
@@ -49,13 +53,47 @@ describe("lease-backed source binding", () => {
                     ),
                   ).toThrow(/state-handles/);
                   expect(copied).toBe(true);
-                  runOpenClawStateWriteTransaction(({ db }) => {
-                    db.exec(
-                      "INSERT INTO config_machine_state(state_key,value_json,updated_at_ms) VALUES ('test:capture-bind','true',1)",
+                  const register = walAdmission.registerSqliteWalWorkerMaintenance;
+                  const registered = vi
+                    .spyOn(walAdmission, "registerSqliteWalWorkerMaintenance")
+                    .mockImplementation((database, execute, cancel) =>
+                      register(
+                        database,
+                        (request) => (periodicMaintenance = execute(request)),
+                        cancel,
+                      ),
                     );
-                  }, options);
-                  bindingConnection = openOpenClawStateDatabase(options).db;
-                  expect(bindingConnection.isOpen).toBe(true);
+                  const intervals = vi.spyOn(globalThis, "setInterval");
+                  try {
+                    runOpenClawStateWriteTransaction(({ db }) => {
+                      db.exec(
+                        "INSERT INTO config_machine_state(state_key,value_json,updated_at_ms) VALUES ('test:capture-bind','true',1)",
+                      );
+                    }, options);
+                    bindingConnection = openOpenClawStateDatabase(options).db;
+                    expect(bindingConnection.isOpen).toBe(true);
+                    const timers = intervals.mock.calls.filter(
+                      ([, delay]) => delay === 30 * 60 * 1000,
+                    );
+                    expect(timers).toHaveLength(1);
+                    const [tick, , ...args] = timers[0]!;
+                    if (typeof tick !== "function") {
+                      throw new Error("Private binding did not register its real WAL timer");
+                    }
+                    const exec = vi.spyOn(bindingConnection, "exec");
+                    const prepare = vi.spyOn(bindingConnection, "prepare");
+                    try {
+                      Reflect.apply(tick, undefined, args);
+                      expect(exec).not.toHaveBeenCalled();
+                      expect(prepare).not.toHaveBeenCalled();
+                    } finally {
+                      exec.mockRestore();
+                      prepare.mockRestore();
+                    }
+                  } finally {
+                    registered.mockRestore();
+                    intervals.mockRestore();
+                  }
                   bound = true;
                   if (publisherFailure) {
                     throw new Error("publisher failed after durable bind");
@@ -69,6 +107,8 @@ describe("lease-backed source binding", () => {
               }
               expect(bound).toBe(true);
               expect(bindingConnection?.isOpen).toBe(false);
+              expect(periodicMaintenance).toBeDefined();
+              await expect(periodicMaintenance).resolves.toBeUndefined();
               const persisted = openOpenClawStateDatabase(options)
                 .db.prepare(
                   "SELECT value_json FROM config_machine_state WHERE state_key='test:capture-bind'",

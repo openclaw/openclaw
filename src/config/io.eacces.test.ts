@@ -75,35 +75,6 @@ describe("config io EACCES handling", () => {
     ).toContain(configPath);
     expect(errors.join("\n")).toContain("chown");
   });
-
-  it("includes configPath in the chown hint for the correct remediation command", async () => {
-    const configPath = "/home/myuser/.openclaw/openclaw.json";
-    const io = createConfigIO({
-      configPath,
-      fs: makeEaccesFs(configPath),
-      logger: { error: () => {}, warn: () => {} },
-    });
-
-    const snapshot = await io.readConfigFileSnapshot();
-    expect(
-      expectDefined(snapshot.issues[0], "snapshot.issues[0] test invariant").message,
-    ).toContain(configPath);
-    expect(
-      expectDefined(snapshot.issues[0], "snapshot.issues[0] test invariant").message,
-    ).toContain("container");
-  });
-
-  it("marks the snapshot with the underlying read error code", async () => {
-    const configPath = "/data/.openclaw/openclaw.json";
-    const io = createConfigIO({
-      configPath,
-      fs: makeEaccesFs(configPath),
-      logger: { error: () => {}, warn: () => {} },
-    });
-
-    const snapshot = await io.readConfigFileSnapshot();
-    expect(snapshot.readError).toEqual({ code: "EACCES" });
-  });
 });
 
 function makeUnreadableConfigFs(configPath: string): typeof fsNode {

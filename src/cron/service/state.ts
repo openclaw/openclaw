@@ -6,6 +6,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "../../infra/gateway-scheduler.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
@@ -14,8 +15,8 @@ import type { CronAgentAvailability } from "../agent-availability.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import type { QuarantinedCronConfigJob } from "../store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import type { QuarantinedCronConfigJob } from "../store/types.js";
 import type {
   CronCompletionStatus,
   CronTriggerEvaluationResult,
@@ -40,6 +41,7 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../types.js";
+import type { CronJobsSortBy, CronSortDir } from "./list-page-types.js";
 import type {
   CronNotificationIntent,
   CronNotificationJob,
@@ -117,6 +119,7 @@ export type CronRunDeliveryResult = {
 /** Dependency injection surface for the cron service runtime. */
 export type CronServiceDeps = {
   nowMs?: () => number;
+  scheduler: GatewayScheduler;
   log: Logger;
   storePath: string;
   cronEnabled: boolean;
@@ -139,7 +142,7 @@ export type CronServiceDeps = {
   legacyDefaultAgentId?: string;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[];
-  /** Revalidate ownership through the supplied transaction when a receipt holds it. */
+  /** Revalidate resident policy using the supplied transaction or worker deletion facts. */
   isAgentAvailable?: CronAgentAvailability;
   /** Resolve session store path for a given agent id. */
   resolveSessionStorePath?: (agentId?: string) => string;
@@ -305,10 +308,19 @@ type QueuedCronRunReservation = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** One prepared list, invalidated by committed revisions and service mutations. */
+  listPageSnapshot?: {
+    storeRevision: number;
+    filteredJobs: CronJob[];
+    sortBy: CronJobsSortBy;
+    sortDir: CronSortDir;
+    jobs: CronJob[];
+    snapshotRevision: string;
+  };
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
-  timer: NodeJS.Timeout | null;
+  timer: GatewayScheduledJob | null;
   running: boolean;
   /** Number of timer batches currently executing admitted scheduled work. */
   activeTimerTicks: number;
@@ -345,7 +357,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
   const defaultAgentId =
     deps.defaultAgentId ?? (deps.resolveDefaultAgentId ? undefined : LEGACY_IMPLICIT_AGENT_ID);
   return {
-    deps: { ...deps, defaultAgentId, nowMs: deps.nowMs ?? (() => Date.now()) },
+    deps: { ...deps, defaultAgentId, nowMs: deps.nowMs ?? (() => deps.scheduler.now()) },
     store: null,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,

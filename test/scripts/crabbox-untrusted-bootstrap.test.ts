@@ -94,7 +94,7 @@ esac
     return createHash(algorithm).update(bytes).digest("hex");
   }
   const hashes = {
-    node: archive("node", "node-v24.19.0-linux-x64.tar.xz", "sha256"),
+    node: archive("node", "node-v24.21.0-linux-x64.tar.xz", "sha256"),
     wrapper: archive("wrapper", "pnpm-12.4.2.tgz", "sha512"),
     native: archive("native", "exe.linux-x64-12.4.2.tgz", "sha512"),
   };
@@ -116,9 +116,9 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 if [[ "$url" == */SHASUMS256.txt ]]; then
-  printf '%s  %s\\n' ${JSON.stringify(hashes.node)} node-v24.19.0-linux-x64.tar.xz > "$output"
+  printf '%s  %s\\n' ${JSON.stringify(hashes.node)} node-v24.21.0-linux-x64.tar.xz > "$output"
 else
-  cp ${JSON.stringify(join(origin, "node-v24.19.0-linux-x64.tar.xz"))} "$output"
+  cp ${JSON.stringify(join(origin, "node-v24.21.0-linux-x64.tar.xz"))} "$output"
 fi
 `,
   );
@@ -146,7 +146,7 @@ fi
   // Only the trusted fixture's anchors change; candidate/image state never supplies them.
   script = script
     .replace(productionSpec, spec)
-    .replaceAll("14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647", hashes.node)
+    .replaceAll("fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6", hashes.node)
     .replaceAll(
       "fe96edd145536bc34c0e1cce58b4117d9e86f5138a5e524f66dc7ce3906ac967dcee10ab5978532c177bd323b6cbcf84f8858dde81ccd6cfc9b0840d1a4d72be",
       hashes.native,
@@ -261,7 +261,7 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
       const f = fixture();
       const archive =
         kind === "node" || kind === "wrong-arch"
-          ? "node-v24.19.0-linux-x64.tar.xz"
+          ? "node-v24.21.0-linux-x64.tar.xz"
           : kind === "wrapper"
             ? "pnpm-12.4.2.tgz"
             : "exe.linux-x64-12.4.2.tgz";
@@ -349,7 +349,7 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
   it("refuses an invalid download after rejecting the image archive", () => {
     const f = fixture();
     for (const directory of [f.image, f.origin]) {
-      writeFileSync(join(directory, "node-v24.19.0-linux-x64.tar.xz"), "invalid");
+      writeFileSync(join(directory, "node-v24.21.0-linux-x64.tar.xz"), "invalid");
     }
     const result = f.run();
     expect(result.status).toBe(1);

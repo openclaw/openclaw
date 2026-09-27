@@ -29,7 +29,9 @@ import {
 import {
   assertSqliteSourceReadAllowed,
   withSqliteSourceHandleAsync,
+  withSqliteSourceHandle,
 } from "./sqlite-source-handle.js";
+import { readSqliteSourceContentVersionInProcess } from "./sqlite-source-revision.js";
 import {
   assertStateDatabaseSourceReadContext,
   hasStateDatabaseSourceExclusion,
@@ -38,7 +40,12 @@ import {
 // Keep parent launch orchestration out of the native snapshot child's import graph.
 export async function prepareSqliteReadOnlyLocation(
   pathname: string,
-  options: { preserveSourceArtifacts?: boolean; signal?: AbortSignal } = {},
+  options: {
+    preserveSourceArtifacts?: boolean;
+    signal?: AbortSignal;
+    /** A dedicated reader pins its transaction without borrowing a live writer's connection. */
+    allowLiveOwner?: boolean;
+  } = {},
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const signal = resolveSqliteInspectionSignal(options.signal);
   try {
@@ -56,7 +63,7 @@ export async function prepareSqliteReadOnlyLocation(
       }
     }
     assertSqliteSourceReadAllowed(pathname);
-    if (!options.preserveSourceArtifacts) {
+    if (!options.preserveSourceArtifacts && options.allowLiveOwner !== false) {
       const owned = prepareSqliteSnapshotFromLiveOwner(pathname, signal);
       if (owned) {
         return await owned;
@@ -205,4 +212,18 @@ export async function withSqliteSnapshotSource<T>(
   } finally {
     await prepared?.cleanupAsync();
   }
+}
+
+/** Fresh bytes without opening SQLite or making another durable private copy. */
+export function readSqliteSourceContentVersionSync(pathname: string): string | undefined {
+  if (hasStateDatabaseSourceExclusion(pathname)) {
+    return readSqliteSourceContentVersionInProcess(pathname);
+  }
+  // Do not acquire file exclusion: the Gateway may already be starting. A shared
+  // source lease spans this read-only child's complete synchronous settlement.
+  // The child owns no SQLite connection, snapshots, or authority to publish effects.
+  return withSqliteSourceHandle(
+    pathname,
+    () => runSqliteReadOnlyWorkerSync(pathname, undefined, "content-version") || undefined,
+  );
 }

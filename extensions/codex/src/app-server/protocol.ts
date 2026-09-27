@@ -30,7 +30,6 @@ import type {
   CodexPluginReadParams,
   CodexPluginReadResponse,
   CodexPluginSummary,
-  CodexSkillsListParams,
   CodexSkillsListResponse,
 } from "./protocol-control-plane.js";
 import type { JsonObject, JsonValue } from "./protocol-json.js";
@@ -73,8 +72,8 @@ export type CodexApprovalPolicy =
       };
     }
   | "never";
-type CodexApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
-type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+export type CodexApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
+export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexPersonality = "none" | "friendly" | "pragmatic";
 
 export type CodexAppServerRequestMethod = keyof CodexAppServerRequestResultMap | (string & {});
@@ -648,8 +647,6 @@ export declare namespace v2 {
   export type PluginReadParams = CodexPluginReadParams;
   export type PluginReadResponse = CodexPluginReadResponse;
   export type PluginSummary = CodexPluginSummary;
-  export type SkillsListParams = CodexSkillsListParams;
-  export type SkillsListResponse = CodexSkillsListResponse;
 }
 
 type CodexAppServerRequestParamsOverride = {
@@ -692,7 +689,9 @@ type CodexAppServerRequestParamsOverride = {
 };
 
 type CodexAppServerRequestResultMap = {
-  "thread/backgroundTerminals/list": { data: { itemId: string; processId: string }[] };
+  "thread/backgroundTerminals/list": {
+    data: { itemId: string; processId: string; command: string; cwd: string }[];
+  };
   "thread/backgroundTerminals/terminate": { terminated: boolean };
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;

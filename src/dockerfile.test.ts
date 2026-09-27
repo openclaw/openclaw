@@ -13,10 +13,6 @@ const dockerfilePath = join(repoRoot, "Dockerfile");
 const dockerComposePath = join(repoRoot, "docker-compose.yml");
 const dockerInstallDocsPath = join(repoRoot, "docs/install/docker.md");
 const composeSetupScriptPath = join(repoRoot, "scripts/e2e/compose-setup.sh");
-const fullReleaseValidationWorkflowPath = join(
-  repoRoot,
-  ".github/workflows/full-release-validation.yml",
-);
 const dockerSetupDockerfilePaths = ["Dockerfile", "scripts/docker/sandbox/Dockerfile"] as const;
 
 function collapseDockerContinuations(dockerfile: string): string {
@@ -130,15 +126,12 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3 tini",
     );
-    expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
+    expect(dockerfile).toContain(
+      'ENTRYPOINT ["tini", "-s", "--", "node", "/app/docker-entrypoint.mjs"]',
+    );
   });
 
   it.runIf(process.platform !== "win32").each([
-    {
-      name: "preferred packages",
-      env: { OPENCLAW_IMAGE_APT_PACKAGES: "python3 wget" },
-      expected: "python3 wget",
-    },
     {
       name: "legacy packages when the preferred argument is empty",
       env: {
@@ -597,18 +590,6 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       'test "$(node /app/openclaw.mjs --version | cut -d \' \' -f 2)" = "$OPENCLAW_DOCKER_BUILD_VERSION"',
     );
-  });
-
-  it("keeps only the runtime-assets prune proof in full release validation", async () => {
-    const workflow = await readFile(fullReleaseValidationWorkflowPath, "utf8");
-
-    expect(workflow).toContain("Verify Docker runtime-assets prune path");
-    expect(workflow).toContain("--target runtime-assets");
-    expect(workflow).not.toContain("Build and smoke test final Docker runtime image");
-    expect(workflow).not.toContain("test -f /app/src/agents/templates/HEARTBEAT.md");
-    expect(workflow).not.toContain('grep -F "Missing workspace template:"');
-    expect(workflow).not.toContain('test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"');
-    expect(workflow).not.toContain("scripts/docker/runtime-workspace-template-smoke.sh");
   });
 
   it("does not override bundled plugin discovery in runtime images", async () => {

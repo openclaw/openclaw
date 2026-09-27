@@ -4,12 +4,54 @@ import {
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import type { MediaGenerationExecutionResult } from "./media-generate-background-shared.js";
+import { buildTaskRunDetails } from "./media-tool-shared.js";
 
 export type MediaGenerateToolExecutionResult = MediaGenerationExecutionResult & {
   attachments: AgentGeneratedAttachment[];
   contentText: string;
   details: Record<string, unknown>;
 };
+
+/** Projects generated attachments into the common foreground and completion result contract. */
+export function buildMediaGenerateToolExecutionResult(params: {
+  result: {
+    provider: string;
+    model: string;
+    attempts: readonly { provider: string; model: string; error: string }[];
+    normalization?: MediaGenerationNormalizationMetadataInput;
+    metadata?: Record<string, unknown>;
+    ignoredOverrides?: readonly { key: string; value: string | boolean | number }[];
+  };
+  attachments: AgentGeneratedAttachment[];
+  mediaUrls: string[];
+  lines: string[];
+  taskHandle?: { taskId: string; runId: string } | null;
+  warning?: string;
+  details: Record<string, unknown>;
+}): MediaGenerateToolExecutionResult {
+  const { result, attachments, mediaUrls, warning } = params;
+  const identity = { provider: result.provider, model: result.model, count: attachments.length };
+  const contentText = params.lines.join("\n");
+  return {
+    ...identity,
+    attachments,
+    contentText,
+    wakeResult: contentText,
+    details: {
+      ...identity,
+      media: { mediaUrls, attachments },
+      attachments,
+      paths: mediaUrls,
+      ...buildTaskRunDetails(params.taskHandle),
+      ...params.details,
+      attempts: result.attempts,
+      ...(result.normalization ? { normalization: result.normalization } : {}),
+      metadata: result.metadata,
+      ...(warning ? { warning } : {}),
+      ...(result.ignoredOverrides?.length ? { ignoredOverrides: result.ignoredOverrides } : {}),
+    },
+  };
+}
 
 export function describeMediaGenerationResult(result: {
   provider: string;

@@ -73,46 +73,25 @@ function resolveTranscriptMirrorOwner(
   }
   const sessionKey = first.sessionKey.trim();
   const expectedSessionId = first.expectedSessionId?.trim();
-  if (first.transcriptWriteBlocked) {
-    if (
-      !sessionKey ||
-      owners.some(
-        (owner) =>
-          !owner?.transcriptWriteBlocked ||
-          owner.sessionKey.trim() !== sessionKey ||
-          owner.expectedSessionId?.trim() !== expectedSessionId ||
-          owner.agentId !== first.agentId,
-      )
-    ) {
-      return { kind: "invalid" };
-    }
-    return {
-      kind: "blocked",
-      owner: {
-        sessionKey,
-        ...(expectedSessionId ? { expectedSessionId } : {}),
-        ...(first.agentId ? { agentId: first.agentId } : {}),
-      },
-    };
-  }
   if (
     !sessionKey ||
-    !expectedSessionId ||
+    (!first.transcriptWriteBlocked && !expectedSessionId) ||
     owners.some(
       (owner) =>
+        (first.transcriptWriteBlocked && !owner?.transcriptWriteBlocked) ||
         owner?.sessionKey.trim() !== sessionKey ||
         owner.expectedSessionId?.trim() !== expectedSessionId ||
         owner.agentId !== first.agentId ||
-        owner.transcriptWriteBlocked === true,
+        (!first.transcriptWriteBlocked && owner.transcriptWriteBlocked === true),
     )
   ) {
     return { kind: "invalid" };
   }
   return {
-    kind: "owner",
+    kind: first.transcriptWriteBlocked ? "blocked" : "owner",
     owner: {
       sessionKey,
-      expectedSessionId,
+      ...(expectedSessionId ? { expectedSessionId } : {}),
       ...(first.agentId ? { agentId: first.agentId } : {}),
     },
   };

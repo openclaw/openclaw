@@ -6,7 +6,6 @@ import {
   buildFullReleaseCandidateRequest,
   candidateRequestSha256,
   canonicalFullReleaseCandidateRequestJson,
-  fullReleaseCandidateArtifactName,
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
 } from "../../scripts/full-release-candidate-contract.mjs";
@@ -64,13 +63,6 @@ function replaceBindingRequest(
 }
 
 describe("full release candidate contract", () => {
-  it("uses the canonical request digest directly in the evidence artifact name", () => {
-    const requestSha256 = "a".repeat(64);
-    expect(fullReleaseCandidateArtifactName(requestSha256)).toBe(
-      `full-release-candidate-v2-${requestSha256}`,
-    );
-  });
-
   it("canonicalizes equivalent request inputs and expands effective policy", () => {
     const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
     const reordered = Object.fromEntries(
@@ -199,14 +191,6 @@ describe("full release candidate contract", () => {
         contractVersions: { ...request.contractVersions, sharedImage: 2 },
       }),
     ).toThrow("contract versions are invalid");
-  });
-
-  it("validates one canonical binding across the request, plan, producer, and artifacts", () => {
-    const value = manifest();
-    const binding = fullReleaseCandidateBindingFixture();
-    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
-    expect(binding.request).toEqual(value.request);
-    expect(binding.manifestSha256).toBe(canonicalTestSha256(value));
   });
 
   it("runs request, manifest, and binding commands through their subprocess boundary", () => {

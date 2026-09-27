@@ -8,7 +8,6 @@ import { pipeline } from "node:stream/promises";
 import zlib from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { isVisibleSubagentResultEventForRun } from "../../agents/subagents/announce/subagent-announce-result.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { assertOpenClawAgentCurrentRuntimeSchema } from "../../state/openclaw-agent-db-schema-helpers.js";
 import {
@@ -683,9 +682,9 @@ describe("SQLite transcript archive reads", () => {
         entry: { sessionId, updatedAt: 3 },
         events: rows,
       });
-      await expect(
-        findTranscriptEvent(scope, (event) => isVisibleSubagentResultEventForRun(event, runId)),
-      ).resolves.toEqual({ event: answer });
+      await expect(findTranscriptEvent(scope, { kind: "visible-final", runId })).resolves.toEqual({
+        event: answer,
+      });
 
       const deletion = await deleteSessionEntryLifecycle({
         ...scope,

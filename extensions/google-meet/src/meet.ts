@@ -7,12 +7,9 @@ import {
   endGoogleMeetActiveConference,
   fetchGoogleMeetSpace,
   fetchLatestGoogleMeetConferenceRecord,
-  listGoogleMeetParticipants,
+  listGoogleMeetConferenceResources,
   listGoogleMeetParticipantSessions,
-  listGoogleMeetRecordings,
-  listGoogleMeetSmartNotes,
   listGoogleMeetTranscriptEntries,
-  listGoogleMeetTranscripts,
   resolveConferenceRecordQuery,
   type GoogleMeetAccessType,
   type GoogleMeetArtifactsResult,
@@ -48,10 +45,6 @@ function getParticipantDisplayName(participant: GoogleMeetParticipant): string |
     participant.anonymousUser?.displayName ??
     participant.phoneUser?.displayName
   );
-}
-
-function getParticipantUser(participant: GoogleMeetParticipant): string | undefined {
-  return participant.signedinUser?.user;
 }
 
 function getDocsDestinationDocumentId(
@@ -248,22 +241,22 @@ export async function fetchGoogleMeetArtifacts(params: {
   const artifacts = await Promise.all(
     resolved.conferenceRecords.map(async (conferenceRecord) => {
       const [participants, recordings, transcripts, smartNotesResult] = await Promise.all([
-        listGoogleMeetParticipants({
+        listGoogleMeetConferenceResources("participants", {
           accessToken: params.accessToken,
           conferenceRecord: conferenceRecord.name,
           pageSize: params.pageSize,
         }),
-        listGoogleMeetRecordings({
+        listGoogleMeetConferenceResources("recordings", {
           accessToken: params.accessToken,
           conferenceRecord: conferenceRecord.name,
           pageSize: params.pageSize,
         }),
-        listGoogleMeetTranscripts({
+        listGoogleMeetConferenceResources("transcripts", {
           accessToken: params.accessToken,
           conferenceRecord: conferenceRecord.name,
           pageSize: params.pageSize,
         }),
-        listGoogleMeetSmartNotes({
+        listGoogleMeetConferenceResources("smartNotes", {
           accessToken: params.accessToken,
           conferenceRecord: conferenceRecord.name,
           pageSize: params.pageSize,
@@ -353,7 +346,7 @@ export async function fetchGoogleMeetAttendance(params: {
   const resolved = await resolveConferenceRecordQuery(params);
   const nestedRows = await Promise.all(
     resolved.conferenceRecords.map(async (conferenceRecord) => {
-      const participants = await listGoogleMeetParticipants({
+      const participants = await listGoogleMeetConferenceResources("participants", {
         accessToken: params.accessToken,
         conferenceRecord: conferenceRecord.name,
         pageSize: params.pageSize,
@@ -363,7 +356,7 @@ export async function fetchGoogleMeetAttendance(params: {
           conferenceRecord: conferenceRecord.name,
           participant: participant.name,
           displayName: getParticipantDisplayName(participant),
-          user: getParticipantUser(participant),
+          user: participant.signedinUser?.user,
           earliestStartTime: participant.earliestStartTime,
           latestEndTime: participant.latestEndTime,
           sessions: await listGoogleMeetParticipantSessions({

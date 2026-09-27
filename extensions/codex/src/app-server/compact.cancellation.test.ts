@@ -10,13 +10,17 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
-import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
 import {
+  compactCodexSessionWithTestHost as maybeCompactCodexAppServerSessionImpl,
+  createFakeCodexCompactionClient,
   maybeCompactCodexAppServerSession,
   resetCodexAppServerClientFactoryForTest,
   writeCompactionTestBinding,
   writeSupervisedTestBinding,
 } from "./compact.test-support.js";
+import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
   createCodexTestBindingStore,
@@ -218,6 +222,76 @@ describe("maybeCompactCodexAppServerSession", () => {
     },
   );
 
+  it("never detaches an unconfirmed remote supervised thread", async () => {
+    const fake = createFakeCodexCompactionClient(tempDir, {
+      autoCompleteCompaction: false,
+      rejectInterrupt: true,
+    });
+    fake.closeAndWait.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
+    const pluginConfig = {
+      supervision: { enabled: true },
+      appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:45001" },
+    };
+    const sessionFile = await writeSupervisedTestBinding(tempDir, {
+      threadId: "thread-stuck-supervision",
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+        resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig }),
+      ),
+    });
+
+    const retirementOutcome = createDeferred<"retained">();
+    using _ = vi.spyOn(embeddedAgentLog, "error").mockImplementation((message) => {
+      if (message === "failed to retire unconfirmed codex app-server compaction") {
+        retirementOutcome.resolve("retained");
+      }
+    });
+    const pendingResult = maybeCompactCodexAppServerSession(
+      {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "manual",
+      },
+      {
+        clientFactory: async () => fake.client,
+        pluginConfig,
+        nativeCompletionTimeoutMs: 10,
+        nativeInterruptGraceMs: 10,
+      },
+    );
+
+    try {
+      const outcome = await Promise.race([
+        pendingResult.then(() => "settled" as const),
+        retirementOutcome.promise,
+      ]);
+      expect(outcome).toBe("retained");
+      expect(fake.closeAndWait).toHaveBeenCalledOnce();
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+        threadId: "thread-stuck-supervision",
+        connectionScope: "supervision",
+      });
+    } finally {
+      fake.emit({
+        method: "turn/started",
+        params: {
+          threadId: "thread-stuck-supervision",
+          turn: { id: "supervised-terminal", status: "inProgress" },
+        },
+      });
+      fake.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-stuck-supervision",
+          turn: { id: "supervised-terminal", status: "interrupted", items: [] },
+        },
+      });
+      await pendingResult.finally(() => fake.client.close());
+    }
+    await expect(pendingResult).resolves.toMatchObject({ ok: false, compacted: false });
+  });
+
   it("cancels compaction while reading a retained supervision thread", async () => {
     const sessionFile = await writeSupervisedTestBinding(tempDir, {
       contextEngine: {
@@ -346,6 +420,12 @@ describe("maybeCompactCodexAppServerSession", () => {
           turn: { id: "completed-turn", status: "inProgress" },
         },
       });
+      const unrelatedCapture = codexNativeSubagentMonitorRuntime.captureModelSource({
+        client: harness.client,
+        threadId: "thread-1",
+        turnId: "unrelated-turn",
+        signal: abortController.signal,
+      });
       for (const method of ["item/started", "item/completed"]) {
         harness.send({
           method,
@@ -355,6 +435,21 @@ describe("maybeCompactCodexAppServerSession", () => {
             item: { id: "completed-item", type: "contextCompaction" },
           },
         });
+        if (method === "item/started") {
+          const capture = await codexNativeSubagentMonitorRuntime.captureModelSource({
+            client: harness.client,
+            threadId: "thread-1",
+            turnId: "completed-turn",
+            signal: abortController.signal,
+          });
+          try {
+            expect(capture).toBeDefined();
+            capture?.assertCurrent();
+            await expect(unrelatedCapture).resolves.toBeUndefined();
+          } finally {
+            capture?.release();
+          }
+        }
       }
       harness.send({
         method: "turn/completed",
@@ -367,6 +462,13 @@ describe("maybeCompactCodexAppServerSession", () => {
       harness.send({ id: requestId, result: {} });
 
       await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
+      await expect(
+        codexNativeSubagentMonitorRuntime.captureModelSource({
+          client: harness.client,
+          threadId: "thread-1",
+          turnId: "completed-turn",
+        }),
+      ).resolves.toBeUndefined();
       expect(closeAndWait).not.toHaveBeenCalled();
       expect(harness.client.getCloseError()).toBeUndefined();
       await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({

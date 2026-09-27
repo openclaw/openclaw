@@ -1,6 +1,7 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { replaceComposerPopoverAnchor } from "../chat/components/chat-composer-dom.ts";
 import { renderDebugOverlayFrame } from "./debug-overlay-frame.ts";
 
 const key = "openclaw.debug-overlay.position";
@@ -139,16 +140,45 @@ describe("System busyness frame layout", () => {
   );
 
   it("leaves controls and secondary clicks alone and cleans up a removed frame", async () => {
-    const panel = await mount();
-    pointer(panel.querySelector("button")!, "pointerdown");
-    pointer(panel.querySelector("header")!, "pointerdown", { button: 2 });
-    expect(capturePointer).not.toHaveBeenCalled();
-    pointer(panel.querySelector("header")!, "pointerdown");
-    render(nothing, container);
-    pointer(panel, "pointermove", { clientX: 200 });
-    window.dispatchEvent(new Event("resize"));
-    expect(storage.getItem(key)).toBeNull();
-    expect(frames.size).toBe(0);
+    const composer = document.body.appendChild(document.createElement("div"));
+    let composerTop = 500;
+    composer.getBoundingClientRect = () => new DOMRect(0, composerTop, 100, 40);
+    const anchor = replaceComposerPopoverAnchor(null, composer);
+    const initialComposerHeight = composer.style.getPropertyValue(
+      "--chat-composer-popover-max-height",
+    );
+    try {
+      const panel = await mount();
+      pointer(panel.querySelector("button")!, "pointerdown");
+      pointer(panel.querySelector("header")!, "pointerdown", { button: 2 });
+      expect(capturePointer).not.toHaveBeenCalled();
+      pointer(panel.querySelector("header")!, "pointerdown");
+      await mount("expanded", false);
+      expect(frames.size).toBe(1);
+      render(nothing, container);
+      expect(frames.size).toBe(0);
+      panel.style.left = "320px";
+      panel.style.top = "240px";
+      const detachedStyle = panel.style.cssText;
+      pointer(panel, "pointermove", { clientX: 200 });
+      composerTop = 300;
+      window.dispatchEvent(new Event("resize"));
+      expect(storage.getItem(key)).toBeNull();
+      expect(panel.style.cssText).toBe(detachedStyle);
+      flushFrame();
+      expect(panel.style.cssText).toBe(detachedStyle);
+    } finally {
+      // Other resize owners must settle while this fixture still owns the frame queue.
+      try {
+        flushFrame();
+      } finally {
+        replaceComposerPopoverAnchor(anchor);
+        composer.remove();
+      }
+    }
+    expect(composer.style.getPropertyValue("--chat-composer-popover-max-height")).not.toBe(
+      initialComposerHeight,
+    );
   });
 
   it("keeps dragging usable when storage fails and rejects malformed stored coordinates", async () => {

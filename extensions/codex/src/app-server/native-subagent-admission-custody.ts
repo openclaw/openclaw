@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   MAX_PENDING_CHILD_ADMISSION_EVIDENCE,
+  admitNativeChildModelExecution,
   consumeNativeChildModelAdmission,
   retainNativeModelSource,
   retainNativeModelExecution,
@@ -74,6 +75,20 @@ export class CodexNativeSubagentAdmissionCustody {
         setDetachedTaskDeliveryStatusByRunId: this.followAssignmentTransition(
           runtime.setDetachedTaskDeliveryStatusByRunId.bind(runtime),
         ),
+        ...(runtime.finalizeTaskRunByRunIdAsync
+          ? {
+              finalizeTaskRunByRunIdAsync: this.followAssignmentTransitionAsync(
+                runtime.finalizeTaskRunByRunIdAsync.bind(runtime),
+              ),
+            }
+          : {}),
+        ...(runtime.setDetachedTaskDeliveryStatusByRunIdAsync
+          ? {
+              setDetachedTaskDeliveryStatusByRunIdAsync: this.followAssignmentTransitionAsync(
+                runtime.setDetachedTaskDeliveryStatusByRunIdAsync.bind(runtime),
+              ),
+            }
+          : {}),
       };
     }
     // Cached parents retain their original adapter; a new registration must not
@@ -98,37 +113,44 @@ export class CodexNativeSubagentAdmissionCustody {
   ): (params: T) => AgentHarnessTaskRecord[] {
     return (params) => {
       const records = transition(params);
-      const previous = params.expectedTask;
-      const committed = records.length === 1 ? records[0] : undefined;
-      if (
-        !previous ||
-        !committed ||
-        committed.createdAt >= previous.createdAt ||
-        !matchesAgentHarnessTaskAssignment(
-          { ...committed, createdAt: previous.createdAt },
-          previous,
-        )
-      ) {
-        return records;
-      }
-      const child = this.dependencies.childState(previous.runId);
-      const mirror = child && this.dependencies.parentState(child.parentThreadId)?.mirror;
-      if (
-        !child?.expectedTask ||
-        !matchesAgentHarnessTaskAssignment(child.expectedTask, previous)
-      ) {
-        return records;
-      }
-      // An exact commit can lower the lifecycle floor. Advance from its own returned
-      // record only; a publication-time replacement still fails the next exact check.
-      const next = captureAgentHarnessTaskAssignment(committed);
-      if (mirror?.advanceTaskAssignment(previous, next)) {
-        child.expectedTask = next;
-        child.emitTaskEvent = undefined;
-        this.bindTaskEventSink(child, next);
-      }
-      return records;
+      return this.advanceAssignmentTransition(records, params.expectedTask);
     };
+  }
+
+  private followAssignmentTransitionAsync<T extends { expectedTask?: AgentHarnessTaskAssignment }>(
+    transition: (params: T) => Promise<AgentHarnessTaskRecord[]>,
+  ): (params: T) => Promise<AgentHarnessTaskRecord[]> {
+    return async (params) =>
+      this.advanceAssignmentTransition(await transition(params), params.expectedTask);
+  }
+
+  private advanceAssignmentTransition(
+    records: AgentHarnessTaskRecord[],
+    previous: AgentHarnessTaskAssignment | undefined,
+  ): AgentHarnessTaskRecord[] {
+    const committed = records.length === 1 ? records[0] : undefined;
+    if (
+      !previous ||
+      !committed ||
+      committed.createdAt >= previous.createdAt ||
+      !matchesAgentHarnessTaskAssignment({ ...committed, createdAt: previous.createdAt }, previous)
+    ) {
+      return records;
+    }
+    const child = this.dependencies.childState(previous.runId);
+    const mirror = child && this.dependencies.parentState(child.parentThreadId)?.mirror;
+    if (!child?.expectedTask || !matchesAgentHarnessTaskAssignment(child.expectedTask, previous)) {
+      return records;
+    }
+    // An exact commit can lower the lifecycle floor. Advance from its own returned
+    // record only; a publication-time replacement still fails the next exact check.
+    const next = captureAgentHarnessTaskAssignment(committed);
+    if (mirror?.advanceTaskAssignment(previous, next)) {
+      child.expectedTask = next;
+      child.emitTaskEvent = undefined;
+      this.bindTaskEventSink(child, next);
+    }
+    return records;
   }
 
   get entries(): ReadonlyMap<string, NativeChildAdmissionEvidence[]> {
@@ -332,16 +354,11 @@ export class CodexNativeSubagentAdmissionCustody {
     if (!owner) {
       this.buffer(turnIdInput, { ...evidence, kind: "spawn" });
     } else if (childState) {
-      const known = this.dependencies.knownChild(childState.childThreadId);
-      if (known) {
-        known.configurationQualification = owner.configurationQualification;
-      }
-      childState.modelExecution ??= retainNativeModelExecution(
+      admitNativeChildModelExecution(
+        childState,
         owner,
-        childState.nativeTurnId,
-        childState.childThreadId,
+        this.dependencies.knownChild(childState.childThreadId),
       );
-      owner.onDirectChildAccepted?.();
     }
     return childState;
   }

@@ -182,6 +182,13 @@ export function createCollectorLaunchCallbacks(params: {
         }
         await claim;
       }
+      for (
+        let publication = registrationScope?.waitForRetirementPublication();
+        publication;
+        publication = registrationScope?.waitForRetirementPublication()
+      ) {
+        await publication;
+      }
       const launchError = summarizeSpawnError(error);
       const settleFailure = async () => {
         if (registrationScope) {

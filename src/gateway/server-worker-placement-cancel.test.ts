@@ -11,6 +11,7 @@ import {
 import { onAgentEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
@@ -129,6 +130,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
     try {
       await replaceSessionEntry(target, entry);
       subscriptions = startGatewayEventSubscriptions({
+        scheduler: createTestGatewayScheduler(),
         signal: new AbortController().signal,
         log,
         broadcast: context.broadcast,
@@ -151,6 +153,9 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         throw new Error("active admission missing");
       }
       const owned = active.value;
+      if (outcome !== "setup-failed-write") {
+        expect(owned.activeRunAbort.markExecutionStarted()).toBe(true);
+      }
       await replaceSessionEntry(target, {
         ...entry,
         status: "running",

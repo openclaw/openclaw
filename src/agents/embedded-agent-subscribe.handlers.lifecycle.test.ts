@@ -531,329 +531,115 @@ describe("handleAgentEnd", () => {
     expect(ctx.log.debug).toHaveBeenCalledWith("embedded run agent end: runId=run-1 isError=false");
   });
 
-  it("surfaces replay-invalid paused lifecycle end state when present", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
-    ctx.state.livenessState = "paused";
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
+  it.each<{
+    name: string;
+    stopReason?: string;
+    content?: unknown[];
+    state: Partial<EmbeddedAgentSubscribeContext["state"]>;
+    params?: Partial<EmbeddedAgentSubscribeContext["params"]>;
+    expected: Record<string, unknown>;
+  }>([
+    {
+      name: "surfaces replay-invalid paused lifecycle end state when present",
+      state: {
+        replayState: { replayInvalid: true, hadPotentialSideEffects: false },
         livenessState: "paused",
-        replayInvalid: true,
       },
-    });
-  });
-
-  it("derives abandoned lifecycle end state when replay-invalid work finished without a reply", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
-    ctx.state.livenessState = "working";
-    ctx.state.assistantTexts = [];
-    ctx.state.messagingToolSentTexts = [];
-    ctx.state.messagingToolSentMediaUrls = [];
-    ctx.state.successfulCronAdds = 0;
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        livenessState: "abandoned",
-        replayInvalid: true,
+      expected: { livenessState: "paused", replayInvalid: true },
+    },
+    {
+      name: "derives abandoned lifecycle end state when replay-invalid work finished without a reply",
+      state: {
+        replayState: { replayInvalid: true, hadPotentialSideEffects: false },
+        assistantTexts: [],
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        successfulCronAdds: 0,
       },
-    });
-  });
-
-  it("marks incomplete tool-use lifecycle end state before runner finalization", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "toolUse",
-        content: [],
+      expected: { livenessState: "abandoned", replayInvalid: true },
+    },
+    {
+      name: "marks tool-use terminal with pre-tool text as abandoned (#76477)",
+      stopReason: "toolUse",
+      content: [
+        { type: "text", text: "Initial analysis..." },
+        { type: "tool_use", id: "tool_1", name: "read", input: { path: "src/index.ts" } },
+      ],
+      state: { assistantTexts: ["Initial analysis..."] },
+      expected: { livenessState: "abandoned", replayInvalid: true },
+    },
+    {
+      name: "keeps tool-use terminal incomplete when tool media is pending",
+      stopReason: "toolUse",
+      state: { pendingToolMediaUrls: ["/tmp/render.png"] },
+      expected: { livenessState: "abandoned", replayInvalid: true },
+    },
+    {
+      name: "keeps token-limited terminal text replayable before runner finalization",
+      stopReason: "length",
+      content: [{ type: "text", text: "Partial answer" }],
+      state: { assistantTexts: ["Partial answer"] },
+      expected: { livenessState: "working" },
+    },
+    {
+      name: "keeps token-limited text replayable when it was never streamed",
+      stopReason: "length",
+      content: [{ type: "text", text: "Partial answer" }],
+      state: { assistantTexts: [] },
+      expected: { livenessState: "working" },
+    },
+    {
+      name: "marks a token-limited turn with nothing to deliver as abandoned",
+      stopReason: "length",
+      state: { assistantTexts: [] },
+      expected: { livenessState: "abandoned", replayInvalid: true },
+    },
+    {
+      name: "preserves token-limited deferred media before terminal delivery",
+      stopReason: "length",
+      state: { deferredBlockReplies: [{ mediaUrls: ["/tmp/render.png"] }] },
+      expected: { livenessState: "working" },
+    },
+    {
+      name: "preserves token-limited message-tool-only delivery before runner finalization",
+      stopReason: "length",
+      state: { messageToolOnlySourceReplyDelivered: true },
+      params: { sourceReplyDeliveryMode: "message_tool_only" },
+      expected: { livenessState: "working" },
+    },
+    {
+      name: "keeps accumulated deterministic side effects from being marked abandoned",
+      state: {
+        replayState: { replayInvalid: true, hadPotentialSideEffects: false },
+        assistantTexts: [],
+        hadDeterministicSideEffect: true,
       },
-      { onAgentEvent },
-    );
-    ctx.state.livenessState = "working";
-    ctx.state.assistantTexts = [];
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "toolUse",
-        livenessState: "abandoned",
-        replayInvalid: true,
-      },
-    });
-  });
-
-  it("marks tool-use terminal with pre-tool text as abandoned (#76477)", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "toolUse",
-        content: [
-          { type: "text", text: "Initial analysis..." },
-          { type: "tool_use", id: "tool_1", name: "read", input: { path: "src/index.ts" } },
+      expected: { livenessState: "working", replayInvalid: true },
+    },
+    {
+      name: "keeps accepted session spawns from being marked abandoned",
+      state: {
+        replayState: { replayInvalid: true, hadPotentialSideEffects: false },
+        assistantTexts: [],
+        acceptedSessionSpawns: [
+          { runId: "run-child", childSessionKey: "agent:claude:subagent:child" },
         ],
       },
-      { onAgentEvent },
-    );
-    ctx.state.livenessState = "working";
-    ctx.state.assistantTexts = ["Initial analysis..."];
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "toolUse",
-        livenessState: "abandoned",
-        replayInvalid: true,
-      },
-    });
-  });
-
-  it("keeps tool-use terminal incomplete when tool media is pending", async () => {
+      expected: { livenessState: "working", replayInvalid: true },
+    },
+  ])("$name", async ({ stopReason, content = [], state, params, expected }) => {
     const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "toolUse",
-        content: [],
-      },
-      { onAgentEvent },
-    );
-    ctx.state.livenessState = "working";
-    ctx.state.pendingToolMediaUrls = ["/tmp/render.png"];
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "toolUse",
-        livenessState: "abandoned",
-        replayInvalid: true,
-      },
+    const ctx = createContext(stopReason ? { role: "assistant", stopReason, content } : undefined, {
+      onAgentEvent,
     });
-  });
-
-  it("keeps token-limited terminal text replayable before runner finalization", async () => {
-    // The partial answer is delivered, so the turn must not be abandoned or
-    // marked replay-invalid — that is what lets the user ask to continue it
-    // instead of restarting the work.
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "length",
-        content: [{ type: "text", text: "Partial answer" }],
-      },
-      { onAgentEvent },
-    );
-    ctx.state.livenessState = "working";
-    ctx.state.assistantTexts = ["Partial answer"];
+    Object.assign(ctx.state, { livenessState: "working" }, state);
+    Object.assign(ctx.params, params);
 
     await handleAgentEnd(ctx);
 
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "length",
-        livenessState: "working",
-      },
-    });
-  });
-
-  it("keeps token-limited text replayable when it was never streamed", async () => {
-    // Non-streaming routes can end the turn with empty streamed assistant texts
-    // while the completed assistant message still carries the visible answer.
-    // Payload building falls back to that message, so the reply is delivered and
-    // classification must not call the turn abandoned.
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "length",
-        content: [{ type: "text", text: "Partial answer" }],
-      },
-      { onAgentEvent },
-    );
-    ctx.state.livenessState = "working";
-    ctx.state.assistantTexts = [];
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "length",
-        livenessState: "working",
-      },
-    });
-  });
-
-  it("marks a token-limited turn with nothing to deliver as abandoned", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "length",
-        content: [],
-      },
-      { onAgentEvent },
-    );
-    ctx.state.livenessState = "working";
-    ctx.state.assistantTexts = [];
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "length",
-        livenessState: "abandoned",
-        replayInvalid: true,
-      },
-    });
-  });
-
-  it("preserves token-limited terminal tool media before runner finalization", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "length",
-        content: [{ type: "text", text: "Partial answer" }],
-      },
-      { onAgentEvent },
-    );
-    ctx.state.livenessState = "working";
-    ctx.state.assistantTexts = ["Partial answer"];
-    ctx.state.pendingToolMediaUrls = ["/tmp/render.png"];
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "length",
-        livenessState: "working",
-      },
-    });
-  });
-
-  it("preserves token-limited deferred media before terminal delivery", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "length",
-        content: [],
-      },
-      { onAgentEvent },
-    );
-    ctx.state.livenessState = "working";
-    ctx.state.deferredBlockReplies = [{ mediaUrls: ["/tmp/render.png"] }];
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "length",
-        livenessState: "working",
-      },
-    });
-  });
-
-  it("preserves token-limited message-tool-only delivery before runner finalization", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "length",
-        content: [],
-      },
-      { onAgentEvent },
-    );
-    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
-    ctx.state.livenessState = "working";
-    ctx.state.messageToolOnlySourceReplyDelivered = true;
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "length",
-        livenessState: "working",
-      },
-    });
-  });
-
-  it("keeps accumulated deterministic side effects from being marked abandoned", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
-    ctx.state.livenessState = "working";
-    ctx.state.assistantTexts = [];
-    ctx.state.hadDeterministicSideEffect = true;
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        livenessState: "working",
-        replayInvalid: true,
-      },
-    });
-  });
-
-  it("keeps accepted session spawns from being marked abandoned", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
-    ctx.state.livenessState = "working";
-    ctx.state.assistantTexts = [];
-    ctx.state.acceptedSessionSpawns = [
-      {
-        runId: "run-child",
-        childSessionKey: "agent:claude:subagent:child",
-      },
-    ];
-
-    await handleAgentEnd(ctx);
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        livenessState: "working",
-        replayInvalid: true,
-      },
+      data: { phase: "end", ...(stopReason ? { stopReason } : {}), ...expected },
     });
   });
 
@@ -1194,4 +980,3 @@ describe("handleAgentEnd", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

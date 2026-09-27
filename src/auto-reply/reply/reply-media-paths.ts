@@ -1,5 +1,6 @@
 // Resolves media paths from reply payloads into runtime attachment metadata.
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
@@ -21,13 +22,13 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { SandboxWorkspaceAccess } from "../../agents/sandbox/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { sanitizeUntrustedFileName } from "../../infra/fs-safe-advanced.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
+import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import {
@@ -298,7 +299,11 @@ export function createReplyMediaSourcePreparer(params: {
   };
 
   const normalizeMediaSource = async (raw: string): Promise<PreparedReplyMediaSource> => {
-    const source = raw.trim();
+    const trimmed = raw.trim();
+    // Canonical references from history must pass the same policy as their stored file.
+    const source = /^media:\/\//i.test(trimmed)
+      ? ((await resolveInboundMediaReference(trimmed))?.physicalPath ?? trimmed)
+      : trimmed;
     const mapping = params.workspaceMediaRoot
       ? resolveSandboxPathMapping(
           [{ hostRoot: params.workspaceDir, containerRoot: params.workspaceMediaRoot }],

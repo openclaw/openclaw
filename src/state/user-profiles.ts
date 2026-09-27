@@ -41,7 +41,6 @@ import {
   selectResolvedUserProfileMetadataById,
   setUserProfileEmailBinding,
   toUserProfile,
-  type UserProfile,
   userProfileAvatarPresence,
   userProfilesDb,
 } from "./user-profiles-internal.js";
@@ -63,10 +62,11 @@ import {
 } from "./user-profiles-tailscale-login.js";
 import {
   MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
+  type UserProfile,
   type UserProfileAvatarMime,
 } from "./user-profiles.types.js";
 
-export { formatUserProfileAvatarEtag, getProfileAvatar } from "./user-profiles-internal.js";
+export { formatUserProfileAvatarEtag } from "./user-profiles-internal.js";
 export {
   getUserProfileDisplay,
   readUserProfileAliases,
@@ -316,7 +316,6 @@ function ensureProfileForProviderIdentity(params: {
         }),
       );
       options.mutation?.authority(row.id);
-      publishUserProfileAuthorityChange(db, row.id);
       options.mutation?.publish(row.id);
       publishUserProfilesChange(db, row.id);
       return toUserProfile(row);

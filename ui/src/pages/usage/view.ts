@@ -1,4 +1,3 @@
-// Control UI view renders usage screen content.
 import { html, nothing } from "lit";
 import {
   addCostUsageTotals,
@@ -15,6 +14,7 @@ import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import { downloadTextFile } from "../../lib/download.ts";
 import "../../styles/usage.css";
+import { resolveUsageOverviewState } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
 import {
@@ -106,17 +106,7 @@ export function renderUsage(props: UsageProps) {
   const displayActions = callbacks.display;
   const detailActions = callbacks.details;
 
-  // Cold caches can list sessions before any usage has been read. Zero-filled
-  // aggregate objects are not evidence of zero usage while that read is pending.
-  const awaitingUsage =
-    data.cacheRefresh !== "complete" &&
-    !data.totals?.totalTokens &&
-    !data.totals?.totalCost &&
-    !data.sessions.some((session) => session.usage?.totalTokens || session.usage?.totalCost) &&
-    !data.costDaily.some((day) => day.totalTokens || day.totalCost);
-  const hasOverviewData =
-    !awaitingUsage && Boolean(data.totals || data.sessions.length || data.costDaily.length);
-  const loadingOverview = data.loading || (awaitingUsage && data.cacheRefresh === "retrying");
+  const { hasOverviewData, loadingOverview } = resolveUsageOverviewState(data);
   const isTokenMode = display.chartMode === "tokens";
   const hasQuery = filters.query.trim().length > 0;
   const hasDraftQuery = filters.queryDraft.trim().length > 0;
@@ -645,12 +635,12 @@ export function renderUsage(props: UsageProps) {
               data.cacheRefresh !== "complete"
                 ? html`
                     <div
-                      class="callout ${data.cacheRefresh === "exhausted" ? "warning" : ""} usage-callout usage-cache-warning"
+                      class="callout ${data.cacheRefresh === "failed" ? "warning" : ""} usage-callout usage-cache-warning"
                       role="status"
                       aria-live="polite"
                     >
                       ${t(
-                        data.cacheRefresh === "exhausted"
+                        data.cacheRefresh === "failed"
                           ? "usage.cacheStatus.paused"
                           : "usage.cacheStatus.warning",
                       )}
@@ -746,7 +736,7 @@ export function renderUsage(props: UsageProps) {
                         displayActions.onSessionSortChange,
                         displayActions.onSessionSortDirChange,
                         displayActions.onSessionsTabChange,
-                        display.visibleColumns,
+                        undefined,
                         totalSessions,
                         filterActions.onClearSessions,
                       )}
@@ -756,34 +746,10 @@ export function renderUsage(props: UsageProps) {
                         ? html`<div class="usage-grid-column">
                             ${renderSessionDetailPanel(
                               primarySelectedEntry,
-                              detail.timeSeries,
-                              detail.timeSeriesLoading,
-                              detail.timeSeriesStatus,
-                              detail.timeSeriesMode,
-                              detailActions.onTimeSeriesModeChange,
-                              detail.timeSeriesBreakdownMode,
-                              detailActions.onTimeSeriesBreakdownChange,
-                              detail.timeSeriesCursorStart,
-                              detail.timeSeriesCursorEnd,
-                              detailActions.onTimeSeriesCursorRangeChange,
-                              filters.startDate,
-                              filters.endDate,
-                              filters.selectedDays,
-                              filters.timeZone,
-                              detail.sessionLogs,
-                              detail.sessionLogsLoading,
-                              detail.sessionLogsStatus,
-                              detail.sessionLogsExpanded,
-                              detailActions.onToggleSessionLogsExpanded,
-                              detail.logFilters,
-                              detailActions.onLogFilterRolesChange,
-                              detailActions.onLogFilterToolsChange,
-                              detailActions.onLogFilterHasToolsChange,
-                              detailActions.onLogFilterQueryChange,
-                              detailActions.onLogFilterClear,
-                              detail.context,
+                              detail,
+                              detailActions,
+                              filters,
                               display.contextExpanded,
-                              detailActions.onToggleContextExpanded,
                               filterActions.onClearSessions,
                             )}
                           </div>`

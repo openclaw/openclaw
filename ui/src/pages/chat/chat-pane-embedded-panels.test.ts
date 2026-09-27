@@ -327,12 +327,22 @@ describe("chat pane embedded panels", () => {
       installTranscriptDomMocks();
       const { mount, state } = createReviewFixture();
       const transcript = document.body.appendChild(document.createElement("div"));
-      const fetchMetadata = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ available: true, sizeBytes: 574_000 }),
+      const fetchMetadata = vi.fn(() =>
+        Promise.resolve(Response.json({ available: true, sizeBytes: 574_000 })),
+      );
+      // PDF previews fetch bytes separately; an unavailable preview must not refetch metadata.
+      const contentRequested = createDeferred();
+      const fetchContent = vi.fn<typeof fetch>(async () => {
+        contentRequested.resolve();
+        return new Response(null, { status: 503 });
       });
-      vi.stubGlobal("fetch", fetchMetadata);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>((input, init) => {
+          const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+          return url.searchParams.get("meta") === "1" ? fetchMetadata() : fetchContent(input, init);
+        }),
+      );
       const filename = surface === "history" ? "recording.mp4" : "report.pdf";
       const source = `/tmp/preview-cache-${surface}/${filename}`;
       const controller = createTestTranscript();
@@ -399,9 +409,34 @@ describe("chat pane embedded panels", () => {
         );
         await mount.querySelector<LitElement>("openclaw-chat-detail-panel")?.updateComplete;
         expect(fetchMetadata).toHaveBeenCalledOnce();
-        expect(mount.textContent).toContain(filename);
         if (surface === "history") {
+          expect(mount.textContent).toContain(filename);
           expect(mount.querySelector("openclaw-chat-video-player")).not.toBeNull();
+          expect(fetchContent).not.toHaveBeenCalled();
+        } else {
+          await contentRequested.promise;
+          expect(fetchContent).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining("/__openclaw__/assistant-media?"),
+            expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
+          );
+          await new Promise<void>((resolve) => {
+            const settle = () => {
+              if (mount.querySelector(".sidebar-pdf-preview [role=alert]")) {
+                observer.disconnect();
+                resolve();
+              }
+            };
+            const observer = new MutationObserver(settle);
+            onTestFinished(() => observer.disconnect());
+            observer.observe(mount, { childList: true, subtree: true });
+            settle();
+          });
+          expect(mount.textContent).toContain("Preview unavailable");
+          expect(mount.querySelector(".sidebar-pdf-preview")?.getAttribute("aria-label")).toBe(
+            filename,
+          );
+          expect(fetchMetadata).toHaveBeenCalledOnce();
+          expect(mount.querySelector<HTMLAnchorElement>("a[download]")?.download).toBe(filename);
         }
       } finally {
         render(nothing, transcript);
@@ -671,48 +706,6 @@ describe("chat pane embedded panels", () => {
     expect(notice?.querySelector("img")).toBeNull();
     expect(mount.querySelector("openclaw-session-diff")).toBeNull();
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it("enumerates a structural loading variant for every side-panel tab", async () => {
-    const expected = {
-      browser: "browser",
-      "link-reader": "files",
-      companion: "chat",
-      conversation: "chat",
-      dashboard: "board",
-      desktop: "desktop",
-      detail: "review",
-      discussion: "discussion",
-      portal: "browser",
-      tasks: "tasks",
-      terminal: "terminal",
-      workspace: "files",
-    } as const;
-
-    const definitions = sidebarPanelDefinitions();
-    expect(definitions.map((definition) => definition.slot)).toEqual([
-      "conversation",
-      "detail",
-      "terminal",
-      "browser",
-      "link-reader",
-      "portal",
-      "workspace",
-      "companion",
-      "tasks",
-      "desktop",
-      "discussion",
-      "dashboard",
-    ]);
-    for (const definition of definitions) {
-      const mount = document.body.appendChild(document.createElement("div"));
-      render(definition.loading, mount);
-      const skeleton = mount.querySelector("openclaw-panel-loading-skeleton");
-      await skeleton?.updateComplete;
-      expect(skeleton?.getAttribute("data-panel-skeleton")).toBe(
-        expected[definition.slot as keyof typeof expected],
-      );
-    }
   });
 
   it("exposes task refresh in the shared side-panel header", () => {

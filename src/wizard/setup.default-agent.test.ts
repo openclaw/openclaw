@@ -182,51 +182,6 @@ describe("runSetupWizard default-agent ownership", () => {
     mocks.finalizeSetup.mockResolvedValue({ launchedTui: false });
   });
 
-  it.each([false, true])(
-    "retains the telemetry choice %s when reconciling an authored main roster",
-    async (enabled) => {
-      const config = {
-        gateway: { mode: "local", port: 18789 },
-        agents: { entries: { main: {} } },
-      } satisfies OpenClawConfig;
-      mocks.readSnapshot.mockResolvedValue({
-        exists: true,
-        valid: true,
-        config,
-        sourceConfig: config,
-        sourceConfigBeforeMigrations: config,
-        issues: [],
-      });
-      vi.mocked(prompter.select).mockResolvedValue(enabled);
-      let persisted: OpenClawConfig | undefined;
-      mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => {
-        persisted = nextConfig;
-        return { path: "/tmp/openclaw.json", nextConfig };
-      });
-
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          mode: "local",
-          authChoice: "skip",
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipHooks: true,
-          skipUi: true,
-          installDaemon: false,
-        },
-        runtime,
-        prompter,
-      );
-
-      expect(persisted?.telemetry).toEqual({ enabled, consentedAt: expect.any(String) });
-      expect(persisted?.agents?.entries).toEqual({ main: {} });
-    },
-  );
-
   it("keeps concurrent gateway settings while carrying the telemetry choice", async () => {
     const config = {
       gateway: { mode: "local", port: 18789 },

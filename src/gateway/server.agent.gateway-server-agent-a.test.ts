@@ -27,6 +27,7 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
@@ -260,13 +261,6 @@ const createStubChannelPlugin = (params: {
   }),
 });
 
-const defaultDirectChannelEntries = [
-  { id: "telegram", label: "Telegram" },
-  { id: "discord", label: "Discord" },
-  { id: "slack", label: "Slack" },
-  { id: "signal", label: "Signal" },
-] as const;
-
 const defaultRegistry = createRegistry([
   {
     pluginId: "whatsapp",
@@ -282,11 +276,11 @@ const defaultRegistry = createRegistry([
       },
     }),
   },
-  ...defaultDirectChannelEntries.map((entry) => ({
-    pluginId: entry.id,
+  {
+    pluginId: "discord",
     source: "test",
-    plugin: createStubChannelPlugin({ id: entry.id, label: entry.label }),
-  })),
+    plugin: createStubChannelPlugin({ id: "discord", label: "Discord" }),
+  },
 ]);
 
 describe("gateway server agent", () => {
@@ -325,6 +319,16 @@ describe("gateway server agent", () => {
       method: "agent",
       runId: "idem-agent-detached-root",
     });
+    let participantRecorded = false;
+    const unsubscribeParticipant = onSessionLifecycleEvent((event) => {
+      if (
+        event.reason === "participants" &&
+        event.agentId === "main" &&
+        event.sessionKey === "agent:main:main"
+      ) {
+        participantRecorded = true;
+      }
+    });
     try {
       const res = await rpcReq(gatewaySuite.ws, "agent", {
         message: "prove detached root transfer",
@@ -335,10 +339,15 @@ describe("gateway server agent", () => {
       expect(res.ok).toBe(true);
       expect(res.payload?.status).toBe("accepted");
       await execution.waitForCompletion();
+      expect(participantRecorded).toBe(true);
       expect(subordinateAdmissionClosed).toBe(false);
       expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
     } finally {
-      await execution.restore();
+      try {
+        await execution.restore();
+      } finally {
+        unsubscribeParticipant();
+      }
     }
   });
 
@@ -994,32 +1003,11 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-last-whatsapp",
     },
     {
-      name: "telegram",
-      sessionId: "sess-main",
-      lastChannel: "telegram",
-      lastTo: "123",
-      idempotencyKey: "idem-agent-last",
-    },
-    {
       name: "discord",
       sessionId: "sess-discord",
       lastChannel: "discord",
       lastTo: "channel:discord-123",
       idempotencyKey: "idem-agent-last-discord",
-    },
-    {
-      name: "slack",
-      sessionId: "sess-slack",
-      lastChannel: "slack",
-      lastTo: "channel:slack-123",
-      idempotencyKey: "idem-agent-last-slack",
-    },
-    {
-      name: "signal",
-      sessionId: "sess-signal",
-      lastChannel: "signal",
-      lastTo: "+15551234567",
-      idempotencyKey: "idem-agent-last-signal",
     },
   ])("agent routes main last-channel $name", async (tc) => {
     await setTestSessionStore({

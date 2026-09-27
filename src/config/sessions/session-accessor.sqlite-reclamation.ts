@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -19,6 +20,7 @@ import {
   resolveOpenClawStateDirForDatabasePath,
   resolveOpenClawStateSqlitePath,
 } from "../../state/openclaw-state-db.paths.js";
+import { reclaimSessionArchivePublicationInTransaction } from "./session-accessor.sqlite-archive-transaction.js";
 import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type {
   DeleteSessionEntryLifecycleParams,
@@ -99,7 +101,10 @@ export function resolveSessionReclamationDatabaseOptions(
   const sharedStatePath = options.database?.path ?? resolveOpenClawStateSqlitePath(sourceEnv);
   return {
     agentId: normalizeAgentId(options.agentId),
-    env: { OPENCLAW_STATE_DIR: resolveOpenClawStateDirForDatabasePath(sharedStatePath) },
+    env: {
+      OPENCLAW_STATE_DIR: resolveOpenClawStateDirForDatabasePath(sharedStatePath),
+      ...(isGatewayExternallySupervised(sourceEnv) ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
+    },
     path: resolveOpenClawAgentSqlitePath(options),
   };
 }
@@ -251,8 +256,10 @@ export function* prepareHistoricalGenerationDeletions(params: {
   }
 }
 
-function expectedEntryMismatchResult(): DeleteSessionEntryLifecycleResult {
-  return { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true };
+export function expectedEntryMismatchResult(
+  archivedTranscripts: DeleteSessionEntryLifecycleResult["archivedTranscripts"] = [],
+): DeleteSessionEntryLifecycleResult {
+  return { archivedTranscripts, deleted: false, expectedEntryMismatch: true };
 }
 
 export function reclaimSqliteSessionInTransaction(
@@ -283,6 +290,9 @@ function reclaimSqliteRowsInTransaction(
   plan: Exclude<SqliteSessionReclamationPlan, { kind: "maintenance-pages" }>,
   callbacks: SqliteSessionReclamationCallbacks,
 ): SqliteSessionReclamationResult {
+  if (plan.kind === "archive-publish-prepare" || plan.kind === "archive-publish-record") {
+    return reclaimSessionArchivePublicationInTransaction(plan, callbacks);
+  }
   if (
     plan.kind === "maintenance-plan" ||
     plan.kind === "maintenance-finalize" ||
@@ -421,7 +431,10 @@ export async function runSqliteSessionReclamation(params: {
   assertCommitAllowed?: () => void;
   forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
-  onWorkerResult?: (result: SqliteSessionReclamationResult) => void;
+  onWorkerResult?: (
+    result: SqliteSessionReclamationResult,
+    databaseIdentity: string | symbol,
+  ) => void;
   plan: SqliteSessionReclamationPlan;
 }): Promise<SqliteSessionReclamationResult> {
   if (params.diagnostics) {
@@ -445,7 +458,11 @@ export async function runSqliteSessionReclamation(params: {
             return reclaimSqliteSessionInTransaction(params.plan, {
               beforeMutation: params.assertCommitAllowed,
               onCommit: (database, result) => {
-                const publish = prepareReclamationPublication(params.plan, result);
+                const publish = prepareReclamationPublication(
+                  params.plan,
+                  readOpenClawAgentDatabaseIdentity(database).identity,
+                  result,
+                );
                 if (publish) {
                   deferOpenClawAgentPostCommitPublication(database, publish);
                 }

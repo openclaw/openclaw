@@ -30,6 +30,8 @@ Quick `/acp` flow from chat:
   </Step>
   <Step title="Steer">
     Without replacing context: `/acp steer tighten logging and continue`.
+    The instruction runs after the current turn finishes. To redirect work in
+    progress, `/acp cancel` first.
   </Step>
   <Step title="Stop">
     `/acp cancel` (current turn) or `/acp close` (session + bindings).

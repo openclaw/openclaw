@@ -145,6 +145,9 @@ openclaw sessions delete "agent:main:scratch-1" --dry-run
 openclaw sessions delete "agent:main:scratch-1" --yes --json
 ```
 
+Repeated keys are processed once, in first-occurrence order, after surrounding
+whitespace is removed. This also applies to `sessions archive`.
+
 <Warning>
   Delete is destructive. In an interactive terminal it asks once before
   deleting the valid keys. Non-interactive and `--json` deletion requires
@@ -180,8 +183,10 @@ Both lifecycle commands:
 - emit one stable JSON envelope with `ok`, `operation`, `dryRun`, and `results`
   when `--json` is set.
 
-Dry-run uses the Gateway's session list to report protected agent-main sessions
-as failed, even when the CLI uses different local session settings. Already
+Lifecycle commands look up each requested key directly, including cron run sessions
+hidden from the Gateway's general session list. Dry-run uses those Gateway facts to
+report protected agent-main sessions as failed, even when the CLI uses different
+local session settings. Already
 archived sessions remain successful archive no-ops. Dry-run does not execute all
 Gateway lifecycle checks: `global` previews can still show an archive or delete
 action that the Gateway refuses. Explicitly selected non-default global deletion
@@ -319,6 +324,12 @@ When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
 sent through the Gateway so it shares the same session-store writer as runtime
 traffic. Use `--store <path>` for explicit offline repair of a SQLite database or
 legacy store selector.
+
+Automatic offline fallback applies only when the configured local Gateway cannot
+be reached before connecting. A failed remote Gateway connection or
+`OPENCLAW_GATEWAY_URL` override exits with an error and leaves local stores alone,
+including when the selected URL uses a loopback SSH tunnel. Restore the remote
+connection or use `--store <path>` to explicitly select a local store.
 
 When the selected store's parent directory is named `agent`, transcript artifacts
 live in the sibling `sessions` directory. This also applies to custom paths:

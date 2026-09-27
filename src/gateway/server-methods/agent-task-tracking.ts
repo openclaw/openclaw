@@ -229,6 +229,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   requester?: PluginSubagentRequesterContext;
   pluginId?: string;
   gatewayContextResolver?: GatewayContextResolver;
+  assertAdmissionCurrent: () => void;
 }): Promise<void> {
   const childSessionKey = params.childSessionKey.trim();
   if (!childSessionKey) {
@@ -241,6 +242,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
   const { adoptPausedSubagentRunForFollowUp, registerSubagentRun } =
     await import("../../agents/subagents/registry/subagent-registry.js");
+  params.assertAdmissionCurrent();
   // A follow-up aimed at a session paused by sessions_yield continues that run.
   // Registering a sibling row here would reassign the requester to this agent's
   // own main session and leave the original requester waiting behind a row that
@@ -260,22 +262,25 @@ export async function registerPluginSubagentRunFromGateway(params: {
   ) {
     return;
   }
-  registerSubagentRun({
-    runId: params.runId,
-    childSessionKey,
-    controllerSessionKey: ownerSessionKey,
-    requesterSessionKey,
-    requesterOrigin: params.requester?.origin,
-    requesterDisplayKey: params.requester ? requesterSessionKey : "main",
-    task: params.task,
-    cleanup: "keep",
-    ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
-    expectsCompletionMessage: params.requester !== undefined,
-    spawnMode: "run",
-    ...(params.gatewayContextResolver
-      ? { gatewayContextResolver: params.gatewayContextResolver }
-      : {}),
-  });
+  await registerSubagentRun(
+    {
+      runId: params.runId,
+      childSessionKey,
+      controllerSessionKey: ownerSessionKey,
+      requesterSessionKey,
+      requesterOrigin: params.requester?.origin,
+      requesterDisplayKey: params.requester ? requesterSessionKey : "main",
+      task: params.task,
+      cleanup: "keep",
+      ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
+      expectsCompletionMessage: params.requester !== undefined,
+      spawnMode: "run",
+      ...(params.gatewayContextResolver
+        ? { gatewayContextResolver: params.gatewayContextResolver }
+        : {}),
+    },
+    { assertCurrent: params.assertAdmissionCurrent },
+  );
 }
 
 export function tryFinalizeTrackedAgentTask(params: {
@@ -285,6 +290,7 @@ export function tryFinalizeTrackedAgentTask(params: {
   status: GatewayAgentTaskTerminalStatus;
   error?: string;
   terminalSummary?: string;
+  isIncognito?: boolean;
   log: Pick<GatewayRequestContext["logGateway"], "warn">;
 }): void {
   try {
@@ -300,6 +306,8 @@ export function tryFinalizeTrackedAgentTask(params: {
   } catch (err) {
     // Best-effort only: background task tracking must not block agent runs.
     // Still surface the swallowed error so non-transient finalize failures stay observable.
-    params.log.warn(`failed to finalize tracked agent task ${params.runId}: ${formatForLog(err)}`);
+    params.log.warn(
+      `failed to finalize tracked agent task ${params.runId}: ${params.isIncognito ? "Incognito agent error." : formatForLog(err)}`,
+    );
   }
 }

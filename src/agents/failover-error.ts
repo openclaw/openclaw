@@ -36,6 +36,7 @@ import {
   isSessionPlacementSettlementClosedError,
   isAgentRunSupersededAbortReason,
 } from "./run-termination.js";
+import { isSessionTranscriptTurnMismatchErrorMessage } from "./sessions/transcript-turn-error.js";
 
 export {
   FailoverError,
@@ -70,6 +71,7 @@ export function hasModelFallbackStop(error: unknown): boolean {
     collectErrorGraphCandidates(error, resolveNestedErrors).some(
       (candidate) =>
         isRecordedModelFallbackStop(candidate) ||
+        isSessionTranscriptTurnMismatchErrorMessage(readDirectErrorMessage(candidate)) ||
         (isFailoverError(candidate) && isCliTerminalStopCode(candidate.code)),
     )
   );

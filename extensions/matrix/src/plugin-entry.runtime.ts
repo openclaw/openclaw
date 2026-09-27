@@ -1,5 +1,4 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-// Matrix plugin module implements plugin entry behavior.
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";

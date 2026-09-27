@@ -139,15 +139,15 @@ export function loadOrCreateDeviceIdentity(
 export function loadOrCreateProcessDeviceIdentity(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity {
-  return withDeviceIdentityCoordinator(options, (resolved, resolvedOptions) => {
-    const cacheKey = `${resolved.databasePath}\0${resolved.identityKey}`;
-    const cached = readProcessDeviceIdentity(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const identity = loadOrCreateDeviceIdentityOwned(resolvedOptions);
-    return cacheProcessDeviceIdentity(cacheKey, identity);
-  });
+  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
+  const cacheKey = `${databasePath}\0${identityKey}`;
+  const cached = readProcessDeviceIdentity(cacheKey);
+  // A process-stable identity needs no database admission on a warm read.
+  if (cached) {
+    return cached;
+  }
+  const identity = loadOrCreateDeviceIdentity({ ...options, path: databasePath, identityKey });
+  return cacheProcessDeviceIdentity(cacheKey, identity);
 }
 
 /** Load a valid persisted identity without creating or mutating SQLite state. */

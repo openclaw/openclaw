@@ -55,6 +55,8 @@ export function waitForFile(file) {
     "lib/check-limits.mts",
     "lib/direct-run.mjs",
     "lib/dist-artifact-ownership.mts",
+    "lib/dist-artifact-lock.mts",
+    "lib/record-shared.mjs",
     "lib/failed-trailer.mts",
     "lib/managed-child-process.mts",
     "lib/vitest-resource-ownership.mts",
@@ -70,11 +72,22 @@ export function waitForFile(file) {
     write(file, fs.readFileSync(path.resolve(file), "utf8"));
   }
   // Only this disposable fixture gets synthetic binaries; installed tools stay untouched.
-  for (const name of ["tsx", "p-map", "@openclaw/fs-safe", "json5"]) {
+  for (const name of ["p-map", "@openclaw/fs-safe", "json5"]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.resolve("node_modules", name), target, "junction");
   }
+  // Wrappers are compiled below and synthetic tools are native JavaScript.
+  // Keep loader imports without adding unrelated compiler-service children.
+  write(
+    "node_modules/tsx/package.json",
+    JSON.stringify({
+      name: "tsx",
+      type: "module",
+      exports: { ".": "./loader.mjs", "./esm": "./loader.mjs" },
+    }),
+  );
+  write("node_modules/tsx/loader.mjs", "export {};\n");
   preparedScripts ??= (async () => {
     const { bundles } = await build({
       config: false,

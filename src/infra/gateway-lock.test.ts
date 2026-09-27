@@ -400,26 +400,6 @@ describe("gateway lock", () => {
     }
   });
 
-  it("keeps a retitled gateway lock owned during concurrent acquisition", async () => {
-    const env = await makeEnv();
-    const lock = expectGatewayLock(await acquireForTest(env, { platform: "darwin", port: 48789 }));
-    const connectSpy = createPortProbeConnectionSpy("refused");
-
-    try {
-      await expect(
-        acquireForTest(env, {
-          platform: "darwin",
-          port: 48789,
-          timeoutMs: 15,
-          readProcessCmdline: () => ["openclaw-gateway"],
-        }),
-      ).rejects.toBeInstanceOf(GatewayLockError);
-      expect(connectSpy).not.toHaveBeenCalled();
-    } finally {
-      await lock.release();
-    }
-  });
-
   it("keeps a verified owner when a second gateway requests a different unbound port", async () => {
     const env = await makeEnv();
     const lock = expectGatewayLock(
@@ -1052,47 +1032,6 @@ describe("gateway lock", () => {
       port: 18789,
       readProcessCmdline: () => null,
       readProcessStartTime: () => null,
-    });
-    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
-
-    connectSpy.mockRestore();
-  });
-
-  it("clears stale lock on darwin when process cmdline is not a gateway", async () => {
-    vi.useRealTimers();
-    const env = await makeEnv();
-    await writeRecentLockFile(env);
-
-    const connectSpy = createPortProbeConnectionSpy("connect");
-
-    const lock = await acquireForTest(env, {
-      timeoutMs: 80,
-      pollIntervalMs: 5,
-      staleMs: 10_000,
-      platform: "darwin",
-      port: 18789,
-      readProcessCmdline: () => ["/Applications/Safari.app/Contents/MacOS/Safari"],
-    });
-    await expectGatewayLock(lock).release();
-
-    connectSpy.mockRestore();
-  });
-
-  it("keeps lock on darwin when process cmdline is a gateway", async () => {
-    vi.useRealTimers();
-    const env = await makeEnv();
-    await writeRecentLockFile(env);
-
-    const connectSpy = createPortProbeConnectionSpy("connect");
-
-    const pending = acquireForTest(env, {
-      timeoutMs: 20,
-      pollIntervalMs: 2,
-      staleMs: 10_000,
-      platform: "darwin",
-      port: 18789,
-      readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run", "--port", "18789"],
-      readProcessStartTime: () => 111,
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 

@@ -1,21 +1,23 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { FileLockHandle } from "@openclaw/fs-safe/file-lock";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  PrepareBundledPluginRuntime,
-  WithDistArtifactOwnership,
-} from "../../../scripts/lib/runtime-artifact-contract.js";
-import { hasErrnoCode } from "../../infra/errno.js";
+import type { WithDistArtifactOwnership } from "../../../scripts/lib/runtime-artifact-contract.js";
+import { loadSourceRuntimePreparation } from "../../../scripts/lib/source-update-artifact-preflight.mts";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import type { PluginLifecycleLeaseContext } from "../../plugins/plugin-lifecycle-lease.js";
 import { withGatewayRuntimeArtifactPublication } from "./update-command-service-maintenance.js";
 
-type SourceRuntimeStaging = { prepareBundledPluginRuntime: PrepareBundledPluginRuntime };
 type SourceArtifactOwnership = { withDistArtifactOwnership: WithDistArtifactOwnership };
 
-function isSourceRuntimeStaging(value: unknown): value is SourceRuntimeStaging {
-  return isRecord(value) && typeof value.prepareBundledPluginRuntime === "function";
+export async function releaseLegacySourceLock(root: string, lock?: FileLockHandle) {
+  const consumer = path.join(root, "scripts/lib/source-update-artifact-preflight.mts");
+  // Shipped targets without the prepared-fact consumer retain their original writer.
+  if (lock && !existsSync(consumer)) {
+    await lock.release();
+  }
 }
 
 function isSourceArtifactOwnership(value: unknown): value is SourceArtifactOwnership {
@@ -27,10 +29,14 @@ export async function completeSourceUpdateRuntime(params: {
   root: string;
   timeoutMs: number;
   lease: PluginLifecycleLeaseContext;
+  sourceRuntimePrepared?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   beforePublication?: () => Promise<void>;
 }): Promise<{ changed: boolean }> {
   params.lease.assertOwned();
+  if (params.sourceRuntimePrepared === true) {
+    return { changed: false };
+  }
   const installKind = await resolveUpdateInstallKind(params.root, {
     signal: params.lease.signal,
     timeoutMs: params.timeoutMs,
@@ -41,47 +47,14 @@ export async function completeSourceUpdateRuntime(params: {
   }
   const root = await fs.realpath(params.root);
   params.lease.assertOwned();
-  const stagingFile = path.join(root, "scripts", "stage-bundled-plugin-runtime.mts");
-  const stagingPresent = await fs.lstat(stagingFile).then(
-    () => true,
-    (error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return false;
-      }
-      throw error;
-    },
-  );
+  const prepare = await loadSourceRuntimePreparation(root);
   params.lease.assertOwned();
-  // Older downgrade targets have no completion contract: 2026.4.27 predates
-  // this .mts module, and 2026.9.4 exports only the destructive legacy stager.
-  if (!stagingPresent) {
+  if (!prepare) {
     return { changed: false };
   }
-  // These source-checkout modules are native Node TypeScript. The packaged
-  // updater must load the installed target's generator, not its retained code.
-  const staging: unknown = await import(pathToFileURL(stagingFile).href);
-  params.lease.assertOwned();
-  if (
-    isRecord(staging) &&
-    staging.prepareBundledPluginRuntime === undefined &&
-    typeof staging.stageBundledPluginRuntime === "function"
-  ) {
-    return { changed: false };
-  }
-  if (!isSourceRuntimeStaging(staging)) {
-    throw new Error("The installed source checkout cannot complete its runtime artifacts.");
-  }
-  const ownership: unknown = await import(
-    pathToFileURL(path.join(root, "scripts", "lib", "dist-artifact-ownership.mts")).href
-  );
-  params.lease.assertOwned();
-  if (!isSourceArtifactOwnership(ownership)) {
-    throw new Error("The installed source checkout cannot complete its runtime artifacts.");
-  }
-
-  return await ownership.withDistArtifactOwnership(root, async () => {
+  const complete = async () => {
     params.lease.assertOwned();
-    const prepared = staging.prepareBundledPluginRuntime({ repoRoot: root });
+    const prepared = prepare({ repoRoot: root });
     try {
       params.lease.assertOwned();
       if (prepared.changed) {
@@ -119,5 +92,16 @@ export async function completeSourceUpdateRuntime(params: {
     }
     await prepared.cleanup();
     return { changed: prepared.changed };
-  });
+  };
+  if (params.sourceRuntimePrepared === false) {
+    return await complete();
+  }
+  const ownership: unknown = await import(
+    pathToFileURL(path.join(root, "scripts", "lib", "dist-artifact-ownership.mts")).href
+  );
+  params.lease.assertOwned();
+  if (!isSourceArtifactOwnership(ownership)) {
+    throw new Error("The installed source checkout cannot complete its runtime artifacts.");
+  }
+  return await ownership.withDistArtifactOwnership(root, complete);
 }

@@ -90,7 +90,7 @@ export function buildCaptureTimelineModel(params: {
         .join("")}
     </div>`;
   };
-  const computeLaneSeverity = (eventsForLane: CaptureEventView[]) => {
+  const summarizeLane = (eventsForLane: CaptureEventView[]) => {
     const total = eventsForLane.length;
     const errorCount = eventsForLane.filter(
       (event) => Boolean(event.errorText) || (event.status ?? 0) >= 400,
@@ -98,30 +98,16 @@ export function buildCaptureTimelineModel(params: {
     const focusedCount = selectedFlowId
       ? eventsForLane.filter((event) => event.flowId === selectedFlowId).length
       : 0;
-    const recencyScore =
-      total === 0
-        ? 0
-        : eventsForLane.reduce((max, event) => Math.max(max, event.ts), 0) / Math.max(1, maxTs);
+    const newestTs = eventsForLane.reduce((max, event) => Math.max(max, event.ts), 0);
+    const recencyScore = newestTs / Math.max(1, maxTs);
     const errorShare = total > 0 ? errorCount / total : 0;
     const focusedShare = total > 0 ? focusedCount / total : 0;
-    return (
+    const score =
       errorCount * 10 +
       errorShare * 30 +
       focusedShare * 35 +
       recencyScore * 8 +
-      Math.min(total, 40) * 0.2
-    );
-  };
-  const describeLaneSeverity = (eventsForLane: CaptureEventView[]) => {
-    const total = eventsForLane.length;
-    const errorCount = eventsForLane.filter(
-      (event) => Boolean(event.errorText) || (event.status ?? 0) >= 400,
-    ).length;
-    const focusedCount = selectedFlowId
-      ? eventsForLane.filter((event) => event.flowId === selectedFlowId).length
-      : 0;
-    const newestTs =
-      total === 0 ? 0 : eventsForLane.reduce((max, event) => Math.max(max, event.ts), 0);
+      Math.min(total, 40) * 0.2;
     const recencyMinutes =
       newestTs > 0 ? Math.max(0, Math.round((maxTs - newestTs) / 60000)) : null;
     const focusedPercent = total > 0 ? Math.round((focusedCount / total) * 100) : 0;
@@ -140,8 +126,10 @@ export function buildCaptureTimelineModel(params: {
       reasons.push(`${total} events`);
     }
     return {
-      score: computeLaneSeverity(eventsForLane),
+      score,
       summary: reasons.join(" · "),
+      errorCount,
+      focusedCount,
     };
   };
   const unsortedTimelineLanes = Array.from(
@@ -179,30 +167,24 @@ export function buildCaptureTimelineModel(params: {
         events: [event],
       });
       return lanes;
-    }, new Map()),
-  ).map(([, lane]) => lane);
+    }, new Map<string, { id: string; label: string; meta: string; events: CaptureEventView[] }>()),
+  ).map(([, lane]) => Object.assign(lane, summarizeLane(lane.events)));
   const sortTimelineLanes = (
-    lanes: Array<{ id: string; label: string; meta: string; events: CaptureEventView[] }>,
+    lanes: typeof unsortedTimelineLanes,
     mode: UiState["captureTimelineLaneSort"],
   ) =>
-    [...lanes].toSorted((a, b) => {
-      const aErrorCount = a.events.filter(
-        (event) => Boolean(event.errorText) || (event.status ?? 0) >= 400,
-      ).length;
-      const bErrorCount = b.events.filter(
-        (event) => Boolean(event.errorText) || (event.status ?? 0) >= 400,
-      ).length;
+    lanes.toSorted((a, b) => {
       if (mode === "severity") {
         return (
-          computeLaneSeverity(b.events) - computeLaneSeverity(a.events) ||
-          bErrorCount - aErrorCount ||
+          b.score - a.score ||
+          b.errorCount - a.errorCount ||
           b.events.length - a.events.length ||
           a.label.localeCompare(b.label)
         );
       }
       if (mode === "most-errors") {
         return (
-          bErrorCount - aErrorCount ||
+          b.errorCount - a.errorCount ||
           b.events.length - a.events.length ||
           a.label.localeCompare(b.label)
         );
@@ -212,7 +194,7 @@ export function buildCaptureTimelineModel(params: {
       }
       return (
         b.events.length - a.events.length ||
-        bErrorCount - aErrorCount ||
+        b.errorCount - a.errorCount ||
         a.label.localeCompare(b.label)
       );
     });
@@ -248,21 +230,18 @@ export function buildCaptureTimelineModel(params: {
     return focusedCount > 0;
   };
   const visibleTimelineLanes = timelineLanes.filter((lane) => {
-    const focusedCount = selectedFlowId
-      ? lane.events.filter((event) => event.flowId === selectedFlowId).length
-      : 0;
     if (
       focusedLaneMode === "only-matching" &&
-      !laneMeetsFocusedThreshold(focusedCount, lane.events.length) &&
+      !laneMeetsFocusedThreshold(lane.focusedCount, lane.events.length) &&
       !pinnedLaneIds.has(lane.id)
     ) {
       return false;
     }
-    if (pinnedLaneIds.size > 0 && pinnedLaneIds.has(lane.id)) {
+    if (pinnedLaneIds.has(lane.id)) {
       return true;
     }
     if (!laneSearch) {
-      return pinnedLaneIds.size === 0 || !pinnedLaneIds.has(lane.id);
+      return true;
     }
     const haystack = [lane.label, lane.meta].filter(Boolean).join(" ").toLowerCase();
     return haystack.includes(laneSearch);
@@ -273,7 +252,6 @@ export function buildCaptureTimelineModel(params: {
     renderTimelineWindow,
     timelineAxisTicks,
     renderLaneSparkline,
-    describeLaneSeverity,
     timelineLanes,
     previousLanePosition,
     collapsedLaneIds,

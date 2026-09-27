@@ -68,6 +68,7 @@ type TranscriptAppendOptions = {
   eventJson?: string;
   preparedPayload?: PreparedTranscriptPayload;
   allowStoredAlias?: boolean;
+  onPlaceholderInserted?: (placeholder: { sessionKey: string; sessionId: string }) => void;
   idempotencyKeyMode?: "dedupe" | "preserve-owner" | "relocate-owner";
   onProjectionReconcileNeeded?: () => void;
   scheduleProjectionReconcile?: boolean;
@@ -183,6 +184,7 @@ function appendTranscriptEvent(
   } else {
     ensureTranscriptSessionRoot(database, scope, createdAt, {
       allowStoredAlias: options.allowStoredAlias === true,
+      onPlaceholderInserted: options.onPlaceholderInserted,
     });
     ensureTranscriptGenerationInTransaction(database, scope.sessionId);
     cursor.initialized = true;
@@ -260,10 +262,9 @@ export function scheduleTranscriptProjectionReconcile(
     return;
   }
   // Dirty state is durable: a missed post-commit kick is recovered by startup/search reconciliation.
-  deferOpenClawAgentPostCommitPublication(database, () =>
+  deferOpenClawAgentPostCommitPublication(database, (databaseOptions) =>
     startSessionTranscriptIndexReconcile({
-      agentId: database.agentId,
-      path: database.path,
+      ...databaseOptions,
       preferredSessionId: sessionId,
     }),
   );

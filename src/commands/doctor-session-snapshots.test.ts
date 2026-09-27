@@ -594,7 +594,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
     await withOpenClawTestState(
       { label: "retained-snapshot-source", env: { OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir } },
       async (state) => {
-        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default");
+        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
         const store = JSON.parse(await fs.readFile(storePath, "utf8"));
         const prompt = skillPrompt(
           path.join(root, "old", "node_modules", "openclaw", "skills", "doctor", "SKILL.md"),

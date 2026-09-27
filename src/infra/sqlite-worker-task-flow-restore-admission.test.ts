@@ -172,14 +172,14 @@ it.each([
       if (completion === "refused admission") {
         const original = workerAdmission.createSqliteWorkerOperationAdmission;
         vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-          (admit) =>
+          (admit, attachment) =>
             original((request, grant) => {
               if (isRecord(request.facts) && request.facts.kind === "task-restored-flow") {
                 configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });
                 refused.resolve();
               }
               admit(request, grant);
-            }),
+            }, attachment),
         );
       }
       let pending: Promise<void> | undefined;

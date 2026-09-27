@@ -64,8 +64,10 @@ describe("gradium speech provider", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = firstFetchCall(fetchMock);
     expect(url).toBe("https://api.gradium.ai/api/post/speech/tts");
+    expect(init.method).toBe("POST");
     const headers = new Headers(init.headers);
     expect(headers.get("x-api-key")).toBe("gsk_test123");
+    expect(headers.get("content-type")).toBe("application/json");
     expect(JSON.parse(init.body as string)).toEqual({
       text: "OpenClaw test",
       voice_id: "YTpq7expH9539ERJ",

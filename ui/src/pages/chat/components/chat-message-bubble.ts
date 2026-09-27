@@ -27,6 +27,7 @@ import {
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import "./chat-clawhub-card.ts";
@@ -35,6 +36,7 @@ import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts"
 import { readAsyncQuestions, renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import {
+  hasUserFileAttachments,
   renderAssistantAttachments,
   renderMessageAttachment,
   renderOmittedMedia,
@@ -66,7 +68,6 @@ import {
   renderToolCard,
   renderToolIcon,
   renderPluginToolResult,
-  renderToolPreview,
   resolveCollapsedToolDetail,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
@@ -77,6 +78,7 @@ import {
   renderToolOutcome,
 } from "./chat-tool-content.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
+import { renderToolPreview } from "./widget-card.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -248,14 +250,7 @@ export function renderGroupedMessage(
         )
       : [];
   const cardAttachments = visibleAttachments.filter((item) => !videoPreviews.includes(item));
-  const hasUserFiles =
-    normalizedRole === "user" &&
-    cardAttachments.some(
-      (item) =>
-        item.attachment.kind === "document" &&
-        !isSentCommentAttachment(item) &&
-        !isSentPastedTextAttachment(item),
-    );
+  const hasUserFiles = normalizedRole === "user" && hasUserFileAttachments(cardAttachments);
   const imageRenderOptions = {
     galleryImages: images,
     sessionKey: opts.sessionKey,
@@ -654,6 +649,16 @@ export function renderGroupedMessage(
                 `,
               )
             : renderBody()
+      }
+      ${
+        sourceRole === "assistant" && assistantMessageIsInterrupted(message)
+          ? html`<div
+              class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation"
+              role="status"
+            >
+              ${t("chat.composer.runInterrupted")}
+            </div>`
+          : nothing
       }
       ${
         duplicateCount > 1 && (!markdown || jsonResult)

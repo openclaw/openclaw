@@ -1,5 +1,6 @@
 // Google Meet tests cover request deadlines across Google API surfaces.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listGoogleMeetCalendarEvents } from "./calendar.js";
 import { exportGoogleDriveDocumentText } from "./drive.js";
 import { fetchGoogleMeetSpace } from "./meet.js";
 import { resolveGoogleMeetAccessToken } from "./oauth.js";
@@ -10,6 +11,10 @@ afterEach(() => {
 });
 
 const requests = [
+  {
+    name: "Calendar events.list",
+    run: () => listGoogleMeetCalendarEvents({ accessToken: "test-token" }),
+  },
   {
     name: "Meet v2",
     run: () => fetchGoogleMeetSpace({ accessToken: "test-token", meeting: "abc-defg-hij" }),

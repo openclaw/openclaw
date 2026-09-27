@@ -1,7 +1,9 @@
 // Registered in agent.test.ts's existing handler suite and cleanup lifetime.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { findTaskByRunId } from "../../tasks/task-registry.js";
+import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
+import { findTaskByRunId, listTaskRecords } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
 import {
   mockSpawnedChildSessionEntry,
   spyDetachedCreateRunningTaskRun,
@@ -20,6 +22,41 @@ import {
 } from "./agent.test-harness.js";
 
 const mocks = getAgentTestMocks();
+
+export function registerHostOwnedSubagentTaskTrackingTest() {
+  it("keeps a host-owned subagent run to its pre-registered task row", async () => {
+    await withPluginSubagentTestState("openclaw-gateway-subagent-owner-", async (state) => {
+      const root = state.stateDir;
+      // The Gateway worker must read the same durable task that the host registered.
+      resetTaskRegistryForTests({ persist: false });
+      const childSessionKey = "agent:main:subagent:owned";
+      const runId = "host-owned-subagent-run";
+      mockSpawnedChildSessionEntry(childSessionKey, root);
+      getDetachedTaskLifecycleRuntime().createRunningTaskRun({
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey,
+        runId,
+        task: "Run one owned subagent",
+        deliveryStatus: "pending",
+      });
+      const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+      await invokeAgent(
+        { message: "host-owned child turn", sessionKey: childSessionKey, idempotencyKey: runId },
+        { reqId: runId, client: backendGatewayClient() },
+      );
+      await waitForAgentCommandCall();
+
+      expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
+      expect(listTaskRecords().filter((task) => task.runId === runId)).toEqual([
+        expect.objectContaining({ runtime: "subagent", childSessionKey }),
+      ]);
+    });
+  });
+}
 
 export function registerNativeSubagentTaskTrackingTests() {
   describe("native subagent child run task tracking", () => {

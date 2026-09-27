@@ -38,7 +38,7 @@ describe("CodexNativeSubagentMonitor", () => {
       nativeModel: { provider: "test-provider", model: "wire-b" },
       authorizedModel: { provider: "test-provider", model: "model-b" },
     };
-    const first = monitor.registerParent({ parentThreadId: "parent-thread", modelSource: a });
+    const first = await monitor.registerParent({ parentThreadId: "parent-thread", modelSource: a });
     first.bindTurn("parent-a", mappingA);
     await notifyChildStarted(client);
     await client.notify(turnStartedNotification("child-a"));
@@ -87,7 +87,10 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(
       await monitor.captureModelSource({ ...originalRequest, turnId: "unrelated-turn" }),
     ).toBeUndefined();
-    const second = monitor.registerParent({ parentThreadId: "parent-thread", modelSource: b });
+    const second = await monitor.registerParent({
+      parentThreadId: "parent-thread",
+      modelSource: b,
+    });
     second.bindTurn("parent-b", mappingB);
     await client.notify({
       method: "item/completed",
@@ -161,7 +164,10 @@ describe("CodexNativeSubagentMonitor", () => {
       recoveryPollDelaysMs: [],
     });
     const source = modelSource(["model-a", "model-b"]);
-    const parent = monitor.registerParent({ parentThreadId: "parent-thread", modelSource: source });
+    const parent = await monitor.registerParent({
+      parentThreadId: "parent-thread",
+      modelSource: source,
+    });
     parent.bindTurn("parent-turn");
     for (const child of ["child-a", "child-b"]) {
       await notifyChildStarted(client, "parent-thread", child);
@@ -242,7 +248,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    const parent = registerParent(monitor);
+    const parent = await registerParent(monitor);
     parent.bindTurn("parent-turn");
     await notifyChildStarted(client);
     await client.notify({
@@ -307,7 +313,7 @@ describe("CodexNativeSubagentMonitor", () => {
         recoveryPollDelaysMs: [10],
       });
       const claimDirectChild = vi.fn(() => () => undefined);
-      const owner = monitor.registerParent({
+      const owner = await monitor.registerParent({
         parentThreadId: "parent-thread",
         requesterSessionKey: "agent:main:main",
         taskRuntimeScope: createTaskScope("agent:main:main"),
@@ -446,7 +452,7 @@ describe("CodexNativeSubagentMonitor", () => {
         recoveryPollDelaysMs: [],
       });
       onTestFinished(() => monitor.dispose());
-      const owner = monitor.registerParent({
+      const owner = await monitor.registerParent({
         parentThreadId: "parent-thread",
         historyOwner,
         requesterSessionKey: task.requesterSessionKey,
@@ -518,7 +524,10 @@ describe("CodexNativeSubagentMonitor", () => {
       const client = createClient();
       const claimDirectChild = vi.fn(() => () => undefined);
       const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-      const owner = monitor.registerParent({ parentThreadId: "parent-thread", claimDirectChild });
+      const owner = await monitor.registerParent({
+        parentThreadId: "parent-thread",
+        claimDirectChild,
+      });
       const item = directSpawnItem(version, "parent-thread", "child-thread");
 
       await client.notify({
@@ -538,7 +547,10 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const claimDirectChild = vi.fn(() => () => undefined);
     const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-    const owner = monitor.registerParent({ parentThreadId: "parent-thread", claimDirectChild });
+    const owner = await monitor.registerParent({
+      parentThreadId: "parent-thread",
+      claimDirectChild,
+    });
 
     await client.notify({
       method: "item/completed",
@@ -561,11 +573,11 @@ describe("CodexNativeSubagentMonitor", () => {
       const firstClaim = vi.fn(() => () => undefined);
       const secondClaim = vi.fn(() => () => undefined);
       const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-      const first = monitor.registerParent({
+      const first = await monitor.registerParent({
         parentThreadId: "parent-first",
         claimDirectChild: firstClaim,
       });
-      const second = monitor.registerParent({
+      const second = await monitor.registerParent({
         parentThreadId: "parent-second",
         claimDirectChild: secondClaim,
       });
@@ -609,7 +621,10 @@ describe("CodexNativeSubagentMonitor", () => {
       const client = createClient();
       const claimDirectChild = vi.fn(() => () => undefined);
       const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-      const owner = monitor.registerParent({ parentThreadId: "parent-thread", claimDirectChild });
+      const owner = await monitor.registerParent({
+        parentThreadId: "parent-thread",
+        claimDirectChild,
+      });
       const item = directSpawnItem(version, "parent-thread", "child-thread");
       await client.notify({
         method: "item/completed",
@@ -633,7 +648,7 @@ describe("CodexNativeSubagentMonitor", () => {
     });
     const claimDirectChild = vi.fn(() => release);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    const owner = monitor.registerParent({
+    const owner = await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
       taskRuntimeScope: createTaskScope("agent:main:main"),
@@ -665,7 +680,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const claimDirectChild = vi.fn(() => () => undefined);
     const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-    const owner = monitor.registerParent({
+    const owner = await monitor.registerParent({
       parentThreadId: "parent-thread",
       claimDirectChild,
     });
@@ -696,7 +711,7 @@ describe("CodexNativeSubagentMonitor", () => {
       const client = createClient();
       const claimDirectChild = vi.fn(() => () => undefined);
       const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-      const owner = monitor.registerParent({
+      const owner = await monitor.registerParent({
         parentThreadId: "parent-thread",
         requesterSessionKey: "agent:main:main",
         taskRuntimeScope: createTaskScope("agent:main:main"),
@@ -727,7 +742,10 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const claimDirectChild = vi.fn(() => () => undefined);
     const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-    const owner = monitor.registerParent({ parentThreadId: "parent-thread", claimDirectChild });
+    const owner = await monitor.registerParent({
+      parentThreadId: "parent-thread",
+      claimDirectChild,
+    });
     owner.bindTurn("turn-1");
     const spawn = directSpawnItem("v1", "parent-thread", "child-thread");
     await client.notify({
@@ -749,7 +767,10 @@ describe("CodexNativeSubagentMonitor", () => {
     const release = vi.fn();
     const claimDirectChild = vi.fn(() => release);
     const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-    const owner = monitor.registerParent({ parentThreadId: "parent-thread", claimDirectChild });
+    const owner = await monitor.registerParent({
+      parentThreadId: "parent-thread",
+      claimDirectChild,
+    });
     owner.bindTurn("turn-1");
     const spawn = directSpawnItem("v1", "parent-thread", "child-thread");
     await client.notify({
@@ -774,7 +795,7 @@ describe("CodexNativeSubagentMonitor", () => {
       const rejectPendingDirectChild = vi.fn();
       const claimDirectChild = vi.fn(() => () => undefined);
       const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-      const owner = monitor.registerParent({
+      const owner = await monitor.registerParent({
         parentThreadId: "parent-thread",
         claimDirectChild,
         rejectPendingDirectChild,
@@ -804,7 +825,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const firstClaim = vi.fn(() => () => undefined);
     const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-    const first = monitor.registerParent({
+    const first = await monitor.registerParent({
       parentThreadId: "parent-thread",
       claimDirectChild: firstClaim,
     });
@@ -818,7 +839,7 @@ describe("CodexNativeSubagentMonitor", () => {
 
     await first.unregister();
     const nextClaim = vi.fn(() => () => undefined);
-    const next = monitor.registerParent({
+    const next = await monitor.registerParent({
       parentThreadId: "parent-thread",
       claimDirectChild: nextClaim,
     });
@@ -846,7 +867,7 @@ describe("CodexNativeSubagentMonitor", () => {
     client.setThreadReadFactory("child-thread", async () => await pendingRead);
     const firstClaim = vi.fn(() => () => undefined);
     const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-    const first = monitor.registerParent({
+    const first = await monitor.registerParent({
       parentThreadId: "parent-thread",
       claimDirectChild: firstClaim,
     });
@@ -859,7 +880,7 @@ describe("CodexNativeSubagentMonitor", () => {
     await reconciliation;
 
     const nextClaim = vi.fn(() => () => undefined);
-    const next = monitor.registerParent({
+    const next = await monitor.registerParent({
       parentThreadId: "parent-thread",
       claimDirectChild: nextClaim,
     });

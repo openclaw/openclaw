@@ -183,7 +183,6 @@ export type NativeHookRelayInvocationMetadata = Partial<
 type NativeHookRelayPermissionDecision = "allow" | "deny";
 
 export type NativeHookRelayProviderAdapter = {
-  normalizeMetadata: (rawPayload: JsonValue) => NativeHookRelayInvocationMetadata;
   readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
   readToolResponse: (rawPayload: JsonValue) => unknown;
   renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;

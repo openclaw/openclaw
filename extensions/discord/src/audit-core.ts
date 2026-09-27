@@ -45,16 +45,6 @@ export function resolveRequiredDiscordChannelPermissions(channelType?: number): 
   return [...REQUIRED_TEXT_CHANNEL_PERMISSIONS];
 }
 
-function shouldAuditChannelConfig(config: DiscordGuildChannelConfig | undefined) {
-  if (!config) {
-    return true;
-  }
-  if (config.enabled === false) {
-    return false;
-  }
-  return true;
-}
-
 function listConfiguredGuildChannelKeys(
   guilds: Record<string, DiscordGuildEntry> | undefined,
 ): string[] {
@@ -78,7 +68,7 @@ function listConfiguredGuildChannelKeys(
       if (channelId === "*") {
         continue;
       }
-      if (!shouldAuditChannelConfig(value as DiscordGuildChannelConfig | undefined)) {
+      if ((value as DiscordGuildChannelConfig | undefined)?.enabled === false) {
         continue;
       }
       ids.add(channelId);

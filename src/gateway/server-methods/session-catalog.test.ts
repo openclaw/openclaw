@@ -569,41 +569,39 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it.each(["codex", "claude"])(
-    "advertises %s native hosts with no model create target",
-    async (id) => {
-      const host = {
-        hostId: "node:ready",
-        label: "Ready",
-        kind: "node" as const,
-        connected: true,
-        canStartTerminal: true,
-        sessions: [],
-      };
-      hoisted.activeRegistry.sessionCatalogs = [
-        {
-          provider: provider(id, {
-            resolveCreateSession: () => undefined,
-            list: async () => [host],
-            startTerminalSession: async ({ cwd }) => ({ kind: "local", argv: [id], cwd }),
-          }),
-        },
-      ];
-      const respond = await call("sessions.catalog.list", {});
-      expect(respond).toHaveBeenCalledWith(true, {
-        catalogs: [
-          expect.objectContaining({
-            id,
-            capabilities: {
-              continueSession: false,
-              archive: false,
-              startTerminal: true,
-            },
-          }),
-        ],
-      });
-    },
-  );
+  it("advertises native hosts with no model create target", async () => {
+    const id = "codex";
+    const host = {
+      hostId: "node:ready",
+      label: "Ready",
+      kind: "node" as const,
+      connected: true,
+      canStartTerminal: true,
+      sessions: [],
+    };
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider(id, {
+          resolveCreateSession: () => undefined,
+          list: async () => [host],
+          startTerminalSession: async ({ cwd }) => ({ kind: "local", argv: [id], cwd }),
+        }),
+      },
+    ];
+    const respond = await call("sessions.catalog.list", {});
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          id,
+          capabilities: {
+            continueSession: false,
+            archive: false,
+            startTerminal: true,
+          },
+        }),
+      ],
+    });
+  });
 
   it.each([false, true])(
     "memoizes create targets until config changes (metadataOnly=%s)",

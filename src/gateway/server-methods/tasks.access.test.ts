@@ -15,6 +15,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import * as taskRuntime from "../../tasks/runtime-internal.js";
 import { reloadTaskRegistryFromStoreAsync } from "../../tasks/task-registry-state.js";
+import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
@@ -279,7 +280,13 @@ describe("task page access snapshots", () => {
             );
             expect(readGatewayAccessRevision()).toBe(accessRevision);
             if (registryRestart) {
-              expect(taskRuntime.deleteTaskRecordById("access-task-63")).toBe(true);
+              const current = expectDefined(
+                taskRuntime.getTaskById("access-task-63"),
+                "registry-restart task",
+              );
+              const changed = { ...current, task: "Registry changed during access selection" };
+              getTaskRegistryStore().upsertTaskWithDeliveryState({ task: changed });
+              taskRuntime.publishTaskRecordAfterAtomicStore(changed);
             }
             resolve();
           } catch (error) {

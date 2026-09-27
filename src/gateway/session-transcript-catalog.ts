@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import {
+  parseDateFirstTimestampMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
@@ -16,7 +20,7 @@ import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 import { createSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
-import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
+import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 
 export type SessionTranscriptCatalogPage = {
@@ -131,15 +135,9 @@ function projectMessageItems(
         label: typeof senderName === "string" ? senderName : undefined,
       })
     : undefined;
-  const timestamp = message.timestamp ?? metadata?.recordTimestampMs;
-  const milliseconds =
-    typeof timestamp === "number"
-      ? timestamp
-      : typeof timestamp === "string"
-        ? Date.parse(timestamp)
-        : Number.NaN;
-  const date = Number.isFinite(milliseconds) ? new Date(milliseconds) : undefined;
-  const timestampText = date && Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+  const timestampText = timestampMsToIsoString(
+    parseDateFirstTimestampMs(message.timestamp ?? metadata?.recordTimestampMs),
+  );
   const content = Array.isArray(message.content)
     ? message.content
     : [message.content ?? message.text];
@@ -245,12 +243,9 @@ export async function readSessionTranscriptCatalogPage(
     ) {
       throw new Error("Session transcript changed during this read; retry the page.");
     }
-    const projected = projectChatDisplayMessages(
-      page.events.map(({ event, seq, displayPosition }) =>
-        projectTranscriptEntryMessage(event, seq, displayPosition),
-      ),
-      { maxChars: MAX_CATALOG_TEXT_CHARS },
-    );
+    const projected = projectChatDisplayMessages(page.events.map(sqliteMessageEventWithSeq), {
+      maxChars: MAX_CATALOG_TEXT_CHARS,
+    });
     const bySequence = new Map<unknown, SessionCatalogTranscriptItem[]>();
     for (const message of projected.toReversed()) {
       const seq = asOptionalRecord(message["__openclaw"])?.seq;
@@ -325,10 +320,8 @@ export function readSessionTranscriptCatalogTitle(params: {
     if (page.olderOffset !== undefined || page.omittedOversized) {
       return undefined;
     }
-    for (const { event, seq, displayPosition } of page.events) {
-      const message = projectSessionDisplayMessage(
-        projectTranscriptEntryMessage(event, seq, displayPosition),
-      );
+    for (const event of page.events) {
+      const message = projectSessionDisplayMessage(sqliteMessageEventWithSeq(event));
       if (message?.role === "user") {
         const derived = deriveSessionTitle(params.entry, message.text);
         return derived ? boundedText(derived).text : undefined;

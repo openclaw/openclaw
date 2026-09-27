@@ -228,12 +228,27 @@ Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS` 
 ### Upgrading container images
 
 When you replace the OpenClaw image but keep the same mounted state/config, the
-new Gateway runs Doctor's upgrade migrations under exclusive maintenance ownership and plugin convergence before
-readiness. Routine image upgrades should not require a separate
-`openclaw doctor --fix` pass.
+image entrypoint runs `openclaw doctor --fix --non-interactive` under exclusive
+maintenance ownership before starting the Gateway. This covers the default image
+command and Compose's foreground Gateway command, including its selected profile.
+Routine image upgrades do not require a separate Doctor pass.
+
+On older Linux hosts such as Synology DSM, an unavailable `openat2` syscall can
+make older images report that another Gateway owns even an empty state volume.
+Current images use the guarded filesystem fallback; keep native filesystem
+checks enabled. Doctor reports the underlying lock failure and recovery action
+instead of treating every acquisition error as an active Gateway. Permission
+errors require writable state and `/tmp` mounts for the container user. If the
+filesystem cannot provide SQLite locking, stop OpenClaw, back up its state, and
+move the state volume to a local filesystem that supports it; provide a writable
+local `/tmp` as well. Do not delete state or lock files to bypass ownership.
+
+Other CLI commands and help pass through unchanged. If you replace the image's
+entrypoint, run Doctor against the same mounted state/config before launching the
+Gateway; a custom entrypoint bypasses this activation step.
 
 This includes agent database schema upgrades, shared-state audit migrations, and
-legacy workspace setup imports. Before advancing database schemas, startup saves
+legacy workspace setup imports. Before advancing database schemas, Doctor saves
 verified SQLite copies beside the originals as
 `<database>.pre-startup-migration-<id>.bak`. The shared database and affected agent
 databases use the same backup ID. Config backups and retired workspace-file

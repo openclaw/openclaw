@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import {
   createBot,
+  admitSpooledUpdate,
   commandMessage,
   harness,
   chat,
@@ -38,7 +39,7 @@ const requireRecord = createRequireRecord("record", "expected-label-object");
 
 describe("createTelegramBot typed command pipeline", () => {
   it("keeps the replied-to photo and quote on a native command turn", async () => {
-    const bot = createBot();
+    const bot = await createBot();
     await bot.handleUpdate({
       update_id: 1001,
       message: {
@@ -65,7 +66,7 @@ describe("createTelegramBot typed command pipeline", () => {
   });
 
   it("keeps caption commands in the message pipeline", async () => {
-    const bot = createBot();
+    const bot = await createBot();
     const { text, entities, ...message } = commandMessage("/status");
     await bot.handleUpdate({
       update_id: 1002,
@@ -79,7 +80,7 @@ describe("createTelegramBot typed command pipeline", () => {
   });
 
   it("renders the argument menu without dispatching a turn", async () => {
-    const bot = createBot();
+    const bot = await createBot();
     await bot.handleUpdate({ update_id: 1003, message: commandMessage("/think") });
     expect(harness.replySpy).not.toHaveBeenCalled();
     expect(apiCalls).toHaveBeenCalledWith(
@@ -91,7 +92,7 @@ describe("createTelegramBot typed command pipeline", () => {
   });
 
   it("dispatches completed thinking arguments through the message pipeline", async () => {
-    const bot = createBot();
+    const bot = await createBot();
     await bot.handleUpdate({ update_id: 1005, message: commandMessage("/think high") });
     expect(harness.replySpy).toHaveBeenCalledTimes(1);
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
@@ -106,14 +107,14 @@ describe("createTelegramBot typed command pipeline", () => {
   });
 
   it("runs the login executor without dispatching a turn", async () => {
-    const bot = createBot();
+    const bot = await createBot();
     await bot.handleUpdate({ update_id: 1004, message: commandMessage("/login") });
     expect(loginExecutor).toHaveBeenCalledWith(expect.objectContaining({ commandText: "/login" }));
     expect(harness.replySpy).not.toHaveBeenCalled();
   });
 
   it("translates native command names while preserving arguments and raw text", async () => {
-    const bot = createBot();
+    const bot = await createBot();
     await bot.handleUpdate({
       update_id: 1006,
       message: commandMessage("/export_session session-notes.html"),
@@ -129,7 +130,7 @@ describe("createTelegramBot typed command pipeline", () => {
 
   it("threads native command replies inside topics", async () => {
     harness.replySpy.mockResolvedValue({ text: "response" });
-    const bot = createBot(true, true, {
+    const bot = await createBot(true, true, {
       commands: { native: true },
       channels: {
         telegram: {
@@ -178,7 +179,7 @@ describe("createTelegramBot typed command pipeline", () => {
       entry: from.id,
       accountId: "default",
     });
-    const bot = createBot(
+    const bot = await createBot(
       true,
       true,
       {
@@ -207,7 +208,7 @@ describe("createTelegramBot typed command pipeline", () => {
   it.each(["command allowlist", "owner"] as const)(
     "admits an unpaired sender authorized by the %s",
     async (grant) => {
-      const bot = createBot(true, true, {
+      const bot = await createBot(true, true, {
         commands: {
           native: true,
           ...(grant === "owner"
@@ -229,7 +230,7 @@ describe("createTelegramBot typed command pipeline", () => {
   it.each(["command allowlist", "owner"] as const)(
     "admits a sender outside the group allowlist authorized by the %s",
     async (grant) => {
-      const bot = createBot(true, true, {
+      const bot = await createBot(true, true, {
         commands: {
           native: true,
           ...(grant === "owner"
@@ -254,7 +255,7 @@ describe("createTelegramBot typed command pipeline", () => {
   it.each([true, false])(
     "keeps pairing challenges for unlisted senders with command allowlist configured=%s",
     async (configured) => {
-      const bot = createBot(true, true, {
+      const bot = await createBot(true, true, {
         commands: { native: true, ...(configured ? { allowFrom: { telegram: ["99999"] } } : {}) },
         channels: { telegram: { dmPolicy: "pairing" } },
       });
@@ -270,7 +271,7 @@ describe("createTelegramBot typed command pipeline", () => {
   it.each([true, false])(
     "silently drops unlisted group senders with command allowlist configured=%s",
     async (configured) => {
-      const bot = createBot(true, true, {
+      const bot = await createBot(true, true, {
         commands: { native: true, ...(configured ? { allowFrom: { telegram: ["99999"] } } : {}) },
         channels: {
           telegram: {
@@ -287,7 +288,7 @@ describe("createTelegramBot typed command pipeline", () => {
   );
 
   it("keeps disabled topics closed to command-authorized senders", async () => {
-    const bot = createBot(true, true, {
+    const bot = await createBot(true, true, {
       commands: { native: true, allowFrom: { telegram: [String(from.id)] } },
       channels: {
         telegram: {
@@ -320,7 +321,7 @@ describe("createTelegramBot typed command pipeline", () => {
     async ({ scope, grant, included, command }) => {
       const allowFrom = [included ? String(from.id) : "99999"];
       const scopedConfig = scope === "topic" ? { topics: { "99": { allowFrom } } } : { allowFrom };
-      const bot = createBot(true, true, {
+      const bot = await createBot(true, true, {
         commands: {
           native: true,
           ...(grant === "owner"
@@ -367,7 +368,7 @@ describe("createTelegramBot typed command pipeline", () => {
   );
 
   it("keeps an explicit command allowlist authoritative for an owner", async () => {
-    const bot = createBot(true, true, {
+    const bot = await createBot(true, true, {
       commands: {
         native: true,
         ownerAllowFrom: [`telegram:${from.id}`],
@@ -389,7 +390,7 @@ describe("createTelegramBot typed command pipeline", () => {
   it.each(["private", "supergroup"] as const)(
     "enforces access-group membership for ordinary %s messages",
     async (kind) => {
-      const bot = createBot(false, true, {
+      const bot = await createBot(false, true, {
         accessGroups: {
           operators: { type: "message.senders", members: { telegram: ["42001"] } },
         },
@@ -429,8 +430,8 @@ describe("createTelegramBot typed command pipeline", () => {
     },
   );
 
-  it("uses the chat identity for a malformed senderless webhook but not an unlisted sender", async () => {
-    const bot = createBot(false, true, {
+  it("uses the chat identity for a senderless update but not an unlisted sender", async () => {
+    const bot = await createBot(false, true, {
       channels: { telegram: { dmPolicy: "allowlist", allowFrom: ["42001"] } },
     });
     const message = { message_id: 203, date: 1736380800, chat, text: "senderless request" };
@@ -439,14 +440,12 @@ describe("createTelegramBot typed command pipeline", () => {
       message: { ...message, from: { ...from, id: 99999 } },
     });
     expect(harness.replySpy).not.toHaveBeenCalled();
-    const webhook = webhookCallback(bot, "std/http");
-    await webhook(
-      new Request("http://localhost/telegram", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ update_id: 2004, message: { ...message, message_id: 204 } }),
+    await expect(
+      admitSpooledUpdate(bot, {
+        update_id: 2004,
+        message: { ...message, message_id: 204 },
       }),
-    );
+    ).resolves.toMatchObject({ kind: "durable" });
     expect(harness.replySpy.mock.calls.map(([ctx]) => [ctx.SessionKey, ctx.RawBody])).toEqual([
       ["agent:main:main", "senderless request"],
     ]);
@@ -458,7 +457,7 @@ describe("createTelegramBot typed command pipeline", () => {
       type: "supergroup",
       title: "Non-forum group",
     } as const;
-    const bot = createBot(
+    const bot = await createBot(
       false,
       true,
       {
@@ -551,7 +550,7 @@ describe("createTelegramBot typed command pipeline", () => {
 
   it("dispatches registered reaction updates to the routed event queue", async () => {
     resetSystemEventsForTest();
-    const bot = createBot(false, true, {
+    const bot = await createBot(false, true, {
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" } },
     });
     try {
@@ -588,7 +587,7 @@ describe("createTelegramBot typed command pipeline", () => {
     };
     const persist = vi.spyOn(configMutation, "mutateConfigFile").mockResolvedValue({} as never);
     try {
-      const bot = createBot(false, true, config);
+      const bot = await createBot(false, true, config);
       await bot.handleUpdate({
         update_id: 2300,
         message: {
@@ -611,10 +610,10 @@ describe("createTelegramBot typed command pipeline", () => {
 
   it("re-answers a durable callback after a new bot loses the prior admission state", async () => {
     const callbackId = "restart-replayed-callback";
-    const previousBot = createBot();
+    const previousBot = await createBot();
     await startTelegramCallbackQueryAnswer(previousBot, callbackId, true);
     await previousBot.stop();
-    const restarted = createBot(false, true, {
+    const restarted = await createBot(false, true, {
       channels: { telegram: { dmPolicy: "disabled" } },
     });
     const pending = createDeferred<true>();
@@ -656,7 +655,7 @@ describe("createTelegramBot typed command pipeline", () => {
       agents: { list: [{ id: "agent-a", default: true }, { id: "agent-b" }] },
       bindings: [{ agentId: "agent-a", match: { channel: "telegram", accountId: "default" } }],
     };
-    const bot = createBot(true, true, config);
+    const bot = await createBot(true, true, config);
     await bot.handleUpdate({ update_id: 2500, message: commandMessage("/status") });
     publishTelegramTestConfig({
       ...config,
@@ -720,7 +719,7 @@ describe("createTelegramBot typed command pipeline", () => {
         modelNames: new Map(),
         modelCatalog: [{ provider, id: model, name: model, reasoning: false }],
       });
-      const bot = createBot(false, true, config);
+      const bot = await createBot(false, true, config);
       await bot.handleUpdate({
         update_id: 2600,
         callback_query: {
@@ -771,7 +770,7 @@ describe("createTelegramBot typed command pipeline", () => {
         },
       };
       try {
-        const bot = createBot(false, true, cfg, true);
+        const bot = await createBot(false, true, cfg, true);
         await bot.handleUpdate({
           update_id: 2700,
           message: {
@@ -905,33 +904,19 @@ describe("createTelegramBot typed command pipeline", () => {
       return { text: "Sticker received" };
     });
     try {
-      const bot = createBot(false, true, cfg);
-      const webhook = webhookCallback(bot, "std/http");
-      const receive = async (
-        update: Parameters<typeof bot.handleUpdate>[0],
-        receiveWebhook = webhook,
-      ) => {
-        // grammY requires undefined at the reply leaf; Telegram JSON omits it.
-        const response = await receiveWebhook(
-          new Request("http://localhost/telegram", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(update),
-          }),
-        );
-        expect(response.status).toBe(200);
-      };
-      const receiving = receive({ update_id: 2800, message });
+      const bot = await createBot(false, true, cfg);
+      // Durable ingress dispatches accepted updates outside the HTTP request deadline.
+      const receiving = bot.handleUpdate({ update_id: 2800, message });
       await Promise.race([
         describeStarted.promise,
         receiving.then(() => {
-          throw new Error("Sticker webhook completed before description started");
+          throw new Error("Sticker handler completed before description started");
         }),
       ]);
       expect(harness.replySpy).not.toHaveBeenCalled();
       description.resolve({ text: "A curious sticker" });
       await receiving;
-      await receive({
+      await bot.handleUpdate({
         update_id: 2801,
         message: {
           ...message,
@@ -954,7 +939,7 @@ describe("createTelegramBot typed command pipeline", () => {
         fileId: "refreshed-sticker-file",
         description: "A curious sticker",
       });
-      await receive({
+      await bot.handleUpdate({
         update_id: 2802,
         message: {
           ...message,
@@ -983,16 +968,19 @@ describe("createTelegramBot typed command pipeline", () => {
       expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toHaveLength(3);
       describeImage.mockImplementationOnce(() => lateDescription.promise);
       await expect(
-        receive(
-          {
-            update_id: 2803,
-            message: {
-              ...message,
-              message_id: 2803,
-              sticker: { ...sticker, file_unique_id: lateStickerId },
-            },
-          },
-          webhookCallback(bot, "std/http", { timeoutMilliseconds: 0 }),
+        webhookCallback(bot, "std/http", { timeoutMilliseconds: 0 })(
+          new Request("http://localhost/telegram", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              update_id: 2803,
+              message: {
+                ...message,
+                message_id: 2803,
+                sticker: { ...sticker, file_unique_id: lateStickerId },
+              },
+            }),
+          }),
         ),
       ).rejects.toThrow("Request timed out after 0 ms");
     } finally {

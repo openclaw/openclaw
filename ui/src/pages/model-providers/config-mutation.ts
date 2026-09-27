@@ -62,16 +62,12 @@ export function readModelBehaviorConfig(
  */
 export const DEFAULT_MODELS_REPLACE_PATHS = ["agents.defaults.model.fallbacks"];
 
-export function buildDefaultsPatch(params: {
-  primary: string;
-  fallbacks: readonly string[];
-  utilityModel: string | null;
-  decisionModel?: string | null;
-  thinkingLevel: string | undefined;
-  thinkingOverridden: boolean;
-  fastMode: FastMode | undefined;
-  fastModeOverridden: boolean;
-}) {
+export function buildDefaultsPatch(
+  params: Omit<DefaultModelSelection, "fallbacks"> &
+    ModelBehaviorConfig & {
+      fallbacks: readonly string[];
+    },
+) {
   return {
     agents: {
       defaults: {

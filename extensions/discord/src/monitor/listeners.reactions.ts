@@ -115,22 +115,10 @@ async function runDiscordReactionHandler(initialParams: {
     event: params.event,
     run: async () =>
       handleDiscordReactionEvent({
+        ...params.handlerParams,
         data: params.data,
         client: params.client,
         action: params.action,
-        cfg: params.handlerParams.cfg,
-        isPolicyCurrent: params.handlerParams.isPolicyCurrent,
-        accountId: params.handlerParams.accountId,
-        botUserId: params.handlerParams.botUserId,
-        dmEnabled: params.handlerParams.dmEnabled,
-        groupDmEnabled: params.handlerParams.groupDmEnabled,
-        groupDmChannels: params.handlerParams.groupDmChannels,
-        dmPolicy: params.handlerParams.dmPolicy,
-        allowFrom: params.handlerParams.allowFrom,
-        groupPolicy: params.handlerParams.groupPolicy,
-        allowNameMatching: params.handlerParams.allowNameMatching,
-        guildEntries: params.handlerParams.guildEntries,
-        logger: params.handlerParams.logger,
       }),
   });
 }

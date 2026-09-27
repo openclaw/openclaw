@@ -9,12 +9,10 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
-import {
-  buildTelegramInboundDebounceConversationKey,
-  buildTelegramInboundDebounceKey,
-} from "./bot-handlers.debounce-key.js";
+import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
 import {
   createTelegramInboundBuffers,
   type TelegramDebounceEntry,
@@ -25,6 +23,7 @@ import {
   isMediaSizeLimitError,
   TelegramBotApiFileTooLargeError,
 } from "./bot-handlers.media.js";
+import { promptContextBoundaryOptions } from "./bot-handlers.message-context.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type {
   RegisterTelegramHandlerParams,
@@ -42,13 +41,13 @@ import {
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import {
   buildTelegramThreadParams,
+  buildTelegramGroupPeerId,
   getTelegramTextParts,
   type TelegramThreadSpec,
   resolveTelegramPrimaryMedia,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
-import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 import { isTelegramControlLaneText } from "./sequential-key.js";
 
 export interface TelegramInboundProcessing {
@@ -75,7 +74,7 @@ type TelegramInboundMessage = {
   oversizeLogMessage: string;
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
-  dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
+  dispatchDedupeClaims: ChannelReplayClaimHandle[];
 };
 
 export function createTelegramInboundProcessing({
@@ -98,7 +97,6 @@ export function createTelegramInboundProcessing({
   const {
     resolveMediaRuntime,
     recordMessageResolvedMedia,
-    promptContextBoundaryOptions,
     releaseDispatchDedupeClaims,
     createSpooledReplayParticipantForBufferedWork,
   } = message;
@@ -316,10 +314,7 @@ export function createTelegramInboundProcessing({
             : { kind: nativeMedia.kind, unavailable },
         ]
       : [];
-    const conversationKey = buildTelegramInboundDebounceConversationKey({
-      chatId,
-      threadSpec,
-    });
+    const conversationKey = buildTelegramGroupPeerId(chatId, threadSpec);
     const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceSenderId = senderId || (msg.from?.id != null ? String(msg.from.id) : "");
     const debounceKey = debounceSenderId

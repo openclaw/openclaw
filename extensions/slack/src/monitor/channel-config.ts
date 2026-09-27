@@ -1,4 +1,4 @@
-// Slack helper module supports channel config behavior.
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import {
   applyChannelMatchMeta,
   buildChannelKeyCandidates,
@@ -22,15 +22,6 @@ export type SlackChannelConfigResolved = Omit<
 };
 
 export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
-
-function firstDefined<T>(...values: Array<T | undefined>) {
-  for (const value of values) {
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  return undefined;
-}
 
 export function resolveSlackChannelLabel(params: { channelId?: string; channelName?: string }) {
   const channelName = params.channelName?.trim();

@@ -13,11 +13,12 @@ const log = createSubsystemLogger("state/coordinator");
 
 /** Wait only for native acquisition; validation, execution and cleanup are never retried. */
 export async function acquireStateDatabaseCoordinatorWithWait(params: {
-  operation: "session-admission" | "mutation-worker-admission";
+  operation: "session-admission" | "mutation-worker-admission" | "wal-maintenance";
   databasePath: string;
   runtime: StateDatabaseCoordinatorRuntime;
   /** Absolute deadline in the native node:perf_hooks monotonic clock domain. */
   deadlineMs: number;
+  maxPollIntervalMs?: number;
   signal?: AbortSignal;
   assertCurrent?(): void | Promise<void>;
   onWait?(): void;
@@ -27,6 +28,7 @@ export async function acquireStateDatabaseCoordinatorWithWait(params: {
   let notified = false;
   let attempts = 0;
   let outcome = "refused";
+  let lastContention: InstanceType<typeof StateDatabaseCoordinatorContentionError> | undefined;
   try {
     const lease = await acquireWithWait({
       get deadlineMs() {
@@ -34,7 +36,7 @@ export async function acquireStateDatabaseCoordinatorWithWait(params: {
       },
       now: performance.now.bind(performance),
       pollIntervalMs: 25,
-      maxPollIntervalMs: 250,
+      maxPollIntervalMs: params.maxPollIntervalMs ?? 250,
       shouldRetry: (error) =>
         acquisitionFailed &&
         error instanceof StateDatabaseCoordinatorContentionError &&
@@ -53,7 +55,7 @@ export async function acquireStateDatabaseCoordinatorWithWait(params: {
         await params.assertCurrent?.();
         params.signal?.throwIfAborted();
         if (performance.now() >= params.deadlineMs) {
-          throw new StateDatabaseCoordinatorContentionError("state-lifecycle");
+          throw lastContention ?? new StateDatabaseCoordinatorContentionError("state-lifecycle");
         }
         try {
           attempts += 1;
@@ -65,6 +67,9 @@ export async function acquireStateDatabaseCoordinatorWithWait(params: {
           );
         } catch (error) {
           acquisitionFailed = true;
+          if (error instanceof StateDatabaseCoordinatorContentionError) {
+            lastContention = error;
+          }
           throw error;
         }
       },

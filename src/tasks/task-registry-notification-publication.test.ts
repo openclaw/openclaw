@@ -200,7 +200,7 @@ it.each(["start", "end"] as const)(
 
         releaseSibling.resolve();
         await withTestTimeout(
-          deliveries.settle(),
+          deliveries.settleResults(),
           2_000,
           "Published notification joined its producer or transport cleanup",
         );

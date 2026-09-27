@@ -30,8 +30,8 @@ import { hasVisibleCompletionResult } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import {
+  hasAnnounceSendEvidence,
   SourceOwnerChangedError,
-  sourceOwnerChangedResult,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
@@ -39,7 +39,10 @@ import {
   sendSubagentAnnounceMessage,
   tryResolveSubagentRequesterAgentId,
 } from "./subagent-announce-delivery.runtime.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import {
+  sourceOwnerChangedResult,
+  type SubagentAnnounceDeliveryResult,
+} from "./subagent-announce-dispatch.js";
 import type { SubagentCompletionToolHandoffRegistration } from "./subagent-announce-handoff.js";
 import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
 
@@ -320,6 +323,7 @@ export async function deliverCompletionDirect(params: {
   }
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
   let committedDelivery: SubagentAnnounceDeliveryResult | undefined;
+  let deliveryResultReported: Promise<void> | undefined;
   try {
     if (params.isSourceSessionEffectsAllowed?.() === false) {
       return sourceOwnerChangedResult();
@@ -346,14 +350,18 @@ export async function deliverCompletionDirect(params: {
           throw new SourceOwnerChangedError();
         }
       },
-      onDeliveryResult: async () => {
+      onDeliveredPayload: () => {
         if (committedDelivery) {
           return;
         }
-        // Platform identity is committed before transcript mirroring, which
-        // may wait behind the requester's still-active SQLite writer.
+        // This single payload must finish every chunk before settling the
+        // announcement, still ahead of potentially blocked transcript mirroring.
         committedDelivery = { delivered: true, path: "direct", deliveredAt: Date.now() };
-        await params.onDeliveryResult?.(committedDelivery);
+        deliveryResultReported = Promise.resolve(
+          params.onDeliveryResult?.(committedDelivery),
+        ).catch(() => {
+          // Bookkeeping failure cannot make a fully sent result retryable.
+        });
       },
       mirror: {
         sessionKey: params.requesterSessionKey,
@@ -385,6 +393,15 @@ export async function deliverCompletionDirect(params: {
       // retryable failure and send the same completion twice.
       return committedDelivery;
     }
+    if (hasAnnounceSendEvidence(err)) {
+      return {
+        delivered: false,
+        path: "direct",
+        terminal: true,
+        disposition: "permanent_failure",
+        error: `text completion direct delivery was incomplete; automatic retry would duplicate sent chunks: ${summarizeDeliveryError(err)}`,
+      };
+    }
     if (err instanceof SourceOwnerChangedError) {
       return sourceOwnerChangedResult();
     }
@@ -396,6 +413,8 @@ export async function deliverCompletionDirect(params: {
       path: "direct",
       error: `text completion direct delivery failed: ${summarizeDeliveryError(err)}`,
     };
+  } finally {
+    await deliveryResultReported;
   }
 }
 

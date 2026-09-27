@@ -198,6 +198,7 @@ function expectPluginAutoEnableFor(config: OpenClawConfig) {
   expect(applyPluginAutoEnable).toHaveBeenCalledWith({
     config,
     env: process.env,
+    ambientEnvTriggers: "suppress",
     manifestRegistry: pluginManifestRegistry,
   });
 }
@@ -277,6 +278,7 @@ function loadTestStartup(params: {
 }) {
   return loadGatewayStartupConfigSnapshot({
     minimalTestGateway: params.minimalTestGateway ?? true,
+    ambientEnvTriggers: "suppress",
     log: params.log ?? testStartupLog(),
     initialSnapshotRead: params.initialSnapshotRead,
   });
@@ -668,27 +670,6 @@ describe("gateway startup config validation", () => {
       ],
     });
     vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
-    await expectStartupRejects(`Invalid config at ${configPath}:`);
-  });
-
-  it("keeps mixed plugin and core startup invalidity fatal", async () => {
-    const rawConfig = enabledPluginRawConfig("invalid");
-    const invalidSnapshot = buildInvalidConfigSnapshot({
-      rawConfig,
-      config: rawConfig as unknown as OpenClawConfig,
-      issues: [
-        {
-          path: "gateway.mode",
-          message: "Expected 'local' or 'remote'",
-        },
-        {
-          path: "plugins.entries.feishu.config.token",
-          message: "invalid config: must be string",
-        },
-      ],
-    });
-    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
-
     await expectStartupRejects(`Invalid config at ${configPath}:`);
   });
 

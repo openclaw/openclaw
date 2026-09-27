@@ -1010,23 +1010,7 @@ export function extractNativeI18nCandidates(
           continue;
         }
         const body = source.slice(bodyStart, closingBrace);
-        for (const returnKeyword of body.matchAll(/\breturn\b/gu)) {
-          const openingQuote = skipWhitespaceAndBrace(
-            source,
-            bodyStart + (returnKeyword.index ?? 0) + returnKeyword[0].length,
-          );
-          const literal = readAdjacentStringLiterals(surface, source, openingQuote);
-          if (literal) {
-            addCandidate(
-              entries,
-              surface,
-              repoPath,
-              literal.value,
-              "conditional-branch",
-              lineNumber(source, openingQuote),
-            );
-          }
-        }
+        addBranchCandidates(entries, surface, repoPath, source, bodyStart, body, /\breturn\b/gu);
         continue;
       }
       const expression = source.slice(bodyStart);
@@ -1840,7 +1824,7 @@ async function main() {
       await apple.verifyAppleAppI18n();
     } else {
       await android.checkAndroidAppI18n({ reportObsolete });
-      await apple.checkAppleAppI18n();
+      await apple.checkAppleAppI18n({ reportObsolete });
     }
   }
   if (parsed.command === "sync" && parsed.write && !parsed.locale) {

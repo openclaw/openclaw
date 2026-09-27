@@ -1,6 +1,7 @@
 /** Offline Doctor target discovery and legacy-source admission. */
 import fs from "node:fs";
 import path from "node:path";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import {
@@ -19,12 +20,28 @@ import {
   hasOrphanedSqliteSidecars,
   resolveSqliteDatabaseFilePaths,
 } from "../infra/sqlite-files.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import type { HistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
-import type { DoctorSessionSqliteMode } from "./doctor-session-sqlite-types.js";
+import type {
+  DoctorSessionSqliteMode,
+  DoctorSessionSqliteOptions,
+} from "./doctor-session-sqlite-types.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
+
+// Direct store migrations are scoped by path; broader agent discovery needs runtime config.
+export function resolveDoctorSessionSqliteConfig(
+  options: DoctorSessionSqliteOptions,
+): OpenClawConfig {
+  if (options.cfg) {
+    return options.cfg;
+  }
+  const requestedAgentId = normalizeAgentId(options.agent ?? LEGACY_IMPLICIT_AGENT_ID);
+  return options.store
+    ? { agents: { entries: { [requestedAgentId]: { default: true } } } }
+    : getRuntimeConfig();
+}
 
 export function resolveDoctorSessionSqliteMaintenancePaths(
   targets: readonly SessionStoreTarget[],

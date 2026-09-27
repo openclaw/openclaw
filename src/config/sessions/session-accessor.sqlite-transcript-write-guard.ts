@@ -8,7 +8,10 @@ import type {
   TranscriptAppendRefusal,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
-import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  transcriptWriteScopeIsCurrent,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
   assertOwnedTranscriptWriteCommit,
@@ -57,14 +60,7 @@ export function resolveTranscriptAppendRefusal(
   resolved: ResolvedTranscriptScope,
   scope: SessionTranscriptWriteScope,
 ): TranscriptAppendRefusal | undefined {
-  if (
-    entry &&
-    entry.sessionId === resolved.sessionId &&
-    (scope.expectedLifecycleRevision === undefined ||
-      entry.lifecycleRevision === scope.expectedLifecycleRevision) &&
-    (scope.expectedWriterRunId === undefined ||
-      entry.activeWriterRunId === scope.expectedWriterRunId)
-  ) {
+  if (transcriptWriteScopeIsCurrent(entry, resolved.sessionId, scope)) {
     return undefined;
   }
   const identity = {

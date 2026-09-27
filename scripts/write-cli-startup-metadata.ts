@@ -5,13 +5,17 @@ import fs, { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import pMap from "p-map";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
-import { replaceFileAtomicSync } from "../src/infra/replace-file.js";
 import { resolveCliStartupRootHelpBundleIdentity } from "./lib/cli-startup-root-help-bundle.js";
-import { terminateManagedChild } from "./lib/managed-child-process.mts";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -516,25 +520,23 @@ async function spawnText(
       if (!useProcessGroup || typeof child.pid !== "number") {
         return false;
       }
-      try {
-        process.kill(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return (error as NodeJS.ErrnoException).code === "EPERM";
-      }
+      // Snapshot work belongs to the bounded drain, not this initial presence check.
+      return (
+        inspectManagedProcessGroup(child, {
+          deadlineAt: Date.now(),
+          errorPolicy: "alive-on-eperm",
+          useProcessGroup,
+        }) !== "dead"
+      );
     };
-    const waitForProcessGroupExit = async (timeoutMs: number) => {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        if (!processGroupIsAlive()) {
-          return true;
-        }
-        await new Promise((resolvePoll) => {
-          setTimeout(resolvePoll, 25);
-        });
-      }
-      return !processGroupIsAlive();
-    };
+    const waitForProcessGroupExit = (deadlineAt: number) =>
+      waitForManagedProcessGroupExit(child, Math.max(0, deadlineAt - Date.now()), {
+        deadlineAt,
+        errorPolicy: "alive-on-eperm",
+        useProcessGroup,
+        clampPollToDeadline: true,
+        pollIntervalMs: 25,
+      });
     const recordTerminalFailure = (error: Error) => {
       if (terminalFailure) {
         return terminalFailure;
@@ -601,39 +603,43 @@ async function spawnText(
       if (waitingForKillGrace) {
         return;
       }
+      const graceDeadlineAt = Date.now() + killGraceMs;
       waitingForKillGrace = true;
-      killTimer = setTimeout(() => {
-        waitingForKillGrace = false;
-        killTimer = undefined;
-        forceKillInFlight = true;
-        signalChild("SIGKILL");
-        const forceDrain = useProcessGroup
-          ? waitForProcessGroupExit(killGraceMs)
-          : Promise.resolve(true);
-        void forceDrain.then((drained) => {
-          forceKillInFlight = false;
-          if (!drained) {
-            processTreeCleanupFailure = Object.assign(
-              createFailure(
-                "process-tree-cleanup",
-                `process group did not exit within ${killGraceMs}ms after SIGKILL`,
-              ),
-              { preserveRenderState: true },
-            );
-            options.onTerminalFailure?.(processTreeCleanupFailure);
-          }
-          if (childClosedResult) {
-            finishClose(childClosedResult);
-          } else if (!drained) {
-            child.stdout.destroy();
-            child.stderr.destroy();
-            child.unref?.();
-            finishClose({ code: null, signal: "SIGKILL" });
-          }
-        });
-      }, killGraceMs);
+      killTimer = setTimeout(
+        () => {
+          waitingForKillGrace = false;
+          killTimer = undefined;
+          forceKillInFlight = true;
+          signalChild("SIGKILL");
+          const forceDrain = useProcessGroup
+            ? waitForProcessGroupExit(Date.now() + killGraceMs)
+            : Promise.resolve(true);
+          void forceDrain.then((drained) => {
+            forceKillInFlight = false;
+            if (!drained) {
+              processTreeCleanupFailure = Object.assign(
+                createFailure(
+                  "process-tree-cleanup",
+                  `process group did not exit within ${killGraceMs}ms after SIGKILL`,
+                ),
+                { preserveRenderState: true },
+              );
+              options.onTerminalFailure?.(processTreeCleanupFailure);
+            }
+            if (childClosedResult) {
+              finishClose(childClosedResult);
+            } else if (!drained) {
+              child.stdout.destroy();
+              child.stderr.destroy();
+              child.unref?.();
+              finishClose({ code: null, signal: "SIGKILL" });
+            }
+          });
+        },
+        Math.max(0, graceDeadlineAt - Date.now()),
+      );
       if (useProcessGroup) {
-        void waitForProcessGroupExit(killGraceMs).then((drained) => {
+        void waitForProcessGroupExit(graceDeadlineAt).then((drained) => {
           if (!drained || !waitingForKillGrace) {
             return;
           }

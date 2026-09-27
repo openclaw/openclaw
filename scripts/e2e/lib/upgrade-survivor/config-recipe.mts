@@ -161,6 +161,22 @@ const configuredPluginInstallSteps = [
 
 const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   [
+    "base",
+    [
+      {
+        id: "logging-file",
+        intent: "logging",
+        // Raw debug output stays in the isolated home, outside uploaded artifact roots.
+        argv: ["config", "set", "logging.file", "~/openclaw-upgrade-survivor/gateway.jsonl"],
+      },
+      {
+        id: "logging-level",
+        intent: "logging",
+        argv: ["config", "set", "logging.level", "debug"],
+      },
+    ],
+  ],
+  [
     "acpx-openclaw-tools-bridge",
     [
       {

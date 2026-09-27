@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -38,6 +39,7 @@ import {
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
   linkEmail,
+  resolveUserProfileId,
   setDisplayName,
   setUserProfileRole,
   syncGitHubIdentity,
@@ -59,6 +61,63 @@ function stateOptions() {
   return { path: join(tempDirs.make("openclaw-channel-identities-"), "state.sqlite") };
 }
 
+it("keeps revoked authority retired after worker email bindings return to their original owner", async () => {
+  const options = stateOptions();
+  const source = ensureProfileForEmail("source@example.test", options);
+  const target = ensureProfileForEmail("target@example.test", options);
+  await linkCanonicalUserProfileEmail("retained@example.test", source.id, options);
+  await changeCanonicalUserChannelIdentity("link", source.id, identity, options);
+  const selection = await prepareUserProfileSelectionAuthority(source.id, options);
+  const admin = await prepareUserProfileRoleAuthority(source.id, options);
+  const channel = await prepareUserChannelIdentityAuthority(identity, options);
+  expect(selection?.isCurrent()).toBe(true);
+  expect(admin?.isCurrent()).toBe(true);
+  expect(channel?.isCurrent()).toBe(true);
+
+  await linkCanonicalUserProfileEmail("source@example.test", target.id, options);
+  await linkCanonicalUserProfileEmail("source@example.test", source.id, options);
+
+  expect(resolveUserProfileId(source.id, options)).toBe(source.id);
+  expect(selection?.isCurrent()).toBe(true);
+  expect(admin?.isCurrent()).toBe(false);
+  expect(channel?.isCurrent()).toBe(false);
+  expect((await prepareUserProfileRoleAuthority(source.id, options))?.isCurrent()).toBe(true);
+  expect((await prepareUserChannelIdentityAuthority(identity, options))?.isCurrent()).toBe(true);
+});
+
+it("rejects a stale worker role reply after writer commits restore the original role", async () => {
+  const options = stateOptions();
+  const profile = ensureProfileForEmail("source@example.test", options);
+  await setCanonicalUserProfileRole(profile.id, "admin", options);
+  await changeCanonicalUserChannelIdentity("link", profile.id, identity, options);
+  const original = await prepareUserProfileRoleAuthority(profile.id, options);
+  const channel = await prepareUserChannelIdentityAuthority(identity, options);
+  const selection = await prepareUserProfileSelectionAuthority(profile.id, options);
+  const execute = stateReads.executeExistingOpenClawStateRead;
+  const read = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockImplementationOnce(async (...args) => {
+      await setCanonicalUserProfileRole(profile.id, "member", options);
+      const reply = await execute(...args);
+      expect(reply).toMatchObject({
+        type: "userProfiles.authority.resolve",
+        profile: { profileId: profile.id, role: "member" },
+      });
+      await setCanonicalUserProfileRole(profile.id, "admin", options);
+      return reply;
+    });
+  try {
+    const prepared = await prepareUserProfileRoleAuthority(profile.id, options);
+    expect(prepared?.role).toBe("admin");
+    expect(prepared?.isCurrent()).toBe(true);
+    expect(original?.isCurrent()).toBe(false);
+    expect(channel?.isCurrent()).toBe(false);
+    expect(selection?.isCurrent()).toBe(true);
+  } finally {
+    read.mockRestore();
+  }
+});
+
 it("does not create state or identity tables while resolving absent links", async () => {
   const options = stateOptions();
   expect(await prepareUserChannelIdentityAuthority(identity, options)).toBeUndefined();
@@ -72,7 +131,7 @@ it("does not create state or identity tables while resolving absent links", asyn
   expect(tableExists(db, "user_profile_identities")).toBe(false);
 });
 
-it("keeps prepared authority SQL-free and revokes the exact binding before worker commit acknowledgement", async () => {
+it("revokes the exact prepared binding before worker commit acknowledgement", async () => {
   const options = stateOptions();
   const otherOptions = stateOptions();
   const ada = ensureProfileForEmail("ada@example.test", options);
@@ -102,7 +161,7 @@ it("keeps prepared authority SQL-free and revokes the exact binding before worke
     let observedCommitGrant = false;
     const admissionSpy = vi
       .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit) =>
+      .mockImplementation((admit, attachment) =>
         createAdmission((request, grant) => {
           admit(request, () => {
             if (request.stage === "commit") {
@@ -112,7 +171,7 @@ it("keeps prepared authority SQL-free and revokes the exact binding before worke
             }
             return grant();
           });
-        }),
+        }, attachment),
       );
     try {
       await changeCanonicalUserChannelIdentity("unlink", ada.id, identity, options);
@@ -142,7 +201,7 @@ it("keeps prepared authority SQL-free and revokes the exact binding before worke
     let pendingSelection: ReturnType<typeof prepareUserProfileSelectionAuthority> | undefined;
     const mutationAdmissionSpy = vi
       .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit) =>
+      .mockImplementation((admit, attachment) =>
         createAdmission((request, grant) => {
           if (request.stage === "commit" && mutation === "reject") {
             actorCurrent = false;
@@ -168,7 +227,7 @@ it("keeps prepared authority SQL-free and revokes the exact binding before worke
             }
             return grant();
           });
-        }),
+        }, attachment),
       );
     try {
       await expect(
@@ -257,6 +316,9 @@ it("keeps prepared authority SQL-free and revokes the exact binding before worke
     }
     const latest = await prepareUserChannelIdentityAuthority(identity, options);
     await closeOpenClawStateDatabaseAsync();
+    expect(latest?.isCurrent()).toBe(false);
+    const reopened = await prepareUserChannelIdentityAuthority(identity, options);
+    expect(reopened?.isCurrent()).toBe(true);
     expect(latest?.isCurrent()).toBe(false);
   } finally {
     queries.mockRestore();

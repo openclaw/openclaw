@@ -305,7 +305,7 @@ describe("appendSessionTranscriptNote", () => {
           .mockImplementation(
             <T>(
               options: Parameters<typeof admit>[0],
-              run: () => T | Promise<T>,
+              run: Parameters<typeof admit<T>>[1],
               reentrant?: boolean,
               timing?: Parameters<typeof admit>[3],
             ) => {
@@ -456,7 +456,7 @@ describe("appendSessionTranscriptNote", () => {
         .mockImplementation(
           <T>(
             options: Parameters<typeof runWrite>[0],
-            run: () => T | Promise<T>,
+            run: Parameters<typeof runWrite<T>>[1],
             reentrant?: boolean,
             timing?: Parameters<typeof runWrite>[3],
           ) => {
@@ -613,14 +613,14 @@ describe("appendSessionTranscriptNote", () => {
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       const spy = vi
         .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit) =>
+        .mockImplementation((admit, attachment) =>
           createAdmission((request, grant) => {
             if (request.stage === "commit" && changed === 0) {
               changed++;
               registerSecretValueForRedaction(marker);
             }
             admit(request, grant);
-          }),
+          }, attachment),
         );
       try {
         const rejected = await appendSessionTranscriptNote(target, note).then(

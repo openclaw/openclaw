@@ -1,4 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "../../daemon/service-stage.js";
@@ -143,6 +144,7 @@ export async function runUpdatedInstallGatewayCommand(
     assertCurrent?: () => void;
     definitionRecovery?: UpdateServiceDefinitionRecovery;
     onWarnings?: (warnings: string[]) => void;
+    onGatewayStartAttempted?: () => void;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   },
   action: "install" | "restart",
@@ -195,8 +197,7 @@ export async function runUpdatedInstallGatewayCommand(
   }
   params.signal?.throwIfAborted();
   assertCurrent();
-  const receiveInstallResult = (stdout: string) => {
-    const response = safeParseJsonRecord(stdout);
+  const receiveInstallResult = (response: Record<string, unknown> | undefined) => {
     if (!installing || !response) {
       return;
     }
@@ -277,6 +278,7 @@ export async function runUpdatedInstallGatewayCommand(
     bindChild?: (pid: number, argv?: readonly string[]) => void,
   ) => {
     const argv = [nodeRunner, entrypoint, ...args, ...(grant ? ["--update-executor", "run"] : [])];
+    params.onGatewayStartAttempted?.();
     const result = await runCommandWithTimeout(argv, {
       // The complete owned env must not regain selectors removed during capture.
       baseEnv: {},
@@ -322,13 +324,11 @@ export async function runUpdatedInstallGatewayCommand(
     res.cleanup !== "uncertain";
   const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
   const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
-  if (complete) {
-    receiveInstallResult(res.stdout);
-  }
+  receiveInstallResult(response);
 
   const original = params.originalManagedServiceRuntime;
   if (installing && original && exited && complete) {
-    const receipt = response && safeParseJsonRecord(JSON.stringify(response.rebind));
+    const receipt = asOptionalRecord(response?.rebind);
     if (
       receipt?.before === original.definition.fingerprint &&
       typeof receipt.after === "string" &&
@@ -389,6 +389,7 @@ export async function restartRetainedUpdateGatewayService(params: {
   stdout: NodeJS.WritableStream;
   assertCurrent: () => void;
   revalidate: () => Promise<void>;
+  onGatewayStartAttempted?: () => void;
   signal?: AbortSignal;
 }): Promise<GatewayServiceRestartResult> {
   const env = { ...params.env };
@@ -401,6 +402,7 @@ export async function restartRetainedUpdateGatewayService(params: {
         stdout: params.stdout,
         env,
         beforeMutation: params.revalidate,
+        onRestartAttempted: params.onGatewayStartAttempted,
         assertCurrent: () => {
           assertNative();
           assertCurrent();

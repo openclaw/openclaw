@@ -10,24 +10,15 @@ type DiscordPresenceConfig = Pick<
   "activity" | "status" | "activityType" | "activityUrl"
 >;
 
-export function resolveDiscordPresenceUpdate(
-  config: DiscordPresenceConfig,
-): UpdatePresenceData | null {
+export function resolveDiscordPresenceUpdate(config: DiscordPresenceConfig): UpdatePresenceData {
   const activityText = normalizeOptionalString(config.activity) ?? "";
   const status = normalizeOptionalString(config.status) ?? "";
   const activityType = config.activityType;
   const activityUrl = normalizeOptionalString(config.activityUrl) ?? "";
 
-  const hasActivity = Boolean(activityText);
-  const hasStatus = Boolean(status);
-
-  if (!hasActivity && !hasStatus) {
-    return { since: null, activities: [], status: "online", afk: false };
-  }
-
   const activities: Activity[] = [];
 
-  if (hasActivity) {
+  if (activityText) {
     const resolvedType = activityType ?? DEFAULT_CUSTOM_ACTIVITY_TYPE;
     const activity: Activity =
       resolvedType === DEFAULT_CUSTOM_ACTIVITY_TYPE

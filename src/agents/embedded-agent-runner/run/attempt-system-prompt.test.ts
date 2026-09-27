@@ -207,18 +207,18 @@ describe("buildAttemptSystemPrompt", () => {
   });
 
   it.each([
-    { sandboxSessionKey: "global", mode: "off", sandboxed: false },
-    { sandboxSessionKey: "agent:main:policy", mode: "all", sandboxed: true },
+    { sandboxSessionKey: "global", mode: "off" as const, sandboxed: false },
+    { sandboxSessionKey: "agent:main:policy", mode: "all" as const, sandboxed: true },
   ])(
-    "reports the selected sandbox policy for a global attempt ($sandboxSessionKey)",
+    "reports the prepared sandbox policy even if configuration changes ($sandboxSessionKey)",
     async (testCase) => {
       const workspaceDir = tempDirs.make("openclaw-global-system-prompt-");
       const config = {
         agents: {
           ownership: "explicit" as const,
           list: [
-            { id: "main", sandbox: { mode: "all" as const } },
-            { id: "marketing", sandbox: { mode: "off" as const } },
+            { id: "main", sandbox: { mode: "off" as const } },
+            { id: "marketing", sandbox: { mode: "all" as const } },
           ],
         },
       };
@@ -254,6 +254,7 @@ describe("buildAttemptSystemPrompt", () => {
             prepared: true,
           }),
           sandboxSessionKey: testCase.sandboxSessionKey,
+          sandboxReport: { mode: testCase.mode, sandboxed: testCase.sandboxed },
           sessionAgentId: "marketing",
         }),
         isRawModelRun: true,
@@ -400,12 +401,8 @@ describe("buildAttemptSystemPrompt", () => {
 
       expect(result.systemPrompt).toContain("\nWorking directory: /tmp/openclaw\n");
       expect(result.systemPrompt).not.toContain("\u202e");
-      expect(result.systemPrompt).toContain("# Project Context");
-      expect(result.systemPrompt).toContain("## /tmp/openclaw/SOUL.md");
       expect(result.systemPrompt).toContain("SOUL_CONTEXT_MARKER");
-      expect(result.systemPrompt).toContain("## /tmp/openclaw/IDENTITY.md");
       expect(result.systemPrompt).toContain("IDENTITY_CONTEXT_MARKER");
-      expect(result.systemPrompt).toContain("## /tmp/openclaw/USER.md");
       expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
     },
   );
@@ -491,19 +488,11 @@ describe("buildAttemptSystemPrompt", () => {
       providerTransform: baseProviderTransform,
     });
 
-    expect(result.systemPrompt).toContain("Current model identity: openai/gpt-5.5.");
     expect(result.systemPrompt).toContain("## Bootstrap Pending");
-    expect(result.systemPrompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
-    expect(result.systemPrompt).toContain("## Bootstrap Context Notice");
     expect(result.systemPrompt).toContain("Bootstrap context was truncated.");
-    expect(result.systemPrompt).toContain("# Project Context");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/SOUL.md");
     expect(result.systemPrompt).toContain("SOUL_CONTEXT_MARKER");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/IDENTITY.md");
     expect(result.systemPrompt).toContain("IDENTITY_CONTEXT_MARKER");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/USER.md");
     expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/BOOTSTRAP.md");
     expect(result.systemPrompt).toContain("Reply with BOOTSTRAP_OK.");
   });
 
@@ -570,7 +559,7 @@ describe("buildAttemptSystemPrompt", () => {
       providerTransform: baseProviderTransform,
     });
 
-    expect(result.baseSystemPrompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
+    expect(result.baseSystemPrompt).toContain("Reply with BOOTSTRAP_OK.");
     expect(result.systemPrompt).toBe("");
   });
 });

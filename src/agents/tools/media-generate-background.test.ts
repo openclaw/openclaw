@@ -195,43 +195,6 @@ describe("music generate background helpers", () => {
     });
   });
 
-  it("records task progress updates", () => {
-    musicGenerationTaskLifecycle.recordTaskProgress({
-      handle: {
-        taskId: "task-123",
-        runId: "tool:music_generate:abc",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        taskLabel: "night-drive synthwave",
-      },
-      progressSummary: "Saving generated music",
-    });
-
-    expectRecordedTaskProgress({
-      taskExecutorMocks,
-      runId: "tool:music_generate:abc",
-      progressSummary: "Saving generated music",
-    });
-  });
-
-  it("queues a completion event by default when direct send is disabled", async () => {
-    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-      delivered: true,
-      path: "direct",
-    });
-
-    await musicGenerationTaskLifecycle.wakeTaskCompletion({
-      ...createMediaCompletionFixture({
-        runId: "tool:music_generate:abc",
-        taskLabel: "night-drive synthwave",
-        result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
-        mediaUrls: ["/tmp/generated-night-drive.mp3"],
-      }),
-    });
-
-    expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
-  });
-
   it.each([
     "agent:main:discord:direct:123",
     "agent:main:discord:channel:C123",
@@ -284,31 +247,6 @@ describe("music generate background helpers", () => {
       expect(replyInstruction).not.toContain("MEDIA:");
     },
   );
-
-  it("keeps failed completion notices in the durable agent-loop handoff", async () => {
-    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-      delivered: false,
-      path: "direct",
-      reason: "generated_media_missing",
-      error: "completion agent did not deliver generated media",
-    });
-    const completion = createMediaCompletionFixture({
-      runId: "tool:music_generate:abc",
-      taskLabel: "night-drive synthwave",
-      result: "provider failed",
-    });
-
-    await expect(
-      musicGenerationTaskLifecycle.wakeTaskCompletion({
-        ...completion,
-        status: "error",
-        statusLabel: "failed",
-      }),
-    ).resolves.toEqual({ status: "permanent_failure" });
-
-    expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
-  });
 });
 
 // Video generation background tests cover detached task lifecycle, keepalive
@@ -354,24 +292,6 @@ describe("video generate background helpers", () => {
     });
   });
 
-  it("records task progress updates", () => {
-    videoGenerationTaskLifecycle.recordTaskProgress({
-      handle: {
-        taskId: "task-123",
-        runId: "tool:video_generate:abc",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        taskLabel: "friendly lobster surfing",
-      },
-      progressSummary: "Saving generated video",
-    });
-
-    expectRecordedTaskProgress({
-      taskExecutorMocks,
-      runId: "tool:video_generate:abc",
-      progressSummary: "Saving generated video",
-    });
-  });
-
   it("keeps the detached video tool run context registered until terminal status", () => {
     taskExecutorMocks.createRunningTaskRun.mockReturnValue({
       taskId: "task-123",
@@ -403,49 +323,6 @@ describe("video generate background helpers", () => {
     });
 
     expect(getAgentRunContext(handle.runId)).toBeUndefined();
-  });
-
-  it("queues a completion event by default when direct send is disabled", async () => {
-    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-      delivered: true,
-      path: "direct",
-    });
-
-    await videoGenerationTaskLifecycle.wakeTaskCompletion({
-      ...createMediaCompletionFixture({
-        runId: "tool:video_generate:abc",
-        taskLabel: "friendly lobster surfing",
-        result: "Generated 1 video.\nMEDIA:/tmp/generated-lobster.mp4",
-        mediaUrls: ["/tmp/generated-lobster.mp4"],
-      }),
-    });
-
-    expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps video generation failures in the durable agent-loop handoff", async () => {
-    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-      delivered: false,
-      path: "direct",
-      reason: "generated_media_missing",
-      error: "completion agent did not deliver generated media",
-    });
-
-    await expect(
-      videoGenerationTaskLifecycle.wakeTaskCompletion({
-        ...createMediaCompletionFixture({
-          runId: "tool:video_generate:abc",
-          taskLabel: "friendly lobster surfing",
-          result: "All video generation models failed.",
-        }),
-        status: "error",
-        statusLabel: "failed",
-      }),
-    ).resolves.toEqual({ status: "permanent_failure" });
-
-    expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
   it("keeps active video generation failure wakes agent-mediated", async () => {

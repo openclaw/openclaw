@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   declareAgentWorkspaceAccess,
@@ -311,6 +313,67 @@ describe("host-owned workspace access", () => {
 
 describe("workspace attachment preparation", () => {
   const turn = { timeoutMs: 1_000, media: [{ path: "media://inbound/report.pdf" }] };
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([false, true])(
+    "finishes short attachment reads before publishing paths (close failure: %s)",
+    async (closeFailure) => {
+      const stateDir = tempDirs.make("openclaw-attachment-prefix-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const mediaDir = path.join(stateDir, "media");
+      await fs.mkdir(mediaDir);
+      const filePath = path.join(mediaDir, "attachment");
+      await fs.writeFile(filePath, "%PDF-1.7\nsynthetic attachment\n%%EOF\n");
+      const handles: FileHandle[] = [];
+      const open = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (String(args[0]) === filePath) {
+          handles.push(handle);
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementationOnce(async (...readArgs) => {
+            const result = await read(...readArgs);
+            return { ...result, bytesRead: Math.min(1, result.bytesRead) };
+          });
+          if (closeFailure) {
+            const close = handle.close.bind(handle);
+            vi.spyOn(handle, "close").mockImplementation(async () => {
+              await close();
+              throw new Error("attachment close failed");
+            });
+          }
+        }
+        return handle;
+      });
+      const { prepareLocalWorkspaceAttachments } = await import("./workspace-attachments.local.js");
+
+      const note = await prepareLocalWorkspaceAttachments({
+        media: [{ path: filePath }],
+        execution: {
+          readAllowed: true,
+          maxChars: 10_000,
+          config: {
+            gateway: {
+              http: { endpoints: { responses: { files: { allowedMimes: ["application/pdf"] } } } },
+            },
+          },
+        },
+        assertCurrent() {},
+      });
+
+      if (closeFailure) {
+        expect(note).toBeUndefined();
+      } else {
+        expect(note).toContain(JSON.stringify(filePath));
+      }
+      expect(handles).toHaveLength(1);
+      expect(handles[0]!.fd).toBe(-1);
+    },
+  );
 
   it.each(["binding", "replacement", "caller", "abort"])(
     "fences local attachment preparation when %s changes during an awaited step",

@@ -174,12 +174,7 @@ function matchesResponseSessionScope(
 }
 
 function pruneExpiredResponseSessions(now: number) {
-  while (responseSessionMap.size > 0) {
-    const oldest = responseSessionMap.entries().next().value;
-    if (!oldest) {
-      return;
-    }
-    const [oldestKey, oldestValue] = oldest;
+  for (const [oldestKey, oldestValue] of responseSessionMap) {
     if (now - oldestValue.ts <= RESPONSE_SESSION_TTL_MS) {
       return;
     }

@@ -2372,7 +2372,10 @@ describe("createModelSelectionState disallowed override fallback target", () => 
     },
   } as unknown as OpenClawConfig;
 
-  async function runRejectedStoredOverride(persistedEntry?: SessionEntry): Promise<{
+  async function runRejectedStoredOverride(
+    persistedEntry?: SessionEntry,
+    source: "direct" | "parent" | "degraded" = "direct",
+  ): Promise<{
     state: Awaited<ReturnType<typeof createModelSelectionState>>;
     sessionEntry: SessionEntry;
   }> {
@@ -2383,7 +2386,14 @@ describe("createModelSelectionState disallowed override fallback target", () => 
       modelOverride: "model-c1",
       modelOverrideSource: "user",
     };
-    const sessionStore = { [sessionKey]: sessionEntry };
+    const parentSessionKey = "agent:main:parent";
+    const pinnedEntry = { ...sessionEntry };
+    if (source === "parent") {
+      delete sessionEntry.providerOverride;
+      delete sessionEntry.modelOverride;
+      delete sessionEntry.modelOverrideSource;
+    }
+    const sessionStore = { [sessionKey]: sessionEntry, [parentSessionKey]: pinnedEntry };
     if (persistedEntry) {
       // A concurrent writer won the reset's compare-and-swap and the row still holds the pin.
       sessionPersistenceMocks.persistReplySessionEntry.mockResolvedValueOnce({
@@ -2394,11 +2404,35 @@ describe("createModelSelectionState disallowed override fallback target", () => 
     // The reply owner seeds provider/model from the stored override before selection runs.
     const state = await createModelSelectionState({
       agentId: "main",
-      cfg,
+      cfg:
+        source === "degraded"
+          ? {
+              ...cfg,
+              agents: {
+                defaults: {
+                  ...cfg.agents?.defaults,
+                  modelPolicy: { allow: ["provider-a/*", "provider-b/model-b1"] },
+                },
+              },
+            }
+          : cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
       sessionStore,
       sessionKey,
+      parentSessionKey: source === "parent" ? parentSessionKey : undefined,
+      ...(source === "degraded"
+        ? {
+            preparedModelCatalog: {
+              authoritative: false,
+              entries: [
+                { provider: "provider-a", id: "model-a1", name: "First" },
+                { provider: "provider-b", id: "model-b1", name: "Primary" },
+              ],
+              routeVariants: [],
+            },
+          }
+        : {}),
       ...(persistedEntry ? { storePath: "sessions.json" } : {}),
       defaultProvider: "provider-b",
       defaultModel: "model-b1",
@@ -2408,6 +2442,14 @@ describe("createModelSelectionState disallowed override fallback target", () => 
       model: "model-c1",
       hasModelDirective: false,
     });
+    if (source === "parent") {
+      expect(sessionStore[parentSessionKey]).toMatchObject({
+        providerOverride: "provider-c",
+        modelOverride: "model-c1",
+        modelOverrideSource: "user",
+      });
+      expect(sessionEntry.modelOverride).toBeUndefined();
+    }
     return { state, sessionEntry };
   }
 
@@ -2423,6 +2465,24 @@ describe("createModelSelectionState disallowed override fallback target", () => 
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
   });
+
+  it.each(["parent", "degraded"] as const)(
+    "uses the primary without clearing a refused %s pin",
+    async (source) => {
+      const { state, sessionEntry } = await runRejectedStoredOverride(undefined, source);
+      expect(state).toMatchObject({
+        provider: "provider-b",
+        model: "model-b1",
+        resetModelOverride: false,
+        resetModelOverrideRef: "provider-c/model-c1",
+        resetModelOverrideReason: source === "parent" ? "disallowed" : "temporarily-unavailable",
+      });
+      if (source === "degraded") {
+        expect(sessionEntry.modelOverride).toBe("model-c1");
+        expect(sessionEntry.modelOverrideSource).toBe("user");
+      }
+    },
+  );
 
   it("keeps the configured primary when the reset loses the persistence race", async () => {
     // The refusal is a decision this call already made, so a lost compare-and-swap must not send

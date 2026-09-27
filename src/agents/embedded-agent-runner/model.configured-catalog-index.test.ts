@@ -95,11 +95,12 @@ function fixture(
       inlineProviderModels: [],
     },
     {
+      initialAuth: { authStore, authModes: {}, providerAuthLabels: new Map() },
       isCurrent: () => true,
       withRefreshStatus: (catalog) => catalog,
       readFullModelCatalog: () => undefined,
       readPublishedModels: () => undefined,
-      readPublishedModelCatalog: () => undefined,
+      refreshExpiredModelCatalog: () => {},
       loadNativeModelCatalog: async () => {
         throw new Error("Configured index lookups must not discover native models");
       },

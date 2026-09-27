@@ -10,6 +10,10 @@ import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add as addJob, update as updateJob } from "./ops-mutations.js";
@@ -66,6 +70,7 @@ describe("cron service timer seam coverage", () => {
     await writeCronStoreSnapshot({ storePath, jobs });
     const enqueueSystemEvent = vi.fn();
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       nowMs: () => now,
       enqueueSystemEvent,
@@ -121,6 +126,7 @@ describe("cron service timer seam coverage", () => {
     );
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       nowMs: () => now,
       defaultAgentId: "main-pr-router",
@@ -157,13 +163,14 @@ describe("cron service timer seam coverage", () => {
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clock = createGatewaySchedulerClock(now);
 
     const jobWithoutExplicitOwner = createDueMainJob({ now, wakeMode: "next-heartbeat" });
     delete jobWithoutExplicitOwner.sessionKey;
     await writeCronStoreSnapshot({ storePath, jobs: [jobWithoutExplicitOwner] });
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(clock.clock),
       storePath,
       nowMs: () => now,
       defaultAgentId: "stale-default",
@@ -216,13 +223,7 @@ describe("cron service timer seam coverage", () => {
     expect(task.endedAt).toBe(now);
     expect(task.cleanupAfter).toBe(now + 7 * 24 * 60 * 60_000);
 
-    const delays = timeoutSpy.mock.calls
-      .map(([, delay]) => delay)
-      .filter((delay): delay is number => typeof delay === "number");
-    const positiveDelays = delays.filter((delay) => delay > 0);
-    expect(positiveDelays.length).toBeGreaterThan(0);
-
-    timeoutSpy.mockRestore();
+    expect(clock.armedAtMs).toBe(now + 60_000);
   });
 
   it("uses the persisted execution timestamp for the canonical timer task", async () => {
@@ -241,6 +242,7 @@ describe("cron service timer seam coverage", () => {
       jobs: [job],
     });
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       nowMs: () => clock++,
       enqueueSystemEvent: vi.fn(),
@@ -313,6 +315,7 @@ describe("cron service timer seam coverage", () => {
       const runScriptJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
       const runIsolatedAgentJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         cronConfig: { triggers: { enabled: true } },
         nowMs: () => now,
@@ -370,6 +373,7 @@ describe("cron service timer seam coverage", () => {
       summary: "command ok",
     }));
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
@@ -399,6 +403,7 @@ describe("cron service timer seam coverage", () => {
       const now = Date.parse("2026-03-23T12:00:00.000Z");
       const runPayload = vi.fn(async () => ({ status: "ok" as const }));
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         nowMs: () => now,
         enqueueSystemEvent: vi.fn(),
@@ -446,6 +451,7 @@ describe("cron service timer seam coverage", () => {
     const now = Date.parse("2026-07-18T12:00:00.000Z");
     const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronConfig: { triggers: { enabled: false } },
       nowMs: () => now,
@@ -472,6 +478,7 @@ describe("cron service timer seam coverage", () => {
     const requestHeartbeat = vi.fn();
     const job = createDueScriptJob({ now, sessionTarget: "main" });
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronConfig: { triggers: { enabled: true } },
       nowMs: () => now,
@@ -599,6 +606,7 @@ describe("cron service timer seam coverage", () => {
       );
     }
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronConfig: { triggers: { enabled: true } },
       nowMs: () => now,
@@ -658,6 +666,7 @@ describe("cron service timer seam coverage", () => {
         agentId: undefined,
       };
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         cronConfig: { triggers: { enabled: true } },
         nowMs: () => now,
@@ -682,6 +691,7 @@ describe("cron service timer seam coverage", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronConfig: { triggers: { enabled: true } },
       nowMs: () => now,
@@ -708,6 +718,7 @@ describe("cron service timer seam coverage", () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-07-18T12:00:00.000Z");
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronConfig: { triggers: { enabled: true } },
       nowMs: () => now,
@@ -755,6 +766,7 @@ describe("cron service timer seam coverage", () => {
       const job = createDueScriptJob({ now });
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         cronConfig: { triggers: { enabled: true } },
         nowMs: () => now,
@@ -778,6 +790,7 @@ describe("cron service timer seam coverage", () => {
     const job = createDueScriptJob({ now, pacing: { min: "15m", max: "4h" } });
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronConfig: { triggers: { enabled: true } },
       nowMs: () => now,

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
   bindSessionPendingInputSources,
@@ -8,6 +9,9 @@ import {
   upsertSessionEntryCore,
   loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
+import { saveCronJobsStore } from "../../cron/store.js";
+import type { CronJob } from "../../cron/types.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userProfileList from "../../state/user-profile-list.js";
 import { ensureProfileForEmail, setAvatar } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -23,6 +27,128 @@ import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import type { GatewayRequestContext } from "./types.js";
 
 describe("pending input read boundary", () => {
+  it("prepares automation names once per pending page from the Gateway's selected partition", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:pending-automation",
+        sessionId: "pending-automation",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const job: CronJob = {
+        id: "report",
+        name: "Wrong partition",
+        enabled: false,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "Check the queue." },
+        state: {},
+      };
+      await saveCronJobsStore(state.statePath("cron", "jobs.json"), { version: 1, jobs: [job] });
+      const cronStorePath = state.statePath("selected-cron", "jobs.json");
+      const context = await createHistoryReadContext({ cronStorePath });
+      const receipts = [];
+      try {
+        for (let index = 0; index < 20; index += 1) {
+          receipts.push(
+            expectDefined(
+              await stageSessionPendingInput(scope, {
+                runId: `automation-${index}`,
+                assertCurrent: () => {},
+                message: {
+                  role: "user",
+                  content: "The queue is clear.",
+                  timestamp: 1,
+                  idempotencyKey: `automation-${index}:user`,
+                  provenance: {
+                    kind: "inter_session",
+                    sourceTool: "sessions_send",
+                    sourceSessionKey: "agent:main:cron:report:run:finished",
+                  },
+                },
+              }),
+              "pending automation receipt",
+            ),
+          );
+        }
+        for (const name of ["Selected automation", "Renamed automation", undefined]) {
+          await saveCronJobsStore(cronStorePath, {
+            version: 1,
+            jobs: name ? [{ ...job, name }] : [],
+          });
+          const counter = trackSqliteStatementExecutions(
+            openOpenClawStateDatabase().db,
+            ["names", "selection"],
+            (sql) =>
+              /\bfrom\s+"?cron_jobs"?\b/iu.test(sql)
+                ? "names"
+                : sql.includes('"config_machine_state"')
+                  ? "selection"
+                  : null,
+          );
+          try {
+            const expectedMessage = {
+              role: "assistant",
+              senderSession: expect.objectContaining({ label: name ?? "Automation" }),
+            };
+            const respond = vi.fn();
+            await expectDefined(
+              chatHistoryHandlers["chat.history"],
+              "history handler",
+            )({
+              params: { sessionKey: scope.sessionKey },
+              context,
+              req: { type: "req", id: "history", method: "chat.history" },
+              client: null,
+              isWebchatConnect: () => false,
+              respond,
+            });
+            expect(counter.counts).toEqual({ names: 0, selection: 0 });
+            expect(respond).toHaveBeenLastCalledWith(
+              true,
+              expect.objectContaining({
+                pendingInputs: expect.objectContaining({
+                  total: 20,
+                  items: Array.from({ length: 20 }, () =>
+                    expect.objectContaining({ message: expect.objectContaining(expectedMessage) }),
+                  ),
+                }),
+              }),
+            );
+            await expectDefined(
+              chatMessageGetHandlers["chat.message.get"],
+              "message handler",
+            )({
+              params: {
+                sessionKey: scope.sessionKey,
+                messageId: `pending:${expectDefined(receipts[0], "first automation receipt").inputId}`,
+              },
+              context,
+              req: { type: "req", id: "message", method: "chat.message.get" },
+              client: null,
+              isWebchatConnect: () => false,
+              respond,
+            });
+            expect(respond).toHaveBeenLastCalledWith(true, {
+              ok: true,
+              message: expect.objectContaining(expectedMessage),
+            });
+            expect(counter.counts).toEqual({ names: 0, selection: 0 });
+          } finally {
+            counter.restore();
+          }
+        }
+      } finally {
+        for (const receipt of receipts) {
+          receipt.finish("interrupted");
+        }
+      }
+    });
+  });
+
   it("projects pending input acceptance times with fresh page-scoped sender displays", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
@@ -201,7 +327,7 @@ describe("pending input read boundary", () => {
       );
       try {
         receipt.finish("cancelled");
-        const page = readChatPendingInputs(scope, { limit: 1, maxChars: 50 });
+        const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 50 });
         const displayId = `pending:${receipt.inputId}`;
         expect(page).toMatchObject({
           total: 1,
@@ -269,7 +395,9 @@ describe("pending input read boundary", () => {
         "hidden pending receipt",
       );
       try {
-        expect(readChatPendingInputs(scope, { limit: 20, maxChars: 100 }).items).toEqual([]);
+        expect((await readChatPendingInputs(scope, { limit: 20, maxChars: 100 })).items).toEqual(
+          [],
+        );
         const respond = vi.fn();
         await expectDefined(
           chatMessageGetHandlers["chat.message.get"],

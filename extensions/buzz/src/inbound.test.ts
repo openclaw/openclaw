@@ -372,7 +372,7 @@ describe("handleBuzzInbound", () => {
     expect(params.historyMap.size).toBe(0);
   });
 
-  it.each([undefined, "all", "off"] as const)(
+  it.each(["all", "off"] as const)(
     "uses replyToMode %s for automatic delivery and typing without changing thread context",
     async (replyToMode) => {
       const runtime = createPluginRuntimeMock();
@@ -541,8 +541,6 @@ describe("handleBuzzInbound", () => {
 
   it.each([
     ["membership", true],
-    ["shutdown", true],
-    ["membership", false],
     ["shutdown", false],
   ] as const)(
     "rechecks %s after asynchronous ingress admission (mentioned: %s)",

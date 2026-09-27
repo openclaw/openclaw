@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { assertWorkspaceStateMigrationReady } from "../agents/workspace-legacy-state.js";
 import {
@@ -14,7 +15,6 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { movePathWithCopyFallback } from "../infra/replace-file.js";
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import {
   isUpdateRehearsalReadOnlyPath,

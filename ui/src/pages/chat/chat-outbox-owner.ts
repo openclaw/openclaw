@@ -5,6 +5,7 @@ import {
   observeOutboxRecoveryOwner,
 } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
+import { readStoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
 import {
   applyStoredChatOutboxScope,
   subscribeStoredChatOutboxChanges,
@@ -66,7 +67,7 @@ class ChatOutboxGatewayOwner {
       return existing;
     }
     const scope = resolveUiConversationIdentity(host, host.sessionKey);
-    const durableSeen = new Set(this.outbox(host, scope)?.queue.map((item) => item.id));
+    const durableSeen = new Set(readStoredChatOutbox(host, scope)?.queue.map((item) => item.id));
     const created: HostProjection = { byScope: new Map(), durableSeen, retryable: new Set() };
     if (host.chatQueue.length) {
       created.byScope.set(storedChatOutboxScopeKey(scope), {
@@ -76,11 +77,6 @@ class ChatOutboxGatewayOwner {
     }
     this.hosts.set(host, created);
     return created;
-  }
-  private outbox(host: Composer, scope: Scope) {
-    return listStoredChatOutboxes(host).find(
-      ({ sessionKey, agentId }) => sessionKey === scope.sessionKey && agentId === scope.agentId,
-    );
   }
   durable(host: Composer, id: string) {
     return listStoredChatOutboxes(host).find(({ queue }) => queue.some((item) => item.id === id));
@@ -133,7 +129,7 @@ class ChatOutboxGatewayOwner {
   snapshot(
     host: Host,
     scope: Scope,
-    durable = this.outbox(host, scope)?.queue ?? [],
+    durable = readStoredChatOutbox(host, scope)?.queue ?? [],
   ): ChatQueueItem[] {
     const key = storedChatOutboxScopeKey(scope);
     const state = this.state(host);
@@ -345,7 +341,7 @@ class ChatOutboxGatewayOwner {
     const state = this.state(host);
     const key = storedChatOutboxScopeKey(scope);
     const retained = [
-      ...(this.outbox(host, scope)?.queue ?? []),
+      ...(readStoredChatOutbox(host, scope)?.queue ?? []),
       ...[...this.hosts.values()].flatMap(
         (projection) =>
           projection.byScope.get(key)?.queue.filter((entry) => isActiveLocal(projection, entry)) ??
@@ -654,8 +650,7 @@ function outboxOwnerKey(host: Composer): string {
   if (storage && !storageIds.has(storage)) {
     storageIds.set(storage, ++nextStorageId);
   }
-  const key = `${storage ? storageIds.get(storage) : 0}\u0000${host.settings?.gatewayUrl?.trim() || "default"}\u0000${host.client?.recoveryScope ?? ""}`;
-  return key;
+  return `${storage ? storageIds.get(storage) : 0}\u0000${host.settings?.gatewayUrl?.trim() || "default"}\u0000${host.client?.recoveryScope ?? ""}`;
 }
 export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
   const key = outboxOwnerKey(host);

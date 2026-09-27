@@ -97,40 +97,46 @@ describe("operator role policy", () => {
           signal: controller.signal,
           assertCurrent: () => controller.signal.throwIfAborted(),
         }));
-        const captures: NonNullable<ReturnType<typeof captureGatewayOperatorRunAuthority>>[] = [];
-        const capture = (params: Parameters<typeof captureGatewayOperatorRunAuthority>[0]) => {
+        const captures: NonNullable<
+          Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
+        >[] = [];
+        const capture = async (
+          params: Parameters<typeof captureGatewayOperatorRunAuthority>[0],
+        ) => {
           const result = expectDefined(
-            captureGatewayOperatorRunAuthority(params),
+            await captureGatewayOperatorRunAuthority(params),
             "operator capture",
           );
           captures.push(result);
           return result.authority;
         };
         try {
-          const [first, second] = dependencies.map((dependency) =>
-            capture({
-              client,
-              context:
-                dependencyKind === "gateway resolver"
-                  ? {
-                      getRuntimeConfig: context.getRuntimeConfig,
-                      resolveGatewayContext: () =>
-                        dependency.signal.aborted ? undefined : context,
-                    }
-                  : context,
-              ...(dependencyKind === "invocation"
-                ? { invocationAuthority: dependency }
-                : dependencyKind === "access"
-                  ? { sourceAuthority: dependency }
-                  : {}),
-            }),
+          const [first, second] = await Promise.all(
+            dependencies.map((dependency) =>
+              capture({
+                client,
+                context:
+                  dependencyKind === "gateway resolver"
+                    ? {
+                        getRuntimeConfig: context.getRuntimeConfig,
+                        resolveGatewayContext: () =>
+                          dependency.signal.aborted ? undefined : context,
+                      }
+                    : context,
+                ...(dependencyKind === "invocation"
+                  ? { invocationAuthority: dependency }
+                  : dependencyKind === "access"
+                    ? { sourceAuthority: dependency }
+                    : {}),
+              }),
+            ),
           );
           const original = expectDefined(first, "first source");
           const independent = expectDefined(second, "independent source");
           expect(resolveReplyOperatorAuthorityKey(independent)).not.toBe(
             resolveReplyOperatorAuthorityKey(original),
           );
-          const narrowed = capture({
+          const narrowed = await capture({
             client: {
               ...client,
               connect: { ...client.connect, scopes: [] },
@@ -186,7 +192,7 @@ describe("operator role policy", () => {
             assertCurrent: () => access.signal.throwIfAborted(),
           },
         };
-        const captured = captureGatewayOperatorRunAuthority({
+        const captured = (await captureGatewayOperatorRunAuthority({
           client,
           context: { getRuntimeConfig: () => cfg },
           ...(independent ? { sourceAuthority: null } : {}),
@@ -194,7 +200,7 @@ describe("operator role policy", () => {
             signal: request.signal,
             assertCurrent: () => request.signal.throwIfAborted(),
           },
-        })!;
+        }))!;
         try {
           expect(captured.authority.gatewayAccessGrant).toEqual(independent ? null : grant);
           expect(captured.authority.assertCurrent).not.toThrow();
@@ -221,13 +227,13 @@ describe("operator role policy", () => {
       const target = ensureProfileForEmail("target-role@example.test");
       const unrelated = ensureProfileForEmail("unrelated-role@example.test");
       const cfg = roleConfig();
-      const capture = (profileId: string) =>
-        captureGatewayOperatorRunAuthority({
+      const capture = async (profileId: string) =>
+        (await captureGatewayOperatorRunAuthority({
           client: identifiedClient(profileId),
           context: { getRuntimeConfig: () => cfg },
-        })!;
-      const original = capture(source.id);
-      const unaffected = capture(unrelated.id);
+        }))!;
+      const original = await capture(source.id);
+      const unaffected = await capture(unrelated.id);
       try {
         original.authority.assertCurrent();
         linkEmail("source-role@example.test", target.id);
@@ -240,7 +246,7 @@ describe("operator role policy", () => {
         );
         expect(unaffected.authority.signal?.aborted).toBe(false);
         expect(() => unaffected.authority.assertCurrent()).not.toThrow();
-        const fresh = capture(target.id);
+        const fresh = await capture(target.id);
         try {
           expect(() => fresh.authority.assertCurrent()).not.toThrow();
           expect(() => original.authority.assertCurrent()).toThrow("no longer active");
@@ -261,10 +267,10 @@ describe("operator role policy", () => {
       const admin = identifiedClient(profile.id);
       admin.connect.scopes = ["operator.admin"];
       const reader = identifiedClient(profile.id);
-      const source = captureGatewayOperatorRunAuthority({
+      const source = (await captureGatewayOperatorRunAuthority({
         client: reader,
         context: { getRuntimeConfig: () => cfg },
-      })!;
+      }))!;
       expect(authorizeCurrentOperatorRoleScopes(admin, cfg)).toBeUndefined();
       try {
         setUserProfileRole(profile.id, "guest");
@@ -298,13 +304,16 @@ describe("operator role policy", () => {
           getRuntimeConfig: () => runtimeConfig,
           getCommittedRuntimeConfig: () => committedConfig,
         };
-        const capture = (profileId: string) =>
+        const capture = async (profileId: string) =>
           expectDefined(
-            captureGatewayOperatorRunAuthority({ client: identifiedClient(profileId), context }),
+            await captureGatewayOperatorRunAuthority({
+              client: identifiedClient(profileId),
+              context,
+            }),
             "operator source",
           );
-        const original = capture(profile.id);
-        const unaffected = capture(otherProfile.id);
+        const original = await capture(profile.id);
+        const unaffected = await capture(otherProfile.id);
         const releaseQueued = expectDefined(original.authority.retain, "source retention")();
         original.release();
         try {
@@ -359,10 +368,16 @@ describe("operator role policy", () => {
       };
       cfg.gateway!.roles!.definitions.guest!.modelPolicy = { deny: ["fixture/restricted-*"] };
       const context = { getRuntimeConfig: () => cfg };
-      const capture = (profileId: string) =>
-        captureGatewayOperatorRunAuthority({ client: identifiedClient(profileId), context })!;
-      const original = capture(guest.id);
-      const unaffected = capture(staff.id);
+      const capture = async (profileId: string) =>
+        expectDefined(
+          await captureGatewayOperatorRunAuthority({
+            client: identifiedClient(profileId),
+            context,
+          }),
+          "operator source",
+        );
+      const original = await capture(guest.id);
+      const unaffected = await capture(staff.id);
       const primaryExecution = bindOperatorModelExecution(original.authority, {
         provider: "fixture",
         model: "primary",
@@ -428,7 +443,7 @@ describe("operator role policy", () => {
             model: "restricted-new",
           }),
         ).not.toThrow();
-        const fresh = capture(guest.id);
+        const fresh = await capture(guest.id);
         try {
           expect(fresh.authority.modelPolicy?.models).toEqual([
             { provider: "fixture", model: "next" },
@@ -467,15 +482,15 @@ describe("operator role policy", () => {
         }
         const context = { getRuntimeConfig: () => cfg };
         const client = identifiedClient(profile.id);
-        const source = captureGatewayOperatorRunAuthority({ client, context })!;
-        const narrowed = captureGatewayOperatorRunAuthority({
+        const source = (await captureGatewayOperatorRunAuthority({ client, context }))!;
+        const narrowed = (await captureGatewayOperatorRunAuthority({
           client: {
             ...client,
             connect: { ...client.connect, scopes: [] },
             internal: { operatorRunAuthority: source.authority },
           },
           context,
-        })!;
+        }))!;
         try {
           cfg = structuredClone(cfg);
           cfg.gateway!.roles!.definitions.guest!.modelPolicy = {

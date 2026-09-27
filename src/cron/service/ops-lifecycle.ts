@@ -1,7 +1,7 @@
 import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
 import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
-import type { CronRunRecoveryResult } from "../store/run-recovery.types.js";
+import type { CronRunRecoveryResult, InterruptedStartupRun } from "../store/run-recovery.types.js";
 import {
   configureForeignReceiptMonitor,
   enrollForeignReceipt,
@@ -17,7 +17,6 @@ import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
 import { emitInterruptedCronRun } from "./run-recovery-events.js";
 import { recoverCronRunProposals } from "./run-recovery.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
-import type { InterruptedStartupRun } from "./startup-run-repair.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
@@ -244,10 +243,28 @@ export async function start(state: CronServiceState): Promise<void> {
   if (state.stopped || state.lifecycleGeneration !== generation) {
     return;
   }
-  await runMissedJobs(state, {
-    skipJobIds: skipJobIds.size > 0 ? skipJobIds : undefined,
-    deferAgentWork: true,
-  });
+  try {
+    await runMissedJobs(state, {
+      skipJobIds: skipJobIds.size > 0 ? skipJobIds : undefined,
+      deferAgentWork: true,
+    });
+  } catch (err) {
+    // Catch-up releases its timer fence even when a terminal write fails.
+    // Keep future jobs live without hiding that failure from the caller.
+    if (!state.stopped && state.lifecycleGeneration === generation) {
+      state.schedulerStarted = true;
+      try {
+        armTimer(state);
+        resumeForeignReceiptMonitor(state);
+      } catch (armError) {
+        state.deps.log.warn(
+          { err: String(armError) },
+          "cron: failed to arm scheduling after startup catch-up failed",
+        );
+      }
+    }
+    throw err;
+  }
 
   await locked(state, async () => {
     await ensureLoaded(state, { forceReload: true });

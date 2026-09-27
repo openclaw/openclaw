@@ -3,8 +3,8 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "../infra/fs-safe-defaults.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   createMarketplaceInstallInput,

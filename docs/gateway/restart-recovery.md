@@ -504,6 +504,13 @@ the user to repeat the request. Preparing a new message cannot consume the
 interruption marker; the recovery owner retains it until work is adopted or
 settled.
 
+Recovery reads the interrupted turn's source before starting another run, even
+when a final reply is already pending. If the transcript cannot be read, the
+saved reply and any admitted completion claim remain available for a later
+attempt. Delegated requests and unverified internal inputs cannot resume
+automatically without surviving authority. Child-completion follow-ups still use their
+existing recovery and delivery ownership checks.
+
 When a recovered turn starts with an eligible channel delivery route, OpenClaw
 sends a resumption notice to that conversation, retaining its account and topic.
 The final reply uses the same delivery route. Transcript-only turns stay private,
@@ -674,11 +681,19 @@ update with no continuation does not wake the model to deliver the report.
 
 The sentinel's typed SQLite columns are authoritative for restart handling.
 Its `payload_json` value is a replay/debug shadow only. Runtime reads, writes,
-and clears SQLite state without a file fallback. A bounded state migration runs
-at startup and through Doctor to preserve a validated legacy
-`restart-sentinel.json` left on disk after an update.
-The migration verifies the typed row and removes the source file before normal
-restart handling continues.
+and clears SQLite state without a file fallback. Doctor and restart recovery
+share the bounded importer for `restart-sentinel.json`. Restart recovery imports
+only update notices, after readiness; unrelated legacy repair still requires Doctor.
+
+The `2026.6.1` RPC updater writes its notice after candidate Doctor finishes.
+Its managed updater can publish the final outcome after restart health succeeds.
+Recovery checks that same pending handoff through its existing retry window and
+preserves its delivery route and continuation. A final legacy outcome can replace
+only its own imported pending notification; newer canonical state wins.
+Recorded source generations are not replayed when their files reappear.
+Incomplete notices stay on disk for recovery or explicit Doctor repair.
+The `2026.6.34` and `2026.9.2` updaters write native SQLite state instead.
+For pre-June installations, use the [bridge upgrade procedure](/install/updating#upgrading-very-old-versions).
 
 ## Safety valves and observability
 

@@ -21,13 +21,15 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it("shares prepared approval replay across three subscribers without changing its approvals", async () => {
+it("shares approval replay across 64 subscribers during unrelated approval activity", async () => {
   const databaseOptions = {
     env: { OPENCLAW_STATE_DIR: tempDirs.make("subscribe-approval-perf-") },
   };
   const sessionKey = "agent:main:perf";
   const expected: PendingApprovalSnapshot[] = [];
-  for (let index = 0; index < 200; index += 1) {
+  let unrelatedApproval: store.OperatorApprovalRecord | undefined;
+  for (let index = 0; index <= 200; index += 1) {
+    const sourceSessionKey = index < 200 ? sessionKey : `${sessionKey}-unrelated`;
     const id = `approval-${String(index).padStart(3, "0")}`;
     const presentation = {
       kind: "exec" as const,
@@ -39,7 +41,7 @@ it("shares prepared approval replay across three subscribers without changing it
       agentId: "main",
       allowedDecisions: ["allow-once", "deny"] as ("allow-once" | "deny")[],
     };
-    await store.insertOperatorApproval({
+    const inserted = await store.insertOperatorApproval({
       databaseOptions,
       approval: {
         id,
@@ -47,12 +49,19 @@ it("shares prepared approval replay across three subscribers without changing it
         runtimeEpoch: "synthetic-epoch",
         createdAtMs: 1000 + index,
         expiresAtMs: 60_000,
-        source: { agentId: "main", sessionKey },
-        audienceSessionKeys: [sessionKey],
+        source: { agentId: "main", sessionKey: sourceSessionKey },
+        audienceSessionKeys: [sourceSessionKey],
         reviewerDeviceIds: ["reviewer"],
         presentation,
       },
     });
+    if (inserted.outcome !== "inserted") {
+      throw new Error("Expected a new synthetic approval");
+    }
+    if (index === 200) {
+      unrelatedApproval = inserted.record;
+      continue;
+    }
     expected.push({
       id,
       status: "pending",
@@ -63,7 +72,7 @@ it("shares prepared approval replay across three subscribers without changing it
       sourceSessionKey: sessionKey,
     });
   }
-  const clients = Array.from({ length: 3 }, (_, index) => ({
+  const clients = Array.from({ length: 64 }, (_, index) => ({
     connId: `subscriber-${index}`,
     connect: { client: { id: "test" }, scopes: ["operator.admin"] },
   })) as GatewayClient[];
@@ -91,6 +100,10 @@ it("shares prepared approval replay across three subscribers without changing it
     .mockImplementation(async (params) => {
       const start = performance.now();
       const result = await list(params);
+      if (!unrelatedApproval) {
+        throw new Error("Expected the unrelated synthetic approval");
+      }
+      runtime.publish({ phase: "pending", record: unrelatedApproval });
       phaseMs.pending += performance.now() - start;
       return result;
     });
@@ -150,7 +163,7 @@ it("shares prepared approval replay across three subscribers without changing it
   console.log(
     JSON.stringify({
       pendingApprovals: 200,
-      concurrency: 3,
+      concurrency: clients.length,
       samples: samples.length,
       p50Ms: samples[Math.floor(samples.length * 0.5)],
       p90Ms: samples[Math.floor(samples.length * 0.9)],

@@ -108,9 +108,12 @@ export class AcpTranslatorAgentEvents {
       return;
     }
 
-    if (phase === "update") {
+    if (phase === "update" || phase === "result") {
       const toolState = pending.toolCalls?.get(toolCallId);
-      const partialResult = data.partialResult;
+      const result = phase === "update" ? data.partialResult : data.result;
+      if (phase === "result") {
+        pending.toolCalls?.delete(toolCallId);
+      }
       await this.sessionUpdates.emit({
         sessionId: pending.sessionId,
         sessionKey: pending.sessionKey,
@@ -120,32 +123,10 @@ export class AcpTranslatorAgentEvents {
         update: {
           sessionUpdate: "tool_call_update",
           toolCallId,
-          status: "in_progress",
-          rawOutput: partialResult,
-          content: extractToolCallContent(partialResult),
-          locations: extractToolCallLocations(toolState?.locations, partialResult),
-        },
-      });
-      return;
-    }
-
-    if (phase === "result") {
-      const isError = Boolean(data.isError);
-      const toolState = pending.toolCalls?.get(toolCallId);
-      pending.toolCalls?.delete(toolCallId);
-      await this.sessionUpdates.emit({
-        sessionId: pending.sessionId,
-        sessionKey: pending.sessionKey,
-        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
-        runId: pending.idempotencyKey,
-        record: true,
-        update: {
-          sessionUpdate: "tool_call_update",
-          toolCallId,
-          status: isError ? "failed" : "completed",
-          rawOutput: data.result,
-          content: extractToolCallContent(data.result),
-          locations: extractToolCallLocations(toolState?.locations, data.result),
+          status: phase === "update" ? "in_progress" : data.isError ? "failed" : "completed",
+          rawOutput: result,
+          content: extractToolCallContent(result),
+          locations: extractToolCallLocations(toolState?.locations, result),
         },
       });
     }
@@ -247,15 +228,11 @@ export class AcpTranslatorAgentEvents {
       return this.findPendingBySessionKey(params.sessionKey, params.runId);
     }
     const toolCallId = params.approvalEvent.toolCallId;
-    if (!toolCallId) {
-      return this.findUniquePendingBySessionKey(params.sessionKey);
-    }
-
     let match: AcpPendingPrompt | undefined;
     for (const pending of this.pendingPrompts.values()) {
       if (
         pending.sessionKey !== params.sessionKey ||
-        pending.toolCalls?.get(toolCallId)?.kind !== "execute"
+        (toolCallId && pending.toolCalls?.get(toolCallId)?.kind !== "execute")
       ) {
         continue;
       }
@@ -367,19 +344,5 @@ export class AcpTranslatorAgentEvents {
       relay.state === "active" &&
       this.getPendingPrompt(relay.sessionId, relay.runId) !== undefined
     );
-  }
-
-  private findUniquePendingBySessionKey(sessionKey: string): AcpPendingPrompt | undefined {
-    let match: AcpPendingPrompt | undefined;
-    for (const pending of this.pendingPrompts.values()) {
-      if (pending.sessionKey !== sessionKey) {
-        continue;
-      }
-      if (match) {
-        return undefined;
-      }
-      match = pending;
-    }
-    return match;
   }
 }

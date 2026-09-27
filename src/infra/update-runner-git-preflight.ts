@@ -4,7 +4,6 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { hasErrnoCode } from "./errno.js";
-import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import {
@@ -30,8 +29,8 @@ import type {
   RunStepOptions,
   UpdateRunResult,
   UpdateRunnerOptions,
-  UpdateStepResult,
 } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const PREFLIGHT_MAX_COMMITS = 10;
 const PREFLIGHT_TEMP_PREFIX =
@@ -324,25 +323,15 @@ function classifyPreflightFailure(step: UpdateStepResult): "failed" | "insuffici
   return nodeNoSpace || gitNoSpace ? "insufficient-space" : "failed";
 }
 
-async function testPreflightCandidate(params: {
-  artifactRoot: string;
-  worktreeDir: string;
-  preflightRoot: string;
-  sha: string;
-  rebaseFrom?: string;
-  runLint: boolean;
-  beforeCandidate: (revision: string) => Promise<void>;
-  validateCandidate: UpdateRunnerOptions["validateCandidate"];
-  prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
-  prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
-  runCommand: CommandRunner;
-  timeoutMs: number;
-  defaultCommandEnv: NodeJS.ProcessEnv | undefined;
-  steps: UpdateStepResult[];
-  step: StepFactory;
-  workStep: StepFactory;
-  workTimeoutMs?: number;
-}): Promise<PreflightCandidateResult> {
+async function testPreflightCandidate(
+  params: Parameters<typeof runGitCandidatePreflight>[0] & {
+    worktreeDir: string;
+    preflightRoot: string;
+    sha: string;
+    rebaseFrom?: string;
+    runLint: boolean;
+  },
+): Promise<PreflightCandidateResult> {
   if (!(await resetPreflightCandidateWorktree(params.worktreeDir, params.workStep))) {
     return { status: "failed" };
   }
@@ -445,6 +434,7 @@ async function testPreflightCandidate(params: {
       candidateCommand.env,
       path.join(params.artifactRoot, ".artifacts", "build-all-cache"),
     );
+    buildEnv.sourceRuntimePrepared = params.sourceRuntimePrepared?.toString();
     const lintArgs = managerScriptArgs(manager.manager, "lint");
     let failure =
       (await runCandidateCheck(installName, installArgv, candidateCommand.env)) ??
@@ -528,7 +518,8 @@ export async function runGitCandidatePreflight(params: {
   refreshedRemotes: readonly string[];
   targetRevision?: string;
   beforeSha?: string | null;
-  beforeBuiltCommit: string | null;
+  beforeRuntimeVerified: boolean;
+  sourceRuntimePrepared?: boolean;
   beforeGitStaging?: UpdateRunnerOptions["beforeGitStaging"];
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
@@ -601,11 +592,8 @@ export async function runGitCandidatePreflight(params: {
     localDevBranchExists = upstream.localDevBranchExists;
   }
 
-  // A matching source revision cannot prove an unrecorded runtime is current.
-  const canSkipActivation =
-    !params.prepareGitExposure &&
-    params.beforeBuiltCommit !== null &&
-    gitCommitPrefixesMatch(params.beforeBuiltCommit, params.beforeSha ?? "");
+  // Source identity alone cannot prove the installed build is complete.
+  const canSkipActivation = !params.prepareGitExposure && params.beforeRuntimeVerified;
   if (canSkipActivation && preflightBaseSha === params.beforeSha) {
     return { status: "skipped", reason: "already-current" };
   }

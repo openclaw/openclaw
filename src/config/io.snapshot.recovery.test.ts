@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { acquireStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { acquireStartupMigrationLeaseWithWait } from "../infra/startup-migration-checkpoint.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -320,7 +320,10 @@ describe("prepared config recovery", () => {
     "refuses %s changes while archiving the clobbered config",
     async (changedSource) => {
       const { root, configPath, original, env } = fixture();
-      const lease = changedSource === "lease" ? acquireStartupMigrationLease({ env }) : undefined;
+      const lease =
+        changedSource === "lease"
+          ? await acquireStartupMigrationLeaseWithWait({ env, timeoutMs: 0 })
+          : undefined;
       const changedPath = changedSource === "config" ? configPath : `${configPath}.bak`;
       const concurrentRaw = '{ "gateway": { "mode": "local", "port": 18721 } }\n';
       const io = createConfigIO({

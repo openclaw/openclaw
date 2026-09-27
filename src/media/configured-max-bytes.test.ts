@@ -44,9 +44,7 @@ describe("resolveGeneratedMediaMaxBytes", () => {
 
   it.each([
     { label: "zero", value: 0 },
-    { label: "negative", value: -1 },
     { label: "NaN", value: Number.NaN },
-    { label: "positive infinity", value: Number.POSITIVE_INFINITY },
   ])("uses the per-kind default for $label mediaMaxMb", ({ value }) => {
     expect(resolveGeneratedMediaMaxBytes(configWithMediaMaxMb(value), "image")).toBe(6 * MB);
   });

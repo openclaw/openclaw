@@ -207,7 +207,7 @@ export class DecisionProviderHost {
   }
 
   async evaluate(
-    batch: DecisionBatch,
+    submitted: DecisionBatch,
     options: Options,
     model: string,
     config: OpenClawConfig,
@@ -219,7 +219,7 @@ export class DecisionProviderHost {
     let outcome: DecisionOutcome | undefined;
     try {
       outcome = await this.evaluateRequest(
-        batch,
+        submitted,
         options,
         model,
         config,
@@ -241,7 +241,7 @@ export class DecisionProviderHost {
   }
 
   private async evaluateRequest(
-    batch: DecisionBatch,
+    submitted: DecisionBatch,
     options: Options,
     model: string,
     config: OpenClawConfig,
@@ -250,12 +250,6 @@ export class DecisionProviderHost {
     consumerId?: string,
   ): Promise<DecisionOutcome> {
     options.signal.throwIfAborted();
-    let submitted: DecisionBatch;
-    try {
-      submitted = structuredClone(batch);
-    } catch {
-      throw new DecisionContractError();
-    }
     const instance = getPluginInstance(this.record);
     if (this.retired || this.reloadPause || !instance?.acceptingCalls || instance.owner?.revoked) {
       return this.unavailable("retiring");
@@ -296,7 +290,11 @@ export class DecisionProviderHost {
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {
         throw controller.signal.reason;
       }
-      if (this.retired || controller.signal.reason === "decision-provider-retired") {
+      if (
+        this.retired ||
+        instance.owner?.revoked ||
+        controller.signal.reason === "decision-provider-retired"
+      ) {
         return this.unavailable("retiring");
       }
       if (
@@ -327,15 +325,22 @@ export class DecisionProviderHost {
       try {
         // Preserve the offered questions even when the provider mutates its input.
         questions = structuredClone(submitted.questions);
-        outcome = await instance.runInRegistry(registry, () => {
-          facts.dispatched = true;
-          return this.provider.evaluate(submitted, {
-            model,
-            ...(options.agentId ? { agentId: options.agentId } : {}),
-            signal,
-            deadlineMonotonicMs,
-          });
-        });
+        outcome = await instance.runInRegistry(
+          registry,
+          () => {
+            facts.dispatched = true;
+            return this.provider.evaluate(submitted, {
+              model,
+              ...(options.agentId ? { agentId: options.agentId } : {}),
+              signal,
+              deadlineMonotonicMs,
+            });
+          },
+          // The provider callback's physical settlement is already tracked by
+          // `done`. Do not make its lease await instance disposal: disposal
+          // invokes host.stop(), which itself waits for `done`.
+          { joinDisposal: false },
+        );
       } catch {
         const stopped = interrupted();
         if (stopped) {

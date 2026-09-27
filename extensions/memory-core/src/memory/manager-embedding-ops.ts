@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
@@ -13,7 +14,6 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   runWithConcurrency,
-  type MemoryChunk,
   type MemorySearchDeadlineControl,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -328,26 +328,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       "primary memory provider identity",
     ).providerKey;
     const database = this.database;
+    const generation = {
+      database,
+      databaseRevision: readMemoryDatabaseRevision(database.db),
+      cacheWritesInvalidated: false,
+      providerKey,
+      identities,
+    };
     this.syncProviderGeneration = provider
-      ? {
-          kind: "semantic",
-          database,
-          databaseRevision: readMemoryDatabaseRevision(database.db),
-          cacheWritesInvalidated: false,
-          provider,
-          ...(runtime ? { runtime } : {}),
-          providerKey,
-          identities,
-        }
-      : {
-          kind: "fts-only",
-          database,
-          databaseRevision: readMemoryDatabaseRevision(database.db),
-          cacheWritesInvalidated: false,
-          provider: null,
-          providerKey,
-          identities,
-        };
+      ? { ...generation, kind: "semantic", provider, ...(runtime ? { runtime } : {}) }
+      : { ...generation, kind: "fts-only", provider: null };
     this.syncProviderGenerationRelease = provider ? this.acquireProviderUse(provider) : null;
     this.syncProviderGenerationOwners = 1;
   }
@@ -388,9 +378,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         undefined,
         (write) => this.withDatabaseWrite(write),
       );
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldToEventLoop();
     }
   }
 
@@ -452,15 +440,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  private buildBatchDebug(
-    source: string,
-    chunks: MemoryChunk[],
-    context: Record<string, unknown> = {},
-  ) {
-    return (message: string, data?: Record<string, unknown>) =>
-      log.debug(message, { ...data, source, chunks: chunks.length, ...context });
-  }
-
   private async embedChunksWithBatch(
     candidates: MemoryEmbeddingCacheCandidate[],
     source: string,
@@ -495,7 +474,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           concurrency: this.batch.concurrency,
           pollIntervalMs: this.batch.pollIntervalMs,
           timeoutMs: this.batch.timeoutMs,
-          debug: this.buildBatchDebug(source, chunks, debugContext),
+          debug: (message, data) =>
+            log.debug(message, { ...data, source, chunks: chunks.length, ...debugContext }),
         }),
       fallback: async () => await this.embedChunksInBatches(missingCandidates, generation),
     });

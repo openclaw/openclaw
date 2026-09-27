@@ -13,13 +13,14 @@ import {
 } from "../lib/presence-users.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
-import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
 import {
   renderPersonalSessionEmpty,
   renderSessionListToolbar,
+  renderSessionMutationError,
 } from "./app-sidebar-session-filter-summary.ts";
+import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import {
   renderChildSessionLoadError,
   renderRecentSession,
@@ -39,13 +40,7 @@ import { renderNewSessionLink } from "./new-session-link.ts";
 import { areSessionCatalogsSettled } from "./session-data-controller-catalog.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 
-type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
-  totalRowCount: number;
-  visibleRowCount: number;
-  visibleLimit: number;
-  collapsedVisibleRowCount: number;
-  renderHeader: boolean;
-};
+type RenderableSessionSection = SidebarVisibleSections["sections"][number];
 
 type SidebarSessionListHost = SessionListHost & {
   readonly sidebarAgentsMode: "chip" | "roster";
@@ -207,29 +202,33 @@ export function renderSessionSection(params: {
       </span>`
     : nothing;
   const labelText = renderHoverMarquee(label, "sidebar-recent-sessions__label-text");
-  const headerStatus = html`${
-    collapsed && totalRowCount > 0
-      ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
-      : nothing
-  }${
-    collapsedRunningDot
-      ? html`<span
-          class="session-run-spinner sidebar-session-group-running"
-          role="img"
-          aria-label=${t("sessionsView.activeRun")}
-          title=${t("sessionsView.activeRun")}
-        ></span>`
-      : nothing
-  }${
-    collapsedAttentionDot
-      ? html`<span
-          class="sidebar-session-group-attention"
-          role="img"
-          aria-label=${t("sessionsView.attentionRequired")}
-          title=${t("sessionsView.attentionRequired")}
-        ></span>`
-      : nothing
-  }`;
+  const showCount = collapsed && totalRowCount > 0;
+  const headerStatus =
+    showCount || collapsedRunningDot || collapsedAttentionDot
+      ? html`${
+          showCount
+            ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
+            : nothing
+        }${
+          collapsedRunningDot
+            ? html`<span
+                class="session-run-spinner sidebar-session-group-running"
+                role="img"
+                aria-label=${t("sessionsView.activeRun")}
+                title=${t("sessionsView.activeRun")}
+              ></span>`
+            : nothing
+        }${
+          collapsedAttentionDot
+            ? html`<span
+                class="sidebar-session-group-attention"
+                role="img"
+                aria-label=${t("sessionsView.attentionRequired")}
+                title=${t("sessionsView.attentionRequired")}
+              ></span>`
+            : nothing
+        }`
+      : undefined;
   return html`
     <div
       class=${sectionClass}
@@ -255,6 +254,14 @@ export function renderSessionSection(params: {
         section.renderHeader
           ? renderSidebarSessionSectionHeader({
               sectionId: section.id,
+              status: headerStatus
+                ? {
+                    content: headerStatus,
+                    label,
+                    expanded: !collapsed,
+                    onToggle: () => host.toggleSection(section.id),
+                  }
+                : undefined,
               draggable: !derivedSection,
               disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
               onStartDrag: (sectionId) => host.sessionOrganizer.startSidebarSectionDrag(sectionId),
@@ -298,8 +305,7 @@ export function renderSessionSection(params: {
                           aria-describedby=${presenceId ?? nothing}
                         >
                           ${ownerAvatar}${labelText}
-                        </button>
-                        ${headerStatus}`
+                        </button> `
                     : html`<button
                         type="button"
                         class="sidebar-session-group-toggle"
@@ -308,7 +314,7 @@ export function renderSessionSection(params: {
                         title=${section.project?.path ?? nothing}
                         @click=${() => host.toggleSection(section.id)}
                       >
-                        ${chevron}${ownerAvatar}${labelText}${headerStatus}
+                        ${chevron}${ownerAvatar}${labelText}
                       </button>`
                 }
                 ${
@@ -692,30 +698,7 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: unkno
     >
       ${host.sidebarAgentsMode === "roster" ? nothing : renderSessionListToolbar(host)}
       ${homeLoadKeys.map((key) => renderChildSessionLoadError(host, key))}
-      ${
-        host.sessionData.sessionMutationError
-          ? html`
-              <div
-                class="sidebar-session-error callout danger callout--dismissible"
-                role="alert"
-                data-sidebar-session-error
-              >
-                <span class="callout__content">${host.sessionData.sessionMutationError}</span>
-                <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
-                  <button
-                    class="callout__dismiss"
-                    type="button"
-                    @click=${() => host.sessionData.dismissSessionMutationError()}
-                    aria-label=${t("chat.actions.dismissError")}
-                  >
-                    ${icons.x}
-                  </button>
-                </openclaw-tooltip>
-              </div>
-            `
-          : nothing
-      }
-      ${body}
+      ${renderSessionMutationError(host)} ${body}
     </section>
   `;
 }

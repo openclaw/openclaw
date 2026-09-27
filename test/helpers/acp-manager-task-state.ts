@@ -28,10 +28,10 @@ export async function withAcpManagerTaskStateDir(
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", root);
     resetAcpManagerTaskStateForTests();
-    installInMemoryTaskRegistryRuntime();
     configureTaskFlowRegistryRuntime({
       store: createInMemoryTaskFlowRegistryStore(),
     });
+    installInMemoryTaskRegistryRuntime();
     try {
       await run(root);
     } finally {

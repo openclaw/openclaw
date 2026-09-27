@@ -96,7 +96,10 @@ export function readOpenClawAgentIntegrityVerification(
   if (consume) {
     // Failure cannot admit a writer while leaving an old clean receipt reusable.
     return withQuarantineWriter(env, (database) =>
-      runSqliteImmediateTransactionSync(database, () => read(database)),
+      runSqliteImmediateTransactionSync(database, () => read(database), {
+        databaseLabel: resolveQuarantineStorePath(env),
+        operationLabel: "quarantine.integrity.consume",
+      }),
     );
   }
   const storePath = resolveQuarantineStorePath(env);
@@ -185,8 +188,13 @@ export function clearOpenClawAgentIntegrityVerification(
     invalidateOpenClawAgentDatabaseValidation(pathname);
   }
   withQuarantineWriter(env, (database) =>
-    runSqliteImmediateTransactionSync(database, () =>
-      deleteAgentIntegrityVerification(database, pathname, runtimeProof),
+    runSqliteImmediateTransactionSync(
+      database,
+      () => deleteAgentIntegrityVerification(database, pathname, runtimeProof),
+      {
+        databaseLabel: resolveQuarantineStorePath(env),
+        operationLabel: "quarantine.integrity.invalidate",
+      },
     ),
   );
 }
@@ -491,10 +499,12 @@ export function recordOpenClawDatabaseQuarantine(options: {
     : null;
   try {
     return withQuarantineWriter(options.env ?? process.env, (database) =>
-      runSqliteImmediateTransactionSync(database, () => {
-        database
-          .prepare(
-            `
+      runSqliteImmediateTransactionSync(
+        database,
+        () => {
+          database
+            .prepare(
+              `
               INSERT INTO quarantined_databases (
                 path, kind, reason, quarantined_at, writer_app_version, verified_generation
               ) VALUES (?, ?, ?, ?, ?, ?)
@@ -505,20 +515,25 @@ export function recordOpenClawDatabaseQuarantine(options: {
                 writer_app_version = excluded.writer_app_version,
                 verified_generation = excluded.verified_generation
             `,
-          )
-          .run(
-            path.resolve(options.path),
-            options.kind,
-            options.reason,
-            Date.now(),
-            VERSION,
-            serializedGeneration,
-          );
-        if (options.kind === "agent") {
-          deleteAgentIntegrityVerification(database, options.path);
-        }
-        return true;
-      }),
+            )
+            .run(
+              path.resolve(options.path),
+              options.kind,
+              options.reason,
+              Date.now(),
+              VERSION,
+              serializedGeneration,
+            );
+          if (options.kind === "agent") {
+            deleteAgentIntegrityVerification(database, options.path);
+          }
+          return true;
+        },
+        {
+          databaseLabel: resolveQuarantineStorePath(options.env ?? process.env),
+          operationLabel: "quarantine.record",
+        },
+      ),
     );
   } catch {
     return false;
@@ -536,13 +551,20 @@ export function clearOpenClawDatabaseQuarantine(
   }
   try {
     return withQuarantineWriter(env, (database) =>
-      runSqliteImmediateTransactionSync(database, () => {
-        database
-          .prepare("DELETE FROM quarantined_databases WHERE path = ?")
-          .run(path.resolve(pathname));
-        deleteAgentIntegrityVerification(database, pathname);
-        return true;
-      }),
+      runSqliteImmediateTransactionSync(
+        database,
+        () => {
+          database
+            .prepare("DELETE FROM quarantined_databases WHERE path = ?")
+            .run(path.resolve(pathname));
+          deleteAgentIntegrityVerification(database, pathname);
+          return true;
+        },
+        {
+          databaseLabel: resolveQuarantineStorePath(env),
+          operationLabel: "quarantine.clear",
+        },
+      ),
     );
   } catch {
     return false;

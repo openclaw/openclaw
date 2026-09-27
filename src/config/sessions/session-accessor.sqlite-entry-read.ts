@@ -32,7 +32,7 @@ import {
   canonicalSessionValidationQuery,
 } from "./session-canonical-key.js";
 import {
-  validateCanonicalSessionRow,
+  validateCanonicalSessionRowEntry,
   type CanonicalSessionValidationRow,
 } from "./session-canonical-row.js";
 import {
@@ -263,6 +263,17 @@ export function readSessionEntryRowScan(database: OpenClawAgentDatabaseReader, s
   return scanSessionEntryRows(database, sessionKey, "full");
 }
 
+function selectReadableSessionEntryRows(
+  database: OpenClawAgentDatabaseReader,
+  projection: "full" | "list",
+) {
+  return projection === "list"
+    ? selectSessionEntryRows(database, projection).select(["current_session_id", "updated_at"])
+    : getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+        .selectFrom("session_nodes")
+        .selectAll();
+}
+
 function scanSessionEntryRows(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,
@@ -288,18 +299,11 @@ function scanSessionEntryRows(
         projection === "list" ? queries.metadata(firstLookupKey) : queries.row(firstLookupKey);
       rows = row ? [row] : [];
     } else {
-      const query =
-        projection === "list"
-          ? selectSessionEntryRows(database, projection).select([
-              "current_session_id",
-              "updated_at",
-            ])
-          : getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
-              .selectFrom("session_nodes")
-              .selectAll();
       rows = executeSqliteQuerySync(
         database.db,
-        query.where("session_key", "in", lookupKeys).orderBy("session_key", "asc"),
+        selectReadableSessionEntryRows(database, projection)
+          .where("session_key", "in", lookupKeys)
+          .orderBy("session_key", "asc"),
       ).rows;
     }
     let selected: ResolvedSessionEntryRow | undefined;
@@ -336,7 +340,7 @@ export function readExactSessionEntryRow(
     const entry = parseReadableSqliteSessionEntryRow(database, row, projection);
     if (canonicalRow) {
       // The guard and decoded entry share one statement snapshot, including cold handles.
-      validateCanonicalSessionRow(canonicalRow, "read");
+      validateCanonicalSessionRowEntry(canonicalRow, entry, "read");
     }
     return entry ? { entry, row } : undefined;
   });
@@ -351,18 +355,13 @@ export function prepareExactSessionEntryRowReads(
   return runSqliteReadOperationSync(database.db, () => {
     let rows: ResolvedSessionEntryRow["row"][];
     try {
-      const query =
-        projection === "list"
-          ? selectSessionEntryRows(database, projection).select([
-              "current_session_id",
-              "updated_at",
-            ])
-          : getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
-              .selectFrom("session_nodes")
-              .selectAll();
       rows = executeSqliteQuerySync(
         database.db,
-        query.where("session_key", "in", sqliteStringSet(sessionKeys)),
+        selectReadableSessionEntryRows(database, projection).where(
+          "session_key",
+          "in",
+          sqliteStringSet(sessionKeys),
+        ),
       ).rows;
     } catch {
       // Native conversion errors have no row identity; exact reads preserve each key's error.

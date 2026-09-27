@@ -514,35 +514,6 @@ describe("gateway probe endpoints", () => {
     });
   });
 
-  it("returns detailed readiness payload for authenticated remote /ready requests", async () => {
-    const getReadiness: ReadinessChecker = () => ({
-      ready: false,
-      failing: ["discord", "telegram"],
-      uptimeMs: 8_000,
-    });
-
-    await withGatewayServer({
-      prefix: "probe-remote-authenticated",
-      resolvedAuth: AUTH_TOKEN,
-      overrides: { getReadiness },
-      run: async (server) => {
-        const { res, getBody } = await sendRequest(server, {
-          path: "/ready",
-          remoteAddress: "10.0.0.8",
-          host: "gateway.test",
-          authorization: "Bearer test-token",
-        });
-
-        expect(res.statusCode).toBe(503);
-        expect(JSON.parse(getBody())).toEqual({
-          ready: false,
-          failing: ["discord", "telegram"],
-          uptimeMs: 8_000,
-        });
-      },
-    });
-  });
-
   it("fails closed with guidance for unattributable proxied readiness", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: true,

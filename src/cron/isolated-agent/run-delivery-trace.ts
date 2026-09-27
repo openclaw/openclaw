@@ -316,7 +316,7 @@ export async function resolveCronDeliveryContext(params: {
       sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
     };
   }
-  const { resolveDeliveryTarget } = await loadCronDeliveryRuntime();
+  const { buildDeliveryFormatPrompt, resolveDeliveryTarget } = await loadCronDeliveryRuntime();
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
     ...deliveryPlan,
     sessionTarget: params.job.payload.kind === "agentTurn" ? params.job.sessionTarget : undefined,
@@ -328,6 +328,16 @@ export async function resolveCronDeliveryContext(params: {
     deliveryPlan,
     deliveryRequested: deliveryPlan.requested,
     resolvedDelivery,
+    deliverySystemPrompt:
+      deliveryPlan.requested && resolvedDelivery.ok
+        ? buildDeliveryFormatPrompt({
+            cfg: params.cfg,
+            channel: resolvedDelivery.channel,
+            accountId: resolvedDelivery.accountId,
+            agentId: params.agentId,
+            allowBootstrap: true,
+          })
+        : undefined,
     sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
   };
 }

@@ -7,6 +7,7 @@ import {
   getSignalToolResultTestMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
+  toSignalToolResultTestError,
   waitForSignalToolResultIngressIdle,
 } from "./monitor.tool-result.test-harness.js";
 
@@ -51,6 +52,7 @@ describe("monitorSignalProvider tool results", () => {
     });
     const abortController = new AbortController();
     const uuid = "123e4567-e89b-12d3-a456-426614174000";
+    let ingressError: Error | undefined;
 
     streamMock.mockImplementation(async ({ onEvent }) => {
       const payload = {
@@ -63,12 +65,17 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
-      await waitForSignalToolResultIngressIdle();
-      abortController.abort();
+      try {
+        await onEvent({
+          event: "receive",
+          data: JSON.stringify(payload),
+        });
+        await waitForSignalToolResultIngressIdle();
+      } catch (error) {
+        ingressError = toSignalToolResultTestError(error, "Signal ingress delivery failed");
+      } finally {
+        abortController.abort();
+      }
     });
 
     await runMonitorWithMocks({
@@ -76,6 +83,9 @@ describe("monitorSignalProvider tool results", () => {
       baseUrl: "http://127.0.0.1:8080",
       abortSignal: abortController.signal,
     });
+    if (ingressError) {
+      throw ingressError;
+    }
 
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalledWith({

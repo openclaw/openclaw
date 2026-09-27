@@ -31,10 +31,6 @@ public enum OpenClawBonjour {
         }
 
         let lower = trimmed.lowercased()
-        if lower == "local" || lower == "local." {
-            return self.gatewayServiceDomain
-        }
-
         return lower.hasSuffix(".") ? lower : (lower + ".")
     }
 }

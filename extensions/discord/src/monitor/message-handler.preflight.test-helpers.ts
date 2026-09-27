@@ -1,8 +1,9 @@
-// Discord helper module supports message handler.preflight helpers behavior.
+import type { APIAttachment, APIMessage } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { registerSessionBindingAdapter } from "openclaw/plugin-sdk/conversation-runtime";
 import { onTestFinished } from "vitest";
-import { ChannelType } from "../internal/discord.js";
+import { ChannelType, Message, MessageType } from "../internal/discord.js";
+import { createInternalTestClient } from "../internal/test-builders.test-support.js";
 import type { preflightDiscordMessage } from "./message-handler.preflight.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
@@ -88,30 +89,53 @@ export function createDiscordMessage(params: {
     bot: boolean;
     username?: string;
   };
-  mentionedUsers?: Array<{ id: string }>;
+  mentionedUsers?: Array<{ id: string; username?: string }>;
   mentionedEveryone?: boolean;
   messageReference?: import("../internal/discord.js").Message["messageReference"];
   referencedMessage?: import("../internal/discord.js").Message;
-  attachments?: Array<Record<string, unknown>>;
+  attachments?: Array<Pick<APIAttachment, "id" | "filename" | "url"> & Partial<APIAttachment>>;
   webhookId?: string;
   type?: import("../internal/discord.js").MessageType;
   timestamp?: string;
-}): import("../internal/discord.js").Message {
-  return {
+  embeds?: APIMessage["embeds"];
+  components?: APIMessage["components"];
+  stickers?: APIMessage["sticker_items"];
+}): Message {
+  return new Message(createInternalTestClient(), {
     id: params.id,
-    type: params.type,
+    type: params.type ?? MessageType.Default,
     content: params.content,
     timestamp: params.timestamp ?? new Date().toISOString(),
-    channelId: params.channelId,
-    webhookId: params.webhookId,
-    attachments: params.attachments ?? [],
-    mentionedUsers: params.mentionedUsers ?? [],
-    mentionedRoles: [],
-    mentionedEveryone: params.mentionedEveryone ?? false,
-    messageReference: params.messageReference,
-    referencedMessage: params.referencedMessage,
-    author: params.author,
-  } as unknown as import("../internal/discord.js").Message;
+    channel_id: params.channelId,
+    webhook_id: params.webhookId,
+    attachments: (params.attachments ?? []).map((attachment) =>
+      Object.assign({ size: 1, proxy_url: attachment.url }, attachment),
+    ),
+    mentions: (params.mentionedUsers ?? []).map((user) => ({
+      id: user.id,
+      username: user.username ?? user.id,
+      global_name: null,
+      discriminator: "0",
+      avatar: null,
+    })),
+    mention_roles: [],
+    mention_everyone: params.mentionedEveryone ?? false,
+    message_reference: params.messageReference,
+    ...(params.referencedMessage ? { referenced_message: params.referencedMessage.rawData } : {}),
+    author: {
+      username: params.author.id,
+      global_name: null,
+      discriminator: "0",
+      avatar: null,
+      ...params.author,
+    },
+    edited_timestamp: null,
+    tts: false,
+    pinned: false,
+    embeds: params.embeds ?? [],
+    components: params.components,
+    sticker_items: params.stickers,
+  });
 }
 
 export function createDiscordPreflightArgs(params: {

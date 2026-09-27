@@ -144,7 +144,7 @@ export function renewAgentDatabaseMaintenanceAuthorityIfPresent(): void {
 
 export type OpenClawAgentIntegrityVerificationReceiver = (
   record: OpenClawAgentIntegrityVerification | undefined,
-  hasLiveLease: boolean,
+  canReuseRuntimeIntegrity: boolean,
   invalidated: boolean,
 ) => void;
 
@@ -223,7 +223,7 @@ function claimAgentDatabaseLeaseInDatabase(
   );
   onVerification?.(
     verification && hasLiveLease ? { ...verification, clean_close: 0 } : verification,
-    hasLiveLease && !hasOtherOwner,
+    !hasOtherOwner,
     invalidated,
   );
   executeSqliteQuerySync(

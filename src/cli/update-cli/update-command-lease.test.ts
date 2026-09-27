@@ -405,7 +405,8 @@ describe("update orchestration lifecycle ownership", () => {
       shape: "malformed-prepare",
       version: VERSION,
       source: "export const prepareBundledPluginRuntime = 1;",
-      failure: /cannot complete its runtime artifacts/,
+      failure:
+        /^Installed runtime staging is unavailable: .+[/\\]scripts[/\\]stage-bundled-plugin-runtime\.mts$/u,
     },
     {
       shape: "missing-dependency",

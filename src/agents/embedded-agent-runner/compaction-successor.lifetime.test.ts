@@ -36,7 +36,8 @@ const edge = vi.hoisted(() => ({
 }));
 
 vi.mock("node:sqlite", () => ({ DatabaseSync: edge.forbidden }));
-vi.mock("node:worker_threads", () => ({
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
   Worker: edge.forbidden,
   MessageChannel: edge.forbidden,
   receiveMessageOnPort: edge.forbidden,
@@ -88,6 +89,7 @@ vi.mock("../session-placement-admission.js", () => ({
 
 const predecessorId = "00000000-0000-4000-8000-000000000001";
 const successorId = "00000000-0000-4000-8000-000000000002";
+const databaseIdentity = Symbol("compaction-lifetime-database");
 const target = {
   agentId: "main",
   sessionKey: "agent:main:compaction-lifetime",
@@ -141,6 +143,7 @@ it.each([false, true])(
         // The entry owner publishes identity only after the committed-fact callback.
         emitSessionIdentityMutation({
           agentId: target.agentId,
+          databaseIdentity,
           kind: "replace",
           previous: { sessionId: previous.sessionId, sessionKeys: [target.sessionKey] },
           current: { sessionId: row.sessionId, sessionKeys: [target.sessionKey] },

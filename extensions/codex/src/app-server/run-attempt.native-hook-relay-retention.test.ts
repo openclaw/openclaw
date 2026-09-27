@@ -63,7 +63,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     }
     const a = { sourceIdentity: {}, assertCurrent: vi.fn(), release: vi.fn() };
     const b = createNativeModelSourceFixture(["model-b"]);
-    const first = codexNativeSubagentMonitorRuntime.register({
+    const first = await codexNativeSubagentMonitorRuntime.register({
       client: client.client,
       parentThreadId: "parent-thread",
       runtime: createRuntime(),
@@ -81,14 +81,14 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         item: directSpawnItem("v1", "parent-thread", "child-thread"),
       },
     });
-    const second = codexNativeSubagentMonitorRuntime.register({
+    const second = await codexNativeSubagentMonitorRuntime.register({
       client: client.client,
       parentThreadId: "parent-thread",
       modelSource: b,
       configurationQualification: qualification,
     });
     second.bindTurn("parent-b");
-    const reserved = codexNativeSubagentMonitorRuntime.register({
+    const reserved = await codexNativeSubagentMonitorRuntime.register({
       client: client.client,
       parentThreadId: "reserved-root",
       modelSource: { sourceIdentity: {}, assertCurrent: vi.fn(), release: vi.fn() },

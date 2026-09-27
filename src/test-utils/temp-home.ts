@@ -78,7 +78,7 @@ export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
     home,
     restore: async () => {
       try {
-        await cleanupSessionStateForTest({ stateDir });
+        await cleanupSessionStateForTest({ stateDir, rootPath: home });
       } finally {
         snapshot.restore();
       }

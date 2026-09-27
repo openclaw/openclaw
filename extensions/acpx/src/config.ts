@@ -1,12 +1,9 @@
-/**
- * Resolves ACPX plugin config from raw user configuration. It locates the
- * plugin root, injects optional MCP bridge servers, and applies runtime defaults.
- */
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatPluginConfigIssue } from "openclaw/plugin-sdk/extension-shared";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { splitCommandParts } from "./command-line.js";
 import { AcpxPluginConfigSchema } from "./config-schema.js";
@@ -176,7 +173,6 @@ function resolveConfiguredMcpServers(params: {
   return resolved;
 }
 
-/** Convert OpenClaw MCP server config into ACPX runtime MCP server entries. */
 export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): AcpxMcpServer[] {
   return Object.entries(mcpServers).map(([name, server]) => ({
     name,
@@ -189,10 +185,10 @@ export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): Ac
   }));
 }
 
-/** Validate and normalize raw ACPX plugin config for runtime startup. */
 export function resolveAcpxPluginConfig(params: {
   rawConfig: unknown;
   workspaceDir?: string;
+  stateDir?: string;
   moduleUrl?: string;
 }): ResolvedAcpxPluginConfig {
   const { rawConfig } = params;
@@ -203,7 +199,9 @@ export function resolveAcpxPluginConfig(params: {
   const normalized = parsed.data;
   const workspaceDir = params.workspaceDir?.trim() || process.cwd();
   const cwd = path.resolve(normalized.cwd?.trim() || workspaceDir);
-  const stateDir = path.resolve(normalized.stateDir?.trim() || path.join(workspaceDir, "state"));
+  const stateDir = path.resolve(
+    normalized.stateDir?.trim() || path.join(params.stateDir ?? resolveStateDir(), "acpx"),
+  );
   const pluginToolsMcpBridge = normalized.pluginToolsMcpBridge === true;
   const openClawToolsMcpBridge = normalized.openClawToolsMcpBridge === true;
   const mcpServers = resolveConfiguredMcpServers({
