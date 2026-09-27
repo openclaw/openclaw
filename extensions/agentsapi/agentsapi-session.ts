@@ -532,7 +532,10 @@ export function createAgentsApiSession(options: {
           // Creation can finish inference before this non-replaying stream opens.
           await settleFromSavedState(true);
         }
-        while (!settled) {
+        while (true) {
+          if (settled) {
+            break;
+          }
           let chunk: IteratorResult<AgentsApiEvent> | undefined;
           try {
             if (options.initialInputSubmitted) {
