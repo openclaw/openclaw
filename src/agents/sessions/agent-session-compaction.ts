@@ -215,6 +215,8 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       return { status: "skipped", reason: formatNoModelSelectedMessage() };
     }
     const model = this.model;
+    const compactionThinkingLevel =
+      this.resolveCompactionThinkingLevel?.(model, this.thinkingLevel) ?? this.thinkingLevel;
 
     let auth: Awaited<ReturnType<typeof this.getCompactionRequestAuth>>;
     try {
@@ -325,7 +327,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         signal: options.signal,
         // Extension-owned compaction must use the same prepared model execution
         // context as the core path below or provider wrappers and reasoning drift.
-        thinkingLevel: this.thinkingLevel,
+        thinkingLevel: compactionThinkingLevel,
         streamFn: this.agent.streamFn,
       });
 
@@ -367,7 +369,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           auth.headers,
           coreInstructions || undefined,
           options.signal,
-          this.thinkingLevel,
+          compactionThinkingLevel,
           this.agent.streamFn,
           createCompactionRuntime((usage) => recordSessionModelUsage(this.sessionManager, usage)),
         );

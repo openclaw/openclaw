@@ -481,6 +481,20 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "caller",
     });
+    const resolveCompactionThinkingLevel = sessionCall?.[1]?.resolveCompactionThinkingLevel;
+    expect(resolveCompactionThinkingLevel).toBeTypeOf("function");
+    expect(
+      resolveCompactionThinkingLevel?.(
+        {
+          ...fixture.input.attempt.model,
+          provider: "synthetic",
+          id: "synthetic-reasoner",
+          api: "openai-responses",
+          reasoning: true,
+        },
+        "high",
+      ),
+    ).toBe("low");
     expect(sessionCall?.[0]).not.toHaveProperty("contextOverflowRecoveryOwner");
     expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
     expect(result).toEqual(
