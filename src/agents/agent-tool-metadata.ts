@@ -26,11 +26,11 @@ class ToolActionMetadata extends PluginHostObject {
     this.#descriptor = descriptor;
   }
 
-  static get(this: void, tool: AnyAgentTool): AgentToolActionDescriptor | undefined {
+  static get(tool: AnyAgentTool): AgentToolActionDescriptor | undefined {
     return #descriptor in tool ? tool.#descriptor : undefined;
   }
 
-  static set(this: void, tool: AnyAgentTool, descriptor: AgentToolActionDescriptor): void {
+  static set(tool: AnyAgentTool, descriptor: AgentToolActionDescriptor): void {
     if (#descriptor in tool) {
       tool.#descriptor = descriptor;
     } else {
@@ -48,8 +48,18 @@ const openclawAction: AgentToolActionDescriptor = Object.freeze({
   operation: "openclaw",
 });
 
-export const bindAgentToolActionDescriptor = ToolActionMetadata.set;
-export const getAgentToolActionDescriptor = ToolActionMetadata.get;
+export function bindAgentToolActionDescriptor(
+  tool: AnyAgentTool,
+  descriptor: AgentToolActionDescriptor,
+): void {
+  ToolActionMetadata.set(tool, descriptor);
+}
+
+export function getAgentToolActionDescriptor(
+  tool: AnyAgentTool,
+): AgentToolActionDescriptor | undefined {
+  return ToolActionMetadata.get(tool);
+}
 
 function copyAgentToolActionDescriptor(source: AnyAgentTool, target: AnyAgentTool): void {
   const descriptor = getAgentToolActionDescriptor(source);
