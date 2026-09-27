@@ -17,11 +17,18 @@ const viewport = { width: 1180, height: 820 };
 type ConversationTestWindow = Window &
   typeof globalThis & {
     conversationMessages: Record<string, unknown>[];
+    dashboardResponse?: "rejected" | "throw";
     __OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__: { documentId: string };
   };
 const messages = (page: Page) =>
   page.evaluate(() => (window as ConversationTestWindow).conversationMessages);
-async function command(page: Page, type: string, payload: unknown, requestId: string) {
+async function command(
+  page: Page,
+  type: string,
+  payload: unknown,
+  requestId: string,
+  expected: { ok: boolean; error?: string } = { ok: true },
+) {
   await page.evaluate(
     (commandDetails) => {
       const host = window as ConversationTestWindow;
@@ -43,7 +50,7 @@ async function command(page: Page, type: string, payload: unknown, requestId: st
         (message) => message.type === "command-result" && message.requestId === requestId,
       ),
     )
-    .toMatchObject({ ok: true });
+    .toMatchObject(expected);
 }
 
 async function headerLeadingInset(page: Page) {
@@ -72,7 +79,16 @@ suite.define(() => {
             messageHandlers: {
               openclawConversation: {
                 postMessage(message: Record<string, unknown>) {
-                  (window as ConversationTestWindow).conversationMessages.push(message);
+                  const host = window as ConversationTestWindow;
+                  host.conversationMessages.push(message);
+                  if (message.type === "open-dashboard") {
+                    if (host.dashboardResponse === "rejected") {
+                      return Promise.resolve({ ok: false, error: "Dashboard unavailable" });
+                    }
+                    if (host.dashboardResponse === "throw") {
+                      return Promise.reject(new Error("Dashboard unavailable"));
+                    }
+                  }
                   return Promise.resolve({ ok: true });
                 },
               },
@@ -82,6 +98,7 @@ suite.define(() => {
       });
       const linkedUrl = controlUiSessionUrl(suite.server.baseUrl, "agent:main:linked");
       const gateway = await installMockGateway(page, {
+        workspace: "/workspace",
         sessions: ["main", "next", "linked"].map((name) => ({
           key: `agent:main:${name}`,
           label: name,
@@ -93,11 +110,27 @@ suite.define(() => {
             content: [
               {
                 type: "text",
-                text: `Conversation ready. [Linked conversation](${linkedUrl}) · [Settings](/settings?section=general)`,
+                text: `Conversation ready. [Linked conversation](${linkedUrl}) · [Settings](/settings?section=general) · [Notes](notes.txt)`,
               },
             ],
           },
         ],
+        methodResponses: {
+          "sessions.files.get": {
+            root: "/workspace",
+            sessionKey: "agent:main:main",
+            file: {
+              name: "notes.txt",
+              path: "notes.txt",
+              workspacePath: "notes.txt",
+              content: "Conversation workspace notes.",
+              contentEncoding: "utf8",
+              kind: "read",
+              missing: false,
+              previewKind: "text",
+            },
+          },
+        },
       });
       await page.addInitScript((storageKey) => {
         localStorage.setItem(
@@ -142,6 +175,25 @@ suite.define(() => {
       expect(first).toMatchObject({ type: "ready", contract: 1, surface: "conversation" });
       const documentId = first?.documentId;
       const timeOrigin = await page.evaluate(() => performance.timeOrigin);
+      const initialUrl = page.url();
+      await pane.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
+      expect(
+        requireRecord((await gateway.waitForRequest("sessions.files.get")).params),
+      ).toMatchObject({
+        sessionKey: "agent:main:main",
+        path: "notes.txt",
+      });
+      const fileView = pane.locator(".sidebar-file-view");
+      await fileView.waitFor({ state: "visible" });
+      await expect
+        .poll(() => fileView.locator(".cm-content").textContent())
+        .toContain("Conversation workspace notes.");
+      expect(page.url()).toBe(initialUrl);
+      expect((await messages(page)).filter((message) => message.type === "open-dashboard")).toEqual(
+        [],
+      );
+      await pane.getByRole("button", { name: "Close tab: notes.txt", exact: true }).click();
+      await fileView.waitFor({ state: "detached" });
       if (captureUiProofEnabled) {
         await mkdir(".artifacts/pr-proof", { recursive: true });
         await page.screenshot({ path: ".artifacts/pr-proof/conversation-initial.png" });
@@ -193,6 +245,20 @@ suite.define(() => {
         )
         .toMatchObject({ path: "/settings", search: "?section=general" });
       expect(page.url()).toBe(conversationUrl);
+      for (const response of ["rejected", "throw"] as const) {
+        await page.evaluate((replyMode) => {
+          (window as ConversationTestWindow).dashboardResponse = replyMode;
+        }, response);
+        await pane.getByRole("link", { name: "Settings", exact: true }).click();
+        const toast = page.locator(".app-toast");
+        await expect
+          .poll(() => toast.textContent())
+          .toContain("Couldn't open that page in the Dashboard");
+        expect(page.url()).toBe(conversationUrl);
+        expect(await composer.isVisible()).toBe(true);
+        await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
+        await toast.waitFor({ state: "detached" });
+      }
       expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
       expect((await messages(page)).every((message) => message.documentId === documentId)).toBe(
         true,
@@ -205,8 +271,25 @@ suite.define(() => {
         { agentId: "main", sessionKey: "agent:main:next" },
         "hidden-navigate",
       );
-      await command(page, "presentation", { visible: true, active: true }, "show");
+      await command(page, "presentation", { visible: true, active: false }, "show-inactive");
       await expect.poll(() => pane.getAttribute("aria-hidden")).toBe("false");
+      expect(await composer.isVisible()).toBe(true);
+      await command(
+        page,
+        "navigate",
+        { agentId: "main", sessionKey: "agent:main:linked" },
+        "inactive-navigate",
+      );
+      await expect
+        .poll(async () => (await messages(page)).findLast((message) => message.type === "state"))
+        .toMatchObject({ context: { agentId: "main", sessionKey: "agent:main:linked" } });
+      expect(await pane.getAttribute("aria-hidden")).toBe("false");
+      expect(await composer.isVisible()).toBe(true);
+      await command(page, "focus-composer", {}, "inactive-focus", {
+        ok: false,
+        error: "unavailable",
+      });
+      await command(page, "presentation", { visible: true, active: true }, "activate");
       await command(page, "focus-composer", {}, "focus");
       expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
       expect(await headerLeadingInset(page)).toBe(12);

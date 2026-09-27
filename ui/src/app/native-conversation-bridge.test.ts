@@ -1,12 +1,17 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { showToast } from "../lib/toast.ts";
 import type { ApplicationContext } from "./context.ts";
 import { createNativeConversationBridge } from "./native-conversation-bridge.ts";
+
+vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   cleanups.splice(0).forEach((cleanup) => cleanup());
+  vi.useRealTimers();
+  vi.clearAllMocks();
   vi.unstubAllGlobals();
   document.body.replaceChildren();
 });
@@ -95,7 +100,7 @@ function fixture() {
 
 async function flush() {
   // Drain the serialized command and postMessage microtasks, without timer polling.
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 24; i++) {
     await Promise.resolve();
   }
 }
@@ -163,7 +168,7 @@ describe("native conversation contract", () => {
     const f = fixture();
     f.command(type, payload, extra);
     await flush();
-    expect(f.messages.at(-1)).toMatchObject({
+    expect(f.messages.find((message) => message.type === "command-result")).toMatchObject({
       type: "command-result",
       requestId: "request-1",
       ok: false,
@@ -249,7 +254,7 @@ describe("native conversation contract", () => {
       expect(f.messages.at(-1)).toMatchObject({
         type: "command-result",
         ok,
-        ...(ok ? {} : { error: "navigation-failed" }),
+        ...(ok ? {} : { error: "navigate-rejected" }),
       });
     },
   );
@@ -261,7 +266,7 @@ describe("native conversation contract", () => {
     expect(f.messages.at(-1)).toMatchObject({
       type: "command-result",
       ok: false,
-      error: "navigation-failed",
+      error: "navigate-rejected",
     });
   });
 
@@ -276,7 +281,7 @@ describe("native conversation contract", () => {
     gate.resolve();
     await flush();
     expect(f.messages).toContainEqual(
-      expect.objectContaining({ type: "command-result", ok: false, error: "navigation-failed" }),
+      expect.objectContaining({ type: "command-result", ok: false, error: "navigate-rejected" }),
     );
     expect(f.messages).toContainEqual(
       expect.objectContaining({
@@ -319,6 +324,257 @@ describe("native conversation contract", () => {
       run: { active: false },
     });
   });
+
+  it("rejects a failed route loader and a settled non-chat route", async () => {
+    const f = fixture();
+    f.navigateAndWait.mockRejectedValueOnce(new Error("Session unavailable"));
+    f.command("navigate", { agentId: "main", sessionKey: f.data.sessionKey });
+    await flush();
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "command-result",
+      ok: false,
+      error: "navigate-rejected",
+    });
+    f.navigateAndWait.mockImplementationOnce(async () => {
+      f.match.routeId = "dashboard";
+      f.changed();
+    });
+    f.command(
+      "navigate",
+      { agentId: "main", sessionKey: f.data.sessionKey },
+      { requestId: "face" },
+    );
+    await flush();
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "command-result",
+      requestId: "face",
+      ok: false,
+      error: "navigate-rejected",
+    });
+  });
+
+  it("bounds navigation from receipt, including time waiting behind another command", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    await flush();
+    f.navigateAndWait.mockReturnValue(new Promise(() => {}));
+    f.command("navigate", { agentId: "main", sessionKey: "agent:main:first" });
+    await flush();
+    await vi.advanceTimersByTimeAsync(5_000);
+    f.command(
+      "navigate",
+      { agentId: "main", sessionKey: "agent:main:second" },
+      { requestId: "second" },
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(f.messages).toContainEqual(
+      expect.objectContaining({
+        type: "command-result",
+        requestId: "request-1",
+        ok: false,
+        error: "navigate-timeout",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(f.messages).toContainEqual(
+      expect.objectContaining({
+        type: "command-result",
+        requestId: "second",
+        ok: false,
+        error: "navigate-timeout",
+      }),
+    );
+  });
+
+  it.each(["ready", "state"] as const)(
+    "settles navigation when the host never acknowledges %s",
+    async (stalledType) => {
+      vi.useFakeTimers();
+      const f = fixture();
+      if (stalledType === "state") {
+        await flush();
+      }
+      f.reply.mockImplementation((message) =>
+        message.type === stalledType ? new Promise(() => {}) : Promise.resolve({ ok: true }),
+      );
+      f.navigateAndWait.mockImplementation(async () => {
+        f.data.sessionKey = "agent:main:next";
+        f.changed();
+      });
+      f.command("navigate", { agentId: "main", sessionKey: "agent:main:next" });
+      await flush();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(f.messages).toContainEqual(
+        expect.objectContaining({
+          type: "command-result",
+          requestId: "request-1",
+          ok: false,
+          error: "navigate-timeout",
+        }),
+      );
+    },
+  );
+
+  it.each(["rejected", "timeout"] as const)(
+    "allows a fresh navigation to confirm the same state after its delivery %s",
+    async (failure) => {
+      vi.useFakeTimers();
+      const f = fixture();
+      await flush();
+      const delivery = createDeferred<unknown>();
+      f.reply.mockImplementation((message) =>
+        message.type === "state" ? delivery.promise : Promise.resolve({ ok: true }),
+      );
+      const target = { agentId: "main", sessionKey: "agent:main:next" };
+      f.navigateAndWait.mockImplementation(async () => {
+        f.data.sessionKey = target.sessionKey;
+        f.changed();
+      });
+      f.command("navigate", target);
+      await flush();
+      if (failure === "rejected") {
+        delivery.resolve({ ok: false, error: "unavailable" });
+        await flush();
+      } else {
+        await vi.advanceTimersByTimeAsync(15_000);
+      }
+      expect(f.messages.at(-1)).toMatchObject({
+        type: "command-result",
+        ok: false,
+        error: failure === "timeout" ? "navigate-timeout" : "navigate-rejected",
+      });
+      f.reply.mockResolvedValue({ ok: true });
+      f.changed();
+      await flush();
+      expect(f.messages.filter((message) => message.type === "state")).toHaveLength(2);
+      f.command("navigate", target, { requestId: "retry" });
+      await flush();
+      expect(f.messages.slice(-2)).toMatchObject([
+        { type: "state", revision: 3, context: target },
+        { type: "command-result", requestId: "retry", ok: true },
+      ]);
+      delivery.resolve({ ok: false, error: "late-rejection" });
+      await flush();
+      f.command("navigate", target, { requestId: "confirmed" });
+      await flush();
+      expect(f.messages.filter((message) => message.type === "state")).toHaveLength(3);
+      expect(f.messages.at(-1)).toMatchObject({
+        type: "command-result",
+        requestId: "confirmed",
+        ok: true,
+      });
+    },
+  );
+
+  it("retires timed-out navigation before a later command can publish its state", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const first = createDeferred();
+    const second = createDeferred();
+    f.navigateAndWait.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const target = { agentId: "main", sessionKey: "agent:main:next" };
+    f.command("navigate", target);
+    await flush();
+    await vi.advanceTimersByTimeAsync(15_000);
+    f.command("navigate", target, { requestId: "second" });
+    await flush();
+    f.data.sessionKey = target.sessionKey;
+    f.changed();
+    const beforeLateCompletion = [...f.messages];
+    first.resolve();
+    await flush();
+    expect(f.messages).toEqual(beforeLateCompletion);
+    second.resolve();
+    await flush();
+    expect(f.messages.slice(-2)).toMatchObject([
+      { type: "state", context: target },
+      { type: "command-result", requestId: "second", ok: true },
+    ]);
+    expect(
+      f.messages.filter(
+        (message) => message.type === "command-result" && message.requestId === "request-1",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("leaves transcript file links and existing pane link handlers in control", async () => {
+    const f = fixture();
+    for (const markup of [
+      '<a href="/workspace/notes.md" data-file-path="/workspace/notes.md">Transcript file</a>',
+      '<a href="/settings">Existing panel action</a>',
+      '<a href="/chat/main/next">In-pane session</a>',
+    ]) {
+      document.body.innerHTML = markup;
+      const anchor = document.querySelector("a")!;
+      const handled = vi.fn((event: MouseEvent) => event.preventDefault());
+      anchor.addEventListener("click", handled);
+      anchor.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      expect(handled).toHaveBeenCalledOnce();
+    }
+    await flush();
+    expect(f.messages.some((message) => message.type === "open-dashboard")).toBe(false);
+    expect(f.navigateAndWait).not.toHaveBeenCalled();
+  });
+
+  it("only hands unclaimed same-origin application routes to Dashboard", async () => {
+    const f = fixture();
+    for (const markup of [
+      "<a>Action without href</a>",
+      '<a href="/files/report.txt">Non-route file</a>',
+      '<a href="/settings" data-file-path="settings">Workspace file</a>',
+      '<a href="/settings" download>Download</a>',
+      '<a href="/settings" target="_blank">New window</a>',
+      '<a href="https://example.com/settings">External</a>',
+      '<a href="/chat/main/next">Conversation</a>',
+    ]) {
+      document.body.innerHTML = markup;
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      const finish = vi.fn((event: MouseEvent) => {
+        expect(event.defaultPrevented).toBe(false);
+        event.preventDefault();
+      });
+      window.addEventListener("click", finish, { once: true });
+      document.querySelector("a")!.dispatchEvent(click);
+      window.removeEventListener("click", finish);
+      expect(finish).toHaveBeenCalledOnce();
+    }
+    await flush();
+    expect(f.messages.some((message) => message.type === "open-dashboard")).toBe(false);
+    expect(f.navigateAndWait).not.toHaveBeenCalled();
+    document.body.innerHTML = '<a href="/settings?section=general">Settings</a>';
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    document.querySelector("a")!.dispatchEvent(click);
+    await flush();
+    expect(click.defaultPrevented).toBe(true);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "open-dashboard",
+      path: "/settings",
+      search: "?section=general",
+    });
+  });
+
+  it.each(["rejected", "throwing"] as const)(
+    "shows a toast when Dashboard handoff is %s",
+    async (failure) => {
+      const f = fixture();
+      await flush();
+      f.reply.mockImplementation((message) => {
+        if (message.type !== "open-dashboard") {
+          return Promise.resolve({ ok: true });
+        }
+        return failure === "rejected"
+          ? Promise.resolve({ ok: false, error: "unavailable" })
+          : Promise.reject(new Error("Dashboard unavailable"));
+      });
+      f.bridge.interceptNavigation({ pathname: "/settings", search: "", hash: "" });
+      await flush();
+      expect(showToast).toHaveBeenCalledWith({
+        message: "Couldn't open that page in the Dashboard",
+      });
+      expect(f.navigateAndWait).not.toHaveBeenCalled();
+      expect(f.data.sessionKey).toBe("agent:main:main");
+    },
+  );
 
   it("reports route changes and hands non-chat navigation to Dashboard", async () => {
     const f = fixture();
@@ -369,6 +625,7 @@ describe("native conversation contract", () => {
   });
 
   it("does not publish a late navigation result after document retirement", async () => {
+    vi.useFakeTimers();
     const f = fixture();
     const gate = createDeferred();
     f.navigateAndWait.mockReturnValue(gate.promise);
@@ -378,5 +635,6 @@ describe("native conversation contract", () => {
     gate.resolve();
     await flush();
     expect(f.messages.some((message) => message.type === "command-result")).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

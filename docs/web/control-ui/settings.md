@@ -405,10 +405,17 @@ are `navigate { agentId, sessionKey }`, `presentation { visible, active }`, and
 `focus-composer {}`. Each request receives one `command-result`; stale document
 IDs return `stale-document`, and unknown commands return `unsupported`. Navigation
 switches sessions in place and reports success after the target state reaches the
-host. Change-only `state` messages carry a monotonic revision,
+host. It settles within 15 seconds of receipt, including queued commands and host
+acknowledgements; failures return `navigate-timeout` or `navigate-rejected`.
+The `visible` flag controls pane presentation. A visible, inactive window keeps
+rendering and accepting navigation; `active` only gates composer focus requests.
+Change-only `state` messages carry a monotonic revision,
 agent/session context, title, run activity, and connection state. Web session changes
 send `route-changed`; non-chat destinations send `open-dashboard { path, search? }`
-and leave the current conversation in place. The canonical wire types and validation
+and leave the current conversation in place. Existing transcript file links,
+session links, and side-panel actions keep their in-pane handlers. A failed
+Dashboard handoff shows a toast without leaving the conversation.
+The canonical wire types and validation
 live in `ui/src/app/native-conversation-bridge.ts`.
 
 Choice fields that accept an explicit `null` value show it as a dropdown option. For optional fields, `null` remains distinct from clearing the setting or selecting its default. Rejected choices, such as a duplicate in a unique-value list, leave the previous selection in place.

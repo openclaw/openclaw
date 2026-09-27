@@ -75,7 +75,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
 
   private get conversationPresented(): boolean {
     const presentation = this.context?.nativeConversation?.presentation;
-    return this.presented && (!presentation || (presentation.visible && presentation.active));
+    return this.presented && (!presentation || presentation.visible);
   }
 
   private get pendingCreate(): boolean {

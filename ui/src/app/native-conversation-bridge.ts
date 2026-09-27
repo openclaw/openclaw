@@ -13,6 +13,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { z } from "zod";
 import { routeIdFromPath } from "../app-route-paths.ts";
+import { t } from "../i18n/index.ts";
 import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
@@ -23,6 +24,7 @@ import {
   resolveUiSelectedSessionAgentId,
   uiConversationMatches,
 } from "../lib/sessions/session-key.ts";
+import { showToast } from "../lib/toast.ts";
 import {
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
@@ -34,6 +36,7 @@ import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import { nativeEmbedHost } from "./native-web-chrome.ts";
 
 const COMMAND_EVENT = "openclaw:native-conversation-command";
+const RESPONSE_TIMEOUT_MS = 15_000;
 const identifier = z
   .string()
   .min(1)
@@ -57,6 +60,7 @@ type Conversation = {
 };
 type Connection = "connected" | "connecting" | "offline" | "signed-out";
 type Binding = { contract: 1; documentId: string };
+type Delivery = "accepted" | "rejected" | "timeout";
 type NativeConversationMessage = Binding &
   (
     | { type: "ready"; surface: "conversation"; capabilities: string[] }
@@ -110,34 +114,70 @@ export function createNativeConversationBridge(
   let revision = 0;
   let navigating = false;
   let commands = Promise.resolve();
-  let outgoing = Promise.resolve(true);
-  let stateDelivery = Promise.resolve(false);
+  let outgoing = Promise.resolve<Delivery>("accepted");
+  let stateDelivery = Promise.resolve<Delivery>("rejected");
+  let stateDeliveryFailed = false;
   const requests = new Set<string>();
   const listeners = new Set<() => void>();
+  const pending = new Set<() => void>();
   const current = () =>
     !disposed &&
     host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"] === binding &&
     host.webkit?.messageHandlers?.openclawConversation === handler &&
     handler.postMessage === postMessage;
-  const send = (message: NativeConversationMessage): Promise<boolean> => {
-    // Readiness adoption and state publication finish before later messages reach
-    // the host. A lost reply is a failure, never a reason to duplicate a message.
-    outgoing = outgoing.then(async () => {
-      if (!current()) {
-        return false;
-      }
-      try {
-        const reply = await post(message);
-        return current() && isRecord(reply) && reply.ok === true;
-      } catch {
-        return false;
-      }
+  const bounded = <T>(
+    work: (active: () => boolean) => Promise<T>,
+    timeout: T,
+    deadline = Date.now() + RESPONSE_TIMEOUT_MS,
+  ): Promise<T> =>
+    new Promise((resolve) => {
+      let settled = false;
+      const finish = (result: T) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        pending.delete(expire);
+        resolve(result);
+      };
+      const expire = () => finish(timeout);
+      const timer = setTimeout(expire, Math.max(0, deadline - Date.now()));
+      pending.add(expire);
+      void work(() => !settled && current() && Date.now() < deadline).then(finish, expire);
     });
+  const postToHost = async (message: NativeConversationMessage): Promise<Delivery> => {
+    if (!current()) {
+      return "rejected";
+    }
+    try {
+      const reply = await post(message);
+      return current() && isRecord(reply) && reply.ok === true ? "accepted" : "rejected";
+    } catch {
+      return "rejected";
+    }
+  };
+  const send = (
+    message: NativeConversationMessage,
+    deadline?: number,
+    canSend = current,
+  ): Promise<Delivery> => {
+    // Readiness adoption and state publication finish before later messages reach
+    // the host. Expired deliveries release the queue without retrying the message.
+    const previous = outgoing;
+    outgoing = bounded(
+      async (active) => {
+        await previous;
+        return active() && canSend() ? postToHost(message) : "timeout";
+      },
+      "timeout",
+      deadline,
+    );
     return outgoing;
   };
-  const publishState = () => {
+  const publishState = (deadline?: number, active?: () => boolean) => {
     if (!conversation || !current()) {
-      return Promise.resolve(false);
+      return Promise.resolve<Delivery>("rejected");
     }
     const { phase, lastErrorAuthReason } = context.gateway.snapshot;
     const connection: Connection =
@@ -150,9 +190,22 @@ export function createNativeConversationBridge(
             : "offline";
     const snapshot = { ...conversation, connection };
     const serialized = JSON.stringify(snapshot);
-    if (serialized !== lastState) {
+    // A fresh command can confirm a failed delivery; passive refresh stays
+    // change-only so a lost acknowledgement never creates a retry loop.
+    if (serialized !== lastState || (active && stateDeliveryFailed)) {
       lastState = serialized;
-      stateDelivery = send({ ...binding, type: "state", revision: ++revision, ...snapshot });
+      stateDeliveryFailed = false;
+      const delivery = send(
+        { ...binding, type: "state", revision: ++revision, ...snapshot },
+        deadline,
+        active,
+      );
+      stateDelivery = delivery;
+      void delivery.then((result) => {
+        if (stateDelivery === delivery) {
+          stateDeliveryFailed = result !== "accepted";
+        }
+      });
     }
     return stateDelivery;
   };
@@ -211,7 +264,8 @@ export function createNativeConversationBridge(
     }
   };
   const interceptNavigation = (location: RouteLocation) => {
-    if (routeIdFromPath(location.pathname, context.basePath) === "chat") {
+    const routeId = routeIdFromPath(location.pathname, context.basePath);
+    if (!routeId || routeId === "chat") {
       return false;
     }
     void send({
@@ -219,10 +273,18 @@ export function createNativeConversationBridge(
       type: "open-dashboard",
       path: location.pathname,
       ...(location.search ? { search: location.search } : {}),
+    }).then((delivery) => {
+      if (delivery !== "accepted" && current()) {
+        showToast({ message: t("nativeConversation.openDashboardFailed") });
+      }
     });
     return true;
   };
-  const execute = async (detail: unknown): Promise<string | undefined> => {
+  const execute = async (
+    detail: unknown,
+    active: () => boolean,
+    deadline: number,
+  ): Promise<string | undefined> => {
     const parsed = envelope.safeParse(detail);
     if (!parsed.success) {
       return isRecord(detail) && detail.contract !== 1 ? "unsupported" : "invalid-command";
@@ -244,15 +306,20 @@ export function createNativeConversationBridge(
           ...target.data,
         }).options;
         navigating = true;
-        await context.navigateAndWait("chat", options);
-        if (!current()) {
-          return "stale-document";
+        try {
+          await context.navigateAndWait("chat", options);
+        } catch {
+          return "navigate-rejected";
+        }
+        if (!active()) {
+          return "navigate-timeout";
         }
         refreshConversation();
         const targetSelected = () => {
           const route = context.router.getState();
           return (
             route.pendingMatches.length === 0 &&
+            route.matches[0]?.routeId === "chat" &&
             route.matches[0]?.status === "success" &&
             isRecord(route.matches[0]?.data) &&
             route.matches[0].data.kind === "session" &&
@@ -272,16 +339,16 @@ export function createNativeConversationBridge(
         // A fulfilled router promise can mean cancellation, a missing session,
         // or superseding navigation. Only the settled target can acknowledge success.
         if (!targetSelected()) {
-          return "navigation-failed";
+          return "navigate-rejected";
         }
         // The host requested this settled route. Preserve later web selections
         // independently, including while its state acknowledgement is pending.
         reportedRoute = conversation?.context;
-        const published = await publishState();
-        if (!current()) {
-          return "stale-document";
+        const published = await publishState(deadline, active);
+        if (!active() || published === "timeout") {
+          return "navigate-timeout";
         }
-        return published && targetSelected() ? undefined : "navigation-failed";
+        return published === "accepted" && targetSelected() ? undefined : "navigate-rejected";
       }
       case "presentation": {
         const next = presentationPayload.safeParse(command.payload);
@@ -321,23 +388,43 @@ export function createNativeConversationBridge(
       return;
     }
     requests.add(key);
-    // Native commands preserve dispatch order, including across route-loader awaits.
-    commands = commands.then(async () => {
-      let error: string | undefined;
-      try {
-        error = await execute(detail);
-      } catch {
-        error = "command-failed";
+    const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
+    const previous = commands;
+    // The receipt deadline includes queueing; expired continuations cannot publish
+    // state or take ownership from the next command after a late loader resolves.
+    commands = bounded<string | undefined>(
+      async (active) => {
+        await previous;
+        if (!active()) {
+          return "navigate-timeout";
+        }
+        try {
+          return await execute(detail, active, deadline);
+        } catch {
+          return "command-failed";
+        }
+      },
+      "navigate-timeout",
+      deadline,
+    ).then((error) => {
+      if (!current()) {
+        return;
       }
-      void send({
-        ...binding,
-        type: "command-result",
-        // A stale rejection must never collide with a current document's request.
-        documentId,
-        requestId,
-        ok: error === undefined,
-        ...(error ? { error } : {}),
-      });
+      // Success already awaits accepted state. Failure must reach the host even
+      // when an earlier host acknowledgement is stuck; ready was invoked first.
+      void bounded(
+        () =>
+          postToHost({
+            ...binding,
+            type: "command-result",
+            // A stale rejection must never collide with a current document's request.
+            documentId,
+            requestId,
+            ok: error === undefined,
+            ...(error ? { error } : {}),
+          }),
+        "timeout",
+      );
       navigating = false;
       refreshConversation();
     });
@@ -347,7 +434,12 @@ export function createNativeConversationBridge(
       return;
     }
     const anchor = anchorFromNavigationEvent(event);
-    if (!anchor || anchor.hasAttribute("download")) {
+    if (
+      !anchor?.hasAttribute("href") ||
+      anchor.hasAttribute("download") ||
+      anchor.hasAttribute("data-file-path") ||
+      (anchor.target && anchor.target !== "_self")
+    ) {
       return;
     }
     const url = new URL(anchor.href, window.location.href);
@@ -357,14 +449,12 @@ export function createNativeConversationBridge(
     ) {
       return;
     }
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    if (!interceptNavigation(url)) {
-      void context.navigateAndWait("chat", url).catch(() => undefined);
+    if (interceptNavigation(url)) {
+      event.preventDefault();
     }
   };
   window.addEventListener(COMMAND_EVENT, onCommand);
-  document.addEventListener("click", onClick, true);
+  document.addEventListener("click", onClick);
   void send({
     ...binding,
     type: "ready",
@@ -388,6 +478,7 @@ export function createNativeConversationBridge(
     interceptNavigation,
     dispose() {
       disposed = true;
+      pending.forEach((expire) => expire());
       document.removeEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation);
       document.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation);
       stopGateway();
@@ -395,7 +486,7 @@ export function createNativeConversationBridge(
       stopSessions();
       listeners.clear();
       window.removeEventListener(COMMAND_EVENT, onCommand);
-      document.removeEventListener("click", onClick, true);
+      document.removeEventListener("click", onClick);
       if (host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"] === binding) {
         delete host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"];
       }

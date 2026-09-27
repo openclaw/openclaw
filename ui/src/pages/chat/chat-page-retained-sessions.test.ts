@@ -107,7 +107,7 @@ describe("chat page retained sessions", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["web", "visible", "active"] as const)(
+  it.each(["web", "visible"] as const)(
     "suspends once per effective %s presentation transition",
     async (mode) => {
       const page = new ChatPage();
@@ -162,7 +162,7 @@ describe("chat page retained sessions", () => {
     },
   );
 
-  it("synchronizes a route selected while the native conversation is hidden", async ({
+  it("keeps inactive native conversations visible and synchronizes routes selected while hidden", async ({
     onTestFinished,
   }) => {
     const previousHref = window.location.href;
@@ -175,7 +175,7 @@ describe("chat page retained sessions", () => {
     });
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
-    const presentation = { visible: true, active: true };
+    const presentation = { visible: true, active: false };
     let notify = () => {};
     Object.assign(navigation.context, {
       nativeConversation: {
@@ -190,6 +190,7 @@ describe("chat page retained sessions", () => {
     window.history.replaceState({}, "", "/chat/main");
     document.body.append(page);
     await page.updateComplete;
+    expect(page.querySelector<RenderedPane>("openclaw-chat-pane")?.presented).toBe(true);
     presentation.visible = false;
     notify();
     await page.updateComplete;
@@ -201,6 +202,7 @@ describe("chat page retained sessions", () => {
     await page.updateComplete;
     expect(navigation.setAgent).toHaveBeenLastCalledWith("research", { background: true });
     const pane = page.querySelector<RenderedPane>(".chat-pane-cache__pane--visible");
+    expect(pane?.presented).toBe(true);
     expect(pane?.onPaneSessionChange?.("p1", "agent:research:forked")).toBe(true);
     expect(navigation.navigate).toHaveBeenCalledWith(
       "chat",
