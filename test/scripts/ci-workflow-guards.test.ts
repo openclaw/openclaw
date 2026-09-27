@@ -3785,6 +3785,10 @@ setImmediate(() => {
     },
   );
 
+  it("keeps CI within GitHub's 500 KB workflow file limit", () => {
+    expect(readFileSync(".github/workflows/ci.yml").byteLength).toBeLessThanOrEqual(500 * 1024);
+  });
+
   it("keeps Codex selection observational and limited to same-repository PR first attempts", () => {
     const workflow = readCiWorkflow();
     const selection = workflow.jobs["codex-test-selection"];
