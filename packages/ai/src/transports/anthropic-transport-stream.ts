@@ -1,10 +1,5 @@
 import type { AssistantMessageEvent, Context, Model, StreamFn } from "@openclaw/llm-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-/**
- * Native Anthropic Messages streaming transport.
- * Converts OpenClaw contexts/tools into Anthropic payloads, streams SSE events
- * back into runtime output blocks, and applies provider request policy.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getEnvApiKey } from "../env-api-keys.js";
@@ -57,11 +52,7 @@ import {
   type AnthropicTransportOptions,
 } from "./anthropic-transport-options.js";
 import { createAssistantOutput } from "./assistant-output.js";
-import {
-  buildGuardedModelFetch,
-  resolveProviderEndpoint,
-  transformTransportMessages,
-} from "./host-policy.js";
+import { buildGuardedModelFetch, resolveProviderEndpoint } from "./host-policy.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
@@ -496,7 +487,12 @@ async function buildAnthropicParams(
   });
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
   const messages = await convertAnthropicMessages(
-    transformTransportMessages(replayPlan.messages, model, normalizeAnthropicToolCallId),
+    getAiTransportHost().transformTransportMessages(
+      replayPlan.messages,
+      model,
+      normalizeAnthropicToolCallId,
+      undefined,
+    ),
     model,
     isOAuthToken,
     {

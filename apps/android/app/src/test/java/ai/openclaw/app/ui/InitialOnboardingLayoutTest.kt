@@ -7,6 +7,7 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.bindNodeRuntimeTestFixture
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.drainWithMainLooper
@@ -23,6 +24,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.provider.Settings
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
 import androidx.appcompat.app.AlertDialog
@@ -305,6 +307,84 @@ class InitialOnboardingLayoutTest {
             assertEquals(ai.openclaw.app.LocationMode.Off, model.locationMode.value)
           }
         }
+      } finally {
+        requester.detach(activity)
+      }
+    }
+  }
+
+  @Test
+  @Config(sdk = [34])
+  fun smsSetupKeepsPartialGrantsAndExplainsBlockedAccess() {
+    val app = ApplicationProvider.getApplicationContext<NodeApp>()
+    shadowOf(app.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, true)
+    shadowOf(app).grantPermissions(Manifest.permission.READ_SMS)
+    withOnboarding(permissionsStep = true) { model, activity ->
+      composeRule.onNodeWithText("Additional features").performScrollTo().performClick()
+      if (!SensitiveFeatureConfig.smsEnabled) {
+        composeRule.onNodeWithText("SMS").assertDoesNotExist()
+        return@withOnboarding
+      }
+      composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("SMS"))
+      val partialStatus =
+        composeRule
+          .onNodeWithText("SMS")
+          .fetchSemanticsNode()
+          .config[SemanticsProperties.Text]
+          .joinToString { it.text }
+      val requester = app.permissionRequester
+      composeRule.runOnIdle {
+        activity.setTheme(androidx.appcompat.R.style.Theme_AppCompat_DayNight)
+        requester.attach(activity)
+        requester.activate(activity)
+      }
+      try {
+        composeRule.onNodeWithText("SMS").performClick()
+        composeRule.runOnIdle {
+          val request = checkNotNull(shadowOf(activity).lastRequestedPermission)
+          assertEquals(listOf(Manifest.permission.SEND_SMS), request.requestedPermissions.toList())
+          val permissionIntent = checkNotNull(shadowOf(activity).nextStartedActivity)
+          shadowOf(activity).receiveResult(
+            permissionIntent,
+            Activity.RESULT_OK,
+            Intent()
+              .putExtra("android.content.pm.extra.REQUEST_PERMISSIONS_NAMES", request.requestedPermissions)
+              .putExtra("android.content.pm.extra.REQUEST_PERMISSIONS_RESULTS", intArrayOf(PackageManager.PERMISSION_DENIED)),
+          )
+        }
+        val recoveryMessage =
+          composeRule.runOnIdle {
+            val dialog = checkNotNull(ShadowDialog.getLatestDialog() as? AlertDialog)
+            assertTrue(dialog.isShowing)
+            val message = checkNotNull(dialog.findViewById<TextView>(android.R.id.message)).text.toString()
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
+            message
+          }
+        composeRule.runOnIdle {
+          assertEquals(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, shadowOf(activity).nextStartedActivity.action)
+          (activity.lifecycle as LifecycleRegistry).handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+          (activity.lifecycle as LifecycleRegistry).handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        }
+        composeRule.onNode(hasText("SMS") and hasText("Allowed")).assertDoesNotExist()
+        composeRule.runOnIdle {
+          (activity.lifecycle as LifecycleRegistry).handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+          shadowOf(app).grantPermissions(Manifest.permission.SEND_SMS)
+          (activity.lifecycle as LifecycleRegistry).handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        }
+        composeRule.onNode(hasText("SMS") and hasText("Allowed")).assertIsDisplayed()
+        composeRule.runOnIdle { assertFalse(model.onboardingCompleted.value) }
+
+        composeRule.runOnIdle {
+          (activity.lifecycle as LifecycleRegistry).handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+          shadowOf(app).denyPermissions(Manifest.permission.READ_SMS)
+          (activity.lifecycle as LifecycleRegistry).handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        }
+        composeRule.onNode(hasText("SMS") and hasText("Partial") and hasText("Send allowed; read not granted.", substring = true)).assertIsDisplayed()
+
+        assertTrue("Missing permission must be named: $recoveryMessage", recoveryMessage.contains("Send SMS"))
+        assertFalse("Granted permission must not be requested again: $recoveryMessage", recoveryMessage.contains("Read SMS"))
+        assertTrue("Recovery must explain installer restrictions: $recoveryMessage", recoveryMessage.contains("installer"))
+        assertTrue("Partial access must be visible: $partialStatus", partialStatus.contains("Partial"))
       } finally {
         requester.detach(activity)
       }

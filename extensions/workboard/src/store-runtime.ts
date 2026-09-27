@@ -80,62 +80,53 @@ export class WorkboardStoreRuntime {
   ): WorkboardKeyedStore<T> {
     return {
       register: (key, value) =>
-        this.runOperation(async () => {
-          await store.register(key, value);
-          if (notifyChanges) {
-            this.mutationRevision += 1;
-          }
-        }),
+        this.trackMutation(
+          () => store.register(key, value),
+          () => notifyChanges,
+        ),
       lookup: (key) => this.runOperation(() => store.lookup(key)),
       delete: (key) =>
-        this.runOperation(async () => {
-          const deleted = await store.delete(key);
-          if (deleted && notifyChanges) {
-            this.mutationRevision += 1;
-          }
-          return deleted;
-        }),
+        this.trackMutation(
+          () => store.delete(key),
+          (deleted) => deleted && notifyChanges,
+        ),
       entries: () => this.runOperation(() => store.entries()),
     };
   }
 
   protected trackCardStore(store: WorkboardCardStore): WorkboardCardStore {
-    const trackConditionalMutation = (run: () => Promise<boolean>) =>
-      this.runOperation(async () => {
-        const changed = await run();
-        if (changed) {
-          this.mutationRevision += 1;
-        }
-        return changed;
-      });
     return {
       ...this.track(store),
       entries: (scope) => this.runOperation(() => store.entries(scope)),
       registerIfAbsent: (key, value) =>
-        trackConditionalMutation(() => store.registerIfAbsent(key, value)),
+        this.trackMutation(() => store.registerIfAbsent(key, value)),
       registerIfUpdatedAt: (key, value, expectedUpdatedAt) =>
-        trackConditionalMutation(() => store.registerIfUpdatedAt(key, value, expectedUpdatedAt)),
+        this.trackMutation(() => store.registerIfUpdatedAt(key, value, expectedUpdatedAt)),
       deleteIfUpdatedAt: (key, expectedUpdatedAt) =>
-        trackConditionalMutation(() => store.deleteIfUpdatedAt(key, expectedUpdatedAt)),
+        this.trackMutation(() => store.deleteIfUpdatedAt(key, expectedUpdatedAt)),
       claimIfOwnerAvailable: (key, value, expectedUpdatedAt, ownerId, now) =>
-        this.runOperation(async () => {
-          const result = await store.claimIfOwnerAvailable(
-            key,
-            value,
-            expectedUpdatedAt,
-            ownerId,
-            now,
-          );
-          if (result === "updated") {
-            this.mutationRevision += 1;
-          }
-          return result;
-        }),
+        this.trackMutation(
+          () => store.claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now),
+          (result) => result === "updated",
+        ),
       listCardStatuses: (ids) => this.runOperation(() => store.listCardStatuses(ids)),
       listBoardAggregates: () => this.runOperation(() => store.listBoardAggregates()),
       listStatsAggregates: (boardId) => this.runOperation(() => store.listStatsAggregates(boardId)),
       hasCards: (boardId) => this.runOperation(() => store.hasCards(boardId)),
     };
+  }
+
+  private trackMutation<T>(
+    run: () => Promise<T>,
+    changed: (result: T) => boolean = Boolean,
+  ): Promise<T> {
+    return this.runOperation(async () => {
+      const result = await run();
+      if (changed(result)) {
+        this.mutationRevision += 1;
+      }
+      return result;
+    });
   }
 
   subscribeChanges(listener: (change: WorkboardChange) => void): () => void {

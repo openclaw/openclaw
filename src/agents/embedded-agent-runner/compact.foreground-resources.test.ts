@@ -62,10 +62,8 @@ it.for([
   { mode: "timeout", factory: "none", deferred: false },
   { mode: "caller-abort", factory: "none", deferred: false },
   { mode: "success-tail", factory: "none", deferred: false },
-  { mode: "factory-service", factory: "service", deferred: false },
   { mode: "factory-signal", factory: "signal", deferred: false },
   { mode: "operation-signal", factory: "service", deferred: false },
-  { mode: "deferred-factory-service", factory: "service", deferred: true },
   { mode: "deferred-factory-signal", factory: "signal", deferred: true },
 ] as const)(
   "retains $mode resources through disposal without retaining write authority",

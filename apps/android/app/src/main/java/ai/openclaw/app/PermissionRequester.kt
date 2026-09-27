@@ -318,8 +318,9 @@ class PermissionRequester internal constructor(
     showPermissionDialog(active, SettingsResult.HostLost) { activity, finish ->
       AlertDialog
         .Builder(activity)
-        .setTitle(nativeString("Enable permission in Settings"))
-        .setMessage(buildSettingsMessage(permissions))
+        .setTitle(
+          if (permissions.any(::isSmsPermission)) nativeString("SMS permission not granted") else nativeString("Enable permission in Settings"),
+        ).setMessage(buildSettingsMessage(permissions))
         .setPositiveButton(nativeString("Open Settings")) { _, _ ->
           if (!isCurrentActiveHost(active)) {
             finish(SettingsResult.HostLost)
@@ -395,11 +396,19 @@ class PermissionRequester internal constructor(
 
   private fun buildSettingsMessage(permissions: List<String>): String {
     val labels = permissions.map { permissionLabel(it) }
+    if (permissions.any(::isSmsPermission)) {
+      return nativeString(
+        "Not granted: \${labels.joinToString(\", \")}. If you denied access, review it in Android Settings. A missing or disabled SMS option may mean an installer or device-policy restriction. Check your installation source or contact your device administrator; OpenClaw cannot override these restrictions.",
+        labels.joinToString(", "),
+      )
+    }
     return nativeString(
       "Please enable \${labels.joinToString(\", \")} in Android Settings to continue.",
       labels.joinToString(", "),
     )
   }
+
+  private fun isSmsPermission(permission: String): Boolean = permission == Manifest.permission.READ_SMS || permission == Manifest.permission.SEND_SMS
 
   private fun permissionLabel(permission: String): String =
     when (permission) {

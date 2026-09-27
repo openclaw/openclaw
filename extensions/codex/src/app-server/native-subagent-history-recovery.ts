@@ -110,7 +110,7 @@ export class CodexNativeSubagentHistoryRecovery {
     return [...retiring].filter((state) => parents.get(state.parentThreadId) === state);
   }
 
-  selectTaskRecords(state: ParentState, records = state.readTaskRecords?.() ?? []) {
+  selectTaskRecords(state: ParentState, records: readonly AgentHarnessTaskRecord[]) {
     return records
       .filter((task) => this.acceptsTask(task, state))
       .toSorted((a, b) => (b.startedAt ?? b.createdAt) - (a.startedAt ?? a.createdAt));
@@ -168,8 +168,11 @@ export class CodexNativeSubagentHistoryRecovery {
     }
   }
 
-  readReceiverTask(state: ParentState, childThreadId: string) {
-    const records = state.readTaskRecords?.() ?? [];
+  readReceiverTask(
+    state: ParentState,
+    childThreadId: string,
+    records: readonly AgentHarnessTaskRecord[],
+  ) {
     const task = records
       .toSorted((a, b) => (b.startedAt ?? b.createdAt) - (a.startedAt ?? a.createdAt))
       .find((record) => readNativeTaskAssignment(record)?.childThreadId === childThreadId);

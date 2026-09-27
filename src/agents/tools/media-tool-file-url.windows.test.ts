@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as imageGenerationRuntime from "../../image-generation/runtime.js";
 import * as mediaStore from "../../media/store.js";
@@ -35,7 +34,10 @@ vi.mock("../openclaw-plugin-tools.js", () => ({
 }));
 
 const { stubPdfToolInfra } = createPdfToolInfraStub(completeMock);
-const ONE_PIXEL_PNG = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
+const ONE_PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: "view_image" | "pdf") {
   const tool = tools.find((candidate) => candidate.name === name);

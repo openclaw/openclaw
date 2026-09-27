@@ -2,7 +2,7 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
-import type { CronJobPolicyContext, Logger } from "../service/state.js";
+import type { CronJobPolicyContext } from "../service/state.js";
 import { loadedCronStoreFromRows, loadCronRows, upsertCronJobRow } from "./row-codec.js";
 import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
 import {
@@ -11,6 +11,7 @@ import {
 } from "./runtime-authority-store.js";
 import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
 import {
+  createCronMutationLogger,
   prepareCronRuntimeMutation,
   retainCronRuntimeMutationOutcome,
 } from "./runtime-mutation.worker.js";
@@ -43,18 +44,10 @@ export function scheduleUnownedCronJobsInWorker(
         notifications: [],
         logs: [],
       };
-      const record = (level: keyof Logger) => (fields: unknown, message?: string) => {
-        outcome.logs.push({ level, fields, message });
-      };
       const state: CronJobPolicyContext = {
         deps: {
           nowMs: () => preparation.nowMs,
-          log: {
-            debug: record("debug"),
-            info: record("info"),
-            warn: record("warn"),
-            error: record("error"),
-          },
+          log: createCronMutationLogger(outcome.logs),
         },
       };
       for (const row of rows) {

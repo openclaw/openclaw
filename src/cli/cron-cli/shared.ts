@@ -61,6 +61,17 @@ export function parseCronIntegerOption(
   return parsed;
 }
 
+export function assertCronTimeoutSupported(
+  payloadKind: CronJob["payload"]["kind"],
+): asserts payloadKind is "agentTurn" | "command" {
+  if (payloadKind === "script") {
+    throw new CronCliError("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
+  }
+  if (payloadKind !== "agentTurn" && payloadKind !== "command") {
+    throw new CronCliError(`--timeout-seconds is not supported for ${payloadKind} jobs.`);
+  }
+}
+
 export function parseCronNoOutputTimeoutOption(opts: Record<string, unknown>): number | undefined {
   // Commander strips the leading no- from this option's attribute name.
   const raw =

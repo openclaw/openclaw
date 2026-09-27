@@ -1055,6 +1055,7 @@ internal fun ChatScreen(
   ) { onJumpToLatest, compactHeight, tabletop ->
     ChatComposer(
       onInputPositioned = { composerAnchor = it },
+      agentName = viewModel.chatComposerAgentName(composerOwner),
       ownerReady = composerOwnerReady,
       compactHeight = compactHeight,
       detailsExpanded = detailsExpanded,
@@ -2500,7 +2501,7 @@ private fun ToolActivityDisclosure(
   var expanded by rememberSaveable(stableKey) { mutableStateOf(false) }
   var showAll by rememberSaveable(stableKey) { mutableStateOf(false) }
   val summary = completedToolGroupSummary(tools)
-  val hasError = tools.any { it.isError || it.activity?.status == "failed" }
+  val hasError = tools.any { it.hasFailedOutcome }
   val hasBlocked = tools.any { it.activity?.status == "blocked" }
   val running = item.liveTools.values.any { !it.isComplete }
   val state = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
@@ -2640,13 +2641,8 @@ private fun ToolActivityItem(
   var expanded by rememberSaveable(parentStableKey, saveableKey) { mutableStateOf(false) }
   val kind = completedToolKind(tool.name)
   val resultPresentation = completedToolResultPresentation(tool)
-  val liveStatus =
-    when {
-      tool.isError || tool.activity?.status == "failed" -> nativeString("Failed")
-      tool.activity?.status == "blocked" -> nativeString("Blocked")
-      live?.isComplete == false -> nativeString("OpenClaw is working")
-      else -> null
-    }
+  val isError = tool.hasFailedOutcome
+  val outcome = resultPresentation.outcome ?: if (live?.isComplete == false) nativeString("OpenClaw is working") else null
   val preview =
     tool.detail
       ?.lineSequence()
@@ -2685,7 +2681,7 @@ private fun ToolActivityItem(
       ) {
         Icon(
           imageVector =
-            if (tool.isError) {
+            if (isError) {
               Icons.Default.Close
             } else {
               when (kind) {
@@ -2698,10 +2694,10 @@ private fun ToolActivityItem(
             },
           contentDescription = null,
           modifier = Modifier.size(16.dp),
-          tint = if (tool.isError) ClawTheme.colors.danger else ClawTheme.colors.textMuted,
+          tint = if (isError) ClawTheme.colors.danger else ClawTheme.colors.textMuted,
         )
-        (liveStatus ?: resultPresentation.outcome)?.let { outcome ->
-          Text(text = outcome, style = ClawTheme.type.caption, color = if (tool.isError || tool.activity?.status in setOf("failed", "blocked")) ClawTheme.colors.danger else ClawTheme.colors.textMuted)
+        outcome?.let {
+          Text(text = it, style = ClawTheme.type.caption, color = if (isError || tool.activity?.status == "blocked") ClawTheme.colors.danger else ClawTheme.colors.textMuted)
         }
         Row(
           modifier = Modifier.weight(1f),
@@ -3236,6 +3232,7 @@ private fun minimumChatInputHeight(): Dp {
 @Composable
 private fun ChatComposer(
   onInputPositioned: (LayoutCoordinates) -> Unit,
+  agentName: String?,
   ownerReady: Boolean,
   compactHeight: Boolean,
   detailsExpanded: Boolean,
@@ -3413,6 +3410,7 @@ private fun ChatComposer(
         } else {
           ChatInputPill(
             inputEnabled = ownerReady && !detailsExpanded,
+            agentName = agentName,
             onOpenDetails = if (compactHeight) ({ onDetailsExpandedChange(true) }) else null,
             value = value,
             onValueChange = onValueChange,
@@ -3943,9 +3941,8 @@ private fun ChatModelPickerContent(
   var expandedProviders by remember { mutableStateOf(emptySet<String>()) }
   val defaultModel = models.firstOrNull { it.providerQualifiedRef() == defaultModelRef }
 
-  fun matches(model: GatewayModelSummary): Boolean = query.isBlank() || listOf(model.name, model.id, providerDisplayName(model.provider)).any { it.contains(query.trim(), ignoreCase = true) }
-
-  val matchingModels = models.filter(::matches)
+  val search = remember(models) { ChatModelSearch(models) }
+  val matchingModels = remember(search, query) { search.search(query) }
   LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = 8.dp)) {
     item {
       if (modelSelectionLocked) {
@@ -3982,7 +3979,7 @@ private fun ChatModelPickerContent(
     }
     if (modelSelectionLocked) return@LazyColumn
 
-    matchingModels.groupBy { it.provider }.entries.sortedBy { if (it.key == defaultModel?.provider) 0 else 1 }.forEach { (provider, entries) ->
+    matchingModels.groupBy { it.provider }.entries.sortedBy { if (query.isBlank() && it.key == defaultModel?.provider) 0 else 1 }.forEach { (provider, entries) ->
       val expanded = query.isNotBlank() || provider in expandedProviders
       item(key = "provider-$provider") {
         Surface(
@@ -4005,7 +4002,7 @@ private fun ChatModelPickerContent(
         }
       }
       if (expanded) {
-        itemsIndexed(entries.sortedBy { if (it.providerQualifiedRef() == defaultModelRef) 0 else 1 }, key = { _, model -> model.providerQualifiedRef() }) { _, model ->
+        itemsIndexed(entries.sortedBy { if (query.isBlank() && it.providerQualifiedRef() == defaultModelRef) 0 else 1 }, key = { _, model -> model.providerQualifiedRef() }) { _, model ->
           val ref = model.providerQualifiedRef()
           val isDefault = ref == defaultModelRef
           ChatModelPickerRow(
@@ -4258,6 +4255,7 @@ internal fun canSelectChatPermissionMode(
 @Composable
 private fun ChatInputPill(
   inputEnabled: Boolean,
+  agentName: String?,
   onOpenDetails: (() -> Unit)?,
   value: String,
   onValueChange: (String) -> Unit,
@@ -4347,7 +4345,7 @@ private fun ChatInputPill(
               .fillMaxWidth()
               .heightIn(min = ClawTheme.spacing.touchTarget, max = with(LocalDensity.current) { sixLines.toDp() } + 12.dp)
               .padding(vertical = 6.dp),
-            contentAlignment = Alignment.CenterStart,
+            contentAlignment = Alignment.TopStart,
           ) {
             BasicTextField(
               value = textFieldValue,
@@ -4377,7 +4375,13 @@ private fun ChatInputPill(
                 Box(modifier = Modifier.fillMaxWidth().verticalScroll(scroll, enabled = inputEnabled), contentAlignment = Alignment.CenterStart) {
                   if (value.isEmpty()) {
                     // BasicTextField's line limit does not constrain its decoration.
-                    Text(text = nativeString("Message OpenClaw"), style = draftStyle, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                      text = agentName?.let { nativeString("Message \$agentName", it) } ?: nativeString("Message"),
+                      style = draftStyle,
+                      color = ClawTheme.colors.textMuted,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                    )
                   }
                   innerTextField()
                 }

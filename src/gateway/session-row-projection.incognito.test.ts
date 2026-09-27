@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
+import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
@@ -150,6 +151,34 @@ it.each([false, true])(
             .findBySessionId({ agentId: "main", storePath, sessionId: entry.sessionId })
             .map(({ key: foundKey }) => foundKey),
         ).toEqual([key]);
+        expect(
+          projection
+            .findBySessionId({ agentId: "main", sessionId: entry.sessionId, federated: true })
+            .map((row) => row.key),
+        ).toEqual([key]);
+        expect(projection.selectEntries()).toEqual([]);
+        const internal = resolveInternalSessionEffectsIdentity({
+          agentId: "main",
+          incognito: true,
+          runId: "private-maintenance",
+        });
+        const internalScope = { agentId: "main", storePath, ...internal };
+        replaceSessionEntrySync(internalScope, { ...entry, sessionId: internal.sessionId });
+        await persistSessionTranscriptTurn(internalScope, {
+          messages: [{ message: { role: "assistant", content: "Internal maintenance" } }],
+          touchSessionEntry: false,
+        });
+        // Exact internal readers may address their private row; discovery must not.
+        expect(projection.findBySessionId(internalScope).map((row) => row.key)).toEqual([
+          internal.sessionKey,
+        ]);
+        expect(
+          projection.findBySessionId({
+            agentId: "main",
+            sessionId: internal.sessionId,
+            federated: true,
+          }),
+        ).toEqual([]);
         replaceSessionEntrySync(target, { ...entry, lifecycleRevision: "reset" });
         await projection.ensureMaterialized();
         expect(projection.isCurrent(original)).toBe(false);
