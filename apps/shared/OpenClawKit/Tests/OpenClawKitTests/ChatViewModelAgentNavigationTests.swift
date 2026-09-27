@@ -108,12 +108,12 @@ private actor AgentNavigationTransport: OpenClawChatTransport {
             request: { await self.recordMutation($0) })
     }
 
-    func listAgents() async throws -> OpenClawChatAgentsListResponse? {
+    func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws {
         let index = self.catalogRequests
         self.catalogRequests += 1
         let result = self.catalogs[min(index, self.catalogs.count - 1)]
         if index == 0 { await self.catalogGate?.wait() }
-        return try result.get()
+        try await onUpdate(result.get())
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {

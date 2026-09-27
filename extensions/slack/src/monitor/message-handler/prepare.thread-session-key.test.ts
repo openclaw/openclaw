@@ -526,74 +526,76 @@ describe("thread-level session keys", () => {
     expect(resolveConfiguredBindingRouteMock).not.toHaveBeenCalled();
   });
 
-  it("routes DM thread replies through explicit runtime conversation bindings", () => {
-    const targetSessionKey = "agent:review:acp:session-slack-dm";
-    const binding: SessionBindingRecord = {
-      bindingId: "test-slack-dm-thread-binding",
-      targetSessionKey,
-      targetKind: "session",
-      conversation: {
+  it.each(["thread", "base"])(
+    "routes DM thread replies through explicit %s conversation bindings",
+    (scope) => {
+      const targetSessionKey = "agent:review:acp:session-slack-dm";
+      const binding: SessionBindingRecord = {
+        bindingId: "test-slack-dm-thread-binding",
+        targetSessionKey,
+        targetKind: "session",
+        conversation: {
+          channel: "slack",
+          accountId: "default",
+          conversationId: scope === "thread" ? "1770408530.000000" : "user:U3",
+          parentConversationId: scope === "thread" ? "user:U3" : undefined,
+        },
+        status: "active",
+        boundAt: Date.now(),
+        metadata: {},
+      };
+      const resolveByConversation: SessionBindingAdapter["resolveByConversation"] = vi.fn((ref) =>
+        ref.channel === "slack" &&
+        ref.accountId === "default" &&
+        ref.conversationId === binding.conversation.conversationId &&
+        ref.parentConversationId === binding.conversation.parentConversationId
+          ? binding
+          : null,
+      );
+      const touch: NonNullable<SessionBindingAdapter["touch"]> = vi.fn();
+      const adapter: SessionBindingAdapter = {
         channel: "slack",
         accountId: "default",
-        conversationId: "1770408530.000000",
-        parentConversationId: "user:U3",
-      },
-      status: "active",
-      boundAt: Date.now(),
-      metadata: {},
-    };
-    const resolveByConversation: SessionBindingAdapter["resolveByConversation"] = vi.fn((ref) =>
-      ref.channel === "slack" &&
-      ref.accountId === "default" &&
-      ref.conversationId === "1770408530.000000" &&
-      ref.parentConversationId === "user:U3"
-        ? binding
-        : null,
-    );
-    const touch: NonNullable<SessionBindingAdapter["touch"]> = vi.fn();
-    const adapter: SessionBindingAdapter = {
-      channel: "slack",
-      accountId: "default",
-      listBySession: () => [],
-      resolveByConversation,
-      touch,
-    };
-    registerSessionBindingAdapter(adapter);
-    try {
-      const ctx = buildCtx({ replyToMode: "all", dmScope: "per-channel-peer" });
-      const account = buildAccount("all");
+        listBySession: () => [],
+        resolveByConversation,
+        touch,
+      };
+      registerSessionBindingAdapter(adapter);
+      try {
+        const ctx = buildCtx({ replyToMode: "all", dmScope: "per-channel-peer" });
+        ctx.cfg.agents = {
+          ownership: "explicit",
+          entries: { main: {}, review: {} },
+        };
+        const account = buildAccount("all");
 
-      const routing = resolveSlackRoutingContext({
-        ctx,
-        account,
-        message: {
-          channel: "D456",
-          channel_type: "im",
-          user: "U3",
-          text: "bound reply in thread",
-          ts: "1770408540.000000",
-          thread_ts: "1770408530.000000",
-          parent_user_id: "B1",
-        } as SlackMessageEvent,
-        isDirectMessage: true,
-        isGroupDm: false,
-        isRoom: false,
-        isRoomish: false,
-      });
+        const routing = resolveSlackRoutingContext({
+          ctx,
+          account,
+          message: {
+            channel: "D456",
+            channel_type: "im",
+            user: "U3",
+            text: "bound reply in thread",
+            ts: "1770408540.000000",
+            thread_ts: "1770408530.000000",
+            parent_user_id: "B1",
+          } as SlackMessageEvent,
+          isDirectMessage: true,
+          isGroupDm: false,
+          isRoom: false,
+          isRoomish: false,
+        });
 
-      expect(routing.sessionKey).toBe(targetSessionKey);
-      expect(routing.runtimeBoundSessionKey).toBe(targetSessionKey);
-      expect(resolveByConversation).toHaveBeenCalledWith({
-        channel: "slack",
-        accountId: "default",
-        conversationId: "1770408530.000000",
-        parentConversationId: "user:U3",
-      });
-      expect(touch).toHaveBeenCalledWith("test-slack-dm-thread-binding", undefined);
-    } finally {
-      unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
-    }
-  });
+        expect(routing.sessionKey).toBe(targetSessionKey);
+        expect(routing.runtimeBoundSessionKey).toBe(targetSessionKey);
+        expect(resolveByConversation).toHaveBeenCalledWith(binding.conversation);
+        expect(touch).toHaveBeenCalledWith("test-slack-dm-thread-binding", undefined);
+      } finally {
+        unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
+      }
+    },
+  );
 
   it("preserves distinct MessageThreadIds for concurrent assistant DM roots", () => {
     const ctx = buildCtx({ replyToMode: "off", dmScope: "per-channel-peer" });

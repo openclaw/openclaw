@@ -184,6 +184,12 @@ unchanged, including any handles inside them.
 `createPluginRuntimeStore` resolves its slot from the invoking managed instance.
 Preparing another instance does not overwrite that instance's runtime. Calls
 outside managed instance scope retain the store's existing standalone behavior.
+Gateway-hosted agent turns borrow tool registrations from the admitting Gateway's
+current registry, so factories and execution share the instance whose services
+initialized the runtime. Adoption requires the same plugin source, configuration,
+non-empty set of declared tool names, and optionality. It preserves discovery's
+tool membership and order. Without an unambiguous admitting Gateway owner, turns
+keep their discovery registrations.
 
 SDK helpers that return bare results retain their resources until the owning
 host closes. Callers do not need to dispose those results; see

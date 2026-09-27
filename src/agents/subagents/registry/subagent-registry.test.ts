@@ -65,8 +65,16 @@ import {
   observeRootWork,
   registerBrowserCleanupBoundaryTests,
 } from "./subagent-registry.browser-cleanup.test-support.js";
+import {
+  registerCompletedTaskSettlementTest,
+  registerForcedCollectorCompletionSettlementTests,
+  registerProvisionalKillCompletionSettlementTest,
+  registerReplacedGenerationTaskSettlementTest,
+  registerRestartDrainCompletionSettlementTest,
+} from "./subagent-registry.completion-settlement.test-support.js";
 import { findRecordCallArg } from "./subagent-registry.mock-call.test-support.js";
 import { registerSubagentRegistrationPersistenceTests } from "./subagent-registry.persistence.test-support.js";
+import * as restoredSettlement from "./subagent-registry.restored-settlement.test-support.js";
 import {
   makeCompletedCollectorRun,
   makeKilledRun,
@@ -75,17 +83,6 @@ import {
   makeSuspendedDeliveryRun,
 } from "./subagent-registry.run-fixtures.test-support.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
-import {
-  registerCompletedTaskSettlementTest,
-  registerForcedCollectorCompletionSettlementTests,
-  registerRestartDrainCompletionSettlementTest,
-  registerProvisionalKillCompletionSettlementTest,
-  registerReplacedGenerationTaskSettlementTest,
-  registerRestoredRollbackPublicationTest,
-  registerRestoredRunDeadlineSettlementTests,
-  registerRestoredRunningTaskSettlementTest,
-  registerRestoredTaskSettlementTest,
-} from "./subagent-registry.task-settlement.test-support.js";
 import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
@@ -977,7 +974,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledTimes(2);
   });
 
-  registerRestoredTaskSettlementTest({
+  restoredSettlement.registerRestoredTaskSettlementTest({
     getRegistry: () => mod,
     mocks,
     hydrateAndActivateRegistry,
@@ -1036,7 +1033,7 @@ describe("subagent registry seam flow", () => {
     }
   });
 
-  registerRestoredRunningTaskSettlementTest({
+  restoredSettlement.registerRestoredRunningTaskSettlementTest({
     getRegistry: () => mod,
     mocks,
     hydrateAndActivateRegistry,
@@ -1456,7 +1453,7 @@ describe("subagent registry seam flow", () => {
     expect(mod.getSubagentRunByRunId("gateway-terminal-stale")).toBeUndefined();
   });
 
-  registerRestoredRollbackPublicationTest({
+  restoredSettlement.registerRestoredRollbackPublicationTest({
     mocks,
     hydrateAndActivateRegistry,
     mockSingleCollectorConcurrency,
@@ -2458,7 +2455,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
-  registerRestoredRunDeadlineSettlementTests({
+  restoredSettlement.registerRestoredRunDeadlineSettlementTests({
     getRegistry: () => mod,
     mocks,
     hydrateAndActivateRegistry,

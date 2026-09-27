@@ -19,7 +19,7 @@ const boundary = vi.hoisted(() => ({
   admission: vi.fn(),
   authority: vi.fn(),
   scopeAssert: undefined as undefined | (() => void),
-  stateAcquire: vi.fn(),
+  ownerAssert: vi.fn(),
   schemas: vi.fn(),
   lease: vi.fn(),
   step: vi.fn<typeof recordUpdateRunStep>(),
@@ -95,17 +95,25 @@ vi.mock("../infra/gateway-owner-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-owner-lease.js")>()),
   readGatewayOwnerLease: boundary.owner,
 }));
-vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/state-database-coordinator.js")>()),
-  acquireGatewayMaintenanceCoordinator: boundary.gatewayAcquire,
-  acquireStateDatabaseCoordinator: boundary.stateAcquire,
+vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
+  acquireGatewayLock: boundary.gatewayAcquire,
 }));
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-state-db-async-lifecycle.js")>()),
-  createOpenClawDatabaseMaintenanceScope: () => ({
-    run: <T>(operation: () => T) => operation(),
-    close: boundary.close,
-  }),
+  createOpenClawDatabaseMaintenanceScope: () => {
+    let closing: Promise<void> | undefined;
+    return {
+      run: <T>(operation: () => T) => operation(),
+      close: () =>
+        (closing ??= (async () => {
+          await boundary.close();
+        })().catch((error: unknown) => {
+          closing = undefined;
+          throw error;
+        })),
+    };
+  },
 }));
 vi.mock("../state/openclaw-agent-db-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-agent-db-lease.js")>()),
@@ -118,7 +126,6 @@ vi.mock("../state/openclaw-database-preflight.js", () => ({
 }));
 vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
   maybeStopManagedServiceBeforeMutableUpdate: boundary.stop,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate: boundary.resume,
   revalidateManagedGatewayServiceAfterUpdate: boundary.revalidate,
 }));
 vi.mock("../daemon/service.js", () => ({
@@ -171,10 +178,13 @@ beforeEach(() => {
   boundary.schemas.mockResolvedValue({ indeterminate: [] });
   boundary.scopeAssert = undefined;
   boundary.admission.mockReturnValue({ kind: "recovery", runs: [] });
-  boundary.stateAcquire.mockImplementation(() => ({ release: boundary.release }));
   boundary.gatewayAcquire.mockImplementation(() => ({
     release: boundary.release,
-    createSchemaFenceDelegate: vi.fn(),
+    assertCurrent: boundary.ownerAssert,
+    run<T>(operation: () => T): T {
+      boundary.ownerAssert();
+      return operation();
+    },
   }));
   vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/doctor-state");
   vi.stubEnv("OPENCLAW_CONFIG_PATH", "/synthetic/doctor-state/openclaw.json");
@@ -201,7 +211,7 @@ beforeEach(() => {
     windowsTaskAutoStartRecovery: {
       suspended: Promise.resolve(true),
       beginMutation: () => {},
-      restore: async () => {},
+      restore: boundary.resume,
       handoff: () => {},
       complete: boundary.complete,
       interrupted: () => false,

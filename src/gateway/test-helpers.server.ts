@@ -468,7 +468,7 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   resetLogger();
   if (tempHome) {
     // Join native borrowers before registry reset attempts its synchronous close.
-    await closeGatewayTestHomeDatabases(tempHome, options);
+    await closeGatewayTestHomeDatabases(tempHome);
   }
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });

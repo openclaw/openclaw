@@ -17,6 +17,7 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { createAssistantOutput } from "./assistant-output.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
+import { prepareModelRequestBody } from "./model-request-body.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
@@ -252,6 +253,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           context,
           options as OpenAICompletionsOptions | undefined,
         );
+        const encodeBody = prepareModelRequestBody(options);
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
@@ -281,9 +283,12 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         const { data: responseStream, response } = await client.chat.completions
           .create(
             params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
-            buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
-              timeoutMs: options?.timeoutMs,
-            }),
+            {
+              ...buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+                timeoutMs: options?.timeoutMs,
+              }),
+              ...(await encodeBody(params)),
+            },
           )
           .withResponse();
         const hookedResponseStream = withProviderResponseHook({

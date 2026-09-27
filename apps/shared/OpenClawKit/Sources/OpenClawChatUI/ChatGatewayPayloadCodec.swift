@@ -40,8 +40,10 @@ public enum OpenClawChatGatewayPayloadCodec {
             agents: result.agents.filter(\.isSelectableAgent).map {
                 OpenClawChatAgentChoice(
                     id: $0.id,
-                    name: $0.name,
-                    emoji: $0.identity?["emoji"]?.value as? String,
+                    name: OpenClawChatAgentChoice.normalizedName($0.name)
+                        ?? OpenClawChatAgentChoice.normalizedName($0.identity?["name"]?.value as? String),
+                    emoji: OpenClawChatAgentChoice.textAvatar($0.identity?["emoji"]?.value as? String)
+                        ?? OpenClawChatAgentChoice.textAvatar($0.identity?["avatar"]?.value as? String),
                     workspaceGit: $0.workspacegit)
             },
             sessionRoutingContract: OpenClawChatSessionRoutingContract.make(

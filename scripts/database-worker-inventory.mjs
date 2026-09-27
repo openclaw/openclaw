@@ -114,7 +114,7 @@ const workerModules = new Set([
   "src/infra/session-cost-usage-worker.ts",
 ]);
 const exceptionModules = new Set([
-  "src/state/openclaw-state-db-write-coordination.ts",
+  "src/state/openclaw-state-db-transaction.ts",
   "src/state/openclaw-state-lease-store.ts",
   "src/state/openclaw-state-lease-storage.ts",
   "src/state/openclaw-agent-db-lease.ts",

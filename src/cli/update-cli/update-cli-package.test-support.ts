@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi, type Mock } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
+import { resolveGatewayTaskScriptPath } from "../../daemon/paths.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { runCommandWithTimeout as RunCommandWithTimeout } from "../../process/exec.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
@@ -335,6 +336,9 @@ export function createUpdateCliPackageFixtures({
   ) => {
     serviceReadCommand.mockResolvedValue({
       programArguments,
+      ...(process.platform === "win32"
+        ? { sourcePath: resolveGatewayTaskScriptPath(process.env) }
+        : {}),
       environment: {
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",

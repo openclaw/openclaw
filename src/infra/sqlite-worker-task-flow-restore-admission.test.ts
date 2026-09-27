@@ -6,7 +6,10 @@ import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createRuntimeTaskFlow } from "../plugins/runtime/runtime-taskflow.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { captureTaskExecutionOwner } from "../tasks/task-execution-owner.js";
 import {
@@ -24,12 +27,16 @@ import {
 import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.test-support.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import { retainTaskRegistryRestoreFlowObligations } from "../tasks/task-registry-flow-sync.js";
+import { restoreTaskRegistryInDatabase } from "../tasks/task-registry-restore.worker.js";
 import { ensureTaskRegistryReadyAsync } from "../tasks/task-registry-state.js";
 import {
   configureTaskRegistryRuntime,
   getTaskRegistryStore,
 } from "../tasks/task-registry.store.js";
-import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
+import {
+  loadTaskRegistryStateFromSqliteReadOnly,
+  upsertTaskWithDeliveryStateToSqlite,
+} from "../tasks/task-registry.store.sqlite.js";
 import type { TaskExecutionOwner, TaskRecord } from "../tasks/task-registry.types.js";
 import {
   resetTaskFlowRegistryForTests,
@@ -42,6 +49,7 @@ import {
 } from "../test-utils/task-registry-store.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import { interceptTaskWorkerCommands } from "./sqlite-worker-task.test-support.js";
 
 let executionOwner: TaskExecutionOwner;
@@ -250,3 +258,52 @@ it.each([
     });
   },
 );
+
+it("retains an earlier orphan settlement when the next task write fails", async () => {
+  await withOpenClawTestState({ layout: "state-only" }, async () => {
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    for (const [index, taskId] of ["first-orphan", "second-orphan"].entries()) {
+      upsertTaskWithDeliveryStateToSqlite({
+        task: {
+          taskId,
+          runtime: "cli",
+          ownerKey: "agent:main:restore-commits",
+          requesterSessionKey: "agent:main:restore-commits",
+          scopeKind: "session",
+          task: "Synthetic orphaned execution",
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+          executionOwner,
+          createdAt: 10 + index,
+        },
+      });
+    }
+    const database = openOpenClawStateDatabase();
+    const { db } = database;
+    db.exec(
+      "CREATE TEMP TRIGGER reject_second_restore BEFORE UPDATE OF status ON main.task_runs WHEN NEW.task_id = 'second-orphan' BEGIN SELECT RAISE(ABORT, 'synthetic second restore failure'); END",
+    );
+    const context = captureOpenClawStateWorkerContext();
+    const restore = () =>
+      runWithSqliteWorkerStateContext(context, () => restoreTaskRegistryInDatabase(database));
+    try {
+      expect(restore).toThrow("synthetic second restore failure");
+      const persisted = loadTaskRegistryStateFromSqliteReadOnly();
+      expect(persisted.tasks.get("first-orphan")).toMatchObject({
+        status: "cancelled",
+        endedAt: expect.any(Number),
+      });
+      expect(persisted.tasks.get("second-orphan")).toMatchObject({ status: "running" });
+    } finally {
+      db.exec("DROP TRIGGER reject_second_restore");
+    }
+    const recovered = restore();
+    expect(recovered.settledTasks.map((task) => task.taskId)).toEqual(["second-orphan"]);
+    expect([...recovered.snapshot.tasks.values()].map((task) => task.status)).toEqual([
+      "cancelled",
+      "cancelled",
+    ]);
+  });
+});

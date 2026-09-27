@@ -16,7 +16,7 @@ import {
   readActiveGatewayLockPort,
   resolveGatewayOwnerStatus,
 } from "./gateway-lock.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
 type GatewayLockOptions = NonNullable<Parameters<typeof acquireGatewayLock>[0]>;
@@ -572,19 +572,16 @@ describe("gateway lock", () => {
     await nextLock.release();
   });
 
-  it("continues honoring the legacy lifetime coordinator", async () => {
+  it("refuses a retained process owner even before its compatibility projection exists", async () => {
     const env = await makeEnv();
-    const { stateLockPath } = resolveLockPath(env);
-    await fs.mkdir(path.dirname(stateLockPath), { recursive: true });
-    const coordinator = openNodeSqliteDatabase(`${stateLockPath}.sqlite`);
-    coordinator.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+    const owner = acquireGatewayStateOwner({
+      databasePath: path.join(resolveStateDir(env), "state", "openclaw.sqlite"),
+    });
     try {
-      await expect(acquireForTest(env, { timeoutMs: 15 })).rejects.toBeInstanceOf(GatewayLockError);
+      await expect(acquireForTest(env, { timeoutMs: 0 })).rejects.toBeInstanceOf(GatewayLockError);
     } finally {
-      coordinator.exec("ROLLBACK");
-      coordinator.close();
+      owner.release();
     }
-
     await expectGatewayLock(await acquireForTest(env)).release();
   });
 
@@ -811,9 +808,9 @@ describe("gateway lock", () => {
     vi.useRealTimers();
     const env = await makeEnv();
     await writeLockFile(env);
-    const statSpy = vi
-      .spyOn(fs, "stat")
-      .mockRejectedValue(Object.assign(new Error("EPERM"), { code: "EPERM" }));
+    const statSpy = vi.spyOn(fsSync, "statSync").mockImplementation(() => {
+      throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    });
 
     const pending = acquireForTest(env, {
       timeoutMs: 20,
@@ -906,7 +903,8 @@ describe("gateway lock", () => {
     );
 
     try {
-      expect(lock.lockPath).toBe(stateLockPath);
+      expect(lock.stateLockPath).toBe(stateLockPath);
+      expect(lock.lockPath).not.toBe(stateLockPath);
       await fs.access(stateLockPath);
       await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(
@@ -961,11 +959,11 @@ describe("gateway lock", () => {
 
   it("wraps unexpected fs errors as GatewayLockError", async () => {
     const env = await makeEnv();
-    const openSpy = vi.spyOn(fs, "open").mockRejectedValueOnce(
-      Object.assign(new Error("denied"), {
+    const openSpy = vi.spyOn(fsSync, "openSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("denied"), {
         code: "EACCES",
-      }),
-    );
+      });
+    });
 
     await expect(acquireForTest(env)).rejects.toBeInstanceOf(GatewayLockError);
     openSpy.mockRestore();

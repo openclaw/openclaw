@@ -2,7 +2,10 @@ import { PluginHostObject } from "../plugins/plugin-instance-owned-values.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { copyAgentToolAvailability } from "./agent-tool-availability.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { copyBeforeToolCallMetadata } from "./before-tool-call-metadata.js";
+import {
+  copyBeforeToolCallMetadata,
+  type ToolExecutionWrapper,
+} from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { copyCodeModeControlToolIdentity } from "./code-mode-control-tools.js";
 import { copyCronScheduledToolProjection } from "./exec-tool-target-pinning.js";
@@ -92,13 +95,17 @@ export function bindAssembledAgentToolActionDescriptor(tool: AnyAgentTool): void
  * Preserve identity-backed tool metadata that object spread cannot carry.
  * Losing it detaches policy, hooks, presentation, and control-flow ownership.
  */
-export function copyAgentToolMetadata<T extends AnyAgentTool>(source: AnyAgentTool, target: T): T {
+export function copyAgentToolMetadata<T extends AnyAgentTool>(
+  source: AnyAgentTool,
+  target: T,
+  wrapExecution?: ToolExecutionWrapper,
+): T {
   if (source === target) {
     return target;
   }
   copyPluginToolMeta(source, target);
   copyChannelAgentToolMeta(source as never, target as never);
-  copyBeforeToolCallMetadata(source, target);
+  copyBeforeToolCallMetadata(source, target, wrapExecution);
   copyToolTerminalPresentation(source, target);
   copyCodeModeControlToolIdentity(source, target);
   copyCronScheduledToolProjection(source, target);

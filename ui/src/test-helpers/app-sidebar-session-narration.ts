@@ -35,7 +35,7 @@ export function runningRow(key: string): SidebarRecentSession {
 export function createRunningNarrationController(source: SidebarNarrationSyncInput["source"]) {
   const updates: Array<ReadonlyMap<string, string>> = [];
   const controller = new SidebarSessionNarrationController((lines) => updates.push(lines));
-  controller.sync({
+  const input: SidebarNarrationSyncInput = {
     enabled: true,
     connected: true,
     connectionIdentity: {},
@@ -43,8 +43,9 @@ export function createRunningNarrationController(source: SidebarNarrationSyncInp
     openSessionKey: "",
     rows: [runningRow("agent:main:run")],
     agentId: "main",
-  });
-  return { controller, updates };
+  };
+  controller.sync(input);
+  return { controller, updates, input };
 }
 
 export function browserVisibility(initial: DocumentVisibilityState = "visible") {

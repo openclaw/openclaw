@@ -14,7 +14,6 @@ import {
   withArtifactPreservingStateReads,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
-import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { mapTaskFlowView } from "./task-domain-views.js";
 import { maintainTaskFlowInDatabase } from "./task-flow-maintenance.worker.js";
@@ -126,37 +125,38 @@ export function executeTaskRegistryCommand(
     let committed: ManagedTaskInFlowReceipt | undefined;
     try {
       const database = open();
-      return withSharedStateWriteCoordinator(
-        { databasePath: database.path, existing: database.db, operationLabel: "flows.runTask" },
-        () =>
-          runManagedTaskInFlowInDatabase(
-            database.db,
-            command.input,
-            (operation) => runOpenClawStateWriteTransaction(operation, { ...options, database }),
-            (result) => {
-              committed = result;
-            },
-            {
-              assertCurrent: () =>
-                requestSqliteWorkerOperationAdmission({
-                  stage: "transaction",
-                  facts: {
-                    kind: "task-registry-mutation",
-                    operation: command.type,
-                    taskId: command.input.taskId,
-                  },
-                }),
-              retainTaskCommit(taskId) {
-                const task = readTaskRecord(database.db, taskId);
-                if (task?.runId) {
-                  deferSqliteWorkerCommitReceipt(
-                    database.db,
-                    captureTaskCreationEventTarget(task, command.type, command.input.taskId),
-                  );
-                }
-              },
-            },
+      return runManagedTaskInFlowInDatabase(
+        database.db,
+        command.input,
+        (operation) =>
+          runOpenClawStateWriteTransaction(
+            operation,
+            { ...options, database },
+            { operationLabel: "flows.runTask" },
           ),
+        (result) => {
+          committed = result;
+        },
+        {
+          assertCurrent: () =>
+            requestSqliteWorkerOperationAdmission({
+              stage: "transaction",
+              facts: {
+                kind: "task-registry-mutation",
+                operation: command.type,
+                taskId: command.input.taskId,
+              },
+            }),
+          retainTaskCommit(taskId) {
+            const task = readTaskRecord(database.db, taskId);
+            if (task?.runId) {
+              deferSqliteWorkerCommitReceipt(
+                database.db,
+                captureTaskCreationEventTarget(task, command.type, command.input.taskId),
+              );
+            }
+          },
+        },
       );
     } catch (error) {
       if (committed) {

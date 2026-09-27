@@ -5338,7 +5338,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-inline-reply-transcript",
     });
 
-    expect(extractFirstTextBlock(getMessage(payload))).toBe("see now with spacing");
+    expect(extractFirstTextBlock(getMessage(payload))).toBe("see now  with  spacing");
     const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
       (update) =>
         typeof update.message === "object" &&
@@ -5349,7 +5349,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       openclawDelivery: { replyToCurrent: true },
     });
     expect(JSON.stringify(transcriptUpdate?.message)).not.toContain("[[reply_to_current]]");
-    expect(JSON.stringify(transcriptUpdate?.message)).toContain("see now with spacing");
+    expect(JSON.stringify(transcriptUpdate?.message)).toContain("see now  with  spacing");
   });
 
   it("rejects oversized chat.send session keys before dispatch", async () => {

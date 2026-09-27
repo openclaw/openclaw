@@ -58,10 +58,7 @@ vi.mock("./openclaw-state-db-read-connection.js", () => ({
   openOpenClawStateReadOnlyLocation: mocks.forbiddenNative,
   withOpenClawStateReadOnlyLocation: mocks.forbiddenNative,
 }));
-vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/state-database-coordinator.js")>()),
-  hasStateDatabaseSourceExclusion: () => false,
-}));
+
 vi.mock("./openclaw-state-read-worker.js", () => ({
   createOpenClawStateReadTransport: () => ({
     read: mocks.read,

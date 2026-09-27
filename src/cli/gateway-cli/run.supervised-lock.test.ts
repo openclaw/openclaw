@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import { resolveGatewayRuntimeConfig } from "../../gateway/server-runtime-config.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
-import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator.js";
+import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
 import { TailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
 import { testing } from "./run.test-support.js";
@@ -31,7 +31,7 @@ describe("supervised gateway lock recovery", () => {
   it("retries lifecycle contention without treating a healthy port as ownership", async () => {
     const error = new GatewayLockError(
       "failed to acquire gateway state ownership",
-      new StateDatabaseCoordinatorContentionError("gateway-lifecycle"),
+      new GatewayStateOwnerContentionError("/synthetic/state/openclaw.sqlite"),
     );
     const startLoop = vi
       .fn<() => Promise<void>>()
@@ -58,8 +58,8 @@ describe("supervised gateway lock recovery", () => {
   it("spends one budget across supervised retries and lifecycle acquisition", async () => {
     let elapsedMs = 0;
     const error = new GatewayLockError(
-      "failed to acquire gateway state ownership; waited 295000ms for gateway-lifecycle ownership",
-      new StateDatabaseCoordinatorContentionError("gateway-lifecycle"),
+      "failed to acquire gateway state ownership; waited 295000ms for Gateway state ownership",
+      new GatewayStateOwnerContentionError("/synthetic/state/openclaw.sqlite"),
     );
     const budgets: Array<number | undefined> = [];
     const startLoop = vi.fn(async (deadlineMs?: number) => {

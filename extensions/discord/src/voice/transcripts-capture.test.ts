@@ -11,7 +11,7 @@ defineDiscordVoiceTests(
     joinVoiceChannelMock,
     entersStateMock,
     createAudioPlayerMock,
-    resolveRealtimeBootstrapContextInstructionsMock,
+    resolveRealtimeVoiceAgentContextInstructionsMock,
     createRealtimeVoiceBridgeSessionMock,
     realtimeSessionMock,
     createManager,
@@ -676,9 +676,16 @@ defineDiscordVoiceTests(
         const realtimeReady = createDeferred<undefined>();
         const pending =
           phase === "bootstrap"
-            ? resolveRealtimeBootstrapContextInstructionsMock
+            ? resolveRealtimeVoiceAgentContextInstructionsMock
             : realtimeSessionMock.connect;
-        pending.mockImplementationOnce(() => realtimeReady.promise);
+        if (phase === "bootstrap") {
+          resolveRealtimeVoiceAgentContextInstructionsMock.mockImplementationOnce(async () => {
+            await realtimeReady.promise;
+            return "Agent context: shared voice agent context.";
+          });
+        } else {
+          realtimeSessionMock.connect.mockImplementationOnce(() => realtimeReady.promise);
+        }
 
         const upgrade = manager.join({ guildId: "g1", channelId: "1001" });
 
@@ -706,9 +713,10 @@ defineDiscordVoiceTests(
 
       await startTranscripts(manager, onUtterance, "notes-1");
       const bootstrapReady = createDeferred<undefined>();
-      resolveRealtimeBootstrapContextInstructionsMock.mockImplementationOnce(
-        () => bootstrapReady.promise,
-      );
+      resolveRealtimeVoiceAgentContextInstructionsMock.mockImplementationOnce(async () => {
+        await bootstrapReady.promise;
+        return "Agent context: shared voice agent context.";
+      });
 
       const upgrade = manager.join({ guildId: "g1", channelId: "1001" });
       await Promise.resolve();

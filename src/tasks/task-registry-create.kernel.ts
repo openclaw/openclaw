@@ -22,7 +22,7 @@ type TaskCreateOptions = Pick<
   "onCommitted" | "assertCurrent" | "retainTaskCommit"
 >;
 
-/** Shared writer custody spans the operation; write owns each separate transaction. */
+/** Each write callback reads its selection again under native SQLite serialization. */
 export function createTaskRecordInDatabase(
   db: DatabaseSync,
   input: TaskCreateInput,

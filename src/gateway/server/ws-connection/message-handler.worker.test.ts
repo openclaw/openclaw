@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
+  WORKER_PRESENCE_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   type WorkerSessionToolResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -66,6 +67,12 @@ const SESSION_TOOL_CASES = [
     method: "worker.portal",
     toolName: "portal",
     request: { toolCallId: "call-portal", action: "open", port: 3000 },
+  },
+  {
+    name: "presence",
+    method: "worker.presence",
+    toolName: "presence",
+    request: { toolCallId: "call-presence", action: "person", person: "me", include: ["devices"] },
   },
 ] as const;
 describe("dedicated worker websocket protocol", () => {
@@ -350,7 +357,7 @@ describe("dedicated worker websocket protocol", () => {
       ATTACHED_IDENTITY,
       testCase.toolName,
       testCase.request,
-      undefined,
+      testCase.toolName === "presence" ? expect.any(AbortSignal) : undefined,
     );
     expect(harness.responses[1]).toMatchObject({
       id: `${testCase.name}-route`,
@@ -363,13 +370,15 @@ describe("dedicated worker websocket protocol", () => {
     });
   });
 
-  it.each([SESSION_TOOL_CASES[0], SESSION_TOOL_CASES[2]])(
+  it.each([SESSION_TOOL_CASES[0], SESSION_TOOL_CASES[2], SESSION_TOOL_CASES[3]])(
     "feature-gates $name independently",
     async (testCase) => {
       const requiredFeature =
         testCase.toolName === "portal"
           ? WORKER_PORTAL_PROTOCOL_FEATURE
-          : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
+          : testCase.toolName === "presence"
+            ? WORKER_PRESENCE_PROTOCOL_FEATURE
+            : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
       const harness = attachHarness({
         identity: {
           ...ATTACHED_IDENTITY,

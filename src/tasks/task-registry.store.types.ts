@@ -10,6 +10,9 @@ export type TaskRegistryStoreSnapshot = {
 
 export type TaskExecutionRestoreStore = {
   loadSnapshot: () => TaskRegistryStoreSnapshot;
+  loadMutationSnapshot?: (
+    scopes: readonly TaskRegistryMutationScope[],
+  ) => TaskRegistryStoreSnapshot;
   withMutation?: <T>(operation: () => T) => T;
   upsertTaskWithDeliveryState: (params: {
     task: TaskRecord;

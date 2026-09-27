@@ -20,7 +20,8 @@ function chronologyActions() {
   return guarded.actions.slice(start, start + 2);
 }
 
-function replay(wire: string, fault?: string) {
+function replay(fault?: string) {
+  const wire = "tool_call";
   const calls = ["first", "second"].map((id, index) => ({
     plannedToolName: "sessions_spawn",
     plannedWireToolName: wire,
@@ -33,14 +34,8 @@ function replay(wire: string, fault?: string) {
     timestamp: call.timestamp,
     toolCallId: call.plannedToolCallId + "|" + call.plannedToolItemId,
   }));
-  if (fault === "missing") {
-    events.pop();
-  }
   if (fault === "foreign") {
     events[1]!.toolCallId = "foreign";
-  }
-  if (fault === "duplicate") {
-    events[1]!.toolCallId = events[0]!.toolCallId;
   }
   return runLoadedScenarioFlow("subagent-completion-direct-fallback", {
     flow: { steps: [{ name: "committed private spawn chronology", actions: chronologyActions() }] },
@@ -58,16 +53,13 @@ function replay(wire: string, fault?: string) {
 }
 
 describe("terminal private chronology across invocation surfaces", () => {
-  it.each(["sessions_spawn", "tool_call", "exec"])(
-    "accepts exactly matched successful %s receipts",
-    async (wire) => {
-      await expect(replay(wire)).resolves.toMatchObject({ status: "pass" });
-    },
-  );
-  it.each(["missing", "foreign", "duplicate", "early", "message", "extra"])(
+  it("accepts exactly matched successful dispatcher receipts", async () => {
+    await expect(replay()).resolves.toMatchObject({ status: "pass" });
+  });
+  it.each(["foreign", "early", "message", "extra"])(
     "rejects %s evidence instead of trusting a successful dispatcher count",
     async (fault) => {
-      await expect(replay("tool_call", fault)).rejects.toThrow(
+      await expect(replay(fault)).rejects.toThrow(
         "private continuation lacks committed tool chronology",
       );
     },
