@@ -522,16 +522,6 @@ async function runDoctorHealthContributionList(
         )
       : [],
   );
-  if (rehearsalInspections.size > 0) {
-    const warnings = [...rehearsalInspections].map(
-      (entry) =>
-        `${entry.id}: advisory inspection deferred during copied-state rehearsal. The live post-swap Doctor retains this check.`,
-    );
-    recordDoctorHealthWarnings(ctx, [], warnings, { prepend: true });
-    for (const warning of warnings) {
-      ctx.runtime.log(warning);
-    }
-  }
   const deferred = updateDoctorRun
     ? contributions.filter((contribution) => contribution.updateWork?.kind === "standalone")
     : [];
@@ -616,6 +606,12 @@ async function runDoctorHealthContributionList(
       }
     }
   } finally {
+    if (rehearsalInspections.size > 0) {
+      // Scope notices must not displace actionable warnings from the bounded result.
+      ctx.runtime.log(
+        `Deferred advisory inspections during copied-state rehearsal: ${[...rehearsalInspections].map((entry) => entry.id).join(", ")}. The live post-swap Doctor retains these checks.`,
+      );
+    }
     const findings = [...(ctx.updateBudget?.deferred.values() ?? [])];
     // Preserve the deferred set before the existing bounded advisory digest.
     recordDoctorHealthWarnings(ctx, findings, [], { prepend: true });

@@ -4,6 +4,7 @@ import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js"
 import { createUpdateRun, recordUpdateRunPhase } from "../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
@@ -71,13 +72,18 @@ it.each(["rehearsal", "live", "partial-markers", "standalone"])(
     );
     expect(contributions).toHaveLength(advisoryIds.size + retainedIds.size);
     const executed: string[] = [];
+    const priorWarnings = Array.from({ length: 31 }, (_, index) => `Repair warning ${index}`);
     for (const contribution of contributions) {
-      vi.spyOn(contribution, "run").mockImplementation(async () => {
+      vi.spyOn(contribution, "run").mockImplementation(async (ctx) => {
         executed.push(contribution.id);
+        if (contribution.id === "doctor:write-config") {
+          recordDoctorHealthWarnings(ctx, [], ["Final repair warning"]);
+        }
       });
     }
     const ctx = createDoctorHealthFlowContext({
       env,
+      updateWarnings: priorWarnings,
       updateBudget: {
         agentCount: 1,
         phase: mode === "rehearsal" ? "validation" : "activation",
@@ -92,13 +98,13 @@ it.each(["rehearsal", "live", "partial-markers", "standalone"])(
     );
     if (mode === "rehearsal") {
       for (const id of advisoryIds) {
-        expect(ctx.updateWarnings).toContainEqual(expect.stringContaining(id));
         expect(ctx.runtime.log).toHaveBeenCalledWith(expect.stringContaining(id));
       }
-      expect(ctx.updateWarnings?.join("\n")).toContain("copied-state rehearsal");
-    } else {
-      expect(ctx.updateWarnings).toEqual([]);
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("copied-state rehearsal"),
+      );
     }
+    expect(ctx.updateWarnings).toEqual([...priorWarnings, "Final repair warning"]);
   },
 );
 
