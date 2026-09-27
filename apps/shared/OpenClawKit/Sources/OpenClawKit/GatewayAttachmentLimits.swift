@@ -1,6 +1,9 @@
 import OpenClawProtocol
 
 public struct GatewayAttachmentLimits: Sendable, Equatable {
+    /// Older Gateways do not advertise attachment limits, so native uploads retain their client ceilings.
+    public static let legacyClientFallback = Self(maxBytes: 20 * 1024 * 1024, maxImageBytes: 5_000_000)
+
     public let maxBytes: Int
     public let maxImageBytes: Int
 
@@ -11,8 +14,7 @@ public struct GatewayAttachmentLimits: Sendable, Equatable {
 }
 
 extension HelloOk {
-    /// Decoded file-size ceilings belong to this hello; absent policy carries
-    /// no client-side limit, matching the web composer's admission contract.
+    /// Returns advertised ceilings; native staging supplies its legacy fallback when absent.
     public func advertisedAttachmentLimits() -> GatewayAttachmentLimits? {
         guard let attachments = self.policy["attachments"]?.dictionaryValue,
               let maxBytes = attachments["maxBytes"]?.intValue,

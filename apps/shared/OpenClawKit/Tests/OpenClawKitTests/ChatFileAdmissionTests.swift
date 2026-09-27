@@ -86,6 +86,34 @@ struct ChatFileAdmissionTests {
             await model.loadAttachments(urls: [image])
             #expect(model.errorText == "Too large to send: image.png")
         }
+        if limits == nil {
+            model.errorText = nil
+            let attachmentCount = model.attachments.count
+            let oversized = directory.appendingPathComponent("oversized.pdf")
+            try Data().write(to: oversized)
+            let handle = try FileHandle(forWritingTo: oversized)
+            try handle.truncate(atOffset: 20 * 1024 * 1024 + 1)
+            try handle.close()
+            await model.loadAttachments(urls: [oversized])
+            #expect(model.attachments.count == attachmentCount)
+            #expect(model.errorText == "Too large to send: oversized.pdf")
+
+            model.errorText = nil
+            let image = directory.appendingPathComponent("resizable.png")
+            var imageData = try #require(Data(base64Encoded:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////GQAJ+wP/2hN8NwAAAABJRU5ErkJggg=="))
+            // A valid image with trailing padding exceeds the final ceiling,
+            // but must still pass through the existing resize step.
+            imageData.append(Data(count: 5_000_001 - imageData.count))
+            try imageData.write(to: image)
+            await model.loadAttachments(urls: [image])
+            #expect(model.errorText == nil)
+            #expect(model.attachments.count == attachmentCount + 1)
+            let resized = try #require(model.attachments.last)
+            #expect(resized.fileName == "resizable.jpg")
+            #expect(resized.mimeType == "image/jpeg")
+            #expect(resized.data.count <= 5_000_000)
+        }
     }
 }
 

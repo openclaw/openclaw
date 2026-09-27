@@ -859,6 +859,10 @@ extension OpenClawChatMessage.OpenClawMetadata {
         self.senderUsername = try? container.decode(String.self, forKey: .senderUsername)
         self.senderProfileAvatarUrl = try? container.decode(String.self, forKey: .senderProfileAvatarUrl)
         self.transport = try container.decodeIfPresent(AnyCodable.self, forKey: .transport)
+        self.media = try container.decodeIfPresent([OpenClawChatMessage.MediaFact?].self, forKey: .media)
+        self.mediaImageLayout = try container.decodeIfPresent(
+            OpenClawChatMessage.MediaImageLayout.self,
+            forKey: .mediaImageLayout)
     }
 }
 

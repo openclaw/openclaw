@@ -201,13 +201,17 @@ extension OpenClawChatViewModel {
         mimeType: String,
         expectedSession: SessionSnapshot? = nil) async
     {
-        let limits = await self.transport.attachmentLimits()
+        let advertisedLimits = await self.transport.attachmentLimits()
+        let limits = advertisedLimits ?? .legacyClientFallback
         guard self.ownsAttachmentSession(expectedSession) else { return }
         guard !data.isEmpty else {
             errorText = String(format: String(localized: "Could not attach: %@"), fileName)
             return
         }
-        if let maximumBytes = limits?.maxImageBytes, data.count > maximumBytes {
+        // Legacy images may exceed the final image ceiling before resizing;
+        // keep their source bounded by the general file ceiling instead.
+        let maximumSourceBytes = advertisedLimits?.maxImageBytes ?? limits.maxBytes
+        if data.count > maximumSourceBytes {
             errorText = String(format: String(localized: "Too large to send: %@"), fileName)
             return
         }
@@ -239,7 +243,7 @@ extension OpenClawChatViewModel {
         // Image processing runs off actor. Revalidate the draft owner before
         // publishing either the attachment or any session-scoped error state.
         guard self.ownsAttachmentSession(expectedSession) else { return }
-        if let maximumBytes = limits?.maxImageBytes, processed.count > maximumBytes {
+        if processed.count > limits.maxImageBytes {
             errorText = String(
                 format: String(localized: "Too large to send: %@"),
                 fileName)
@@ -291,13 +295,16 @@ extension OpenClawChatViewModel {
         mimeType: String,
         expectedSession: SessionSnapshot?) async throws
     {
-        let limits = await self.transport.attachmentLimits()
+        let advertisedLimits = await self.transport.attachmentLimits()
+        let limits = advertisedLimits ?? .legacyClientFallback
         guard self.ownsAttachmentSession(expectedSession) else { return }
         let hasSecurityScope = url.startAccessingSecurityScopedResource()
         defer {
             if hasSecurityScope { url.stopAccessingSecurityScopedResource() }
         }
-        let maximumBytes = mimeType.hasPrefix("image/") ? limits?.maxImageBytes : limits?.maxBytes
+        let maximumBytes = mimeType.hasPrefix("image/")
+            ? advertisedLimits?.maxImageBytes ?? limits.maxBytes
+            : limits.maxBytes
         let data = try await Self.readAttachmentData(from: url, maximumBytes: maximumBytes)
         guard self.ownsAttachmentSession(expectedSession) else { return }
         if mimeType.hasPrefix("image/") {
@@ -333,24 +340,20 @@ extension OpenClawChatViewModel {
         #endif
     }
 
-    private nonisolated static func readAttachmentData(from url: URL, maximumBytes: Int?) async throws -> Data {
+    private nonisolated static func readAttachmentData(from url: URL, maximumBytes: Int) async throws -> Data {
         try await Task.detached(priority: .userInitiated) {
             guard url.isFileURL else { throw ChatAttachmentReadError.unreadable }
             let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
             guard values.isRegularFile == true else { throw ChatAttachmentReadError.unreadable }
-            if let maximumBytes, let fileSize = values.fileSize, fileSize > maximumBytes {
+            if let fileSize = values.fileSize, fileSize > maximumBytes {
                 throw ChatAttachmentReadError.tooLarge
             }
             let handle = try FileHandle(forReadingFrom: url)
             defer { try? handle.close() }
             // Recheck bytes after reading: a file can grow after the metadata
             // check. An oversized base64 frame would disconnect the Gateway.
-            let data: Data = if let maximumBytes {
-                try handle.read(upToCount: maximumBytes + 1) ?? Data()
-            } else {
-                try handle.readToEnd() ?? Data()
-            }
-            if let maximumBytes, data.count > maximumBytes {
+            let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
+            if data.count > maximumBytes {
                 throw ChatAttachmentReadError.tooLarge
             }
             guard !data.isEmpty else { throw ChatAttachmentReadError.unreadable }

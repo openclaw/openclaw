@@ -46,7 +46,7 @@ changes. Badges show at most two complete characters, preserving emoji sequences
 Image avatars are not shown in the full native window; a text avatar or name
 initial appears instead.
 
-File attachments keep their original filename, MIME type, and bytes through the durable outbox. Admission uses the Gateway’s advertised image and file size limits, matching the web composer. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**, with the affected filenames. Recorded voice notes keep their separate recording flow. Sent uploads remain visible after history refresh; downloading inbound uploads from native history is not supported yet. Assistant-generated managed files retain their **Download file** action.
+File attachments keep their original filename, MIME type, and bytes through the durable outbox. Admission uses the Gateway’s advertised image and file size limits. For older Gateways that do not advertise limits, native chat caps source files at 20 MiB and processed images at 5 MB after resizing. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**, with the affected filenames. Recorded voice notes keep their separate recording flow. Sent uploads remain visible after history refresh; downloading inbound uploads from native history is not supported yet. Assistant-generated managed files retain their **Download file** action.
 
 The anchored compact chat panel from the menu bar keeps the compact single-column layout with the same model, thinking, verbosity, and Fast controls inline, plus starter prompts, Talk Mode, voice notes, and Listen. Assistant reasoning and tool activity remain hidden in this compact surface.
 
