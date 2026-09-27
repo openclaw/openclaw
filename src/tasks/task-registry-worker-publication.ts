@@ -139,7 +139,10 @@ function mergeTaskRegistryWorkerSnapshot(params: {
     ) {
       continue;
     }
-    conflicted = true;
+    // A concurrent refresh can already have installed this exact readback.
+    conflicted ||=
+      !isDeepStrictEqual(snapshot.tasks.get(taskId), current) ||
+      !isDeepStrictEqual(snapshot.deliveryStates.get(taskId), delivery);
     if (current) {
       merged.tasks.set(taskId, current);
     } else {
