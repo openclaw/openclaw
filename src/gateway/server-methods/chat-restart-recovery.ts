@@ -465,6 +465,10 @@ export async function terminalizeRestartSafeChatAdmission(
           event: {
             runId: params.clientRunId,
             ts: endedAt,
+            // A restart-safe admission only exists for the browser Control UI, so
+            // its terminal write counts as visible activity: the same unread
+            // marker a live visible terminal advances (see #155690).
+            controlUiVisible: true,
             data: {
               phase: params.status === "failed" ? "error" : "end",
               startedAt: params.startedAt,
