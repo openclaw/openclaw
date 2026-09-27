@@ -145,10 +145,11 @@ const BLUEPRINT_MARKS = svg`
 // Laurel and imperial sash belong to the shell, not the random wardrobe.
 const CLAWNSTANTINE_REGALIA = svg`
   <g class="lob-clawnstantine">
-    <path d="M25 48 Q60 59 95 48 L95 69 Q88 88 74 93 L46 93 Q32 88 25 69 Z" fill="#4e296e" />
-    <path d="M33 72 Q60 91 87 72" fill="none" stroke="#a576c4" stroke-width="2" />
-    <path d="M82 46 L91 51 Q75 78 46 93 L36 88 Q66 72 82 46 Z" fill="#e5bc62" />
-    <path d="M84 51 Q68 75 42 89" fill="none" stroke="#fff0bc" stroke-width="2" />
+    <path d="M18 48 Q60 62 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#4e296e" />
+    <path d="M28 61 Q30 72 39 78 M70 88 Q82 82 91 65" fill="none" stroke="#a576c4" stroke-width="1.6" stroke-linecap="round" />
+    <!-- The lower edge follows the shell contour so the sash wraps around it. -->
+    <path d="M81.5 45.5 C70 64 50 78 29.9 85.444 C32.971 88.632 36.349 91.249 39.814 93.121 C62 85 81 68 90.5 50.5 Z" fill="#e5bc62" />
+    <path d="M84 51 C73 68 57 80 39 87" fill="none" stroke="#fff0bc" stroke-width="1.6" stroke-linecap="round" />
     <circle cx="85" cy="49" r="6" fill="#e5bc62" />
     <circle cx="85" cy="49" r="3" fill="#58c8b5" />
     <g class="lob-clawnstantine__laurel" fill="#e5bc62" stroke="#bd8a38" stroke-width="0.6">
