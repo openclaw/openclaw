@@ -248,11 +248,13 @@ describe("chat send retry identity", () => {
         restartRecoveryDeliverySourceRunId: params.session.clientRunId,
         restartRecoveryDeliveryRequestFingerprint: "original",
       };
-      params.session.restartSafeRequest = fingerprint ? { fingerprint } : undefined;
+      params.session.restartSafeRequest = fingerprint
+        ? { controlUiVisible: true, fingerprint }
+        : undefined;
       expect(resolveChatSendRequestConflict(params)).toMatchObject({
         details: { reason: "chat-request-conflict" },
       });
-      params.session.restartSafeRequest = { fingerprint: "original" };
+      params.session.restartSafeRequest = { controlUiVisible: true, fingerprint: "original" };
       expect(resolveChatSendRequestConflict(params)).toBeUndefined();
       expect(readSessionSubmittedInput).not.toHaveBeenCalled();
     },
