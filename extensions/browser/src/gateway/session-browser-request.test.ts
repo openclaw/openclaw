@@ -115,7 +115,7 @@ describe("closed session browser route", () => {
     expect(mocked.dispatch).not.toHaveBeenCalled();
   });
 
-  it.each(["profile", "targetId"])(
+  it.each(["profile", "targetId", "node", "target"])(
     "rejects caller-selected %s before binding",
     async (selector) => {
       await rejectedRequest(

@@ -270,7 +270,7 @@ describe("Windows saved selection through the registered setup CLI", () => {
     expect(f.exit).toHaveBeenCalledWith(1);
     expect(f.mutations()).toHaveLength(0);
   });
-  it.each(["configPath", "nodePath"] as const)(
+  it.each(["stateDir", "configPath", "nodePath", "cliPath"] as const)(
     "rejects a descriptor with changed %s",
     async (field) => {
       const f = await setup();
