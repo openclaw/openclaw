@@ -101,6 +101,14 @@ type StatusArgs = {
   runtimeContextProvider?: string;
   runtimeContextTokens?: number;
   sessionEntry?: SessionEntry;
+  /** Admitted-owner capacity for the displayed session; see session-context-capacity. */
+  resolveOwnerContextCapacity?: (
+    provider: string | undefined,
+    model: string | undefined,
+  ) =>
+    | { state: "ready"; contextTokens: number; synthetic: boolean }
+    | { state: "unavailable" }
+    | undefined;
   sessionKey?: string;
   parentSessionKey?: string;
   sessionScope?: SessionScope;
@@ -731,6 +739,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       modelProvider: activeModelProvider,
       model: contextLookupModel,
     }),
+    ownerCapacity: args.resolveOwnerContextCapacity?.(contextLookupProvider, contextLookupModel),
   });
   const runtimeSnapshotHasFallbackProvenance =
     initialFallbackState.active ||
@@ -743,9 +752,18 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     entry?.modelSelectionLocked !== true &&
     runtimeDiffersFromSelected &&
     !runtimeSnapshotHasFallbackProvenance;
+  // A run that budgeted against a synthetic estimate is not evidence of any window.
+  // If the displayed session's own owner cannot answer, render unknown ("?") rather
+  // than restoring the estimate or substituting a generic default.
+  const syntheticOwnerUnknown =
+    entry?.contextTokensSource === "synthetic" &&
+    args.resolveOwnerContextCapacity !== undefined &&
+    projectedActiveContextTokens === undefined;
   const contextTokens = useSelectedContext
     ? (selectedContextTokens ?? DEFAULT_CONTEXT_TOKENS)
-    : (projectedActiveContextTokens ?? DEFAULT_CONTEXT_TOKENS);
+    : syntheticOwnerUnknown
+      ? 0
+      : (projectedActiveContextTokens ?? DEFAULT_CONTEXT_TOKENS);
 
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";

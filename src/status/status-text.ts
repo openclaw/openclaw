@@ -348,6 +348,11 @@ export async function buildStatusReplyParts(
     workspaceDir: statusWorkspaceDir,
     readOnly: true,
   });
+  // Capacity is bound to the displayed session's own admitted owner (agent + spawned
+  // workspace) before any value is chosen; another owner's inventory is never consulted.
+  const { createSessionContextCapacityResolver } =
+    await import("../agents/session-context-capacity.js");
+  const resolveOwnerContextCapacity = createSessionContextCapacityResolver(preparedOwner);
   // This lookup borrows existing facts; status never starts inventory discovery.
   const resolveModel = createStatusModelResolver({
     cfg,
@@ -667,6 +672,7 @@ export async function buildStatusReplyParts(
         ? preparedContextTokens
         : undefined,
     sessionEntry,
+    resolveOwnerContextCapacity,
     sessionKey,
     parentSessionKey,
     sessionScope,

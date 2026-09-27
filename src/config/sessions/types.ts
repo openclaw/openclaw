@@ -553,8 +553,17 @@ type SessionEntryCore = SessionRestartRecoveryState &
     agentHarnessId?: string;
     fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
-    /** Origin of the persisted context window; `resolved` is legacy/unverified. */
-    contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
+    /**
+     * Origin of the persisted context window; `resolved` is legacy/unverified.
+     * `synthetic` means the producing run budgeted against a provider unknown-model
+     * estimate; it is never trusted over the admitted owner's accepted capacity.
+     */
+    contextTokensSource?:
+      | "runtime"
+      | "runtime-configured"
+      | "resolved"
+      | "resolved-v1"
+      | "synthetic";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     memoryFlush?: MemoryFlushState;

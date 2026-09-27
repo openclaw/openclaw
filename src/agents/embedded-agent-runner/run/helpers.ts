@@ -159,6 +159,8 @@ export function buildErrorAgentMeta(params: {
   model: string;
   credentialSource?: EmbeddedAgentMeta["credentialSource"];
   contextTokens?: number;
+  /** Failed/cancelled attempts keep estimate provenance so it cannot become trusted. */
+  contextTokensSource?: "synthetic";
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: NormalizedUsage | undefined;
   currentAttemptAssistant?: { api?: string; usage?: unknown } | null;
@@ -175,7 +177,9 @@ export function buildErrorAgentMeta(params: {
     model: params.model,
     ...(params.credentialSource ? { credentialSource: params.credentialSource } : {}),
     ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),
-    ...(params.contextTokens ? { contextTokensSource: "resolved" as const } : {}),
+    ...(params.contextTokens
+      ? { contextTokensSource: params.contextTokensSource ?? ("resolved" as const) }
+      : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),

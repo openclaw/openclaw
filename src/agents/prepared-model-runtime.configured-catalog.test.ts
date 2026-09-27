@@ -20,6 +20,7 @@ import {
   prepareModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
+import { createSessionContextCapacityResolver } from "./session-context-capacity.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
 describe("configured catalog registry composition", () => {
@@ -737,6 +738,61 @@ describe("synthetic configured context publication", () => {
       expect(resolveContextTokens({ cfg: {}, provider: "fixture", model: "new-model" })).toBe(
         128_000,
       );
+    });
+  });
+
+  describe("existing-session status recovery", () => {
+    const sessionEntry = (contextTokensSource: "synthetic" | "runtime") => ({
+      sessionId: "s-1",
+      updatedAt: 1,
+      modelProvider: "fixture",
+      model: "new-model",
+      agentHarnessId: "openclaw",
+      contextTokens: 128_000,
+      contextTokensSource,
+    });
+    const ownerOf = (entries: ModelCatalogEntry[], current = () => true) =>
+      createSessionContextCapacityResolver({
+        isCurrent: current,
+        modelCatalog: { entries: [] },
+        readFullModelCatalog: () => ({ entries }),
+      });
+    async function status(
+      contextTokensSource: "synthetic" | "runtime",
+      resolveOwnerContextCapacity?: ReturnType<typeof createSessionContextCapacityResolver>,
+    ) {
+      // Same process-global cache as a patched gateway after the synthetic row was superseded.
+      await budget();
+      return buildStatusMessageParts({
+        config: {},
+        agent: {},
+        includeTranscriptUsage: false,
+        modelAuth: "api-key",
+        activeModelAuth: "api-key",
+        resolvedHarness: "openclaw",
+        modelRefs: statusModelRefs({ provider: "fixture", model: "new-model" }),
+        sessionEntry: sessionEntry(contextTokensSource) as never,
+        thinkingCatalog: [discovered],
+        ...(resolveOwnerContextCapacity ? { resolveOwnerContextCapacity } : {}),
+      }).text;
+    }
+
+    it("a synthetic persisted 128k reaches the owner's accepted limit without restart", async () => {
+      expect(await status("synthetic", ownerOf([discovered]))).toContain("/872k");
+    });
+
+    it("genuine persisted 128k telemetry stays conservative", async () => {
+      expect(await status("runtime", ownerOf([discovered]))).toContain("/128k");
+    });
+
+    it("an unavailable owner renders unknown instead of stale or borrowed capacity", async () => {
+      const text = await status(
+        "synthetic",
+        ownerOf([discovered], () => false),
+      );
+      expect(text).toContain("?/?");
+      expect(text).not.toContain("/128k");
+      expect(text).not.toContain("/872k");
     });
   });
 });

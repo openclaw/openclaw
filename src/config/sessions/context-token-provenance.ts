@@ -57,6 +57,12 @@ export function resolveTrustedSessionContextTokens(
   if (contextTokens === undefined) {
     return undefined;
   }
+  // A run that budgeted against a provider unknown-model estimate observed no real
+  // limit. Only the current admitted owner's capacity may answer; if it cannot, the
+  // selection stays unknown rather than restoring the stale estimate.
+  if (params.entry?.contextTokensSource === "synthetic") {
+    return undefined;
+  }
   // Locked sessions own their native window, including rows created before
   // context-window provenance was persisted. A known selection mismatch is a
   // different owner, while missing identity remains a supported legacy state.
@@ -84,8 +90,26 @@ export function resolveProjectedSessionContextTokens(
   params: SessionContextSelection & {
     resolvedContextTokens: number | null | undefined;
     authoredContextTokens?: number | null | undefined;
+    /**
+     * Capacity answered by the session's admitted prepared owner. When supplied, a row
+     * produced against a synthetic estimate takes only this owner's answer (or an
+     * authored cap); an unavailable owner yields unknown, never stale or borrowed capacity.
+     */
+    ownerCapacity?:
+      | { state: "ready"; contextTokens: number; synthetic: boolean }
+      | { state: "unavailable" };
   },
 ): number | undefined {
+  if (params.ownerCapacity && params.entry?.contextTokensSource === "synthetic") {
+    const authored = resolvePositiveContextTokens(params.authoredContextTokens);
+    const owned =
+      params.ownerCapacity.state === "ready"
+        ? resolvePositiveContextTokens(params.ownerCapacity.contextTokens)
+        : undefined;
+    return authored !== undefined && owned !== undefined
+      ? Math.min(authored, owned)
+      : (authored ?? owned);
+  }
   const resolvedContextTokens = resolvePositiveContextTokens(params.resolvedContextTokens);
   const authoredContextTokens = resolvePositiveContextTokens(params.authoredContextTokens);
   const trustedContextTokens = resolveTrustedSessionContextTokens(params);
