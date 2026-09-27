@@ -478,6 +478,7 @@ export function wrapToolWithBeforeToolCallHook(
       const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
         toolCallId,
         toolName,
+        toolKind: hookMetadata?.toolKind,
         params: executeParams,
         ctx,
       });
