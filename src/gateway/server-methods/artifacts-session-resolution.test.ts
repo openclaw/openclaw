@@ -3,6 +3,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import {
   roleClient,
   rolePolicyConfig,
@@ -58,6 +59,31 @@ function identifiedClient(scopes: string[], profileId = "viewer@example.com"): G
 
 describe("artifact session authorization", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("waits for indirect artifact topology without waiting for unrelated row enrichment", async () => {
+    const unavailable = new Error("session projection is unavailable");
+    const projection: Pick<
+      SessionRowProjection,
+      "ensureMaterialized" | "findBySessionId" | "sharingRevision"
+    > = {
+      sharingRevision: undefined,
+      ensureMaterialized: vi
+        .fn<SessionRowProjection["ensureMaterialized"]>()
+        .mockRejectedValue(unavailable),
+      findBySessionId: vi.fn<SessionRowProjection["findBySessionId"]>(),
+    };
+    await expect(
+      prepareArtifactSessionResolution({ sessionKey: "agent:main:main" }, projection),
+    ).resolves.toBeTypeOf("function");
+    expect(projection.ensureMaterialized).not.toHaveBeenCalled();
+    for (const query of [{ runId: "run-1" }, { taskId: "task-1" }]) {
+      await expect(prepareArtifactSessionResolution(query, projection)).rejects.toBe(unavailable);
+    }
+    const current = { ...projection, sharingRevision: {} };
+    await expect(prepareArtifactSessionResolution({ runId: "run-1" }, current)).resolves.toBeTypeOf(
+      "function",
+    );
+  });
 
   it("denies direct and indirect incognito selectors while preserving admin access", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

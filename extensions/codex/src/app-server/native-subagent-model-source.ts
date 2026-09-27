@@ -1,3 +1,4 @@
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   matchingNativeModelAdmissions,
   matchingNativeModelCause as matchingCause,
@@ -231,6 +232,7 @@ export function admitNativeChildModelExecution(
     owner,
     child.nativeTurnId,
     child.childThreadId,
+    child.completionCustody,
   );
   owner.onDirectChildAccepted?.();
 }
@@ -380,13 +382,15 @@ type ModelSourceDependencies = {
   isCurrent: (state: ParentState) => boolean;
   assertInputCurrent: (threadId: string, owner: ParentOwner) => void;
   hasPendingInput: (request: NativeModelSourceRequest) => boolean;
+  pendingChildPreparation: (threadId: string) => Promise<boolean> | undefined;
   onExecutionAdmitted: (known: KnownChild, threadId: string) => void;
   registerChildExecution: (
     state: ParentState,
     request: NativeModelSourceRequest,
+    assertCurrent: () => void,
     agentPath?: string,
     completionCustody?: ParentOwner["completionCustody"],
-  ) => void;
+  ) => Promise<void>;
 };
 
 function captureExecutionOwner(
@@ -438,7 +442,7 @@ function executionOwner(
   request: NativeModelSourceRequest,
   state: ParentState,
   dependencies: ModelSourceDependencies,
-): ParentOwner | undefined {
+): ParentOwner | undefined | Promise<ParentOwner | undefined> {
   if (state.parentThreadId === request.threadId) {
     return [...state.owners.values()].find(
       (owner) => owner.turnId === request.turnId && !owner.modelExecutionSettled,
@@ -458,15 +462,33 @@ function executionOwner(
     admittedOwner?.unqualifiedModelExecution &&
     request.parentThreadId
   ) {
-    for (const entry of admitted) {
-      entry.modelSource?.assertCurrent();
-    }
-    dependencies.registerChildExecution(
-      state,
-      request,
-      admitted[0]?.agentPath,
-      admitted[0]?.completionCustody,
-    );
+    const sources = admitted.flatMap((entry) => (entry.modelSource ? [entry.modelSource] : []));
+    const assertCurrent = () => {
+      request.signal?.throwIfAborted();
+      for (const source of sources) {
+        source.assertCurrent();
+      }
+    };
+    assertCurrent();
+    return racePromiseWithAbortSignal(
+      dependencies.registerChildExecution(
+        state,
+        request,
+        assertCurrent,
+        admitted[0]?.agentPath,
+        admitted[0]?.completionCustody,
+      ),
+      request.signal,
+    ).then(() => {
+      request.signal?.throwIfAborted();
+      if (!dependencies.isCurrent(state) || !dependencies.knownChildren.has(request.threadId)) {
+        return undefined;
+      }
+      for (const entry of admitted) {
+        entry.modelSource?.assertCurrent();
+      }
+      return executionOwner(request, state, dependencies);
+    });
   }
   const known = dependencies.knownChildren.get(request.threadId);
   if (
@@ -556,6 +578,13 @@ export async function captureNativeModelSource(
 ): Promise<NativeModelSourceCapture | undefined> {
   for (;;) {
     request.signal?.throwIfAborted();
+    const preparation = dependencies.pendingChildPreparation(request.threadId);
+    if (preparation) {
+      if (!(await racePromiseWithAbortSignal(preparation, request.signal))) {
+        return undefined;
+      }
+      continue;
+    }
     const parent = request.parentThreadId
       ? dependencies.knownChildren.get(request.parentThreadId)
       : undefined;
@@ -576,7 +605,12 @@ export async function captureNativeModelSource(
     ) {
       return undefined;
     }
-    const owner = executionOwner(request, state, dependencies);
+    const selected = executionOwner(request, state, dependencies);
+    const owner = selected instanceof Promise ? await selected : selected;
+    request.signal?.throwIfAborted();
+    if (!dependencies.isCurrent(state)) {
+      return undefined;
+    }
     if (owner) {
       dependencies.assertInputCurrent(request.threadId, owner);
       return captureExecutionOwner(owner, () =>

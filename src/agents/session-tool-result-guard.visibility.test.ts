@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -39,6 +38,10 @@ async function openPersistedSessionManager() {
     entry: { sessionId: target.sessionId, updatedAt: Date.now() },
   });
   return { target, sessionManager: SessionManager.open(target, root) };
+}
+
+function assistantText(text: string, timestamp: number) {
+  return makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp });
 }
 
 describe("guardSessionManager transcript visibility", () => {
@@ -100,12 +103,7 @@ describe("guardSessionManager transcript visibility", () => {
         isError: false,
         timestamp: 3,
       });
-      guarded.appendMessage(
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: "The repair passed validation" }],
-          timestamp: 4,
-        }),
-      );
+      guarded.appendMessage(assistantText("The repair passed validation", 4));
 
       const persisted = SessionManager.open(target).buildSessionContext().messages;
       expect(persisted).toMatchObject([
@@ -138,12 +136,7 @@ describe("guardSessionManager transcript visibility", () => {
         childProvenance,
       ),
     );
-    parent.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "I found the cause of your bug" }],
-        timestamp: 2,
-      }),
-    );
+    parent.appendMessage(assistantText("I found the cause of your bug", 2));
     const coordination = guardSessionManager(sessionManager, {
       runId: "coordination-run",
       inputProvenance: childProvenance,
@@ -153,21 +146,11 @@ describe("guardSessionManager transcript visibility", () => {
         kind: "external_user",
       }),
     );
-    coordination.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Report received" }],
-        timestamp: 4,
-      }),
-    );
+    coordination.appendMessage(assistantText("Report received", 4));
     guardSessionManager(sessionManager, {
       runId: "completion-run",
       inputProvenance: { ...childProvenance, sourceTool: "subagent_announce" },
-    }).appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Your bug is fixed and tested" }],
-        timestamp: 5,
-      }),
-    );
+    }).appendMessage(assistantText("Your bug is fixed and tested", 5));
 
     const messages = SessionManager.open(target).buildSessionContext().messages;
     expect(messages).toHaveLength(5);
@@ -195,28 +178,18 @@ describe("guardSessionManager transcript visibility", () => {
       markBlocked: vi.fn(),
       markRuntimePersisted,
     } as unknown as UserTurnTranscriptRecorder;
-    const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
-      {
-        role: "user",
-        content: "Pre-compaction memory flush",
-        timestamp: Date.now(),
-      },
-      {
-        message: {
-          role: "user",
-          content: "Pre-compaction memory flush",
-          timestamp: Date.now(),
-        },
-        recorder,
-      },
-    );
+    const runtimeMessage = makeUserMessage("Pre-compaction memory flush", 1);
+    attachRuntimeUserTurnTranscriptContext(runtimeMessage, {
+      message: { ...runtimeMessage },
+      recorder,
+    });
     const guarded = guardSessionManager(sm, {
       agentId: "main",
       sessionKey: "agent:main:memory",
       trigger: "memory",
     });
 
-    guarded.appendMessage(runtimeMessage as Parameters<typeof guarded.appendMessage>[0]);
+    guarded.appendMessage(runtimeMessage);
 
     expect(markRuntimePersisted).toHaveBeenCalledTimes(1);
     expect(markRuntimePersisted.mock.calls[0]?.[0]).toMatchObject({
@@ -233,19 +206,9 @@ describe("guardSessionManager transcript visibility", () => {
       sessionKey: "agent:main:user",
       trigger: "user",
     });
-    const appendMessage = guarded.appendMessage.bind(guarded) as unknown as (
-      message: AgentMessage,
-    ) => void;
+    guarded.appendMessage(makeUserMessage("Why did the memory flush leak?", 1));
 
-    appendMessage({
-      role: "user",
-      content: "Why did the memory flush leak?",
-      timestamp: Date.now(),
-    } as AgentMessage);
-
-    const persisted = sm.getEntries().find((entry) => entry.type === "message") as
-      | { message?: AgentMessage }
-      | undefined;
+    const persisted = sm.getEntries().find((entry) => entry.type === "message");
     expect(persisted?.message).not.toHaveProperty("display", false);
   });
 });

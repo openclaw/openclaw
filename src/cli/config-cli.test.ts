@@ -11,6 +11,7 @@ import {
   createPluginManifestRecordFixture as createPluginManifestRecord,
   createPluginMetadataSnapshotFixture as createPluginMetadataSnapshot,
 } from "../plugins/plugin-metadata.test-support.js";
+import { registerConfigJsonOutputTests } from "./config-cli.json-output.test-support.js";
 import {
   registerConfigSetModelReferenceTests,
   registerConfigUnsetModelReferenceTest,
@@ -1822,6 +1823,16 @@ describe("config cli", () => {
     });
   });
 
+  registerConfigJsonOutputTests(() => ({
+    runConfigCommand,
+    mockReadConfigFileSnapshot,
+    mockWriteConfigFile,
+    mockLog,
+    parseLastLogPayload,
+    expectErrorIncludes,
+    ExitError,
+  }));
+
   describe("config set parsing flags", () => {
     it("falls back to raw string when parsing fails and strict mode is off", async () => {
       const resolved: OpenClawConfig = { gateway: { port: 18789 } };
@@ -1843,13 +1854,6 @@ describe("config cli", () => {
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expectErrorIncludes('Could not parse "{bad" as JSON for --strict-json.');
       expectErrorIncludes("For plain strings, omit --strict-json.");
-    });
-
-    it("keeps --json as a strict parsing alias", async () => {
-      await expect(runConfigSet("gateway.auth.mode", "{bad", "--json")).rejects.toThrow(ExitError);
-
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
     });
 
     it("rejects JSON5-only object syntax when strict parsing is enabled", async () => {
@@ -3506,14 +3510,6 @@ describe("config cli", () => {
       expect(errors).not.toContain("Maximum call stack size exceeded");
     });
 
-    it("rejects config patch --json without dry-run", async () => {
-      await expect(runConfigCommand(["config", "patch", "--stdin", "--json"])).rejects.toThrow(
-        ExitError,
-      );
-      expectErrorIncludes("config patch mode error: --json requires --dry-run.");
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-    });
-
     it("supports replace-path and null deletes in config patch", async () => {
       const resolved = {
         channels: {
@@ -4695,15 +4691,6 @@ describe("config cli", () => {
         id: "WEB_SEARCH_API_KEY",
       });
       expectLogIncludes("Dry run successful: 1 update(s) validated against /tmp/openclaw.json.");
-    });
-
-    it("rejects config unset --json without --dry-run", async () => {
-      await expect(
-        runConfigCommand(["config", "unset", "tools.alsoAllow", "--json"]),
-      ).rejects.toThrow(ExitError);
-
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expectErrorIncludes("--json can only be used with --dry-run.");
     });
 
     it("rejects config unset --allow-exec without --dry-run", async () => {

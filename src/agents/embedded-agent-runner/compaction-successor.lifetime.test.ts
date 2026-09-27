@@ -112,131 +112,122 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
-it.each([false, true])(
-  "preserves the accepted successor and both hook lifetimes (identity observer cancels caller=%s)",
-  async (cancelAfterCommit) => {
-    const caller = new AsyncWorkScope();
-    const failure = new Error("Compaction caller cancelled after commit");
-    const endGate = createDeferred();
-    const startGate = createDeferred();
-    const facts: AcceptedCompactionSuccessor[] = [];
-    const observed: { fact?: AcceptedCompactionSuccessor; signal?: AbortSignal } = {};
-    let row: InternalSessionEntry = {
-      sessionId: predecessorId,
-      lifecycleRevision: "synthetic-lifecycle",
-      activeWriterRunId: "synthetic-writer",
-      updatedAt: 1,
-    };
-    edge.load.mockImplementation(() => structuredClone(row));
-    edge.patch.mockImplementation(async (scope, update, options = {}) => {
-      expect(scope).toEqual(target);
-      const previous = structuredClone(row);
-      const patch = await update(structuredClone(row), { existingEntry: structuredClone(row) });
-      if (!patch) {
-        throw new Error("Expected a successor identity patch");
-      }
-      options.assertCommitAllowed?.();
-      row = { ...row, ...patch };
-      try {
-        options.onCommitted?.(structuredClone(row));
-      } finally {
-        // The entry owner publishes identity only after the committed-fact callback.
-        emitSessionIdentityMutation({
-          agentId: target.agentId,
-          databaseIdentity,
-          kind: "replace",
-          previous: { sessionId: previous.sessionId, sessionKeys: [target.sessionKey] },
-          current: { sessionId: row.sessionId, sessionKeys: [target.sessionKey] },
-        });
-      }
-      return structuredClone(row);
-    });
-    const unsubscribe = onSessionIdentityMutation((mutation) => {
-      if (mutation.kind !== "replace" || mutation.previous.sessionId !== predecessorId) {
-        return;
-      }
-      observed.fact = facts[0];
-      observed.signal = getAsyncWorkSignal();
-      if (cancelAfterCommit) {
-        caller.beginClose(failure);
-      }
-    });
-    const hookSignals: Array<AbortSignal | undefined> = [];
-    edge.end.mockImplementation(async () => {
-      hookSignals.push(getAsyncWorkSignal());
-      await endGate.promise;
-    });
-    edge.start.mockImplementation(async () => {
-      hookSignals.push(getAsyncWorkSignal());
-      await startGate.promise;
-    });
-    noteActiveSessionForShutdown({ ...target, cfg: {} });
-    try {
-      const accepted = await caller.track(() =>
-        acceptCompactionSuccessor({
-          currentTarget: target,
-          expectedEntry: {
-            sessionId: row.sessionId,
-            lifecycleRevision: row.lifecycleRevision,
-            activeWriterRunId: row.activeWriterRunId,
-          },
-          assertActive: () => caller.signal.throwIfAborted(),
-          config: {},
-          result: {
-            ok: true,
-            compacted: true,
-            result: { tokensBefore: 4_097, tokensAfter: 3_000, sessionId: successorId },
-          },
-          onCommitted: (fact) => facts.push(fact),
-        }),
-      );
-      expect(observed.fact).toBe(accepted);
-      expect(observed.signal).toBe(caller.signal);
-      expect(caller.signal.aborted).toBe(cancelAfterCommit);
-      expect(accepted.entry).toEqual(row);
-      expect(accepted.previousSessionId).toBe(predecessorId);
-      expect(row.sessionId).toBe(successorId);
-      expect(edge.patch).toHaveBeenCalledOnce();
-      // Acceptance keeps its existing fire-and-forget hook completion convention.
-      expect(edge.end).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          sessionId: predecessorId,
-          sessionKey: target.sessionKey,
-          reason: "compaction",
-          nextSessionId: successorId,
-          sessionFile: `sqlite:main:${predecessorId}:${target.storePath}`,
-        }),
-        { sessionId: predecessorId, sessionKey: target.sessionKey, agentId: "main" },
-      );
-      expect(edge.start).toHaveBeenCalledExactlyOnceWith(
-        { sessionId: successorId, sessionKey: target.sessionKey, resumedFrom: predecessorId },
-        { sessionId: successorId, sessionKey: target.sessionKey, agentId: "main" },
-      );
-      expect(
-        listActiveSessionsForShutdown().filter((entry) => entry.sessionKey === target.sessionKey),
-      ).toEqual([expect.objectContaining({ sessionId: successorId })]);
-      if (cancelAfterCommit) {
-        await caller.drain();
-      }
-      expect(hookSignals).toHaveLength(2);
-      for (const signal of hookSignals) {
-        expect(signal).toBeDefined();
-        if (cancelAfterCommit) {
-          expect(signal).not.toBe(caller.signal);
-        }
-        expect(signal?.aborted).toBe(false);
-      }
-      expect(getActiveGatewayRootWorkCount()).toBe(2);
-      endGate.resolve();
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
-      startGate.resolve();
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    } finally {
-      unsubscribe();
-      endGate.resolve();
-      startGate.resolve();
-      await caller.drain();
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+it("preserves the accepted successor and both hook lifetimes when an identity observer cancels the caller", async () => {
+  const caller = new AsyncWorkScope();
+  const failure = new Error("Compaction caller cancelled after commit");
+  const endGate = createDeferred();
+  const startGate = createDeferred();
+  const facts: AcceptedCompactionSuccessor[] = [];
+  const observed: { fact?: AcceptedCompactionSuccessor; signal?: AbortSignal } = {};
+  let row: InternalSessionEntry = {
+    sessionId: predecessorId,
+    lifecycleRevision: "synthetic-lifecycle",
+    activeWriterRunId: "synthetic-writer",
+    updatedAt: 1,
+  };
+  edge.load.mockImplementation(() => structuredClone(row));
+  edge.patch.mockImplementation(async (scope, update, options = {}) => {
+    expect(scope).toEqual(target);
+    const previous = structuredClone(row);
+    const patch = await update(structuredClone(row), { existingEntry: structuredClone(row) });
+    if (!patch) {
+      throw new Error("Expected a successor identity patch");
     }
-  },
-);
+    options.assertCommitAllowed?.();
+    row = { ...row, ...patch };
+    try {
+      options.onCommitted?.(structuredClone(row));
+    } finally {
+      // The entry owner publishes identity only after the committed-fact callback.
+      emitSessionIdentityMutation({
+        agentId: target.agentId,
+        databaseIdentity,
+        kind: "replace",
+        previous: { sessionId: previous.sessionId, sessionKeys: [target.sessionKey] },
+        current: { sessionId: row.sessionId, sessionKeys: [target.sessionKey] },
+      });
+    }
+    return structuredClone(row);
+  });
+  const unsubscribe = onSessionIdentityMutation((mutation) => {
+    if (mutation.kind !== "replace" || mutation.previous.sessionId !== predecessorId) {
+      return;
+    }
+    observed.fact = facts[0];
+    observed.signal = getAsyncWorkSignal();
+    caller.beginClose(failure);
+  });
+  const hookSignals: Array<AbortSignal | undefined> = [];
+  edge.end.mockImplementation(async () => {
+    hookSignals.push(getAsyncWorkSignal());
+    await endGate.promise;
+  });
+  edge.start.mockImplementation(async () => {
+    hookSignals.push(getAsyncWorkSignal());
+    await startGate.promise;
+  });
+  noteActiveSessionForShutdown({ ...target, cfg: {} });
+  try {
+    const accepted = await caller.track(() =>
+      acceptCompactionSuccessor({
+        currentTarget: target,
+        expectedEntry: {
+          sessionId: row.sessionId,
+          lifecycleRevision: row.lifecycleRevision,
+          activeWriterRunId: row.activeWriterRunId,
+        },
+        assertActive: () => caller.signal.throwIfAborted(),
+        config: {},
+        result: {
+          ok: true,
+          compacted: true,
+          result: { tokensBefore: 4_097, tokensAfter: 3_000, sessionId: successorId },
+        },
+        onCommitted: (fact) => facts.push(fact),
+      }),
+    );
+    expect(observed.fact).toBe(accepted);
+    expect(observed.signal).toBe(caller.signal);
+    expect(caller.signal.aborted).toBe(true);
+    expect(accepted.entry).toEqual(row);
+    expect(accepted.previousSessionId).toBe(predecessorId);
+    expect(row.sessionId).toBe(successorId);
+    expect(edge.patch).toHaveBeenCalledOnce();
+    // Acceptance keeps its existing fire-and-forget hook completion convention.
+    expect(edge.end).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        sessionId: predecessorId,
+        sessionKey: target.sessionKey,
+        reason: "compaction",
+        nextSessionId: successorId,
+        sessionFile: `sqlite:main:${predecessorId}:${target.storePath}`,
+      }),
+      { sessionId: predecessorId, sessionKey: target.sessionKey, agentId: "main" },
+    );
+    expect(edge.start).toHaveBeenCalledExactlyOnceWith(
+      { sessionId: successorId, sessionKey: target.sessionKey, resumedFrom: predecessorId },
+      { sessionId: successorId, sessionKey: target.sessionKey, agentId: "main" },
+    );
+    expect(
+      listActiveSessionsForShutdown().filter((entry) => entry.sessionKey === target.sessionKey),
+    ).toEqual([expect.objectContaining({ sessionId: successorId })]);
+    await caller.drain();
+    expect(hookSignals).toHaveLength(2);
+    for (const signal of hookSignals) {
+      expect(signal).toBeDefined();
+      expect(signal).not.toBe(caller.signal);
+      expect(signal?.aborted).toBe(false);
+    }
+    expect(getActiveGatewayRootWorkCount()).toBe(2);
+    endGate.resolve();
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    startGate.resolve();
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  } finally {
+    unsubscribe();
+    endGate.resolve();
+    startGate.resolve();
+    await caller.drain();
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  }
+});

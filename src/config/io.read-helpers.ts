@@ -56,16 +56,27 @@ export function resolveGatewayMode(value: unknown): string | null {
 }
 
 export function containsConfigIncludeDirective(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => containsConfigIncludeDirective(item));
+  // Avoid call-stack limits from recursive traversal or spreading large arrays.
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        stack.push(item);
+      }
+      continue;
+    }
+    if (!isRecord(current)) {
+      continue;
+    }
+    if (INCLUDE_KEY in current) {
+      return true;
+    }
+    for (const child of Object.values(current)) {
+      stack.push(child);
+    }
   }
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (INCLUDE_KEY in value) {
-    return true;
-  }
-  return Object.values(value).some((item) => containsConfigIncludeDirective(item));
+  return false;
 }
 
 export function resolveConfigPathForDeps(deps: NormalizedConfigIoDeps): string {
