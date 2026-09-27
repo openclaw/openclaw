@@ -966,11 +966,7 @@ extension OpenClawChatView {
     }
 
     private var latestVisibleTurnStartID: UUID? {
-        self.visibleTurnStartIDs.last
-    }
-
-    private var visibleTurnStartIDs: [UUID] {
-        self.transcriptPresentation.rows.compactMap { $0.startsTurn ? $0.id : nil }
+        self.transcriptPresentation.rows.last(where: \.startsTurn)?.id
     }
 
     private var isFollowingTurn: Bool {
@@ -1051,13 +1047,7 @@ extension OpenClawChatView {
         let activeError = showsContextualSignIn
             ? self.viewModel.errorText
             : self.viewModel.composerModelAvailabilityMessage ?? self.viewModel.errorText
-        guard let text = activeError?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !text.isEmpty
-        else {
-            return nil
-        }
-        return text
+        return ChatPayloadDecoding.trimmedNonEmptyString(activeError)
     }
 
     private var hasVisibleStreamingAssistantText: Bool {
@@ -1138,12 +1128,7 @@ extension OpenClawChatView {
         else {
             return nil
         }
-        guard let text = emptyAssistantIntro?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !text.isEmpty
-        else {
-            return nil
-        }
-        return text
+        return ChatPayloadDecoding.trimmedNonEmptyString(self.emptyAssistantIntro)
     }
 
     private var showsEmptyState: Bool {
@@ -1308,7 +1293,9 @@ extension OpenClawChatView {
     }
 
     private func shouldDisplayMessage(_ message: OpenClawChatMessage) -> Bool {
-        let primaryText = self.primaryText(in: message)
+        let primaryText = ChatMessageVisibleText.displayText(
+            in: message,
+            includeThinking: self.displayOptions.contains(.reasoning))
         if message.content.contains(where: \.isInlineAttachment) {
             return true
         }
@@ -1331,12 +1318,6 @@ extension OpenClawChatView {
 
         return self.displayOptions.contains(.toolActivity) &&
             message.content.contains { $0.isToolCall || $0.isToolResult }
-    }
-
-    private func primaryText(in message: OpenClawChatMessage) -> String {
-        ChatMessageVisibleText.displayText(
-            in: message,
-            includeThinking: self.displayOptions.contains(.reasoning))
     }
 
     @ViewBuilder
