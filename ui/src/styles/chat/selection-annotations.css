@@ -46,6 +46,7 @@
 }
 
 openclaw-chat-comment-pins {
+  contain: layout;
   position: absolute;
   top: 0;
   left: 0;

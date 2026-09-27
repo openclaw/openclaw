@@ -231,7 +231,6 @@ const broadUnitFastCandidateSkipPatterns = prepareGlobPatterns(
     "src/security/**/*.test.ts",
     "src/secrets/**/*.test.ts",
     "test/helpers/stt-live-audio.test.ts",
-    "test/vitest-extensions-config.test.ts",
     "test/vitest-unit-paths.test.ts",
     ...boundaryTestFiles,
   ],

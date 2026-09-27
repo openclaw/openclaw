@@ -477,6 +477,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .login-gate__body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
 }
 
@@ -536,6 +537,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .login-gate__lede,
 .login-gate__failure-summary {
   margin: 0;
+  overflow-wrap: anywhere;
   font-size: 14px;
   line-height: 1.5;
   color: var(--muted);
