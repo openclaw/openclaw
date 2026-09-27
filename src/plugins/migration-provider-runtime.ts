@@ -154,15 +154,11 @@ export async function withPluginMigrationProviders<T>(
   try {
     result = await run(mergeMigrationProviders(activeRegistry, acquisition.registry));
   } catch (error) {
-    const failures = [error];
     try {
       await acquisition.release();
     } catch (disposalError) {
-      failures.push(disposalError);
-    }
-    if (failures.length > 1) {
       throw new AggregateError(
-        failures,
+        [error, disposalError],
         "Migration failed and its plugin resources could not be disposed",
         { cause: error },
       );

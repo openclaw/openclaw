@@ -9,9 +9,6 @@ import type {
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
-type WebSearchProviderId = string;
-type WebFetchProviderId = string;
-
 export type WebSearchProviderToolDefinition = {
   description: string;
   parameters: TSchema;
@@ -51,12 +48,7 @@ type WebFetchProviderContext = {
 
 export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
 
-type WebSearchProviderConfiguredCredentialFallback = {
-  path: string;
-  value: unknown;
-};
-
-type WebFetchProviderConfiguredCredentialFallback = {
+type WebProviderConfiguredCredentialFallback = {
   path: string;
   value: unknown;
 };
@@ -80,7 +72,7 @@ export type WebSearchProviderSetupContext = {
   secretInputMode?: SecretInputMode;
 };
 
-export type WebFetchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+export type WebFetchCredentialResolutionSource = WebSearchCredentialResolutionSource;
 
 type WebFetchRuntimeMetadataContext = {
   config?: OpenClawConfig;
@@ -93,34 +85,37 @@ type WebFetchRuntimeMetadataContext = {
   };
 };
 
-export type WebSearchProviderPlugin = {
-  id: WebSearchProviderId;
+type WebProviderPluginBase = {
+  id: string;
   label: string;
   hint: string;
-  /** Settings subtree relative to this plugin's config; null hides inline settings. Defaults to ["webSearch"]. */
-  configPath?: readonly string[] | null;
-  onboardingScopes?: readonly "text-inference"[];
   requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
-  /** Optional model-provider auth profile id that can satisfy this web provider without a tool-specific API key. */
-  authProviderId?: string;
   placeholder: string;
   signupUrl: string;
   docsUrl?: string;
-  /** Optional note shown before credential collection for provider-specific prerequisites. */
-  credentialNote?: string;
   autoDetectOrder?: number;
   credentialPath: string;
   inactiveSecretPaths?: string[];
-  getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
-  setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getCredentialValue: (config?: Record<string, unknown>) => unknown;
+  setCredentialValue: (configTarget: Record<string, unknown>, value: unknown) => void;
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
   getConfiguredCredentialFallback?: (
     config?: OpenClawConfig,
-  ) => WebSearchProviderConfiguredCredentialFallback | undefined;
+  ) => WebProviderConfiguredCredentialFallback | undefined;
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+};
+
+export type WebSearchProviderPlugin = WebProviderPluginBase & {
+  /** Settings subtree relative to this plugin's config; null hides inline settings. Defaults to ["webSearch"]. */
+  configPath?: readonly string[] | null;
+  onboardingScopes?: readonly "text-inference"[];
+  /** Optional model-provider auth profile id that can satisfy this web provider without a tool-specific API key. */
+  authProviderId?: string;
+  /** Optional note shown before credential collection for provider-specific prerequisites. */
+  credentialNote?: string;
   runSetup?: (ctx: WebSearchProviderSetupContext) => OpenClawConfig | Promise<OpenClawConfig>;
   resolveRuntimeMetadata?: (
     ctx: WebSearchRuntimeMetadataContext,
@@ -132,27 +127,7 @@ export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
   pluginId: string;
 };
 
-export type WebFetchProviderPlugin = {
-  id: WebFetchProviderId;
-  label: string;
-  hint: string;
-  requiresCredential?: boolean;
-  credentialLabel?: string;
-  envVars: string[];
-  placeholder: string;
-  signupUrl: string;
-  docsUrl?: string;
-  autoDetectOrder?: number;
-  credentialPath: string;
-  inactiveSecretPaths?: string[];
-  getCredentialValue: (fetchConfig?: Record<string, unknown>) => unknown;
-  setCredentialValue: (fetchConfigTarget: Record<string, unknown>, value: unknown) => void;
-  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
-  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
-  getConfiguredCredentialFallback?: (
-    config?: OpenClawConfig,
-  ) => WebFetchProviderConfiguredCredentialFallback | undefined;
-  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+export type WebFetchProviderPlugin = WebProviderPluginBase & {
   resolveRuntimeMetadata?: (
     ctx: WebFetchRuntimeMetadataContext,
   ) => Partial<RuntimeWebFetchMetadata> | Promise<Partial<RuntimeWebFetchMetadata>>;

@@ -38,6 +38,10 @@ describe("normalizeRegisteredProvider", () => {
               modelTarget: "utility",
               assistantVisibility: "detected-only",
               onboardingFeatured: true,
+              modelSelection: {
+                promptWhenAuthChoiceProvided: true,
+                allowKeepCurrent: false,
+              },
               modelAllowlist: {
                 allowedKeys: [" demo/model ", "demo/model"],
                 initialSelections: [" demo/model "],
@@ -60,6 +64,7 @@ describe("normalizeRegisteredProvider", () => {
             choiceId: " demo-choice ",
             onboardingFeatured: true,
             methodId: " missing ",
+            modelSelection: { promptWhenAuthChoiceProvided: false, allowKeepCurrent: true },
           },
           modelPicker: {
             label: " Demo models ",
@@ -85,6 +90,10 @@ describe("normalizeRegisteredProvider", () => {
               modelTarget: "utility",
               assistantVisibility: "detected-only",
               onboardingFeatured: true,
+              modelSelection: {
+                promptWhenAuthChoiceProvided: true,
+                allowKeepCurrent: false,
+              },
               modelAllowlist: {
                 allowedKeys: ["demo/model"],
                 initialSelections: ["demo/model"],
@@ -99,6 +108,7 @@ describe("normalizeRegisteredProvider", () => {
           setup: {
             choiceId: "demo-choice",
             onboardingFeatured: true,
+            modelSelection: { promptWhenAuthChoiceProvided: false, allowKeepCurrent: true },
           },
           modelPicker: {
             label: "Demo models",
