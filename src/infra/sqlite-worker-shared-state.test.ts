@@ -1,6 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -14,13 +13,10 @@ import {
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseByPathAsync,
-} from "../state/openclaw-state-db-cache.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
-import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   executeOpenClawStateWorker,
@@ -35,14 +31,14 @@ import {
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { OpenClawStateOwnershipError } from "./sqlite-lifecycle-errors.js";
 import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
 import { registerSharedStateWorkerAdmissionTests } from "./sqlite-worker-shared-state-admission.test-support.js";
-import { closeUnclaimedSharedStateSqliteWorkers } from "./sqlite-worker-store.js";
-import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -251,7 +247,16 @@ describe("canonical shared-state worker admission", () => {
         path: databasePath,
         env: captured.environment,
       });
-      const gateway = acquireGatewayLifecycleCoordinator({ databasePath });
+      const gateway = acquireGatewayStateOwner({
+        databasePath,
+        payload: {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          role: "gateway",
+          stateDir: captured.environment.OPENCLAW_STATE_DIR,
+          configPath: path.join(captured.environment.OPENCLAW_STATE_DIR, "openclaw.json"),
+        },
+      });
       const mainSql = observeMainThreadSql();
       try {
         expect(
@@ -373,6 +378,98 @@ describe("canonical shared-state worker admission", () => {
     expect(existsSync(captured.admission.databasePath)).toBe(false);
   });
 
+  it.each(["same scope", "different scope", "active callback"] as const)(
+    "writes to the relocated database without recreating a retired inspection path (%s)",
+    async (ownership) => {
+      const seeded = context();
+      const originalPath = seeded.admission.databasePath;
+      const value = { generation: "retained-before-relocation", plugins: [] };
+      writeConfigMachineState("plugins.installedIndex", value, {
+        path: originalPath,
+        env: seeded.environment,
+      });
+      await closeOpenClawStateDatabaseAsync();
+      const originalMaintenance = createOpenClawDatabaseMaintenanceScope();
+      const relocatedMaintenance =
+        ownership === "same scope" ? originalMaintenance : createOpenClawDatabaseMaintenanceScope();
+      try {
+        const original = originalMaintenance.run(() =>
+          captureOpenClawStateWorkerContext({
+            path: originalPath,
+            env: seeded.environment,
+          }),
+        );
+        const relocate = () => {
+          const relocatedRoot = dirs.make("openclaw-worker-relocated-");
+          // Relocation keeps the real inode while ending the old path's admission.
+          renameSync(path.dirname(originalPath), path.join(relocatedRoot, "state"));
+          const relocated = relocatedMaintenance.run(() =>
+            captureOpenClawStateWorkerContext({
+              env: { OPENCLAW_STATE_DIR: relocatedRoot },
+            }),
+          );
+          expect(relocated.admission.identity.key).toBe(original.admission.identity.key);
+          expect(existsSync(originalPath)).toBe(false);
+          return relocated;
+        };
+        const flow = buildFlowRecord({
+          ownerKey: "agent:main:relocated-state",
+          syncMode: "managed",
+          controllerId: "tests/relocated-state",
+          goal: "Write only to the current database",
+        });
+        const write = (relocated: ReturnType<typeof captureOpenClawStateWorkerContext>) =>
+          executeOpenClawStateWorker(relocated, {
+            type: "flows.createManaged",
+            input: { flow },
+          });
+        const relocatedDuringCallback = await runOpenClawStateWorkerOperation(
+          original,
+          async (scope) => {
+            expect(
+              await scope.execute({
+                type: "plugins.metadata.read",
+                input: { selector: "installed-index", artifactPreservingReadOnly: true },
+              }),
+            ).toEqual({ value_json: JSON.stringify(value) });
+            if (ownership === "active callback") {
+              const relocated = relocate();
+              // The old callback cannot await its own retirement through a new caller.
+              await expect(write(relocated)).rejects.toMatchObject({
+                code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+              });
+              expect(existsSync(originalPath)).toBe(false);
+              return relocated;
+            }
+            return undefined;
+          },
+          { existingOnly: true },
+        );
+        const relocated = relocatedDuringCallback ?? relocate();
+        await write(relocated);
+
+        expect(existsSync(originalPath)).toBe(false);
+        const database = openOpenClawStateDatabase({
+          path: relocated.admission.databasePath,
+          env: relocated.environment,
+        });
+        expect(
+          database.db.prepare("SELECT goal FROM flow_runs WHERE flow_id = ?").get(flow.flowId),
+        ).toEqual({ goal: "Write only to the current database" });
+        expect(
+          database.db
+            .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+            .get("plugins.installedIndex"),
+        ).toEqual({ value_json: JSON.stringify(value) });
+      } finally {
+        await originalMaintenance.close();
+        if (relocatedMaintenance !== originalMaintenance) {
+          await relocatedMaintenance.close();
+        }
+      }
+    },
+  );
+
   it("preserves future-schema rejection through a cold worker open", async () => {
     const captured = context();
     const database = openOpenClawStateDatabase({
@@ -391,60 +488,6 @@ describe("canonical shared-state worker admission", () => {
         input: { ownerKey: "agent:main:main" },
       }),
     ).rejects.toBeInstanceOf(SqliteSchemaVersionError);
-  });
-
-  it("retries failed-open native custody through the owning path drain", async () => {
-    const captured = context();
-    const databasePath = captured.admission.databasePath;
-    const database = openOpenClawStateDatabase({ path: databasePath, env: captured.environment });
-    database.db.exec("PRAGMA user_version = 999999;");
-    await closeOpenClawStateDatabaseAsync();
-    const reopened = captureOpenClawStateWorkerContext({
-      path: databasePath,
-      env: captured.environment,
-    });
-    const nativeOpen = nodeSqlite.openNodeSqliteDatabase;
-    const opened = new Map<string, DatabaseSync>();
-    const openSpy = vi
-      .spyOn(nodeSqlite, "openNodeSqliteDatabase")
-      .mockImplementation((location, ...options) => {
-        const db = nativeOpen(location, ...options);
-        opened.set(location, db);
-        return db;
-      });
-    const gateway = acquireGatewayLifecycleCoordinator({ databasePath });
-    openSpy.mockRestore();
-    const native = opened.get(gateway.path);
-    if (!native) {
-      throw new Error("Expected the owned Gateway coordinator connection");
-    }
-    const failClose = () => {
-      throw new Error("Synthetic coordinator close failed");
-    };
-    vi.spyOn(native, "close").mockImplementationOnce(failClose).mockImplementationOnce(failClose);
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
-    messages.mockImplementationOnce(function (this: Worker, message, transferList) {
-      messages.mockRestore();
-      this.postMessage(message, transferList ?? []);
-      gateway.release();
-    });
-    try {
-      await expect(
-        executeOpenClawStateWorker(reopened, {
-          type: "flows.list",
-          input: { ownerKey: "agent:main:main" },
-        }),
-      ).rejects.toThrow();
-      expect(native.isOpen).toBe(true);
-      await expect(closeOpenClawStateDatabaseByPathAsync(databasePath)).rejects.toThrow();
-      expect(native.isOpen).toBe(true);
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
-      expect(native.isOpen).toBe(false);
-    } finally {
-      vi.restoreAllMocks();
-      await closeUnclaimedSharedStateSqliteWorkers(databasePath);
-      gateway.release();
-    }
   });
 
   it.each(["open", "execute"] as const)(

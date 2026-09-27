@@ -70,22 +70,12 @@ private func chatBarePreviewURLs(in text: String) -> [URL] {
         }
         for pair: (open: Character, close: Character) in [("(", ")"), ("[", "]"), ("{", "}")] {
             while candidate.hasSuffix(String(pair.close)),
-                  candidate.count(of: pair.close) > candidate.count(of: pair.open)
+                  candidate.count(where: { $0 == pair.close }) > candidate.count(where: { $0 == pair.open })
             {
                 candidate.removeLast()
             }
         }
         return chatSafeWebURL(candidate)
-    }
-}
-
-extension String {
-    fileprivate func count(of character: Character) -> Int {
-        self.reduce(into: 0) { count, current in
-            if current == character {
-                count += 1
-            }
-        }
     }
 }
 

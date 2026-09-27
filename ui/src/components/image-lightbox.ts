@@ -665,19 +665,17 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       void this.navigate((event.key === "ArrowRight" ? 1 : -1) * this.direction);
       return;
     }
-    if (this.panzoom && (event.key === "+" || event.key === "=")) {
+    const zoom =
+      event.key === "+" || event.key === "="
+        ? this.zoomIn
+        : event.key === "-"
+          ? this.zoomOut
+          : event.key === "0"
+            ? this.resetZoom
+            : undefined;
+    if (this.panzoom && zoom) {
       event.preventDefault();
-      this.zoomIn();
-      return;
-    }
-    if (this.panzoom && event.key === "-") {
-      event.preventDefault();
-      this.zoomOut();
-      return;
-    }
-    if (this.panzoom && event.key === "0") {
-      event.preventDefault();
-      this.resetZoom();
+      zoom();
       return;
     }
     if (event.key !== "Tab") {

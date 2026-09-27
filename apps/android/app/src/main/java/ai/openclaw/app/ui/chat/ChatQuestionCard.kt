@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
@@ -141,7 +142,7 @@ private fun SecretStoreConsent(
         onValueChange = { value -> onDraftChanged { it.copy(secretStoreAllowedHostsText = value) } },
         modifier = Modifier.fillMaxWidth(),
         enabled = enabled,
-        label = { Text(nativeString("Allowed HTTPS hosts"), style = ClawTheme.type.body) },
+        label = { Text(nativeString("Allowed HTTPS hosts"), style = ClawTheme.type.body.copy(fontSize = LocalTextStyle.current.fontSize)) },
         placeholder = { Text(nativeString("api.example.com, uploads.example.com"), style = ClawTheme.type.body) },
         textStyle = ClawTheme.type.body,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),

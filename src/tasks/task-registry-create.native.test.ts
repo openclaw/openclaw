@@ -34,6 +34,7 @@ vi.mock("./task-flow-runtime-internal.js", () => {
   };
 });
 vi.mock("./task-registry.store.js", () => ({
+  publishTaskRegistryAfterCommit: (publish: () => void) => publish(),
   tryPersistTaskUpsert: (task: TaskRecord) => {
     memory.writes.push(task);
     return true;

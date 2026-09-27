@@ -568,7 +568,7 @@ struct ChatSessionSidebar: View {
     }
 
     private func isGroupCollapsed(_ name: String) -> Bool {
-        Set(self.collapsedSessionGroups.split(separator: "\u{1F}").map(String.init)).contains(name)
+        self.collapsedSessionGroups.split(separator: "\u{1F}").contains(Substring(name))
     }
 
     private func toggleGroupCollapsed(_ name: String) {
@@ -700,20 +700,13 @@ struct ChatSidebarAgentAvatar: View {
     var size: CGFloat = 28
 
     var body: some View {
-        Text(self.avatarText)
+        Text(verbatim: self.agent.avatarText)
             .font(OpenClawChatTypography.navigationAvatar(size: self.size * 0.5))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             .frame(width: self.size, height: self.size)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: self.size * 0.3))
             .accessibilityHidden(true)
-    }
-
-    private var avatarText: String {
-        if let emoji = self.agent.emoji?.trimmingCharacters(in: .whitespacesAndNewlines), !emoji.isEmpty {
-            return String(emoji.prefix(1))
-        }
-        return String(self.agent.displayName.prefix(1)).uppercased()
     }
 }
 

@@ -2,11 +2,9 @@
 import type { SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import { hostname } from "node:os";
-import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsageMock,
@@ -210,7 +208,7 @@ async function withPreparedGatewayTask(
   run: (context: { env: Record<string, string>; stdout: PassThrough }) => Promise<void>,
   launcherSuffix = "",
 ) {
-  await withWindowsEnv("openclaw-win-stop-", async ({ tmpDir, env }) => {
+  await withWindowsEnv("openclaw-win-stop-", async ({ env }) => {
     await writeGatewayScript(env, GATEWAY_PORT);
     if (launcherSuffix) {
       const scriptPath = resolveTaskScriptPath(env);
@@ -218,9 +216,7 @@ async function withPreparedGatewayTask(
       await fs.writeFile(scriptPath, `${script.trimEnd()} ${launcherSuffix}\r\n`);
     }
     const stdout = new PassThrough();
-    await withStateDatabaseCoordinatorRuntimeDirectory(path.join(tmpDir, "coordinators"), () =>
-      run({ env, stdout }),
-    );
+    await run({ env, stdout });
   });
 }
 

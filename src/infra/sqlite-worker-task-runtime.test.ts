@@ -16,9 +16,10 @@ import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { resetRuntimeTaskTestState } from "../plugins/runtime/runtime-task-test-harness.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
-  acquireOpenClawStateDatabaseFileExclusion,
   closeOpenClawStateDatabaseAsync,
+  prepareOpenClawStateDatabaseRemoval,
 } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabase,
@@ -40,6 +41,7 @@ import {
   observeMainThreadSql,
 } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import {
@@ -514,14 +516,33 @@ describe("registered tasks.async runtime", () => {
   it("refuses a sealed read before cold native admission", async () => {
     const database = openOpenClawStateDatabase();
     const runs = createPluginRuntime().tasks.async.runs.bindSession({ sessionKey: ownerKey });
-    const exclusion = await acquireOpenClawStateDatabaseFileExclusion(database.path);
-    const prepare = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
+    const owner = acquireGatewayStateOwner({ databasePath: database.path });
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: owner.assertCurrent,
+      assertDatabaseAccess: owner.assertDatabaseAccess,
+    });
     try {
-      await expect(runs.list()).rejects.toThrow(/admission is closed/);
-      expect(prepare).not.toHaveBeenCalled();
+      await maintenance.run(async () => {
+        const exclusion = await prepareOpenClawStateDatabaseRemoval(
+          database.path,
+          owner.assertCurrent,
+        );
+        const prepare = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
+        try {
+          await expect(runs.list()).rejects.toThrow(/admission is closed/);
+          expect(prepare).not.toHaveBeenCalled();
+        } finally {
+          prepare.mockRestore();
+          exclusion.release();
+        }
+      });
     } finally {
-      prepare.mockRestore();
-      exclusion.release();
+      try {
+        await maintenance.close();
+      } finally {
+        owner.release();
+      }
     }
   });
 

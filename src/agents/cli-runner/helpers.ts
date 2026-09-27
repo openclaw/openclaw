@@ -41,7 +41,6 @@ import { buildSystemPromptParams } from "../system-prompt-params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
-/** Re-export CLI reliability helpers used by older runner call sites. */
 export {
   buildCliSupervisorScopeKey,
   resolveCliNoOutputTimeoutMs,
@@ -56,7 +55,6 @@ export function isClaudeCliBackendId(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
 }
 
-/** Enqueues a CLI run under a backend/session key to prevent unsafe overlap. */
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   return CLI_RUN_QUEUE.enqueue(key, task);
 }
@@ -238,16 +236,14 @@ export function resolveSessionIdToSend(params: {
   return { sessionId: crypto.randomUUID(), isNew: true };
 }
 
-/** Routes prompt text to argv or stdin based on backend input policy. */
 export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: string }): {
   argsPrompt?: string;
   stdin?: string;
 } {
-  const inputMode = params.backend.input ?? "arg";
-  if (inputMode === "stdin") {
-    return { stdin: params.prompt };
-  }
-  if (params.backend.maxPromptArgChars && params.prompt.length > params.backend.maxPromptArgChars) {
+  if (
+    params.backend.input === "stdin" ||
+    (params.backend.maxPromptArgChars && params.prompt.length > params.backend.maxPromptArgChars)
+  ) {
     return { stdin: params.prompt };
   }
   return { argsPrompt: params.prompt };
@@ -256,13 +252,6 @@ export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: 
 function resolveCliImageFileName(image: ImageContent): string {
   const ext = extensionForMime(image.mimeType) ?? ".bin";
   return `${sha256Hex(`${image.mimeType}\0${image.data}`)}${ext}`;
-}
-
-function resolveCliImageRoot(params: { backend: CliBackendConfig; workspaceDir: string }): string {
-  if (params.backend.imagePathScope === "workspace") {
-    return path.join(params.workspaceDir, ".openclaw-cli-images");
-  }
-  return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
 }
 
 async function sweepCliImageRoot(imageRoot: string): Promise<void> {
@@ -291,10 +280,10 @@ async function writeCliImages(params: {
   workspaceDir: string;
   images: ImageContent[];
 }): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
-  const imageRoot = resolveCliImageRoot({
-    backend: params.backend,
-    workspaceDir: params.workspaceDir,
-  });
+  const imageRoot =
+    params.backend.imagePathScope === "workspace"
+      ? path.join(params.workspaceDir, ".openclaw-cli-images")
+      : path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
   await fs.mkdir(imageRoot, { recursive: true, mode: 0o700 });
   await sweepCliImageRoot(imageRoot);
   const store = privateFileStore(imageRoot);
@@ -307,11 +296,9 @@ async function writeCliImages(params: {
   }
   // Keep content-addressed image paths stable across Claude CLI runs so prompt
   // text and argv don't churn on every turn with fresh temp-dir suffixes.
-  const cleanup = async () => {};
-  return { paths, cleanup };
+  return { paths, cleanup: async () => {} };
 }
 
-/** Writes a temporary system prompt file when the backend needs file-based prompts. */
 export async function writeCliSystemPromptFile(params: {
   backend: CliBackendConfig;
   systemPrompt: string;
@@ -430,34 +417,27 @@ export function buildCliArgs(params: {
   if (params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
-  if (
-    shouldSendSystemPrompt &&
-    params.systemPrompt &&
-    params.systemPromptFilePath &&
-    params.backend.systemPromptFileArg
-  ) {
-    args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
-  } else if (
-    shouldSendSystemPrompt &&
-    params.systemPrompt &&
-    params.systemPromptFilePath &&
-    params.backend.systemPromptFileConfigKey
-  ) {
-    args.push(
-      params.backend.systemPromptFileConfigArg ?? "-c",
-      formatTomlConfigOverride(
-        params.backend.systemPromptFileConfigKey,
-        params.systemPromptFilePath,
-      ),
-    );
-  } else if (shouldSendSystemPrompt && params.systemPrompt && params.backend.systemPromptArg) {
-    args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
+  if (shouldSendSystemPrompt && params.systemPrompt) {
+    if (params.systemPromptFilePath && params.backend.systemPromptFileArg) {
+      args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
+    } else if (params.systemPromptFilePath && params.backend.systemPromptFileConfigKey) {
+      args.push(
+        params.backend.systemPromptFileConfigArg ?? "-c",
+        formatTomlConfigOverride(
+          params.backend.systemPromptFileConfigKey,
+          params.systemPromptFilePath,
+        ),
+      );
+    } else if (params.backend.systemPromptArg) {
+      args.push(
+        params.backend.systemPromptArg,
+        stripSystemPromptCacheBoundary(params.systemPrompt),
+      );
+    }
   }
   if (!params.useResume && params.sessionId) {
-    if (params.backend.sessionArgs && params.backend.sessionArgs.length > 0) {
-      for (const entry of params.backend.sessionArgs) {
-        args.push(entry.replaceAll("{sessionId}", params.sessionId));
-      }
+    for (const entry of params.backend.sessionArgs ?? []) {
+      args.push(entry.replaceAll("{sessionId}", params.sessionId));
     }
   }
   if (params.useResume && params.forkResume) {
@@ -484,16 +464,13 @@ export function buildCliArgs(params: {
       args.push(params.promptArg);
     }
   }
-  if (params.imagePaths && params.imagePaths.length > 0) {
-    const mode = params.backend.imageMode ?? "repeat";
-    const imageArg = params.backend.imageArg;
-    if (imageArg && imageArg !== "@") {
-      if (mode === "list") {
-        args.push(imageArg, params.imagePaths.join(","));
-      } else {
-        for (const imagePath of params.imagePaths) {
-          args.push(imageArg, imagePath);
-        }
+  const imageArg = params.backend.imageArg;
+  if (params.imagePaths?.length && imageArg && imageArg !== "@") {
+    if (params.backend.imageMode === "list") {
+      args.push(imageArg, params.imagePaths.join(","));
+    } else {
+      for (const imagePath of params.imagePaths) {
+        args.push(imageArg, imagePath);
       }
     }
   }

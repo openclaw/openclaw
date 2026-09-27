@@ -115,6 +115,9 @@ function createCiProbe(
 function ciEnv(probe: string, parallelism: number, repeatSpec = false): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    // Nested groups own their cache slots; a parent cache leaf forces serial admission.
+    OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: "",
+    OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "",
     OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: String(parallelism),
     OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]",
     OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
@@ -147,9 +150,7 @@ it.runIf(process.platform !== "win32").for([
       const directory = workerArtifacts.fixtureDirectory();
       const fixture = createCiProbe(directory);
       const temp = path.join(directory, "tmp");
-      if (!shared) {
-        fs.mkdirSync(temp);
-      }
+      fs.mkdirSync(temp);
       const groupOwner = pathToFileURL(path.join(root, "scripts/vitest-process-group.mts")).href;
       const capability = shared
         ? undefined
@@ -167,8 +168,9 @@ it.runIf(process.platform !== "win32").for([
           );
       const env = {
         ...ciEnv(fixture.probe, parallelism, parallelism === 1),
-        // An intentionally unavailable join capability retains claims inside this fixture.
-        ...(!shared ? { TMPDIR: temp, TMP: temp, TEMP: temp } : {}),
+        TMPDIR: temp,
+        TMP: temp,
+        TEMP: temp,
       };
       const controlled =
         shared && parallelism === 2 ? undefined : createControlledWorkerCompiler(directory, env);
@@ -212,6 +214,9 @@ it.runIf(process.platform !== "win32").for([
         }
         for (const { includeFile } of observations) {
           expect(fs.existsSync(path.dirname(includeFile))).toBe(!shared);
+          if (!shared) {
+            expect(result.stderr).toContain(`[shard:cache] retained ${path.dirname(includeFile)}`);
+          }
         }
       } finally {
         const observations = fs.existsSync(fixture.observationsFile) ? fixture.read() : [];
@@ -260,12 +265,10 @@ it
     const directory = workerArtifacts.fixtureDirectory();
     const fixture = createCiProbe(directory, true, claim === "temporary" ? undefined : claim);
     const env = ciEnv(fixture.probe, 2);
-    if (claim === "temporary") {
-      // Deliberate TMP claims stay inside this fixture, never the enclosing test's owner.
-      const temp = path.join(directory, "tmp");
-      fs.mkdirSync(temp);
-      Object.assign(env, { TMPDIR: temp, TMP: temp, TEMP: temp });
-    }
+    // Deliberate TMP claims stay inside this fixture, never the enclosing test's owner.
+    const temp = path.join(directory, "tmp");
+    fs.mkdirSync(temp);
+    Object.assign(env, { TMPDIR: temp, TMP: temp, TEMP: temp });
     const controlled = createControlledWorkerCompiler(directory, env);
     const running = node(command, root, controlled.env);
     try {

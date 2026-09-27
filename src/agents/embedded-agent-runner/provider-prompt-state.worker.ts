@@ -1,4 +1,7 @@
-import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
+import { prepareProviderPrompt, type ProviderPromptTask } from "./provider-prompt-serialization.js";
 
-serveWorkerTasks((payload) => sha256StableValue(payload));
+// SAFETY: This worker's sole caller is the pool typed with ProviderPromptTask.
+serveWorkerTasks((input) => prepareProviderPrompt(input as ProviderPromptTask), {
+  transferList: (result) => (result.encoded ? [result.encoded.body.buffer] : []),
+});

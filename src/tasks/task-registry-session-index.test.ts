@@ -17,7 +17,6 @@ import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.j
 import {
   findTaskByRunId,
   getTaskById,
-  hasActiveTaskForChildSessionKey,
   listTaskRecordPage,
   listTasksForRelatedSessionKey,
 } from "./task-registry-query.js";
@@ -76,8 +75,6 @@ it("publishes requester membership through create, update, restore, atomic publi
   const task = createTask({});
   const originalKey = task.requesterSessionKey;
   expect(await taskIds({ sessionKey: originalKey })).toEqual([task.taskId]);
-  expect(hasActiveTaskForChildSessionKey({ sessionKey: originalKey })).toBe(false);
-  expect(hasActiveTaskForChildSessionKey({ sessionKey: task.childSessionKey! })).toBe(true);
 
   const store = getTaskRegistryStore();
   configureTaskRegistryRuntime({
@@ -189,7 +186,6 @@ it("preserves owner-or-child ACP generation history when requester candidates ar
   expect(
     await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Map(), () => {}),
   ).toBe("pruned");
-  expect(hasActiveTaskForChildSessionKey({ sessionKey: key })).toBe(false);
 });
 
 function createEqualTimeRunTasks() {
@@ -267,12 +263,13 @@ it.each(["native update", "store readback"] as const)(
 );
 
 it.each(["native update", "atomic publication"] as const)(
-  "indexes the row actually replaced after reentrant activity publication during %s",
+  "indexes the last committed row after reentrant activity publication during %s",
   (writer) => {
     const task = createTask({ runId: "run-before-flush", notifyPolicy: "silent" });
     const completed = { ...task, status: "succeeded" as const, endedAt: Date.now() };
     const store = getTaskRegistryStore();
     let reentered = false;
+    let observerInTransaction: boolean | undefined;
     let observerUpdate: ReturnType<typeof updateTask> | undefined;
     recordTaskActivityEvent(task, {
       runId: task.runId!,
@@ -291,6 +288,7 @@ it.each(["native update", "atomic publication"] as const)(
             event.task.status === "running"
           ) {
             reentered = true;
+            observerInTransaction = openOpenClawStateDatabase().db.isTransaction;
             observerUpdate = updateTask(task.taskId, { runId: "run-from-observer" });
             if (writer === "atomic publication") {
               // The outer publisher resumes with this last committed record after the observer.
@@ -309,14 +307,58 @@ it.each(["native update", "atomic publication"] as const)(
       publishTaskRecordAfterAtomicStore(completed);
     }
     expect(reentered).toBe(true);
+    expect(observerInTransaction).toBe(false);
     expect(observerUpdate).toMatchObject({ runId: "run-from-observer" });
-    expect(findTaskByRunId("run-from-observer")).toBeUndefined();
-    expect(findTaskByRunId(task.runId!)?.taskId).toBe(task.taskId);
-    expect(getTaskById(task.taskId)).toMatchObject({ runId: task.runId, status: "succeeded" });
+    // Native observers run after commit; the atomic publisher resumes after its observer.
+    const [committedRunId, replacedRunId]: [string, string] =
+      writer === "native update"
+        ? ["run-from-observer", task.runId!]
+        : [task.runId!, "run-from-observer"];
+    expect(findTaskByRunId(replacedRunId)).toBeUndefined();
+    expect(findTaskByRunId(committedRunId)?.taskId).toBe(task.taskId);
+    expect(getTaskById(task.taskId)).toMatchObject({ runId: committedRunId, status: "succeeded" });
     expect(store.loadSnapshot().tasks.get(task.taskId)).toMatchObject({
-      runId: task.runId,
+      runId: committedRunId,
       status: "succeeded",
     });
+  },
+);
+
+it.each(["commit", "rollback"] as const)(
+  "keeps a newly created task visible inside its transaction through %s",
+  (outcome) => {
+    const onEvent = vi.fn();
+    configureTaskRegistryRuntime({ observers: { onEvent } });
+    const failure = new Error("Synthetic creation rollback");
+    let taskId: string | undefined;
+    const write = () =>
+      runOpenClawStateWriteTransaction(() => {
+        const task = createTask({ runId: "run-created-in-transaction" });
+        taskId = task.taskId;
+        expect(findTaskByRunId(task.runId!)?.taskId).toBe(taskId);
+        expect(updateTask(taskId, { status: "succeeded" })).toMatchObject({ status: "succeeded" });
+        expect(getTaskById(taskId)?.status).toBe("succeeded");
+        expect(onEvent).not.toHaveBeenCalled();
+        if (outcome === "rollback") {
+          throw failure;
+        }
+      });
+    if (outcome === "rollback") {
+      expect(write).toThrow(failure);
+      expect(findTaskByRunId("run-created-in-transaction")).toBeUndefined();
+      expect(getTaskRegistryStore().loadSnapshot().tasks.has(taskId!)).toBe(false);
+      expect(onEvent).not.toHaveBeenCalled();
+    } else {
+      write();
+      expect(findTaskByRunId("run-created-in-transaction")).toMatchObject({
+        taskId,
+        status: "succeeded",
+      });
+      expect(getTaskRegistryStore().loadSnapshot().tasks.get(taskId!)).toMatchObject({
+        status: "succeeded",
+      });
+      expect(onEvent).toHaveBeenCalled();
+    }
   },
 );
 
