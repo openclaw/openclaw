@@ -506,6 +506,33 @@ describe("native app i18n inventory", () => {
     ]);
   });
 
+  it("extracts shared auth problem copy without translating commands or URLs", () => {
+    const entries = collectNativeI18nEntriesFromSources([
+      {
+        surface: "apple",
+        repoPath: "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectionProblem.swift",
+        source: `
+          AuthProblemDefaults(
+            kind: .bootstrapTokenInvalid,
+            owner: .iphone,
+            title: "Setup code no longer valid",
+            message: "Get a fresh setup code from the Gateway owner.",
+            actionLabel: "Scan QR again",
+            actionCommand: "openclaw devices list",
+            docsURLString: "https://docs.openclaw.ai/platforms/ios",
+            retryable: false,
+            pauseReconnect: true)
+        `,
+      },
+    ]);
+
+    expect(entries.map((entry) => entry.source)).toEqual([
+      "Get a fresh setup code from the Gateway owner.",
+      "Scan QR again",
+      "Setup code no longer valid",
+    ]);
+  });
+
   it("collects stable Android and Apple UI entries", async () => {
     const entries = await collectNativeI18nEntries();
     const surfaces = new Set(entries.map((entry) => entry.surface));

@@ -521,7 +521,6 @@ extensions/lmstudio/src/models.ts	2
 extensions/lmstudio/src/stream.ts	3
 extensions/lobster/index.ts	2
 extensions/lobster/src/lobster-runner.ts	4
-extensions/lobster/src/lobster-tool.ts	1
 extensions/logbook/index.ts	5
 extensions/logbook/src/analyze.ts	8
 extensions/logbook/src/config.ts	1
@@ -1686,7 +1685,6 @@ src/agents/subagents/announce/subagent-announce-completion-delivery.ts	2
 src/agents/subagents/announce/subagent-announce-delivery-retry.ts	2
 src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/announce/subagent-announce-output.ts	6
-src/agents/subagents/completion/subagent-completion-admission.store.ts	2
 src/agents/subagents/registry/subagent-recovery-state.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry-restore.ts	1
@@ -1758,7 +1756,7 @@ src/agents/tools/sessions-tool.ts	1
 src/agents/tools/sessions-yield-tool.ts	1
 src/agents/tools/skill-workshop-tool-helpers.ts	3
 src/agents/tools/structured-output-tool.ts	2
-src/agents/tools/subagents-tool.ts	2
+src/agents/tools/subagents-tool.ts	1
 src/agents/tools/system-agent-tool.ts	1
 src/agents/tools/task-suggestion-tools.ts	2
 src/agents/tools/terminal-tool.ts	1
@@ -3058,7 +3056,6 @@ src/state/openclaw-schema-versions.ts	7
 src/state/openclaw-state-db-audit-migration.ts	5
 src/state/openclaw-state-db-delivery-queue-backfill.ts	1
 src/state/openclaw-state-db-legacy-backfills.ts	5
-src/state/openclaw-state-db-maintenance.ts	3
 src/state/openclaw-state-db-operator-approval-migration.ts	1
 src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	3
@@ -3087,16 +3084,6 @@ src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2
 src/talk/provider-resolver.ts	1
 src/talk/turn-context-tracker.ts	2
-src/tasks/agent-harness-task-runtime-scope.ts	1
-src/tasks/generated-media-task-activity.ts	1
-src/tasks/task-flow-registry.store.ts	1
-src/tasks/task-flow-registry.ts	1
-src/tasks/task-flow-registry.types.ts	2
-src/tasks/task-registry.process-state.ts	1
-src/tasks/task-registry.sqlite.shared.ts	1
-src/tasks/task-registry.ts	1
-src/tasks/task-registry.types.ts	2
-src/tasks/task-status.ts	1
 src/trajectory/export.ts	14
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	4
@@ -3309,7 +3296,6 @@ ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-message-bubble.ts	1
 ui/src/pages/chat/components/chat-message-confirmation.ts	2
-ui/src/pages/chat/components/chat-message-media.ts	1
 ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker.ts	4
 ui/src/pages/chat/components/chat-pane-header.ts	2

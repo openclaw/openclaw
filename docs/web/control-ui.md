@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Browser-based control UI for the Gateway (chat, activity, nodes, config)"
 read_when:
   - You want to operate the Gateway from a browser
@@ -25,7 +26,7 @@ If the Gateway's request queue is full, automatic sidebar session discovery keep
 
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
 
-The selected chat loads before automatic sidebar task lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
+The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
 
 Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
@@ -66,15 +67,10 @@ When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
 Approval blocks and tool failures keep their separate outcomes.
 
-Subagent runs appear in inline transcript activity rows and the chat **Tasks** tab,
-outside sidebar navigation. Use the [Tasks CLI](/cli/tasks) to inspect work across conversations.
-Their activity rows lead with the child task's display title, using its configured
-`label` when present, followed by the latest activity. The leading claw moves only
-while running; queued and cancelled tasks stay still, and completion briefly turns
-the claw green. Failed tasks have a warning badge and timed-out tasks a clock badge.
-Hover the row or focus it with the keyboard for a tooltip explaining the exact
-status. Reduced motion keeps the claw still. Tasks without a display title keep
-the generic **Subagent** label. Select a row to open its details.
+Subagent runs appear in their session transcripts, outside sidebar navigation.
+Inspect them from the parent conversation with `/subagents list`,
+`/subagents info <id|#>`, and `/subagents log <id|#>`. Opening a child transcript
+is view-only; continue the conversation in its parent session.
 
 The **running tasks** indicator previews only active background tasks (running or
 queued). Its tooltip shows up to five tasks, with an overflow count for additional

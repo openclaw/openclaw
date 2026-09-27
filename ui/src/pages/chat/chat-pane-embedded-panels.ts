@@ -11,7 +11,6 @@ import { icons } from "../../components/icons.ts";
 import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
-import { registerBackgroundTasksEnglish } from "../../i18n/locales/en-background-tasks.ts";
 import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -39,7 +38,6 @@ import type { SessionDiscussionPanelConfig } from "./components/session-discussi
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
 
-registerBackgroundTasksEnglish();
 registerFilePreviewEnglish();
 
 type SidebarPanelDefinitionParams = {
@@ -66,7 +64,6 @@ type SidebarPanelDefinitionParams = {
   ) => void;
   dashboard: TemplateResult | typeof nothing;
   workspace: TemplateResult | typeof nothing;
-  tasks: TemplateResult | typeof nothing;
   renderDetail: (content: SidebarContent) => TemplateResult;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;
@@ -82,8 +79,6 @@ type SidebarPanelDefinitionParams = {
   onCompanionVisibilityChange: (visible: boolean) => void;
   connected: boolean;
   onClearCompanion: () => void;
-  onRefreshTasks: () => void;
-  tasksLoading: boolean;
   discussion: SessionDiscussionPanelConfig | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;
@@ -334,29 +329,6 @@ export function sidebarPanelDefinitions(
               @click=${params.onClearCompanion}
             >
               ${icons.trash}
-            </button>
-          </openclaw-tooltip>`
-        : undefined,
-    ),
-    definePanel(
-      "tasks",
-      "tasks",
-      icons.listChecks,
-      params?.tasks ?? null,
-      params
-        ? html`<openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
-            <button
-              class="rail-header__action chat-tasks-rail__refresh"
-              type="button"
-              aria-label=${t("chat.backgroundTasks.refresh")}
-              ?disabled=${!params.connected || params.tasksLoading}
-              @click=${params.onRefreshTasks}
-            >
-              ${
-                params.tasksLoading
-                  ? html`<span class="btn__spinner" aria-hidden="true"></span>`
-                  : icons.refresh
-              }
             </button>
           </openclaw-tooltip>`
         : undefined,

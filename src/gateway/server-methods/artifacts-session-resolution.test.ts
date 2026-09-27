@@ -17,12 +17,7 @@ import {
 import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  getTaskSession: vi.fn(),
   resolveRunSession: vi.fn(),
-}));
-
-vi.mock("../../tasks/task-registry-read.js", () => ({
-  prepareTaskRegistryRead: async () => ({ getTaskById: mocks.getTaskSession }),
 }));
 
 vi.mock("../server-session-key.js", () => ({
@@ -98,11 +93,6 @@ describe("artifact session authorization", () => {
           visibility: "shared",
         },
       );
-      mocks.getTaskSession.mockReturnValue({
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        ownerKey: sessionKey,
-      });
       mocks.resolveRunSession.mockReturnValue(sessionKey);
       const viewer = identifiedClient(["operator.read"]);
 
@@ -113,7 +103,7 @@ describe("artifact session authorization", () => {
           viewer,
         ),
       ).rejects.toThrow('Incognito session "dashboard:incognito-artifacts" was not found.');
-      for (const query of [{ taskId: "task-private" }, { runId: "run-private" }]) {
+      for (const query of [{ runId: "run-private" }]) {
         try {
           await resolveSession(query, () => cfg, viewer);
           throw new Error("expected incognito artifact selector to be denied");
@@ -152,7 +142,7 @@ describe("artifact session authorization", () => {
       role: "write",
     },
   ] as const)(
-    "hides $name artifacts behind direct, run, and task selectors",
+    "hides $name artifacts behind direct and run selectors",
     async ({ visibility, cfg, role }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const viewerProfile = ensureProfileForEmail("viewer@example.com");
@@ -167,26 +157,12 @@ describe("artifact session authorization", () => {
             visibility,
           },
         );
-        mocks.getTaskSession.mockImplementation((taskId: string) =>
-          taskId === "task-run"
-            ? { runId: "run-foreign", agentId: "main" }
-            : {
-                requesterSessionKey: sessionKey,
-                requesterAgentId: "main",
-                ownerKey: sessionKey,
-              },
-        );
         mocks.resolveRunSession.mockReturnValue(sessionKey);
         const viewer = role
           ? roleClient(role, "artifact-viewer")
           : identifiedClient(["operator.read"], viewerProfile.id);
 
-        for (const query of [
-          { sessionKey },
-          { runId: "run-foreign" },
-          { taskId: "task-foreign" },
-          { taskId: "task-run" },
-        ]) {
+        for (const query of [{ sessionKey }, { runId: "run-foreign" }]) {
           await expect(resolveSession(query, () => cfg, viewer)).rejects.toThrowError(
             expect.objectContaining({
               shape: {

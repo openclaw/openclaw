@@ -1,5 +1,5 @@
 // Artifact gateway methods collect generated artifacts from session transcripts
-// and expose list/get/download RPCs scoped by session, run, task, or agent.
+// and expose list/get/download RPCs scoped by session, run, or agent.
 import {
   ErrorCodes,
   errorShape,
@@ -89,7 +89,7 @@ function artifactError(type: string, message: string, details?: Record<string, u
   });
 }
 
-/** Loads artifacts from the transcript selected by sessionKey, runId, or taskId. */
+/** Loads artifacts from the transcript selected by sessionKey or runId. */
 async function loadArtifacts(
   query: ArtifactsListParams,
   getRuntimeConfig: () => OpenClawConfig | undefined,
@@ -121,14 +121,13 @@ async function loadArtifacts(
         scope.agentId,
         sessionId,
         query.runId,
-        query.taskId,
         query.messageRole,
       ]),
       client,
       cursor: query.cursor,
       limit: query.limit ?? 4,
       sessionKey,
-      filters: { runId: query.runId, taskId: query.taskId, messageRole: query.messageRole },
+      filters: { runId: query.runId, messageRole: query.messageRole },
     });
     assertCurrent();
     return { ...page, sessionKey, assertCurrent };
@@ -143,7 +142,6 @@ async function loadArtifacts(
           sessionId,
           entry?.lifecycleRevision,
           query.runId,
-          query.taskId,
           query.messageRole,
           readSessionTranscriptUpdateVersion(),
         ])
@@ -165,7 +163,6 @@ async function loadArtifacts(
       kind: "list",
       sessionKey,
       runId: query.runId,
-      taskId: query.taskId,
       messageRole: query.messageRole,
       includeDownloadData: opts.includeDownloadData,
       downloadArtifactIds: downloadIds ? [...downloadIds] : undefined,
@@ -183,16 +180,13 @@ async function loadArtifacts(
 }
 
 function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
-  if (params.sessionKey || params.runId || params.taskId) {
+  if (params.sessionKey || params.runId) {
     return true;
   }
   respond(
     false,
     undefined,
-    artifactError(
-      "artifact_query_unsupported",
-      "artifacts require one of sessionKey, runId, or taskId",
-    ),
+    artifactError("artifact_query_unsupported", "artifacts require sessionKey or runId"),
   );
   return false;
 }
@@ -311,7 +305,6 @@ async function respondManagedArtifactDownload(
         ...(managed.sizeBytes !== undefined ? { sizeBytes: managed.sizeBytes } : {}),
         sessionKey: managed.sessionKey,
         ...(matched?.runId ? { runId: matched.runId } : {}),
-        ...(matched?.taskId ? { taskId: matched.taskId } : {}),
         ...(matched?.messageSeq !== undefined ? { messageSeq: matched.messageSeq } : {}),
         source: "session-transcript",
         download: { mode: "url" as const },
@@ -349,7 +342,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       return;
     }
     const { artifacts, sessionKey, nextCursor, omittedOversized } = loaded.value;
-    if (!sessionKey && (query.runId || query.taskId)) {
+    if (!sessionKey && query.runId) {
       respond(
         false,
         undefined,
@@ -404,7 +397,6 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (
       query.sessionKey &&
       !query.runId &&
-      !query.taskId &&
       !query.messageRole &&
       parseManagedOutgoingArtifactId(query.artifactId)
     ) {

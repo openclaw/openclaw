@@ -40,7 +40,6 @@ const WEB_PUSH_CATEGORIES = [
   ["agentQuestion", () => t("configView.notifications.agentQuestion")],
   ["humanMentioned", () => t("configView.notifications.humanMentioned")],
   ["scheduledTaskFailed", () => t("configView.notifications.scheduledTaskFailed")],
-  ["backgroundTaskFailed", () => t("configView.notifications.backgroundTaskFailed")],
 ] as const;
 
 function minutesToTime(value: number): string {

@@ -1,4 +1,3 @@
-import type { Result } from "@openclaw/normalization-core/result";
 import type { AgentWaitResult } from "../../run-wait.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
@@ -28,20 +27,6 @@ export type FollowupSuccessor = {
 };
 
 export type FollowupSettlement = { kind: "yielded" } | { kind: "terminal"; reply: FollowupReply };
-export type FollowupCancellation =
-  | { kind: "settled" }
-  | {
-      kind: "terminal";
-      runId: string;
-      reply: FollowupReply;
-      /** Guard the pending projection write without revoking an already committed result. */
-      assertCurrent: () => void;
-    };
-export type FollowupExecution = {
-  assertCurrent(): void;
-  cancel?: (reason: string, assertCallerCurrent: () => void) => Promise<Result<void, string>>;
-};
-
 /** Logical result custody outlives each physical execution and its projections. */
 export interface FollowupCompletionOwner {
   readonly request: FollowupRequest;
@@ -51,11 +36,7 @@ export interface FollowupCompletionOwner {
   markAccepted(runId: string): void;
   finishExecution(runId: string): void;
   ownsExecution(runId: string): boolean;
-  activate(runId: string, execution: FollowupExecution): Promise<() => void>;
-  cancel(
-    reason: string,
-    assertCallerCurrent: () => void,
-  ): Promise<Result<FollowupCancellation, string>>;
+  assertExecutionCurrent(runId: string): void;
   promoteYield(runId: string, entries: readonly SubagentRunRecord[], generation: number): void;
   successor(
     entries: readonly SubagentRunRecord[],

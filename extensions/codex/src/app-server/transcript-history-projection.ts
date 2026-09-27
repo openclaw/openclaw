@@ -5,10 +5,8 @@ import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readCodexAsyncQuestions } from "./async-questions.js";
-import { auditNativeToolName, itemName, itemStatus } from "./event-projector-items.js";
 import { codexProviderRefusalDetails, readCodexProviderRefusal } from "./event-projector-values.js";
 import type { CodexThread, CodexTurn, JsonValue } from "./protocol.js";
-import type { CodexHistoryItemEntry } from "./thread-history-page.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 const CODEX_HISTORY_IMPORT_MAX_MESSAGES = 200;
@@ -378,88 +376,4 @@ export function projectBoundedCodexVisibleSessionHistory(
     projected.push(projectCodexHistoryMessage(message, text));
   }
   return selectBoundedCodexHistoryTail(projected).map(({ responseItem }) => responseItem);
-}
-
-/** Displays native items through the shared transcript roles, including an unfinished turn. */
-export function projectCodexThreadHistoryItem(
-  thread: CodexThread,
-  entry: CodexHistoryItemEntry,
-  // Catalog registration shares this module; only the lazy history reader loads tool runtime.
-  toolItems: Pick<
-    typeof import("./event-projector-tool-items.js"),
-    "itemToolArgs" | "itemTranscriptResultText"
-  >,
-): AgentMessage[] {
-  const { item } = entry;
-  const timestamp = (entry.turn?.startedAt ?? thread.createdAt ?? 0) * 1000;
-  if (item.type === "userMessage" || item.type === "agentMessage") {
-    return projectCodexThreadHistory({
-      thread,
-      turns: [{ ...entry.turn, id: entry.turnId, items: [item] }],
-      importedAt: timestamp,
-    }).map(({ message }) => message);
-  }
-  const identity = `${entry.turnId}:${item.id}`;
-  const assistant = (content: AssistantMessage["content"], toolUse = false): AssistantMessage =>
-    attachCodexMirrorIdentity(
-      {
-        role: "assistant",
-        content,
-        api: CODEX_HISTORY_ASSISTANT_API,
-        provider: normalizeOptionalString(thread.modelProvider) ?? CODEX_HISTORY_ASSISTANT_PROVIDER,
-        model: CODEX_HISTORY_ASSISTANT_MODEL,
-        usage: CODEX_HISTORY_ZERO_USAGE,
-        stopReason: toolUse ? "toolUse" : "stop",
-        timestamp,
-      },
-      identity,
-    );
-  if (item.type === "reasoning") {
-    const parts =
-      Array.isArray(item.summary) && item.summary.length > 0 ? item.summary : item.content;
-    const thinking = normalizeImportedHistoryText(
-      Array.isArray(parts)
-        ? parts.filter((part) => typeof part === "string").join("\n")
-        : item.text,
-    );
-    return thinking ? [assistant([{ type: "thinking", thinking }])] : [];
-  }
-  if (item.type === "contextCompaction") {
-    return [assistant([{ type: "text", text: "Context compacted." }])];
-  }
-  const toolName = itemName(item) ?? auditNativeToolName(item);
-  if (!toolName) {
-    const text = normalizeImportedHistoryText(item.text ?? item.title);
-    return text ? [assistant([{ type: "text", text }])] : [];
-  }
-  const messages: AgentMessage[] = [
-    assistant(
-      [
-        {
-          type: "toolCall",
-          id: item.id,
-          name: toolName,
-          arguments: toolItems.itemToolArgs(item) ?? {},
-        },
-      ],
-      true,
-    ),
-  ];
-  const status = itemStatus(item);
-  if (status !== "running") {
-    messages.push(
-      attachCodexMirrorIdentity(
-        {
-          role: "toolResult",
-          toolCallId: item.id,
-          toolName,
-          content: [{ type: "text", text: toolItems.itemTranscriptResultText(item) ?? status }],
-          isError: status === "failed" || status === "blocked",
-          timestamp,
-        },
-        `${identity}:result`,
-      ),
-    );
-  }
-  return messages;
 }

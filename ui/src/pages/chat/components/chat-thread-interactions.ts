@@ -41,7 +41,6 @@ import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
-import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
 import { isConfirmedActionPopoverFocused } from "./chat-message-confirmation.ts";
@@ -196,7 +195,6 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onOpenSession?: (sessionKey: string) => void;
   modelSetupRequired?: boolean;
   onModelSetup?: () => void;
-  backgroundTasks?: BackgroundTasksProps;
 };
 
 type TranscriptInteractionProps = Pick<

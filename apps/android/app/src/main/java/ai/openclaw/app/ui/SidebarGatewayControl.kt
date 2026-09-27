@@ -94,7 +94,7 @@ internal fun SidebarGatewayControl(
     onDispose { opening?.revoke() }
   }
   LaunchedEffect(entries.size) { if (entries.size <= 1) dismiss() }
-  val label = if (entries.isEmpty()) nativeString("Add Gateway") else focused?.name ?: nativeString("Gateways")
+  val label = if (entries.isEmpty()) nativeString("Add Gateway") else focused?.displayName ?: nativeString("Gateways")
   Row(
     modifier =
       Modifier
@@ -164,13 +164,6 @@ internal fun SidebarGatewayControl(
 
 private fun savedGatewayCount(count: Int): String = if (count == 1) nativeString("1 gateway") else nativeString("\$count gateways", count)
 
-private fun gatewayPickerAddress(entry: GatewayRegistryEntry): String {
-  val host = entry.host ?: return entry.stableId
-  val address = if (host.contains(':') && !host.startsWith('[')) "[$host]" else host
-  val port = entry.port?.let { ":$it" }.orEmpty()
-  return "${if (entry.tls) "wss" else "ws"}://$address$port${entry.contextPath}"
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun GatewayPickerSheet(
@@ -188,7 +181,7 @@ private fun GatewayPickerSheet(
   var query by rememberSaveable { mutableStateOf("") }
   val showSearch = entries.size > 4
   val filter = if (showSearch) query.trim() else ""
-  val visible = entries.filter { it.name.contains(filter, ignoreCase = true) || gatewayPickerAddress(it).contains(filter, ignoreCase = true) }
+  val visible = entries.filter { it.displayName.contains(filter, ignoreCase = true) || it.address.contains(filter, ignoreCase = true) }
   val density = LocalDensity.current
   // Match the sidebar exactly, including themes whose canvas equals Material surface.
   // Surface also adds inherited tonal elevation, so zero elevation alone is insufficient.
@@ -295,8 +288,8 @@ private fun GatewayPickerSheet(
                 ) {
                   Icon(Icons.Outlined.Storage, contentDescription = null, tint = palette.muted, modifier = Modifier.size(20.dp))
                   Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(entry.name, style = ClawTheme.type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(gatewayPickerAddress(entry), style = ClawTheme.type.caption, color = palette.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(entry.displayName, style = ClawTheme.type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(entry.address, style = ClawTheme.type.caption, color = palette.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (selected) {
                       GatewayStatus(connection, palette)
                     }

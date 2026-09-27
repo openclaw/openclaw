@@ -433,11 +433,11 @@ it(
               batch.map((member) => member.runId),
             );
           },
-          completeBatch: (batch, _generation, outcome, onCommitted) => {
+          completeBatch: async (batch, _generation, outcome, onCommitted) => {
             if (!outcome) {
               throw new Error("Saved batch did not produce a delivery outcome");
             }
-            settleRequesterCompletionBatch({
+            await settleRequesterCompletionBatch({
               entries: batch.map((subagent) => ({ subagent })),
               outcome,
               isCurrent: () => batch.every((member) => subagentRuns.get(member.runId) === member),

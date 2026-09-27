@@ -7,8 +7,8 @@ import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type {
-  SubagentRunReadRecord,
   SubagentCompletionDeliveryState,
+  SubagentRunReadRecord,
 } from "./subagent-registry-read.types.js";
 
 export type SubagentCompletionRequest = {

@@ -42,13 +42,6 @@ import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinki
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
-import { readTaskStatusSnapshots } from "../tasks/task-status-access.js";
-import {
-  type buildTaskStatusSnapshot,
-  formatTaskStatus,
-  formatTaskStatusDetail,
-  formatTaskStatusTitle,
-} from "../tasks/task-status.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
@@ -171,26 +164,6 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
   }
 }
 
-function formatSessionTaskLine(
-  snapshot: ReturnType<typeof buildTaskStatusSnapshot>,
-): string | undefined {
-  const task = snapshot.focus;
-  if (!task) {
-    return undefined;
-  }
-  const headline =
-    snapshot.activeCount > 0
-      ? `${snapshot.activeCount} active · ${snapshot.totalCount} total`
-      : snapshot.recentFailureCount > 0
-        ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
-        : "recently finished";
-  const title = formatTaskStatusTitle(task);
-  const detail = formatTaskStatusDetail(task);
-  const blocked = formatTaskStatus(task) === "blocked" ? "blocked" : undefined;
-  const parts = [headline, blocked, task.runtime, title, detail].filter(Boolean);
-  return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
-}
-
 async function resolveStatusHarnessId(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -256,15 +229,6 @@ function resolveStatusRuntimeProvider(params: {
     return "claude-cli";
   }
   return params.provider;
-}
-
-function formatAgentTaskCountsLine(
-  snapshot: ReturnType<typeof buildTaskStatusSnapshot> | undefined,
-): string | undefined {
-  if (!snapshot || snapshot.totalCount === 0) {
-    return undefined;
-  }
-  return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
 }
 
 async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
@@ -512,22 +476,9 @@ export async function buildStatusReplyParts(
   );
 
   let subagentsLine: string | undefined;
-  let taskLine: string | undefined;
   if (sessionKey) {
     const { mainKey, alias } = resolveMainSessionAlias(cfg);
     const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
-    // Task/subagent status should follow the internal session key alias used by
-    // runtime registries, not necessarily the external key passed to the command.
-    taskLine = params.taskLineOverride;
-    if (!params.skipDefaultTaskLookup && !taskLine) {
-      const snapshots = await readTaskStatusSnapshots({
-        sessionKey: taskLine === undefined ? requesterKey : undefined,
-        agentId: statusAgentId,
-      });
-      snapshots.assertCurrent();
-      taskLine ??= formatSessionTaskLine(snapshots.session);
-      taskLine ||= formatAgentTaskCountsLine(snapshots.agent);
-    }
     const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
     const subagentReadContext = await buildControlledSubagentRunsReadContext(
@@ -692,7 +643,6 @@ export async function buildStatusReplyParts(
       showDetails: queueOverrides,
     },
     subagentsLine,
-    taskLine,
     pluginHealthLine,
     channelFeatureLine,
     mediaDecisions: params.mediaDecisions,

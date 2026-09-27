@@ -103,8 +103,9 @@ export function registerAgentRunSequenceResetHandler(handler: (runId: string) =>
 }
 
 function storeRunContext(runId: string, context: AgentRunContext, predecessor?: AgentRunContext) {
-  // Callers supply a fresh record; scheduler leases never transfer with its metadata.
+  // Scheduler leases and observed activity never transfer to a fresh registration.
   context.capacityWaits = undefined;
+  context.executionActivity = undefined;
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);
@@ -540,6 +541,17 @@ export function hasAgentRunContextExecutionOwner(runId: string): boolean {
     (owners?.lifecycleGeneration === state.lifecycleGeneration && owners.claimIds.size > 0) ||
     (state.queuedRunContextLeases?.get(context) ?? 0) > 0
   );
+}
+
+/** Counts admitted executions, excluding retained display-only context. */
+export function getActiveAgentRunContextCount(): number {
+  let count = 0;
+  for (const runId of getAgentRunRegistryState().contexts.keys()) {
+    if (hasAgentRunContextExecutionOwner(runId)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /** Live display projection also includes a producer's active-session marker. */

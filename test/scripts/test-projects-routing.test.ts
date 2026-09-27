@@ -259,11 +259,6 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.infra.config.ts",
     },
     {
-      title: "routes the worker-backed task registry to the infra config",
-      target: "src/tasks/task-registry.test.ts",
-      config: "test/vitest/vitest.infra.config.ts",
-    },
-    {
       title: "routes disk-budget worker lifecycle fixtures to the isolated infra owner",
       target: "src/config/sessions/disk-budget.physical-usage.test.ts",
       config: "test/vitest/vitest.infra.config.ts",

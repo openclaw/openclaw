@@ -26,6 +26,10 @@ const baselineGatewayLogs = [
   "missing-load-path/baseline-gateway-convergence-refusal.log",
 ];
 const cronCliLogs = [
+  "legacy-operator-add-survivor-default-owner.out",
+  "legacy-operator-add-survivor-default-owner.err",
+  "legacy-operator-add-survivor-ops-owner.out",
+  "legacy-operator-add-survivor-ops-owner.err",
   ...["default", "ops"].flatMap((owner) =>
     ["out", "err"].map((extension) => `legacy-operator-run-survivor-${owner}-owner.${extension}`),
   ),
@@ -33,6 +37,12 @@ const cronCliLogs = [
   "legacy-operator-post-update-transcript-0.err",
   "legacy-operator-candidate-transcript-1-earlier.out",
   "legacy-operator-candidate-transcript-1-earlier.err",
+];
+const nativeRecoveryLogs = [
+  "native-recover.out",
+  "native-recover.err",
+  "native-recover-wait.out",
+  "native-recover-wait.err",
 ];
 const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
@@ -512,7 +522,7 @@ it.each(["input", "output", "entries", "symlink", "directory-symlink", "malforme
   },
 );
 
-it("publishes bounded and redacted Gateway, Cron run, agent-turn, and update no-op failures", () => {
+it("publishes bounded and redacted Gateway, Cron, native recovery, and update failures", () => {
   const f = fixture();
   write(path.join(f.artifacts, "update-noop.json"), {
     status: "error",
@@ -543,7 +553,34 @@ it("publishes bounded and redacted Gateway, Cron run, agent-turn, and update no-
       `Agent ${stage} turn ended before completion: apiKey=${secret}\n`,
     );
   }
+  for (const name of nativeRecoveryLogs) {
+    write(path.join(f.artifacts, name), {
+      runId: "native-recovery-probe",
+      status: "error",
+      error: `Native resume failed: token=${secret}`,
+    });
+  }
+  fs.writeFileSync(
+    path.join(f.artifacts, "native-assignment-messages.jsonl"),
+    JSON.stringify({ phase: "seed-history", marker: "EARLY_NATIVE_SEED" }) +
+      "\n" +
+      (JSON.stringify({ phase: "seed-history", direction: "response" }) + "\n").repeat(1000) +
+      JSON.stringify({ phase: "recover", error: `Native RPC rejected: token=${secret}` }) +
+      "\n",
+  );
   const report = capture(f);
+  for (const name of nativeRecoveryLogs) {
+    expect(report.logs[name]).toContain("native-recovery-probe");
+    expect(JSON.parse(report.logs[name])).toMatchObject({
+      runId: "native-recovery-probe",
+      status: "error",
+    });
+  }
+  expect(report.logs["native-assignment-messages.jsonl"]).toContain('"phase":"recover"');
+  expect(report.logs["native-assignment-messages.jsonl"]).not.toContain("EARLY_NATIVE_SEED");
+  expect(
+    Buffer.byteLength(JSON.stringify(report.logs["native-assignment-messages.jsonl"])),
+  ).toBeLessThanOrEqual(16 * 1024);
   expect(JSON.parse(report.logs["update-noop.json"])).toMatchObject({
     status: "error",
     reason: "second update failed",
@@ -930,6 +967,7 @@ it("does not reuse sibling or startup observations when an attempt fails before 
     "update-noop.err",
     ...turnLogs,
     ...cronCliLogs,
+    ...nativeRecoveryLogs,
     ...baselineGatewayLogs,
     "sibling-refusal-update.json",
     "sibling-refusal-status.json",

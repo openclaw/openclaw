@@ -16,7 +16,7 @@ Heartbeat is a system-owned automation that runs **periodic agent turns** in the
 main session so the model can surface anything that needs attention without
 spamming you.
 
-Heartbeat is a scheduled main-session turn - it does **not** create [background task](/automation/tasks) records. Task records are for detached work (ACP runs, subagents, isolated automation jobs).
+Heartbeat is a scheduled main-session turn. ACP runs, subagents, and isolated automation jobs use their own execution owners.
 
 Under the hood, heartbeat cadence is owned by the Automations scheduler: the gateway maintains one system-owned automation job per heartbeat-enabled agent (visible in `openclaw cron list --all` as `Heartbeat (agent-id)`). Heartbeat config remains the desired-state input, while the persisted monitor schedule owns the actual tick and the runner's later cooldown. The gateway writes config changes through at startup and on config reload. `openclaw doctor --fix` can materialize missing or stale monitor rows before the next gateway start. Edit `agents.*.heartbeat`, not the automation job. If saving monitor rows fails after a config change is accepted, the Gateway keeps the accepted config and reports that recovery is required. Monitor retries use the current accepted config. Rejected changes never become retry targets.
 
@@ -123,7 +123,7 @@ Proactive heartbeat behavior is opt-in:
   night-time pings in your configured local timezone (see
   [Timezone](/concepts/timezone)).
 
-Heartbeat can react to completed [background tasks](/automation/tasks), but a heartbeat run itself does not create a task record.
+Heartbeat can react to completion events from background execution.
 
 If you want a heartbeat to do something very specific (e.g. "check Gmail PubSub stats" or "verify gateway health"), set `agents.defaults.heartbeat.prompt` (or `agents.entries.*.heartbeat.prompt`) to a custom body (sent verbatim).
 
@@ -361,7 +361,7 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
   <Accordion title="Session lifecycle and audit">
     - Heartbeat-only replies do **not** keep the session alive. Heartbeat metadata may update the session row, but idle expiry uses `lastInteractionAt` from the last real user/channel message, and daily expiry uses `sessionStartedAt`.
     - Control UI and WebChat history hide heartbeat prompts and OK-only acknowledgments. The underlying session transcript can still contain those turns for audit/replay.
-    - Detached [background tasks](/automation/tasks) can enqueue a system event and wake heartbeat when the main session should notice something quickly. That wake does not make the heartbeat run a background task.
+    - Background execution can enqueue a system event and wake heartbeat when the main session should notice something quickly.
 
   </Accordion>
 </AccordionGroup>
@@ -549,6 +549,5 @@ To avoid this, use `isolatedSession: true` to run heartbeats in a fresh session.
 ## Related
 
 - [Automation](/automation) - all automation mechanisms at a glance
-- [Background Tasks](/automation/tasks) - how detached work is tracked
 - [Timezone](/concepts/timezone) - how timezone affects heartbeat scheduling
 - [Troubleshooting](/automation/cron-jobs#troubleshooting) - debugging automation issues
