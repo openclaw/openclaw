@@ -37,9 +37,12 @@ Plugin requirement batches prepare their final installed index through the exist
 metadata worker after installation and compensation settle. Preparation seals
 collection, reads an uncached row from the captured database, and retains the
 original lifecycle lease until the read settles. It rechecks lease ownership and
-batch closure before publishing runtime targets. Synchronous lease primitives and
-repeated source-cleanup reads remain unchanged migration work; this one-shot
-preparation does not replace their fresh authority checks.
+batch closure before publishing runtime targets. After runtime handoff, source
+cleanup reacquires the plugin lease and prepares a fresh index through that worker.
+The index stays scoped to the cleanup lease, which excludes its canonical writers
+until deletion settles. Config policy, source identity, and durable lease checks
+remain fresh at each existing effect guard; the captured index is not a retained
+permission to delete. Stored formats and update behavior are unchanged.
 
 Registry refresh, Doctor repair, and legacy index import hold that same plugin
 lease before reading or deriving replacement rows. Startup acquires plugin
@@ -104,6 +107,13 @@ The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
 provides the typed single-command `execute` method.
 
+Agent registration invalidates discovery when a missing store enters creating
+admission or an existing store begins its actual registration transaction. A
+validated native reopen leaves discovery snapshots current. The host rechecks
+the source after each notification and settles attempted registration even when
+its commit receipt is unavailable; committed topology publication retains the
+original shared-state generation.
+
 ## Carry facts, publish after commit
 
 Proxy capture sessions, events, payload compression, queries, and purge operations
@@ -143,8 +153,10 @@ inspection retains its existing-only, noncreating opener inside the broker.
 Only diagnostic failed health, pressure, and account discovery use the read-only
 worker. Channel callbacks retain payload and lane policy on the
 Gateway thread; the writer compares the prepared ordered rows before claiming
-and rejects stale recovery decisions. A conflicting claim snapshot is prepared
-again; an uncertain write is never replayed. Database admission and commit remain
+and rejects stale recovery decisions. The host rechecks lane selection against
+live channel policy at transaction and commit admission. A conflicting claim
+snapshot is prepared again; a policy conflict retries only after confirmed
+rollback, and an uncertain write is never replayed. Database admission and commit remain
 bound to the captured owner, and shutdown joins accepted work. The existing
 `channel_ingress_events` schema, payload encoding, dedupe windows, retention, and
 update behavior are unchanged. Drain inspection reads pending and claimed rows in

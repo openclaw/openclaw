@@ -23,7 +23,7 @@ import { getPluginCache, preparePluginCacheFact } from "./plugin-cache.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
 
 /** Read failures must escape before either projection can authorize recovery or rebuilding. */
-export function readPersistedInstalledPluginIndexRowSync(
+function readPersistedInstalledPluginIndexRowSync(
   options: InstalledPluginIndexStoreOptions,
 ): { value_json: string } | undefined {
   if (options.filePath?.endsWith(".json")) {

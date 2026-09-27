@@ -10,11 +10,13 @@ import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../../plugins/installed-plugin-index-record-state.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { auditDeclaredOpenClawHostDependency } from "../../plugins/plugin-peer-link.js";
 import * as registryRefresh from "../../plugins/registry-refresh.js";
-import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
+import {
+  readPersistedInstalledPluginIndexRowSync,
+  seedInstalledPluginIndex,
+} from "../../plugins/test-helpers/installed-plugin-index.js";
 import * as pluginUpdates from "../../plugins/update.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";

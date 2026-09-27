@@ -36,6 +36,8 @@ openclaw channels dead-letters list --channel telegram --account default
 
 `--json` returns a local account inventory from plugin metadata without contacting the Gateway or executing channel setup/runtime code. Configured accounts remain visible even when their plugin has a setup entry. Use `channels status --probe` for live checks.
 
+Disabling a plugin does not uninstall it. Its channels remain `installed: true` in the inventory; with `--all`, an installed channel without configured accounts has `origin: "available"` even when its plugin is disabled.
+
 In an explicit multi-agent setup, workspace-scoped channel plugins come from
 `agents.defaults.systemAgent.agentId`. Without that owner, `channels list`
 returns the shared bundled, managed, and global inventory with a diagnostic;
@@ -70,8 +72,8 @@ do not pass an empty shell variable to request that scope.
 
 `channels logs --lines` requires a positive integer. Omit `--lines` to use the default of `200`; explicitly empty values are rejected.
 
-`channels logs --channel <name>` matches subsystem or module names rooted at `<name>`
-or `gateway/channels/<name>`, including slash-separated descendants. Similar names
+`channels logs --channel <name>` matches subsystem or module names rooted at `<name>`,
+`channels/<name>`, or `gateway/channels/<name>`, including slash-separated descendants. Similar names
 such as `discord-archive` do not match `discord`.
 
 `channels status --probe` is the live path: on a reachable gateway it runs per-account

@@ -1,3 +1,9 @@
+import { isDeepStrictEqual } from "node:util";
+import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
+import {
+  formatNormalizedAllowFromEntries,
+  resolveAllowlistMatchByCandidates,
+} from "openclaw/plugin-sdk/allow-from";
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
 /**
  * Maps ClickClack senders and conversations onto the shared channel ingress
@@ -7,6 +13,10 @@ import type {
   resolveStableChannelMessageIngress,
   StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  resolveBotThreadMentionPolicy,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -14,8 +24,10 @@ import {
   type ResolvedAgentRoute,
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
+import { isClickClackAccountCurrent, resolveClickClackAccountConfig } from "./accounts.js";
 import { resolveClickClackDiscussionRoute } from "./discussions/routing.js";
 import { resolveClickClackGroupPolicy } from "./group-policy.js";
+import { createClickClackClient } from "./http-client.js";
 import { resolveClickClackMentionFacts } from "./mention-facts.js";
 import { getClickClackRuntime } from "./runtime.js";
 import { buildClickClackTarget } from "./target.js";
@@ -53,6 +65,42 @@ type ClickClackPreparedInboundRoute = {
   discussionRoute?: ClickClackDiscussionRoute;
   revoked: boolean;
 };
+
+async function isClickClackBotOwnedThread(params: {
+  account: ResolvedClickClackAccount;
+  message: ClickClackMessage;
+}): Promise<boolean> {
+  const { account, message } = params;
+  if (
+    !account.botUserId ||
+    !message.parent_message_id ||
+    !message.thread_root_id ||
+    message.thread_root_id === message.id ||
+    !message.channel_id ||
+    message.direct_conversation_id ||
+    message.workspace_id !== account.workspace
+  ) {
+    return false;
+  }
+  try {
+    const root = await createClickClackClient({
+      baseUrl: account.apiEndpoint,
+      token: account.token,
+    }).message(message.thread_root_id);
+    return (
+      root.id === message.thread_root_id &&
+      root.thread_root_id === root.id &&
+      !root.parent_message_id &&
+      !root.direct_conversation_id &&
+      root.workspace_id === message.workspace_id &&
+      root.channel_id === message.channel_id &&
+      root.author_id === account.botUserId
+    );
+  } catch {
+    // Unreadable roots cannot establish ownership; keep the normal mention policy.
+    return false;
+  }
+}
 
 function resolveClickClackBotLoopConversationId(params: {
   message: ClickClackMessage;
@@ -169,6 +217,7 @@ async function resolvePreparedInboundRoute(params: {
  */
 export type ClickClackInboundAccess = {
   shouldDispatch: boolean;
+  isCurrent: () => boolean;
   commandAuthorized: boolean;
   /** Whether the resolved group policy required a direct mention. */
   requireMention?: boolean;
@@ -192,17 +241,51 @@ export async function resolveClickClackInboundAccess(params: {
   message: ClickClackMessage;
 }): Promise<ClickClackInboundAccess> {
   const runtime = getClickClackRuntime();
-  const cfg = params.config as OpenClawConfig;
-  const preparedRoute = await resolvePreparedInboundRoute(params);
+  const initialGroupPolicy = resolveClickClackGroupPolicy({
+    account: params.account,
+    channelId: params.message.channel_id,
+  });
+  const rootPolicyConfigured = initialGroupPolicy.requireMentionInBotThreads !== undefined;
+  const isCurrent = () =>
+    isClickClackAccountCurrent({
+      // SAFETY: Account identity validation only reads the host-validated current config.
+      cfg: runtime.config.current() as CoreConfig,
+      account: params.account,
+    });
+  const isBotOwnedThread = rootPolicyConfigured && (await isClickClackBotOwnedThread(params));
+  // SAFETY: These legacy policy readers do not mutate the host-validated, frozen config.
+  const routeConfig = rootPolicyConfigured
+    ? (runtime.config.current() as CoreConfig)
+    : params.config;
+  const routeAccountConfig = rootPolicyConfigured
+    ? resolveClickClackAccountConfig(routeConfig, params.account.accountId)
+    : params.account;
+  const preparedRoute = await resolvePreparedInboundRoute({
+    ...params,
+    config: routeConfig,
+    account: { ...params.account, agentId: routeAccountConfig.agentId },
+  });
+  // Root lookup can outlive policy changes. Refresh through the config owner without
+  // replacing the running transport's identity or rereading its credentials.
+  // SAFETY: The host validates ClickClack settings; the downstream readers remain read-only.
+  const cfg = rootPolicyConfigured ? (runtime.config.current() as CoreConfig) : params.config;
+  const accountPolicy = rootPolicyConfigured
+    ? resolveClickClackAccountConfig(cfg, params.account.accountId)
+    : params.account;
+  const effectiveGroupPolicy = resolveClickClackGroupPolicy({
+    account: accountPolicy,
+    channelId: params.message.channel_id,
+  });
+  const threadMentionPolicy = resolveBotThreadMentionPolicy({
+    isBotOwnedThread,
+    requireMentionInBotThreads: effectiveGroupPolicy.requireMentionInBotThreads,
+    requireMention: effectiveGroupPolicy.requireMention,
+  });
   const shouldCheckCommand = runtime.channel.commands.shouldComputeCommandAuthorized(
     params.message.body,
     cfg,
   );
 
-  const effectiveGroupPolicy = resolveClickClackGroupPolicy({
-    account: params.account,
-    channelId: params.message.channel_id,
-  });
   const mentionFacts = resolveClickClackMentionFacts({
     isDirect: preparedRoute.isDirect,
     body: params.message.body,
@@ -212,11 +295,12 @@ export async function resolveClickClackInboundAccess(params: {
     agentId: preparedRoute.route.agentId,
     channelId: params.message.channel_id,
   });
-  if (params.message.kind !== undefined && params.message.kind !== "message") {
+  if (!isCurrent() || (params.message.kind !== undefined && params.message.kind !== "message")) {
     return {
       shouldDispatch: false,
+      isCurrent,
       commandAuthorized: false,
-      requireMention: effectiveGroupPolicy.requireMention,
+      requireMention: threadMentionPolicy.requireMention,
       mentionFacts,
       preparedRoute,
     };
@@ -228,9 +312,10 @@ export async function resolveClickClackInboundAccess(params: {
   // The account's default allowFrom is wildcarded for human traffic. Bot
   // admission is a separate opt-in boundary, so wildcard authorization must
   // not implicitly trust every bot in the workspace.
+  const allowFrom = accountPolicy.allowFrom ?? ["*"];
   const ingressAllowFrom = isBotAuthor
-    ? params.account.allowFrom.filter((entry) => normalizeClickClackUserId(entry) !== "*")
-    : params.account.allowFrom;
+    ? allowFrom.filter((entry) => normalizeClickClackUserId(entry) !== "*")
+    : allowFrom;
   const botMentionAllowed =
     !isBotAuthor ||
     effectiveGroupPolicy.allowBots === true ||
@@ -239,8 +324,9 @@ export async function resolveClickClackInboundAccess(params: {
   if (!botMentionAllowed) {
     return {
       shouldDispatch: false,
+      isCurrent,
       commandAuthorized: false,
-      requireMention: effectiveGroupPolicy.requireMention,
+      requireMention: threadMentionPolicy.requireMention,
       mentionFacts,
       preparedRoute,
     };
@@ -267,7 +353,7 @@ export async function resolveClickClackInboundAccess(params: {
         }
       : undefined;
   const allowTextCommands =
-    params.account.replyMode === "agent" &&
+    accountPolicy.replyMode !== "model" &&
     runtime.channel.commands.shouldHandleTextCommands({
       cfg,
       surface: CHANNEL_ID,
@@ -299,7 +385,7 @@ export async function resolveClickClackInboundAccess(params: {
     mentionFacts,
     policy: {
       activation: {
-        requireMention: effectiveGroupPolicy.requireMention,
+        requireMention: threadMentionPolicy.requireMention,
         allowTextCommands,
       },
     },
@@ -311,12 +397,109 @@ export async function resolveClickClackInboundAccess(params: {
       : false,
   });
 
+  const isAdmissionCurrent = () => {
+    if (!isCurrent()) {
+      return false;
+    }
+    // Config publishes before the old channel monitor is aborted during reload.
+    // Recheck sender and activation policy after ingress awaits and again at dispatch.
+    // SAFETY: The policy resolvers only read the host-validated current config.
+    const currentCfg = runtime.config.current() as CoreConfig;
+    const currentAccountPolicy = resolveClickClackAccountConfig(
+      currentCfg,
+      params.account.accountId,
+    );
+    const currentGroupPolicy = resolveClickClackGroupPolicy({
+      account: currentAccountPolicy,
+      channelId: params.message.channel_id,
+    });
+    const currentAllowFrom = currentAccountPolicy.allowFrom ?? ["*"];
+    const currentIngressAllowFrom = isBotAuthor
+      ? currentAllowFrom.filter((entry) => normalizeClickClackUserId(entry) !== "*")
+      : currentAllowFrom;
+    const directSenderAllowed = resolveAllowlistMatchByCandidates({
+      allowList: formatNormalizedAllowFromEntries({
+        allowFrom: currentIngressAllowFrom.filter(
+          (entry) => parseAccessGroupAllowFromEntry(entry) === null,
+        ),
+        normalizeEntry: normalizeClickClackUserId,
+      }),
+      candidates: [
+        { value: normalizeClickClackUserId(params.message.author_id) ?? undefined, source: "id" },
+      ],
+    }).allowed;
+    // Reuse only static membership already proved by ingress. A changed definition
+    // or removed reference invalidates it; dynamic membership needs its live owner.
+    const staticGroupAllowed = currentIngressAllowFrom.some((entry) => {
+      const name = parseAccessGroupAllowFromEntry(entry);
+      if (!name) {
+        return false;
+      }
+      const group = currentCfg.accessGroups?.[name];
+      return (
+        group?.type === "message.senders" &&
+        resolved.state.allowlists[
+          preparedRoute.isDirect ? "dm" : "group"
+        ].accessGroups.matched.includes(name) &&
+        isDeepStrictEqual(group, cfg.accessGroups?.[name])
+      );
+    });
+    if (!directSenderAllowed && !staticGroupAllowed) {
+      return false;
+    }
+    const currentMentionFacts = resolveClickClackMentionFacts({
+      isDirect: preparedRoute.isDirect,
+      body: params.message.body,
+      mentionPatterns: currentGroupPolicy.mentionPatterns,
+      botHandle: params.account.botHandle,
+      cfg: currentCfg,
+      agentId: preparedRoute.route.agentId,
+      channelId: params.message.channel_id,
+    });
+    if (
+      isBotAuthor &&
+      currentGroupPolicy.allowBots !== true &&
+      !(
+        currentGroupPolicy.allowBots === "mentions" &&
+        (preparedRoute.isDirect || currentMentionFacts.wasMentioned)
+      )
+    ) {
+      return false;
+    }
+    const currentThreadPolicy = resolveBotThreadMentionPolicy({
+      isBotOwnedThread,
+      requireMentionInBotThreads: currentGroupPolicy.requireMentionInBotThreads,
+      requireMention: currentGroupPolicy.requireMention,
+    });
+    return !resolveInboundMentionDecision({
+      facts: currentMentionFacts,
+      policy: {
+        isGroup: !preparedRoute.isDirect,
+        requireMention: currentThreadPolicy.requireMention,
+        allowTextCommands:
+          allowTextCommands &&
+          currentAccountPolicy.replyMode !== "model" &&
+          runtime.channel.commands.shouldHandleTextCommands({
+            cfg: currentCfg,
+            surface: CHANNEL_ID,
+            commandSource: "text",
+          }),
+        hasControlCommand:
+          shouldCheckCommand &&
+          runtime.channel.commands.shouldComputeCommandAuthorized(params.message.body, currentCfg),
+        commandAuthorized: resolved.commandAccess.authorized,
+      },
+    }).shouldSkip;
+  };
+
   return {
-    shouldDispatch: !preparedRoute.revoked && resolved.ingress.admission === "dispatch",
+    shouldDispatch:
+      isAdmissionCurrent() && !preparedRoute.revoked && resolved.ingress.admission === "dispatch",
+    isCurrent: isAdmissionCurrent,
     commandAuthorized: resolved.commandAccess.requested
       ? resolved.commandAccess.authorized
       : resolved.senderAccess.allowed,
-    requireMention: effectiveGroupPolicy.requireMention,
+    requireMention: threadMentionPolicy.requireMention,
     mentionFacts,
     botLoopProtection,
     preparedRoute,

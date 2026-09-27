@@ -84,6 +84,9 @@ describe("Code Mode MCP namespace model", () => {
     }
 
     catalog[0] = mcpCatalogEntry({ id: "replacement__tool", serverName: "replacement" });
+    // The published descriptor is data, not authority over registered call targets.
+    runtime.descriptors[0]!.id = "replacement";
+    runtime.descriptors[0]!.scope = { kind: "object", entries: [] };
     const executeTool = vi.fn(async ({ input }: { input: unknown }) => input);
     await expect(
       runtime.invoke("mcp", ["github", "readFile"], [{ path: "README.md" }], executeTool),

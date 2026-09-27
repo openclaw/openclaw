@@ -169,6 +169,8 @@ describe("createDiscordNativeApprovalAdapter", () => {
     });
 
     expect(text).toContain("`channels.discord.execApprovals.approvers`");
+    expect(text).toContain("Approve it from the Web UI for now.");
+    expect(text).not.toMatch(/terminal UI|\bTUI\b/i);
     expect(text).toContain("`commands.ownerAllowFrom`");
     expect(text).not.toContain("`channels.discord.dm.allowFrom`");
   });

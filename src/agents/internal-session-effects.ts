@@ -40,19 +40,17 @@ function resolveInternalSessionEffectsTarget(params: {
   };
 }
 
-function toInternalSessionEffectsTarget(params: {
-  agentId: string;
-  entry: InternalSessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): InternalSessionEffectsTarget {
+function toInternalSessionEffectsTarget(
+  scope: InternalSessionEffectsSource,
+  entry: InternalSessionEntry,
+): InternalSessionEffectsTarget {
   return {
-    agentId: params.agentId,
-    sessionId: params.entry.sessionId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    sessionEntry: params.entry,
-    sessionFile: params.sessionKey,
+    agentId: scope.agentId,
+    sessionId: entry.sessionId,
+    sessionKey: scope.sessionKey,
+    storePath: scope.storePath,
+    sessionEntry: entry,
+    sessionFile: scope.sessionKey,
   };
 }
 
@@ -80,12 +78,7 @@ export async function prepareInternalSessionEffectsSession(params: {
   const scope = resolveInternalSessionEffectsTarget(params);
   const existing = loadExactSessionEntry(scope)?.entry;
   if (existing?.sessionId === scope.sessionId) {
-    return toInternalSessionEffectsTarget({
-      agentId: params.agentId,
-      entry: existing,
-      sessionKey: scope.sessionKey,
-      storePath: params.storePath,
-    });
+    return toInternalSessionEffectsTarget(scope, existing);
   }
 
   const fork = params.source
@@ -124,12 +117,7 @@ export async function prepareInternalSessionEffectsSession(params: {
   if (!created.ok) {
     throw new Error(`Failed to create internal SQLite session for run ${params.runId}`);
   }
-  return toInternalSessionEffectsTarget({
-    agentId: params.agentId,
-    entry: created.entry,
-    sessionKey: scope.sessionKey,
-    storePath: params.storePath,
-  });
+  return toInternalSessionEffectsTarget(scope, created.entry);
 }
 
 /** Tracks every hidden binding used by one run, including accepted compaction rotations. */

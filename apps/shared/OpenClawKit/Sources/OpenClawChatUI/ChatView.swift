@@ -112,7 +112,9 @@ public struct OpenClawChatView: View {
         }
     }
 
-    @State private var viewModel: OpenClawChatViewModel
+    // The caller owns model lifetime; transport replacement can preserve presentation identity.
+    private let viewModel: OpenClawChatViewModel
+    private let resolveComposerModel: (@MainActor () -> OpenClawChatViewModel?)?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @State private var contentWidth: CGFloat = 0
@@ -202,6 +204,7 @@ public struct OpenClawChatView: View {
     /// `showsAssistantTrace` remains as a source-compatible convenience that sets both display options.
     public init(
         viewModel: OpenClawChatViewModel,
+        resolveComposerModel: (@MainActor () -> OpenClawChatViewModel?)? = nil,
         drawsBackground: Bool = true,
         showsSessionSwitcher: Bool = false,
         style: Style = .standard,
@@ -226,7 +229,8 @@ public struct OpenClawChatView: View {
         speech: OpenClawChatSpeechController? = nil,
         mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true })
     {
-        _viewModel = State(initialValue: viewModel)
+        self.viewModel = viewModel
+        self.resolveComposerModel = resolveComposerModel
         self.drawsBackground = drawsBackground
         self.showsSessionSwitcher = showsSessionSwitcher
         self.style = style
@@ -264,6 +268,9 @@ public struct OpenClawChatView: View {
         .onAppear {
             self.viewModel.refreshSourceContext()
             self.viewModel.load()
+        }
+        .onChange(of: ObjectIdentifier(self.viewModel)) { _, _ in
+            self.viewModel.refreshSourceContext()
         }
         .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
             self.updateTurnRecap(observation)
@@ -374,7 +381,8 @@ extension OpenClawChatView {
             talkControl: self.talkControl,
             dictationControl: self.dictationControl,
             voiceNoteControl: self.voiceNoteControl,
-            focusRequest: self.composerFocusRequest)
+            focusRequest: self.composerFocusRequest,
+            resolveInputModel: self.resolveComposerModel)
     }
 
     @ViewBuilder
@@ -541,8 +549,13 @@ extension OpenClawChatView {
                 text: introText,
                 prompts: self.emptyAssistantPrompts,
                 onPrompt: { prompt in
-                    self.viewModel.input = prompt.prompt
-                    self.viewModel.send()
+                    let model: OpenClawChatViewModel? = if let resolveComposerModel {
+                        resolveComposerModel()
+                    } else {
+                        self.viewModel
+                    }
+                    model?.input = prompt.prompt
+                    model?.send()
                 })
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

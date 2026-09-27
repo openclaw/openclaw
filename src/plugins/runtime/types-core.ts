@@ -270,7 +270,10 @@ export type LlmIsolatedAgentRuntimeCompleteParams = LlmCompleteCommonParams & {
   /** Isolated runtimes currently accept one fresh user prompt, not a replayed chat history. */
   messages: [{ role: "user"; content: string }];
   execution: {
-    /** Fresh, literal-zero-tool completion through the configured agent runtime. */
+    /**
+     * Fresh completion through the configured agent runtime with no supplied tools.
+     * Agents API may retain service-owned helpers; it cannot guarantee zero tools.
+     */
     mode: "isolated-agent-runtime";
     /** Exact credential owner. Requires host-granted plugin policy. */
     authProfileId?: string;

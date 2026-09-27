@@ -811,12 +811,12 @@ describe("buildGatewayCronService", () => {
   });
 
   it("converges Workshop after a heartbeat inventory failure and cancels its retry on stop", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const clock = createGatewaySchedulerClock(Date.now());
     const cfg = {
       ...createCronConfig("server-cron-monitor-partial-failure"),
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } satisfies OpenClawConfig;
-    const state = loadCronService(cfg);
+    const state = loadCronService(cfg, { scheduler: createTestGatewayScheduler(clock.clock) });
     const listJobs = state.cron.list.bind(state.cron);
     const inventory = vi
       .spyOn(state.cron, "list")
@@ -835,11 +835,10 @@ describe("buildGatewayCronService", () => {
       );
       state.cron.stop();
       const callsBeforeStop = inventory.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(30_000);
+      await clock.advanceBy(30_000);
       expect(inventory).toHaveBeenCalledTimes(callsBeforeStop);
     } finally {
       state.cron.stop();
-      vi.useRealTimers();
     }
   });
 

@@ -22,7 +22,10 @@ import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import { writeUpdateInstallReceiptRowSync } from "./restart-sentinel-store.js";
 import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
-import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
+import {
+  createGatewayUpdateLifecycle,
+  currentUpdateCheckLifecycle,
+} from "./update-check-lifecycle.js";
 import type { UpdateCheckResult } from "./update-check.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
 import { createDevGitStatus } from "./update-startup-git.test-support.js";
@@ -2303,7 +2306,8 @@ describe("update-startup", () => {
   });
 
   it("ends a held stable campaign when its replacement target is not yet due", async () => {
-    const campaign = new UpdateCampaignController();
+    const campaign = new UpdateCampaignController(scheduler);
+    currentUpdateCheckLifecycle().campaign = campaign;
     const runAutoUpdate = createAutoUpdateSuccessMock();
     const cfg = { update: { channel: "stable" as const, auto: { enabled: true } } };
     mockPackageUpdateStatus("latest", "2.0.0");
@@ -2317,7 +2321,6 @@ describe("update-startup", () => {
       runGatewayUpdateCheck({
         cfg,
         activeWorkInspectors: idleActiveWorkInspectors(),
-        updateCampaign: campaign,
         runAutoUpdate,
       });
 
