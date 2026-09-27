@@ -281,6 +281,7 @@ describe("Slack durable ingress", () => {
 
   it("acknowledges a durable event before dispatch starts", async () => {
     await withQueue(async (queue) => {
+      const ackStarted = createDeferred<void>();
       let releaseAck = () => {};
       const ackGate = new Promise<void>((resolve) => {
         releaseAck = resolve;
@@ -293,13 +294,15 @@ describe("Slack durable ingress", () => {
       const { ingress, receive } = attachIngress(queue, processEvent);
       const ack = vi.fn(async () => {
         order.push("ack-start");
+        ackStarted.resolve();
         await ackGate;
         order.push("ack-complete");
       });
       ingress.start();
 
       const receiving = receive(createReceiverEvent("Ev-ack-order", ack));
-      await vi.waitFor(() => expect(ack).toHaveBeenCalledTimes(1));
+      await Promise.race([ackStarted.promise, receiving]);
+      expect(ack).toHaveBeenCalledTimes(1);
       expect(processEvent).not.toHaveBeenCalled();
 
       releaseAck();
