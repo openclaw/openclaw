@@ -75,7 +75,12 @@ async function deliverPrimaryWebhook(
     return result;
   }
   const undelivered = (error?: string, deliverySuppressionReason?: "empty") =>
-    withPrimaryWebhookTrace({ job, result, delivered: false, error, deliverySuppressionReason });
+    withPrimaryWebhookTrace({
+      job,
+      result,
+      outcome: { status: "not-delivered", error },
+      deliverySuppressionReason,
+    });
   if (result.status !== "error" && !(typeof result.summary === "string" && result.summary.trim())) {
     return settle(undelivered(undefined, "empty"));
   }
@@ -96,13 +101,17 @@ async function deliverPrimaryWebhook(
   assertRunCurrent?.();
 
   const startedAt = job.state.runningAtMs;
-  const deliveredResult = withPrimaryWebhookTrace({ job, result, delivered: true });
+  const deliveredResult = withPrimaryWebhookTrace({
+    job,
+    result,
+    outcome: { status: "delivered" },
+  });
   try {
-    await state.deps.sendCronWebhook({
+    const outcome = await state.deps.sendCronWebhook({
       job,
       abortSignal,
-      onDeliveryAccepted: () => {
-        settle(deliveredResult);
+      onDeliveryState: (outcome) => {
+        progress.webhookDelivery = outcome;
       },
       event: {
         jobId: job.id,
@@ -126,20 +135,30 @@ async function deliverPrimaryWebhook(
         usage: result.usage,
       },
     });
+    if (outcome.error) {
+      state.deps.log.warn({ jobId: job.id, err: outcome.error }, "cron: webhook delivery failed");
+    }
     if (progress.settledDeliveryResult) {
       return progress.settledDeliveryResult;
     }
     if (abortSignal.aborted) {
-      return undelivered(interruptionError());
+      return withPrimaryWebhookInterruption({ job, result, outcome, error: interruptionError() });
     }
-    return settle(deliveredResult);
+    return settle(withPrimaryWebhookTrace({ job, result, outcome }));
   } catch (error) {
     if (progress.settledDeliveryResult) {
       return progress.settledDeliveryResult;
     }
     const deliveryError = abortSignal.aborted ? interruptionError() : formatErrorMessage(error);
     state.deps.log.warn({ jobId: job.id, err: deliveryError }, "cron: webhook delivery failed");
-    return settle(undelivered(deliveryError));
+    return settle(
+      withPrimaryWebhookTrace({
+        job,
+        result,
+        outcome: progress.webhookDelivery ?? { status: "unknown" },
+        error: deliveryError,
+      }),
+    );
   }
 }
 
