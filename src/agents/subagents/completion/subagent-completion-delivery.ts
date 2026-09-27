@@ -256,7 +256,11 @@ export async function settleCorrelatedSubagentDelivery(
   if (!published) {
     return;
   }
-  if (published !== current || published.delivery?.status !== "delivered") {
+  if (
+    published !== current ||
+    published.delivery?.status !== "delivered" ||
+    published.delivery.queueId !== undefined
+  ) {
     throw new Error("Subagent completion recovery is waiting for committed publication");
   }
   const committed = structuredClone(published);
