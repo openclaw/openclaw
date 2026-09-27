@@ -23,6 +23,7 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import type { Dispatcher } from "undici";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeHostname } from "./hostname.js";
+import { hasTrustedHostUnspecifiedIpv4Exemption } from "./ssrf-trusted-host-exemptions.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
@@ -59,23 +60,6 @@ export type SsrFPolicy = {
    * 198.18.0.0/15 range. See #74351.
    */
   allowIpv6UniqueLocalRange?: boolean;
-  /**
-   * Exempt bare IPv4 addresses in the "unspecified"/"this network" block
-   * (`0.0.0.0/8`, RFC 1122 §3.2.1.3) from the trusted-hostname resolved-address
-   * block, without granting `allowPrivateNetwork`'s full exemption (which also
-   * skips loopback, link-local, and cloud-metadata rebinding checks). Needed for
-   * container runtimes whose synthetic host-gateway hostname (for example
-   * Docker's `host.docker.internal` under OrbStack) resolves into this range.
-   * IPv4-family-scoped only: an IPv6-embedded/mapped/NAT64 form of an
-   * unspecified IPv4 address (e.g. `::ffff:0.0.0.0`) is not exempted — that
-   * representation is exactly the kind of rebinding vector this check exists to
-   * catch. The literal `0.0.0.0` address is also excluded from the exemption:
-   * most OS network stacks treat it as a loopback alias on connect, so it gets
-   * the same rejection as an explicit loopback answer. Only takes effect for a
-   * hostname that already passed `allowedHostnames`/`allowedOrigins` trust —
-   * see `assertAllowedTrustedHostnameResolvedAddressesOrThrow`.
-   */
-  allowUnspecifiedIpv4Range?: boolean;
   allowedHostnames?: string[];
   /**
    * Exact HTTP origins that may promote only the current request hostname into
@@ -102,7 +86,6 @@ function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
     dangerouslyAllowPrivateNetwork: policy.dangerouslyAllowPrivateNetwork === true,
     allowRfc2544BenchmarkRange: policy.allowRfc2544BenchmarkRange === true,
     allowIpv6UniqueLocalRange: policy.allowIpv6UniqueLocalRange === true,
-    allowUnspecifiedIpv4Range: policy.allowUnspecifiedIpv4Range === true,
     allowedHostnames: normalizePolicyHostnames(policy.allowedHostnames).toSorted(),
     allowedOrigins: normalizeSsrFPolicyOrigins(policy.allowedOrigins),
     hostnameAllowlist: [...normalizeHostnameAllowlist(policy.hostnameAllowlist)].toSorted(),
@@ -136,9 +119,6 @@ export function mergeSsrFPolicies(
     }
     if (policy.allowIpv6UniqueLocalRange) {
       merged.allowIpv6UniqueLocalRange = true;
-    }
-    if (policy.allowUnspecifiedIpv4Range) {
-      merged.allowUnspecifiedIpv4Range = true;
     }
     for (const key of [
       "allowedHostnames",
@@ -471,33 +451,28 @@ function isExplicitLoopbackHostname(hostname: string): boolean {
   );
 }
 
+function isHostExemptUnspecifiedIpv4Address(address: string): boolean {
+  // Literal 0.0.0.0 connects to loopback on common stacks, and mapped/NAT64 IPv6
+  // forms are rebinding vectors; only other canonical IPv4 0.0.0.0/8 hosts qualify.
+  return (
+    address !== "0.0.0.0" &&
+    isCanonicalDottedDecimalIPv4(address) &&
+    isUnspecifiedIpAddress(address)
+  );
+}
+
 function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
   hostname: string,
-  policy?: SsrFPolicy,
+  policy: SsrFPolicy | undefined,
 ): void {
   const isLoopbackAllowed = isExplicitLoopbackHostname(hostname);
-  const isUnspecifiedAllowed = policy?.allowUnspecifiedIpv4Range === true;
+  const isUnspecifiedIpv4Allowed = hasTrustedHostUnspecifiedIpv4Exemption(policy);
 
   for (const entry of results) {
-    // The exemption is intentionally IPv4-family-only and excludes the literal
-    // 0.0.0.0 address: isUnspecifiedIpAddress also matches IPv6-embedded/NAT64/mapped
-    // forms (e.g. "::ffff:0.0.0.0", "64:ff9b::0.0.0.0"), which are exactly the kind of
-    // rebinding vector this check exists to catch. Separately, most OS network stacks
-    // treat a literal 0.0.0.0 connect target as an alias for loopback (127.0.0.1), so a
-    // DNS answer of exactly 0.0.0.0 gets the same rejection as an explicit loopback
-    // answer even with this flag set — a rebound trusted hostname must not be able to
-    // reach whatever is bound to loopback on the configured port that way. Only the
-    // rest of the 0.0.0.0/8 "this network" block (e.g. a container runtime's synthetic
-    // gateway address) is exempted.
-    const isLiteralZeroAddress = entry.family === 4 && entry.address === "0.0.0.0";
-    const isExemptUnspecified =
-      isUnspecifiedAllowed &&
-      entry.family === 4 &&
-      !isLiteralZeroAddress &&
-      isUnspecifiedIpAddress(entry.address);
     if (
-      (!isExemptUnspecified && isUnspecifiedIpAddress(entry.address)) ||
+      (isUnspecifiedIpAddress(entry.address) &&
+        !(isUnspecifiedIpv4Allowed && isHostExemptUnspecifiedIpv4Address(entry.address))) ||
       (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
       isBlockedTrustedResolvedIpv6Address(entry.address) ||
       isLinkLocalIpAddress(entry.address) ||

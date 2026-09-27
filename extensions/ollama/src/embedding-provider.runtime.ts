@@ -18,12 +18,16 @@ import {
   normalizeResolvedSecretInputString,
   resolveConfiguredSecretInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
-import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  formatErrorMessage,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL, OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
-import { buildOllamaEmbeddingSsrFPolicy, resolveOllamaApiBase } from "./provider-models.js";
+import { resolveOllamaApiBase } from "./provider-models.js";
 
 export type OllamaEmbeddingProvider = EmbeddingProvider;
 
@@ -57,6 +61,7 @@ export type OllamaEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  allowUnspecifiedIpv4Range: boolean;
   model: string;
   outputDimensionality?: number;
   localServiceTarget?: Parameters<MemoryCoreAcquireLocalService>[0];
@@ -107,6 +112,7 @@ async function withRemoteHttpResponse<T>(params: {
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
   configuredLocalOriginBaseUrl: string;
+  allowUnspecifiedIpv4Range: boolean;
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
   const { response, release } = await fetchConfiguredLocalOriginWithSsrFGuard({
@@ -115,6 +121,7 @@ async function withRemoteHttpResponse<T>(params: {
     signal: params.signal,
     policy: params.ssrfPolicy,
     configuredLocalOriginBaseUrl: params.configuredLocalOriginBaseUrl,
+    allowUnspecifiedIpv4Range: params.allowUnspecifiedIpv4Range,
     auditContext: "ollama-memory-embedding",
   });
   try {
@@ -384,16 +391,11 @@ async function resolveOllamaEmbeddingClient(
   return {
     baseUrl,
     headers,
-    // The origin-only policy previously used here (ssrfPolicyFromHttpBaseUrlAllowedOrigin)
-    // allowlists the hostname but does not exempt it from the unconditional
-    // "unspecified"/0.0.0.0-8 IPv4 block, so a local Ollama server whose hostname
-    // resolves into that range (e.g. Docker's host.docker.internal under OrbStack) was
-    // reachable for chat completions but not for embeddings. Deliberately narrower than
-    // the chat path's buildOllamaBaseUrlSsrFPolicy (which also sets allowPrivateNetwork):
-    // embeddings only need the unspecified-range exemption, so loopback (for a
-    // non-loopback-literal hostname), link-local, and cloud-metadata DNS-rebinding
-    // protections stay active. See buildOllamaEmbeddingSsrFPolicy's doc comment.
-    ssrfPolicy: buildOllamaEmbeddingSsrFPolicy(baseUrl),
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
+    // Chat already trusts the provider-owned host with allowPrivateNetwork. Embeddings
+    // take only the 0.0.0.0/8 exemption container host gateways need (OrbStack's
+    // host.docker.internal), and never for a separate remote embedding host.
+    allowUnspecifiedIpv4Range: providerOwnsHost,
     model,
     outputDimensionality: options.dimensions,
     ...(localService && baseUrlOrigin !== "remote-config"
@@ -426,6 +428,7 @@ export async function createOllamaEmbeddingProvider(
         url: embedUrl,
         ssrfPolicy: client.ssrfPolicy,
         configuredLocalOriginBaseUrl: client.baseUrl,
+        allowUnspecifiedIpv4Range: client.allowUnspecifiedIpv4Range,
         signal,
         init: {
           method: "POST",
