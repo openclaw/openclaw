@@ -312,17 +312,16 @@ export async function probeGateway(opts: {
       // already has a cached operator device token. Fresh diagnostics should not
       // create a read-only pairing baseline that later blocks admin commands.
       const lookup = { deviceId: identity.deviceId, role: "operator", env: opts.env };
-      let cachedOperatorToken = await loadOriginDeviceTokenReadOnly({
-        ...lookup,
-        gatewayScope: deviceAuthScope,
-      });
-      if (!cachedOperatorToken && !opts.originScopedDeviceAuth && loopback) {
-        // Default local clients still cache unscoped tokens. Keep this fallback
-        // local-only and select the same store for the subsequent client handshake.
-        cachedOperatorToken = await loadDeviceAuthTokenReadOnly(lookup);
-        if (cachedOperatorToken) {
-          deviceAuthScope = undefined;
-        }
+      // A retired tunnel's origin token must not displace the local client's token.
+      let cachedOperatorToken =
+        !opts.originScopedDeviceAuth && loopback ? await loadDeviceAuthTokenReadOnly(lookup) : null;
+      if (cachedOperatorToken) {
+        deviceAuthScope = undefined;
+      } else {
+        cachedOperatorToken = await loadOriginDeviceTokenReadOnly({
+          ...lookup,
+          gatewayScope: deviceAuthScope,
+        });
       }
       return cachedOperatorToken ? identity : null;
     } catch {

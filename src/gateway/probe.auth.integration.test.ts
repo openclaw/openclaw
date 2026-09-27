@@ -12,7 +12,8 @@ installGatewayTestHooks({ scope: "suite" });
 
 const { callGateway } = await import("./call.js");
 const { probeGateway } = await import("./probe.js");
-const { seedOriginDeviceToken } = await import("../infra/device-auth-store.test-support.js");
+const { seedDeviceAuthToken, seedOriginDeviceToken } =
+  await import("../infra/device-auth-store.test-support.js");
 const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
   await import("../infra/device-identity.js");
 const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
@@ -55,7 +56,7 @@ function expectRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function seedCachedOperatorToken(scopes: string[]): Promise<void> {
+async function seedCachedOperatorToken(scopes: string[]) {
   const identity = loadOrCreateDeviceIdentity();
   const pairing = await requestDevicePairing({
     deviceId: identity.deviceId,
@@ -77,13 +78,17 @@ async function seedCachedOperatorToken(scopes: string[]): Promise<void> {
   if (!token) {
     throw new Error("expected approved operator token");
   }
-  seedOriginDeviceToken({
-    gatewayScope: `ws://127.0.0.1:${gatewayHarness.port}`,
+  const auth = {
     deviceId: identity.deviceId,
     role: "operator",
     token,
     scopes,
+  };
+  seedOriginDeviceToken({
+    gatewayScope: `ws://127.0.0.1:${gatewayHarness.port}`,
+    ...auth,
   });
+  return auth;
 }
 
 describe("probeGateway auth integration", () => {
@@ -122,7 +127,7 @@ describe("probeGateway auth integration", () => {
 
   it("keeps paired local reads and restores remote loopback reads with explicit credentials", async () => {
     const token = requireGatewayToken();
-    await seedCachedOperatorToken(["operator.read"]);
+    const localAuth = await seedCachedOperatorToken(["operator.read"]);
     const result = await probeGateway({
       url: `ws://127.0.0.1:${gatewayHarness.port}`,
       auth: { token },
@@ -160,5 +165,20 @@ describe("probeGateway auth integration", () => {
     expectRecord(recovered.gatewayProbe?.health, "remote probe health");
     expectRecord(recovered.gatewayProbe?.status, "remote probe status");
     expectRecord(recovered.gatewayProbe?.configSnapshot, "remote probe config snapshot");
+
+    // A retired SSH tunnel can leave another Gateway's token at the local URL.
+    seedDeviceAuthToken(localAuth);
+    seedOriginDeviceToken({
+      ...localAuth,
+      gatewayScope: url,
+      token: "retired-tunnel-device-token",
+    });
+    const local = await probeGateway({ url, timeoutMs: 10_000 });
+    expect(local.error).toBeNull();
+    expect(local.ok).toBe(true);
+    expect(local.auth.capability).toBe("read_only");
+    expectRecord(local.health, "local probe health after tunnel");
+    expectRecord(local.status, "local probe status after tunnel");
+    expectRecord(local.configSnapshot, "local probe config after tunnel");
   });
 });
