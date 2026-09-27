@@ -672,9 +672,7 @@ describe("renderUpdates", () => {
       ),
       container,
     );
-    expect(row("Installed").textContent).toContain(
-      "Unknown · recorded after the next successful update",
-    );
+    expect(row("Installed").querySelector(".settings-row__value")?.textContent).toBe("Unknown");
   });
 
   it.each([

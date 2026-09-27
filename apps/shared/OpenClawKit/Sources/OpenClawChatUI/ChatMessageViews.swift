@@ -859,11 +859,22 @@ private struct AttachmentRow: View {
 
     private var fallbackRow: some View {
         HStack(spacing: 8) {
-            Image(systemName: self.fallbackIcon)
-            Text(self.isAudio ? "Voice note" : self.attachmentLabel)
-                .font(OpenClawChatTypography.footnote)
-                .lineLimit(1)
-                .foregroundStyle(self.textColor)
+            Image(systemName: OpenClawChatPickerAttachmentMetadata.fileIcon(
+                mimeType: self.att.mimeType ?? "",
+                fileName: self.att.fileName ?? ""))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.isAudio && self.att.durationSeconds != nil && self.att.url == nil
+                    ? String(localized: "Voice note") : self.attachmentLabel)
+                    .font(OpenClawChatTypography.footnote)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(self.textColor)
+                if let sizeBytes = self.att.sizeBytes {
+                    Text(ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file))
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(self.textColor.opacity(self.isDesktopLayout ? 0.9 : 0.72))
+                }
+            }
             if self.isAudio, let durationSeconds = self.att.durationSeconds {
                 Text(openClawVoiceNoteDurationLabel(durationSeconds))
                     .font(OpenClawChatTypography.footnote)
@@ -886,14 +897,6 @@ private struct AttachmentRow: View {
         guard let kind = self.att.mediaKind else { return nil }
         let value = self.att.artifactId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return !value.isEmpty && kind.acceptsManagedArtifactID(value) ? value : nil
-    }
-
-    private var fallbackIcon: String {
-        switch self.att.mediaKind {
-        case .audio: "waveform"
-        case .video: "video"
-        default: "paperclip"
-        }
     }
 
     private var attachmentLabel: String {

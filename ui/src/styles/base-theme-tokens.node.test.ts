@@ -90,6 +90,32 @@ describe("Control UI base theme tokens", () => {
     );
     expect(localOverrides).toEqual([]);
   });
+
+  it("derives the Web Awesome switch off state from theme tokens", () => {
+    const baseCss = fs.readFileSync(path.join(stylesDir, "base.css"), "utf8");
+    const switchBlock = baseCss.match(/^wa-switch\s*\{([^}]*)\}/mu)?.[1] ?? "";
+    // Unchecked track fill; the border color also paints the unchecked thumb.
+    const offStateProperties = [
+      "--wa-form-control-background-color",
+      "--wa-form-control-border-color",
+    ];
+    const localOverrides = collectFiles(stylesDir, [".css"])
+      .filter((filePath) => !filePath.endsWith("base.css"))
+      .filter((filePath) =>
+        offStateProperties.some((property) =>
+          new RegExp(`[^{}]*wa-switch[^{}]*\\{[^}]*${property}:`, "su").test(
+            fs.readFileSync(filePath, "utf8"),
+          ),
+        ),
+      )
+      .map((filePath) => path.relative(stylesDir, filePath));
+
+    expect(switchBlock).toMatch(
+      /--wa-form-control-background-color:\s*color-mix\(in srgb, var\(--border-strong\) 60%, transparent\);/u,
+    );
+    expect(switchBlock).toMatch(/--wa-form-control-border-color:\s*var\(--muted\);/u);
+    expect(localOverrides).toEqual([]);
+  });
 });
 
 // Absolutely palette edits left both --bg mirrors stale. Pre-paint needs a color

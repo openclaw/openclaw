@@ -1,6 +1,7 @@
 // Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import {
@@ -796,6 +797,10 @@ export function writeGitHubOutput(
     "utf8",
   );
   const changedPathsJson = JSON.stringify(changedPaths);
+  // Same-job consumers read the complete manifest without Actions output or env limits.
+  const changedPathsFile = resolve(`${outputPath}.changed-paths.json`);
+  writeFileSync(changedPathsFile, changedPathsJson, "utf8");
+  appendFileSync(outputPath, `changed_paths_file=${changedPathsFile}\n`, "utf8");
   appendFileSync(
     outputPath,
     `changed_paths_json=${Buffer.byteLength(changedPathsJson, "utf8") <= CHANGED_PATHS_OUTPUT_MAX_BYTES ? changedPathsJson : "null"}\n`,

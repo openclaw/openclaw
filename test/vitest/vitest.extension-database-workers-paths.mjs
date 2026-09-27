@@ -101,6 +101,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/browser/src/browser/routes/agent.state.dashboard-ownership.test.ts",
   "extensions/browser/src/browser/session-tab-registry.extension-cleanup.test.ts",
   "extensions/browser/src/browser/session-tab-registry.lifecycle-retry.test.ts",
+  "extensions/browser/src/browser/session-tab-registry.membership.test.ts",
   "extensions/browser/src/browser/session-tab-registry.sqlite.test.ts",
   "extensions/browser/src/browser-dashboard.test.ts",
   "extensions/buzz/src/buzz-bus.socket.test.ts",
