@@ -46,15 +46,18 @@ executors through this setting. Input submission has a 60-second HTTP deadline,
 including any wait for the executor to connect. The controller must connect
 promptly; the API's longer connection window does not extend this deadline.
 
-Set `plugins.entries.agentsapi.config.capabilityDirectories` to existing absolute
-skill directories inside the self-hosted executor. The native harness discovers
-and reads skills through that executor; no files are copied from the Gateway.
+Set `plugins.entries.agentsapi.config.hostExecutorSkillDirectories` to absolute
+paths on the executor host machine. These directories must already be set up
+with the skill files and be available to the Agents API harness through the
+executor. OpenClaw sends the paths as the Agents API `capability_directories`
+field. The harness discovers and reads skills through that executor; OpenClaw
+does not copy or install the files.
 This explicit directory selection uses native skill discovery, without OpenClaw's
 per-skill eligibility filters. Gateway function policies still apply.
 Omitted and empty lists keep the existing behavior. Hosted sessions ignore this list.
 
 Reset the OpenClaw session after changing its environment or a self-hosted
-workspace or capability directories. Existing hosted sessions continue with omitted or explicit
+workspace or skill directories. Existing hosted sessions continue with omitted or explicit
 `openai_hosted` configuration. This selection does not expand the MVP's existing
 tool or media capabilities.
 

@@ -17,11 +17,11 @@
         "default": "openai_hosted",
         "description": "Execution environment for new sessions. Self-hosted uses the prepared OpenClaw workspace and requires an externally connected executor. Reset existing sessions after changing this setting."
       },
-      "capabilityDirectories": {
+      "hostExecutorSkillDirectories": {
         "type": "array",
         "maxItems": 32,
         "items": { "type": "string", "pattern": "^(?:/|[A-Za-z]:[/\\\\]|\\\\\\\\)" },
-        "description": "Existing absolute directories inside a self-hosted executor for native skill discovery. Gateway skill eligibility filters do not apply to these directories. Reset existing sessions after changing this list."
+        "description": "Absolute paths on the executor host machine that already contain the skill files and are available to the Agents API harness. OpenClaw does not copy or install these files. Gateway skill eligibility filters do not apply to these directories. Reset existing sessions after changing this list."
       }
     }
   }

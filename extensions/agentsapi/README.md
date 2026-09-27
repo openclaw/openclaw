@@ -49,7 +49,7 @@ Set `plugins.entries.agentsapi.config.environment` to `openai_hosted` or
         "enabled": true,
         "config": {
           "environment": "self_hosted",
-          "capabilityDirectories": ["/workspace/skills", "/opt/agent/skills"]
+          "hostExecutorSkillDirectories": ["/workspace/skills", "/opt/agent/skills"]
         }
       }
     }
@@ -79,19 +79,21 @@ file transfers. Gateway function availability follows the configured OpenClaw
 tool policy. Native Agents API apps and connectors are not configured by this
 plugin, and the Gateway image-generation tool is not exposed.
 
-For self-hosted sessions, `capabilityDirectories` registers existing skill
-directories with the native harness. Supply absolute paths inside the executor;
-OpenClaw does not copy files or resolve these paths against the Gateway's filesystem.
-Include any supporting scripts and dependencies in the executor as well.
-The native harness discovers skills in these directories and reads their contents
-through the executor. OpenClaw's per-skill eligibility filters do not apply to this
+For self-hosted sessions, `hostExecutorSkillDirectories` lists absolute paths on
+the executor host machine. These directories must already be set up with the
+skill files and be available to the Agents API harness through the executor.
+OpenClaw sends the paths as the Agents API `capability_directories` field; it does
+not copy or install files or resolve these paths against the Gateway's filesystem.
+Install any supporting scripts and dependencies on the executor host as well.
+The Agents API harness discovers skills in these directories and reads their
+contents through the executor. OpenClaw's per-skill eligibility filters do not apply to this
 explicit native discovery list; choose only directories you intend to expose.
 Gateway tool policies continue to apply to Gateway functions.
-Sessions created without capability directories remain valid when the list is
+Sessions created without skill directories remain valid when the list is
 omitted or empty. Changing a nonempty list requires a session reset.
 The list is unused for hosted sessions.
 
-Changing the environment, self-hosted workspace, or capability directories requires resetting the
+Changing the environment, self-hosted workspace, or skill directories requires resetting the
 OpenClaw session. Existing hosted bindings remain valid with the setting omitted
 or explicitly `openai_hosted`. No saved session is reset or migrated automatically.
 

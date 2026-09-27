@@ -4,7 +4,7 @@ import { z } from "zod";
 
 export const agentsApiConfigSchema = z.strictObject({
   environment: z.enum(["openai_hosted", "self_hosted"]).default("openai_hosted"),
-  capabilityDirectories: z
+  hostExecutorSkillDirectories: z
     .array(z.string().regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/))
     .max(32)
     .optional(),
@@ -23,8 +23,8 @@ export function resolveAgentsApiEnvironment(
     ? {
         type: "self_hosted",
         workspace_directory: path.resolve(workspaceDir),
-        ...(parsed.capabilityDirectories?.length
-          ? { capability_directories: parsed.capabilityDirectories }
+        ...(parsed.hostExecutorSkillDirectories?.length
+          ? { capability_directories: parsed.hostExecutorSkillDirectories }
           : {}),
       }
     : { type: "openai_hosted" };
