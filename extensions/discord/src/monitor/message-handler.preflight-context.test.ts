@@ -4,6 +4,7 @@ import path from "node:path";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
@@ -12,6 +13,8 @@ import {
   type DiscordClient,
   type DiscordMessageEvent,
 } from "./message-handler.preflight.test-helpers.js";
+
+installDiscordIngressTestRuntime();
 
 it.each([true, false])(
   "preserves the injected context builder through DM preflight (bound=%s)",
