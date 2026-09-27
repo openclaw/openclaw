@@ -69,6 +69,7 @@ import {
 import { resolveSessionStableReplyMode } from "./session-stable-reply-mode.js";
 import {
   isInternalSourceReplyChannel,
+  isExplicitSourceReplyCommand,
   resolveSourceReplyExpectation,
 } from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
@@ -188,6 +189,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isGroupChat &&
     !isHeartbeat &&
     promptSessionCtx.WasMentioned !== true &&
+    !isExplicitSourceReplyCommand(promptSessionCtx, cfg) &&
     (conversation.activation ?? defaultActivation) === "always" &&
     isDecisionAssistanceEligible(cfg, agentId)
       ? {

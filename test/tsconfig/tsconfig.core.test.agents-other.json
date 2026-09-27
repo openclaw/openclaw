@@ -22,6 +22,8 @@
     "../../**/dist/**",
     "../../src/agents/command/**/*.test.ts",
     "../../src/agents/command/**/*.test.tsx",
+    "../../src/agents/embedded-agent-runner/**/*.test.ts",
+    "../../src/agents/embedded-agent-runner/**/*.test.tsx",
     "../../src/agents/harness/**/*.test.ts",
     "../../src/agents/harness/**/*.test.tsx",
     "../../src/agents/sandbox/**/*.test.ts",
