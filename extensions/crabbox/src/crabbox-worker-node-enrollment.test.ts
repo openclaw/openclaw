@@ -6,6 +6,7 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -122,6 +123,7 @@ async function serveArtifact(
     truncate?: boolean;
     resetBeforeHeaders?: boolean;
     resetBeforeTls?: boolean;
+    hold?: Promise<void>;
   } = {},
 ) {
   let tls: { cert: Buffer; key: Buffer } | undefined;
@@ -151,8 +153,11 @@ async function serveArtifact(
     tls = { cert: fs.readFileSync(cert), key: fs.readFileSync(key) };
   }
   const authorizations: Array<string | undefined> = [];
+  const requested = createDeferred<void>();
+  const closed = createDeferred<void>();
   const handle: http.RequestListener = (request, response) => {
     authorizations.push(request.headers.authorization);
+    requested.resolve();
     if (options.resetBeforeHeaders) {
       // End the connection before headers in every host runtime; the child must
       // diagnose the peer loss without relying on resetAndDestroy support.
@@ -171,7 +176,11 @@ async function serveArtifact(
       response.write(archive.subarray(0, 1), () => setImmediate(() => response.destroy()));
       return;
     }
-    response.end(archive);
+    if (options.hold) {
+      void options.hold.then(() => response.end(archive));
+    } else {
+      response.end(archive);
+    }
   };
   const server = options.resetBeforeTls
     ? net.createServer((socket) => socket.once("data", () => socket.resetAndDestroy()))
@@ -183,6 +192,7 @@ async function serveArtifact(
     sockets.add(socket);
     socket.once("close", () => {
       sockets.delete(socket);
+      closed.resolve();
     });
   });
   server.listen(0, "127.0.0.1");
@@ -205,7 +215,7 @@ async function serveArtifact(
     bytes: archive.length,
     ...(tls ? { tlsFingerprint: new X509Certificate(tls.cert).fingerprint256 } : {}),
   });
-  return { nodeBootstrap, authorizations };
+  return { nodeBootstrap, authorizations, requested: requested.promise, closed: closed.promise };
 }
 
 type DesktopFixture = {
@@ -547,30 +557,48 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
 
   it("prepares an exact runtime without node identity, then enrolls and reuses its warm artifact", async () => {
     const { home, stateDir, stop } = testHome();
-    const { nodeBootstrap, authorizations } = await serveArtifact(await packageFixture("first"));
+    const installed = await serveArtifact(Buffer.from("installed"));
+    const { nodeBootstrap, authorizations } = await serveArtifact(
+      await packageFixture(
+        "first",
+        `require("node:http").get(${JSON.stringify(installed.nodeBootstrap.url)}, (response) => response.resume());`,
+      ),
+    );
     const workerBytes = Buffer.from("synthetic standalone worker archive");
-    const worker = await serveArtifact(workerBytes);
+    const workerResponse = createDeferred<void>();
+    const worker = await serveArtifact(workerBytes, { hold: workerResponse.promise });
     const workerBundle = {
       ...worker.nodeBootstrap,
       packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
     };
-    const preparation = await expectSetupPhases(
+    const preparation = expectSetupPhases(
       enroll(home, nodeBootstrap, undefined, true, workerBundle),
     );
-    expect(preparation).toEqual(
+    cleanups.push(async () => {
+      workerResponse.resolve();
+      await preparation;
+    });
+    try {
+      await installed.requested;
+      expect(
+        fs.existsSync(path.join(home, ".openclaw-worker", "node-runtimes", nodeBootstrap.sha256)),
+      ).toBe(false);
+      expect(fs.existsSync(path.join(home, ".openclaw"))).toBe(false);
+    } finally {
+      workerResponse.resolve();
+      await preparation;
+    }
+    expect(await preparation).toEqual(
       expect.arrayContaining([
         "openclaw-bootstrap-preparation",
         "openclaw-bootstrap-download-connection",
         "openclaw-bootstrap-download-http-response",
         "openclaw-bootstrap-download-body",
-        "openclaw-bootstrap-installation",
+        "openclaw-bootstrap-installation-and-worker-download",
         "openclaw-bootstrap-runtime-verification",
         "openclaw-bootstrap-worker-archive-publication",
         "openclaw-bootstrap-complete",
       ]),
-    );
-    expect(preparation.indexOf("openclaw-bootstrap-installation")).toBeGreaterThan(
-      preparation.lastIndexOf("openclaw-bootstrap-download-body"),
     );
     expect(fs.existsSync(path.join(home, ".openclaw"))).toBe(false);
     expect(fs.readdirSync(path.join(home, ".openclaw-worker", "node-runtimes"))).toEqual([
@@ -660,34 +688,70 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
   }, 30_000);
 
   it.each(["worker download", "npm installation"])(
-    "cleans staging after %s fails without publishing a runtime",
+    "settles started work after %s fails before removing staging files",
     async (failure) => {
       const { home } = testHome();
+      const postinstallResponse = createDeferred<void>();
+      const postinstall = await serveArtifact(Buffer.from("finish"), {
+        hold: postinstallResponse.promise,
+      });
       const finished = path.join(home, "postinstall-complete");
       const { nodeBootstrap } = await serveArtifact(
         await packageFixture(
           "preparation-failure",
-          `require("node:fs").writeFileSync(${JSON.stringify(finished)}, "complete"); process.exit(17);`,
+          `
+require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (response) => {
+  response.resume();
+  response.once("end", () => {
+    require("node:fs").writeFileSync("last-install-write", "complete");
+    require("node:fs").writeFileSync(${JSON.stringify(finished)}, "complete");
+    if (${JSON.stringify(failure)} === "npm installation") process.exit(17);
+  });
+});`,
         ),
       );
+      const workerResponse = createDeferred<void>();
       const worker = await serveArtifact(Buffer.from("synthetic worker archive"), {
-        truncate: failure === "worker download",
+        hold: workerResponse.promise,
       });
       const workerBundle = {
         ...worker.nodeBootstrap,
+        ...(failure === "worker download" ? { bytes: worker.nodeBootstrap.bytes + 1 } : {}),
         packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
       };
-      const result = await enroll(home, nodeBootstrap, undefined, true, workerBundle);
-      expect(result).toMatchObject({
+      const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
+      const preparation = enroll(home, nodeBootstrap, undefined, true, workerBundle);
+      cleanups.push(async () => {
+        workerResponse.resolve();
+        postinstallResponse.resolve();
+        await preparation;
+      });
+      try {
+        await Promise.all([postinstall.requested, worker.requested]);
+        if (failure === "worker download") {
+          workerResponse.resolve();
+          await worker.closed;
+          expect(fs.existsSync(finished)).toBe(false);
+          expect(fs.readdirSync(runtimeRoot)).toEqual([expect.stringMatching(/^node-bootstrap-/)]);
+        } else {
+          postinstallResponse.resolve();
+          await worker.closed;
+        }
+      } finally {
+        workerResponse.resolve();
+        postinstallResponse.resolve();
+        await preparation;
+      }
+      expect(await preparation).toMatchObject({
         code: 1,
         output: expect.stringContaining(
           failure === "worker download"
-            ? "archive download body failed"
+            ? "archive length does not match the Gateway"
             : "package installation failed (exit code 17)",
         ),
       });
-      expect(fs.existsSync(finished)).toBe(failure === "npm installation");
-      expect(fs.readdirSync(path.join(home, ".openclaw-worker", "node-runtimes"))).toEqual([]);
+      expect(fs.readFileSync(finished, "utf8")).toBe("complete");
+      expect(fs.readdirSync(runtimeRoot)).toEqual([]);
     },
     30_000,
   );

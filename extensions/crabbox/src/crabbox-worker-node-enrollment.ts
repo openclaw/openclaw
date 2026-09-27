@@ -218,9 +218,9 @@ setPhase("preparation");
       finally { await output.close(); }
     } finally { response.destroy(); }
   };
-  const downloadArchive = async (artifact, token, archive) => {
+  const downloadArchive = async (artifact, token, archive, reportPhase = setPhase) => {
     let downloadPhase;
-    const progress = (next) => { downloadPhase = next; setPhase(next); };
+    const progress = (next) => { downloadPhase = next; reportPhase(next); };
     let attempt = 1;
     let retries = 0;
     try {
@@ -299,38 +299,47 @@ setPhase("preparation");
   try {
     const archive = path.join(stage, "openclaw.tgz");
     const downloadedWorker = workerBundle ? path.join(stage, "worker.tgz") : undefined;
-    // Both capabilities expire from issuance, so neither download can wait for the other.
-    await Promise.allSettled([
-      !existingRuntime ? downloadArchive(bootstrap, tokens.nodeBootstrap, archive) : undefined,
-      downloadedWorker ? downloadArchive(workerBundle, tokens.workerBundle, downloadedWorker) : undefined,
-    ]);
-    if (downloadAbort.signal.aborted) throw downloadAbort.signal.reason;
     const installDir = existingRuntime ? runtimeDir : path.join(stage, "runtime");
-    if (!existingRuntime) {
-      setPhase("installation");
-      fs.mkdirSync(installDir, directoryOptions);
-      // npm 12 requires a project policy even when ignore-scripts is false.
-      // Trust only the verified artifact; dependency script policy stays unchanged.
-      fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ private: true, allowScripts: { ["file:" + archive]: true } }), { mode: 0o600 });
-      const logPath = path.join(stage, "install.log");
-      const log = fs.openSync(logPath, "w", 0o600);
-      let installed;
-      try {
-        const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-        if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
-        installed = await new Promise((resolve) => {
-          const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, windowsHide: true, stdio: ["ignore", log, log], timeout: 600000 });
-          let error;
-          child.once("error", (cause) => { error = cause; });
-          child.once("close", (status, signal) => resolve({ status, signal, error }));
-        });
-      } finally { fs.closeSync(log); }
-      if (installed.status !== 0 || installed.error) {
-        const tail = fs.readFileSync(logPath, "utf8").slice(-2048);
-        throw new Error("Cloud worker bootstrap package installation failed (" + (installed.error?.message || installed.signal || "exit code " + installed.status) + "): " + tail);
-      }
-    }
-    if (!existingRuntime) verifyRuntime(installDir);
+    const overlap = downloadedWorker && !existingRuntime;
+    // Both capabilities expire from issuance; installation must not wait for the worker archive.
+    await Promise.allSettled([
+      (async () => {
+        if (existingRuntime) return;
+        await downloadArchive(bootstrap, tokens.nodeBootstrap, archive);
+        downloadAbort.signal.throwIfAborted();
+        setPhase(overlap ? "installation and worker download" : "installation");
+        fs.mkdirSync(installDir, directoryOptions);
+        // npm 12 requires a project policy even when ignore-scripts is false.
+        // Trust only the verified artifact; dependency script policy stays unchanged.
+        fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ private: true, allowScripts: { ["file:" + archive]: true } }), { mode: 0o600 });
+        const logPath = path.join(stage, "install.log");
+        const log = fs.openSync(logPath, "w", 0o600);
+        let installed;
+        try {
+          const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+          if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
+          installed = await new Promise((resolve) => {
+            const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, windowsHide: true, stdio: ["ignore", log, log], timeout: 600000 });
+            let error;
+            child.once("error", (cause) => { error = cause; });
+            child.once("close", (status, signal) => resolve({ status, signal, error }));
+          });
+        } finally { fs.closeSync(log); }
+        downloadAbort.signal.throwIfAborted();
+        if (installed.status !== 0 || installed.error) {
+          const tail = fs.readFileSync(logPath, "utf8").slice(-2048);
+          throw new Error("Cloud worker bootstrap package installation failed (" + (installed.error?.message || installed.signal || "exit code " + installed.status) + "): " + tail);
+        }
+        verifyRuntime(installDir);
+      })().catch((error) => {
+        if (!downloadAbort.signal.aborted) downloadAbort.abort(Object.assign(error, { downloadPhase: phase }));
+        throw downloadAbort.signal.reason;
+      }),
+      // The runtime branch owns the overlap marker; downloadArchive retains the worker's error phase.
+      downloadedWorker ? downloadArchive(workerBundle, tokens.workerBundle, downloadedWorker, overlap ? () => {} : setPhase) : undefined,
+    ]);
+    // A started npm child must close before either branch can release its staging files.
+    if (downloadAbort.signal.aborted) throw downloadAbort.signal.reason;
     publishWorkerArchive(installDir, downloadedWorker);
     // Archive publication completes before a fresh runtime becomes reusable or capture can begin.
     if (!existingRuntime) fs.renameSync(installDir, runtimeDir);

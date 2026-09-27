@@ -45,6 +45,7 @@ function waitForDownload(ms: number, signal?: AbortSignal) {
 async function download(
   outcomes: DownloadOutcome[] | ((elapsedMs: number) => DownloadOutcome),
   freshRuntime = false,
+  install = { durationMs: 0, exitCode: 0 },
 ) {
   const sha256 = createHash("sha256").update(archive).digest("hex");
   const workerBundle = {
@@ -268,7 +269,7 @@ async function download(
           spawn: () => {
             installations.push(Date.now());
             const child = new EventEmitter();
-            queueMicrotask(() => child.emit("close", 0));
+            setTimeout(() => child.emit("close", install.exitCode), install.durationMs);
             return child;
           },
         };
@@ -307,16 +308,17 @@ describe("bootstrap artifact download retries", () => {
       const result = await download(
         [{ durationMs: runtimeMinutes * 60_000 }, { durationMs: workerMinutes * 60_000 }],
         true,
+        { durationMs: 2 * 60_000, exitCode: 0 },
       );
       expect(result.code, result.output).toBe(0);
-      expect(result.elapsedMs).toBe(9 * 60_000);
+      expect(result.elapsedMs).toBe(Math.max(runtimeMinutes + 2, workerMinutes) * 60_000);
       expect(result.completedAt).toEqual([8 * 60_000, 9 * 60_000]);
       expect(result.aborted).toEqual([]);
       expect(result.requests).toEqual([
         "Bearer synthetic-bootstrap-token",
         "Bearer synthetic-worker-archive-token",
       ]);
-      expect(result.installations).toEqual([9 * 60_000]);
+      expect(result.installations).toEqual([runtimeMinutes * 60_000]);
       expect(result.published).toEqual([archive]);
       expect(result.output).toContain("CRABBOX_PHASE:openclaw-bootstrap-complete");
     },
@@ -343,6 +345,30 @@ describe("bootstrap artifact download retries", () => {
       expect(result.published).toEqual([]);
     },
   );
+
+  it("preserves the worker failure while an already-started npm installation settles", async () => {
+    const result = await download(
+      ["success", { durationMs: 1_000, failure: "synthetic worker failure" }],
+      true,
+      { durationMs: 2_000, exitCode: 17 },
+    );
+    expect(result.code).toBe(1);
+    expect(result.installations).toEqual([0]);
+    expect(result.elapsedMs).toBe(2_000);
+    expect(result.output).toContain("archive download body failed: synthetic worker failure");
+    expect(result.output).not.toContain("package installation failed");
+    expect(result.published).toEqual([]);
+  });
+
+  it("cancels worker retry backoff when npm fails first", async () => {
+    const result = await download(["success", "busy"], true, { durationMs: 1_000, exitCode: 17 });
+    expect(result.code).toBe(1);
+    expect(result.elapsedMs).toBe(1_000);
+    expect(result.installations).toEqual([0]);
+    expect(result.output).toContain("installation and worker download failed");
+    expect(result.output).toContain("package installation failed (exit code 17)");
+    expect(result.published).toEqual([]);
+  });
 
   it("waits for delayed serve settlement without spending content-transfer attempts", async () => {
     let transfers = 0;
