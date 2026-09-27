@@ -42,8 +42,9 @@ for the Gateway's sessions. The controller retrieves each session's environment
 ID and remote URL through the authenticated Agents API and connects its executor,
 following the [official self-hosted setup](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted).
 It owns startup, reconnection, and cleanup. OpenClaw does not launch or provision
-executors through this setting; input can fail if no executor connects before
-the API's deadline.
+executors through this setting. Input submission has a 60-second HTTP deadline,
+including any wait for the executor to connect. The controller must connect
+promptly; the API's longer connection window does not extend this deadline.
 
 Reset the OpenClaw session after changing its environment or a self-hosted
 workspace. Existing hosted sessions continue with omitted or explicit

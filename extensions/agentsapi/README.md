@@ -66,8 +66,10 @@ the executor using `session.environment.id` and the unchanged
 `session.environment.remote_url`. Route only this Gateway's sessions to the
 controller and match its workspace path. The controller owns startup,
 reconnection, and cleanup; this plugin does not launch, provision, or authenticate
-an executor. Without a connected executor, input waits until the API's connection
-deadline and can fail. Session connection events remain visible while it connects.
+an executor. Input submission has a 60-second HTTP deadline, including any wait
+for the executor to connect. Configure the controller to connect promptly;
+the API's longer connection window does not extend this deadline. Session
+connection events remain visible while it connects.
 Hosted environments support input
 attachments and output file transfers. Self-hosted environments do not support
 file transfers. Gateway function availability follows the configured OpenClaw
