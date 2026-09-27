@@ -372,7 +372,8 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
           )}
           ${renderSettingsSection(
             { title: t("ttsVoiceLab.sourceTitle"), description: t("ttsVoiceLab.sourceHint") },
-            this.renderClip("source", this.source, this.sourceUrl),
+            html`<blockquote>${t("ttsVoiceLab.sourceScript")}</blockquote>
+              ${this.renderClip("source", this.source, this.sourceUrl)}`,
           )}
           <p class="settings-page__intro">${t("ttsVoiceLab.durationHint")}</p>
           ${

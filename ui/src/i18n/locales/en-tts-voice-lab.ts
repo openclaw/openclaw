@@ -16,7 +16,10 @@ const enTtsVoiceLab = {
     consentStatement:
       "I am the owner of this voice and I consent to Google using this voice to create a synthetic voice model.",
     sourceTitle: "Reference take",
-    sourceHint: "Talk naturally for 10–30 seconds on the same microphone, same room.",
+    sourceHint:
+      "Read this out loud. Same mic and room as the consent take. Ten to thirty seconds is enough.",
+    sourceScript:
+      "Skip the lighthouse keeper and the silver fog. This is OpenClaw. I am at a desk, talking to a gateway on this machine, and lending it my voice so it can say the next thing without me. A session is waiting, a node is paired, and Control UI looks like it already knows the punchline. I am telling a computer it can sound like a person, which is a weird thing to say out loud.",
     record: "Start recording",
     stop: "Stop recording",
     rerecord: "Record again",
@@ -40,9 +43,9 @@ const enTtsVoiceLab = {
       "Consent needs a full reading of the sentence. The reference take must be 10–30 seconds.",
     needName: "Type a voice name. The field starts empty and is not pre-filled.",
     googleBusy:
-      "Google's voice store is busy. Wait a minute and tap Store again — your recordings are still here.",
+      "Google's voice-clone API is unavailable. Your recordings were sent. Prompted voices still work — describe a voice instead, or retry clone later.",
     googleInternal:
-      "Google could not process those recordings. Record both takes again in this dialog, then Store. The store wants 24 kHz mono WAV from the same speaker.",
+      "Google's voice-clone API failed after receiving the clips. This is not a 24 kHz recording problem. Prompted voices still work — describe a voice instead, or retry clone later.",
     needConsent: "Record the consent sentence before storing.",
     needSource: "Record a 10–30 second reference take before storing.",
     sourceTooLong: "The reference take must be 30 seconds or less.",
